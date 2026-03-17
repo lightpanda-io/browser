@@ -62,6 +62,7 @@ const storage = @import("webapi/storage/storage.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
+const MouseEvent = @import("webapi/event/MouseEvent.zig");
 
 const HttpClient = @import("HttpClient.zig");
 const ArenaPool = App.ArenaPool;
@@ -3271,14 +3272,14 @@ pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
             .type = self._type,
         });
     }
-    const event = (try @import("webapi/event/MouseEvent.zig").initTrusted(comptime .wrap("click"), .{
+    const mouse_event: *MouseEvent = try .initTrusted(comptime .wrap("click"), .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
         .clientX = x,
         .clientY = y,
-    }, self)).asEvent();
-    try self._event_manager.dispatch(target.asEventTarget(), event);
+    }, self);
+    try self._event_manager.dispatch(target.asEventTarget(), mouse_event.asEvent());
 }
 
 // callback when the "click" event reaches the pages.

@@ -5,6 +5,7 @@ const log = lp.log;
 const js = lp.js;
 
 const Element = @import("../browser/webapi/Element.zig");
+const DOMNode = @import("../browser/webapi/Node.zig");
 const Selector = @import("../browser/webapi/selector/Selector.zig");
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
@@ -98,6 +99,47 @@ pub const tool_list = [_]protocol.Tool{
             \\}
         ),
     },
+    .{
+        .name = "click",
+        .description = "Click on an interactive element.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to click." }
+            \\  },
+            \\  "required": ["backendNodeId"]
+            \\}
+        ),
+    },
+    .{
+        .name = "fill",
+        .description = "Fill text into an input element.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the input element to fill." },
+            \\    "text": { "type": "string", "description": "The text to fill into the input element." }
+            \\  },
+            \\  "required": ["backendNodeId", "text"]
+            \\}
+        ),
+    },
+    .{
+        .name = "scroll",
+        .description = "Scroll the page or a specific element.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If omitted, scrolls the window." },
+            \\    "x": { "type": "integer", "description": "Optional: The horizontal scroll offset." },
+            \\    "y": { "type": "integer", "description": "Optional: The vertical scroll offset." }
+            \\  }
+            \\}
+        ),
+    },
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -182,6 +224,9 @@ const ToolAction = enum {
     structuredData,
     evaluate,
     semantic_tree,
+    click,
+    fill,
+    scroll,
 };
 
 const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
@@ -193,6 +238,9 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "structuredData", .structuredData },
     .{ "evaluate", .evaluate },
     .{ "semantic_tree", .semantic_tree },
+    .{ "click", .click },
+    .{ "fill", .fill },
+    .{ "scroll", .scroll },
 });
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -221,6 +269,9 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .structuredData => try handleStructuredData(server, arena, req.id.?, call_params.arguments),
         .evaluate => try handleEvaluate(server, arena, req.id.?, call_params.arguments),
         .semantic_tree => try handleSemanticTree(server, arena, req.id.?, call_params.arguments),
+        .click => try handleClick(server, arena, req.id.?, call_params.arguments),
+        .fill => try handleFill(server, arena, req.id.?, call_params.arguments),
+        .scroll => try handleScroll(server, arena, req.id.?, call_params.arguments),
     }
 }
 
@@ -380,6 +431,87 @@ fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
+fn handleClick(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const ClickParams = struct {
+        backendNodeId: CDPNode.Id,
+    };
+    const args = try parseArguments(ClickParams, arena, arguments, server, id, "click");
+
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
+        return server.sendError(id, .InvalidParams, "Node not found");
+    };
+
+    lp.actions.click(node.dom, page) catch |err| {
+        if (err == error.InvalidNodeType) {
+            return server.sendError(id, .InvalidParams, "Node is not an HTML element");
+        }
+        return server.sendError(id, .InternalError, "Failed to click element");
+    };
+
+    const content = [_]protocol.TextContent([]const u8){.{ .text = "Clicked successfully." }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleFill(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const FillParams = struct {
+        backendNodeId: CDPNode.Id,
+        text: []const u8,
+    };
+    const args = try parseArguments(FillParams, arena, arguments, server, id, "fill");
+
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
+        return server.sendError(id, .InvalidParams, "Node not found");
+    };
+
+    lp.actions.fill(node.dom, args.text, page) catch |err| {
+        if (err == error.InvalidNodeType) {
+            return server.sendError(id, .InvalidParams, "Node is not an input, textarea or select");
+        }
+        return server.sendError(id, .InternalError, "Failed to fill element");
+    };
+
+    const content = [_]protocol.TextContent([]const u8){.{ .text = "Filled successfully." }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const ScrollParams = struct {
+        backendNodeId: ?CDPNode.Id = null,
+        x: ?i32 = null,
+        y: ?i32 = null,
+    };
+    const args = try parseArguments(ScrollParams, arena, arguments, server, id, "scroll");
+
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    var target_node: ?*DOMNode = null;
+    if (args.backendNodeId) |node_id| {
+        const node = server.node_registry.lookup_by_id.get(node_id) orelse {
+            return server.sendError(id, .InvalidParams, "Node not found");
+        };
+        target_node = node.dom;
+    }
+
+    lp.actions.scroll(target_node, args.x, args.y, page) catch |err| {
+        if (err == error.InvalidNodeType) {
+            return server.sendError(id, .InvalidParams, "Node is not an element");
+        }
+        return server.sendError(id, .InternalError, "Failed to scroll");
+    };
+
+    const content = [_]protocol.TextContent([]const u8){.{ .text = "Scrolled successfully." }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
 fn parseArguments(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value, server: *Server, id: std.json.Value, tool_name: []const u8) !T {
     if (arguments == null) {
         try server.sendError(id, .InvalidParams, "Missing arguments");
@@ -454,4 +586,67 @@ test "MCP - evaluate error reporting" {
         \\  }
         \\}
     , out_alloc.writer.buffered());
+}
+
+test "MCP - Actions: click, fill, scroll" {
+    defer testing.reset();
+    const allocator = testing.allocator;
+    const app = testing.test_app;
+
+    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    defer out_alloc.deinit();
+
+    var server = try Server.init(allocator, app, &out_alloc.writer);
+    defer server.deinit();
+
+    const aa = testing.arena_allocator;
+    const page = try server.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    _ = server.session.wait(5000);
+
+    // Test Click
+    const btn = page.document.getElementById("btn", page).?.asNode();
+    const btn_id = (try server.node_registry.register(btn)).id;
+    var btn_id_buf: [12]u8 = undefined;
+    const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
+    const click_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}" });
+    try router.handleMessage(server, aa, click_msg);
+
+    // Test Fill Input
+    const inp = page.document.getElementById("inp", page).?.asNode();
+    const inp_id = (try server.node_registry.register(inp)).id;
+    var inp_id_buf: [12]u8 = undefined;
+    const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
+    const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"text\":\"hello\"}}}" });
+    try router.handleMessage(server, aa, fill_msg);
+
+    // Test Fill Select
+    const sel = page.document.getElementById("sel", page).?.asNode();
+    const sel_id = (try server.node_registry.register(sel)).id;
+    var sel_id_buf: [12]u8 = undefined;
+    const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
+    const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"text\":\"opt2\"}}}" });
+    try router.handleMessage(server, aa, fill_sel_msg);
+
+    // Test Scroll
+    const scrollbox = page.document.getElementById("scrollbox", page).?.asNode();
+    const scrollbox_id = (try server.node_registry.register(scrollbox)).id;
+    var scroll_id_buf: [12]u8 = undefined;
+    const scroll_id_str = std.fmt.bufPrint(&scroll_id_buf, "{d}", .{scrollbox_id}) catch unreachable;
+    const scroll_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"scroll\",\"arguments\":{\"backendNodeId\":", scroll_id_str, ",\"y\":50}}}" });
+    try router.handleMessage(server, aa, scroll_msg);
+
+    // Evaluate assertions
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const result = try ls.local.compileAndRun("window.clicked === true && window.inputVal === 'hello' && window.changed === true && window.selChanged === 'opt2' && window.scrolled === true", null);
+
+    try testing.expect(result.isTrue());
 }

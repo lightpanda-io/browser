@@ -32,6 +32,9 @@ pub fn processMessage(cmd: anytype) !void {
         getSemanticTree,
         getInteractiveElements,
         getStructuredData,
+        clickNode,
+        fillNode,
+        scrollNode,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -39,6 +42,9 @@ pub fn processMessage(cmd: anytype) !void {
         .getSemanticTree => return getSemanticTree(cmd),
         .getInteractiveElements => return getInteractiveElements(cmd),
         .getStructuredData => return getStructuredData(cmd),
+        .clickNode => return clickNode(cmd),
+        .fillNode => return fillNode(cmd),
+        .scrollNode => return scrollNode(cmd),
     }
 }
 
@@ -146,6 +152,76 @@ fn getStructuredData(cmd: anytype) !void {
     }, .{});
 }
 
+fn clickNode(cmd: anytype) !void {
+    const Params = struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?Node.Id = null,
+    };
+    const params = (try cmd.params(Params)) orelse return error.InvalidParam;
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
+    const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
+
+    lp.actions.click(node.dom, page) catch |err| {
+        if (err == error.InvalidNodeType) return error.InvalidParam;
+        return error.InternalError;
+    };
+
+    return cmd.sendResult(.{}, .{});
+}
+
+fn fillNode(cmd: anytype) !void {
+    const Params = struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?Node.Id = null,
+        text: []const u8,
+    };
+    const params = (try cmd.params(Params)) orelse return error.InvalidParam;
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
+    const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
+
+    lp.actions.fill(node.dom, params.text, page) catch |err| {
+        if (err == error.InvalidNodeType) return error.InvalidParam;
+        return error.InternalError;
+    };
+
+    return cmd.sendResult(.{}, .{});
+}
+
+fn scrollNode(cmd: anytype) !void {
+    const Params = struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?Node.Id = null,
+        x: ?i32 = null,
+        y: ?i32 = null,
+    };
+    const params = (try cmd.params(Params)) orelse return error.InvalidParam;
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const maybe_node_id = params.nodeId orelse params.backendNodeId;
+
+    var target_node: ?*DOMNode = null;
+    if (maybe_node_id) |node_id| {
+        const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
+        target_node = node.dom;
+    }
+
+    lp.actions.scroll(target_node, params.x, params.y, page) catch |err| {
+        if (err == error.InvalidNodeType) return error.InvalidParam;
+        return error.InternalError;
+    };
+
+    return cmd.sendResult(.{}, .{});
+}
 const testing = @import("../testing.zig");
 test "cdp.lp: getMarkdown" {
     var ctx = testing.context();
@@ -194,4 +270,64 @@ test "cdp.lp: getStructuredData" {
 
     const result = ctx.client.?.sent.items[0].object.get("result").?.object;
     try testing.expect(result.get("structuredData") != null);
+}
+
+test "cdp.lp: action tools" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    _ = bc.session.wait(5000);
+
+    // Test Click
+    const btn = page.document.getElementById("btn", page).?.asNode();
+    const btn_id = (try bc.node_registry.register(btn)).id;
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.clickNode",
+        .params = .{ .backendNodeId = btn_id },
+    });
+
+    // Test Fill Input
+    const inp = page.document.getElementById("inp", page).?.asNode();
+    const inp_id = (try bc.node_registry.register(inp)).id;
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "LP.fillNode",
+        .params = .{ .backendNodeId = inp_id, .text = "hello" },
+    });
+
+    // Test Fill Select
+    const sel = page.document.getElementById("sel", page).?.asNode();
+    const sel_id = (try bc.node_registry.register(sel)).id;
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "LP.fillNode",
+        .params = .{ .backendNodeId = sel_id, .text = "opt2" },
+    });
+
+    // Test Scroll
+    const scrollbox = page.document.getElementById("scrollbox", page).?.asNode();
+    const scrollbox_id = (try bc.node_registry.register(scrollbox)).id;
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "LP.scrollNode",
+        .params = .{ .backendNodeId = scrollbox_id, .y = 50 },
+    });
+
+    // Evaluate assertions
+    var ls: lp.js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const result = try ls.local.compileAndRun("window.clicked === true && window.inputVal === 'hello' && window.changed === true && window.selChanged === 'opt2' && window.scrolled === true", null);
+
+    try testing.expect(result.isTrue());
 }
