@@ -68,6 +68,7 @@ _on_popstate: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
 _on_message: ?js.Function.Global = null,
 _on_unhandled_rejection: ?js.Function.Global = null, // TODO: invoke on error
+_current_event: ?*Event = null,
 _location: *Location,
 _timer_id: u30 = 0,
 _timers: std.AutoHashMapUnmanaged(u32, *ScheduleCallback) = .{},
@@ -88,6 +89,10 @@ _scroll_pos: struct {
 
 pub fn asEventTarget(self: *Window) *EventTarget {
     return self._proto;
+}
+
+pub fn getEvent(self: *const Window) ?*Event {
+    return self._current_event;
 }
 
 pub fn getSelf(self: *Window) *Window {
@@ -805,6 +810,7 @@ pub const JsApi = struct {
     pub const onerror = bridge.accessor(Window.getOnError, Window.setOnError, .{});
     pub const onmessage = bridge.accessor(Window.getOnMessage, Window.setOnMessage, .{});
     pub const onunhandledrejection = bridge.accessor(Window.getOnUnhandledRejection, Window.setOnUnhandledRejection, .{});
+    pub const event = bridge.accessor(Window.getEvent, null, .{ .null_as_undefined = true });
     pub const fetch = bridge.function(Window.fetch, .{});
     pub const queueMicrotask = bridge.function(Window.queueMicrotask, .{});
     pub const setTimeout = bridge.function(Window.setTimeout, .{});
