@@ -206,7 +206,7 @@ pub fn createFinalizerCallback(
 pub fn takeover(self: *Origin, original: *Origin) !void {
     const arena = self.arena;
 
-    try self.globals.ensureUnusedCapacity(arena, self.globals.items.len);
+    try self.globals.ensureUnusedCapacity(arena, original.globals.items.len);
     for (original.globals.items) |obj| {
         self.globals.appendAssumeCapacity(obj);
     }
