@@ -214,6 +214,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         if (inline_source.len == 0) {
             // we haven't set script_element._executed = true yet, which is good.
             // If content is appended to the script, we will execute it then.
+            page.releaseArena(arena);
             return;
         }
         source = .{ .@"inline" = inline_source };
@@ -271,7 +272,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             if (is_blocking == false) {
                 self.scriptList(script).remove(&script.node);
             }
-            script.deinit();
+            // Let the outer errdefer handle releasing the arena if client.request fails
         }
 
         try self.client.request(.{
