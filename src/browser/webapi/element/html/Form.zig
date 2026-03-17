@@ -117,6 +117,14 @@ pub fn submit(self: *Form, page: *Page) !void {
     return page.submitForm(null, self, .{ .fire_event = false });
 }
 
+/// https://html.spec.whatwg.org/multipage/forms.html#dom-form-requestsubmit
+/// Like submit(), but fires the submit event and validates the form.
+pub fn requestSubmit(self: *Form, submitter: ?*Element, page: *Page) !void {
+    // TODO check the submitter is a submit button if not null.
+    const submitter_element = submitter orelse self.asElement();
+    return page.submitForm(submitter_element, self, .{});
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Form);
     pub const Meta = struct {
@@ -132,6 +140,7 @@ pub const JsApi = struct {
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});
+    pub const requestSubmit = bridge.function(Form.requestSubmit, .{});
 };
 
 const testing = @import("../../../../testing.zig");

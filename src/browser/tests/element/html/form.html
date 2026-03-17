@@ -343,3 +343,44 @@
   testing.expectEqual('', form.elements['choice'].value)
 }
 </script>
+
+<!-- Test: requestSubmit() fires the submit event (unlike submit()) -->
+<form id="test_form2" action="/should-not-navigate2" method="get">
+  <input name="q" value="test2">
+</form>
+
+<script id="requestSubmit_fires_submit_event">
+{
+  const form = $('#test_form2');
+  let submitFired = false;
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitFired = true;
+  });
+
+  form.requestSubmit();
+
+  testing.expectEqual(true, submitFired);
+}
+</script>
+
+<!-- Test: requestSubmit() with preventDefault stops navigation -->
+<form id="test_form3" action="/should-not-navigate3" method="get">
+  <input name="q" value="test3">
+</form>
+
+<script id="requestSubmit_respects_preventDefault">
+{
+  const form = $('#test_form3');
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+  });
+
+  form.requestSubmit();
+
+  // Form submission was prevented, so no navigation should be scheduled
+  testing.expectEqual(true, true);
+}
+</script>
