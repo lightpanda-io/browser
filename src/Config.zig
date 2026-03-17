@@ -852,16 +852,17 @@ fn parseCommonArg(
             return true;
         };
 
-        var arr: std.ArrayList(log.Scope) = .empty;
+        var arr = std.ArrayList(log.Scope).init(allocator);
+        defer arr.deinit();
 
         var it = std.mem.splitScalar(u8, str, ',');
         while (it.next()) |part| {
-            try arr.append(allocator, std.meta.stringToEnum(log.Scope, part) orelse {
+            try arr.append(std.meta.stringToEnum(log.Scope, part) orelse {
                 log.fatal(.app, "invalid option choice", .{ .arg = "--log_filter_scopes", .value = part });
-                return false;
+                return error.InvalidArgument;
             });
         }
-        common.log_filter_scopes = arr.items;
+        common.log_filter_scopes = try arr.toOwnedSlice();
         return true;
     }
 
