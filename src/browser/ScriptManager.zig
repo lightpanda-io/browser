@@ -214,6 +214,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         if (inline_source.len == 0) {
             // we haven't set script_element._executed = true yet, which is good.
             // If content is appended to the script, we will execute it then.
+            page.releaseArena(arena);
             return;
         }
         source = .{ .@"inline" = inline_source };
@@ -260,6 +261,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             break :blk .normal;
         },
     };
+    handover = true;
 
     const is_blocking = script.mode == .normal;
     if (is_blocking == false) {
@@ -290,7 +292,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             .done_callback = Script.doneCallback,
             .error_callback = Script.errorCallback,
         });
-        handover = true;
 
         if (comptime IS_DEBUG) {
             var ls: js.Local.Scope = undefined;
