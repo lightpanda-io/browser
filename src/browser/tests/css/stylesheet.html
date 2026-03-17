@@ -51,6 +51,42 @@
 }
 </script>
 
+<script id="document_styleSheets_prefers_higher_specificity_match">
+{
+    const style = document.createElement('style');
+    style.textContent = 'a { color: rgb(1, 2, 3); } #gbz .gbzt { color: rgb(204, 204, 204); }';
+    document.head.appendChild(style);
+
+    const host = document.createElement('div');
+    host.id = 'gbz';
+    const link = document.createElement('a');
+    link.className = 'gbzt';
+    host.appendChild(link);
+    document.body.appendChild(host);
+
+    const computed = getComputedStyle(link);
+    testing.expectEqual('rgb(204, 204, 204)', computed.color);
+}
+</script>
+
+<script id="document_styleSheets_prefers_important_over_later_non_important">
+{
+    const style = document.createElement('style');
+    style.textContent = '#gbz .gbzt { color: rgb(204, 204, 204) !important; } a { color: rgb(9, 8, 7); }';
+    document.head.appendChild(style);
+
+    const host = document.createElement('div');
+    host.id = 'gbz';
+    const link = document.createElement('a');
+    link.className = 'gbzt';
+    host.appendChild(link);
+    document.body.appendChild(host);
+
+    const computed = getComputedStyle(link);
+    testing.expectEqual('rgb(204, 204, 204)', computed.color);
+}
+</script>
+
 <script id="document_styleSheets_applies_imported_style_to_computed_style">
 {
     const style = document.createElement('style');

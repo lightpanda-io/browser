@@ -129,7 +129,7 @@ fn dispatchMouseEvent(cmd: anytype) !void {
                 try current_page.triggerMouseClickWithModifiers(params.x, params.y, .main, mods);
             }
         },
-        .mouseWheel => try current_page.triggerMouseWheel(
+        .mouseWheel => _ = try current_page.triggerMouseWheel(
             params.x,
             params.y,
             params.deltaX orelse 0,

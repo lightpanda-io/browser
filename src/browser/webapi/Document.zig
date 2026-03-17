@@ -675,7 +675,9 @@ fn elementOverflowClipsAxis(element: *Element, page: *Page, axis: OverflowAxis) 
 fn overflowValueClips(value: []const u8) bool {
     const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
     return std.ascii.eqlIgnoreCase(trimmed, "hidden") or
-        std.ascii.eqlIgnoreCase(trimmed, "clip");
+        std.ascii.eqlIgnoreCase(trimmed, "clip") or
+        std.ascii.eqlIgnoreCase(trimmed, "auto") or
+        std.ascii.eqlIgnoreCase(trimmed, "scroll");
 }
 
 pub fn elementsFromPoint(self: *Document, x: f64, y: f64, page: *Page) ![]const *Element {

@@ -794,10 +794,17 @@ Current state inside Gate 3:
     interaction for block and flex containers, while generic block/flex
     `height`, `min-height`, and `max-height` now affect the used box height
     instead of acting like loose hints
+  - overflow:auto/scroll containers now track client/scroll metrics, clamp
+    scroll offsets, and headed wheel input scrolls the targeted element before
+    falling back to presentation scrolling
   - `document.elementFromPoint(...)` now respects ancestor overflow clipping,
     and headed Win32 input no longer synthesizes anchor/control clicks through
     the DOM path when no rendered link/control region exists at that client
     point
+  - stylesheet rule application now honors selector specificity and source
+    order, including inline-style precedence and `!important`, so nested tab
+    labels and legacy Google-style nav clusters keep the intended colors and
+    weights
 - the remaining gap is still large: this is a pragmatic compatibility slice,
   not a full layout engine
 

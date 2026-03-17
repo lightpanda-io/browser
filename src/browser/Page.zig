@@ -113,6 +113,7 @@ _element_shadow_roots: Element.ShadowRootLookup = .empty,
 _node_owner_documents: Node.OwnerDocumentLookup = .empty,
 _element_assigned_slots: Element.AssignedSlotLookup = .empty,
 _element_scroll_positions: Element.ScrollPositionLookup = .empty,
+_element_scroll_metrics: Element.ScrollMetricsLookup = .empty,
 _element_namespace_uris: Element.NamespaceUriLookup = .empty,
 
 /// Lazily-created inline event listeners (or listeners provided as attributes).
@@ -3437,8 +3438,14 @@ pub fn triggerMouseUp(self: *Page, x: f64, y: f64, button: MouseButton, modifier
     _ = try self.triggerMouseButtonEventResult("mouseup", x, y, button, modifiers);
 }
 
-pub fn triggerMouseWheel(self: *Page, x: f64, y: f64, delta_x: f64, delta_y: f64, modifiers: MouseModifiers) !void {
-    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
+pub const MouseWheelDispatchResult = struct {
+    dispatched: bool = false,
+    default_prevented: bool = false,
+    scrolled_element: bool = false,
+};
+
+pub fn triggerMouseWheel(self: *Page, x: f64, y: f64, delta_x: f64, delta_y: f64, modifiers: MouseModifiers) !MouseWheelDispatchResult {
+    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return .{};
     if (comptime IS_DEBUG) {
         log.debug(.page, "page mouse wheel", .{
             .url = self.url,
@@ -3468,6 +3475,105 @@ pub fn triggerMouseWheel(self: *Page, x: f64, y: f64, delta_x: f64, delta_y: f64
         .deltaMode = WheelEvent.DOM_DELTA_PIXEL,
     }, self)).asEvent();
     try self._event_manager.dispatch(target.asEventTarget(), event);
+    const default_prevented = event.getDefaultPrevented();
+    const scrolled_element = if (!default_prevented)
+        try self.applyDefaultWheelScroll(target, delta_x, delta_y)
+    else
+        false;
+    return .{
+        .dispatched = true,
+        .default_prevented = default_prevented,
+        .scrolled_element = scrolled_element,
+    };
+}
+
+pub fn resetElementScrollMetrics(self: *Page) void {
+    self._element_scroll_metrics.clearRetainingCapacity();
+}
+
+pub fn setElementScrollMetrics(self: *Page, element: *Element, metrics: Element.ScrollMetrics) !void {
+    try self._element_scroll_metrics.put(self.arena, element, metrics);
+    _ = try self.setElementScrollPosition(
+        element,
+        @as(i32, @intCast(element.getScrollLeft(self))),
+        @as(i32, @intCast(element.getScrollTop(self))),
+    );
+}
+
+pub fn setElementScrollPosition(self: *Page, element: *Element, x: i32, y: i32) !bool {
+    const gop = try self._element_scroll_positions.getOrPut(self.arena, element);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{};
+    }
+
+    var next_x: u32 = @intCast(@max(0, x));
+    var next_y: u32 = @intCast(@max(0, y));
+    if (self._element_scroll_metrics.get(element)) |metrics| {
+        next_x = @min(next_x, maxElementScrollOffset(metrics.scroll_width, metrics.client_width));
+        next_y = @min(next_y, maxElementScrollOffset(metrics.scroll_height, metrics.client_height));
+    }
+
+    const changed = gop.value_ptr.x != next_x or gop.value_ptr.y != next_y;
+    gop.value_ptr.x = next_x;
+    gop.value_ptr.y = next_y;
+    return changed;
+}
+
+fn applyDefaultWheelScroll(self: *Page, target: *Element, delta_x: f64, delta_y: f64) !bool {
+    var current: ?*Element = target;
+    while (current) |element| {
+        const metrics = self._element_scroll_metrics.get(element) orelse {
+            current = element.parentElement();
+            continue;
+        };
+
+        var next_left: i32 = @intCast(element.getScrollLeft(self));
+        var next_top: i32 = @intCast(element.getScrollTop(self));
+        const current_left = next_left;
+        const current_top = next_top;
+
+        if (delta_y != 0 and try elementAllowsWheelScrollAxis(self, element, .y) and metrics.scroll_height > metrics.client_height) {
+            next_top += @intFromFloat(@round(delta_y));
+        }
+        if (delta_x != 0 and try elementAllowsWheelScrollAxis(self, element, .x) and metrics.scroll_width > metrics.client_width) {
+            next_left += @intFromFloat(@round(delta_x));
+        }
+
+        if (next_left != current_left or next_top != current_top) {
+            if (try self.setElementScrollPosition(element, next_left, next_top)) {
+                return true;
+            }
+        }
+        current = element.parentElement();
+    }
+    return false;
+}
+
+const ScrollAxis = enum { x, y };
+
+fn elementAllowsWheelScrollAxis(self: *Page, element: *Element, axis: ScrollAxis) !bool {
+    const style = try self.window.getComputedStyle(element, null, self);
+    const decl = style.asCSSStyleDeclaration();
+    if (overflowValueAllowsWheelScroll(decl.getPropertyValue("overflow", self))) {
+        return true;
+    }
+    return switch (axis) {
+        .x => overflowValueAllowsWheelScroll(decl.getPropertyValue("overflow-x", self)),
+        .y => overflowValueAllowsWheelScroll(decl.getPropertyValue("overflow-y", self)),
+    };
+}
+
+fn overflowValueAllowsWheelScroll(value: []const u8) bool {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    return std.ascii.eqlIgnoreCase(trimmed, "auto") or
+        std.ascii.eqlIgnoreCase(trimmed, "scroll");
+}
+
+fn maxElementScrollOffset(scroll_size: u32, client_size: u32) u32 {
+    if (scroll_size <= client_size) {
+        return 0;
+    }
+    return scroll_size - client_size;
 }
 
 fn triggerMouseButtonEventResult(

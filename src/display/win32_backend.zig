@@ -809,13 +809,20 @@ pub const Win32Backend = struct {
                     }
                 },
                 .mouse_move => |mouse| try page.triggerMouseMove(mouse.x, mouse.y, mouse.modifiers),
-                .mouse_wheel => |wheel| try page.triggerMouseWheel(
-                    wheel.x,
-                    wheel.y,
-                    wheel.delta_x,
-                    wheel.delta_y,
-                    wheel.modifiers,
-                ),
+                .mouse_wheel => |wheel| {
+                    const result = try page.triggerMouseWheel(
+                        wheel.x,
+                        wheel.y,
+                        wheel.delta_x,
+                        wheel.delta_y,
+                        wheel.modifiers,
+                    );
+                    if (!result.default_prevented and !result.scrolled_element and wheel.delta_y != 0) {
+                        if (scrollPresentationBy(self, wheelDeltaToPresentationScrollPx(wheel.delta_y))) {
+                            invalidateBackendWindow(self);
+                        }
+                    }
+                },
                 .key_down => |key_down| {
                     const key = mapVirtualKey(key_down.vk, key_down.modifiers.shift, &key_buf) orelse continue;
                     const default_allowed = try page.triggerKeyboardKeyDownNoTextWithRepeat(
@@ -3119,6 +3126,19 @@ fn scrollPresentationTo(backend: *Win32Backend, value: i32) bool {
     }
     backend.presentation_scroll_px = clamped;
     return true;
+}
+
+fn wheelDeltaToPresentationScrollPx(delta_y: f64) i32 {
+    return @as(i32, @intFromFloat(@round(delta_y / @as(f64, @floatFromInt(c.WHEEL_DELTA))))) * PRESENTATION_SCROLL_STEP;
+}
+
+fn invalidateBackendWindow(backend: *Win32Backend) void {
+    const hwnd_value = backend.window_hwnd.load(.acquire);
+    if (hwnd_value == 0) {
+        return;
+    }
+    const hwnd: c.HWND = @ptrFromInt(hwnd_value);
+    _ = c.InvalidateRect(hwnd, null, c.TRUE);
 }
 
 fn syncWindowPresentation(hwnd: c.HWND, backend: *Win32Backend) void {
@@ -7315,10 +7335,15 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                         }
                         return 0;
                     }
-                    const delta = -@divTrunc(@as(i32, raw_delta), @as(i32, c.WHEEL_DELTA)) * PRESENTATION_SCROLL_STEP;
-                    if (scrollPresentationBy(backend, delta)) {
-                        _ = c.InvalidateRect(hwnd, null, c.TRUE);
-                    }
+                    const client_pos = clientCoordForWheel(hwnd, lparam);
+                    const pos = presentationClientToPage(backend, client_pos.x, client_pos.y) orelse return 0;
+                    queueInputEvent(backend, .{ .mouse_wheel = .{
+                        .x = pos.x,
+                        .y = pos.y,
+                        .delta_x = 0,
+                        .delta_y = -wheelDeltaFromWParam(wparam),
+                        .modifiers = modifiers,
+                    } });
                     return 0;
                 }
                 const coord = clientCoordForWheel(hwnd, lparam);
@@ -7335,7 +7360,10 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
         },
         c.WM_MOUSEHWHEEL => {
             if (getBackendPtr(hwnd)) |backend| {
-                const coord = clientCoordForWheel(hwnd, lparam);
+                const coord = if (presentationHasContent(backend))
+                    presentationClientToPage(backend, clientCoordForWheel(hwnd, lparam).x, clientCoordForWheel(hwnd, lparam).y) orelse return 0
+                else
+                    clientCoordForWheel(hwnd, lparam);
                 const wheel_delta = wheelDeltaFromWParam(wparam);
                 queueInputEvent(backend, .{ .mouse_wheel = .{
                     .x = coord.x,

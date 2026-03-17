@@ -57,6 +57,14 @@ pub const ScrollPosition = struct {
 };
 pub const ScrollPositionLookup = std.AutoHashMapUnmanaged(*Element, ScrollPosition);
 
+pub const ScrollMetrics = struct {
+    client_width: u32 = 0,
+    client_height: u32 = 0,
+    scroll_width: u32 = 0,
+    scroll_height: u32 = 0,
+};
+pub const ScrollMetricsLookup = std.AutoHashMapUnmanaged(*Element, ScrollMetrics);
+
 pub const Namespace = enum(u8) {
     html,
     svg,
@@ -1196,6 +1204,9 @@ pub fn getClientWidth(self: *Element, page: *Page) f64 {
     if (!self.checkVisibility(page)) {
         return 0.0;
     }
+    if (page._element_scroll_metrics.get(self)) |metrics| {
+        return @floatFromInt(metrics.client_width);
+    }
     const dims = self.getElementDimensions(page);
     return dims.width;
 }
@@ -1203,6 +1214,9 @@ pub fn getClientWidth(self: *Element, page: *Page) f64 {
 pub fn getClientHeight(self: *Element, page: *Page) f64 {
     if (!self.checkVisibility(page)) {
         return 0.0;
+    }
+    if (page._element_scroll_metrics.get(self)) |metrics| {
+        return @floatFromInt(metrics.client_height);
     }
     const dims = self.getElementDimensions(page);
     return dims.height;
@@ -1249,6 +1263,10 @@ pub fn getClientRects(self: *Element, page: *Page) ![]DOMRect {
 
 pub fn getScrollTop(self: *Element, page: *Page) u32 {
     const pos = page._element_scroll_positions.get(self) orelse return 0;
+    if (page._element_scroll_metrics.get(self)) |metrics| {
+        const max_scroll = maxScrollOffset(metrics.scroll_height, metrics.client_height);
+        return @min(pos.y, max_scroll);
+    }
     return pos.y;
 }
 
@@ -1257,11 +1275,20 @@ pub fn setScrollTop(self: *Element, value: i32, page: *Page) !void {
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
-    gop.value_ptr.y = @intCast(@max(0, value));
+    const next = @max(0, value);
+    if (page._element_scroll_metrics.get(self)) |metrics| {
+        gop.value_ptr.y = @intCast(@min(@as(u32, @intCast(next)), maxScrollOffset(metrics.scroll_height, metrics.client_height)));
+        return;
+    }
+    gop.value_ptr.y = @intCast(next);
 }
 
 pub fn getScrollLeft(self: *Element, page: *Page) u32 {
     const pos = page._element_scroll_positions.get(self) orelse return 0;
+    if (page._element_scroll_metrics.get(self)) |metrics| {
+        const max_scroll = maxScrollOffset(metrics.scroll_width, metrics.client_width);
+        return @min(pos.x, max_scroll);
+    }
     return pos.x;
 }
 
@@ -1270,16 +1297,25 @@ pub fn setScrollLeft(self: *Element, value: i32, page: *Page) !void {
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
-    gop.value_ptr.x = @intCast(@max(0, value));
+    const next = @max(0, value);
+    if (page._element_scroll_metrics.get(self)) |metrics| {
+        gop.value_ptr.x = @intCast(@min(@as(u32, @intCast(next)), maxScrollOffset(metrics.scroll_width, metrics.client_width)));
+        return;
+    }
+    gop.value_ptr.x = @intCast(next);
 }
 
 pub fn getScrollHeight(self: *Element, page: *Page) f64 {
-    // In our dummy layout engine, content doesn't overflow
+    if (page._element_scroll_metrics.get(self)) |metrics| {
+        return @floatFromInt(metrics.scroll_height);
+    }
     return self.getClientHeight(page);
 }
 
 pub fn getScrollWidth(self: *Element, page: *Page) f64 {
-    // In our dummy layout engine, content doesn't overflow
+    if (page._element_scroll_metrics.get(self)) |metrics| {
+        return @floatFromInt(metrics.scroll_width);
+    }
     return self.getClientWidth(page);
 }
 
@@ -1316,6 +1352,13 @@ pub fn getOffsetLeft(self: *Element, page: *Page) f64 {
 pub fn getClientTop(_: *Element) f64 {
     // Border width - in our dummy layout, we don't apply borders to layout
     return 0.0;
+}
+
+fn maxScrollOffset(scroll_size: u32, client_size: u32) u32 {
+    if (scroll_size <= client_size) {
+        return 0;
+    }
+    return scroll_size - client_size;
 }
 
 pub fn getClientLeft(_: *Element) f64 {

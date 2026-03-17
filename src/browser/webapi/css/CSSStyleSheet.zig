@@ -8,6 +8,8 @@ const CSSRuleList = @import("CSSRuleList.zig");
 const CSSRule = @import("CSSRule.zig");
 const CSSStyleDeclaration = @import("CSSStyleDeclaration.zig");
 const RawURL = @import("../../URL.zig");
+const SelectorAst = @import("../selector/Selector.zig");
+const SelectorParser = @import("../selector/Parser.zig");
 
 const CSSStyleSheet = @This();
 const STYLESHEET_ACCEPT_HEADER: [:0]const u8 = "Accept: text/css,*/*;q=0.1";
@@ -28,7 +30,14 @@ _request_include_credentials: bool = true,
 const ParsedRule = struct {
     selector_text: []const u8,
     declarations_text: []const u8,
+    selectors: []const ParsedSelector,
+    source_order: usize,
     rule: *CSSRule,
+};
+
+const ParsedSelector = struct {
+    selector: SelectorAst.Selector,
+    specificity: CSSStyleDeclaration.CascadeSpecificity,
 };
 
 pub const FontFaceEntry = struct {
@@ -148,11 +157,26 @@ pub fn applyMatchingRules(self: *const CSSStyleSheet, element: *Element, decl: *
     if (self._disabled) return;
 
     for (self._rules) |entry| {
-        const matches = try selectorTextMatchesCompat(element, entry.selector_text, page);
-        if (!matches) {
+        const scope = element.asNode();
+        var matched_specificity: ?CSSStyleDeclaration.CascadeSpecificity = null;
+        for (entry.selectors) |selector_entry| {
+            if (!SelectorAst.List.matches(scope, selector_entry.selector, scope, page)) {
+                continue;
+            }
+            if (matched_specificity == null or selector_entry.specificity.compare(matched_specificity.?) == .gt) {
+                matched_specificity = selector_entry.specificity;
+            }
+        }
+
+        if (matched_specificity == null) {
             continue;
         }
-        try decl.applyDeclarationsText(entry.declarations_text, page);
+        try decl.applyDeclarationsTextWithCascade(
+            entry.declarations_text,
+            matched_specificity.?,
+            entry.source_order,
+            page,
+        );
     }
 }
 
@@ -237,6 +261,89 @@ fn topLevelCommaIndex(input: []const u8) usize {
     }
 
     return input.len;
+}
+
+fn parseRuleSelectors(selector_text: []const u8, page: *Page) ![]const ParsedSelector {
+    var parsed_selectors: std.ArrayList(ParsedSelector) = .empty;
+    var remaining = selector_text;
+    while (true) {
+        const trimmed = std.mem.trimLeft(u8, remaining, &std.ascii.whitespace);
+        if (trimmed.len == 0) break;
+
+        const comma_pos = topLevelCommaIndex(trimmed);
+        const selector_input = std.mem.trim(u8, trimmed[0..comma_pos], &std.ascii.whitespace);
+        if (selector_input.len > 0) {
+            const selector = SelectorParser.parse(page.arena, selector_input, page) catch null;
+            if (selector) |parsed_selector| {
+                try parsed_selectors.append(page.arena, .{
+                    .selector = parsed_selector,
+                    .specificity = selectorSpecificity(parsed_selector),
+                });
+            }
+        }
+
+        if (comma_pos >= trimmed.len) break;
+        remaining = trimmed[comma_pos + 1 ..];
+    }
+    return parsed_selectors.items;
+}
+
+fn selectorSpecificity(selector: SelectorAst.Selector) CSSStyleDeclaration.CascadeSpecificity {
+    var specificity = compoundSpecificity(selector.first);
+    for (selector.segments) |segment| {
+        addSpecificity(&specificity, compoundSpecificity(segment.compound));
+    }
+    return specificity;
+}
+
+fn compoundSpecificity(compound: SelectorAst.Compound) CSSStyleDeclaration.CascadeSpecificity {
+    var specificity = CSSStyleDeclaration.CascadeSpecificity{};
+    for (compound.parts) |part| {
+        addSpecificity(&specificity, partSpecificity(part));
+    }
+    return specificity;
+}
+
+fn partSpecificity(part: SelectorAst.Part) CSSStyleDeclaration.CascadeSpecificity {
+    return switch (part) {
+        .id => .{ .ids = 1 },
+        .class => .{ .classes = 1 },
+        .attribute => .{ .classes = 1 },
+        .tag, .tag_name => .{ .tags = 1 },
+        .universal => .{},
+        .pseudo_class => |pseudo| pseudoClassSpecificity(pseudo),
+    };
+}
+
+fn pseudoClassSpecificity(pseudo: SelectorAst.PseudoClass) CSSStyleDeclaration.CascadeSpecificity {
+    return switch (pseudo) {
+        .not => |selectors| maxSelectorSpecificity(selectors),
+        .is => |selectors| maxSelectorSpecificity(selectors),
+        .where => .{},
+        .has => |selectors| maxSelectorSpecificity(selectors),
+        else => .{ .classes = 1 },
+    };
+}
+
+fn maxSelectorSpecificity(selectors: []const SelectorAst.Selector) CSSStyleDeclaration.CascadeSpecificity {
+    var max = CSSStyleDeclaration.CascadeSpecificity{};
+    for (selectors) |selector| {
+        const candidate = selectorSpecificity(selector);
+        if (candidate.compare(max) == .gt) {
+            max = candidate;
+        }
+    }
+    return max;
+}
+
+fn addSpecificity(
+    total: *CSSStyleDeclaration.CascadeSpecificity,
+    addend: CSSStyleDeclaration.CascadeSpecificity,
+) void {
+    total.inline_style +|= addend.inline_style;
+    total.ids +|= addend.ids;
+    total.classes +|= addend.classes;
+    total.tags +|= addend.tags;
 }
 
 fn refreshRuleList(self: *CSSStyleSheet, page: *Page) !void {
@@ -330,12 +437,19 @@ fn appendParsedRulesFromText(
         }
         if (selector_text[0] == '@') continue;
 
+        const selector_text_copy = try page.dupeString(selector_text);
+        const parsed_selectors = try parseRuleSelectors(selector_text_copy, page);
+        if (parsed_selectors.len == 0) continue;
+
+        const declarations_text_copy = try page.dupeString(declarations_text);
         const rule = try CSSRule.init(.style, page);
         try rule.setCssText(rule_text, page);
 
         try parsed.append(page.arena, .{
-            .selector_text = try page.dupeString(selector_text),
-            .declarations_text = try page.dupeString(declarations_text),
+            .selector_text = selector_text_copy,
+            .declarations_text = declarations_text_copy,
+            .selectors = parsed_selectors,
+            .source_order = parsed.items.len,
             .rule = rule,
         });
     }

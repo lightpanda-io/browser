@@ -37,11 +37,14 @@ pub const PaintOpts = struct {
 };
 
 pub fn paintDocument(allocator: std.mem.Allocator, page: *Page, opts: PaintOpts) !DisplayList {
+    page.resetElementScrollMetrics();
     var list = DisplayList{
         .layout_scale = opts.layout_scale,
         .page_margin = opts.page_margin,
     };
     errdefer list.deinit(allocator);
+    var paint_text_styles = std.AutoHashMap(usize, PaintTextStyle).init(allocator);
+    defer paint_text_styles.deinit();
 
     const root = if (page.window._document.is(HTMLDocument)) |html_doc|
         if (html_doc.getBody()) |body| body.asNode() else page.window._document.asNode()
@@ -53,6 +56,7 @@ pub fn paintDocument(allocator: std.mem.Allocator, page: *Page, opts: PaintOpts)
         .page = page,
         .opts = opts,
         .list = &list,
+        .paint_text_styles = &paint_text_styles,
     };
     var cursor = FlowCursor.init(
         opts.page_margin,
@@ -245,6 +249,136 @@ fn intersectBoundsWithClipRect(bounds: Bounds, clip_rect: ?ClipRect) ?Bounds {
     return bounds;
 }
 
+fn translateRecentOutput(self: *Painter, command_start: usize, link_start: usize, control_start: usize, dx: i32, dy: i32) void {
+    if (dx == 0 and dy == 0) {
+        return;
+    }
+
+    var command_index = command_start;
+    while (command_index < self.list.commands.items.len) : (command_index += 1) {
+        switch (self.list.commands.items[command_index]) {
+            .fill_rect => |*rect| {
+                rect.x += dx;
+                rect.y += dy;
+                if (rect.clip_rect) |clip_rect| {
+                    rect.clip_rect = translateClipRect(clip_rect, dx, dy);
+                }
+            },
+            .stroke_rect => |*rect| {
+                rect.x += dx;
+                rect.y += dy;
+                if (rect.clip_rect) |clip_rect| {
+                    rect.clip_rect = translateClipRect(clip_rect, dx, dy);
+                }
+            },
+            .text => |*text| {
+                text.x += dx;
+                text.y += dy;
+                if (text.clip_rect) |clip_rect| {
+                    text.clip_rect = translateClipRect(clip_rect, dx, dy);
+                }
+            },
+            .image => |*image| {
+                image.x += dx;
+                image.y += dy;
+                if (image.clip_rect) |clip_rect| {
+                    image.clip_rect = translateClipRect(clip_rect, dx, dy);
+                }
+            },
+            .canvas => |*canvas| {
+                canvas.x += dx;
+                canvas.y += dy;
+                if (canvas.clip_rect) |clip_rect| {
+                    canvas.clip_rect = translateClipRect(clip_rect, dx, dy);
+                }
+            },
+        }
+    }
+
+    var link_index = link_start;
+    while (link_index < self.list.link_regions.items.len) : (link_index += 1) {
+        self.list.link_regions.items[link_index].x += dx;
+        self.list.link_regions.items[link_index].y += dy;
+    }
+
+    var control_index = control_start;
+    while (control_index < self.list.control_regions.items.len) : (control_index += 1) {
+        self.list.control_regions.items[control_index].x += dx;
+        self.list.control_regions.items[control_index].y += dy;
+    }
+}
+
+fn recentOutputBounds(self: *const Painter, command_start: usize, link_start: usize, control_start: usize) ?Bounds {
+    var min_x: i32 = std.math.maxInt(i32);
+    var min_y: i32 = std.math.maxInt(i32);
+    var max_x: i32 = std.math.minInt(i32);
+    var max_y: i32 = std.math.minInt(i32);
+    var found = false;
+
+    var command_index = command_start;
+    while (command_index < self.list.commands.items.len) : (command_index += 1) {
+        const bounds = switch (self.list.commands.items[command_index]) {
+            .fill_rect => |rect| Bounds{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height },
+            .stroke_rect => |rect| Bounds{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height },
+            .text => |text| Bounds{ .x = text.x, .y = text.y, .width = text.width, .height = @max(text.height, text.font_size + 8) },
+            .image => |image| Bounds{ .x = image.x, .y = image.y, .width = image.width, .height = image.height },
+            .canvas => |canvas| Bounds{ .x = canvas.x, .y = canvas.y, .width = canvas.width, .height = canvas.height },
+        };
+        min_x = @min(min_x, bounds.x);
+        min_y = @min(min_y, bounds.y);
+        max_x = @max(max_x, bounds.x + bounds.width);
+        max_y = @max(max_y, bounds.y + bounds.height);
+        found = true;
+    }
+
+    for (self.list.link_regions.items[link_start..]) |region| {
+        min_x = @min(min_x, region.x);
+        min_y = @min(min_y, region.y);
+        max_x = @max(max_x, region.x + region.width);
+        max_y = @max(max_y, region.y + region.height);
+        found = true;
+    }
+
+    for (self.list.control_regions.items[control_start..]) |region| {
+        min_x = @min(min_x, region.x);
+        min_y = @min(min_y, region.y);
+        max_x = @max(max_x, region.x + region.width);
+        max_y = @max(max_y, region.y + region.height);
+        found = true;
+    }
+
+    if (!found) {
+        return null;
+    }
+
+    return .{
+        .x = min_x,
+        .y = min_y,
+        .width = max_x - min_x,
+        .height = max_y - min_y,
+    };
+}
+
+fn trackElementScrollMetrics(
+    self: *Painter,
+    element: *Element,
+    client_width: i32,
+    client_height: i32,
+    content_width: i32,
+    content_height: i32,
+) !Element.ScrollPosition {
+    try self.page.setElementScrollMetrics(element, .{
+        .client_width = @intCast(@max(0, client_width)),
+        .client_height = @intCast(@max(0, client_height)),
+        .scroll_width = @intCast(@max(client_width, content_width)),
+        .scroll_height = @intCast(@max(client_height, content_height)),
+    });
+    return .{
+        .x = element.getScrollLeft(self.page),
+        .y = element.getScrollTop(self.page),
+    };
+}
+
 const FlexCrossAlignment = enum {
     auto,
     start,
@@ -258,11 +392,20 @@ const FloatMode = enum {
     right,
 };
 
+const PaintTextStyle = struct {
+    font_size: i32,
+    font_family: []const u8,
+    font_weight: i32,
+    italic: bool,
+    color: Color,
+};
+
 const Painter = struct {
     allocator: std.mem.Allocator,
     page: *Page,
     opts: PaintOpts,
     list: *DisplayList,
+    paint_text_styles: *std.AutoHashMap(usize, PaintTextStyle),
     forced_item_node: ?*Node = null,
     forced_item_width: i32 = 0,
 
@@ -295,9 +438,57 @@ const Painter = struct {
             .page = self.page,
             .opts = self.opts,
             .list = &temp_list,
+            .paint_text_styles = self.paint_text_styles,
         };
         var cursor = FlowCursor.init(0, 0, @max(@as(i32, 40), available_width));
         try temp_painter.paintNode(node, &cursor);
+
+        if (displayListBounds(&temp_list)) |bounds| {
+            return .{
+                .width = bounds.width,
+                .height = bounds.height,
+            };
+        }
+
+        return .{
+            .width = @max(@as(i32, 0), cursor.cursor_x - cursor.left),
+            .height = cursor.consumedHeightSince(0),
+        };
+    }
+
+    fn measureElementChildrenPaintedBox(self: *Painter, element: *Element, available_width: i32) !struct { width: i32, height: i32 } {
+        var temp_list = DisplayList{
+            .layout_scale = self.list.layout_scale,
+            .page_margin = self.list.page_margin,
+        };
+        defer temp_list.deinit(self.allocator);
+
+        var out_of_flow_children: std.ArrayList(*Node) = .{};
+        defer out_of_flow_children.deinit(self.allocator);
+
+        var temp_painter = Painter{
+            .allocator = self.allocator,
+            .page = self.page,
+            .opts = self.opts,
+            .list = &temp_list,
+            .paint_text_styles = self.paint_text_styles,
+        };
+        var cursor = FlowCursor.init(0, 0, @max(@as(i32, 40), available_width));
+        var child_it = element.asNode().childrenIterator();
+        while (child_it.next()) |child| {
+            if (try isOutOfFlowNode(child, self.page)) {
+                try out_of_flow_children.append(self.allocator, child);
+                continue;
+            }
+            try temp_painter.paintNode(child, &cursor);
+        }
+
+        if (out_of_flow_children.items.len > 0) {
+            var overlay_cursor = FlowCursor.init(0, 0, @max(@as(i32, 40), available_width));
+            for (out_of_flow_children.items) |child| {
+                try temp_painter.paintNode(child, &overlay_cursor);
+            }
+        }
 
         if (displayListBounds(&temp_list)) |bounds| {
             return .{
@@ -540,6 +731,7 @@ const Painter = struct {
             .page = self.page,
             .opts = self.opts,
             .list = &temp_list,
+            .paint_text_styles = self.paint_text_styles,
         };
         var child_cursor = FlowCursor.init(0, 0, @max(@as(i32, 40), content_width));
         var child_it = element.asNode().childrenIterator();
@@ -577,6 +769,56 @@ const Painter = struct {
             child_height;
     }
 
+    fn resolvePaintTextStyle(self: *Painter, element: *Element, decl: anytype, tag: Element.Tag) !PaintTextStyle {
+        const key = @intFromPtr(element);
+        if (self.paint_text_styles.get(key)) |cached| {
+            return cached;
+        }
+
+        var resolved = PaintTextStyle{
+            .font_size = defaultFontSize(tag),
+            .font_family = "",
+            .font_weight = 400,
+            .italic = false,
+            .color = .{ .r = 0, .g = 0, .b = 0 },
+        };
+
+        if (element.asNode().parentElement()) |parent| {
+            const parent_style = try self.page.window.getComputedStyle(parent, null, self.page);
+            resolved = try self.resolvePaintTextStyle(parent, parent_style.asCSSStyleDeclaration(), parent.getTag());
+        }
+
+        const raw_font_size = normalizeInheritedTextPropertyValue(decl.getSpecifiedPropertyValue("font-size", self.page));
+        if (raw_font_size.len > 0) {
+            resolved.font_size = parseFontSizePx(raw_font_size) orelse resolved.font_size;
+        }
+
+        const raw_font_family = normalizeInheritedTextPropertyValue(decl.getSpecifiedPropertyValue("font-family", self.page));
+        if (raw_font_family.len > 0) {
+            resolved.font_family = raw_font_family;
+        }
+
+        const raw_font_weight = normalizeInheritedTextPropertyValue(decl.getSpecifiedPropertyValue("font-weight", self.page));
+        if (raw_font_weight.len > 0) {
+            resolved.font_weight = parseCssFontWeight(raw_font_weight);
+        }
+
+        const raw_font_style = normalizeInheritedTextPropertyValue(decl.getSpecifiedPropertyValue("font-style", self.page));
+        if (raw_font_style.len > 0) {
+            resolved.italic = parseCssFontItalic(raw_font_style);
+        }
+
+        const raw_color = normalizeInheritedTextPropertyValue(decl.getSpecifiedPropertyValue("color", self.page));
+        if (parseCssColor(raw_color)) |color| {
+            resolved.color = color;
+        } else if (tag == .anchor and element.getAttributeSafe(comptime .wrap("href")) != null) {
+            resolved.color = .{ .r = 0, .g = 102, .b = 204 };
+        }
+
+        try self.paint_text_styles.put(key, resolved);
+        return resolved;
+    }
+
     fn paintInlineTextNode(self: *Painter, cdata: *Node.CData, cursor: *FlowCursor) anyerror!void {
         const parent = cdata.asNode().parentElement() orelse return;
         const parent_style = try self.page.window.getComputedStyle(parent, null, self.page);
@@ -599,10 +841,7 @@ const Painter = struct {
         }
 
         const parent_tag = parent.getTag();
-        const font_size = parseFontSizePx(parent_decl.getPropertyValue("font-size", self.page)) orelse defaultFontSize(parent_tag);
-        const font_family = resolveCssPropertyValue(parent_decl, self.page, parent, "font-family");
-        const font_weight = parseCssFontWeight(resolveCssPropertyValue(parent_decl, self.page, parent, "font-weight"));
-        const italic = parseCssFontItalic(resolveCssPropertyValue(parent_decl, self.page, parent, "font-style"));
+        const text_style = try self.resolvePaintTextStyle(parent, parent_decl, parent_tag);
         var segment_start: usize = 0;
         while (segment_start < normalized.len) {
             while (segment_start < normalized.len and normalized[segment_start] == ' ') : (segment_start += 1) {}
@@ -617,10 +856,11 @@ const Painter = struct {
                 parent,
                 parent_decl,
                 parent_tag,
-                font_size,
-                font_family,
-                font_weight,
-                italic,
+                text_style.font_size,
+                text_style.font_family,
+                text_style.font_weight,
+                text_style.italic,
+                text_style.color,
                 cursor,
             );
             segment_start = segment_end;
@@ -637,6 +877,7 @@ const Painter = struct {
         font_family: []const u8,
         font_weight: i32,
         italic: bool,
+        color: Color,
         cursor: *FlowCursor,
     ) !void {
         if (segment.len == 0) return;
@@ -660,7 +901,7 @@ const Painter = struct {
             .font_family = @constCast(font_family),
             .font_weight = font_weight,
             .italic = italic,
-            .color = resolveTextColor(parent_decl, self.page, parent, parent_tag),
+            .color = color,
             .underline = shouldUnderlineText(parent, parent_decl, self.page, parent_tag),
             .text = @constCast(segment),
         });
@@ -687,7 +928,8 @@ const Painter = struct {
             return;
         }
 
-        const font_size = parseFontSizePx(decl.getPropertyValue("font-size", self.page)) orelse defaultFontSize(tag);
+        const text_style = try self.resolvePaintTextStyle(element, decl, tag);
+        const font_size = text_style.font_size;
         if (tag == .br) {
             cursor.forceLineBreak(@max(font_size + 8, 20), 2);
             return;
@@ -697,14 +939,16 @@ const Painter = struct {
         const raw_has_child_elements = hasRenderableChildElements(element);
         const canvas_surface_present = tag == .canvas and canvasSurfaceForElement(element) != null;
         const has_child_elements = raw_has_child_elements and !canvas_surface_present;
+        const inline_atomic_box = isAtomicInlineDisplay(display);
         const block_like = isFlowBlockLike(tag, display, has_child_elements);
-        const inline_leaf = !block_like and !has_child_elements;
+        const inline_leaf = !block_like and !inline_atomic_box and !has_child_elements;
+        const inline_box = inline_leaf or inline_atomic_box;
         const margins = resolveEdgeSizes(decl, self.page, "margin");
         const padding = resolveEdgeSizes(decl, self.page, "padding");
-        const font_family = resolveCssPropertyValue(decl, self.page, element, "font-family");
-        const font_weight = parseCssFontWeight(resolveCssPropertyValue(decl, self.page, element, "font-weight"));
-        const italic = parseCssFontItalic(resolveCssPropertyValue(decl, self.page, element, "font-style"));
-        const inline_content_flow = block_like and try usesInlineContentFlowContainer(element, decl, self.page, display);
+        const font_family = text_style.font_family;
+        const font_weight = text_style.font_weight;
+        const italic = text_style.italic;
+        const inline_content_flow = (block_like or inline_atomic_box) and try usesInlineContentFlowContainer(element, decl, self.page, display);
         const position_value = resolveCssPropertyValue(decl, self.page, element, "position");
         const out_of_flow_positioned = isOutOfFlowPositioned(position_value);
         const paint_z_index = try resolvePaintZIndex(element, decl, self.page);
@@ -740,23 +984,38 @@ const Painter = struct {
         }
 
         const available_width = resolveAvailableWidthForElement(self, element, cursor.*, decl, margins, out_of_flow_positioned);
-        const width = resolveLayoutWidth(self, element, decl, self.page, tag, block_like, available_width, label, font_size, font_family, font_weight, italic);
+        const width = try resolveLayoutWidth(
+            self,
+            element,
+            decl,
+            self.page,
+            tag,
+            block_like,
+            inline_atomic_box,
+            has_child_elements,
+            available_width,
+            label,
+            font_size,
+            font_family,
+            font_weight,
+            italic,
+        );
         if (width <= 0) {
             return;
         }
 
         const pos = if (out_of_flow_positioned)
             resolveOutOfFlowPosition(self, element, cursor.*, decl, margins, width)
-        else if (inline_leaf)
+        else if (inline_box)
             cursor.beginInlineLeaf(width, margins)
         else
             cursor.beginBlock(margins);
         var x = pos.x;
         const y = pos.y;
-        if (!inline_leaf) {
+        if (!inline_box) {
             x = resolveAutoMarginAlignedX(cursor.*, decl, self.page, width, margins, x);
         }
-        if (block_like and isFlexDisplay(display)) {
+        if ((block_like or inline_atomic_box) and isFlexDisplay(display)) {
             const rect = if (isFlexColumnContainer(display, decl, self.page))
                 try self.paintFlexColumnElement(
                     element,
@@ -781,10 +1040,14 @@ const Painter = struct {
                     margins,
                     block_like,
                 );
-            cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
+            if (inline_box) {
+                cursor.advanceInlineLeaf(rect, margins, flowSpacingAfter(tag, block_like));
+            } else {
+                cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
+            }
             return;
         }
-        if (block_like and isTableContainerDisplay(display)) {
+        if ((block_like or inline_atomic_box) and isTableContainerDisplay(display)) {
             const rect = try self.paintTableElement(
                 element,
                 decl,
@@ -796,7 +1059,11 @@ const Painter = struct {
                 margins,
                 block_like,
             );
-            cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
+            if (inline_box) {
+                cursor.advanceInlineLeaf(rect, margins, flowSpacingAfter(tag, block_like));
+            } else {
+                cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
+            }
             return;
         }
         if (inline_content_flow) {
@@ -852,7 +1119,11 @@ const Painter = struct {
                 });
             }
             if (!out_of_flow_positioned) {
-                cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
+                if (inline_box) {
+                    cursor.advanceInlineLeaf(rect, margins, flowSpacingAfter(tag, block_like));
+                } else {
+                    cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
+                }
             }
             return;
         }
@@ -887,6 +1158,7 @@ const Painter = struct {
                 .page = self.page,
                 .opts = self.opts,
                 .list = &temp_list,
+                .paint_text_styles = self.paint_text_styles,
             };
             const height = try temp_painter.paintBlockChildrenWithFloats(
                 element,
@@ -921,7 +1193,7 @@ const Painter = struct {
         const overflow_clip_rect = if (clipsOverflowContents(decl, self.page)) clipRectFromBounds(rect) else null;
 
         const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
-        const fg = resolveTextColor(decl, self.page, element, tag);
+        const fg = text_style.color;
         const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
 
         if (shouldPaintBox(tag)) {
@@ -977,6 +1249,10 @@ const Painter = struct {
             });
         }
 
+        const scrolled_command_start = self.list.commands.items.len;
+        const scrolled_link_start = self.list.link_regions.items.len;
+        const scrolled_control_start = self.list.control_regions.items.len;
+
         const image_command = if (tag == .img)
             try resolvedImageCommand(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)
         else
@@ -986,14 +1262,10 @@ const Painter = struct {
         else
             null;
         if (image_command) |command| {
-            var clipped_command = command;
-            clipped_command.clip_rect = overflow_clip_rect;
-            try self.list.addImage(self.allocator, clipped_command);
+            try self.list.addImage(self.allocator, command);
         }
         if (canvas_command) |command| {
-            var clipped_command = command;
-            clipped_command.clip_rect = overflow_clip_rect;
-            try self.list.addCanvas(self.allocator, clipped_command);
+            try self.list.addCanvas(self.allocator, command);
         }
 
         if (label.len > 0 and shouldPaintText(tag) and image_command == null and canvas_command == null) {
@@ -1025,11 +1297,59 @@ const Painter = struct {
                 .font_family = @constCast(font_family),
                 .font_weight = font_weight,
                 .italic = italic,
-                .clip_rect = overflow_clip_rect,
+                .clip_rect = null,
                 .color = fg,
                 .underline = shouldUnderlineText(element, decl, self.page, tag),
                 .text = label,
             });
+        }
+
+        if (child_display_list) |*list| {
+            try self.appendDisplayListWithOffset(list, 0, 0, null);
+        }
+
+        const tracks_scroll_metrics = overflow_clip_rect != null or self.page._element_scroll_positions.contains(element);
+        if (tracks_scroll_metrics) {
+            const content_box_width = @max(@as(i32, 0), rect.width - padding.horizontal());
+            const content_box_height = @max(@as(i32, 0), rect.height - padding.vertical());
+            const content_origin_x = rect.x + padding.left;
+            const content_origin_y = rect.y + padding.top;
+            const recent_bounds = recentOutputBounds(self, scrolled_command_start, scrolled_link_start, scrolled_control_start);
+            const bounds_width = if (recent_bounds) |bounds|
+                @max(@as(i32, 0), bounds.x + bounds.width - content_origin_x)
+            else
+                0;
+            const bounds_height = if (recent_bounds) |bounds|
+                @max(@as(i32, 0), bounds.y + bounds.height - content_origin_y)
+            else
+                0;
+            const scroll_position = try trackElementScrollMetrics(
+                self,
+                element,
+                content_box_width,
+                content_box_height,
+                @max(content_box_width, bounds_width),
+                @max(@max(content_box_height, bounds_height), own_content_height + child_gap + child_height),
+            );
+            if (scroll_position.x > 0 or scroll_position.y > 0) {
+                translateRecentOutput(
+                    self,
+                    scrolled_command_start,
+                    scrolled_link_start,
+                    scrolled_control_start,
+                    -@as(i32, @intCast(scroll_position.x)),
+                    -@as(i32, @intCast(scroll_position.y)),
+                );
+            }
+        }
+
+        if (overflow_clip_rect) |clip_rect| {
+            self.applyClipRectToRecentOutput(
+                scrolled_command_start,
+                scrolled_link_start,
+                scrolled_control_start,
+                clip_rect,
+            );
         }
 
         if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
@@ -1039,14 +1359,10 @@ const Painter = struct {
             try self.list.addControlRegion(self.allocator, region);
         }
 
-        if (child_display_list) |*list| {
-            try self.appendDisplayListWithOffset(list, 0, 0, overflow_clip_rect);
-        }
-
         if (out_of_flow_positioned) {
             return;
         }
-        if (inline_leaf) {
+        if (inline_box) {
             cursor.advanceInlineLeaf(rect, margins, flowSpacingAfter(tag, block_like));
         } else {
             cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
@@ -1173,12 +1489,35 @@ const Painter = struct {
             }
         }
 
-        if (clipsOverflowContents(decl, self.page)) {
+        const overflow_clip_rect = if (clipsOverflowContents(decl, self.page)) clipRectFromBounds(rect) else null;
+        const tracks_scroll_metrics = overflow_clip_rect != null or self.page._element_scroll_positions.contains(element);
+        if (tracks_scroll_metrics) {
+            const scroll_position = try trackElementScrollMetrics(
+                self,
+                element,
+                content_width,
+                container_content_height,
+                content_width,
+                content_height,
+            );
+            if (scroll_position.x > 0 or scroll_position.y > 0) {
+                translateRecentOutput(
+                    self,
+                    child_command_start,
+                    child_link_start,
+                    child_control_start,
+                    -@as(i32, @intCast(scroll_position.x)),
+                    -@as(i32, @intCast(scroll_position.y)),
+                );
+            }
+        }
+
+        if (overflow_clip_rect) |clip_rect| {
             self.applyClipRectToRecentOutput(
                 child_command_start,
                 child_link_start,
                 child_control_start,
-                clipRectFromBounds(rect),
+                clip_rect,
             );
         }
 
@@ -1310,6 +1649,7 @@ const Painter = struct {
                     padding.top + content_height + padding.bottom,
             ),
         };
+        const container_content_height = @max(@as(i32, 0), rect.height - padding.vertical());
         const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
         const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
         if (shouldPaintBox(tag)) {
@@ -1424,12 +1764,35 @@ const Painter = struct {
             }
         }
 
-        if (clipsOverflowContents(decl, self.page)) {
+        const overflow_clip_rect = if (clipsOverflowContents(decl, self.page)) clipRectFromBounds(rect) else null;
+        const tracks_scroll_metrics = overflow_clip_rect != null or self.page._element_scroll_positions.contains(element);
+        if (tracks_scroll_metrics) {
+            const scroll_position = try trackElementScrollMetrics(
+                self,
+                element,
+                content_width,
+                container_content_height,
+                content_width,
+                content_height,
+            );
+            if (scroll_position.x > 0 or scroll_position.y > 0) {
+                translateRecentOutput(
+                    self,
+                    child_command_start,
+                    child_link_start,
+                    child_control_start,
+                    -@as(i32, @intCast(scroll_position.x)),
+                    -@as(i32, @intCast(scroll_position.y)),
+                );
+            }
+        }
+
+        if (overflow_clip_rect) |clip_rect| {
             self.applyClipRectToRecentOutput(
                 child_command_start,
                 child_link_start,
                 child_control_start,
-                clipRectFromBounds(rect),
+                clip_rect,
             );
         }
 
@@ -1460,12 +1823,33 @@ const Painter = struct {
         var float_row_y = child_top;
         var float_row_bottom = child_top;
         var float_active = false;
+        const legacy_center = isLegacyCenterElement(element);
 
         var it = element.asNode().childrenIterator();
         while (it.next()) |child| {
+            const child_command_start = self.list.commands.items.len;
+            const child_link_start = self.list.link_regions.items.len;
+            const child_control_start = self.list.control_regions.items.len;
+            var legacy_center_width = child_width;
+            var legacy_center_use_viewport_width = false;
+
             if (try isOutOfFlowNode(child, self.page)) {
                 try out_of_flow_children.append(self.allocator, child);
                 continue;
+            }
+            if (legacy_center) {
+                if (child.is(Node.CData.Text)) |_| {
+                    legacy_center_use_viewport_width = true;
+                    legacy_center_width = @max(child_width, self.opts.viewport_width - (self.opts.page_margin * 2));
+                } else if (child.is(Element)) |child_el| {
+                    const child_style = try self.page.window.getComputedStyle(child_el, null, self.page);
+                    const child_decl = child_style.asCSSStyleDeclaration();
+                    const child_display = resolvedDisplayValue(child_decl, self.page, child_el);
+                    if (isInlineDisplay(child_display) or isAtomicInlineDisplay(child_display)) {
+                        legacy_center_use_viewport_width = true;
+                        legacy_center_width = @max(child_width, self.opts.viewport_width - (self.opts.page_margin * 2));
+                    }
+                }
             }
             if (child.is(Element)) |child_el| {
                 const float_mode = try resolveFloatMode(child_el, self.page);
@@ -1524,6 +1908,14 @@ const Painter = struct {
             }
 
             try self.paintNode(child, &child_cursor);
+
+            if (legacy_center) {
+                if (recentOutputBounds(self, child_command_start, child_link_start, child_control_start)) |child_bounds| {
+                    const center_width = if (legacy_center_use_viewport_width) legacy_center_width else child_width;
+                    const centered_x = child_left + @max(@as(i32, 0), @divTrunc(center_width - child_bounds.width, 2));
+                    translateRecentOutput(self, child_command_start, child_link_start, child_control_start, centered_x - child_bounds.x, 0);
+                }
+            }
         }
 
         if (float_active) {
@@ -1714,6 +2106,9 @@ const Painter = struct {
             },
             .input => {
                 const input = element.as(Element.Html.Input);
+                if (input._input_type == .hidden) {
+                    return self.allocator.dupe(u8, "");
+                }
                 if (input._input_type == .file) {
                     const selected_files = input.getSelectedFiles();
                     if (selected_files.len > 1) {
@@ -1735,7 +2130,22 @@ const Painter = struct {
                 if (element.getAttributeSafe(comptime .wrap("placeholder"))) |placeholder| {
                     return self.allocator.dupe(u8, placeholder);
                 }
-                return self.allocator.dupe(u8, "[input]");
+                return switch (input._input_type) {
+                    .text,
+                    .password,
+                    .email,
+                    .url,
+                    .tel,
+                    .search,
+                    .number,
+                    .date,
+                    .time,
+                    .@"datetime-local",
+                    .month,
+                    .week,
+                    => self.allocator.dupe(u8, ""),
+                    else => self.allocator.dupe(u8, "[input]"),
+                };
             },
             .textarea => {
                 const text = try element.asNode().getTextContentAlloc(self.allocator);
@@ -1778,7 +2188,7 @@ const Painter = struct {
         if (!has_child_elements) {
             return false;
         }
-        if (!isInlineDisplay(display)) {
+        if (!isPureInlineDisplay(display)) {
             return false;
         }
         if (margins.top != 0 or margins.right != 0 or margins.bottom != 0 or margins.left != 0) {
@@ -1911,16 +2321,12 @@ fn canvasSurfaceForElement(element: *Element) ?*const @import("../browser/webapi
     return canvas.getSurface();
 }
 
-fn resolveTextColor(decl: anytype, page: *Page, element: *Element, tag: Element.Tag) Color {
-    if (parseCssColor(resolveCssPropertyValue(decl, page, element, "color"))) |color| {
-        return color;
+fn normalizeInheritedTextPropertyValue(value: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0 or std.ascii.eqlIgnoreCase(trimmed, "inherit")) {
+        return "";
     }
-
-    if (tag == .anchor and element.getAttributeSafe(comptime .wrap("href")) != null) {
-        return .{ .r = 0, .g = 102, .b = 204 };
-    }
-
-    return .{ .r = 0, .g = 0, .b = 0 };
+    return trimmed;
 }
 
 fn shouldUnderlineText(element: *Element, decl: anytype, page: *Page, tag: Element.Tag) bool {
@@ -2639,6 +3045,13 @@ fn hasVisibleBorder(decl: anytype, page: *Page) bool {
     );
 }
 
+fn resolveBorderHorizontalPx(decl: anytype, page: *Page) i32 {
+    const shorthand = parseBorderWidthPx(decl.getPropertyValue("border-width", page)) orelse 0;
+    const left = parseBorderWidthPx(decl.getPropertyValue("border-left-width", page)) orelse shorthand;
+    const right = parseBorderWidthPx(decl.getPropertyValue("border-right-width", page)) orelse shorthand;
+    return left + right;
+}
+
 fn borderSideVisible(style_value: []const u8, width_value: []const u8) bool {
     const style = std.mem.trim(u8, style_value, &std.ascii.whitespace);
     if (style.len == 0 or
@@ -2731,6 +3144,21 @@ fn isInlineDisplay(display: []const u8) bool {
     return std.mem.eql(u8, trimmed, "inline") or std.mem.startsWith(u8, trimmed, "inline-");
 }
 
+fn isPureInlineDisplay(display: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(std.mem.trim(u8, display, &std.ascii.whitespace), "inline");
+}
+
+fn isAtomicInlineDisplay(display: []const u8) bool {
+    const trimmed = std.mem.trim(u8, display, &std.ascii.whitespace);
+    return std.ascii.eqlIgnoreCase(trimmed, "inline-block") or
+        std.ascii.eqlIgnoreCase(trimmed, "inline-flex") or
+        std.ascii.eqlIgnoreCase(trimmed, "inline-table");
+}
+
+fn isLegacyCenterElement(element: *Element) bool {
+    return std.ascii.eqlIgnoreCase(element.getTagNameLower(), "center");
+}
+
 fn isInlineFlowDisplayForElement(element: *Element, display: []const u8) bool {
     if (isInlineDisplay(display)) return true;
 
@@ -2751,6 +3179,7 @@ fn hasRenderableChildElements(element: *Element) bool {
                 .script, .style, .template, .head, .meta, .link, .title => true,
                 else => false,
             }) continue;
+            if (isHiddenFormControl(child_el)) continue;
             return true;
         }
     }
@@ -2805,11 +3234,14 @@ fn hasOnlyInlineFlowChildren(element: *Element, page: *Page) !bool {
 
 fn isFlowBlockLike(tag: Element.Tag, display: []const u8, has_child_elements: bool) bool {
     const trimmed = std.mem.trim(u8, display, &std.ascii.whitespace);
-    if (std.mem.eql(u8, trimmed, "inline")) {
+    if (isPureInlineDisplay(trimmed)) {
         return has_child_elements;
     }
+    if (isAtomicInlineDisplay(trimmed)) {
+        return false;
+    }
     if (std.mem.startsWith(u8, trimmed, "inline-")) {
-        return has_child_elements;
+        return false;
     }
     if (trimmed.len > 0) {
         return true;
@@ -2819,6 +3251,79 @@ fn isFlowBlockLike(tag: Element.Tag, display: []const u8, has_child_elements: bo
         .span, .anchor, .strong, .em, .code, .label, .option => false,
         else => true,
     };
+}
+
+test "paintDocument keeps inline-block tabs on one row when they contain block children" {
+    var page = try testing.pageTest("page/inline_block_tabs_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var search_text: ?TextCommand = null;
+    var images_text: ?TextCommand = null;
+    var maps_text: ?TextCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Search")) {
+                    search_text = text;
+                } else if (std.mem.eql(u8, text.text, "Images")) {
+                    images_text = text;
+                } else if (std.mem.eql(u8, text.text, "Maps")) {
+                    maps_text = text;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const search = search_text orelse return error.InlineBlockTabsSearchMissing;
+    const images = images_text orelse return error.InlineBlockTabsImagesMissing;
+    const maps = maps_text orelse return error.InlineBlockTabsMapsMissing;
+
+    const search_images_dy = if (search.y > images.y) search.y - images.y else images.y - search.y;
+    const images_maps_dy = if (images.y > maps.y) images.y - maps.y else maps.y - images.y;
+    try std.testing.expect(search_images_dy <= 4);
+    try std.testing.expect(images_maps_dy <= 4);
+    try std.testing.expect(images.x > search.x + 40);
+    try std.testing.expect(maps.x > images.x + 40);
+}
+
+test "paintDocument keeps inline-block wrappers on one row with nested block children" {
+    var page = try testing.pageTest("page/inline_block_wrapper_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var alpha_text: ?TextCommand = null;
+    var beta_text: ?TextCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Alpha")) {
+                    alpha_text = text;
+                } else if (std.mem.eql(u8, text.text, "Beta")) {
+                    beta_text = text;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const alpha = alpha_text orelse return error.InlineBlockWrapperAlphaMissing;
+    const beta = beta_text orelse return error.InlineBlockWrapperBetaMissing;
+
+    const alpha_beta_dy = if (alpha.y > beta.y) alpha.y - beta.y else beta.y - alpha.y;
+    try std.testing.expect(alpha_beta_dy <= 4);
+    try std.testing.expect(beta.x > alpha.x + 40);
 }
 
 fn isFlexDisplay(display: []const u8) bool {
@@ -3213,19 +3718,21 @@ fn defaultFontSize(tag: Element.Tag) i32 {
 }
 
 fn resolveLayoutWidth(
-    self: *const Painter,
+    self: *Painter,
     element: *Element,
     decl: anytype,
     page: *Page,
     tag: Element.Tag,
     block_like: bool,
+    inline_atomic_box: bool,
+    has_child_elements: bool,
     available_width: i32,
     label: []const u8,
     font_size: i32,
     font_family: []const u8,
     font_weight: i32,
     italic: bool,
-) i32 {
+) !i32 {
     const explicit_width = resolveExplicitWidth(self, element, decl, page, tag, available_width);
     const explicit_height = resolveExplicitHeight(self, element, decl, page, tag, self.opts.viewport_height);
     const intrinsic_image = if (tag == .img) resolveIntrinsicImageDimensions(element, page) else null;
@@ -3262,9 +3769,24 @@ fn resolveLayoutWidth(
         return std.math.clamp(resolved_image_width, 1, available_width);
     }
 
+    const position_value = resolveCssPropertyValue(decl, page, element, "position");
+    const out_of_flow_positioned = isOutOfFlowPositioned(position_value);
+    const has_left_constraint = std.mem.trim(u8, decl.getPropertyValue("left", page), &std.ascii.whitespace).len > 0;
+    const has_right_constraint = std.mem.trim(u8, decl.getPropertyValue("right", page), &std.ascii.whitespace).len > 0;
     if (block_like) {
+        const shrink_to_fit_out_of_flow = out_of_flow_positioned and explicit_width <= 0 and !(has_left_constraint and has_right_constraint);
+        var measured_auto_width: i32 = 0;
+        if (shrink_to_fit_out_of_flow) {
+            const measured = try self.measureElementChildrenPaintedBox(element, available_width);
+            measured_auto_width = measured.width;
+        }
         var resolved = std.math.clamp(
-            if (explicit_width > 0) explicit_width else available_width,
+            if (explicit_width > 0)
+                explicit_width
+            else if (measured_auto_width > 0)
+                measured_auto_width
+            else
+                available_width,
             80,
             available_width,
         );
@@ -3275,6 +3797,11 @@ fn resolveLayoutWidth(
 
     var preferred = explicit_width;
     if (preferred <= 0) {
+        if (inline_atomic_box and has_child_elements) {
+            preferred = try estimateInlineAtomicDescendantWidth(self, element, available_width);
+        }
+    }
+    if (preferred <= 0) {
         preferred = switch (tag) {
             .img => if (intrinsic_image) |dims|
                 if (explicit_height > 0 and dims.height > 0)
@@ -3284,13 +3811,93 @@ fn resolveLayoutWidth(
             else
                 180,
             .textarea => 240,
-            .input, .select => 180,
+            .input => blk: {
+                const input = element.as(Element.Html.Input);
+                break :blk switch (input._input_type) {
+                    .submit, .reset, .button => @max(
+                        self.opts.inline_min_width,
+                        estimateTextWidth(label, font_size, font_family, font_weight, italic) + 24,
+                    ),
+                    else => 180,
+                };
+            },
+            .select => 180,
             else => @max(self.opts.inline_min_width, estimateTextWidth(label, font_size, font_family, font_weight, italic) + 16),
         };
     }
     preferred = @max(preferred, min_width);
     if (max_width) |limit| preferred = @min(preferred, limit);
     return std.math.clamp(preferred, 60, available_width);
+}
+
+fn estimateInlineAtomicDescendantWidth(
+    self: *Painter,
+    element: *Element,
+    available_width: i32,
+) !i32 {
+    var best: i32 = 0;
+    const style = try self.page.window.getComputedStyle(element, null, self.page);
+    const decl = style.asCSSStyleDeclaration();
+    const text_style = try self.resolvePaintTextStyle(element, decl, element.getTag());
+    const font_size = text_style.font_size;
+    const font_family = text_style.font_family;
+    const font_weight = text_style.font_weight;
+    const italic = text_style.italic;
+
+    var it = element.asNode().childrenIterator();
+    while (it.next()) |child| {
+        if (child.is(Node.CData.Text)) |text| {
+            const normalized = try normalizeInlineText(self.allocator, text.getWholeText());
+            defer self.allocator.free(normalized);
+            const trimmed = std.mem.trim(u8, normalized, " ");
+            if (trimmed.len == 0) continue;
+            best = @max(best, estimateTextWidth(trimmed, font_size, font_family, font_weight, italic) + 16);
+            continue;
+        }
+        if (child.is(Element)) |child_el| {
+            const child_tag = child_el.getTag();
+            if (switch (child_tag) {
+                .script, .style, .template, .head, .meta, .link, .title => true,
+                else => false,
+            }) continue;
+            if (isHiddenFormControl(child_el)) continue;
+
+            const child_style = try self.page.window.getComputedStyle(child_el, null, self.page);
+            const child_decl = child_style.asCSSStyleDeclaration();
+            if (std.ascii.eqlIgnoreCase(
+                std.mem.trim(u8, child_decl.getPropertyValue("display", self.page), &std.ascii.whitespace),
+                "none",
+            )) continue;
+            const child_padding = resolveEdgeSizes(child_decl, self.page, "padding");
+            const child_margins = resolveEdgeSizes(child_decl, self.page, "margin");
+            const child_extra = child_padding.left +
+                child_padding.right +
+                child_margins.left +
+                child_margins.right +
+                resolveBorderHorizontalPx(child_decl, self.page);
+
+            const explicit_child_width = resolveExplicitWidth(self, child_el, child_decl, self.page, child_tag, available_width);
+            if (explicit_child_width > 0) {
+                best = @max(best, explicit_child_width + child_extra);
+            }
+
+            const child_label = try self.elementLabel(child_el);
+            defer self.allocator.free(child_label);
+            const trimmed_label = std.mem.trim(u8, child_label, &std.ascii.whitespace);
+            if (trimmed_label.len > 0 and trimmed_label[0] != '[') {
+                const child_text_style = try self.resolvePaintTextStyle(child_el, child_decl, child_tag);
+                const child_font_size = child_text_style.font_size;
+                const child_font_family = child_text_style.font_family;
+                const child_font_weight = child_text_style.font_weight;
+                const child_italic = child_text_style.italic;
+                best = @max(best, estimateTextWidth(trimmed_label, child_font_size, child_font_family, child_font_weight, child_italic) + 24 + child_extra);
+            }
+
+            best = @max(best, (try estimateInlineAtomicDescendantWidth(self, child_el, available_width)) + child_extra);
+        }
+    }
+
+    return std.math.clamp(best, 0, available_width);
 }
 
 fn resolveOwnContentHeight(
@@ -3448,14 +4055,20 @@ fn resolveAncestorExplicitHeight(self: *const Painter, element: *Element, page: 
 
 fn clipsOverflowContents(decl: anytype, page: *Page) bool {
     const overflow = std.mem.trim(u8, decl.getPropertyValue("overflow", page), &std.ascii.whitespace);
-    if (std.ascii.eqlIgnoreCase(overflow, "hidden") or std.ascii.eqlIgnoreCase(overflow, "clip")) {
+    if (overflowValueCreatesViewport(overflow)) {
         return true;
     }
 
     const overflow_x = std.mem.trim(u8, decl.getPropertyValue("overflow-x", page), &std.ascii.whitespace);
     const overflow_y = std.mem.trim(u8, decl.getPropertyValue("overflow-y", page), &std.ascii.whitespace);
-    return (std.ascii.eqlIgnoreCase(overflow_x, "hidden") and std.ascii.eqlIgnoreCase(overflow_y, "hidden")) or
-        (std.ascii.eqlIgnoreCase(overflow_x, "clip") and std.ascii.eqlIgnoreCase(overflow_y, "clip"));
+    return overflowValueCreatesViewport(overflow_x) or overflowValueCreatesViewport(overflow_y);
+}
+
+fn overflowValueCreatesViewport(value: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(value, "hidden") or
+        std.ascii.eqlIgnoreCase(value, "clip") or
+        std.ascii.eqlIgnoreCase(value, "auto") or
+        std.ascii.eqlIgnoreCase(value, "scroll");
 }
 
 fn resolveMinimumHeight(self: *const Painter, tag: Element.Tag, block_like: bool, own_content_height: i32) i32 {
@@ -6349,6 +6962,7 @@ test "paintDocument lays out legacy centered table search form" {
     const main_cell = (try page.window._document.querySelector(.wrap("#main-cell"), page)).?;
     const side_cell = (try page.window._document.querySelector(.wrap("#side-cell"), page)).?;
     const side_pill = (try page.window._document.querySelector(.wrap(".side-pill"), page)).?;
+    const center = (try page.window._document.querySelector(.wrap("center"), page)).?;
     const logo = (try page.window._document.querySelector(.wrap(".logo"), page)).?;
     const shell = (try page.window._document.querySelector(.wrap(".search-shell"), page)).?;
 
@@ -6357,9 +6971,12 @@ test "paintDocument lays out legacy centered table search form" {
     const main_style = try page.window.getComputedStyle(main_cell, null, page);
     const side_style = try page.window.getComputedStyle(side_cell, null, page);
     const side_pill_style = try page.window.getComputedStyle(side_pill, null, page);
+    const center_style = try page.window.getComputedStyle(center, null, page);
     const logo_style = try page.window.getComputedStyle(logo, null, page);
     const shell_style = try page.window.getComputedStyle(shell, null, page);
 
+    try std.testing.expectEqualStrings("block", center_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+    try std.testing.expectEqualStrings("center", center_style.asCSSStyleDeclaration().getPropertyValue("text-align", page));
     try std.testing.expectEqualStrings("table", table_style.asCSSStyleDeclaration().getPropertyValue("display", page));
     try std.testing.expectEqualStrings("table-row", row_style.asCSSStyleDeclaration().getPropertyValue("display", page));
     try std.testing.expectEqualStrings("table-cell", main_style.asCSSStyleDeclaration().getPropertyValue("display", page));
@@ -6787,6 +7404,105 @@ test "paintDocument honors generic block min-height and max-height" {
     try std.testing.expect(green.y >= clip.y + clip.height + 14);
 }
 
+test "paintDocument scrolls generic block overflow auto content" {
+    var page = try testing.pageTest("page/overflow_auto_scroll_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    const box = page.window._document.getElementById("box", page) orelse return error.OverflowAutoBoxMissing;
+    try std.testing.expectEqual(@as(f64, 80), box.getClientHeight(page));
+    try std.testing.expectEqual(@as(f64, 120), box.getScrollHeight(page));
+    try std.testing.expectEqual(@as(u32, 40), box.getScrollTop(page));
+
+    var blue_fill: ?RectCommand = null;
+    var red_fill: ?RectCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.b >= 180 and rect.color.r <= 80 and rect.color.g <= 120 and rect.width == 120 and rect.height == 40) {
+                    blue_fill = rect;
+                } else if (rect.color.r >= 180 and rect.color.g <= 100 and rect.color.b <= 100 and rect.width == 120 and rect.height == 40) {
+                    red_fill = rect;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const blue = blue_fill orelse return error.OverflowAutoBlueFillMissing;
+    const red = red_fill orelse return error.OverflowAutoRedFillMissing;
+    const blue_clip = blue.clip_rect orelse return error.OverflowAutoBlueClipMissing;
+    const red_clip = red.clip_rect orelse return error.OverflowAutoRedClipMissing;
+
+    try std.testing.expect(blue.y < blue_clip.y);
+    try std.testing.expectEqual(@as(i32, 80), blue_clip.height);
+    try std.testing.expect(red.y >= blue_clip.y);
+    try std.testing.expect(red.y < red_clip.y + red_clip.height);
+}
+
+test "paintDocument scrolls flex overflow auto content" {
+    var page = try testing.pageTest("page/flex_overflow_auto_scroll_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    const box = page.window._document.getElementById("box", page) orelse return error.FlexOverflowAutoBoxMissing;
+    try std.testing.expectEqual(@as(f64, 80), box.getClientHeight(page));
+    try std.testing.expectEqual(@as(f64, 120), box.getScrollHeight(page));
+    try std.testing.expectEqual(@as(u32, 40), box.getScrollTop(page));
+
+    var blue_fill: ?RectCommand = null;
+    var red_fill: ?RectCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.b >= 180 and rect.color.r <= 80 and rect.color.g <= 120 and rect.width == 140 and rect.height == 40) {
+                    blue_fill = rect;
+                } else if (rect.color.r >= 180 and rect.color.g <= 100 and rect.color.b <= 100 and rect.width == 140 and rect.height == 40) {
+                    red_fill = rect;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const blue = blue_fill orelse return error.FlexOverflowAutoBlueFillMissing;
+    const red = red_fill orelse return error.FlexOverflowAutoRedFillMissing;
+    const blue_clip = blue.clip_rect orelse return error.FlexOverflowAutoBlueClipMissing;
+    const red_clip = red.clip_rect orelse return error.FlexOverflowAutoRedClipMissing;
+
+    try std.testing.expect(blue.y < blue_clip.y);
+    try std.testing.expectEqual(@as(i32, 80), blue_clip.height);
+    try std.testing.expect(red.y >= blue_clip.y);
+    try std.testing.expect(red.y < red_clip.y + red_clip.height);
+}
+
+test "paintDocument scrolls overflow auto link regions with scrollTop" {
+    var page = try testing.pageTest("page/overflow_auto_link_scroll_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), display_list.link_regions.items.len);
+    const region = display_list.link_regions.items[0];
+    try std.testing.expectEqual(@as(i32, 120), region.width);
+    try std.testing.expect(region.y < 120);
+    try std.testing.expect(region.y + region.height <= 20 + 80 + 2);
+}
+
 test "paintDocument clips hidden link regions to overflow containers" {
     var page = try testing.pageTest("page/overflow_hidden_link_layout.html");
     defer page._session.removePage();
@@ -6985,4 +7701,132 @@ test "paintDocument centers inline children when text-align is center" {
     try std.testing.expect(input.x > 150);
     try std.testing.expect(input.x < 190);
     try std.testing.expect(input.width >= 280);
+}
+
+test "paintDocument sizes submit inputs from label instead of generic text-input width" {
+    var page = try testing.pageTest("page/input_submit_sizing_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), display_list.control_regions.items.len);
+
+    const text_input = display_list.control_regions.items[0];
+    const submit_input = display_list.control_regions.items[1];
+
+    try std.testing.expect(text_input.width >= 160);
+    try std.testing.expect(submit_input.width <= 100);
+    try std.testing.expect(submit_input.width < text_input.width);
+}
+
+test "paintDocument ignores hidden and script descendants when sizing inline submit wrappers" {
+    var page = try testing.pageTest("page/input_submit_wrapper_hidden_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), display_list.control_regions.items.len);
+
+    const submit_input = display_list.control_regions.items[0];
+    try std.testing.expect(submit_input.width <= 160);
+
+    var widest_wrapper_rect: i32 = 0;
+    for (display_list.commands.items) |command| {
+        const rect = switch (command) {
+            .fill_rect => |value| value,
+            .stroke_rect => |value| value,
+            else => continue,
+        };
+        if (rect.color.a == 0) continue;
+        if (rect.color.r == 255 and rect.color.g == 255 and rect.color.b == 255) continue;
+        if (rect.x > submit_input.x or rect.x + rect.width < submit_input.x + submit_input.width) continue;
+        if (rect.y > submit_input.y + submit_input.height or rect.y + rect.height < submit_input.y) continue;
+        widest_wrapper_rect = @max(widest_wrapper_rect, rect.width);
+    }
+
+    try std.testing.expect(widest_wrapper_rect > 0);
+    try std.testing.expect(widest_wrapper_rect <= submit_input.width + 24);
+}
+
+test "paintDocument shrink-wraps auto-width absolute nav bars when only one edge is pinned" {
+    var page = try testing.pageTest("page/absolute_auto_width_nav_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var search_x: ?i32 = null;
+    var sign_in_x: ?i32 = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Search")) search_x = text.x;
+                if (std.mem.eql(u8, text.text, "Sign in")) sign_in_x = text.x;
+            },
+            else => {},
+        }
+    }
+
+    const search = search_x orelse return error.AbsoluteAutoWidthSearchMissing;
+    const sign_in = sign_in_x orelse return error.AbsoluteAutoWidthSignInMissing;
+
+    try std.testing.expect(search < 60);
+    try std.testing.expect(sign_in > 760);
+}
+
+test "paintDocument inherits google-tab text styles into nested span labels" {
+    var page = try testing.pageTest("page/google_tab_text_inheritance_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var search_text: ?TextCommand = null;
+    var images_text: ?TextCommand = null;
+    var sign_in_text: ?TextCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Search")) {
+                    search_text = text;
+                } else if (std.mem.eql(u8, text.text, "Images")) {
+                    images_text = text;
+                } else if (std.mem.eql(u8, text.text, "Sign in")) {
+                    sign_in_text = text;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const search = search_text orelse return error.GoogleTabSearchMissing;
+    const images = images_text orelse return error.GoogleTabImagesMissing;
+    const sign_in = sign_in_text orelse return error.GoogleTabSignInMissing;
+
+    try std.testing.expectEqual(@as(i32, 13), search.font_size);
+    try std.testing.expectEqual(@as(i32, 13), images.font_size);
+    try std.testing.expect(search.font_weight >= 700);
+    try std.testing.expect(search.color.r >= 240);
+    try std.testing.expect(search.color.g >= 240);
+    try std.testing.expect(search.color.b >= 240);
+    try std.testing.expect(images.color.r >= 190 and images.color.r <= 210);
+    try std.testing.expect(images.color.g >= 190 and images.color.g <= 210);
+    try std.testing.expect(images.color.b >= 190 and images.color.b <= 210);
+    try std.testing.expect(sign_in.color.r >= 190 and sign_in.color.r <= 210);
+    try std.testing.expect(sign_in.color.g >= 190 and sign_in.color.g <= 210);
+    try std.testing.expect(sign_in.color.b >= 190 and sign_in.color.b <= 210);
 }

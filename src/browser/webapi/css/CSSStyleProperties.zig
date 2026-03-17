@@ -38,7 +38,12 @@ pub fn init(element: ?*Element, is_computed: bool, page: *Page) !*CSSStyleProper
             }
 
             if (el.getAttributeSafe(comptime .wrap("style"))) |style_attr| {
-                try proto.applyDeclarationsText(style_attr, page);
+                try proto.applyDeclarationsTextWithCascade(
+                    style_attr,
+                    .{ .inline_style = 1 },
+                    std.math.maxInt(usize),
+                    page,
+                );
             }
         }
     }
