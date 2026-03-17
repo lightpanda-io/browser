@@ -203,3 +203,25 @@
     testing.expectEqual(true, response.body !== null);
   });
 </script>
+
+<script id=fetch_blob_url>
+  testing.async(async (restore) => {
+    // Create a blob and get its URL
+    const blob = new Blob(['Hello from blob!'], { type: 'text/plain' });
+    const blobUrl = URL.createObjectURL(blob);
+
+    const response = await fetch(blobUrl);
+    restore();
+
+    testing.expectEqual(200, response.status);
+    testing.expectEqual(true, response.ok);
+    testing.expectEqual(blobUrl, response.url);
+    testing.expectEqual('text/plain', response.headers.get('Content-Type'));
+
+    const text = await response.text();
+    testing.expectEqual('Hello from blob!', text);
+
+    // Clean up
+    URL.revokeObjectURL(blobUrl);
+  });
+</script>
