@@ -164,33 +164,24 @@ const HeaderValue = struct {
 };
 
 pub const AuthChallenge = struct {
+    const Source = enum { server, proxy };
+    const Scheme = enum { basic, digest };
+
     status: u16,
-    source: ?enum { server, proxy },
-    scheme: ?enum { basic, digest },
+    source: ?Source,
+    scheme: ?Scheme,
     realm: ?[]const u8,
 
-    pub fn parse(status: u16, header: []const u8) !AuthChallenge {
+    pub fn parse(status: u16, source: Source, value: []const u8) !AuthChallenge {
         var ac: AuthChallenge = .{
             .status = status,
-            .source = null,
+            .source = source,
             .realm = null,
             .scheme = null,
         };
 
-        const sep = std.mem.indexOfPos(u8, header, 0, ": ") orelse return error.InvalidHeader;
-        const hname = header[0..sep];
-        const hvalue = header[sep + 2 ..];
-
-        if (std.ascii.eqlIgnoreCase("WWW-Authenticate", hname)) {
-            ac.source = .server;
-        } else if (std.ascii.eqlIgnoreCase("Proxy-Authenticate", hname)) {
-            ac.source = .proxy;
-        } else {
-            return error.InvalidAuthChallenge;
-        }
-
-        const pos = std.mem.indexOfPos(u8, std.mem.trim(u8, hvalue, std.ascii.whitespace[0..]), 0, " ") orelse hvalue.len;
-        const _scheme = hvalue[0..pos];
+        const pos = std.mem.indexOfPos(u8, std.mem.trim(u8, value, std.ascii.whitespace[0..]), 0, " ") orelse value.len;
+        const _scheme = value[0..pos];
         if (std.ascii.eqlIgnoreCase(_scheme, "basic")) {
             ac.scheme = .basic;
         } else if (std.ascii.eqlIgnoreCase(_scheme, "digest")) {
@@ -366,11 +357,8 @@ pub const Connection = struct {
 
     pub fn setCallbacks(
         self: *const Connection,
-        comptime header_cb: libcurl.CurlHeaderFunction,
         comptime data_cb: libcurl.CurlWriteFunction,
     ) !void {
-        try libcurl.curl_easy_setopt(self.easy, .header_data, self.easy);
-        try libcurl.curl_easy_setopt(self.easy, .header_function, header_cb);
         try libcurl.curl_easy_setopt(self.easy, .write_data, self.easy);
         try libcurl.curl_easy_setopt(self.easy, .write_function, data_cb);
     }
@@ -378,9 +366,6 @@ pub const Connection = struct {
     pub fn reset(self: *const Connection) !void {
         try libcurl.curl_easy_setopt(self.easy, .proxy, null);
         try libcurl.curl_easy_setopt(self.easy, .http_header, null);
-
-        try libcurl.curl_easy_setopt(self.easy, .header_data, null);
-        try libcurl.curl_easy_setopt(self.easy, .header_function, null);
 
         try libcurl.curl_easy_setopt(self.easy, .write_data, null);
         try libcurl.curl_easy_setopt(self.easy, .write_function, discardBody);
@@ -392,6 +377,10 @@ pub const Connection = struct {
 
     pub fn setProxy(self: *const Connection, proxy: ?[:0]const u8) !void {
         try libcurl.curl_easy_setopt(self.easy, .proxy, if (proxy) |p| p.ptr else null);
+    }
+
+    pub fn setFollowLocation(self: *const Connection, follow: bool) !void {
+        try libcurl.curl_easy_setopt(self.easy, .follow_location, @as(c_long, if (follow) 2 else 0));
     }
 
     pub fn setTlsVerify(self: *const Connection, verify: bool, use_proxy: bool) !void {
