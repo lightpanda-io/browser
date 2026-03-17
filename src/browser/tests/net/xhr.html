@@ -283,3 +283,26 @@
     testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
   });
 </script>
+
+<script id=xhr_blob_url>
+  testing.async(async (restore) => {
+    // Create a blob and get its URL
+    const blob = new Blob(['Hello from blob!'], { type: 'text/plain' });
+    const blobUrl = URL.createObjectURL(blob);
+
+    const req = new XMLHttpRequest();
+    await new Promise((resolve) => {
+      req.onload = resolve;
+      req.open('GET', blobUrl);
+      req.send();
+    });
+
+    restore();
+    testing.expectEqual(200, req.status);
+    testing.expectEqual('Hello from blob!', req.responseText);
+    testing.expectEqual(blobUrl, req.responseURL);
+
+    // Clean up
+    URL.revokeObjectURL(blobUrl);
+  });
+</script>

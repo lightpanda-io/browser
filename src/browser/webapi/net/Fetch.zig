@@ -25,6 +25,7 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const URL = @import("../../URL.zig");
 
+const Blob = @import("../Blob.zig");
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
 
@@ -44,10 +45,14 @@ pub const InitOpts = Request.InitOpts;
 
 pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     const request = try Request.init(input, options, page);
+    const resolver = page.js.local.?.createPromiseResolver();
+
+    if (std.mem.startsWith(u8, request._url, "blob:")) {
+        return handleBlobUrl(request._url, resolver, page);
+    }
+
     const response = try Response.init(null, .{ .status = 0 }, page);
     errdefer response.deinit(true, page._session);
-
-    const resolver = page.js.local.?.createPromiseResolver();
 
     const fetch = try response._arena.create(Fetch);
     fetch.* = .{
@@ -87,6 +92,26 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
     });
+    return resolver.promise();
+}
+
+fn handleBlobUrl(url: []const u8, resolver: js.PromiseResolver, page: *Page) !js.Promise {
+    const blob: *Blob = page.lookupBlobUrl(url) orelse {
+        resolver.rejectError("fetch blob error", .{ .type_error = "BlobNotFound" });
+        return resolver.promise();
+    };
+
+    const response = try Response.init(null, .{ .status = 200 }, page);
+    response._body = try response._arena.dupe(u8, blob._slice);
+    response._url = try response._arena.dupeZ(u8, url);
+    response._type = .basic;
+
+    if (blob._mime.len > 0) {
+        try response._headers.append("Content-Type", blob._mime, page);
+    }
+
+    const js_val = try page.js.local.?.zigValueToJs(response, .{});
+    resolver.resolve("fetch blob done", js_val);
     return resolver.promise();
 }
 

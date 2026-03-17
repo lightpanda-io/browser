@@ -29,6 +29,7 @@ const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
 
 const Node = @import("../Node.zig");
+const Blob = @import("../Blob.zig");
 const Event = @import("../Event.zig");
 const Headers = @import("Headers.zig");
 const EventTarget = @import("../EventTarget.zig");
@@ -211,6 +212,11 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
     }
 
     const page = self._page;
+
+    if (std.mem.startsWith(u8, self._url, "blob:")) {
+        return self.handleBlobUrl(page);
+    }
+
     const http_client = page._session.browser.http_client;
     var headers = try http_client.newHeaders();
 
@@ -242,6 +248,39 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
 
     page.js.strongRef(self);
 }
+
+fn handleBlobUrl(self: *XMLHttpRequest, page: *Page) !void {
+    const blob = page.lookupBlobUrl(self._url) orelse {
+        self.handleError(error.BlobNotFound);
+        return;
+    };
+
+    self._response_status = 200;
+    self._response_url = self._url;
+
+    try self._response_data.appendSlice(self._arena, blob._slice);
+    self._response_len = blob._slice.len;
+
+    try self.stateChanged(.headers_received, page);
+    try self._proto.dispatch(.load_start, .{ .loaded = 0, .total = self._response_len orelse 0 }, page);
+    try self.stateChanged(.loading, page);
+    try self._proto.dispatch(.progress, .{
+        .total = self._response_len orelse 0,
+        .loaded = self._response_data.items.len,
+    }, page);
+    try self.stateChanged(.done, page);
+
+    const loaded = self._response_data.items.len;
+    try self._proto.dispatch(.load, .{
+        .total = loaded,
+        .loaded = loaded,
+    }, page);
+    try self._proto.dispatch(.load_end, .{
+        .total = loaded,
+        .loaded = loaded,
+    }, page);
+}
+
 pub fn getReadyState(self: *const XMLHttpRequest) u32 {
     return @intFromEnum(self._ready_state);
 }

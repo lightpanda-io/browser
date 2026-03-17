@@ -408,16 +408,9 @@ pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
     return std.mem.startsWith(u8, url, current_origin);
 }
 
-/// Look up a blob URL in this page's registry, walking up the parent chain.
+/// Look up a blob URL in this page's registry.
 pub fn lookupBlobUrl(self: *Page, url: []const u8) ?*Blob {
-    var current: ?*Page = self;
-    while (current) |page| {
-        if (page._blob_urls.get(url)) |blob| {
-            return blob;
-        }
-        current = page.parent;
-    }
-    return null;
+    return self._blob_urls.get(url);
 }
 
 pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
@@ -458,7 +451,14 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
 
         // Content injection
         if (is_blob) {
-            const blob = self.lookupBlobUrl(request_url) orelse {
+            // For navigation, walk up the parent chain to find blob URLs
+            // (e.g., parent creates blob URL and sets iframe.src to it)
+            const blob = blk: {
+                var current: ?*Page = self.parent;
+                while (current) |page| {
+                    if (page._blob_urls.get(request_url)) |b| break :blk b;
+                    current = page.parent;
+                }
                 log.warn(.js, "invalid blob", .{ .url = request_url });
                 return error.BlobNotFound;
             };
