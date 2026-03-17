@@ -2,37 +2,17 @@
 <script src="testing.js"></script>
 
 <script id=history>
-  testing.expectEqual('auto', history.scrollRestoration);
-
-  history.scrollRestoration = 'manual';
-  testing.expectEqual('manual', history.scrollRestoration);
-
-  history.scrollRestoration = 'auto';
-  testing.expectEqual('auto', history.scrollRestoration);
-  testing.expectEqual(null, history.state)
-
-  history.pushState({ testInProgress: true }, null, 'http://127.0.0.1:9582/src/browser/tests/history_after_nav.skip.html');
-  testing.expectEqual({ testInProgress: true }, history.state);
-
-  history.pushState({ testInProgress: false }, null, 'http://127.0.0.1:9582/xhr/json');
-  history.replaceState({ "new": "field", testComplete: true }, null);
-
-  let state = { "new": "field", testComplete: true };
-  testing.expectEqual(state, history.state);
-
-  let popstateEventFired = false;
-  let popstateEventState = null;
-
-  window.addEventListener('popstate', (event) => {
-      popstateEventFired = true;
-      popstateEventState = event.state;
-  });
-
+  // This test is a bit wonky. But it's trying to test navigation, which is
+  // something we can't do in the main page (we can't navigate away from this
+  // page and still assertOk in the test runner).
+  // If support/history.html has a failed assertion, it'll log the error and
+  // stop the script. If it succeeds, it'll set support_history_completed
+  // which we can use here to assume everything passed.
   testing.eventually(() => {
-    testing.expectEqual(true, popstateEventFired);
-    testing.expectEqual({testInProgress: true }, popstateEventState);
-  })
-
-  history.back();
+    testing.expectEqual(true, window.support_history_completed);
+    testing.expectEqual(true, window.support_history_popstateEventFired);
+    testing.expectEqual({testInProgress: true }, window.support_history_popstateEventState);
+  });
 </script>
 
+<iframe id=frame src="support/history.html"></iframe>
