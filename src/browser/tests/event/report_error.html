@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=onerrorFiveArguments>
+  let called = false;
+  let argCount = 0;
+  window.onerror = function() {
+    called = true;
+    argCount = arguments.length;
+    return true; // suppress default
+  };
+  try { undefinedVariable; } catch(e) { window.reportError(e); }
+  testing.expectEqual(true, called);
+  testing.expectEqual(5, argCount);
+  window.onerror = null;
+</script>
+
+<script id=onerrorCalledBeforeEventListener>
+  let callOrder = [];
+  window.onerror = function() { callOrder.push('onerror'); return true; };
+  window.addEventListener('error', function() { callOrder.push('listener'); });
+  try { undefinedVariable; } catch(e) { window.reportError(e); }
+  testing.expectEqual('onerror', callOrder[0]);
+  testing.expectEqual('listener', callOrder[1]);
+  window.onerror = null;
+</script>
+
+<script id=onerrorReturnTrueSuppresses>
+  let listenerCalled = false;
+  window.onerror = function() { return true; };
+  window.addEventListener('error', function(e) {
+    // listener still fires even when onerror returns true
+    listenerCalled = true;
+  });
+  try { undefinedVariable; } catch(e) { window.reportError(e); }
+  testing.expectEqual(true, listenerCalled);
+  window.onerror = null;
+</script>

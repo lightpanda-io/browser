@@ -348,7 +348,11 @@ pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
 
     const event = error_event.asEvent();
     event._prevent_default = prevent_default;
-    try page._event_manager.dispatch(self.asEventTarget(), event);
+    // Pass null as handler: onerror was already called above with 5 args.
+    // We still dispatch so that addEventListener('error', ...) listeners fire.
+    try page._event_manager.dispatchDirect(self.asEventTarget(), event, null, .{
+        .context = "window.reportError",
+    });
 
     if (comptime builtin.is_test == false) {
         if (!event._prevent_default) {
@@ -879,4 +883,8 @@ test "WebApi: Window" {
 
 test "WebApi: Window scroll" {
     try testing.htmlRunner("window_scroll.html", .{});
+}
+
+test "WebApi: Window.onerror" {
+    try testing.htmlRunner("event/report_error.html", .{});
 }
