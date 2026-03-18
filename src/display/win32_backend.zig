@@ -4644,26 +4644,71 @@ fn drawPresentationImagePlaceholder(hdc: c.HDC, rect: c.RECT, image: ImageComman
     );
 }
 
-fn fitImageRect(rect: c.RECT, image_width: u32, image_height: u32) c.RECT {
+fn resolveImageDrawRect(rect: c.RECT, image_cmd: ImageCommand, image_width: u32, image_height: u32) c.RECT {
     const target_width = rect.right - rect.left;
     const target_height = rect.bottom - rect.top;
     if (target_width <= 0 or target_height <= 0 or image_width == 0 or image_height == 0) {
         return rect;
     }
 
-    const width_scale = @as(f64, @floatFromInt(target_width)) / @as(f64, @floatFromInt(image_width));
-    const height_scale = @as(f64, @floatFromInt(target_height)) / @as(f64, @floatFromInt(image_height));
-    const scale = @min(width_scale, height_scale);
-    const draw_width: c.INT = @max(1, @as(c.INT, @intFromFloat(@round(@as(f64, @floatFromInt(image_width)) * scale))));
-    const draw_height: c.INT = @max(1, @as(c.INT, @intFromFloat(@round(@as(f64, @floatFromInt(image_height)) * scale))));
-    const offset_x = @divTrunc(target_width - draw_width, 2);
-    const offset_y = @divTrunc(target_height - draw_height, 2);
+    const max_int_u32: u32 = @intCast(std.math.maxInt(c.INT));
+    const natural_width: c.INT = @intCast(@min(image_width, max_int_u32));
+    const natural_height: c.INT = @intCast(@min(image_height, max_int_u32));
+
+    const fit_mode: ImageCommand.ObjectFitMode = switch (image_cmd.object_fit) {
+        .fill => .fill,
+        .contain => .contain,
+        .cover => .cover,
+        .none => .none,
+        .scale_down => if (natural_width <= target_width and natural_height <= target_height) .none else .contain,
+    };
+    if (fit_mode == .fill) {
+        return rect;
+    }
+
+    var draw_width: c.INT = natural_width;
+    var draw_height: c.INT = natural_height;
+    switch (fit_mode) {
+        .none => {},
+        .contain => {
+            const width_scale = @as(f64, @floatFromInt(target_width)) / @as(f64, @floatFromInt(natural_width));
+            const height_scale = @as(f64, @floatFromInt(target_height)) / @as(f64, @floatFromInt(natural_height));
+            const scale = @min(width_scale, height_scale);
+            draw_width = @max(1, @as(c.INT, @intFromFloat(@round(@as(f64, @floatFromInt(natural_width)) * scale))));
+            draw_height = @max(1, @as(c.INT, @intFromFloat(@round(@as(f64, @floatFromInt(natural_height)) * scale))));
+        },
+        .cover => {
+            const width_scale = @as(f64, @floatFromInt(target_width)) / @as(f64, @floatFromInt(natural_width));
+            const height_scale = @as(f64, @floatFromInt(target_height)) / @as(f64, @floatFromInt(natural_height));
+            const scale = @max(width_scale, height_scale);
+            draw_width = @max(1, @as(c.INT, @intFromFloat(@round(@as(f64, @floatFromInt(natural_width)) * scale))));
+            draw_height = @max(1, @as(c.INT, @intFromFloat(@round(@as(f64, @floatFromInt(natural_height)) * scale))));
+        },
+        else => {},
+    }
+
+    const origin_x = backgroundAxisOrigin(
+        rect.left,
+        target_width,
+        draw_width,
+        image_cmd.object_position_x_mode,
+        image_cmd.object_position_x_offset,
+        image_cmd.object_position_x_percent_bp,
+    );
+    const origin_y = backgroundAxisOrigin(
+        rect.top,
+        target_height,
+        draw_height,
+        image_cmd.object_position_y_mode,
+        image_cmd.object_position_y_offset,
+        image_cmd.object_position_y_percent_bp,
+    );
 
     return .{
-        .left = rect.left + offset_x,
-        .top = rect.top + offset_y,
-        .right = rect.left + offset_x + draw_width,
-        .bottom = rect.top + offset_y + draw_height,
+        .left = origin_x,
+        .top = origin_y,
+        .right = origin_x + draw_width,
+        .bottom = origin_y + draw_height,
     };
 }
 
@@ -4962,6 +5007,16 @@ fn drawPresentationImageCore(
         return;
     }
 
+    const saved_dc = c.SaveDC(hdc);
+    if (saved_dc == 0) {
+        drawPresentationImagePlaceholder(hdc, rect, image_cmd);
+        return;
+    }
+    defer _ = c.RestoreDC(hdc, saved_dc);
+    if (c.IntersectClipRect(hdc, rect.left, rect.top, rect.right, rect.bottom) == c.ERROR) {
+        return;
+    }
+
     var graphics: ?*GpGraphics = null;
     if (GdipCreateFromHDC(hdc, &graphics) != GDIP_STATUS_OK or graphics == null) {
         drawPresentationImagePlaceholder(hdc, rect, image_cmd);
@@ -4969,7 +5024,7 @@ fn drawPresentationImageCore(
     }
     defer _ = GdipDeleteGraphics(graphics.?);
 
-    const draw_rect = fitImageRect(rect, cached.width, cached.height);
+    const draw_rect = resolveImageDrawRect(rect, image_cmd, cached.width, cached.height);
     const status = GdipDrawImageRectI(
         graphics.?,
         cached.gp_image.?,

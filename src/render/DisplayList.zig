@@ -73,6 +73,14 @@ pub const ImageCommand = struct {
         background,
     };
 
+    pub const ObjectFitMode = enum(u8) {
+        fill,
+        contain,
+        cover,
+        none,
+        scale_down,
+    };
+
     pub const BackgroundPositionMode = enum(u8) {
         offset,
         center,
@@ -100,6 +108,13 @@ pub const ImageCommand = struct {
     z_index: i32 = 0,
     clip_rect: ?ClipRect = null,
     draw_mode: DrawMode = .fit,
+    object_fit: ObjectFitMode = .fill,
+    object_position_x_mode: BackgroundPositionMode = .center,
+    object_position_y_mode: BackgroundPositionMode = .center,
+    object_position_x_percent_bp: i32 = 0,
+    object_position_y_percent_bp: i32 = 0,
+    object_position_x_offset: i32 = 0,
+    object_position_y_offset: i32 = 0,
     background_offset_x: i32 = 0,
     background_offset_y: i32 = 0,
     background_position_x_mode: BackgroundPositionMode = .offset,
@@ -195,6 +210,13 @@ pub const Command = union(enum) {
                 .z_index = image.z_index,
                 .clip_rect = image.clip_rect,
                 .draw_mode = image.draw_mode,
+                .object_fit = image.object_fit,
+                .object_position_x_mode = image.object_position_x_mode,
+                .object_position_y_mode = image.object_position_y_mode,
+                .object_position_x_percent_bp = image.object_position_x_percent_bp,
+                .object_position_y_percent_bp = image.object_position_y_percent_bp,
+                .object_position_x_offset = image.object_position_x_offset,
+                .object_position_y_offset = image.object_position_y_offset,
                 .background_offset_x = image.background_offset_x,
                 .background_offset_y = image.background_offset_y,
                 .background_position_x_mode = image.background_position_x_mode,
@@ -376,6 +398,13 @@ pub fn addImage(self: *DisplayList, allocator: std.mem.Allocator, image: ImageCo
         .z_index = image.z_index,
         .clip_rect = image.clip_rect,
         .draw_mode = image.draw_mode,
+        .object_fit = image.object_fit,
+        .object_position_x_mode = image.object_position_x_mode,
+        .object_position_y_mode = image.object_position_y_mode,
+        .object_position_x_percent_bp = image.object_position_x_percent_bp,
+        .object_position_y_percent_bp = image.object_position_y_percent_bp,
+        .object_position_x_offset = image.object_position_x_offset,
+        .object_position_y_offset = image.object_position_y_offset,
         .background_offset_x = image.background_offset_x,
         .background_offset_y = image.background_offset_y,
         .background_position_x_mode = image.background_position_x_mode,
@@ -513,6 +542,13 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&image.z_index));
                 hasher.update(std.mem.asBytes(&image.clip_rect));
                 hasher.update(std.mem.asBytes(&image.draw_mode));
+                hasher.update(std.mem.asBytes(&image.object_fit));
+                hasher.update(std.mem.asBytes(&image.object_position_x_mode));
+                hasher.update(std.mem.asBytes(&image.object_position_y_mode));
+                hasher.update(std.mem.asBytes(&image.object_position_x_percent_bp));
+                hasher.update(std.mem.asBytes(&image.object_position_y_percent_bp));
+                hasher.update(std.mem.asBytes(&image.object_position_x_offset));
+                hasher.update(std.mem.asBytes(&image.object_position_y_offset));
                 hasher.update(std.mem.asBytes(&image.background_offset_x));
                 hasher.update(std.mem.asBytes(&image.background_offset_y));
                 hasher.update(std.mem.asBytes(&image.background_position_x_mode));

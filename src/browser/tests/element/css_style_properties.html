@@ -170,6 +170,30 @@
 }
 </script>
 
+<script id="imageSizingDefaults">
+{
+  const img = document.createElement('img');
+  const computed = getComputedStyle(img);
+
+  testing.expectEqual('fill', computed.objectFit);
+  testing.expectEqual('50% 50%', computed.objectPosition);
+  testing.expectEqual('auto', computed.aspectRatio);
+
+  img.style.objectFit = 'contain';
+  img.style.objectPosition = 'left top';
+  img.style.aspectRatio = '2 / 1';
+
+  testing.expectEqual('contain', img.style.objectFit);
+  testing.expectEqual('left top', img.style.objectPosition);
+  testing.expectEqual('2 / 1', img.style.aspectRatio);
+
+  const computed_after = getComputedStyle(img);
+  testing.expectEqual('contain', computed_after.objectFit);
+  testing.expectEqual('left top', computed_after.objectPosition);
+  testing.expectEqual('2 / 1', computed_after.aspectRatio);
+}
+</script>
+
 <script id="propertyAssignment">
 {
   const div = $('#test-div');

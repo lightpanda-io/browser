@@ -1136,6 +1136,14 @@ fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height
         const decl = resolved_style.asCSSStyleDeclaration();
         width = resolveElementDimension(decl.getPropertyValue("width", page), .width, parent, page) orelse 5.0;
         height = resolveElementDimension(decl.getPropertyValue("height", page), .height, parent, page) orelse 5.0;
+        const aspect_ratio = parseAspectRatioValue(decl.getPropertyValue("aspect-ratio", page));
+        if (aspect_ratio) |ratio| {
+            if (width == 5.0 and height != 5.0) {
+                width = height * ratio;
+            } else if (height == 5.0 and width != 5.0) {
+                height = width / ratio;
+            }
+        }
     }
 
     if (width == 5.0 or height == 5.0) {
@@ -1175,6 +1183,21 @@ fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height
     }
 
     return .{ .width = width, .height = height };
+}
+
+fn parseAspectRatioValue(raw_value: []const u8) ?f64 {
+    const trimmed = std.mem.trim(u8, raw_value, &std.ascii.whitespace);
+    if (trimmed.len == 0 or std.ascii.eqlIgnoreCase(trimmed, "auto")) return null;
+    if (std.mem.indexOfScalar(u8, trimmed, '/')) |slash_index| {
+        const left = std.mem.trim(u8, trimmed[0..slash_index], &std.ascii.whitespace);
+        const right = std.mem.trim(u8, trimmed[slash_index + 1 ..], &std.ascii.whitespace);
+        if (left.len == 0 or right.len == 0) return null;
+        const numerator = std.fmt.parseFloat(f64, left) catch return null;
+        const denominator = std.fmt.parseFloat(f64, right) catch return null;
+        if (denominator == 0) return null;
+        return numerator / denominator;
+    }
+    return std.fmt.parseFloat(f64, trimmed) catch null;
 }
 
 const DimensionAxis = enum {

@@ -806,6 +806,10 @@ Current state inside Gate 3:
   - bounded tests plus headed probes now cover intrinsic image sizing,
     responsive image shrink-to-fit behavior, semantic background positioning,
     and semantic background sizing on the real screenshot path
+  - `object-fit`, `object-position`, and `aspect-ratio` now ride the same
+    headed image path, with display-list preservation plus headed probes
+    proving fill/contain/cover/none/scale-down placement and explicit aspect
+    ratio backfill on the real screenshot path
   - explicit `box-sizing: content-box` now expands headed block and control
     boxes by their padding on the real surface instead of treating all used
     sizes as border-box, with a focused display-list regression and headed

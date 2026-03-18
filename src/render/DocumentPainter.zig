@@ -715,6 +715,13 @@ const Painter = struct {
                     .z_index = image.z_index,
                     .clip_rect = combineTranslatedClipRect(image.clip_rect, dx, dy, parent_clip_rect),
                     .draw_mode = image.draw_mode,
+                    .object_fit = image.object_fit,
+                    .object_position_x_mode = image.object_position_x_mode,
+                    .object_position_y_mode = image.object_position_y_mode,
+                    .object_position_x_percent_bp = image.object_position_x_percent_bp,
+                    .object_position_y_percent_bp = image.object_position_y_percent_bp,
+                    .object_position_x_offset = image.object_position_x_offset,
+                    .object_position_y_offset = image.object_position_y_offset,
                     .background_offset_x = image.background_offset_x,
                     .background_offset_y = image.background_offset_y,
                     .background_position_x_mode = image.background_position_x_mode,
@@ -3043,6 +3050,14 @@ fn resolvedImageCommand(
     const request_context = try resolveImageRequestContext(page, resolved_z);
     const alt = element.getAttributeSafe(comptime .wrap("alt")) orelse "";
     const include_credentials = imageRequestIncludesCredentials(element);
+    const object_position = resolveObjectPosition(
+        element,
+        page,
+        width,
+        height,
+        @as(i32, @intCast(page.window.getInnerWidth())),
+        @as(i32, @intCast(page.window.getInnerHeight())),
+    );
     return .{
         .x = x,
         .y = y,
@@ -3052,6 +3067,13 @@ fn resolvedImageCommand(
         .opacity = opacity,
         .url = @constCast(resolved),
         .alt = @constCast(alt),
+        .object_fit = resolveObjectFit(element, page),
+        .object_position_x_mode = object_position.x_mode,
+        .object_position_y_mode = object_position.y_mode,
+        .object_position_x_percent_bp = object_position.x_percent_bp,
+        .object_position_y_percent_bp = object_position.y_percent_bp,
+        .object_position_x_offset = object_position.x,
+        .object_position_y_offset = object_position.y,
         .request_include_credentials = include_credentials,
         .request_cookie_value = if (include_credentials) request_context.cookie_value else &.{},
         .request_referer_value = request_context.referer_value,
@@ -3112,6 +3134,17 @@ const BackgroundSize = struct {
 const BackgroundRepeat = struct {
     x: bool = true,
     y: bool = true,
+};
+
+const ObjectFit = ImageCommand.ObjectFitMode;
+
+const ObjectPosition = struct {
+    x: i32 = 0,
+    y: i32 = 0,
+    x_mode: ImageCommand.BackgroundPositionMode = .center,
+    y_mode: ImageCommand.BackgroundPositionMode = .center,
+    x_percent_bp: i32 = 0,
+    y_percent_bp: i32 = 0,
 };
 
 fn resolveImageRequestContext(page: *Page, resolved_url: [:0]const u8) !ImageRequestContext {
@@ -3311,6 +3344,114 @@ fn resolveBackgroundSize(
         .width_percent_bp = width.percent_bp,
         .height_percent_bp = if (height) |value| value.percent_bp else 0,
     };
+}
+
+fn resolveObjectFit(element: *Element, page: *Page) ObjectFit {
+    const raw = std.mem.trim(u8, resolveImageStyleValue(element, page, "object-fit"), &std.ascii.whitespace);
+    if (raw.len == 0) return .fill;
+    if (std.ascii.eqlIgnoreCase(raw, "contain")) return .contain;
+    if (std.ascii.eqlIgnoreCase(raw, "cover")) return .cover;
+    if (std.ascii.eqlIgnoreCase(raw, "none")) return .none;
+    if (std.ascii.eqlIgnoreCase(raw, "scale-down") or std.ascii.eqlIgnoreCase(raw, "scaledown")) return .scale_down;
+    return .fill;
+}
+
+fn resolveObjectPosition(
+    element: *Element,
+    page: *Page,
+    reference_width: i32,
+    reference_height: i32,
+    viewport_width: i32,
+    viewport_height: i32,
+) ObjectPosition {
+    const raw = std.mem.trim(u8, resolveImageStyleValue(element, page, "object-position"), &std.ascii.whitespace);
+    if (raw.len == 0) return .{};
+
+    var tokens = std.mem.tokenizeAny(u8, raw, " \t\r\n");
+    const first = tokens.next() orelse return .{};
+    const second = tokens.next();
+    const first_axis = parseBackgroundPositionAxis(first, reference_width, reference_height, viewport_width, viewport_height) orelse return .{};
+    const second_axis = if (second) |token|
+        parseBackgroundPositionAxis(token, reference_width, reference_height, viewport_width, viewport_height)
+    else
+        null;
+
+    var x_axis = BackgroundAxisPosition{ .mode = .center };
+    var y_axis = BackgroundAxisPosition{ .mode = .center };
+
+    if (second_axis == null) {
+        if (first_axis.prefers_y and !first_axis.prefers_x) {
+            y_axis = first_axis;
+        } else if (first_axis.mode == .center) {
+            x_axis = first_axis;
+            y_axis = first_axis;
+        } else {
+            x_axis = first_axis;
+        }
+    } else {
+        const second_value = second_axis.?;
+        if ((first_axis.prefers_y and !first_axis.prefers_x) or (second_value.prefers_x and !second_value.prefers_y)) {
+            x_axis = second_value;
+            y_axis = first_axis;
+        } else {
+            x_axis = first_axis;
+            y_axis = second_value;
+        }
+    }
+
+    return .{
+        .x = x_axis.offset,
+        .y = y_axis.offset,
+        .x_mode = x_axis.mode,
+        .y_mode = y_axis.mode,
+        .x_percent_bp = x_axis.percent_bp,
+        .y_percent_bp = y_axis.percent_bp,
+    };
+}
+
+fn resolveImageStyleValue(element: *Element, page: *Page, property: []const u8) []const u8 {
+    if (element.getAttributeSafe(comptime .wrap("style"))) |style_attr| {
+        if (inlineStyleAttributeValue(style_attr, property)) |value| {
+            return value;
+        }
+    }
+    if (element.getOrCreateStyle(page)) |style| {
+        const specified = style.asCSSStyleDeclaration().getSpecifiedPropertyValue(property, page);
+        if (specified.len > 0) {
+            return specified;
+        }
+    } else |_| {}
+
+    const computed = page.window.getComputedStyle(element, null, page) catch return "";
+    return computed.asCSSStyleDeclaration().getPropertyValue(property, page);
+}
+
+fn inlineStyleAttributeValue(style_attr: []const u8, property: []const u8) ?[]const u8 {
+    var declarations = std.mem.tokenizeScalar(u8, style_attr, ';');
+    while (declarations.next()) |declaration| {
+        const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse continue;
+        const name = std.mem.trim(u8, declaration[0..colon], &std.ascii.whitespace);
+        if (!std.ascii.eqlIgnoreCase(name, property)) {
+            continue;
+        }
+        return std.mem.trim(u8, declaration[colon + 1 ..], &std.ascii.whitespace);
+    }
+    return null;
+}
+
+fn parseAspectRatioValue(raw_value: []const u8) ?f64 {
+    const trimmed = std.mem.trim(u8, raw_value, &std.ascii.whitespace);
+    if (trimmed.len == 0 or std.ascii.eqlIgnoreCase(trimmed, "auto")) return null;
+    if (std.mem.indexOfScalar(u8, trimmed, '/')) |slash_index| {
+        const left = std.mem.trim(u8, trimmed[0..slash_index], &std.ascii.whitespace);
+        const right = std.mem.trim(u8, trimmed[slash_index + 1 ..], &std.ascii.whitespace);
+        if (left.len == 0 or right.len == 0) return null;
+        const numerator = std.fmt.parseFloat(f64, left) catch return null;
+        const denominator = std.fmt.parseFloat(f64, right) catch return null;
+        if (denominator == 0) return null;
+        return numerator / denominator;
+    }
+    return std.fmt.parseFloat(f64, trimmed) catch null;
 }
 
 const BackgroundAxisPosition = struct {
@@ -4188,6 +4329,7 @@ fn resolveLayoutWidth(
     const explicit_width = resolveExplicitWidth(self, element, decl, page, tag, available_width);
     const explicit_height = resolveExplicitHeight(self, element, decl, page, tag, self.opts.viewport_height);
     const intrinsic_image = if (tag == .img) resolveIntrinsicImageDimensions(element, page) else null;
+    const aspect_ratio = parseAspectRatioValue(resolveImageStyleValue(element, page, "aspect-ratio"));
     const min_width = parseCssLengthPxWithContext(
         decl.getPropertyValue("min-width", page),
         available_width,
@@ -4208,13 +4350,22 @@ fn resolveLayoutWidth(
     if (tag == .img) {
         var resolved_image_width = explicit_width;
         if (resolved_image_width <= 0) {
-            resolved_image_width = if (intrinsic_image) |dims|
-                if (explicit_height > 0 and dims.height > 0)
-                    @max(1, @divTrunc(dims.width * explicit_height, dims.height))
-                else
-                    dims.width
-            else
-                180;
+            if (explicit_height > 0) {
+                if (aspect_ratio) |ratio| {
+                    resolved_image_width = @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(explicit_height)) * ratio))));
+                } else if (intrinsic_image) |dims| {
+                    resolved_image_width = if (dims.height > 0)
+                        @max(1, @divTrunc(dims.width * explicit_height, dims.height))
+                    else
+                        dims.width;
+                } else {
+                    resolved_image_width = 180;
+                }
+            } else if (intrinsic_image) |dims| {
+                resolved_image_width = dims.width;
+            } else {
+                resolved_image_width = 180;
+            }
         }
         resolved_image_width = @max(resolved_image_width, min_width);
         if (max_width) |limit| resolved_image_width = @min(resolved_image_width, limit);
@@ -4384,9 +4535,14 @@ fn resolveOwnContentHeight(
     var height: i32 = 0;
 
     if (tag == .img) {
+        const aspect_ratio = parseAspectRatioValue(resolveImageStyleValue(element, self.page, "aspect-ratio"));
         const explicit_height = resolveExplicitHeight(self, element, decl, self.page, tag, self.opts.viewport_height);
         if (explicit_height > 0) {
             height = @max(height, explicit_height);
+        } else if (aspect_ratio) |ratio| {
+            if (content_width > 0) {
+                height = @max(height, @max(@as(i32, 1), @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(content_width)) / ratio)))));
+            }
         } else if (resolveIntrinsicImageDimensions(element, self.page)) |dims| {
             height = @max(height, @max(@as(i32, 1), @divTrunc(content_width * dims.height, dims.width)));
         } else {
@@ -7749,6 +7905,113 @@ test "paintDocument uses intrinsic image dimensions and aspect ratio" {
     try std.testing.expectEqual(@as(i32, 40), images.items[1].height);
     try std.testing.expectEqual(@as(i32, 20), images.items[2].width);
     try std.testing.expectEqual(@as(i32, 40), images.items[2].height);
+}
+
+test "paintDocument emits image object-fit and object-position commands" {
+    var page = try testing.pageTest("page/image_layout_fidelity.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var fill: ?ImageCommand = null;
+    var contain: ?ImageCommand = null;
+    var cover: ?ImageCommand = null;
+    var none: ?ImageCommand = null;
+    var scale_down: ?ImageCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .image => |image| {
+                if (std.mem.indexOf(u8, image.url, "data:image/png;base64") == null) continue;
+                switch (image.object_fit) {
+                    .fill => fill = image,
+                    .contain => contain = image,
+                    .cover => cover = image,
+                    .none => none = image,
+                    .scale_down => scale_down = image,
+                }
+            },
+            else => {},
+        }
+    }
+
+    const fill_image = fill orelse return error.ObjectFitFillMissing;
+    const contain_image = contain orelse return error.ObjectFitContainMissing;
+    const cover_image = cover orelse return error.ObjectFitCoverMissing;
+    const none_image = none orelse return error.ObjectFitNoneMissing;
+    const scale_down_image = scale_down orelse return error.ObjectFitScaleDownMissing;
+
+    try std.testing.expectEqual(ImageCommand.ObjectFitMode.fill, fill_image.object_fit);
+    try std.testing.expectEqual(ImageCommand.ObjectFitMode.contain, contain_image.object_fit);
+    try std.testing.expectEqual(ImageCommand.ObjectFitMode.cover, cover_image.object_fit);
+    try std.testing.expectEqual(ImageCommand.ObjectFitMode.none, none_image.object_fit);
+    try std.testing.expectEqual(ImageCommand.ObjectFitMode.scale_down, scale_down_image.object_fit);
+
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.percent, fill_image.object_position_x_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.percent, fill_image.object_position_y_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.percent, contain_image.object_position_x_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.percent, contain_image.object_position_y_mode);
+    try std.testing.expectEqual(@as(i32, 5000), fill_image.object_position_x_percent_bp);
+    try std.testing.expectEqual(@as(i32, 5000), fill_image.object_position_y_percent_bp);
+    try std.testing.expectEqual(@as(i32, 5000), contain_image.object_position_x_percent_bp);
+    try std.testing.expectEqual(@as(i32, 5000), contain_image.object_position_y_percent_bp);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.offset, cover_image.object_position_x_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.offset, cover_image.object_position_y_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.offset, none_image.object_position_x_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.offset, none_image.object_position_y_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.offset, scale_down_image.object_position_x_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.offset, scale_down_image.object_position_y_mode);
+
+    try std.testing.expectEqual(@as(i32, 80), fill_image.width);
+    try std.testing.expectEqual(@as(i32, 80), fill_image.height);
+    try std.testing.expectEqual(@as(i32, 80), contain_image.width);
+    try std.testing.expectEqual(@as(i32, 80), contain_image.height);
+    try std.testing.expectEqual(@as(i32, 80), cover_image.width);
+    try std.testing.expectEqual(@as(i32, 80), cover_image.height);
+    try std.testing.expectEqual(@as(i32, 80), none_image.width);
+    try std.testing.expectEqual(@as(i32, 80), none_image.height);
+    try std.testing.expectEqual(@as(i32, 40), scale_down_image.width);
+    try std.testing.expectEqual(@as(i32, 40), scale_down_image.height);
+}
+
+test "paintDocument applies image aspect ratio with explicit width and height" {
+    var page = try testing.pageTest("page/image_layout_fidelity.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var ratio_images: std.ArrayList(ImageCommand) = .empty;
+    defer ratio_images.deinit(std.testing.allocator);
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .image => |image| {
+                if (std.mem.indexOf(u8, image.url, "layout_tall_blue.png") == null) continue;
+                try ratio_images.append(std.testing.allocator, image);
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), ratio_images.items.len);
+    std.mem.sort(ImageCommand, ratio_images.items, {}, struct {
+        fn lessThan(_: void, lhs: ImageCommand, rhs: ImageCommand) bool {
+            return lhs.y < rhs.y;
+        }
+    }.lessThan);
+    const width_image = ratio_images.items[0];
+    const height_image = ratio_images.items[1];
+
+    try std.testing.expectEqual(@as(i32, 60), width_image.width);
+    try std.testing.expectEqual(@as(i32, 30), width_image.height);
+    try std.testing.expectEqual(@as(i32, 60), height_image.width);
+    try std.testing.expectEqual(@as(i32, 30), height_image.height);
 }
 
 test "paintDocument emits semantic background-position modes" {
