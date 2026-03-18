@@ -438,12 +438,11 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
         };
     }
 
-    // TODO: Header Iterator
-    // var it = transfer.responseHeaderIterator();
-    // while (it.next()) |hdr| {
-    //     const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ hdr.name, hdr.value });
-    //     try self._response_headers.append(self._arena, joined);
-    // }
+    var it = response.headerIterator();
+    while (it.next()) |hdr| {
+        const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ hdr.name, hdr.value });
+        try self._response_headers.append(self._arena, joined);
+    }
 
     self._response_status = response.status().?;
     if (response.contentLength()) |cl| {

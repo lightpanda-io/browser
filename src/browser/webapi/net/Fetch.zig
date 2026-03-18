@@ -182,11 +182,10 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
         res._type = .basic;
     }
 
-    // TODO: Header Iterator
-    // var it = transfer.responseHeaderIterator();
-    // while (it.next()) |hdr| {
-    //     try res._headers.append(hdr.name, hdr.value, self._page);
-    // }
+    var it = response.headerIterator();
+    while (it.next()) |hdr| {
+        try res._headers.append(hdr.name, hdr.value, self._page);
+    }
 
     return true;
 }

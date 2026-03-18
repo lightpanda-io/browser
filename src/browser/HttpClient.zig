@@ -1042,7 +1042,11 @@ pub const Response = struct {
         };
     }
 
-    // TODO: Headers Iterator.
+    pub fn headerIterator(self: Response) HeaderIterator {
+        return switch (self.inner) {
+            .live => |live| live.responseHeaderIterator(),
+        };
+    }
 
     pub fn abort(self: Response, err: anyerror) void {
         switch (self.inner) {
