@@ -77,10 +77,11 @@ pub fn item(self: *const CSSStyleDeclaration, index: u32) []const u8 {
 
 pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const u8, page: *Page) []const u8 {
     const normalized = normalizePropertyName(property_name, &page.buf);
-    const prop = self.findProperty(normalized) orelse {
+    const wrapped = String.wrap(normalized);
+    const prop = self.findProperty(wrapped) orelse {
         // Only return default values for computed styles
         if (self._is_computed) {
-            return getDefaultPropertyValue(self, normalized);
+            return getDefaultPropertyValue(self, wrapped);
         }
         return "";
     };
@@ -89,7 +90,7 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 
 pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, page: *Page) []const u8 {
     const normalized = normalizePropertyName(property_name, &page.buf);
-    const prop = self.findProperty(normalized) orelse return "";
+    const prop = self.findProperty(.wrap(normalized)) orelse return "";
     return if (prop._important) "important" else "";
 }
 
@@ -120,7 +121,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     const normalized_value = try normalizePropertyValue(page.call_arena, normalized, value);
 
     // Find existing property
-    if (self.findProperty(normalized)) |existing| {
+    if (self.findProperty(.wrap(normalized))) |existing| {
         existing._value = try String.init(page.arena, normalized_value, .{});
         existing._important = important;
         return;
@@ -144,7 +145,7 @@ pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, pag
 
 fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, page: *Page) ![]const u8 {
     const normalized = normalizePropertyName(property_name, &page.buf);
-    const prop = self.findProperty(normalized) orelse return "";
+    const prop = self.findProperty(.wrap(normalized)) orelse return "";
 
     // the value might not be on the heap (it could be inlined in the small string
     // optimization), so we need to dupe it.
@@ -208,11 +209,11 @@ pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
     }
 }
 
-fn findProperty(self: *const CSSStyleDeclaration, name: []const u8) ?*Property {
+pub fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
     var node = self._properties.first;
     while (node) |n| {
         const prop = Property.fromNodeLink(n);
-        if (prop._name.eqlSlice(name)) {
+        if (prop._name.eql(name)) {
             return prop;
         }
         node = n.next;
@@ -617,26 +618,36 @@ fn isLengthProperty(name: []const u8) bool {
     return length_properties.has(name);
 }
 
-fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, normalized_name: []const u8) []const u8 {
-    if (std.mem.eql(u8, normalized_name, "visibility")) {
-        return "visible";
+fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, name: String) []const u8 {
+    switch (name.len) {
+        5 => {
+            if (name.eql(comptime .wrap("color"))) {
+                const element = self._element orelse return "";
+                return getDefaultColor(element);
+            }
+        },
+        7 => {
+            if (name.eql(comptime .wrap("opacity"))) {
+                return "1";
+            }
+            if (name.eql(comptime .wrap("display"))) {
+                const element = self._element orelse return "";
+                return getDefaultDisplay(element);
+            }
+        },
+        10 => {
+            if (name.eql(comptime .wrap("visibility"))) {
+                return "visible";
+            }
+        },
+        16 => {
+            if (name.eqlSlice("background-color")) {
+                // transparent
+                return "rgba(0, 0, 0, 0)";
+            }
+        },
+        else => {},
     }
-    if (std.mem.eql(u8, normalized_name, "opacity")) {
-        return "1";
-    }
-    if (std.mem.eql(u8, normalized_name, "display")) {
-        const element = self._element orelse return "";
-        return getDefaultDisplay(element);
-    }
-    if (std.mem.eql(u8, normalized_name, "color")) {
-        const element = self._element orelse return "";
-        return getDefaultColor(element);
-    }
-    if (std.mem.eql(u8, normalized_name, "background-color")) {
-        // transparent
-        return "rgba(0, 0, 0, 0)";
-    }
-
     return "";
 }
 

@@ -586,7 +586,7 @@ pub fn elementFromPoint(self: *Document, x: f64, y: f64, page: *Page) !?*Element
     while (stack.items.len > 0) {
         const node = stack.pop() orelse break;
         if (node.is(Element)) |element| {
-            if (element.checkVisibility(page)) {
+            if (element.checkVisibilityCached(null, page)) {
                 const rect = element.getBoundingClientRectForVisible(page);
                 if (x >= rect.getLeft() and x <= rect.getRight() and y >= rect.getTop() and y <= rect.getBottom()) {
                     topmost = element;
