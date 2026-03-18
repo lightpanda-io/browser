@@ -497,13 +497,13 @@ pub fn terminate(self: *const Env) void {
 fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) void {
     const promise_handle = v8.v8__PromiseRejectMessage__GetPromise(&message_handle).?;
     const v8_isolate = v8.v8__Object__GetIsolate(@ptrCast(promise_handle)).?;
-    const js_isolate = js.Isolate{ .handle = v8_isolate };
-    const ctx = Context.fromIsolate(js_isolate);
+    const isolate = js.Isolate{ .handle = v8_isolate };
+    const ctx, const v8_context = Context.fromIsolate(isolate);
 
     const local = js.Local{
         .ctx = ctx,
-        .isolate = js_isolate,
-        .handle = v8.v8__Isolate__GetCurrentContext(v8_isolate).?,
+        .isolate = isolate,
+        .handle = v8_context,
         .call_arena = ctx.call_arena,
     };
 

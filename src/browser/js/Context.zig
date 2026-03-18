@@ -119,12 +119,22 @@ const ModuleEntry = struct {
     resolver_promise: ?js.Promise.Global = null,
 };
 
-pub fn fromC(c_context: *const v8.Context) *Context {
+pub fn fromC(c_context: *const v8.Context) ?*Context {
     return @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(c_context, 1)));
 }
 
-pub fn fromIsolate(isolate: js.Isolate) *Context {
-    return fromC(v8.v8__Isolate__GetCurrentContext(isolate.handle).?);
+/// Returns the Context and v8::Context for the given isolate.
+/// If the current context is from a destroyed Context (e.g., navigated-away iframe),
+/// falls back to the incumbent context (the calling context).
+pub fn fromIsolate(isolate: js.Isolate) struct { *Context, *const v8.Context } {
+    const v8_context = v8.v8__Isolate__GetCurrentContext(isolate.handle).?;
+    if (fromC(v8_context)) |ctx| {
+        return .{ ctx, v8_context };
+    }
+    // The current context's Context struct has been freed (e.g., iframe navigated away).
+    // Fall back to the incumbent context (the calling context).
+    const v8_incumbent = v8.v8__Isolate__GetIncumbentContext(isolate.handle).?;
+    return .{ fromC(v8_incumbent).?, v8_incumbent };
 }
 
 pub fn deinit(self: *Context) void {
@@ -154,6 +164,11 @@ pub fn deinit(self: *Context) void {
     }
 
     self.session.releaseOrigin(self.origin);
+
+    // Clear the embedder data so that if V8 keeps this context alive
+    // (because objects created in it are still referenced), we don't
+    // have a dangling pointer to our freed Context struct.
+    v8.v8__Context__SetAlignedPointerInEmbedderData(entered.handle, 1, null);
 
     v8.v8__Global__Reset(&self.handle);
     env.isolate.notifyContextDisposed();
@@ -255,7 +270,7 @@ pub fn toLocal(self: *Context, global: anytype) js.Local.ToLocalReturnType(@Type
 }
 
 pub fn getIncumbent(self: *Context) *Page {
-    return fromC(v8.v8__Isolate__GetIncumbentContext(self.env.isolate.handle).?).page;
+    return fromC(v8.v8__Isolate__GetIncumbentContext(self.env.isolate.handle).?).?.page;
 }
 
 pub fn stringToPersistedFunction(
@@ -479,7 +494,7 @@ fn resolveModuleCallback(
 ) callconv(.c) ?*const v8.Module {
     _ = import_attributes;
 
-    const self = fromC(c_context.?);
+    const self = fromC(c_context.?).?;
     const local = js.Local{
         .ctx = self,
         .handle = c_context.?,
@@ -512,7 +527,7 @@ pub fn dynamicModuleCallback(
     _ = host_defined_options;
     _ = import_attrs;
 
-    const self = fromC(c_context.?);
+    const self = fromC(c_context.?).?;
     const local = js.Local{
         .ctx = self,
         .handle = c_context.?,
@@ -559,7 +574,7 @@ pub fn dynamicModuleCallback(
 
 pub fn metaObjectCallback(c_context: ?*v8.Context, c_module: ?*v8.Module, c_meta: ?*v8.Value) callconv(.c) void {
     // @HandleScope  implement this without a fat context/local..
-    const self = fromC(c_context.?);
+    const self = fromC(c_context.?).?;
     var local = js.Local{
         .ctx = self,
         .handle = c_context.?,

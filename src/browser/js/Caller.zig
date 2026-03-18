@@ -40,8 +40,8 @@ prev_context: *Context,
 
 // Takes the raw v8 isolate and extracts the context from it.
 pub fn init(self: *Caller, v8_isolate: *v8.Isolate) void {
-    const v8_context = v8.v8__Isolate__GetCurrentContext(v8_isolate).?;
-    initWithContext(self, Context.fromC(v8_context), v8_context);
+    const ctx, const v8_context = Context.fromIsolate(.{ .handle = v8_isolate });
+    initWithContext(self, ctx, v8_context);
 }
 
 fn initWithContext(self: *Caller, ctx: *Context, v8_context: *const v8.Context) void {
@@ -537,9 +537,7 @@ pub const Function = struct {
 
     pub fn call(comptime T: type, info_handle: *const v8.FunctionCallbackInfo, func: anytype, comptime opts: Opts) void {
         const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(info_handle).?;
-        const v8_context = v8.v8__Isolate__GetCurrentContext(v8_isolate).?;
-
-        const ctx = Context.fromC(v8_context);
+        const ctx, const v8_context = Context.fromIsolate(.{ .handle = v8_isolate });
         const info = FunctionCallbackInfo{ .handle = info_handle };
 
         var hs: js.HandleScope = undefined;
