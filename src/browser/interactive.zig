@@ -253,14 +253,28 @@ pub fn classifyInteractivity(
     return null;
 }
 
-fn isInteractiveRole(role: []const u8) bool {
+pub fn isInteractiveRole(role: []const u8) bool {
     const interactive_roles = [_][]const u8{
         "button",           "link",          "tab",        "menuitem",
         "menuitemcheckbox", "menuitemradio", "switch",     "checkbox",
         "radio",            "slider",        "spinbutton", "searchbox",
-        "combobox",         "option",        "treeitem",
+        "combobox",         "option",        "treeitem",   "textbox",
+        "listbox",          "iframe",
     };
     for (interactive_roles) |r| {
+        if (std.ascii.eqlIgnoreCase(role, r)) return true;
+    }
+    return false;
+}
+
+pub fn isContentRole(role: []const u8) bool {
+    const content_roles = [_][]const u8{
+        "heading",      "cell",      "gridcell",
+        "columnheader", "rowheader", "listitem",
+        "article",      "region",    "main",
+        "navigation",
+    };
+    for (content_roles) |r| {
         if (std.ascii.eqlIgnoreCase(role, r)) return true;
     }
     return false;

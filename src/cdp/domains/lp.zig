@@ -52,6 +52,7 @@ fn getSemanticTree(cmd: anytype) !void {
     const Params = struct {
         format: ?enum { text } = null,
         prune: ?bool = null,
+        interactiveOnly: ?bool = null,
     };
     const params = (try cmd.params(Params)) orelse Params{};
 
@@ -65,6 +66,7 @@ fn getSemanticTree(cmd: anytype) !void {
         .page = page,
         .arena = cmd.arena,
         .prune = params.prune orelse false,
+        .interactive_only = params.interactiveOnly orelse false,
     };
 
     if (params.format) |format| {

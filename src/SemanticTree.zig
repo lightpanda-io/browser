@@ -37,6 +37,7 @@ registry: *CDPNode.Registry,
 page: *Page,
 arena: std.mem.Allocator,
 prune: bool = false,
+interactive_only: bool = false,
 
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
     var visitor = JsonVisitor{ .jw = jw, .tree = self };
@@ -174,7 +175,23 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
     };
 
     var should_visit = true;
-    if (self.prune) {
+    if (self.interactive_only) {
+        var keep = false;
+        if (interactive.isInteractiveRole(role)) {
+            keep = true;
+        } else if (interactive.isContentRole(role)) {
+            if (name != null and name.?.len > 0) {
+                keep = true;
+            }
+        } else if (std.mem.eql(u8, role, "RootWebArea")) {
+            keep = true;
+        } else if (is_interactive) {
+            keep = true;
+        }
+        if (!keep) {
+            should_visit = false;
+        }
+    } else if (self.prune) {
         if (structural and !is_interactive and !has_explicit_label) {
             should_visit = false;
         }
@@ -389,36 +406,46 @@ const TextVisitor = struct {
     depth: usize,
 
     pub fn visit(self: *TextVisitor, node: *Node, data: *NodeData) !bool {
-        // Format: "  [12] link: Hacker News (value)"
-        for (0..(self.depth * 2)) |_| {
+        for (0..self.depth) |_| {
             try self.writer.writeByte(' ');
         }
-        try self.writer.print("[{d}] {s}: ", .{ data.id, data.role });
 
+        var name_to_print: ?[]const u8 = null;
         if (data.name) |n| {
             if (n.len > 0) {
-                try self.writer.writeAll(n);
+                name_to_print = n;
             }
         } else if (node.is(CData.Text)) |text_node| {
             const trimmed = std.mem.trim(u8, text_node.getWholeText(), " \t\r\n");
             if (trimmed.len > 0) {
-                try self.writer.writeAll(trimmed);
+                name_to_print = trimmed;
+            }
+        }
+
+        const is_text_only = std.mem.eql(u8, data.role, "StaticText") or std.mem.eql(u8, data.role, "none") or std.mem.eql(u8, data.role, "generic");
+
+        if (is_text_only and name_to_print != null) {
+            try self.writer.print("{d} '{s}'", .{ data.id, name_to_print.? });
+        } else {
+            try self.writer.print("{d} {s}", .{ data.id, data.role });
+            if (name_to_print) |n| {
+                try self.writer.print(" '{s}'", .{n});
             }
         }
 
         if (data.value) |v| {
             if (v.len > 0) {
-                try self.writer.print(" (value: {s})", .{v});
+                try self.writer.print(" value='{s}'", .{v});
             }
         }
 
         if (data.options) |options| {
-            try self.writer.writeAll(" options: [");
+            try self.writer.writeAll(" options=[");
             for (options, 0..) |opt, i| {
-                if (i > 0) try self.writer.writeAll(", ");
+                if (i > 0) try self.writer.writeAll(",");
                 try self.writer.print("'{s}'", .{opt.value});
                 if (opt.selected) {
-                    try self.writer.writeAll(" (selected)");
+                    try self.writer.writeAll("*");
                 }
             }
             try self.writer.writeAll("]\n");
