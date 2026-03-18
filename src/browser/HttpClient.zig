@@ -815,7 +815,7 @@ fn processMessages(self: *Client) !bool {
         };
 
         if (msg.err != null and !is_conn_close_recv) {
-            transfer.requestFailed(msg.err.?, true);
+            transfer.requestFailed(transfer._callback_error orelse msg.err.?, true);
         } else blk: {
             // make sure the transfer can't be immediately aborted from a callback
             // since we still need it here.
@@ -826,11 +826,31 @@ fn processMessages(self: *Client) !bool {
                 // In case of request w/o data, we need to call the header done
                 // callback now.
                 const proceed = transfer.headerDoneCallback(&msg.conn) catch |err| {
-                    lp.log.err(.http, "header_done_callback2", .{ .err = err });
+                    lp.log.err(.http, "header_done_callback", .{ .err = err, .req = transfer });
                     transfer.requestFailed(err, true);
                     continue;
                 };
                 if (!proceed) {
+                    transfer.requestFailed(error.Abort, true);
+                    break :blk;
+                }
+            }
+
+            // Replay buffered body through user's data_callback.
+            if (transfer._stream_buffer.items.len > 0) {
+                const body = transfer._stream_buffer.items;
+                transfer.req.data_callback(transfer, body) catch |err| {
+                    lp.log.err(.http, "data_callback", .{ .err = err, .req = transfer });
+                    transfer.requestFailed(err, true);
+                    break :blk;
+                };
+
+                transfer.req.notification.dispatch(.http_response_data, &.{
+                    .data = body,
+                    .transfer = transfer,
+                });
+
+                if (transfer.aborted) {
                     transfer.requestFailed(error.Abort, true);
                     break :blk;
                 }
@@ -960,6 +980,12 @@ pub const Transfer = struct {
     _tries: u8 = 0,
     _performing: bool = false,
     _redirect_count: u8 = 0,
+
+    // Buffered response body. Filled by bufferDataCallback, consumed in processMessages.
+    _stream_buffer: std.ArrayListUnmanaged(u8) = .{},
+
+    // Error captured in bufferDataCallback to be reported in processMessages.
+    _callback_error: ?anyerror = null,
 
     // for when a Transfer is queued in the client.queue
     _node: std.DoublyLinkedList.Node = .{},
@@ -1100,6 +1126,8 @@ pub const Transfer = struct {
         self.response_header = null;
         self.bytes_received = 0;
         self._tries += 1;
+        self._stream_buffer.clearRetainingCapacity();
+        self._callback_error = null;
     }
 
     fn buildResponseHeader(self: *Transfer, conn: *const http.Connection) !void {
@@ -1303,35 +1331,19 @@ pub const Transfer = struct {
             return @intCast(chunk_len);
         }
 
-        if (!transfer._header_done_called) {
-            const proceed = transfer.headerDoneCallback(conn) catch |err| {
-                lp.log.err(.http, "header_done_callback", .{ .err = err, .req = transfer });
-                return http.writefunc_error;
-            };
-            if (!proceed) {
-                // signal abort to libcurl
-                return http.writefunc_error;
-            }
-        }
-
         transfer.bytes_received += chunk_len;
         if (transfer.max_response_size) |max_size| {
             if (transfer.bytes_received > max_size) {
-                transfer.requestFailed(error.ResponseTooLarge, true);
+                transfer._callback_error = error.ResponseTooLarge;
                 return http.writefunc_error;
             }
         }
 
         const chunk = buffer[0..chunk_len];
-        transfer.req.data_callback(transfer, chunk) catch |err| {
-            lp.log.err(.http, "data_callback", .{ .err = err, .req = transfer });
+        transfer._stream_buffer.appendSlice(transfer.arena.allocator(), chunk) catch |err| {
+            transfer._callback_error = err;
             return http.writefunc_error;
         };
-
-        transfer.req.notification.dispatch(.http_response_data, &.{
-            .data = chunk,
-            .transfer = transfer,
-        });
 
         if (transfer.aborted) {
             return http.writefunc_error;
