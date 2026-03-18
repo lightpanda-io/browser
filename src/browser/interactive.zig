@@ -261,10 +261,9 @@ pub fn isInteractiveRole(role: []const u8) bool {
         "combobox",         "option",        "treeitem",   "textbox",
         "listbox",          "iframe",
     };
-    for (interactive_roles) |r| {
-        if (std.ascii.eqlIgnoreCase(role, r)) return true;
-    }
-    return false;
+    return for (interactive_roles) |r| {
+        if (std.ascii.eqlIgnoreCase(role, r)) break true;
+    } else false;
 }
 
 pub fn isContentRole(role: []const u8) bool {
@@ -274,10 +273,9 @@ pub fn isContentRole(role: []const u8) bool {
         "article",      "region",    "main",
         "navigation",
     };
-    for (content_roles) |r| {
-        if (std.ascii.eqlIgnoreCase(role, r)) return true;
-    }
-    return false;
+    return for (content_roles) |r| {
+        if (std.ascii.eqlIgnoreCase(role, r)) break true;
+    } else false;
 }
 
 fn getRole(el: *Element) ?[]const u8 {
