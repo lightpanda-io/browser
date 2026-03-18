@@ -115,6 +115,7 @@ _node_owner_documents: Node.OwnerDocumentLookup = .empty,
 _element_assigned_slots: Element.AssignedSlotLookup = .empty,
 _element_scroll_positions: Element.ScrollPositionLookup = .empty,
 _element_scroll_metrics: Element.ScrollMetricsLookup = .empty,
+_element_layout_boxes: Element.LayoutBoxLookup = .empty,
 _element_namespace_uris: Element.NamespaceUriLookup = .empty,
 
 /// Lazily-created inline event listeners (or listeners provided as attributes).
@@ -1407,6 +1408,7 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
 
 pub fn domChanged(self: *Page) void {
     self.version += 1;
+    self.resetElementLayoutBoxes();
 
     if (self._intersection_check_scheduled) {
         return;
@@ -3492,6 +3494,10 @@ pub fn resetElementScrollMetrics(self: *Page) void {
     self._element_scroll_metrics.clearRetainingCapacity();
 }
 
+pub fn resetElementLayoutBoxes(self: *Page) void {
+    self._element_layout_boxes.clearRetainingCapacity();
+}
+
 pub fn setElementScrollMetrics(self: *Page, element: *Element, metrics: Element.ScrollMetrics) !void {
     try self._element_scroll_metrics.put(self.arena, element, metrics);
     _ = try self.setElementScrollPosition(
@@ -3499,6 +3505,10 @@ pub fn setElementScrollMetrics(self: *Page, element: *Element, metrics: Element.
         @as(i32, @intCast(element.getScrollLeft(self))),
         @as(i32, @intCast(element.getScrollTop(self))),
     );
+}
+
+pub fn setElementLayoutBox(self: *Page, element: *Element, box: Element.LayoutBox) !void {
+    try self._element_layout_boxes.put(self.arena, element, box);
 }
 
 pub fn setElementScrollPosition(self: *Page, element: *Element, x: i32, y: i32) !bool {

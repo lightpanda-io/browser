@@ -65,6 +65,14 @@ pub const ScrollMetrics = struct {
 };
 pub const ScrollMetricsLookup = std.AutoHashMapUnmanaged(*Element, ScrollMetrics);
 
+pub const LayoutBox = struct {
+    x: i32 = 0,
+    y: i32 = 0,
+    width: i32 = 0,
+    height: i32 = 0,
+};
+pub const LayoutBoxLookup = std.AutoHashMapUnmanaged(*Element, LayoutBox);
+
 pub const Namespace = enum(u8) {
     html,
     svg,
@@ -1127,6 +1135,13 @@ fn isHitTestVisibleElement(self: *Element) bool {
 }
 
 fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height: f64 } {
+    if (page._element_layout_boxes.get(self)) |layout_box| {
+        return .{
+            .width = @floatFromInt(layout_box.width),
+            .height = @floatFromInt(layout_box.height),
+        };
+    }
+
     var width: f64 = 5.0;
     var height: f64 = 5.0;
     const parent = self.parentElement();
@@ -1282,11 +1297,15 @@ pub fn getBoundingClientRect(self: *Element, page: *Page) DOMRect {
 // Some cases need a the BoundingClientRect but have already done the
 // visibility check.
 pub fn getBoundingClientRectForVisible(self: *Element, page: *Page) DOMRect {
-    var y = calculateDocumentPosition(self.asNode());
     const dims = self.getElementDimensions(page);
+    var x = calculateSiblingPosition(self.asNode());
+    var y = calculateDocumentPosition(self.asNode());
 
     // Use sibling position for x coordinate to ensure siblings have different x values
-    var x = calculateSiblingPosition(self.asNode());
+    if (page._element_layout_boxes.get(self)) |layout_box| {
+        x = @floatFromInt(layout_box.x);
+        y = @floatFromInt(layout_box.y);
+    }
 
     var ancestor = self.asNode().parentElement();
     while (ancestor) |current| : (ancestor = current.parentElement()) {

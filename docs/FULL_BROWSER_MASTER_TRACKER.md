@@ -99,6 +99,13 @@ The fork already has a real headed Windows foundation:
   `align-content`, and `align-self`, with bounded headed probes proving
   ordered links, shrunk boxes, wrapped line spacing, and per-item vertical
   alignment on the real Win32 surface
+- the headed painter now caches painted element layout boxes so DOM
+  `getBoundingClientRect`/hit-testing can reuse painted geometry for visible
+  elements instead of falling back to the older sibling-position heuristic
+- flex column layout now also respects authored `flex-grow`, `flex-shrink`,
+  `justify-content`, and `column-reverse`, with renderer tests plus bounded
+  headed probes proving the grow, justify, reverse, and stretch paths on the
+  real Win32 surface
 
 ## Achieved Gates
 

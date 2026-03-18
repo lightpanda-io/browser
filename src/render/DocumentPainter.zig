@@ -38,6 +38,7 @@ pub const PaintOpts = struct {
 
 pub fn paintDocument(allocator: std.mem.Allocator, page: *Page, opts: PaintOpts) !DisplayList {
     page.resetElementScrollMetrics();
+    page.resetElementLayoutBoxes();
     var list = DisplayList{
         .layout_scale = opts.layout_scale,
         .page_margin = opts.page_margin,
@@ -521,6 +522,7 @@ const FlexCrossAlignment = enum {
     start,
     center,
     end,
+    stretch,
 };
 
 const FloatMode = enum {
@@ -560,8 +562,10 @@ const Painter = struct {
     opts: PaintOpts,
     list: *DisplayList,
     paint_text_styles: *std.AutoHashMap(usize, PaintTextStyle),
+    cache_layout_boxes: bool = true,
     forced_item_node: ?*Node = null,
     forced_item_width: i32 = 0,
+    forced_item_height: i32 = 0,
 
     fn paintNode(self: *Painter, node: *Node, cursor: *FlowCursor) anyerror!void {
         try self.paintNodeWithOpacity(node, cursor, 255);
@@ -584,6 +588,16 @@ const Painter = struct {
         }
     }
 
+    fn recordElementLayoutBox(self: *Painter, element: *Element, rect: Bounds) !void {
+        if (!self.cache_layout_boxes) return;
+        try self.page.setElementLayoutBox(element, .{
+            .x = rect.x,
+            .y = rect.y,
+            .width = rect.width,
+            .height = rect.height,
+        });
+    }
+
     fn measureNodePaintedBox(self: *Painter, node: *Node, available_width: i32) !struct { width: i32, height: i32 } {
         var temp_list = DisplayList{
             .layout_scale = self.list.layout_scale,
@@ -597,6 +611,7 @@ const Painter = struct {
             .opts = self.opts,
             .list = &temp_list,
             .paint_text_styles = self.paint_text_styles,
+            .cache_layout_boxes = false,
         };
         var cursor = FlowCursor.init(0, 0, @max(@as(i32, 40), available_width));
             try temp_painter.paintNode(node, &cursor);
@@ -630,6 +645,7 @@ const Painter = struct {
             .opts = self.opts,
             .list = &temp_list,
             .paint_text_styles = self.paint_text_styles,
+            .cache_layout_boxes = false,
         };
         var cursor = FlowCursor.init(0, 0, @max(@as(i32, 40), available_width));
         var child_it = element.asNode().childrenIterator();
@@ -905,6 +921,7 @@ const Painter = struct {
             .opts = self.opts,
             .list = &temp_list,
             .paint_text_styles = self.paint_text_styles,
+            .cache_layout_boxes = false,
         };
         var child_cursor = FlowCursor.init(0, 0, @max(@as(i32, 40), content_width));
         var child_it = element.asNode().childrenIterator();
@@ -1231,9 +1248,10 @@ const Painter = struct {
         }
         const content_box_sizing = isContentBoxSizing(decl, self.page);
         const has_explicit_width = hasExplicitDimensionValue(decl, self.page, "width");
-        const has_explicit_height = hasExplicitDimensionValue(decl, self.page, "height");
+        const has_forced_height = self.forced_item_node == element.asNode() and self.forced_item_height > 0;
+        const has_explicit_height = hasExplicitDimensionValue(decl, self.page, "height") or has_forced_height;
         const box_sizing_extra_width = if (content_box_sizing and has_explicit_width) padding.horizontal() else 0;
-        const box_sizing_extra_height = if (content_box_sizing and has_explicit_height) padding.vertical() else 0;
+        const box_sizing_extra_height = if (content_box_sizing and has_explicit_height and !has_forced_height) padding.vertical() else 0;
         width += box_sizing_extra_width;
 
         const pos = if (out_of_flow_positioned)
@@ -1356,6 +1374,7 @@ const Painter = struct {
                 .width = width,
                 .height = height,
             };
+            try self.recordElementLayoutBox(element, rect);
             if (clipsOverflowContents(decl, self.page)) {
                 self.applyClipRectToRecentOutput(
                     child_command_start,
@@ -1420,13 +1439,14 @@ const Painter = struct {
                 .layout_scale = self.list.layout_scale,
                 .page_margin = self.list.page_margin,
             };
-            var temp_painter = Painter{
-                .allocator = self.allocator,
-                .page = self.page,
-                .opts = self.opts,
-                .list = &temp_list,
-                .paint_text_styles = self.paint_text_styles,
-            };
+        var temp_painter = Painter{
+            .allocator = self.allocator,
+            .page = self.page,
+            .opts = self.opts,
+            .list = &temp_list,
+            .paint_text_styles = self.paint_text_styles,
+            .cache_layout_boxes = false,
+        };
             const height = try temp_painter.paintBlockChildrenWithFloats(
                 element,
                 child_left,
@@ -1458,6 +1478,7 @@ const Painter = struct {
             .width = width,
             .height = height,
         };
+        try self.recordElementLayoutBox(element, rect);
         const overflow_clip_rect = if (clipsOverflowContents(decl, self.page)) clipRectFromBounds(rect) else null;
 
         const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
@@ -1707,24 +1728,45 @@ const Painter = struct {
         while (child_it.next()) |child| : (child_index += 1) {
             if (!isFlexRenderableChild(child)) continue;
 
+            var flex_grow: f32 = 0;
+            var flex_shrink: f32 = 1;
             var order: i32 = 0;
+            var align_self: FlexCrossAlignment = .auto;
+            var min_height: i32 = 0;
+            var max_height: ?i32 = null;
+            var flex_basis: ?i32 = null;
             if (child.is(Element)) |child_element| {
                 const child_style = try self.page.window.getComputedStyle(child_element, null, self.page);
                 const child_decl = child_style.asCSSStyleDeclaration();
+                flex_grow = resolveFlexGrow(child_decl, self.page);
+                flex_shrink = resolveFlexShrink(child_decl, self.page);
                 order = resolveFlexOrder(child_decl, self.page);
+                align_self = resolveFlexCrossAlignment(resolveCssPropertyValue(child_decl, self.page, child_element, "align-self"));
+                flex_basis = resolveFlexBasisHeightPx(self, child_element, child_decl, self.opts.viewport_height);
+                min_height = parseCssLengthPxWithContext(child_decl.getPropertyValue("min-height", self.page), self.opts.viewport_height, self.opts.viewport_height) orelse 0;
+                max_height = parseCssLengthPxWithContext(child_decl.getPropertyValue("max-height", self.page), self.opts.viewport_height, self.opts.viewport_height);
             }
 
             const measurement = try self.measureNodePaintedBox(child, content_width);
             if (measurement.width <= 0 and measurement.height <= 0) continue;
 
+            var measured_height = flex_basis orelse measurement.height;
+            measured_height = @max(measured_height, min_height);
+            if (max_height) |limit| {
+                measured_height = @min(measured_height, limit);
+            }
+
             try measured_children.append(self.allocator, .{
                 .node = child,
                 .width = std.math.clamp(measurement.width, @as(i32, 0), content_width),
-                .height = measurement.height,
+                .height = measured_height,
                 .order = order,
+                .flex_grow = flex_grow,
+                .flex_shrink = flex_shrink,
+                .align_self = align_self,
                 .source_index = child_index,
             });
-            child_total_height += measurement.height;
+            child_total_height += measured_height;
         }
 
         std.mem.sort(FlexChildMeasure, measured_children.items, {}, flexChildMeasureLessThan);
@@ -1739,8 +1781,9 @@ const Painter = struct {
         const min_height_css = resolveCssMinHeightPx(self, element, decl, self.page, self.opts.viewport_height);
         const max_height_css = resolveCssMaxHeightPx(self, element, decl, self.page, self.opts.viewport_height);
         const min_required_height = @max(resolveMinimumHeight(self, tag, block_like, 0), min_height_css);
-        const has_explicit_height = hasExplicitDimensionValue(decl, self.page, "height");
-        const box_sizing_extra_height = if (isContentBoxSizing(decl, self.page) and has_explicit_height) padding.vertical() else 0;
+        const has_forced_height = self.forced_item_node == element.asNode() and self.forced_item_height > 0;
+        const has_explicit_height = hasExplicitDimensionValue(decl, self.page, "height") or has_forced_height;
+        const box_sizing_extra_height = if (isContentBoxSizing(decl, self.page) and has_explicit_height and !has_forced_height) padding.vertical() else 0;
 
         const rect: Bounds = .{
             .x = x,
@@ -1749,12 +1792,15 @@ const Painter = struct {
             .height = clampBoxHeight(
                 min_required_height,
                 max_height_css,
-                if (has_explicit_height)
+                if (has_forced_height)
+                    self.forced_item_height
+                else if (has_explicit_height)
                     explicit_height + box_sizing_extra_height
                 else
                     padding.top + content_height + padding.bottom,
             ),
         };
+        try self.recordElementLayoutBox(element, rect);
         const container_content_height = @max(@as(i32, 0), rect.height - padding.vertical());
         const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
         const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
@@ -1795,6 +1841,7 @@ const Painter = struct {
         const child_control_start = self.list.control_regions.items.len;
         var child_y = rect.y + padding.top;
         const free_vertical_space = @max(@as(i32, 0), container_content_height - content_height);
+        var gap_between_items = gap;
         const justify_start = std.ascii.eqlIgnoreCase(justify_content, "flex-start") or
             std.ascii.eqlIgnoreCase(justify_content, "start") or
             std.ascii.eqlIgnoreCase(justify_content, "normal") or
@@ -1807,27 +1854,91 @@ const Painter = struct {
         } else if (justify_end) {
             if (!reverse_main_axis) child_y += free_vertical_space;
         } else if (std.ascii.eqlIgnoreCase(justify_content, "space-between") and measured_children.items.len > 1) {
-            // Single-column flex doesn't use distributed main-axis gaps yet.
-            child_y += 0;
-        } else if (std.ascii.eqlIgnoreCase(justify_content, "space-around") or std.ascii.eqlIgnoreCase(justify_content, "space-evenly")) {
-            child_y += 0;
+            gap_between_items += @divTrunc(free_vertical_space, @as(i32, @intCast(measured_children.items.len - 1)));
+        } else if (std.ascii.eqlIgnoreCase(justify_content, "space-around") and measured_children.items.len > 0) {
+            const extra = @divTrunc(free_vertical_space, @as(i32, @intCast(measured_children.items.len)));
+            child_y += @divTrunc(extra, 2);
+            gap_between_items += extra;
+        } else if (std.ascii.eqlIgnoreCase(justify_content, "space-evenly") and measured_children.items.len > 0) {
+            const extra = @divTrunc(free_vertical_space, @as(i32, @intCast(measured_children.items.len + 1)));
+            child_y += extra;
+            gap_between_items += extra;
+        }
+
+        var resolved_heights: std.ArrayList(i32) = .empty;
+        defer resolved_heights.deinit(self.allocator);
+        try resolved_heights.ensureTotalCapacity(self.allocator, measured_children.items.len);
+        var total_flex_grow: f32 = 0;
+        var total_shrink_weight: f64 = 0;
+        for (measured_children.items) |child_measure| {
+            try resolved_heights.append(self.allocator, child_measure.height);
+            if (child_measure.flex_grow > 0) {
+                total_flex_grow += child_measure.flex_grow;
+            }
+            if (child_measure.flex_shrink > 0) {
+                total_shrink_weight += @as(f64, @floatFromInt(@max(@as(i32, 1), child_measure.height))) * @as(f64, @floatCast(child_measure.flex_shrink));
+            }
+        }
+
+        if (content_height > container_content_height and total_shrink_weight > 0) {
+            var remaining_shrink_space: i32 = content_height - container_content_height;
+            var remaining_weight = total_shrink_weight;
+            for (resolved_heights.items, 0..) |*child_height, local_index| {
+                const child_measure = measured_children.items[local_index];
+                const shrink_weight = @as(f64, @floatFromInt(@max(@as(i32, 1), child_measure.height))) * @as(f64, @floatCast(child_measure.flex_shrink));
+                if (shrink_weight <= 0) continue;
+                const extra = if (local_index + 1 == measured_children.items.len or remaining_weight <= shrink_weight)
+                    remaining_shrink_space
+                else
+                    @as(i32, @intFromFloat(@floor(@as(f64, @floatFromInt(content_height - container_content_height)) * (shrink_weight / total_shrink_weight))));
+                child_height.* = @max(@as(i32, 0), child_height.* - extra);
+                remaining_shrink_space -= extra;
+                remaining_weight -= shrink_weight;
+            }
+        } else if (free_vertical_space > 0 and total_flex_grow > 0) {
+            var remaining_grow_space: i32 = free_vertical_space;
+            var remaining_grow_weight = total_flex_grow;
+            for (resolved_heights.items, 0..) |*child_height, local_index| {
+                const child_measure = measured_children.items[local_index];
+                if (child_measure.flex_grow <= 0) continue;
+                const extra = if (local_index + 1 == measured_children.items.len or remaining_grow_weight <= child_measure.flex_grow)
+                    remaining_grow_space
+                else
+                    @as(i32, @intFromFloat(@floor(@as(f64, @floatFromInt(free_vertical_space)) *
+                        (@as(f64, @floatCast(child_measure.flex_grow)) / @as(f64, @floatCast(total_flex_grow))))));
+                child_height.* += extra;
+                remaining_grow_space -= extra;
+                remaining_grow_weight -= child_measure.flex_grow;
+            }
         }
 
         for (measured_children.items, 0..) |child_measure, index| {
             var child_x = rect.x + padding.left;
-            const free_horizontal_space = @max(@as(i32, 0), content_width - child_measure.width);
-            if (std.ascii.eqlIgnoreCase(align_items, "center")) {
+            var child_width = child_measure.width;
+            const item_align = effectiveFlexCrossAlignment(align_items, child_measure.align_self);
+            if (item_align == .stretch) {
+                child_width = content_width;
+            }
+            const free_horizontal_space = @max(@as(i32, 0), content_width - child_width);
+            if (item_align == .center) {
                 child_x += @divTrunc(free_horizontal_space, 2);
-            } else if (std.ascii.eqlIgnoreCase(align_items, "flex-end") or std.ascii.eqlIgnoreCase(align_items, "end")) {
+            } else if (item_align == .end) {
                 child_x += free_horizontal_space;
             }
 
-            var child_cursor = FlowCursor.init(child_x, child_y, @max(@as(i32, 40), child_measure.width));
+            const child_height = resolved_heights.items[index];
+            var child_cursor = FlowCursor.init(child_x, child_y, @max(@as(i32, 40), child_width));
+            const previous_forced_node = self.forced_item_node;
+            const previous_forced_height = self.forced_item_height;
+            self.forced_item_node = child_measure.node;
+            self.forced_item_height = child_height;
             try self.paintNodeWithOpacity(child_measure.node, &child_cursor, opacity);
+            self.forced_item_node = previous_forced_node;
+            self.forced_item_height = previous_forced_height;
 
-            child_y += child_measure.height;
+            child_y += child_height;
             if (index + 1 < measured_children.items.len) {
-                child_y += gap;
+                child_y += gap_between_items;
             }
         }
 
@@ -2004,8 +2115,9 @@ const Painter = struct {
         const min_height_css = resolveCssMinHeightPx(self, element, decl, self.page, self.opts.viewport_height);
         const max_height_css = resolveCssMaxHeightPx(self, element, decl, self.page, self.opts.viewport_height);
         const min_required_height = @max(resolveMinimumHeight(self, tag, block_like, 0), min_height_css);
-        const has_explicit_height = hasExplicitDimensionValue(decl, self.page, "height");
-        const box_sizing_extra_height = if (isContentBoxSizing(decl, self.page) and has_explicit_height) padding.vertical() else 0;
+        const has_forced_height = self.forced_item_node == element.asNode() and self.forced_item_height > 0;
+        const has_explicit_height = hasExplicitDimensionValue(decl, self.page, "height") or has_forced_height;
+        const box_sizing_extra_height = if (isContentBoxSizing(decl, self.page) and has_explicit_height and !has_forced_height) padding.vertical() else 0;
 
         const rect: Bounds = .{
             .x = x,
@@ -2014,7 +2126,9 @@ const Painter = struct {
             .height = clampBoxHeight(
                 min_required_height,
                 max_height_css,
-                if (has_explicit_height)
+                if (has_forced_height)
+                    self.forced_item_height
+                else if (has_explicit_height)
                     explicit_height + box_sizing_extra_height
                 else
                     padding.top + content_height + padding.bottom,
@@ -2175,23 +2289,29 @@ const Painter = struct {
                 var item_y = child_y;
                 const item_free_vertical_space = @max(@as(i32, 0), (line.height + line_extra_height) - child_measure.height);
                 const item_align = effectiveFlexCrossAlignment(align_items, child_measure.align_self);
+                var item_forced_height: i32 = 0;
                 if (item_align == .center) {
                     item_y += @divTrunc(item_free_vertical_space, 2);
                 } else if (item_align == .end) {
                     item_y += item_free_vertical_space;
+                } else if (item_align == .stretch) {
+                    item_forced_height = @max(child_measure.height, line.height + line_extra_height);
                 }
 
                 {
                     const previous_forced_node = self.forced_item_node;
                     const previous_forced_width = self.forced_item_width;
+                    const previous_forced_height = self.forced_item_height;
                     self.forced_item_node = child_measure.node;
                     self.forced_item_width = child_width;
+                    self.forced_item_height = item_forced_height;
 
                     var child_cursor = FlowCursor.init(child_x, item_y, @max(@as(i32, 40), child_width));
                     try self.paintNodeWithOpacity(child_measure.node, &child_cursor, opacity);
 
                     self.forced_item_node = previous_forced_node;
                     self.forced_item_width = previous_forced_width;
+                    self.forced_item_height = previous_forced_height;
                 }
                 child_x += child_width;
                 if (line_child_index + 1 < line.end_index) {
@@ -2517,6 +2637,7 @@ const Painter = struct {
             .width = width,
             .height = @max(resolveMinimumHeight(self, tag, block_like, 0), padding.top + (row_y - content_y) + padding.bottom),
         };
+        try self.recordElementLayoutBox(element, rect);
 
         const paint_z_index = try resolvePaintZIndex(element, decl, self.page);
         const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
@@ -4414,12 +4535,35 @@ fn resolveFlexBasisPx(self: *const Painter, element: *Element, decl: anytype, av
     return resolveExplicitWidth(self, element, decl, self.page, element.getTag(), available_width);
 }
 
+fn resolveFlexBasisHeightPx(self: *const Painter, element: *Element, decl: anytype, available_height: i32) ?i32 {
+    if (parseCssLengthPxWithContext(decl.getPropertyValue("flex-basis", self.page), available_height, self.opts.viewport_height)) |value| {
+        return value;
+    }
+
+    const shorthand = std.mem.trim(u8, decl.getPropertyValue("flex", self.page), &std.ascii.whitespace);
+    if (shorthand.len != 0 and !std.ascii.eqlIgnoreCase(shorthand, "none") and !std.ascii.eqlIgnoreCase(shorthand, "auto")) {
+        var parts = std.mem.tokenizeAny(u8, shorthand, &std.ascii.whitespace);
+        _ = parts.next();
+        if (parts.next()) |maybe_shrink| {
+            _ = maybe_shrink;
+            if (parts.next()) |basis_token| {
+                if (parseCssLengthPxWithContext(basis_token, available_height, self.opts.viewport_height)) |value| {
+                    return value;
+                }
+            }
+        }
+    }
+
+    return resolveExplicitHeight(self, element, decl, self.page, element.getTag(), available_height);
+}
+
 fn resolveFlexCrossAlignment(value: []const u8) FlexCrossAlignment {
     const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
     if (trimmed.len == 0 or std.ascii.eqlIgnoreCase(trimmed, "auto")) return .auto;
     if (std.ascii.eqlIgnoreCase(trimmed, "center")) return .center;
     if (std.ascii.eqlIgnoreCase(trimmed, "flex-end") or std.ascii.eqlIgnoreCase(trimmed, "end")) return .end;
     if (std.ascii.eqlIgnoreCase(trimmed, "flex-start") or std.ascii.eqlIgnoreCase(trimmed, "start")) return .start;
+    if (std.ascii.eqlIgnoreCase(trimmed, "stretch")) return .stretch;
     return .auto;
 }
 
@@ -4757,6 +4901,9 @@ fn resolveExplicitWidth(self: *const Painter, element: *Element, decl: anytype, 
 }
 
 fn resolveExplicitHeight(self: *const Painter, element: *Element, decl: anytype, page: *Page, tag: Element.Tag, available_height: i32) i32 {
+    if (self.forced_item_node == element.asNode() and self.forced_item_height > 0) {
+        return @min(@max(self.forced_item_height, 1), @max(@as(i32, 1), available_height));
+    }
     const raw_height = decl.getPropertyValue("height", page);
     const height_basis = if (std.mem.indexOfScalar(u8, raw_height, '%') != null)
         resolveAncestorExplicitHeight(self, element, page, available_height)
@@ -7962,6 +8109,205 @@ test "paintDocument honors align-self on flex row items" {
     try std.testing.expect(gray.y < blue.y);
     try std.testing.expect(red.width < gray.width);
     try std.testing.expect(blue.x > gray.x);
+}
+
+test "paintDocument stretches flex row items on the cross axis" {
+    var page = try testing.pageTest("page/flex_row_stretch_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_rect: ?Bounds = null;
+    var gray_rect: ?Bounds = null;
+    var blue_rect: ?Bounds = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 180 and rect.color.g <= 90 and rect.color.b <= 90) {
+                    red_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.r >= 130 and rect.color.r <= 190 and rect.color.g >= 130 and rect.color.g <= 190 and rect.color.b >= 130 and rect.color.b <= 190) {
+                    gray_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.b >= 180 and rect.color.r <= 90 and rect.color.g <= 150) {
+                    blue_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_rect orelse return error.RowStretchRedMissing;
+    const gray = gray_rect orelse return error.RowStretchGrayMissing;
+    const blue = blue_rect orelse return error.RowStretchBlueMissing;
+
+    try std.testing.expectEqual(@as(i32, 70), red.height);
+    try std.testing.expectEqual(@as(i32, 70), gray.height);
+    try std.testing.expectEqual(@as(i32, 70), blue.height);
+    try std.testing.expect(red.x < gray.x);
+    try std.testing.expect(gray.x < blue.x);
+}
+
+test "paintDocument distributes flex column items with flex-grow" {
+    var page = try testing.pageTest("page/flex_column_grow_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 320,
+        .viewport_height = 320,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_rect: ?Bounds = null;
+    var gray_rect: ?Bounds = null;
+    var blue_rect: ?Bounds = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 180 and rect.color.g <= 90 and rect.color.b <= 90) {
+                    red_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.r >= 130 and rect.color.r <= 190 and rect.color.g >= 130 and rect.color.g <= 190 and rect.color.b >= 130 and rect.color.b <= 190) {
+                    gray_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.b >= 180 and rect.color.r <= 90 and rect.color.g <= 150) {
+                    blue_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_rect orelse return error.ColumnGrowRedMissing;
+    const gray = gray_rect orelse return error.ColumnGrowGrayMissing;
+    const blue = blue_rect orelse return error.ColumnGrowBlueMissing;
+
+    try std.testing.expectEqual(@as(i32, 80), red.height);
+    try std.testing.expectEqual(@as(i32, 80), gray.height);
+    try std.testing.expectEqual(@as(i32, 80), blue.height);
+    try std.testing.expectEqual(@as(i32, 180), red.width);
+    try std.testing.expectEqual(@as(i32, 180), gray.width);
+    try std.testing.expectEqual(@as(i32, 180), blue.width);
+    try std.testing.expect(red.y < gray.y);
+    try std.testing.expect(gray.y < blue.y);
+}
+
+test "paintDocument shrinks flex column items with flex-shrink under overflow" {
+    var page = try testing.pageTest("page/flex_column_shrink_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 320,
+        .viewport_height = 320,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_rect: ?Bounds = null;
+    var gray_rect: ?Bounds = null;
+    var blue_rect: ?Bounds = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 180 and rect.color.g <= 90 and rect.color.b <= 90) {
+                    red_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.r >= 130 and rect.color.r <= 190 and rect.color.g >= 130 and rect.color.g <= 190 and rect.color.b >= 130 and rect.color.b <= 190) {
+                    gray_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.b >= 180 and rect.color.r <= 90 and rect.color.g <= 150) {
+                    blue_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_rect orelse return error.ColumnShrinkRedMissing;
+    const gray = gray_rect orelse return error.ColumnShrinkGrayMissing;
+    const blue = blue_rect orelse return error.ColumnShrinkBlueMissing;
+
+    try std.testing.expectEqual(@as(i32, 60), red.height);
+    try std.testing.expectEqual(@as(i32, 60), gray.height);
+    try std.testing.expectEqual(@as(i32, 60), blue.height);
+    try std.testing.expectEqual(@as(i32, 180), red.width);
+    try std.testing.expectEqual(@as(i32, 180), gray.width);
+    try std.testing.expectEqual(@as(i32, 180), blue.width);
+}
+
+test "paintDocument applies justify-content space-between across flex columns" {
+    var page = try testing.pageTest("page/flex_column_justify_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 320,
+        .viewport_height = 320,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_rect: ?Bounds = null;
+    var gray_rect: ?Bounds = null;
+    var blue_rect: ?Bounds = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 180 and rect.color.g <= 90 and rect.color.b <= 90) {
+                    red_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.r >= 130 and rect.color.r <= 190 and rect.color.g >= 130 and rect.color.g <= 190 and rect.color.b >= 130 and rect.color.b <= 190) {
+                    gray_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.b >= 180 and rect.color.r <= 90 and rect.color.g <= 150) {
+                    blue_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_rect orelse return error.ColumnJustifyRedMissing;
+    const gray = gray_rect orelse return error.ColumnJustifyGrayMissing;
+    const blue = blue_rect orelse return error.ColumnJustifyBlueMissing;
+
+    try std.testing.expectEqual(@as(i32, 40), red.height);
+    try std.testing.expectEqual(@as(i32, 40), gray.height);
+    try std.testing.expectEqual(@as(i32, 40), blue.height);
+    try std.testing.expect(gray.y >= red.y + red.height + 50);
+    try std.testing.expect(blue.y >= gray.y + gray.height + 50);
+}
+
+test "paintDocument honors column-reverse order on flex columns" {
+    var page = try testing.pageTest("page/flex_column_reverse_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 320,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_rect: ?Bounds = null;
+    var gray_rect: ?Bounds = null;
+    var blue_rect: ?Bounds = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 180 and rect.color.g <= 90 and rect.color.b <= 90) {
+                    red_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.r >= 130 and rect.color.r <= 190 and rect.color.g >= 130 and rect.color.g <= 190 and rect.color.b >= 130 and rect.color.b <= 190) {
+                    gray_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.b >= 180 and rect.color.r <= 90 and rect.color.g <= 150) {
+                    blue_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_rect orelse return error.ColumnReverseRedMissing;
+    const gray = gray_rect orelse return error.ColumnReverseGrayMissing;
+    const blue = blue_rect orelse return error.ColumnReverseBlueMissing;
+
+    try std.testing.expectEqual(@as(i32, 40), red.height);
+    try std.testing.expectEqual(@as(i32, 40), gray.height);
+    try std.testing.expectEqual(@as(i32, 40), blue.height);
+    try std.testing.expect(blue.y < gray.y);
+    try std.testing.expect(gray.y < red.y);
 }
 
 test "paintDocument lays out legacy centered table search form" {
