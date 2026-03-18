@@ -84,3 +84,24 @@
   testing.eventually(() => testing.expectEqual(true, result));
 }
 </script>
+
+<script id="refs">
+{
+  const rels = ['stylesheet', 'preload', 'modulepreload'];
+  const results = rels.map(() => false);
+  rels.forEach((rel, i) => {
+    let link = document.createElement('link')
+    link.rel = rel;
+    link.href = '/nope';
+    link.onload = () => results[i] = true;
+    document.documentElement.appendChild(link);
+  });
+
+
+  testing.eventually(() => {
+    results.forEach((r) => {
+      testing.expectEqual(true, r);
+    });
+  });
+}
+</script>
