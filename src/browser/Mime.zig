@@ -112,14 +112,13 @@ fn parseCharset(value: []const u8) error{ CharsetTooBig, Invalid }![]const u8 {
     return value;
 }
 
-pub fn parse(input: []u8) !Mime {
+pub fn parse(input: []const u8) !Mime {
     if (input.len > 255) {
         return error.TooBig;
     }
 
-    // Zig's trim API is broken. The return type is always `[]const u8`,
-    // even if the input type is `[]u8`. @constCast is safe here.
-    var normalized = @constCast(std.mem.trim(u8, input, &std.ascii.whitespace));
+    var buf: [255]u8 = undefined;
+    const normalized = std.ascii.lowerString(&buf, std.mem.trim(u8, input, &std.ascii.whitespace));
     _ = std.ascii.lowerString(normalized, normalized);
 
     const content_type, const type_len = try parseContentType(normalized);
