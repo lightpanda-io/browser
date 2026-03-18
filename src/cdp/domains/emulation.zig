@@ -69,6 +69,6 @@ fn setTouchEmulationEnabled(cmd: anytype) !void {
 }
 
 fn setUserAgentOverride(cmd: anytype) !void {
-    log.info(.app, "setUserAgentOverride ignored", .{});
+    log.warn(.ignore, "setUserAgentOverride", .{});
     return cmd.sendResult(null, .{});
 }

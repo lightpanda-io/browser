@@ -31,6 +31,7 @@ pub const Scope = enum {
     cdp,
     console,
     http,
+    ignore,
     page,
     js,
     event,
