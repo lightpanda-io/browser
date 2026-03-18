@@ -156,6 +156,13 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn profileDir(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .browse, .mcp => |opts| opts.common.profile_dir,
+        .help, .version => null,
+    };
+}
+
 pub fn browserMode(self: *const Config) BrowserMode {
     return switch (self.mode) {
         inline .serve, .fetch, .browse, .mcp => |opts| opts.common.browser_mode,
@@ -254,6 +261,7 @@ pub const Common = struct {
     log_format: ?log.Format = null,
     log_filter_scopes: ?[]log.Scope = null,
     user_agent_suffix: ?[]const u8 = null,
+    profile_dir: ?[:0]const u8 = null,
     browser_mode: BrowserMode = .headless,
     window_width: ?u32 = null,
     window_height: ?u32 = null,
@@ -363,6 +371,11 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--user_agent_suffix
         \\                Suffix to append to the Lightpanda/X.Y User-Agent
+        \\
+        \\--profile_dir   Explicit browser profile root for cookies, storage,
+        \\                downloads, telemetry IDs, and other persisted state.
+        \\                Defaults to the platform app-data directory when
+        \\                available.
         \\
         \\--browser_mode  Browser mode: headless or headed.
         \\                Defaults to headless.
@@ -997,6 +1010,15 @@ fn parseCommonArg(
             }
         }
         common.user_agent_suffix = try allocator.dupe(u8, str);
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--profile_dir", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--profile_dir" });
+            return error.InvalidArgument;
+        };
+        common.profile_dir = try allocator.dupeZ(u8, str);
         return true;
     }
 

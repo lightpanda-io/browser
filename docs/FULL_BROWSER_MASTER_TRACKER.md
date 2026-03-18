@@ -109,6 +109,10 @@ The fork already has a real headed Windows foundation:
   `justify-content`, and `column-reverse`, with renderer tests plus bounded
   headed probes proving the grow, justify, reverse, and stretch paths on the
   real Win32 surface
+- the browser now accepts an explicit profile directory override and resolves
+  its persistence root through a small host-path abstraction, which is the
+  first cross-platform/bare-metal support seam for cookies, storage,
+  downloads, and telemetry IDs
 
 ## Achieved Gates
 

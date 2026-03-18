@@ -20,8 +20,8 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
-const log = @import("log.zig");
 const Config = @import("Config.zig");
+const HostPaths = @import("HostPaths.zig");
 const Snapshot = @import("browser/js/Snapshot.zig");
 const Platform = @import("browser/js/Platform.zig");
 const Display = @import("display/Display.zig");
@@ -72,7 +72,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     app.snapshot = try Snapshot.load();
     errdefer app.snapshot.deinit();
 
-    app.app_dir_path = getAndMakeAppDir(allocator);
+    app.app_dir_path = HostPaths.resolveProfileDir(allocator, config.profileDir());
     app.display.setAppDataPath(app.app_dir_path);
 
     app.telemetry = try Telemetry.init(app, config.mode);
@@ -103,24 +103,4 @@ pub fn deinit(self: *App) void {
     self.arena_pool.deinit();
 
     allocator.destroy(self);
-}
-
-fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {
-    if (@import("builtin").is_test) {
-        return allocator.dupe(u8, "/tmp") catch unreachable;
-    }
-    const app_dir_path = std.fs.getAppDataDir(allocator, "lightpanda") catch |err| {
-        log.warn(.app, "get data dir", .{ .err = err });
-        return null;
-    };
-
-    std.fs.cwd().makePath(app_dir_path) catch |err| switch (err) {
-        error.PathAlreadyExists => return app_dir_path,
-        else => {
-            allocator.free(app_dir_path);
-            log.warn(.app, "create data dir", .{ .err = err, .path = app_dir_path });
-            return null;
-        },
-    };
-    return app_dir_path;
 }
