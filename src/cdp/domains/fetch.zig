@@ -50,7 +50,7 @@ pub fn processMessage(cmd: anytype) !void {
 // Stored in CDP
 pub const InterceptState = struct {
     allocator: Allocator,
-    waiting: std.AutoArrayHashMapUnmanaged(u32, *HttpClient.Transfer),
+    waiting: std.AutoArrayHashMapUnmanaged(u32, *HttpClient.LiveTransfer),
 
     pub fn init(allocator: Allocator) !InterceptState {
         return .{
@@ -63,11 +63,11 @@ pub const InterceptState = struct {
         return self.waiting.count() == 0;
     }
 
-    pub fn put(self: *InterceptState, transfer: *HttpClient.Transfer) !void {
+    pub fn put(self: *InterceptState, transfer: *HttpClient.LiveTransfer) !void {
         return self.waiting.put(self.allocator, transfer.id, transfer);
     }
 
-    pub fn remove(self: *InterceptState, request_id: u32) ?*HttpClient.Transfer {
+    pub fn remove(self: *InterceptState, request_id: u32) ?*HttpClient.LiveTransfer {
         const entry = self.waiting.fetchSwapRemove(request_id) orelse return null;
         return entry.value;
     }
@@ -76,7 +76,7 @@ pub const InterceptState = struct {
         self.waiting.deinit(self.allocator);
     }
 
-    pub fn pendingTransfers(self: *const InterceptState) []*HttpClient.Transfer {
+    pub fn pendingTransfers(self: *const InterceptState) []*HttpClient.LiveTransfer {
         return self.waiting.values();
     }
 };

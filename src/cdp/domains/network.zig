@@ -25,7 +25,7 @@ const CdpStorage = @import("storage.zig");
 
 const id = @import("../id.zig");
 const URL = @import("../../browser/URL.zig");
-const Transfer = @import("../../browser/HttpClient.zig").Transfer;
+const LiveTransfer = @import("../../browser/HttpClient.zig").LiveTransfer;
 const Notification = @import("../../Notification.zig");
 const Mime = @import("../../browser/Mime.zig");
 
@@ -294,9 +294,9 @@ pub fn httpRequestDone(bc: anytype, msg: *const Notification.RequestDone) !void 
 }
 
 pub const TransferAsRequestWriter = struct {
-    transfer: *Transfer,
+    transfer: *LiveTransfer,
 
-    pub fn init(transfer: *Transfer) TransferAsRequestWriter {
+    pub fn init(transfer: *LiveTransfer) TransferAsRequestWriter {
         return .{
             .transfer = transfer,
         };
@@ -348,9 +348,9 @@ pub const TransferAsRequestWriter = struct {
 
 const TransferAsResponseWriter = struct {
     arena: Allocator,
-    transfer: *Transfer,
+    transfer: *LiveTransfer,
 
-    fn init(arena: Allocator, transfer: *Transfer) TransferAsResponseWriter {
+    fn init(arena: Allocator, transfer: *LiveTransfer) TransferAsResponseWriter {
         return .{
             .arena = arena,
             .transfer = transfer,

@@ -42,7 +42,7 @@ const XMLHttpRequest = @This();
 _page: *Page,
 _proto: *XMLHttpRequestEventTarget,
 _arena: Allocator,
-_transfer: ?*HttpClient.Transfer = null,
+_transfer: ?*HttpClient.LiveTransfer = null,
 
 _url: [:0]const u8 = "",
 _method: net_http.Method = .GET,
@@ -382,7 +382,7 @@ pub fn getResponseXML(self: *XMLHttpRequest, page: *Page) !?*Node.Document {
     };
 }
 
-fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
+fn httpStartCallback(transfer: *HttpClient.LiveTransfer) !void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
     if (comptime IS_DEBUG) {
         log.debug(.http, "request start", .{ .method = self._method, .url = self._url, .source = "xhr" });
@@ -390,13 +390,13 @@ fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
     self._transfer = transfer;
 }
 
-fn httpHeaderCallback(transfer: *HttpClient.Transfer, header: net_http.Header) !void {
+fn httpHeaderCallback(transfer: *HttpClient.LiveTransfer, header: net_http.Header) !void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
     const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ header.name, header.value });
     try self._response_headers.append(self._arena, joined);
 }
 
-fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
+fn httpHeaderDoneCallback(transfer: *HttpClient.LiveTransfer) !bool {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
 
     const header = &transfer.response_header.?;
@@ -446,7 +446,7 @@ fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     return true;
 }
 
-fn httpDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+fn httpDataCallback(transfer: *HttpClient.LiveTransfer, data: []const u8) !void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
     try self._response_data.appendSlice(self._arena, data);
 

@@ -46,7 +46,7 @@ _type: Type,
 _status_text: []const u8,
 _url: [:0]const u8,
 _is_redirected: bool,
-_transfer: ?*HttpClient.Transfer = null,
+_transfer: ?*HttpClient.LiveTransfer = null,
 
 const InitOpts = struct {
     status: u16 = 200,

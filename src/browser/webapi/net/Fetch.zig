@@ -126,7 +126,7 @@ fn handleBlobUrl(url: []const u8, resolver: js.PromiseResolver, page: *Page) !js
     return resolver.promise();
 }
 
-fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
+fn httpStartCallback(transfer: *HttpClient.LiveTransfer) !void {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
     if (comptime IS_DEBUG) {
         log.debug(.http, "request start", .{ .url = self._url, .source = "fetch" });
@@ -134,7 +134,7 @@ fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
     self._response._transfer = transfer;
 }
 
-fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
+fn httpHeaderDoneCallback(transfer: *HttpClient.LiveTransfer) !bool {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
 
     if (self._signal) |signal| {
@@ -190,7 +190,7 @@ fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     return true;
 }
 
-fn httpDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+fn httpDataCallback(transfer: *HttpClient.LiveTransfer, data: []const u8) !void {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
 
     // Check if aborted

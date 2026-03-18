@@ -694,11 +694,11 @@ pub const Script = struct {
         self.manager.page.releaseArena(self.arena);
     }
 
-    fn startCallback(transfer: *HttpClient.Transfer) !void {
+    fn startCallback(transfer: *HttpClient.LiveTransfer) !void {
         log.debug(.http, "script fetch start", .{ .req = transfer });
     }
 
-    fn headerCallback(transfer: *HttpClient.Transfer) !bool {
+    fn headerCallback(transfer: *HttpClient.LiveTransfer) !bool {
         const self: *Script = @ptrCast(@alignCast(transfer.ctx));
         const header = &transfer.response_header.?;
         self.status = header.status;
@@ -765,14 +765,14 @@ pub const Script = struct {
         return true;
     }
 
-    fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+    fn dataCallback(transfer: *HttpClient.LiveTransfer, data: []const u8) !void {
         const self: *Script = @ptrCast(@alignCast(transfer.ctx));
         self._dataCallback(transfer, data) catch |err| {
             log.err(.http, "SM.dataCallback", .{ .err = err, .transfer = transfer, .len = data.len });
             return err;
         };
     }
-    fn _dataCallback(self: *Script, _: *HttpClient.Transfer, data: []const u8) !void {
+    fn _dataCallback(self: *Script, _: *HttpClient.LiveTransfer, data: []const u8) !void {
         try self.source.remote.appendSlice(self.arena, data);
     }
 

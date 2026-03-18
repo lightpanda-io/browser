@@ -821,7 +821,7 @@ fn notifyParentLoadComplete(self: *Page) void {
     parent.iframeCompletedLoading(self.iframe.?);
 }
 
-fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
+fn pageHeaderDoneCallback(transfer: *HttpClient.LiveTransfer) !bool {
     var self: *Page = @ptrCast(@alignCast(transfer.ctx));
 
     const header = &transfer.response_header.?;
@@ -849,7 +849,7 @@ fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     return true;
 }
 
-fn pageDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+fn pageDataCallback(transfer: *HttpClient.LiveTransfer, data: []const u8) !void {
     var self: *Page = @ptrCast(@alignCast(transfer.ctx));
 
     if (self._parse_state == .pre) {
