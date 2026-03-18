@@ -57,7 +57,7 @@ fn dispatchSelectionChangeEvent(self: *TextArea, page: *Page) !void {
 }
 
 fn dispatchInputEvent(self: *TextArea, data: ?[]const u8, input_type: []const u8, page: *Page) !void {
-    const event = try InputEvent.init("input", .{ .data = data, .inputType = input_type }, page);
+    const event = try InputEvent.initTrusted(comptime .wrap("input"), .{ .data = data, .inputType = input_type }, page);
     try page._event_manager.dispatch(self.asElement().asEventTarget(), event.asEvent());
 }
 
