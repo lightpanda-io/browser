@@ -170,6 +170,19 @@
 }
 </script>
 
+<script id="boxShadowDefaults">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  const computed = getComputedStyle(div);
+  testing.expectEqual('none', computed.boxShadow);
+
+  div.style.boxShadow = '18px 12px 0 0 rgba(0, 0, 0, 0.35)';
+  testing.expectEqual('18px 12px 0 0 rgba(0, 0, 0, 0.35)', div.style.boxShadow);
+}
+</script>
+
 <script id="flexDefaults">
 {
   const div = $('#test-div');

@@ -95,6 +95,9 @@ The fork already has a real headed Windows foundation:
   hit-testing for translated controls and links, with bounded screenshot and
   interaction coverage proving the transformed button and link geometry both
   render and remain targetable
+- the headed painter now also paints a pragmatic one-layer `box-shadow` for
+  boxes and controls, with a renderer test plus a bounded headed screenshot
+  probe proving the visible offset shadow on the real Win32 surface
 - flex row layout now also respects authored `order`, `flex-shrink`,
   `align-content`, and `align-self`, with bounded headed probes proving
   ordered links, shrunk boxes, wrapped line spacing, and per-item vertical

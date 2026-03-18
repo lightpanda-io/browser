@@ -116,6 +116,7 @@ fn isKnownCSSProperty(dash_case: []const u8) bool {
     const known_properties = std.StaticStringMap(void).initComptime(.{
         .{ "color", {} },
         .{ "background-color", {} },
+        .{ "box-shadow", {} },
         .{ "font-size", {} },
         .{ "font-family", {} },
         .{ "line-height", {} },

@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Flex Column Shrink - Lightpanda Browser</title>
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+}
+#box {
+  display: flex;
+  flex-direction: column;
+  width: 180px;
+  height: 180px;
+}
+.red, .gray, .blue {
+  height: 80px;
+  flex-shrink: 1;
+}
+.red { background: #d9534f; }
+.gray { background: #909090; }
+.blue { background: #428bca; }
+</style>
+</head>
+<body>
+<div id="box">
+  <div class="red"></div>
+  <div class="gray"></div>
+  <div class="blue"></div>
+</div>
+</body>
+</html>

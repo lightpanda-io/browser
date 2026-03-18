@@ -1486,6 +1486,7 @@ const Painter = struct {
         const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
 
         if (shouldPaintBox(tag)) {
+            try appendResolvedBoxShadow(self, decl, rect, paint_z_index, combined_opacity, corner_radius, overflow_clip_rect);
             if (bg) |background| {
                 if (background.a > 0 and shouldPaintBackground(tag, has_child_elements)) {
                     try self.list.addFillRect(self.allocator, .{
@@ -1805,6 +1806,7 @@ const Painter = struct {
         const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
         const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
         if (shouldPaintBox(tag)) {
+            try appendResolvedBoxShadow(self, decl, rect, paint_z_index, opacity, corner_radius, null);
             if (bg) |background| {
                 if (background.a > 0 and shouldPaintBackground(tag, true)) {
                     try self.list.addFillRect(self.allocator, .{
@@ -2138,6 +2140,7 @@ const Painter = struct {
         const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
         const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
         if (shouldPaintBox(tag)) {
+            try appendResolvedBoxShadow(self, decl, rect, paint_z_index, opacity, corner_radius, null);
             if (bg) |background| {
                 if (background.a > 0 and shouldPaintBackground(tag, true)) {
                     try self.list.addFillRect(self.allocator, .{
@@ -2641,6 +2644,7 @@ const Painter = struct {
 
         const paint_z_index = try resolvePaintZIndex(element, decl, self.page);
         const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
+        try appendResolvedBoxShadow(self, decl, rect, paint_z_index, opacity, corner_radius, null);
         if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
             try self.list.addStrokeRect(self.allocator, .{
                 .x = rect.x,
@@ -3481,6 +3485,187 @@ fn appendResolvedBackgroundImage(
         .request_referer_value = request_context.referer_value,
         .request_authorization_value = request_context.authorization_value,
     });
+}
+
+const BoxShadow = struct {
+    offset_x: i32,
+    offset_y: i32,
+    blur: i32,
+    spread: i32,
+    color: Color,
+};
+
+fn appendResolvedBoxShadow(
+    self: *Painter,
+    decl: anytype,
+    rect: Bounds,
+    z_index: i32,
+    opacity: u8,
+    corner_radius: i32,
+    clip_rect: ?ClipRect,
+) !void {
+    const raw_box_shadow = std.mem.trim(u8, decl.getPropertyValue("box-shadow", self.page), &std.ascii.whitespace);
+    if (raw_box_shadow.len == 0 or std.ascii.eqlIgnoreCase(raw_box_shadow, "none")) {
+        return;
+    }
+
+    const layer = firstBoxShadowLayer(raw_box_shadow);
+    const shadow = parseBoxShadowLayer(layer) orelse return;
+    const expansion = @max(@as(i32, 0), shadow.blur + shadow.spread);
+    const width = rect.width + expansion * 2;
+    const height = rect.height + expansion * 2;
+    if (width <= 0 or height <= 0) {
+        return;
+    }
+
+    if (shadow.color.a == 0) {
+        return;
+    }
+
+    const shadow_opacity = shadow.color.a;
+    const shadow_radius = @max(@as(i32, 0), corner_radius + shadow.spread + shadow.blur);
+    try self.list.addFillRect(self.allocator, .{
+        .x = rect.x + shadow.offset_x - expansion,
+        .y = rect.y + shadow.offset_y - expansion,
+        .width = width,
+        .height = height,
+        .z_index = z_index,
+        .corner_radius = shadow_radius,
+        .clip_rect = clip_rect,
+        .opacity = @min(opacity, shadow_opacity),
+        .color = shadow.color,
+    });
+}
+
+fn firstBoxShadowLayer(raw_box_shadow: []const u8) []const u8 {
+    var depth: i32 = 0;
+    var quote: ?u8 = null;
+    for (raw_box_shadow, 0..) |c, i| {
+        if (quote) |q| {
+            if (c == q and (i == 0 or raw_box_shadow[i - 1] != '\\')) {
+                quote = null;
+            }
+            continue;
+        }
+
+        switch (c) {
+            '"', '\'' => quote = c,
+            '(' => depth += 1,
+            ')' => {
+                if (depth > 0) depth -= 1;
+            },
+            ',' => {
+                if (depth == 0) return std.mem.trim(u8, raw_box_shadow[0..i], &std.ascii.whitespace);
+            },
+            else => {},
+        }
+    }
+    return std.mem.trim(u8, raw_box_shadow, &std.ascii.whitespace);
+}
+
+fn parseBoxShadowLayer(raw_layer: []const u8) ?BoxShadow {
+    const trimmed = std.mem.trim(u8, raw_layer, &std.ascii.whitespace);
+    if (trimmed.len == 0 or std.ascii.eqlIgnoreCase(trimmed, "none")) {
+        return null;
+    }
+
+    var terms: [8][]const u8 = undefined;
+    var term_count: usize = 0;
+    var start: ?usize = null;
+    var depth: i32 = 0;
+    var quote: ?u8 = null;
+
+    for (trimmed, 0..) |c, i| {
+        if (quote) |q| {
+            if (c == q and (i == 0 or trimmed[i - 1] != '\\')) {
+                quote = null;
+            }
+            if (start == null) start = i;
+            continue;
+        }
+
+        switch (c) {
+            '"', '\'' => {
+                if (start == null) start = i;
+                quote = c;
+            },
+            '(' => {
+                if (start == null) start = i;
+                depth += 1;
+            },
+            ')' => {
+                if (start == null) start = i;
+                if (depth > 0) depth -= 1;
+            },
+            ' ', '\t', '\r', '\n' => {
+                if (depth == 0) {
+                    if (start) |term_start| {
+                        if (term_count == terms.len) return null;
+                        const term = std.mem.trim(u8, trimmed[term_start..i], &std.ascii.whitespace);
+                        if (term.len > 0) {
+                            terms[term_count] = term;
+                            term_count += 1;
+                        }
+                        start = null;
+                    }
+                }
+            },
+            else => {
+                if (start == null) start = i;
+            },
+        }
+    }
+
+    if (start) |term_start| {
+        if (term_count == terms.len) return null;
+        const term = std.mem.trim(u8, trimmed[term_start..], &std.ascii.whitespace);
+        if (term.len > 0) {
+            terms[term_count] = term;
+            term_count += 1;
+        }
+    }
+
+    if (term_count < 2) {
+        return null;
+    }
+
+    var inset = false;
+    var color: ?Color = null;
+    var lengths: [4]i32 = undefined;
+    var length_count: usize = 0;
+
+    for (terms[0..term_count]) |term| {
+        if (std.ascii.eqlIgnoreCase(term, "inset")) {
+            inset = true;
+            continue;
+        }
+        if (color == null) {
+            if (parseCssColor(term)) |parsed_color| {
+                color = parsed_color;
+                continue;
+            }
+        }
+        if (length_count < lengths.len) {
+            if (parseCssLengthPx(term)) |length| {
+                lengths[length_count] = length;
+                length_count += 1;
+                continue;
+            }
+        }
+        return null;
+    }
+
+    if (inset or length_count < 2) {
+        return null;
+    }
+
+    return .{
+        .offset_x = lengths[0],
+        .offset_y = lengths[1],
+        .blur = if (length_count >= 3) @max(@as(i32, 0), lengths[2]) else 0,
+        .spread = if (length_count >= 4) lengths[3] else 0,
+        .color = color orelse .{ .r = 0, .g = 0, .b = 0, .a = 96 },
+    };
 }
 
 fn extractBackgroundImageUrl(raw_background_image: []const u8) ?[]const u8 {
@@ -8506,6 +8691,42 @@ test "paintDocument carries border radius on box commands" {
         },
         else => return error.SquareFillWrongCommand,
     }
+}
+
+test "paintDocument emits box shadow commands for headed boxes" {
+    var page = try testing.pageTest("page/box_shadow_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 320,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var card_fill: ?RectCommand = null;
+    var shadow_fill: ?RectCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.width == 140 and rect.height == 90 and rect.x == 40 and rect.y == 30 and rect.color.r == 255 and rect.color.g == 255 and rect.color.b == 255) {
+                    card_fill = rect;
+                } else if (rect.width == 140 and rect.height == 90 and rect.x == 70 and rect.y == 50 and rect.color.r == 0 and rect.color.g == 0 and rect.color.b == 0) {
+                    shadow_fill = rect;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const card = card_fill orelse return error.BoxShadowCardMissing;
+    const shadow = shadow_fill orelse return error.BoxShadowShadowMissing;
+
+    try std.testing.expectEqual(@as(u8, 255), card.opacity);
+    try std.testing.expect(shadow.opacity < 255);
+    try std.testing.expectEqual(@as(i32, 40), card.x);
+    try std.testing.expectEqual(@as(i32, 30), card.y);
+    try std.testing.expectEqual(@as(i32, 70), shadow.x);
+    try std.testing.expectEqual(@as(i32, 50), shadow.y);
 }
 
 test "paintDocument expands content-box dimensions from explicit size" {
