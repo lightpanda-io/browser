@@ -46,7 +46,7 @@ _type: Type,
 _status_text: []const u8,
 _url: [:0]const u8,
 _is_redirected: bool,
-_transfer: ?*HttpClient.LiveTransfer = null,
+_http_response: ?HttpClient.Response = null,
 
 const InitOpts = struct {
     status: u16 = 200,
@@ -79,13 +79,13 @@ pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
 }
 
 pub fn deinit(self: *Response, shutdown: bool, session: *Session) void {
-    if (self._transfer) |transfer| {
+    if (self._http_response) |resp| {
         if (shutdown) {
-            transfer.terminate();
+            resp.terminate();
         } else {
-            transfer.abort(error.Abort);
+            resp.abort(error.Abort);
         }
-        self._transfer = null;
+        self._http_response = null;
     }
     session.releaseArena(self._arena);
 }
@@ -185,7 +185,7 @@ pub fn clone(self: *const Response, page: *Page) !*Response {
         ._type = self._type,
         ._is_redirected = self._is_redirected,
         ._headers = try Headers.init(.{ .obj = self._headers }, page),
-        ._transfer = null,
+        ._http_response = null,
     };
     return cloned;
 }

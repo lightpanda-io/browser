@@ -376,8 +376,10 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
     try entry.value_ptr.append(self.allocator, req);
 }
 
-fn robotsHeaderCallback(transfer: *LiveTransfer) !bool {
-    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(transfer.ctx));
+fn robotsHeaderCallback(response: Response) !bool {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(response.ctx));
+    // Robots callbacks only happen on real live requests.
+    const transfer = response.inner.live;
 
     if (transfer.response_header) |hdr| {
         log.debug(.browser, "robots status", .{ .status = hdr.status, .robots_url = ctx.robots_url });
@@ -391,8 +393,8 @@ fn robotsHeaderCallback(transfer: *LiveTransfer) !bool {
     return true;
 }
 
-fn robotsDataCallback(transfer: *LiveTransfer, data: []const u8) !void {
-    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(transfer.ctx));
+fn robotsDataCallback(response: Response, data: []const u8) !void {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(response.ctx));
     try ctx.buffer.appendSlice(ctx.client.allocator, data);
 }
 
@@ -611,7 +613,6 @@ fn makeTransfer(self: *Client, req: Request) !*LiveTransfer {
         .id = id,
         .url = req.url,
         .req = req,
-        .ctx = req.ctx,
         .client = self,
         .max_response_size = self.network.config.httpMaxResponseSize(),
     };
@@ -634,9 +635,9 @@ fn requestFailed(transfer: *LiveTransfer, err: anyerror, comptime execute_callba
     });
 
     if (execute_callback) {
-        transfer.req.error_callback(transfer.ctx, err);
+        transfer.req.error_callback(transfer.req.ctx, err);
     } else if (transfer.req.shutdown_callback) |cb| {
-        cb(transfer.ctx);
+        cb(transfer.req.ctx);
     }
 }
 
@@ -743,7 +744,7 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *LiveTransfer) an
     };
 
     if (req.start_callback) |cb| {
-        cb(transfer) catch |err| {
+        cb(Response.fromLive(transfer)) catch |err| {
             transfer.deinit();
             return err;
         };
@@ -875,7 +876,7 @@ fn processMessages(self: *Client) !bool {
                     break :blk;
                 }
             }
-            transfer.req.done_callback(transfer.ctx) catch |err| {
+            transfer.req.done_callback(transfer.req.ctx) catch |err| {
                 // transfer isn't valid at this point, don't use it.
                 log.err(.http, "done_callback", .{ .err = err });
                 requestFailed(transfer, err, true);
@@ -962,9 +963,9 @@ pub const Request = struct {
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
 
-    start_callback: ?*const fn (transfer: *LiveTransfer) anyerror!void = null,
-    header_callback: *const fn (transfer: *LiveTransfer) anyerror!bool,
-    data_callback: *const fn (transfer: *LiveTransfer, data: []const u8) anyerror!void,
+    start_callback: ?*const fn (response: Response) anyerror!void = null,
+    header_callback: *const fn (response: Response) anyerror!bool,
+    data_callback: *const fn (response: Response, data: []const u8) anyerror!void,
     done_callback: *const fn (ctx: *anyopaque) anyerror!void,
     error_callback: *const fn (ctx: *anyopaque, err: anyerror) void,
     shutdown_callback: ?*const fn (ctx: *anyopaque) void = null,
@@ -992,40 +993,41 @@ pub const Request = struct {
 
 const AuthChallenge = Net.AuthChallenge;
 
-pub const Transfer = struct {
+pub const Response = struct {
+    ctx: *anyopaque,
     inner: union(enum) {
-        live: LiveTransfer,
+        live: *LiveTransfer,
     },
 
-    pub fn fromLive(transfer: *LiveTransfer) Transfer {
+    pub fn fromLive(transfer: *LiveTransfer) Response {
         return .{ .ctx = transfer.req.ctx, .inner = .{ .live = transfer } };
     }
 
-    pub fn status(self: Transfer) ?u16 {
+    pub fn status(self: Response) ?u16 {
         return switch (self.inner) {
             .live => |live| if (live.response_header) |rh| rh.status else null,
         };
     }
 
-    pub fn contentType(self: Transfer) ?[]const u8 {
+    pub fn contentType(self: Response) ?[]const u8 {
         return switch (self.inner) {
             .live => |live| if (live.response_header) |*rh| rh.contentType() else null,
         };
     }
 
-    pub fn contentLength(self: Transfer) ?u32 {
+    pub fn contentLength(self: Response) ?u32 {
         return switch (self.inner) {
             .live => |live| live.getContentLength(),
         };
     }
 
-    pub fn redirectCount(self: Transfer) ?u32 {
+    pub fn redirectCount(self: Response) ?u32 {
         return switch (self.inner) {
             .live => |live| if (live.response_header) |rh| rh.redirect_count else null,
         };
     }
 
-    pub fn url(self: Transfer) [:0]const u8 {
+    pub fn url(self: Response) [:0]const u8 {
         return switch (self.inner) {
             .live => |live| live.url,
         };
@@ -1033,13 +1035,13 @@ pub const Transfer = struct {
 
     // TODO: Headers Iterator.
 
-    pub fn abort(self: Transfer, err: anyerror) void {
+    pub fn abort(self: Response, err: anyerror) void {
         switch (self.inner) {
             .live => |live| live.abort(err),
         }
     }
 
-    pub fn terminate(self: Transfer) void {
+    pub fn terminate(self: Response) void {
         switch (self.inner) {
             .live => |live| live.terminate(),
         }
@@ -1047,7 +1049,6 @@ pub const Transfer = struct {
 };
 
 pub const LiveTransfer = struct {
-    ctx: *anyopaque,
     arena: ArenaAllocator,
     id: u32 = 0,
     req: Request,
@@ -1215,7 +1216,7 @@ pub const LiveTransfer = struct {
             self.client.endTransfer(self);
         }
         if (self.req.shutdown_callback) |cb| {
-            cb(self.ctx);
+            cb(self.req.ctx);
         }
         self.deinit();
     }
@@ -1317,7 +1318,7 @@ pub const LiveTransfer = struct {
             }
         }
 
-        const proceed = transfer.req.header_callback(transfer) catch |err| {
+        const proceed = transfer.req.header_callback(Response.fromLive(transfer)) catch |err| {
             log.err(.http, "header_callback", .{ .err = err, .req = transfer });
             return err;
         };
@@ -1482,7 +1483,7 @@ pub const LiveTransfer = struct {
         }
 
         const chunk = buffer[0..chunk_len];
-        transfer.req.data_callback(transfer, chunk) catch |err| {
+        transfer.req.data_callback(Response.fromLive(transfer), chunk) catch |err| {
             log.err(.http, "data_callback", .{ .err = err, .req = transfer });
             return Net.writefunc_error;
         };
@@ -1534,7 +1535,7 @@ pub const LiveTransfer = struct {
     fn _fulfill(transfer: *LiveTransfer, status: u16, headers: []const Net.Header, body: ?[]const u8) !void {
         const req = &transfer.req;
         if (req.start_callback) |cb| {
-            try cb(transfer);
+            try cb(Response.fromLive(transfer));
         }
 
         transfer.response_header = .{
@@ -1553,13 +1554,13 @@ pub const LiveTransfer = struct {
         }
 
         lp.assert(transfer._header_done_called == false, "Transfer.fulfill header_done_called", .{});
-        if (try req.header_callback(transfer) == false) {
+        if (try req.header_callback(Response.fromLive(transfer)) == false) {
             transfer.abort(error.Abort);
             return;
         }
 
         if (body) |b| {
-            try req.data_callback(transfer, b);
+            try req.data_callback(Response.fromLive(transfer), b);
         }
 
         try req.done_callback(req.ctx);
