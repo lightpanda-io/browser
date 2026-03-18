@@ -201,7 +201,7 @@ Lightpanda also depends on
 [v8](https://chromium.googlesource.com/v8/v8.git),
 [Libcurl](https://curl.se/libcurl/) and [html5ever](https://github.com/servo/html5ever).
 
-To be able to build the v8 engine for zig-js-runtime, you have to install some libs:
+To be able to build the v8 engine, you have to install some libs:
 
 For **Debian/Ubuntu based Linux**:
 
