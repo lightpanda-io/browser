@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -67,7 +68,7 @@ fn setTouchEmulationEnabled(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-// TODO: noop method
 fn setUserAgentOverride(cmd: anytype) !void {
+    log.info(.app, "setUserAgentOverride ignored", .{});
     return cmd.sendResult(null, .{});
 }
