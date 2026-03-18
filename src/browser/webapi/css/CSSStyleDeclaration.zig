@@ -766,6 +766,39 @@ fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, normalized_name: []
     if (std.mem.eql(u8, normalized_name, "box-sizing")) {
         return "border-box";
     }
+    if (std.mem.eql(u8, normalized_name, "flex-direction")) {
+        return "row";
+    }
+    if (std.mem.eql(u8, normalized_name, "flex-wrap")) {
+        return "nowrap";
+    }
+    if (std.mem.eql(u8, normalized_name, "flex-grow")) {
+        return "0";
+    }
+    if (std.mem.eql(u8, normalized_name, "flex-shrink")) {
+        return "1";
+    }
+    if (std.mem.eql(u8, normalized_name, "flex-basis")) {
+        return "auto";
+    }
+    if (std.mem.eql(u8, normalized_name, "justify-content")) {
+        return "normal";
+    }
+    if (std.mem.eql(u8, normalized_name, "align-items")) {
+        return "stretch";
+    }
+    if (std.mem.eql(u8, normalized_name, "align-content")) {
+        return "stretch";
+    }
+    if (std.mem.eql(u8, normalized_name, "align-self")) {
+        return "auto";
+    }
+    if (std.mem.eql(u8, normalized_name, "order")) {
+        return "0";
+    }
+    if (std.mem.eql(u8, normalized_name, "gap") or std.mem.eql(u8, normalized_name, "row-gap") or std.mem.eql(u8, normalized_name, "column-gap")) {
+        return "0";
+    }
     if (std.mem.eql(u8, normalized_name, "object-fit")) {
         return "fill";
     }

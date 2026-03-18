@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+<head>
+  <title>Flex Align Content - Lightpanda Browser</title>
+  <style>
+    html, body {
+      margin: 0;
+      min-height: 100vh;
+      background: #ffffff;
+    }
+
+    body {
+      padding: 24px;
+    }
+
+    .toolbar {
+      width: 260px;
+      height: 260px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      align-content: space-between;
+      gap: 12px;
+      padding: 12px;
+      border: 1px solid #dfe1e5;
+      background: #f8f9fa;
+    }
+
+    .chip {
+      width: 100px;
+      height: 40px;
+      border: 0;
+    }
+
+    .red {
+      background: rgb(220, 50, 50);
+    }
+
+    .blue {
+      background: rgb(40, 110, 220);
+    }
+
+    .green {
+      background: rgb(40, 170, 90);
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="chip red"></div>
+    <div class="chip blue"></div>
+    <div class="chip green"></div>
+  </div>
+</body>
+</html>

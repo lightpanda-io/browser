@@ -95,6 +95,10 @@ The fork already has a real headed Windows foundation:
   hit-testing for translated controls and links, with bounded screenshot and
   interaction coverage proving the transformed button and link geometry both
   render and remain targetable
+- flex row layout now also respects authored `order`, `flex-shrink`,
+  `align-content`, and `align-self`, with bounded headed probes proving
+  ordered links, shrunk boxes, wrapped line spacing, and per-item vertical
+  alignment on the real Win32 surface
 
 ## Achieved Gates
 

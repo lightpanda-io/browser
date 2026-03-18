@@ -162,8 +162,11 @@ const FlexChildMeasure = struct {
     node: *Node,
     width: i32,
     height: i32,
+    order: i32 = 0,
     flex_grow: f32 = 0,
+    flex_shrink: f32 = 1,
     align_self: FlexCrossAlignment = .auto,
+    source_index: usize = 0,
 };
 
 const FlexLineMeasure = struct {
@@ -1693,14 +1696,23 @@ const Painter = struct {
         const gap = resolveFlexGapPx(decl, self.page);
         const justify_content = std.mem.trim(u8, resolveCssPropertyValue(decl, self.page, element, "justify-content"), &std.ascii.whitespace);
         const align_items = std.mem.trim(u8, resolveCssPropertyValue(decl, self.page, element, "align-items"), &std.ascii.whitespace);
+        const reverse_main_axis = flexDirectionIsReverse(decl, self.page);
 
         var measured_children: std.ArrayList(FlexChildMeasure) = .empty;
         defer measured_children.deinit(self.allocator);
 
         var child_total_height: i32 = 0;
         var child_it = element.asNode().childrenIterator();
-        while (child_it.next()) |child| {
+        var child_index: usize = 0;
+        while (child_it.next()) |child| : (child_index += 1) {
             if (!isFlexRenderableChild(child)) continue;
+
+            var order: i32 = 0;
+            if (child.is(Element)) |child_element| {
+                const child_style = try self.page.window.getComputedStyle(child_element, null, self.page);
+                const child_decl = child_style.asCSSStyleDeclaration();
+                order = resolveFlexOrder(child_decl, self.page);
+            }
 
             const measurement = try self.measureNodePaintedBox(child, content_width);
             if (measurement.width <= 0 and measurement.height <= 0) continue;
@@ -1709,8 +1721,15 @@ const Painter = struct {
                 .node = child,
                 .width = std.math.clamp(measurement.width, @as(i32, 0), content_width),
                 .height = measurement.height,
+                .order = order,
+                .source_index = child_index,
             });
             child_total_height += measurement.height;
+        }
+
+        std.mem.sort(FlexChildMeasure, measured_children.items, {}, flexChildMeasureLessThan);
+        if (reverse_main_axis) {
+            std.mem.reverse(FlexChildMeasure, measured_children.items);
         }
 
         const gap_count = @max(@as(i32, 0), @as(i32, @intCast(measured_children.items.len)) - 1);
@@ -1776,10 +1795,22 @@ const Painter = struct {
         const child_control_start = self.list.control_regions.items.len;
         var child_y = rect.y + padding.top;
         const free_vertical_space = @max(@as(i32, 0), container_content_height - content_height);
+        const justify_start = std.ascii.eqlIgnoreCase(justify_content, "flex-start") or
+            std.ascii.eqlIgnoreCase(justify_content, "start") or
+            std.ascii.eqlIgnoreCase(justify_content, "normal") or
+            justify_content.len == 0;
+        const justify_end = std.ascii.eqlIgnoreCase(justify_content, "flex-end") or std.ascii.eqlIgnoreCase(justify_content, "end");
         if (std.ascii.eqlIgnoreCase(justify_content, "center")) {
             child_y += @divTrunc(free_vertical_space, 2);
-        } else if (std.ascii.eqlIgnoreCase(justify_content, "flex-end") or std.ascii.eqlIgnoreCase(justify_content, "end")) {
-            child_y += free_vertical_space;
+        } else if (justify_start) {
+            if (reverse_main_axis) child_y += free_vertical_space;
+        } else if (justify_end) {
+            if (!reverse_main_axis) child_y += free_vertical_space;
+        } else if (std.ascii.eqlIgnoreCase(justify_content, "space-between") and measured_children.items.len > 1) {
+            // Single-column flex doesn't use distributed main-axis gaps yet.
+            child_y += 0;
+        } else if (std.ascii.eqlIgnoreCase(justify_content, "space-around") or std.ascii.eqlIgnoreCase(justify_content, "space-evenly")) {
+            child_y += 0;
         }
 
         for (measured_children.items, 0..) |child_measure, index| {
@@ -1861,37 +1892,63 @@ const Painter = struct {
         const main_gap = resolveFlexRowMainGapPx(decl, self.page);
         const cross_gap = resolveFlexRowCrossGapPx(decl, self.page);
         const wrap_enabled = flexWrapEnabled(decl, self.page);
+        const reverse_main_axis = flexDirectionIsReverse(decl, self.page);
         const justify_content = std.mem.trim(u8, resolveCssPropertyValue(decl, self.page, element, "justify-content"), &std.ascii.whitespace);
         const align_items = std.mem.trim(u8, resolveCssPropertyValue(decl, self.page, element, "align-items"), &std.ascii.whitespace);
+        const align_content = resolveFlexAlignContent(resolveCssPropertyValue(decl, self.page, element, "align-content"));
+        const specified_align_content = std.mem.trim(u8, decl.getSpecifiedPropertyValue("align-content", self.page), &std.ascii.whitespace);
 
         var measured_children: std.ArrayList(FlexChildMeasure) = .empty;
         defer measured_children.deinit(self.allocator);
 
         var child_it = element.asNode().childrenIterator();
-        while (child_it.next()) |child| {
+        var child_index: usize = 0;
+        while (child_it.next()) |child| : (child_index += 1) {
             if (!isFlexRenderableChild(child)) continue;
 
             var flex_grow: f32 = 0;
+            var flex_shrink: f32 = 1;
             var align_self: FlexCrossAlignment = .auto;
             var flex_basis: ?i32 = null;
+            var order: i32 = 0;
+            var min_width: i32 = 0;
+            var max_width: ?i32 = null;
             if (child.is(Element)) |child_element| {
                 const child_style = try self.page.window.getComputedStyle(child_element, null, self.page);
                 const child_decl = child_style.asCSSStyleDeclaration();
                 flex_grow = resolveFlexGrow(child_decl, self.page);
+                flex_shrink = resolveFlexShrink(child_decl, self.page);
                 align_self = resolveFlexCrossAlignment(resolveCssPropertyValue(child_decl, self.page, child_element, "align-self"));
                 flex_basis = resolveFlexBasisPx(self, child_element, child_decl, content_width);
+                order = resolveFlexOrder(child_decl, self.page);
+                min_width = parseCssLengthPxWithContext(child_decl.getPropertyValue("min-width", self.page), content_width, self.opts.viewport_width) orelse 0;
+                max_width = parseCssLengthPxWithContext(child_decl.getPropertyValue("max-width", self.page), content_width, self.opts.viewport_width);
             }
 
             const measurement = try self.measureNodePaintedBox(child, flex_basis orelse content_width);
             if (measurement.width <= 0 and measurement.height <= 0) continue;
 
+            var measured_width = flex_basis orelse measurement.width;
+            measured_width = @max(measured_width, min_width);
+            if (max_width) |limit| {
+                measured_width = @min(measured_width, limit);
+            }
+
             try measured_children.append(self.allocator, .{
                 .node = child,
-                .width = std.math.clamp(flex_basis orelse measurement.width, @as(i32, 0), content_width),
+                .width = std.math.clamp(measured_width, @as(i32, 0), content_width),
                 .height = measurement.height,
+                .order = order,
                 .flex_grow = flex_grow,
+                .flex_shrink = flex_shrink,
                 .align_self = align_self,
+                .source_index = child_index,
             });
+        }
+
+        std.mem.sort(FlexChildMeasure, measured_children.items, {}, flexChildMeasureLessThan);
+        if (reverse_main_axis) {
+            std.mem.reverse(FlexChildMeasure, measured_children.items);
         }
 
         var lines: std.ArrayList(FlexLineMeasure) = .empty;
@@ -2002,17 +2059,85 @@ const Painter = struct {
         const child_link_start = self.list.link_regions.items.len;
         const child_control_start = self.list.control_regions.items.len;
         var child_y = rect.y + padding.top;
+        var line_gap = cross_gap;
+        var line_extra_height: i32 = 0;
+        const free_vertical_space = @max(@as(i32, 0), container_content_height - content_height);
+        if (lines.items.len > 1 and specified_align_content.len > 0) {
+            if (std.ascii.eqlIgnoreCase(align_content, "center")) {
+                child_y += @divTrunc(free_vertical_space, 2);
+            } else if (std.ascii.eqlIgnoreCase(align_content, "flex-end") or std.ascii.eqlIgnoreCase(align_content, "end")) {
+                child_y += free_vertical_space;
+            } else if (std.ascii.eqlIgnoreCase(align_content, "space-between")) {
+                line_gap += @divTrunc(free_vertical_space, @as(i32, @intCast(lines.items.len - 1)));
+            } else if (std.ascii.eqlIgnoreCase(align_content, "space-around")) {
+                const extra = @divTrunc(free_vertical_space, @as(i32, @intCast(lines.items.len)));
+                child_y += @divTrunc(extra, 2);
+                line_gap += extra;
+            } else if (std.ascii.eqlIgnoreCase(align_content, "space-evenly")) {
+                const extra = @divTrunc(free_vertical_space, @as(i32, @intCast(lines.items.len + 1)));
+                child_y += extra;
+                line_gap += extra;
+            } else if (std.ascii.eqlIgnoreCase(align_content, "stretch")) {
+                line_extra_height = @divTrunc(free_vertical_space, @as(i32, @intCast(lines.items.len)));
+            }
+        }
+
         for (lines.items, 0..) |line, line_index| {
             const item_count: i32 = @intCast(line.end_index - line.start_index);
-            const free_horizontal_space = @max(@as(i32, 0), content_width - line.width);
+            var resolved_widths: std.ArrayList(i32) = .empty;
+            defer resolved_widths.deinit(self.allocator);
+            try resolved_widths.ensureTotalCapacity(self.allocator, @intCast(item_count));
+            var line_width_used: i32 = 0;
+            var total_shrink_weight: f64 = 0;
+
+            for (measured_children.items[line.start_index..line.end_index]) |child_measure| {
+                try resolved_widths.append(self.allocator, child_measure.width);
+                if (child_measure.flex_shrink > 0) {
+                    total_shrink_weight += @as(f64, @floatFromInt(@max(@as(i32, 1), child_measure.width))) * @as(f64, @floatCast(child_measure.flex_shrink));
+                }
+            }
+
+            if (line.width > content_width and total_shrink_weight > 0) {
+                var remaining_shrink_space = line.width - content_width;
+                var remaining_weight = total_shrink_weight;
+                for (resolved_widths.items, 0..) |*child_width, local_index| {
+                    const line_child_index = line.start_index + local_index;
+                    const child_measure = measured_children.items[line_child_index];
+                    const shrink_weight = @as(f64, @floatFromInt(@max(@as(i32, 1), child_measure.width))) * @as(f64, @floatCast(child_measure.flex_shrink));
+                    if (shrink_weight <= 0) continue;
+                    const extra = if (line_child_index + 1 == line.end_index or remaining_weight <= shrink_weight)
+                        remaining_shrink_space
+                    else
+                        @as(i32, @intFromFloat(@floor(@as(f64, @floatFromInt(line.width - content_width)) * (shrink_weight / total_shrink_weight))));
+                    child_width.* = @max(@as(i32, 0), child_width.* - extra);
+                    remaining_shrink_space -= extra;
+                    remaining_weight -= shrink_weight;
+                }
+            }
+
+            for (resolved_widths.items) |child_width| {
+                line_width_used += child_width;
+            }
+            if (item_count > 1) {
+                line_width_used += main_gap * (item_count - 1);
+            }
+
+            const free_horizontal_space = @max(@as(i32, 0), content_width - line_width_used);
             var child_x = rect.x + padding.left;
             var gap = main_gap;
             var total_flex_grow: f32 = 0;
 
+            const justify_start = std.ascii.eqlIgnoreCase(justify_content, "flex-start") or
+                std.ascii.eqlIgnoreCase(justify_content, "start") or
+                std.ascii.eqlIgnoreCase(justify_content, "normal") or
+                justify_content.len == 0;
+            const justify_end = std.ascii.eqlIgnoreCase(justify_content, "flex-end") or std.ascii.eqlIgnoreCase(justify_content, "end");
             if (std.ascii.eqlIgnoreCase(justify_content, "center")) {
                 child_x += @divTrunc(free_horizontal_space, 2);
-            } else if (std.ascii.eqlIgnoreCase(justify_content, "flex-end") or std.ascii.eqlIgnoreCase(justify_content, "end")) {
-                child_x += free_horizontal_space;
+            } else if (justify_start) {
+                if (reverse_main_axis) child_x += free_horizontal_space;
+            } else if (justify_end) {
+                if (!reverse_main_axis) child_x += free_horizontal_space;
             } else if (std.ascii.eqlIgnoreCase(justify_content, "space-between") and item_count > 1) {
                 gap += @divTrunc(free_horizontal_space, item_count - 1);
             } else if (std.ascii.eqlIgnoreCase(justify_content, "space-around") and item_count > 0) {
@@ -2033,12 +2158,12 @@ const Painter = struct {
             var remaining_grow_space: i32 = free_horizontal_space;
             var remaining_flex_grow = total_flex_grow;
 
-            var child_index = line.start_index;
-            while (child_index < line.end_index) : (child_index += 1) {
-                const child_measure = measured_children.items[child_index];
-                var child_width = child_measure.width;
+            var line_child_index = line.start_index;
+            while (line_child_index < line.end_index) : (line_child_index += 1) {
+                const child_measure = measured_children.items[line_child_index];
+                var child_width = resolved_widths.items[line_child_index - line.start_index];
                 if (total_flex_grow > 0 and free_horizontal_space > 0 and child_measure.flex_grow > 0) {
-                    const extra_width = if (child_index + 1 == line.end_index or remaining_flex_grow <= child_measure.flex_grow)
+                    const extra_width = if (line_child_index + 1 == line.end_index or remaining_flex_grow <= child_measure.flex_grow)
                         remaining_grow_space
                     else
                         @as(i32, @intFromFloat(@floor(@as(f64, @floatFromInt(free_horizontal_space)) *
@@ -2048,12 +2173,12 @@ const Painter = struct {
                     remaining_flex_grow -= child_measure.flex_grow;
                 }
                 var item_y = child_y;
-                const free_vertical_space = @max(@as(i32, 0), line.height - child_measure.height);
+                const item_free_vertical_space = @max(@as(i32, 0), (line.height + line_extra_height) - child_measure.height);
                 const item_align = effectiveFlexCrossAlignment(align_items, child_measure.align_self);
                 if (item_align == .center) {
-                    item_y += @divTrunc(free_vertical_space, 2);
+                    item_y += @divTrunc(item_free_vertical_space, 2);
                 } else if (item_align == .end) {
-                    item_y += free_vertical_space;
+                    item_y += item_free_vertical_space;
                 }
 
                 {
@@ -2069,14 +2194,14 @@ const Painter = struct {
                     self.forced_item_width = previous_forced_width;
                 }
                 child_x += child_width;
-                if (child_index + 1 < line.end_index) {
+                if (line_child_index + 1 < line.end_index) {
                     child_x += gap;
                 }
             }
 
-            child_y += line.height;
+            child_y += line.height + line_extra_height;
             if (line_index + 1 < lines.items.len) {
-                child_y += cross_gap;
+                child_y += line_gap;
             }
         }
 
@@ -4161,6 +4286,53 @@ fn isFlexColumnContainer(display: []const u8, decl: anytype, page: *Page) bool {
     const direction = std.mem.trim(u8, decl.getPropertyValue("flex-direction", page), &std.ascii.whitespace);
     return std.ascii.eqlIgnoreCase(direction, "column") or
         std.ascii.eqlIgnoreCase(direction, "column-reverse");
+}
+
+fn flexDirectionValue(decl: anytype, page: *Page) []const u8 {
+    return std.mem.trim(u8, decl.getPropertyValue("flex-direction", page), &std.ascii.whitespace);
+}
+
+fn flexDirectionIsReverse(decl: anytype, page: *Page) bool {
+    const direction = flexDirectionValue(decl, page);
+    return std.ascii.eqlIgnoreCase(direction, "row-reverse") or std.ascii.eqlIgnoreCase(direction, "column-reverse");
+}
+
+fn resolveFlexOrder(decl: anytype, page: *Page) i32 {
+    if (parseCssIntegerValue(decl.getPropertyValue("order", page))) |value| {
+        return value;
+    }
+    return 0;
+}
+
+fn resolveFlexShrink(decl: anytype, page: *Page) f32 {
+    if (parseCssFloatValue(decl.getPropertyValue("flex-shrink", page))) |value| {
+        return @max(@as(f32, 0), value);
+    }
+
+    const shorthand = std.mem.trim(u8, decl.getPropertyValue("flex", page), &std.ascii.whitespace);
+    if (shorthand.len == 0) return 1;
+    if (std.ascii.eqlIgnoreCase(shorthand, "none")) return 0;
+    if (std.ascii.eqlIgnoreCase(shorthand, "auto") or std.ascii.eqlIgnoreCase(shorthand, "initial")) return 1;
+
+    var it = std.mem.tokenizeAny(u8, shorthand, &std.ascii.whitespace);
+    _ = it.next() orelse return 1;
+    if (it.next()) |maybe_shrink| {
+        if (parseCssFloatValue(maybe_shrink)) |value| {
+            return @max(@as(f32, 0), value);
+        }
+    }
+    return 1;
+}
+
+fn flexChildMeasureLessThan(_: void, lhs: FlexChildMeasure, rhs: FlexChildMeasure) bool {
+    if (lhs.order != rhs.order) return lhs.order < rhs.order;
+    return lhs.source_index < rhs.source_index;
+}
+
+fn resolveFlexAlignContent(value: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) return "stretch";
+    return trimmed;
 }
 
 fn isFlexRowContainer(display: []const u8, decl: anytype, page: *Page) bool {
@@ -7636,6 +7808,160 @@ test "paintDocument grows flex row items with bounded docked siblings" {
     try std.testing.expect(gray.width >= 220);
     try std.testing.expect(gray.x > red.x + red.width);
     try std.testing.expect(blue.x > gray.x + gray.width);
+}
+
+test "paintDocument orders flex row items by order before painting" {
+    var page = try testing.pageTest("page/flex_order_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_rect: ?Bounds = null;
+    var blue_rect: ?Bounds = null;
+    var green_rect: ?Bounds = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 180 and rect.color.g <= 90 and rect.color.b <= 90) {
+                    red_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.b >= 180 and rect.color.r <= 90 and rect.color.g <= 150) {
+                    blue_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.g >= 140 and rect.color.r <= 100 and rect.color.b <= 140) {
+                    green_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_rect orelse return error.RedChipMissing;
+    const blue = blue_rect orelse return error.BlueChipMissing;
+    const green = green_rect orelse return error.GreenChipMissing;
+
+    try std.testing.expectEqual(@as(i32, 88), red.width);
+    try std.testing.expectEqual(@as(i32, 88), blue.width);
+    try std.testing.expectEqual(@as(i32, 88), green.width);
+    try std.testing.expect(blue.x < green.x);
+    try std.testing.expect(green.x < red.x);
+}
+
+test "paintDocument shrinks flex row items with flex-shrink under overflow" {
+    var page = try testing.pageTest("page/flex_shrink_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_rect: ?Bounds = null;
+    var gray_rect: ?Bounds = null;
+    var blue_rect: ?Bounds = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 180 and rect.color.g <= 90 and rect.color.b <= 90) {
+                    red_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.r >= 130 and rect.color.r <= 190 and rect.color.g >= 130 and rect.color.g <= 190 and rect.color.b >= 130 and rect.color.b <= 190) {
+                    gray_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.b >= 180 and rect.color.r <= 90 and rect.color.g <= 150) {
+                    blue_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_rect orelse return error.ShrinkRedMissing;
+    const gray = gray_rect orelse return error.ShrinkGrayMissing;
+    const blue = blue_rect orelse return error.ShrinkBlueMissing;
+
+    try std.testing.expectEqual(@as(i32, 120), red.width);
+    try std.testing.expectEqual(@as(i32, 90), gray.width);
+    try std.testing.expectEqual(@as(i32, 90), blue.width);
+    try std.testing.expect(red.x < gray.x);
+    try std.testing.expect(gray.x < blue.x);
+}
+
+test "paintDocument applies align-content space-between across wrapped flex rows" {
+    var page = try testing.pageTest("page/flex_align_content_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 420,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_rect: ?Bounds = null;
+    var blue_rect: ?Bounds = null;
+    var green_rect: ?Bounds = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 180 and rect.color.g <= 90 and rect.color.b <= 90) {
+                    red_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.b >= 180 and rect.color.r <= 90 and rect.color.g <= 150) {
+                    blue_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.g >= 140 and rect.color.r <= 100 and rect.color.b <= 140) {
+                    green_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_rect orelse return error.AlignContentRedMissing;
+    const blue = blue_rect orelse return error.AlignContentBlueMissing;
+    const green = green_rect orelse return error.AlignContentGreenMissing;
+
+    try std.testing.expectApproxEqAbs(@as(f64, @floatFromInt(red.y)), @as(f64, @floatFromInt(blue.y)), 4.0);
+    try std.testing.expect(green.y >= red.y + red.height + 80);
+    try std.testing.expect(green.x >= 110);
+    try std.testing.expect(green.x <= 180);
+}
+
+test "paintDocument honors align-self on flex row items" {
+    var page = try testing.pageTest("page/flex_align_self_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_rect: ?Bounds = null;
+    var gray_rect: ?Bounds = null;
+    var blue_rect: ?Bounds = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 180 and rect.color.g <= 90 and rect.color.b <= 90) {
+                    red_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.r >= 130 and rect.color.r <= 190 and rect.color.g >= 130 and rect.color.g <= 190 and rect.color.b >= 130 and rect.color.b <= 190) {
+                    gray_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.b >= 180 and rect.color.r <= 90 and rect.color.g <= 150) {
+                    blue_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_rect orelse return error.AlignSelfRedMissing;
+    const gray = gray_rect orelse return error.AlignSelfGrayMissing;
+    const blue = blue_rect orelse return error.AlignSelfBlueMissing;
+
+    try std.testing.expect(red.y < gray.y);
+    try std.testing.expect(gray.y < blue.y);
+    try std.testing.expect(red.width < gray.width);
+    try std.testing.expect(blue.x > gray.x);
 }
 
 test "paintDocument lays out legacy centered table search form" {

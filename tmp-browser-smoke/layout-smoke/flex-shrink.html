@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Flex Shrink - Lightpanda Browser</title>
+  <style>
+    html, body {
+      margin: 0;
+      min-height: 100vh;
+      background: #ffffff;
+    }
+
+    body {
+      padding: 24px;
+    }
+
+    .toolbar {
+      width: 320px;
+      display: flex;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid #dfe1e5;
+      background: #f8f9fa;
+    }
+
+    .chip {
+      height: 40px;
+      border: 0;
+    }
+
+    .red {
+      width: 120px;
+      flex-shrink: 0;
+      background: rgb(220, 50, 50);
+    }
+
+    .gray {
+      width: 120px;
+      flex-shrink: 1;
+      background: rgb(160, 160, 160);
+    }
+
+    .blue {
+      width: 120px;
+      flex-shrink: 1;
+      background: rgb(40, 110, 220);
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="chip red"></div>
+    <div class="chip gray"></div>
+    <div class="chip blue"></div>
+  </div>
+
+  <script>
+    window.addEventListener('load', () => {
+      requestAnimationFrame(() => {
+        const widths = Array.from(document.querySelectorAll('.chip'), (el) => Math.round(el.getBoundingClientRect().width));
+        document.title = `Flex Shrink ${widths.join(' ')}`;
+      });
+    });
+  </script>
+</body>
+</html>

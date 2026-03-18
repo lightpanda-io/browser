@@ -170,6 +170,50 @@
 }
 </script>
 
+<script id="flexDefaults">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  const computed = getComputedStyle(div);
+  testing.expectEqual('row', computed.flexDirection);
+  testing.expectEqual('nowrap', computed.flexWrap);
+  testing.expectEqual('0', computed.flexGrow);
+  testing.expectEqual('1', computed.flexShrink);
+  testing.expectEqual('auto', computed.flexBasis);
+  testing.expectEqual('normal', computed.justifyContent);
+  testing.expectEqual('stretch', computed.alignItems);
+  testing.expectEqual('stretch', computed.alignContent);
+  testing.expectEqual('auto', computed.alignSelf);
+  testing.expectEqual('0', computed.order);
+  testing.expectEqual('0px', computed.gap);
+
+  div.style.flexDirection = 'column';
+  div.style.flexWrap = 'wrap';
+  div.style.flexGrow = '2';
+  div.style.flexShrink = '0';
+  div.style.flexBasis = '24px';
+  div.style.justifyContent = 'space-between';
+  div.style.alignItems = 'center';
+  div.style.alignContent = 'space-around';
+  div.style.alignSelf = 'flex-end';
+  div.style.order = '3';
+  div.style.gap = '8px';
+
+  testing.expectEqual('column', div.style.flexDirection);
+  testing.expectEqual('wrap', div.style.flexWrap);
+  testing.expectEqual('2', div.style.flexGrow);
+  testing.expectEqual('0', div.style.flexShrink);
+  testing.expectEqual('24px', div.style.flexBasis);
+  testing.expectEqual('space-between', div.style.justifyContent);
+  testing.expectEqual('center', div.style.alignItems);
+  testing.expectEqual('space-around', div.style.alignContent);
+  testing.expectEqual('flex-end', div.style.alignSelf);
+  testing.expectEqual('3', div.style.order);
+  testing.expectEqual('8px', div.style.gap);
+}
+</script>
+
 <script id="imageSizingDefaults">
 {
   const img = document.createElement('img');
