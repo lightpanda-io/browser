@@ -424,13 +424,12 @@ const TextVisitor = struct {
 
         const is_text_only = std.mem.eql(u8, data.role, "StaticText") or std.mem.eql(u8, data.role, "none") or std.mem.eql(u8, data.role, "generic");
 
-        if (is_text_only and name_to_print != null) {
-            try self.writer.print("{d} '{s}'", .{ data.id, name_to_print.? });
-        } else {
-            try self.writer.print("{d} {s}", .{ data.id, data.role });
-            if (name_to_print) |n| {
-                try self.writer.print(" '{s}'", .{n});
-            }
+        try self.writer.print("{d}", .{data.id});
+        if (!is_text_only) {
+            try self.writer.print(" {s}", .{data.role});
+        }
+        if (name_to_print) |n| {
+            try self.writer.print(" '{s}'", .{n});
         }
 
         if (data.value) |v| {
