@@ -190,8 +190,6 @@ Here are the key features we have implemented:
 
 NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
 
-You can also follow the progress of our Javascript support in our dedicated [zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime#development) project.
-
 ## Build from sources
 
 ### Prerequisites
