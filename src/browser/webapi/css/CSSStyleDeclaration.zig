@@ -748,6 +748,18 @@ fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, normalized_name: []
         // transparent
         return "rgba(0, 0, 0, 0)";
     }
+    if (std.mem.eql(u8, normalized_name, "line-height")) {
+        return "normal";
+    }
+    if (std.mem.eql(u8, normalized_name, "letter-spacing")) {
+        return "normal";
+    }
+    if (std.mem.eql(u8, normalized_name, "word-spacing")) {
+        return "normal";
+    }
+    if (std.mem.eql(u8, normalized_name, "text-transform")) {
+        return "none";
+    }
 
     if (self._element) |element| {
         if (presentationalPropertyValue(element, normalized_name)) |value| {

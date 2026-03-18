@@ -4156,6 +4156,20 @@ fn colorRef(color: DisplayColor) c.COLORREF {
         (@as(c.COLORREF, color.b) << 16);
 }
 
+fn countPresentationTextSpaces(text: []const u8) usize {
+    var count: usize = 0;
+    for (text) |byte| {
+        if (byte == ' ') {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+fn combinePresentationAlpha(source_alpha: u8, opacity: u8) u8 {
+    return @as(u8, @intCast((@as(u16, source_alpha) * @as(u16, opacity) + 127) / 255));
+}
+
 fn ensureGdiplusStarted(backend: *Win32Backend) bool {
     if (backend.gdiplus_started) {
         return true;
@@ -4659,7 +4673,116 @@ fn rectCommandCornerDiameter(rect: c.RECT, radius: i32) c.INT {
     return @as(c.INT, @intCast(std.math.clamp(radius, 0, max_radius) * 2));
 }
 
-fn drawPresentationFillRect(hdc: c.HDC, rect: c.RECT, rect_cmd: @import("../render/DisplayList.zig").RectCommand) void {
+const AlphaBlendSurface = struct {
+    mem_dc: c.HDC,
+    bitmap: c.HBITMAP,
+    previous_bitmap: ?c.HGDIOBJ,
+    bits: [*]u8,
+    pixel_bytes: usize,
+    width: c.INT,
+    height: c.INT,
+
+    fn deinit(self: *AlphaBlendSurface) void {
+        if (self.mem_dc == null) return;
+        if (self.previous_bitmap) |previous_bitmap| {
+            _ = c.SelectObject(self.mem_dc, previous_bitmap);
+        }
+        _ = c.DeleteObject(self.bitmap);
+        _ = c.DeleteDC(self.mem_dc);
+        self.* = undefined;
+    }
+};
+
+const alpha_surface_sentinel = [3]u8{ 0xaa, 0x55, 0xaa };
+
+fn beginAlphaBlendSurface(hdc: c.HDC, width: c.INT, height: c.INT) ?AlphaBlendSurface {
+    if (width <= 0 or height <= 0) return null;
+
+    const mem_dc = c.CreateCompatibleDC(hdc);
+    if (mem_dc == null) return null;
+
+    var bmi: c.BITMAPINFO = std.mem.zeroes(c.BITMAPINFO);
+    bmi.bmiHeader.biSize = @sizeOf(c.BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -height;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = c.BI_RGB;
+
+    var bits: ?*anyopaque = null;
+    const bitmap = c.CreateDIBSection(mem_dc, &bmi, c.DIB_RGB_COLORS, &bits, null, 0);
+    if (bitmap == null or bits == null) {
+        _ = c.DeleteDC(mem_dc);
+        return null;
+    }
+
+    const previous_bitmap = c.SelectObject(mem_dc, bitmap);
+    if (previous_bitmap == null) {
+        _ = c.DeleteObject(bitmap);
+        _ = c.DeleteDC(mem_dc);
+        return null;
+    }
+
+    const pixel_bytes = @as(usize, @intCast(width)) * @as(usize, @intCast(height)) * 4;
+    const dst_pixels: [*]u8 = @ptrCast(bits.?);
+    var pixel_index: usize = 0;
+    while (pixel_index + 3 < pixel_bytes) : (pixel_index += 4) {
+        dst_pixels[pixel_index + 0] = alpha_surface_sentinel[0];
+        dst_pixels[pixel_index + 1] = alpha_surface_sentinel[1];
+        dst_pixels[pixel_index + 2] = alpha_surface_sentinel[2];
+        dst_pixels[pixel_index + 3] = 0;
+    }
+
+    return .{
+        .mem_dc = mem_dc,
+        .bitmap = bitmap,
+        .previous_bitmap = previous_bitmap,
+        .bits = dst_pixels,
+        .pixel_bytes = pixel_bytes,
+        .width = width,
+        .height = height,
+    };
+}
+
+fn prepareAlphaMask(pixels: []u8) void {
+    var index: usize = 0;
+    while (index + 3 < pixels.len) : (index += 4) {
+        const is_sentinel = pixels[index + 0] == alpha_surface_sentinel[0] and
+            pixels[index + 1] == alpha_surface_sentinel[1] and
+            pixels[index + 2] == alpha_surface_sentinel[2];
+        pixels[index + 3] = if (is_sentinel) 0 else 255;
+    }
+}
+
+fn alphaBlendSurfaceToTarget(hdc: c.HDC, rect: c.RECT, surface: *AlphaBlendSurface, alpha: u8, prepare_mask: bool) void {
+    if (alpha == 0 or surface.width <= 0 or surface.height <= 0) {
+        return;
+    }
+    if (prepare_mask) {
+        prepareAlphaMask(surface.bits[0..surface.pixel_bytes]);
+    }
+    const blend = c.BLENDFUNCTION{
+        .BlendOp = c.AC_SRC_OVER,
+        .BlendFlags = 0,
+        .SourceConstantAlpha = alpha,
+        .AlphaFormat = c.AC_SRC_ALPHA,
+    };
+    _ = c.AlphaBlend(
+        hdc,
+        rect.left,
+        rect.top,
+        surface.width,
+        surface.height,
+        surface.mem_dc,
+        0,
+        0,
+        surface.width,
+        surface.height,
+        blend,
+    );
+}
+
+fn drawPresentationFillRectOpaque(hdc: c.HDC, rect: c.RECT, rect_cmd: @import("../render/DisplayList.zig").RectCommand) void {
     const brush = c.CreateSolidBrush(colorRef(rect_cmd.color));
     if (brush == null) return;
     defer _ = c.DeleteObject(brush);
@@ -4682,7 +4805,30 @@ fn drawPresentationFillRect(hdc: c.HDC, rect: c.RECT, rect_cmd: @import("../rend
     _ = c.FillRgn(hdc, region, brush);
 }
 
-fn drawPresentationStrokeRect(hdc: c.HDC, rect: c.RECT, rect_cmd: @import("../render/DisplayList.zig").RectCommand) void {
+fn drawPresentationFillRect(hdc: c.HDC, rect: c.RECT, rect_cmd: @import("../render/DisplayList.zig").RectCommand) void {
+    const combined_alpha = combinePresentationAlpha(rect_cmd.color.a, rect_cmd.opacity);
+    if (combined_alpha == 0) return;
+    if (combined_alpha == 255) {
+        drawPresentationFillRectOpaque(hdc, rect, rect_cmd);
+        return;
+    }
+
+    const width = rect.right - rect.left;
+    const height = rect.bottom - rect.top;
+    var surface = beginAlphaBlendSurface(hdc, width, height) orelse return;
+    defer surface.deinit();
+
+    const local_rect = c.RECT{
+        .left = 0,
+        .top = 0,
+        .right = width,
+        .bottom = height,
+    };
+    drawPresentationFillRectOpaque(surface.mem_dc, local_rect, rect_cmd);
+    alphaBlendSurfaceToTarget(hdc, rect, &surface, combined_alpha, true);
+}
+
+fn drawPresentationStrokeRectOpaque(hdc: c.HDC, rect: c.RECT, rect_cmd: @import("../render/DisplayList.zig").RectCommand) void {
     const brush = c.CreateSolidBrush(colorRef(rect_cmd.color));
     if (brush == null) return;
     defer _ = c.DeleteObject(brush);
@@ -4705,7 +4851,68 @@ fn drawPresentationStrokeRect(hdc: c.HDC, rect: c.RECT, rect_cmd: @import("../re
     _ = c.FrameRgn(hdc, region, brush, 1, 1);
 }
 
+fn drawPresentationStrokeRect(hdc: c.HDC, rect: c.RECT, rect_cmd: @import("../render/DisplayList.zig").RectCommand) void {
+    const combined_alpha = combinePresentationAlpha(rect_cmd.color.a, rect_cmd.opacity);
+    if (combined_alpha == 0) return;
+    if (combined_alpha == 255) {
+        drawPresentationStrokeRectOpaque(hdc, rect, rect_cmd);
+        return;
+    }
+
+    const width = rect.right - rect.left;
+    const height = rect.bottom - rect.top;
+    var surface = beginAlphaBlendSurface(hdc, width, height) orelse return;
+    defer surface.deinit();
+
+    const local_rect = c.RECT{
+        .left = 0,
+        .top = 0,
+        .right = width,
+        .bottom = height,
+    };
+    drawPresentationStrokeRectOpaque(surface.mem_dc, local_rect, rect_cmd);
+    alphaBlendSurfaceToTarget(hdc, rect, &surface, combined_alpha, true);
+}
+
 fn drawPresentationImage(
+    backend: *Win32Backend,
+    hdc: c.HDC,
+    rect: c.RECT,
+    image_cmd: ImageCommand,
+    page_url: []const u8,
+    cookie_jar: ?*CookieJar,
+) void {
+    if (image_cmd.opacity == 0) {
+        return;
+    }
+    if (image_cmd.opacity == 255) {
+        drawPresentationImageCore(backend, hdc, rect, image_cmd, page_url, cookie_jar);
+        return;
+    }
+
+    const target_width = rect.right - rect.left;
+    const target_height = rect.bottom - rect.top;
+    if (target_width <= 0 or target_height <= 0) {
+        return;
+    }
+
+    var surface = beginAlphaBlendSurface(hdc, target_width, target_height) orelse {
+        drawPresentationImageCore(backend, hdc, rect, image_cmd, page_url, cookie_jar);
+        return;
+    };
+    defer surface.deinit();
+
+    const local_rect = c.RECT{
+        .left = 0,
+        .top = 0,
+        .right = target_width,
+        .bottom = target_height,
+    };
+    drawPresentationImageCore(backend, surface.mem_dc, local_rect, image_cmd, page_url, cookie_jar);
+    alphaBlendSurfaceToTarget(hdc, rect, &surface, image_cmd.opacity, false);
+}
+
+fn drawPresentationImageCore(
     backend: *Win32Backend,
     hdc: c.HDC,
     rect: c.RECT,
@@ -4989,7 +5196,7 @@ fn drawPresentationCanvas(
     canvas_cmd: @import("../render/DisplayList.zig").CanvasCommand,
 ) void {
     _ = backend;
-    if (canvas_cmd.pixel_width == 0 or canvas_cmd.pixel_height == 0 or canvas_cmd.pixels.len == 0) {
+    if (canvas_cmd.opacity == 0 or canvas_cmd.pixel_width == 0 or canvas_cmd.pixel_height == 0 or canvas_cmd.pixels.len == 0) {
         return;
     }
 
@@ -5043,7 +5250,7 @@ fn drawPresentationCanvas(
     const blend = c.BLENDFUNCTION{
         .BlendOp = c.AC_SRC_OVER,
         .BlendFlags = 0,
-        .SourceConstantAlpha = 255,
+        .SourceConstantAlpha = canvas_cmd.opacity,
         .AlphaFormat = c.AC_SRC_ALPHA,
     };
     _ = c.AlphaBlend(
@@ -5229,39 +5436,101 @@ fn renderPresentationDisplayList(
                         }
                     }
                 }
-                const previous = c.SetTextColor(hdc, colorRef(text_cmd.color));
-                const font_height: c_int = -@as(c_int, @intCast(font_size));
-                const font_spec = resolvePresentationFontSpec(text_cmd.font_family);
-                const wide_face = std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, font_spec.face_name) catch null;
-                defer if (wide_face) |face| std.heap.c_allocator.free(face);
-                const font = c.CreateFontW(
-                    font_height,
-                    0,
-                    0,
-                    0,
-                    presentationFontWeight(text_cmd.font_weight),
-                    @intFromBool(text_cmd.italic),
-                    @as(c.DWORD, @intFromBool(text_cmd.underline)),
-                    0,
-                    c.DEFAULT_CHARSET,
-                    c.OUT_DEFAULT_PRECIS,
-                    c.CLIP_DEFAULT_PRECIS,
-                    c.CLEARTYPE_QUALITY,
-                    font_spec.pitch_family,
-                    if (wide_face) |face| face.ptr else null,
-                );
-                const previous_font = if (font != null) c.SelectObject(hdc, font) else null;
-                defer if (font != null) {
-                    _ = c.SelectObject(hdc, previous_font);
-                    _ = c.DeleteObject(font);
-                };
-                drawPresentationText(
-                    hdc,
-                    &rect,
-                    text_cmd.text,
-                    c.DT_LEFT | c.DT_TOP | c.DT_WORDBREAK | c.DT_NOPREFIX,
-                );
-                _ = c.SetTextColor(hdc, previous);
+                const space_count = countPresentationTextSpaces(text_cmd.text);
+                const text_alpha = combinePresentationAlpha(text_cmd.color.a, text_cmd.opacity);
+                if (text_alpha > 0) {
+                    if (text_alpha == 255) {
+                        const previous = c.SetTextColor(hdc, colorRef(text_cmd.color));
+                        const font_height: c_int = -@as(c_int, @intCast(font_size));
+                        const font_spec = resolvePresentationFontSpec(text_cmd.font_family);
+                        const wide_face = std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, font_spec.face_name) catch null;
+                        defer if (wide_face) |face| std.heap.c_allocator.free(face);
+                        const font = c.CreateFontW(
+                            font_height,
+                            0,
+                            0,
+                            0,
+                            presentationFontWeight(text_cmd.font_weight),
+                            @intFromBool(text_cmd.italic),
+                            @as(c.DWORD, @intFromBool(text_cmd.underline)),
+                            0,
+                            c.DEFAULT_CHARSET,
+                            c.OUT_DEFAULT_PRECIS,
+                            c.CLIP_DEFAULT_PRECIS,
+                            c.CLEARTYPE_QUALITY,
+                            font_spec.pitch_family,
+                            if (wide_face) |face| face.ptr else null,
+                        );
+                        const previous_font = if (font != null) c.SelectObject(hdc, font) else null;
+                        defer if (font != null) {
+                            _ = c.SelectObject(hdc, previous_font);
+                            _ = c.DeleteObject(font);
+                        };
+                        const previous_character_extra = c.SetTextCharacterExtra(hdc, @as(c_int, @intCast(text_cmd.letter_spacing)));
+                        defer _ = c.SetTextCharacterExtra(hdc, previous_character_extra);
+                        if (space_count > 0 and text_cmd.word_spacing != 0) {
+                            _ = c.SetTextJustification(hdc, @as(c_int, @intCast(text_cmd.word_spacing * @as(i32, @intCast(space_count)))), @as(c_int, @intCast(space_count)));
+                            defer _ = c.SetTextJustification(hdc, 0, 0);
+                        }
+                        drawPresentationText(
+                            hdc,
+                            &rect,
+                            text_cmd.text,
+                            c.DT_LEFT | c.DT_TOP | c.DT_WORDBREAK | c.DT_NOPREFIX,
+                        );
+                        _ = c.SetTextColor(hdc, previous);
+                    } else {
+                        var surface = beginAlphaBlendSurface(hdc, rect.right - rect.left, rect.bottom - rect.top) orelse continue;
+                        defer surface.deinit();
+                        var local_rect = c.RECT{
+                            .left = 0,
+                            .top = 0,
+                            .right = rect.right - rect.left,
+                            .bottom = rect.bottom - rect.top,
+                        };
+                        _ = c.SetBkMode(surface.mem_dc, c.TRANSPARENT);
+                        const previous = c.SetTextColor(surface.mem_dc, colorRef(text_cmd.color));
+                        const font_height: c_int = -@as(c_int, @intCast(font_size));
+                        const font_spec = resolvePresentationFontSpec(text_cmd.font_family);
+                        const wide_face = std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, font_spec.face_name) catch null;
+                        defer if (wide_face) |face| std.heap.c_allocator.free(face);
+                        const font = c.CreateFontW(
+                            font_height,
+                            0,
+                            0,
+                            0,
+                            presentationFontWeight(text_cmd.font_weight),
+                            @intFromBool(text_cmd.italic),
+                            @as(c.DWORD, @intFromBool(text_cmd.underline)),
+                            0,
+                            c.DEFAULT_CHARSET,
+                            c.OUT_DEFAULT_PRECIS,
+                            c.CLIP_DEFAULT_PRECIS,
+                            c.CLEARTYPE_QUALITY,
+                            font_spec.pitch_family,
+                            if (wide_face) |face| face.ptr else null,
+                        );
+                        const previous_font = if (font != null) c.SelectObject(surface.mem_dc, font) else null;
+                        defer if (font != null) {
+                            _ = c.SelectObject(surface.mem_dc, previous_font);
+                            _ = c.DeleteObject(font);
+                        };
+                        const previous_character_extra = c.SetTextCharacterExtra(surface.mem_dc, @as(c_int, @intCast(text_cmd.letter_spacing)));
+                        defer _ = c.SetTextCharacterExtra(surface.mem_dc, previous_character_extra);
+                        if (space_count > 0 and text_cmd.word_spacing != 0) {
+                            _ = c.SetTextJustification(surface.mem_dc, @as(c_int, @intCast(text_cmd.word_spacing * @as(i32, @intCast(space_count)))), @as(c_int, @intCast(space_count)));
+                            defer _ = c.SetTextJustification(surface.mem_dc, 0, 0);
+                        }
+                        drawPresentationText(
+                            surface.mem_dc,
+                            &local_rect,
+                            text_cmd.text,
+                            c.DT_LEFT | c.DT_TOP | c.DT_WORDBREAK | c.DT_NOPREFIX,
+                        );
+                        _ = c.SetTextColor(surface.mem_dc, previous);
+                        alphaBlendSurfaceToTarget(hdc, rect, &surface, text_alpha, true);
+                    }
+                }
             },
             .image => |image_cmd| {
                 if (image_cmd.clip_rect) |clip| {
@@ -8950,4 +9219,119 @@ test "win32 topmostControlRegionAtDisplayListPoint prefers higher z-index then l
 
     const region = topmostControlRegionAtDisplayListPoint(&display_list, 20, 20) orelse return error.TopmostControlRegionMissing;
     try std.testing.expectEqualSlices(u16, &.{ 5, 6 }, region.dom_path);
+}
+
+test "win32 translucent fill rect alpha blends against background" {
+    const base_dc = c.CreateCompatibleDC(null) orelse return error.TranslucentFillBaseDcMissing;
+    defer _ = c.DeleteDC(base_dc);
+
+    var surface = beginAlphaBlendSurface(base_dc, 32, 32) orelse return error.TranslucentFillSurfaceMissing;
+    defer surface.deinit();
+
+    @memset(surface.bits[0..surface.pixel_bytes], 255);
+    drawPresentationFillRect(surface.mem_dc, .{
+        .left = 4,
+        .top = 4,
+        .right = 20,
+        .bottom = 20,
+    }, .{
+        .x = 4,
+        .y = 4,
+        .width = 16,
+        .height = 16,
+        .color = .{ .r = 255, .g = 0, .b = 0, .a = 128 },
+    });
+
+    const sample_index = (@as(usize, 8) * @as(usize, 32) + 8) * 4;
+    try std.testing.expectEqual(@as(u8, 255), surface.bits[sample_index + 2]);
+    try std.testing.expect(surface.bits[sample_index + 1] >= 120 and surface.bits[sample_index + 1] <= 140);
+    try std.testing.expect(surface.bits[sample_index + 0] >= 120 and surface.bits[sample_index + 0] <= 140);
+}
+
+test "win32 translucent fill rect opacity blends against background" {
+    const base_dc = c.CreateCompatibleDC(null) orelse return error.TranslucentFillOpacityBaseDcMissing;
+    defer _ = c.DeleteDC(base_dc);
+
+    var surface = beginAlphaBlendSurface(base_dc, 32, 32) orelse return error.TranslucentFillOpacitySurfaceMissing;
+    defer surface.deinit();
+
+    @memset(surface.bits[0..surface.pixel_bytes], 255);
+    drawPresentationFillRect(surface.mem_dc, .{
+        .left = 4,
+        .top = 4,
+        .right = 20,
+        .bottom = 20,
+    }, .{
+        .x = 4,
+        .y = 4,
+        .width = 16,
+        .height = 16,
+        .opacity = 128,
+        .color = .{ .r = 255, .g = 0, .b = 0, .a = 255 },
+    });
+
+    const sample_index = (@as(usize, 8) * @as(usize, 32) + 8) * 4;
+    try std.testing.expectEqual(@as(u8, 255), surface.bits[sample_index + 2]);
+    try std.testing.expect(surface.bits[sample_index + 1] >= 120 and surface.bits[sample_index + 1] <= 140);
+    try std.testing.expect(surface.bits[sample_index + 0] >= 120 and surface.bits[sample_index + 0] <= 140);
+}
+
+test "win32 translucent stroke rect alpha blends against background" {
+    const base_dc = c.CreateCompatibleDC(null) orelse return error.TranslucentStrokeBaseDcMissing;
+    defer _ = c.DeleteDC(base_dc);
+
+    var surface = beginAlphaBlendSurface(base_dc, 32, 32) orelse return error.TranslucentStrokeSurfaceMissing;
+    defer surface.deinit();
+
+    @memset(surface.bits[0..surface.pixel_bytes], 255);
+    drawPresentationStrokeRect(surface.mem_dc, .{
+        .left = 4,
+        .top = 4,
+        .right = 20,
+        .bottom = 20,
+    }, .{
+        .x = 4,
+        .y = 4,
+        .width = 16,
+        .height = 16,
+        .color = .{ .r = 0, .g = 0, .b = 255, .a = 128 },
+    });
+
+    const edge_index = (@as(usize, 4) * @as(usize, 32) + 4) * 4;
+    try std.testing.expect(surface.bits[edge_index + 2] >= 120 and surface.bits[edge_index + 2] <= 140);
+    try std.testing.expect(surface.bits[edge_index + 1] >= 120 and surface.bits[edge_index + 1] <= 140);
+    try std.testing.expectEqual(@as(u8, 255), surface.bits[edge_index + 0]);
+
+    const center_index = (@as(usize, 10) * @as(usize, 32) + 10) * 4;
+    try std.testing.expectEqual(@as(u8, 255), surface.bits[center_index + 2]);
+    try std.testing.expectEqual(@as(u8, 255), surface.bits[center_index + 1]);
+    try std.testing.expectEqual(@as(u8, 255), surface.bits[center_index + 0]);
+}
+
+test "win32 translucent stroke rect opacity blends against background" {
+    const base_dc = c.CreateCompatibleDC(null) orelse return error.TranslucentStrokeOpacityBaseDcMissing;
+    defer _ = c.DeleteDC(base_dc);
+
+    var surface = beginAlphaBlendSurface(base_dc, 32, 32) orelse return error.TranslucentStrokeOpacitySurfaceMissing;
+    defer surface.deinit();
+
+    @memset(surface.bits[0..surface.pixel_bytes], 255);
+    drawPresentationStrokeRect(surface.mem_dc, .{
+        .left = 4,
+        .top = 4,
+        .right = 20,
+        .bottom = 20,
+    }, .{
+        .x = 4,
+        .y = 4,
+        .width = 16,
+        .height = 16,
+        .opacity = 128,
+        .color = .{ .r = 0, .g = 0, .b = 255, .a = 255 },
+    });
+
+    const edge_index = (@as(usize, 4) * @as(usize, 32) + 4) * 4;
+    try std.testing.expect(surface.bits[edge_index + 2] >= 120 and surface.bits[edge_index + 2] <= 140);
+    try std.testing.expect(surface.bits[edge_index + 1] >= 120 and surface.bits[edge_index + 1] <= 140);
+    try std.testing.expectEqual(@as(u8, 255), surface.bits[edge_index + 0]);
 }

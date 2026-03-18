@@ -62,6 +62,7 @@ const storage = @import("webapi/storage/storage.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
+const DocumentPainter = @import("../render/DocumentPainter.zig");
 
 const Http = App.Http;
 const Net = @import("../Net.zig");
@@ -5134,6 +5135,32 @@ test "Page triggerMouseClickWithResult uses href mutated by onclick" {
     var pending_tabs = page._session.takePendingTabOpens();
     defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending_tabs);
     try testing.expectEqual(@as(usize, 0), pending_tabs.items.len);
+}
+
+test "Page handleClick follows scrolled overflow auto link" {
+    var page = try testing.pageTest("page/overflow_auto_link_scroll_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try DocumentPainter.paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .layout_scale = 100,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    const link = page.window._document.getElementById("link", page) orelse return error.OverflowAutoLinkMissing;
+    const link_region = blk: {
+        for (display_list.link_regions.items) |region| {
+            if (std.mem.indexOf(u8, region.url, "next-overflow-auto-link.html") != null) break :blk region;
+        }
+        return error.OverflowAutoLinkMissing;
+    };
+    try testing.expect(link_region.y >= 0);
+    try testing.expect(link_region.width >= 100);
+    try testing.expect(link_region.height >= 20);
+
+    try page.handleClick(link.asNode());
+    try testing.expect(page._queued_navigation != null);
+    try testing.expect(std.mem.indexOf(u8, page._queued_navigation.?.url, "next-overflow-auto-link.html") != null);
 }
 
 test "Page word boundary navigation helpers" {

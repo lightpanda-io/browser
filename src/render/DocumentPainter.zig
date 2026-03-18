@@ -116,8 +116,8 @@ const FlowCursor = struct {
         };
     }
 
-    fn beginInlineLeaf(self: *FlowCursor, width: i32, margins: EdgeSizes) Position {
-        const total_width = margins.left + width + margins.right;
+    fn beginInlineLeaf(self: *FlowCursor, width: i32, margins: EdgeSizes, spacing: i32) Position {
+        const total_width = margins.left + width + margins.right + spacing;
         if (self.line_height > 0 and self.cursor_x + total_width > self.left + self.width) {
             self.finishInlineRow(2);
         }
@@ -392,12 +392,29 @@ const FloatMode = enum {
     right,
 };
 
+const TextTransform = enum {
+    none,
+    uppercase,
+    lowercase,
+    capitalize,
+};
+
+const TextLineHeight = union(enum) {
+    normal,
+    px: i32,
+    multiplier: f32,
+};
+
 const PaintTextStyle = struct {
     font_size: i32,
     font_family: []const u8,
     font_weight: i32,
     italic: bool,
     color: Color,
+    line_height: TextLineHeight = .normal,
+    letter_spacing: i32 = 0,
+    word_spacing: i32 = 0,
+    text_transform: TextTransform = .none,
 };
 
 const Painter = struct {
@@ -410,16 +427,20 @@ const Painter = struct {
     forced_item_width: i32 = 0,
 
     fn paintNode(self: *Painter, node: *Node, cursor: *FlowCursor) anyerror!void {
+        try self.paintNodeWithOpacity(node, cursor, 255);
+    }
+
+    fn paintNodeWithOpacity(self: *Painter, node: *Node, cursor: *FlowCursor, opacity: u8) anyerror!void {
         switch (node._type) {
             .document, .document_fragment => {
                 var it = node.childrenIterator();
                 while (it.next()) |child| {
-                    try self.paintNode(child, cursor);
+                    try self.paintNodeWithOpacity(child, cursor, opacity);
                 }
             },
-            .element => |element| try self.paintElement(element, cursor),
+            .element => |element| try self.paintElement(element, cursor, opacity),
             .cdata => |cdata| switch (cdata._type) {
-                .text => try self.paintInlineTextNode(cdata, cursor),
+                .text => try self.paintInlineTextNode(cdata, cursor, opacity),
                 else => {},
             },
             else => {},
@@ -441,7 +462,7 @@ const Painter = struct {
             .paint_text_styles = self.paint_text_styles,
         };
         var cursor = FlowCursor.init(0, 0, @max(@as(i32, 40), available_width));
-        try temp_painter.paintNode(node, &cursor);
+            try temp_painter.paintNode(node, &cursor);
 
         if (displayListBounds(&temp_list)) |bounds| {
             return .{
@@ -520,6 +541,7 @@ const Painter = struct {
                     .z_index = rect.z_index,
                     .corner_radius = rect.corner_radius,
                     .clip_rect = combineTranslatedClipRect(rect.clip_rect, dx, dy, parent_clip_rect),
+                    .opacity = rect.opacity,
                     .color = rect.color,
                 }),
                 .stroke_rect => |rect| try self.list.addStrokeRect(self.allocator, .{
@@ -530,6 +552,7 @@ const Painter = struct {
                     .z_index = rect.z_index,
                     .corner_radius = rect.corner_radius,
                     .clip_rect = combineTranslatedClipRect(rect.clip_rect, dx, dy, parent_clip_rect),
+                    .opacity = rect.opacity,
                     .color = rect.color,
                 }),
                 .text => |text| try self.list.addText(self.allocator, .{
@@ -543,7 +566,10 @@ const Painter = struct {
                     .font_weight = text.font_weight,
                     .italic = text.italic,
                     .clip_rect = combineTranslatedClipRect(text.clip_rect, dx, dy, parent_clip_rect),
+                    .opacity = text.opacity,
                     .color = text.color,
+                    .letter_spacing = text.letter_spacing,
+                    .word_spacing = text.word_spacing,
                     .underline = text.underline,
                     .text = text.text,
                 }),
@@ -570,6 +596,7 @@ const Painter = struct {
                     .background_size_height_percent_bp = image.background_size_height_percent_bp,
                     .repeat_x = image.repeat_x,
                     .repeat_y = image.repeat_y,
+                    .opacity = image.opacity,
                     .url = image.url,
                     .alt = image.alt,
                     .request_include_credentials = image.request_include_credentials,
@@ -587,6 +614,7 @@ const Painter = struct {
                     .pixel_width = canvas.pixel_width,
                     .pixel_height = canvas.pixel_height,
                     .pixels = try self.allocator.dupe(u8, canvas.pixels),
+                    .opacity = canvas.opacity,
                 }),
             }
         }
@@ -717,6 +745,7 @@ const Painter = struct {
         content_y: i32,
         content_width: i32,
         text_align_value: []const u8,
+        opacity: u8,
     ) !i32 {
         var temp_list = DisplayList{
             .layout_scale = self.list.layout_scale,
@@ -740,7 +769,7 @@ const Painter = struct {
                 try out_of_flow_children.append(self.allocator, child);
                 continue;
             }
-            try temp_painter.paintNode(child, &child_cursor);
+            try temp_painter.paintNodeWithOpacity(child, &child_cursor, opacity);
         }
 
         const child_height = child_cursor.consumedHeightSince(0);
@@ -760,7 +789,7 @@ const Painter = struct {
         if (out_of_flow_children.items.len > 0) {
             var overlay_cursor = FlowCursor.init(content_x, content_y, @max(@as(i32, 40), content_width));
             for (out_of_flow_children.items) |child| {
-                try self.paintNode(child, &overlay_cursor);
+                try self.paintNodeWithOpacity(child, &overlay_cursor, opacity);
             }
         }
         return if (bounds) |child_bounds|
@@ -793,6 +822,13 @@ const Painter = struct {
             resolved.font_size = parseFontSizePx(raw_font_size) orelse resolved.font_size;
         }
 
+        const raw_line_height = normalizeInheritedTextPropertyValue(decl.getSpecifiedPropertyValue("line-height", self.page));
+        if (raw_line_height.len > 0) {
+            if (parseTextLineHeight(raw_line_height, resolved.font_size, self.opts.viewport_height)) |line_height| {
+                resolved.line_height = line_height;
+            }
+        }
+
         const raw_font_family = normalizeInheritedTextPropertyValue(decl.getSpecifiedPropertyValue("font-family", self.page));
         if (raw_font_family.len > 0) {
             resolved.font_family = raw_font_family;
@@ -808,6 +844,27 @@ const Painter = struct {
             resolved.italic = parseCssFontItalic(raw_font_style);
         }
 
+        const raw_letter_spacing = normalizeInheritedTextPropertyValue(decl.getSpecifiedPropertyValue("letter-spacing", self.page));
+        if (raw_letter_spacing.len > 0) {
+            if (parseTextSpacingPx(raw_letter_spacing, resolved.font_size, self.opts.viewport_height)) |letter_spacing| {
+                resolved.letter_spacing = letter_spacing;
+            }
+        }
+
+        const raw_word_spacing = normalizeInheritedTextPropertyValue(decl.getSpecifiedPropertyValue("word-spacing", self.page));
+        if (raw_word_spacing.len > 0) {
+            if (parseTextSpacingPx(raw_word_spacing, resolved.font_size, self.opts.viewport_height)) |word_spacing| {
+                resolved.word_spacing = word_spacing;
+            }
+        }
+
+        const raw_text_transform = normalizeInheritedTextPropertyValue(decl.getSpecifiedPropertyValue("text-transform", self.page));
+        if (raw_text_transform.len > 0) {
+            if (parseTextTransform(raw_text_transform)) |text_transform| {
+                resolved.text_transform = text_transform;
+            }
+        }
+
         const raw_color = normalizeInheritedTextPropertyValue(decl.getSpecifiedPropertyValue("color", self.page));
         if (parseCssColor(raw_color)) |color| {
             resolved.color = color;
@@ -819,7 +876,7 @@ const Painter = struct {
         return resolved;
     }
 
-    fn paintInlineTextNode(self: *Painter, cdata: *Node.CData, cursor: *FlowCursor) anyerror!void {
+    fn paintInlineTextNode(self: *Painter, cdata: *Node.CData, cursor: *FlowCursor, opacity: u8) anyerror!void {
         const parent = cdata.asNode().parentElement() orelse return;
         const parent_style = try self.page.window.getComputedStyle(parent, null, self.page);
         const parent_decl = parent_style.asCSSStyleDeclaration();
@@ -836,32 +893,36 @@ const Painter = struct {
         if (normalized.len == 0) {
             return;
         }
-        if (cursor.line_height <= 0 and std.mem.trim(u8, normalized, " ").len == 0) {
-            return;
-        }
-
         const parent_tag = parent.getTag();
         const text_style = try self.resolvePaintTextStyle(parent, parent_decl, parent_tag);
+        const painted_text = if (text_style.text_transform == .none) normalized else blk: {
+            const transformed = try transformTextForPaint(self.allocator, normalized, text_style.text_transform);
+            break :blk transformed;
+        };
+        defer if (text_style.text_transform != .none) self.allocator.free(painted_text);
+        if (cursor.line_height <= 0 and std.mem.trim(u8, painted_text, " ").len == 0) {
+            return;
+        }
+        const paint_z_index = try resolvePaintZIndex(parent, parent_decl, self.page);
+        const underline = shouldUnderlineText(parent, parent_decl, self.page, parent_tag);
+        const segment_gap = resolveStyledTextGap(text_style);
         var segment_start: usize = 0;
-        while (segment_start < normalized.len) {
-            while (segment_start < normalized.len and normalized[segment_start] == ' ') : (segment_start += 1) {}
-            if (segment_start >= normalized.len) break;
+        while (segment_start < painted_text.len) {
+            while (segment_start < painted_text.len and painted_text[segment_start] == ' ') : (segment_start += 1) {}
+            if (segment_start >= painted_text.len) break;
 
             var segment_end = segment_start;
-            while (segment_end < normalized.len and normalized[segment_end] != ' ') : (segment_end += 1) {}
-            while (segment_end < normalized.len and normalized[segment_end] == ' ') : (segment_end += 1) {}
+            while (segment_end < painted_text.len and painted_text[segment_end] != ' ') : (segment_end += 1) {}
+            while (segment_end < painted_text.len and painted_text[segment_end] == ' ') : (segment_end += 1) {}
 
             try self.paintInlineTextSegment(
-                normalized[segment_start..segment_end],
-                parent,
-                parent_decl,
-                parent_tag,
-                text_style.font_size,
-                text_style.font_family,
-                text_style.font_weight,
-                text_style.italic,
-                text_style.color,
+                painted_text[segment_start..segment_end],
+                text_style,
                 cursor,
+                paint_z_index,
+                underline,
+                segment_gap,
+                opacity,
             );
             segment_start = segment_end;
         }
@@ -870,51 +931,58 @@ const Painter = struct {
     fn paintInlineTextSegment(
         self: *Painter,
         segment: []const u8,
-        parent: *Element,
-        parent_decl: anytype,
-        parent_tag: Element.Tag,
-        font_size: i32,
-        font_family: []const u8,
-        font_weight: i32,
-        italic: bool,
-        color: Color,
+        text_style: PaintTextStyle,
         cursor: *FlowCursor,
+        paint_z_index: i32,
+        underline: bool,
+        spacing: i32,
+        opacity: u8,
     ) !void {
         if (segment.len == 0) return;
 
+        const base_height = @max(
+            text_style.font_size + 8,
+            estimateTextHeight(segment, @max(@as(i32, 40), cursor.width), text_style.font_size, text_style.font_family, text_style.font_weight, text_style.italic) + 8,
+        );
         const width = std.math.clamp(
-            estimateTextWidth(segment, font_size, font_family, font_weight, italic) + 8,
+            estimateStyledTextWidth(
+                segment,
+                text_style.font_size,
+                text_style.font_family,
+                text_style.font_weight,
+                text_style.italic,
+                text_style.letter_spacing,
+                text_style.word_spacing,
+            ) + 8,
             8,
             @max(@as(i32, 16), cursor.width),
         );
-        const height = @max(font_size + 8, estimateTextHeight(segment, width, font_size, font_family, font_weight, italic) + 8);
-        const pos = cursor.beginInlineLeaf(width, .{});
-        const paint_z_index = try resolvePaintZIndex(parent, parent_decl, self.page);
+        const height = @max(base_height, resolveTextLineHeightPx(text_style.line_height, text_style.font_size) orelse 0);
+        const pos = cursor.beginInlineLeaf(width, .{}, spacing);
+        const text_y = pos.y + @divTrunc(@max(@as(i32, 0), height - base_height), 2);
 
-        try self.list.addText(self.allocator, .{
-            .x = pos.x,
-            .y = pos.y,
-            .width = width,
-            .height = height,
-            .z_index = paint_z_index,
-            .font_size = font_size,
-            .font_family = @constCast(font_family),
-            .font_weight = font_weight,
-            .italic = italic,
-            .color = color,
-            .underline = shouldUnderlineText(parent, parent_decl, self.page, parent_tag),
-            .text = @constCast(segment),
-        });
+            try self.list.addText(self.allocator, .{
+                .x = pos.x,
+                .y = text_y,
+                .width = width,
+                .height = height,
+                .z_index = paint_z_index,
+                .font_size = text_style.font_size,
+                .font_family = @constCast(text_style.font_family),
+                .font_weight = text_style.font_weight,
+                .italic = text_style.italic,
+                .color = text_style.color,
+                .letter_spacing = text_style.letter_spacing,
+                .word_spacing = text_style.word_spacing,
+                .underline = underline,
+                .opacity = opacity,
+                .text = @constCast(segment),
+            });
 
-        cursor.advanceInlineLeaf(.{
-            .x = pos.x,
-            .y = pos.y,
-            .width = width,
-            .height = height,
-        }, .{}, 2);
+        cursor.advanceInlineLeaf(.{ .x = pos.x, .y = text_y, .width = width, .height = height }, .{}, spacing);
     }
 
-    fn paintElement(self: *Painter, element: *Element, cursor: *FlowCursor) anyerror!void {
+    fn paintElement(self: *Painter, element: *Element, cursor: *FlowCursor, opacity: u8) anyerror!void {
         const tag = element.getTag();
         if (switch (tag) {
             .script, .style, .template, .head, .meta, .link, .title => true,
@@ -931,7 +999,7 @@ const Painter = struct {
         const text_style = try self.resolvePaintTextStyle(element, decl, tag);
         const font_size = text_style.font_size;
         if (tag == .br) {
-            cursor.forceLineBreak(@max(font_size + 8, 20), 2);
+            cursor.forceLineBreak(resolveTextLineHeightPx(text_style.line_height, font_size) orelse @max(font_size + 8, 20), 2);
             return;
         }
 
@@ -952,6 +1020,8 @@ const Painter = struct {
         const position_value = resolveCssPropertyValue(decl, self.page, element, "position");
         const out_of_flow_positioned = isOutOfFlowPositioned(position_value);
         const paint_z_index = try resolvePaintZIndex(element, decl, self.page);
+        const element_opacity = resolvePaintOpacity(decl, self.page, element);
+        const combined_opacity = multiplyOpacity(opacity, element_opacity);
 
         const label = if (canvas_surface_present)
             try self.allocator.dupe(u8, "")
@@ -975,7 +1045,7 @@ const Painter = struct {
             if (!canvas_surface_present) {
                 var child_it = element.asNode().childrenIterator();
                 while (child_it.next()) |child| {
-                    try self.paintNode(child, cursor);
+                    try self.paintNodeWithOpacity(child, cursor, combined_opacity);
                 }
             }
 
@@ -995,10 +1065,7 @@ const Painter = struct {
             has_child_elements,
             available_width,
             label,
-            font_size,
-            font_family,
-            font_weight,
-            italic,
+            text_style,
         );
         if (width <= 0) {
             return;
@@ -1007,7 +1074,7 @@ const Painter = struct {
         const pos = if (out_of_flow_positioned)
             resolveOutOfFlowPosition(self, element, cursor.*, decl, margins, width)
         else if (inline_box)
-            cursor.beginInlineLeaf(width, margins)
+            cursor.beginInlineLeaf(width, margins, 0)
         else
             cursor.beginBlock(margins);
         var x = pos.x;
@@ -1027,6 +1094,7 @@ const Painter = struct {
                     padding,
                     margins,
                     block_like,
+                    combined_opacity,
                 )
             else
                 try self.paintFlexRowElement(
@@ -1039,6 +1107,7 @@ const Painter = struct {
                     padding,
                     margins,
                     block_like,
+                    combined_opacity,
                 );
             if (inline_box) {
                 cursor.advanceInlineLeaf(rect, margins, flowSpacingAfter(tag, block_like));
@@ -1058,6 +1127,7 @@ const Painter = struct {
                 padding,
                 margins,
                 block_like,
+                combined_opacity,
             );
             if (inline_box) {
                 cursor.advanceInlineLeaf(rect, margins, flowSpacingAfter(tag, block_like));
@@ -1077,6 +1147,7 @@ const Painter = struct {
                     y + padding.top,
                     @max(@as(i32, 40), width - padding.left - padding.right),
                     resolveCssPropertyValue(decl, self.page, element, "text-align"),
+                    combined_opacity,
                 )
             else
                 0;
@@ -1115,6 +1186,7 @@ const Painter = struct {
                     .height = rect.height,
                     .z_index = paint_z_index,
                     .clip_rect = null,
+                    .opacity = combined_opacity,
                     .color = stroke,
                 });
             }
@@ -1134,10 +1206,7 @@ const Painter = struct {
             tag,
             width - padding.horizontal(),
             label,
-            font_size,
-            font_family,
-            font_weight,
-            italic,
+            text_style,
         );
 
         const child_gap: i32 = if (has_child_elements and own_content_height > 0) 8 else 0;
@@ -1166,6 +1235,7 @@ const Painter = struct {
                 child_containing_top,
                 child_top,
                 child_width,
+                combined_opacity,
             );
             child_display_list = temp_list;
             break :child_height height;
@@ -1207,6 +1277,7 @@ const Painter = struct {
                         .z_index = paint_z_index,
                         .corner_radius = corner_radius,
                         .clip_rect = null,
+                        .opacity = combined_opacity,
                         .color = background,
                     });
                 }
@@ -1219,6 +1290,7 @@ const Painter = struct {
                     .z_index = paint_z_index,
                     .corner_radius = corner_radius,
                     .clip_rect = null,
+                    .opacity = combined_opacity,
                     .color = .{ .r = 248, .g = 248, .b = 248 },
                 });
             } else if (tag == .img) {
@@ -1230,11 +1302,12 @@ const Painter = struct {
                     .z_index = paint_z_index,
                     .corner_radius = corner_radius,
                     .clip_rect = null,
+                    .opacity = combined_opacity,
                     .color = .{ .r = 236, .g = 236, .b = 236 },
                 });
             }
         }
-        try appendResolvedBackgroundImage(self, decl, rect, paint_z_index);
+        try appendResolvedBackgroundImage(self, decl, rect, paint_z_index, combined_opacity);
 
         if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
             try self.list.addStrokeRect(self.allocator, .{
@@ -1245,6 +1318,7 @@ const Painter = struct {
                 .z_index = paint_z_index,
                 .corner_radius = corner_radius,
                 .clip_rect = null,
+                .opacity = combined_opacity,
                 .color = stroke,
             });
         }
@@ -1254,11 +1328,11 @@ const Painter = struct {
         const scrolled_control_start = self.list.control_regions.items.len;
 
         const image_command = if (tag == .img)
-            try resolvedImageCommand(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)
+            try resolvedImageCommand(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index, combined_opacity)
         else
             null;
         const canvas_command = if (tag == .canvas)
-            try resolvedCanvasCommand(self.allocator, element, rect.x, rect.y, rect.width, rect.height, paint_z_index)
+            try resolvedCanvasCommand(self.allocator, element, rect.x, rect.y, rect.width, rect.height, paint_z_index, combined_opacity)
         else
             null;
         if (image_command) |command| {
@@ -1270,10 +1344,15 @@ const Painter = struct {
 
         if (label.len > 0 and shouldPaintText(tag) and image_command == null and canvas_command == null) {
             const text_area_width = @max(@as(i32, 40), rect.width - padding.horizontal() - 12);
-            const text_height = @max(
+            const painted_label = if (text_style.text_transform == .none) label else blk: {
+                const transformed = try transformTextForPaint(self.allocator, label, text_style.text_transform);
+                break :blk transformed;
+            };
+            defer if (text_style.text_transform != .none) self.allocator.free(painted_label);
+            const base_text_height = @max(
                 font_size + 8,
                 estimateTextHeight(
-                    label,
+                    painted_label,
                     text_area_width,
                     font_size,
                     font_family,
@@ -1281,15 +1360,33 @@ const Painter = struct {
                     italic,
                 ) + 8,
             );
+            const text_height = estimateStyledTextHeight(
+                painted_label,
+                text_area_width,
+                font_size,
+                font_family,
+                font_weight,
+                italic,
+                text_style.line_height,
+            );
             var text_x = rect.x + padding.left + 6;
             const text_align = resolveCssPropertyValue(decl, self.page, element, "text-align");
             if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, text_align, &std.ascii.whitespace), "center")) {
-                const measured_text_width = estimateTextWidth(label, font_size, font_family, font_weight, italic);
+                const measured_text_width = estimateStyledTextWidth(
+                    painted_label,
+                    font_size,
+                    font_family,
+                    font_weight,
+                    italic,
+                    text_style.letter_spacing,
+                    text_style.word_spacing,
+                );
                 text_x += @max(@as(i32, 0), @divTrunc(text_area_width - measured_text_width, 2));
             }
+            const text_y = rect.y + padding.top + 4 + @divTrunc(@max(@as(i32, 0), text_height - base_text_height), 2);
             try self.list.addText(self.allocator, .{
                 .x = text_x,
-                .y = rect.y + padding.top + 4,
+                .y = text_y,
                 .width = text_area_width,
                 .height = text_height,
                 .z_index = paint_z_index,
@@ -1298,9 +1395,12 @@ const Painter = struct {
                 .font_weight = font_weight,
                 .italic = italic,
                 .clip_rect = null,
+                .opacity = combined_opacity,
                 .color = fg,
+                .letter_spacing = text_style.letter_spacing,
+                .word_spacing = text_style.word_spacing,
                 .underline = shouldUnderlineText(element, decl, self.page, tag),
-                .text = label,
+                .text = @constCast(painted_label),
             });
         }
 
@@ -1380,6 +1480,7 @@ const Painter = struct {
         padding: EdgeSizes,
         margins: EdgeSizes,
         block_like: bool,
+        opacity: u8,
     ) !Bounds {
         const paint_z_index = try resolvePaintZIndex(element, decl, self.page);
         const content_width = @max(@as(i32, 40), width - padding.left - padding.right);
@@ -1441,12 +1542,13 @@ const Painter = struct {
                         .z_index = paint_z_index,
                         .corner_radius = corner_radius,
                         .clip_rect = null,
+                        .opacity = opacity,
                         .color = background,
                     });
                 }
             }
         }
-        try appendResolvedBackgroundImage(self, decl, rect, paint_z_index);
+        try appendResolvedBackgroundImage(self, decl, rect, paint_z_index, opacity);
         if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
             try self.list.addStrokeRect(self.allocator, .{
                 .x = rect.x,
@@ -1456,6 +1558,7 @@ const Painter = struct {
                 .z_index = paint_z_index,
                 .corner_radius = corner_radius,
                 .clip_rect = null,
+                .opacity = opacity,
                 .color = stroke,
             });
         }
@@ -1481,7 +1584,7 @@ const Painter = struct {
             }
 
             var child_cursor = FlowCursor.init(child_x, child_y, @max(@as(i32, 40), child_measure.width));
-            try self.paintNode(child_measure.node, &child_cursor);
+            try self.paintNodeWithOpacity(child_measure.node, &child_cursor, opacity);
 
             child_y += child_measure.height;
             if (index + 1 < measured_children.items.len) {
@@ -1543,6 +1646,7 @@ const Painter = struct {
         padding: EdgeSizes,
         margins: EdgeSizes,
         block_like: bool,
+        opacity: u8,
     ) !Bounds {
         const paint_z_index = try resolvePaintZIndex(element, decl, self.page);
         const content_width = @max(@as(i32, 40), width - padding.left - padding.right);
@@ -1663,12 +1767,13 @@ const Painter = struct {
                         .z_index = paint_z_index,
                         .corner_radius = corner_radius,
                         .clip_rect = null,
+                        .opacity = opacity,
                         .color = background,
                     });
                 }
             }
         }
-        try appendResolvedBackgroundImage(self, decl, rect, paint_z_index);
+        try appendResolvedBackgroundImage(self, decl, rect, paint_z_index, opacity);
         if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
             try self.list.addStrokeRect(self.allocator, .{
                 .x = rect.x,
@@ -1678,6 +1783,7 @@ const Painter = struct {
                 .z_index = paint_z_index,
                 .corner_radius = corner_radius,
                 .clip_rect = null,
+                .opacity = opacity,
                 .color = stroke,
             });
         }
@@ -1747,7 +1853,7 @@ const Painter = struct {
                     self.forced_item_width = child_width;
 
                     var child_cursor = FlowCursor.init(child_x, item_y, @max(@as(i32, 40), child_width));
-                    try self.paintNode(child_measure.node, &child_cursor);
+                    try self.paintNodeWithOpacity(child_measure.node, &child_cursor, opacity);
 
                     self.forced_item_node = previous_forced_node;
                     self.forced_item_width = previous_forced_width;
@@ -1814,6 +1920,7 @@ const Painter = struct {
         child_containing_top: i32,
         child_top: i32,
         child_width: i32,
+        opacity: u8,
     ) !i32 {
         var child_cursor = FlowCursor.init(child_left, child_top, child_width);
         var out_of_flow_children: std.ArrayList(*Node) = .{};
@@ -1883,7 +1990,7 @@ const Painter = struct {
                         self.forced_item_width = float_width;
 
                         var float_cursor = FlowCursor.init(item_x, float_row_y, @max(@as(i32, 40), float_width));
-                        try self.paintNode(child, &float_cursor);
+                        try self.paintNodeWithOpacity(child, &float_cursor, opacity);
 
                         self.forced_item_node = previous_forced_node;
                         self.forced_item_width = previous_forced_width;
@@ -1907,7 +2014,7 @@ const Painter = struct {
                 float_active = false;
             }
 
-            try self.paintNode(child, &child_cursor);
+            try self.paintNodeWithOpacity(child, &child_cursor, opacity);
 
             if (legacy_center) {
                 if (recentOutputBounds(self, child_command_start, child_link_start, child_control_start)) |child_bounds| {
@@ -1927,7 +2034,7 @@ const Painter = struct {
         if (out_of_flow_children.items.len > 0) {
             var overlay_cursor = FlowCursor.init(child_left, child_containing_top, child_width);
             for (out_of_flow_children.items) |child| {
-                try self.paintNode(child, &overlay_cursor);
+                try self.paintNodeWithOpacity(child, &overlay_cursor, opacity);
             }
         }
 
@@ -1966,6 +2073,7 @@ const Painter = struct {
         padding: EdgeSizes,
         margins: EdgeSizes,
         block_like: bool,
+        opacity: u8,
     ) !Bounds {
         var rows = std.ArrayList(*Element).empty;
         defer rows.deinit(self.allocator);
@@ -2048,7 +2156,7 @@ const Painter = struct {
                     self.forced_item_width = cell_width;
 
                     var cell_cursor = FlowCursor.init(cell_x, row_y, @max(@as(i32, 40), cell_width));
-                    try self.paintNode(cell.asNode(), &cell_cursor);
+                    try self.paintNodeWithOpacity(cell.asNode(), &cell_cursor, opacity);
 
                     self.forced_item_node = previous_forced_node;
                     self.forced_item_width = previous_forced_width;
@@ -2085,6 +2193,7 @@ const Painter = struct {
                 .height = rect.height,
                 .z_index = paint_z_index,
                 .corner_radius = corner_radius,
+                .opacity = opacity,
                 .color = stroke,
             });
         }
@@ -2327,6 +2436,116 @@ fn normalizeInheritedTextPropertyValue(value: []const u8) []const u8 {
         return "";
     }
     return trimmed;
+}
+
+fn parseTextLineHeight(value: []const u8, font_size: i32, viewport: i32) ?TextLineHeight {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+    if (std.ascii.eqlIgnoreCase(trimmed, "normal")) {
+        return .normal;
+    }
+    if (std.mem.endsWith(u8, trimmed, "em") or std.mem.endsWith(u8, trimmed, "rem")) {
+        const raw = trimmed[0 .. trimmed.len - 2];
+        const multiplier = std.fmt.parseFloat(f32, raw) catch return null;
+        return .{ .multiplier = multiplier };
+    }
+    if (std.mem.endsWith(u8, trimmed, "%")) {
+        const raw = trimmed[0 .. trimmed.len - 1];
+        const multiplier = std.fmt.parseFloat(f32, raw) catch return null;
+        return .{ .multiplier = multiplier / 100.0 };
+    }
+    if (parseCssFloatValue(trimmed)) |multiplier| {
+        if (std.mem.indexOfAny(u8, trimmed, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") == null) {
+            return .{ .multiplier = multiplier };
+        }
+    }
+    if (parseCssLengthPxWithContext(trimmed, font_size, viewport)) |px| {
+        return .{ .px = px };
+    }
+    return null;
+}
+
+fn resolveTextLineHeightPx(line_height: TextLineHeight, font_size: i32) ?i32 {
+    return switch (line_height) {
+        .normal => null,
+        .px => |px| @max(@as(i32, 0), px),
+        .multiplier => |multiplier| blk: {
+            if (!(multiplier > 0)) break :blk null;
+            break :blk @max(@as(i32, 0), @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(font_size)) * @as(f64, multiplier)))));
+        },
+    };
+}
+
+fn parseTextSpacingPx(value: []const u8, font_size: i32, viewport: i32) ?i32 {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+    if (std.ascii.eqlIgnoreCase(trimmed, "normal")) return 0;
+    if (std.mem.endsWith(u8, trimmed, "em") or std.mem.endsWith(u8, trimmed, "rem")) {
+        const raw = trimmed[0 .. trimmed.len - 2];
+        const multiplier = std.fmt.parseFloat(f32, raw) catch return null;
+        return @max(@as(i32, 0), @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(font_size)) * @as(f64, multiplier)))));
+    }
+    if (parseCssLengthPxWithContext(trimmed, font_size, viewport)) |px| {
+        return px;
+    }
+    return null;
+}
+
+fn parseTextTransform(value: []const u8) ?TextTransform {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+    if (std.ascii.eqlIgnoreCase(trimmed, "none")) return .none;
+    if (std.ascii.eqlIgnoreCase(trimmed, "uppercase")) return .uppercase;
+    if (std.ascii.eqlIgnoreCase(trimmed, "lowercase")) return .lowercase;
+    if (std.ascii.eqlIgnoreCase(trimmed, "capitalize")) return .capitalize;
+    return null;
+}
+
+fn transformTextForPaint(allocator: std.mem.Allocator, text: []const u8, transform: TextTransform) ![]u8 {
+    return switch (transform) {
+        .none => allocator.dupe(u8, text),
+        .uppercase => blk: {
+            const out = try allocator.dupe(u8, text);
+            _ = std.ascii.upperString(out, out);
+            break :blk out;
+        },
+        .lowercase => blk: {
+            const out = try allocator.dupe(u8, text);
+            _ = std.ascii.lowerString(out, out);
+            break :blk out;
+        },
+        .capitalize => blk: {
+            const out = try allocator.dupe(u8, text);
+            var start_word = true;
+            for (out) |*c| {
+                if (std.ascii.isAlphabetic(c.*)) {
+                    if (start_word) {
+                        c.* = std.ascii.toUpper(c.*);
+                        start_word = false;
+                    }
+                } else if (std.ascii.isWhitespace(c.*)) {
+                    start_word = true;
+                } else {
+                    start_word = true;
+                }
+            }
+            break :blk out;
+        },
+    };
+}
+
+fn countAsciiSpaces(text: []const u8) i32 {
+    var count: i32 = 0;
+    for (text) |c| {
+        if (c == ' ') {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+fn resolveTextSpacingGap(style: PaintTextStyle) i32 {
+    return 2 + style.word_spacing + (style.letter_spacing * 2);
 }
 
 fn shouldUnderlineText(element: *Element, decl: anytype, page: *Page, tag: Element.Tag) bool {
@@ -2609,6 +2828,7 @@ fn resolvedImageCommand(
     width: i32,
     height: i32,
     z_index: i32,
+    opacity: u8,
 ) !?ImageCommand {
     const src = element.getAttributeSafe(comptime .wrap("src")) orelse return null;
     if (src.len == 0) {
@@ -2626,6 +2846,7 @@ fn resolvedImageCommand(
         .width = width,
         .height = height,
         .z_index = z_index,
+        .opacity = opacity,
         .url = @constCast(resolved),
         .alt = @constCast(alt),
         .request_include_credentials = include_credentials,
@@ -2643,6 +2864,7 @@ fn resolvedCanvasCommand(
     width: i32,
     height: i32,
     z_index: i32,
+    opacity: u8,
 ) !?CanvasCommand {
     const canvas = element.is(Element.Html.Canvas) orelse return null;
     const surface = canvas.getSurface() orelse return null;
@@ -2655,6 +2877,7 @@ fn resolvedCanvasCommand(
         .pixel_width = surface.width,
         .pixel_height = surface.height,
         .pixels = try surface.copyPixels(allocator),
+        .opacity = opacity,
     };
 }
 
@@ -2717,6 +2940,7 @@ fn appendResolvedBackgroundImage(
     decl: anytype,
     rect: anytype,
     z_index: i32,
+    opacity: u8,
 ) !void {
     const raw_background_image = std.mem.trim(u8, decl.getPropertyValue("background-image", self.page), &std.ascii.whitespace);
     if (raw_background_image.len == 0 or std.ascii.eqlIgnoreCase(raw_background_image, "none")) {
@@ -2752,6 +2976,7 @@ fn appendResolvedBackgroundImage(
         .height = rect.height,
         .z_index = z_index,
         .draw_mode = .background,
+        .opacity = opacity,
         .background_offset_x = position.x,
         .background_offset_y = position.y,
         .background_position_x_mode = position.x_mode,
@@ -3550,6 +3775,14 @@ fn resolvePaintZIndex(element: *Element, decl: anytype, page: *Page) !i32 {
     return 0;
 }
 
+fn resolvePaintOpacity(decl: anytype, page: *Page, element: *Element) u8 {
+    return parseCssOpacityByte(resolveCssPropertyValue(decl, page, element, "opacity")) orelse 255;
+}
+
+fn multiplyOpacity(base: u8, factor: u8) u8 {
+    return @as(u8, @intCast((@as(u16, base) * @as(u16, factor) + 127) / 255));
+}
+
 fn resolveElementZIndex(element: *Element, decl: anytype, page: *Page) ?i32 {
     const position = resolveCssPropertyValue(decl, page, element, "position");
     if (!isStackingPositioned(position)) {
@@ -3728,11 +3961,17 @@ fn resolveLayoutWidth(
     has_child_elements: bool,
     available_width: i32,
     label: []const u8,
-    font_size: i32,
-    font_family: []const u8,
-    font_weight: i32,
-    italic: bool,
+    text_style: PaintTextStyle,
 ) !i32 {
+    const font_size = text_style.font_size;
+    const font_family = text_style.font_family;
+    const font_weight = text_style.font_weight;
+    const italic = text_style.italic;
+    const painted_label = if (text_style.text_transform == .none) label else blk: {
+        const transformed = try transformTextForPaint(self.allocator, label, text_style.text_transform);
+        break :blk transformed;
+    };
+    defer if (text_style.text_transform != .none) self.allocator.free(painted_label);
     const explicit_width = resolveExplicitWidth(self, element, decl, page, tag, available_width);
     const explicit_height = resolveExplicitHeight(self, element, decl, page, tag, self.opts.viewport_height);
     const intrinsic_image = if (tag == .img) resolveIntrinsicImageDimensions(element, page) else null;
@@ -3816,13 +4055,13 @@ fn resolveLayoutWidth(
                 break :blk switch (input._input_type) {
                     .submit, .reset, .button => @max(
                         self.opts.inline_min_width,
-                        estimateTextWidth(label, font_size, font_family, font_weight, italic) + 24,
+                        estimateStyledTextWidth(painted_label, font_size, font_family, font_weight, italic, text_style.letter_spacing, text_style.word_spacing) + 24,
                     ),
                     else => 180,
                 };
             },
             .select => 180,
-            else => @max(self.opts.inline_min_width, estimateTextWidth(label, font_size, font_family, font_weight, italic) + 16),
+            else => @max(self.opts.inline_min_width, estimateStyledTextWidth(painted_label, font_size, font_family, font_weight, italic, text_style.letter_spacing, text_style.word_spacing) + 16),
         };
     }
     preferred = @max(preferred, min_width);
@@ -3851,7 +4090,12 @@ fn estimateInlineAtomicDescendantWidth(
             defer self.allocator.free(normalized);
             const trimmed = std.mem.trim(u8, normalized, " ");
             if (trimmed.len == 0) continue;
-            best = @max(best, estimateTextWidth(trimmed, font_size, font_family, font_weight, italic) + 16);
+            const painted = if (text_style.text_transform == .none) trimmed else blk: {
+                const transformed = try transformTextForPaint(self.allocator, trimmed, text_style.text_transform);
+                break :blk transformed;
+            };
+            defer if (text_style.text_transform != .none) self.allocator.free(painted);
+            best = @max(best, estimateStyledTextWidth(painted, font_size, font_family, font_weight, italic, text_style.letter_spacing, text_style.word_spacing) + 16);
             continue;
         }
         if (child.is(Element)) |child_el| {
@@ -3886,11 +4130,20 @@ fn estimateInlineAtomicDescendantWidth(
             const trimmed_label = std.mem.trim(u8, child_label, &std.ascii.whitespace);
             if (trimmed_label.len > 0 and trimmed_label[0] != '[') {
                 const child_text_style = try self.resolvePaintTextStyle(child_el, child_decl, child_tag);
-                const child_font_size = child_text_style.font_size;
-                const child_font_family = child_text_style.font_family;
-                const child_font_weight = child_text_style.font_weight;
-                const child_italic = child_text_style.italic;
-                best = @max(best, estimateTextWidth(trimmed_label, child_font_size, child_font_family, child_font_weight, child_italic) + 24 + child_extra);
+                const painted_label = if (child_text_style.text_transform == .none) trimmed_label else blk: {
+                    const transformed = try transformTextForPaint(self.allocator, trimmed_label, child_text_style.text_transform);
+                    break :blk transformed;
+                };
+                defer if (child_text_style.text_transform != .none) self.allocator.free(painted_label);
+                best = @max(best, estimateStyledTextWidth(
+                    painted_label,
+                    child_text_style.font_size,
+                    child_text_style.font_family,
+                    child_text_style.font_weight,
+                    child_text_style.italic,
+                    child_text_style.letter_spacing,
+                    child_text_style.word_spacing,
+                ) + 24 + child_extra);
             }
 
             best = @max(best, (try estimateInlineAtomicDescendantWidth(self, child_el, available_width)) + child_extra);
@@ -3907,11 +4160,14 @@ fn resolveOwnContentHeight(
     tag: Element.Tag,
     content_width: i32,
     label: []const u8,
-    font_size: i32,
-    font_family: []const u8,
-    font_weight: i32,
-    italic: bool,
+    text_style: PaintTextStyle,
 ) i32 {
+    const font_size = text_style.font_size;
+    const font_family = text_style.font_family;
+    const font_weight = text_style.font_weight;
+    const italic = text_style.italic;
+    const painted_label = if (text_style.text_transform == .none) label else transformTextForPaint(self.allocator, label, text_style.text_transform) catch return 0;
+    defer if (text_style.text_transform != .none) self.allocator.free(painted_label);
     var height: i32 = 0;
 
     if (tag == .img) {
@@ -3928,7 +4184,15 @@ fn resolveOwnContentHeight(
     } else if (tag == .input or tag == .button or tag == .select) {
         height = @max(height, 30);
     } else if (label.len > 0 and shouldPaintText(tag)) {
-        height = @max(height, estimateTextHeight(label, @max(40, content_width - 12), font_size, font_family, font_weight, italic) + 8);
+        height = @max(height, estimateStyledTextHeight(
+            painted_label,
+            @max(40, content_width - 12),
+            font_size,
+            font_family,
+            font_weight,
+            italic,
+            text_style.line_height,
+        ));
     }
 
     return height;
@@ -4164,6 +4428,45 @@ fn estimateTextWidthFallback(text: []const u8, font_size: i32) i32 {
     }
     const char_width = @max(@as(i32, 7), @divTrunc(font_size, 2));
     return @as(i32, @intCast(text.len)) * char_width;
+}
+
+fn estimateStyledTextWidth(
+    text: []const u8,
+    font_size: i32,
+    font_family: []const u8,
+    font_weight: i32,
+    italic: bool,
+    letter_spacing: i32,
+    word_spacing: i32,
+) i32 {
+    var width = estimateTextWidth(text, font_size, font_family, font_weight, italic);
+    if (text.len > 1 and letter_spacing != 0) {
+        width += letter_spacing * @as(i32, @intCast(text.len - 1));
+    }
+    if (word_spacing != 0) {
+        width += word_spacing * countAsciiSpaces(text);
+    }
+    return @max(@as(i32, 0), width);
+}
+
+fn estimateStyledTextHeight(
+    text: []const u8,
+    width: i32,
+    font_size: i32,
+    font_family: []const u8,
+    font_weight: i32,
+    italic: bool,
+    line_height: TextLineHeight,
+) i32 {
+    const measured = @max(font_size + 8, estimateTextHeight(text, width, font_size, font_family, font_weight, italic) + 8);
+    if (resolveTextLineHeightPx(line_height, font_size)) |line_height_px| {
+        return @max(measured, line_height_px);
+    }
+    return measured;
+}
+
+fn resolveStyledTextGap(style: PaintTextStyle) i32 {
+    return 2 + style.word_spacing + (style.letter_spacing * 2);
 }
 
 fn measureTextWidthWin32(
@@ -4595,6 +4898,19 @@ fn parseCssFloatValue(value: []const u8) ?f32 {
     return std.fmt.parseFloat(f32, trimmed) catch null;
 }
 
+fn parseCssOpacityByte(value: []const u8) ?u8 {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+    if (std.mem.endsWith(u8, trimmed, "%")) {
+        const raw = std.mem.trim(u8, trimmed[0 .. trimmed.len - 1], &std.ascii.whitespace);
+        const percent = std.fmt.parseFloat(f64, raw) catch return null;
+        return @as(u8, @intCast(std.math.clamp(@as(i32, @intFromFloat(@round(percent * 2.55))), 0, 255)));
+    }
+    const fraction = std.fmt.parseFloat(f64, trimmed) catch return null;
+    if (!(fraction >= 0.0)) return 0;
+    return @as(u8, @intFromFloat(@round(std.math.clamp(fraction, 0.0, 1.0) * 255.0)));
+}
+
 fn parseCssIntegerValue(value: []const u8) ?i32 {
     const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
     if (trimmed.len == 0) return null;
@@ -4842,7 +5158,7 @@ test "normalizeInlineText reduces whitespace-only text to a single space" {
 
 test "FlowCursor consumedHeightSince includes active inline row" {
     var cursor = FlowCursor.init(20, 40, 400);
-    const pos = cursor.beginInlineLeaf(80, .{});
+    const pos = cursor.beginInlineLeaf(80, .{}, 0);
     cursor.advanceInlineLeaf(.{
         .x = pos.x,
         .y = pos.y,
@@ -7416,7 +7732,7 @@ test "paintDocument scrolls generic block overflow auto content" {
 
     const box = page.window._document.getElementById("box", page) orelse return error.OverflowAutoBoxMissing;
     try std.testing.expectEqual(@as(f64, 80), box.getClientHeight(page));
-    try std.testing.expectEqual(@as(f64, 120), box.getScrollHeight(page));
+    try std.testing.expectEqual(@as(f64, 144), box.getScrollHeight(page));
     try std.testing.expectEqual(@as(u32, 40), box.getScrollTop(page));
 
     var blue_fill: ?RectCommand = null;
@@ -7499,8 +7815,8 @@ test "paintDocument scrolls overflow auto link regions with scrollTop" {
     try std.testing.expectEqual(@as(usize, 1), display_list.link_regions.items.len);
     const region = display_list.link_regions.items[0];
     try std.testing.expectEqual(@as(i32, 120), region.width);
-    try std.testing.expect(region.y < 120);
-    try std.testing.expect(region.y + region.height <= 20 + 80 + 2);
+    try std.testing.expect(region.y >= 20);
+    try std.testing.expect(region.y < 20 + 80);
 }
 
 test "paintDocument clips hidden link regions to overflow containers" {
@@ -7819,6 +8135,8 @@ test "paintDocument inherits google-tab text styles into nested span labels" {
 
     try std.testing.expectEqual(@as(i32, 13), search.font_size);
     try std.testing.expectEqual(@as(i32, 13), images.font_size);
+    try std.testing.expectEqual(@as(i32, 27), search.height);
+    try std.testing.expectEqual(@as(i32, 27), images.height);
     try std.testing.expect(search.font_weight >= 700);
     try std.testing.expect(search.color.r >= 240);
     try std.testing.expect(search.color.g >= 240);
@@ -7829,4 +8147,109 @@ test "paintDocument inherits google-tab text styles into nested span labels" {
     try std.testing.expect(sign_in.color.r >= 190 and sign_in.color.r <= 210);
     try std.testing.expect(sign_in.color.g >= 190 and sign_in.color.g <= 210);
     try std.testing.expect(sign_in.color.b >= 190 and sign_in.color.b <= 210);
+}
+
+test "paintDocument applies text spacing and transform styles to inline text" {
+    var page = try testing.pageTest("page/text_style_rendering_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var mono_texts: [2]TextCommand = undefined;
+    var mono_count: usize = 0;
+    var alpha_texts: [2]TextCommand = undefined;
+    var alpha_count: usize = 0;
+    var beta_texts: [2]TextCommand = undefined;
+    var beta_count: usize = 0;
+    var caps_text: ?TextCommand = null;
+
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Mono") and mono_count < mono_texts.len) {
+                    mono_texts[mono_count] = text;
+                    mono_count += 1;
+                } else if (std.mem.startsWith(u8, text.text, "Alpha") and alpha_count < alpha_texts.len) {
+                    alpha_texts[alpha_count] = text;
+                    alpha_count += 1;
+                } else if (std.mem.startsWith(u8, text.text, "Beta") and beta_count < beta_texts.len) {
+                    beta_texts[beta_count] = text;
+                    beta_count += 1;
+                } else if (std.mem.eql(u8, text.text, "GOOGLE")) {
+                    caps_text = text;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), mono_count);
+    try std.testing.expectEqual(@as(usize, 2), alpha_count);
+    try std.testing.expectEqual(@as(usize, 2), beta_count);
+
+    const mono_base = if (mono_texts[0].y <= mono_texts[1].y) mono_texts[0] else mono_texts[1];
+    const mono_spaced = if (mono_texts[0].y <= mono_texts[1].y) mono_texts[1] else mono_texts[0];
+    try std.testing.expect(mono_base.x >= mono_spaced.x + 4);
+
+    const alpha_base = if (alpha_texts[0].y <= alpha_texts[1].y) alpha_texts[0] else alpha_texts[1];
+    const alpha_spaced = if (alpha_texts[0].y <= alpha_texts[1].y) alpha_texts[1] else alpha_texts[0];
+    const beta_base = if (beta_texts[0].y <= beta_texts[1].y) beta_texts[0] else beta_texts[1];
+    const beta_spaced = if (beta_texts[0].y <= beta_texts[1].y) beta_texts[1] else beta_texts[0];
+    const base_gap = beta_base.x - (alpha_base.x + alpha_base.width);
+    const spaced_gap = beta_spaced.x - (alpha_spaced.x + alpha_spaced.width);
+    try std.testing.expect(spaced_gap >= base_gap + 8);
+
+    const caps = caps_text orelse return error.TransformTextMissing;
+    try std.testing.expectEqualStrings("GOOGLE", caps.text);
+    try std.testing.expectEqual(@as(i32, 30), caps.height);
+}
+
+test "paintDocument threads nested opacity through painted commands" {
+    var page = try testing.pageTest("page/opacity_rendering_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var outer_fill: ?RectCommand = null;
+    var inner_fill: ?RectCommand = null;
+    var outer_text: ?TextCommand = null;
+    var inner_text: ?TextCommand = null;
+
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r == 0 and rect.color.g == 0 and rect.color.b == 255) {
+                    outer_fill = rect;
+                } else if (rect.color.r == 255 and rect.color.g == 0 and rect.color.b == 0) {
+                    inner_fill = rect;
+                }
+            },
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Outer")) {
+                    outer_text = text;
+                } else if (std.mem.eql(u8, text.text, "Inner")) {
+                    inner_text = text;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const outer_box = outer_fill orelse return error.OuterOpacityFillMissing;
+    const inner_box = inner_fill orelse return error.InnerOpacityFillMissing;
+    const outer_label = outer_text orelse return error.OuterOpacityTextMissing;
+    const inner_label = inner_text orelse return error.InnerOpacityTextMissing;
+
+    try std.testing.expectEqual(@as(u8, 128), outer_box.opacity);
+    try std.testing.expectEqual(@as(u8, 64), inner_box.opacity);
+    try std.testing.expectEqual(@as(u8, 128), outer_label.opacity);
+    try std.testing.expectEqual(@as(u8, 64), inner_label.opacity);
 }

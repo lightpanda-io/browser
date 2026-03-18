@@ -79,6 +79,18 @@ The fork already has a real headed Windows foundation:
   flow for `text-align:center`; and absolute out-of-flow positioning, with
   focused painter tests plus bounded headed runtime probes for microtask
   containment, centered flex hero layout, and absolute corner docking
+- the headed painter now also respects basic text styling on real labels and
+  inline text, including `line-height`, `letter-spacing`, `word-spacing`, and
+  `text-transform`, with Google nav-style and dedicated text-style regression
+  coverage wired into the render tests
+- the headed painter now also threads inherited CSS `opacity` through the
+  display-list path so rect, text, image, and canvas paint commands carry a
+  consistent alpha multiplier into headed composition
+- overflow:auto containers now keep scrolled link regions visible enough for
+  real click activation on the headed surface, and screenshot readiness no
+  longer burns the capture on bodyless-but-substantive frames; bounded scroll
+  and visible-link probes now cover the programmatic scroll state and the
+  resulting navigation path
 
 ## Achieved Gates
 
@@ -822,6 +834,12 @@ Exit criteria:
 - image rendering uses the browser resource pipeline
 - canvas, SVG, and screenshot fidelity materially improve
 - dirty-region invalidation avoids full-frame redraws for common interactions
+
+Current slice in progress:
+- the Win32 headed painter now alpha-blends translucent filled and stroked
+  box paint commands through a temporary DIB surface, and the same opacity
+  multiplier now threads through text, image, and canvas presentation
+  commands so `opacity` is no longer ignored on the headed surface
 
 ### Gate 5: Editing, Forms, And App Interactivity
 

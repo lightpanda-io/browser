@@ -22,6 +22,7 @@ pub const RectCommand = struct {
     z_index: i32 = 0,
     corner_radius: i32 = 0,
     clip_rect: ?ClipRect = null,
+    opacity: u8 = 255,
     color: Color,
 };
 
@@ -36,7 +37,10 @@ pub const TextCommand = struct {
     font_weight: i32 = 400,
     italic: bool = false,
     clip_rect: ?ClipRect = null,
+    opacity: u8 = 255,
     color: Color,
+    letter_spacing: i32 = 0,
+    word_spacing: i32 = 0,
     underline: bool = false,
     text: []u8,
 };
@@ -111,6 +115,7 @@ pub const ImageCommand = struct {
     background_size_height_percent_bp: i32 = 0,
     repeat_x: bool = false,
     repeat_y: bool = false,
+    opacity: u8 = 255,
     url: []u8,
     alt: []u8,
     request_include_credentials: bool = true,
@@ -129,6 +134,7 @@ pub const CanvasCommand = struct {
     pixel_width: u32,
     pixel_height: u32,
     pixels: []u8,
+    opacity: u8 = 255,
 };
 
 pub const FontFaceFormat = enum(u8) {
@@ -163,19 +169,22 @@ pub const Command = union(enum) {
         return switch (self) {
             .fill_rect => |rect| .{ .fill_rect = rect },
             .stroke_rect => |rect| .{ .stroke_rect = rect },
-            .text => |text| .{ .text = .{
-                .x = text.x,
-                .y = text.y,
-                .width = text.width,
-                .height = text.height,
-                .z_index = text.z_index,
-                .font_size = text.font_size,
-                .font_family = try allocator.dupe(u8, text.font_family),
-                .font_weight = text.font_weight,
-                .italic = text.italic,
-                .clip_rect = text.clip_rect,
-                .color = text.color,
-                .underline = text.underline,
+                .text => |text| .{ .text = .{
+                    .x = text.x,
+                    .y = text.y,
+                    .width = text.width,
+                    .height = text.height,
+                    .z_index = text.z_index,
+                    .font_size = text.font_size,
+                    .font_family = try allocator.dupe(u8, text.font_family),
+                    .font_weight = text.font_weight,
+                    .italic = text.italic,
+                    .clip_rect = text.clip_rect,
+                    .opacity = text.opacity,
+                    .color = text.color,
+                    .letter_spacing = text.letter_spacing,
+                    .word_spacing = text.word_spacing,
+                    .underline = text.underline,
                 .text = try allocator.dupe(u8, text.text),
             } },
             .image => |image| .{ .image = .{
@@ -201,6 +210,7 @@ pub const Command = union(enum) {
                 .background_size_height_percent_bp = image.background_size_height_percent_bp,
                 .repeat_x = image.repeat_x,
                 .repeat_y = image.repeat_y,
+                .opacity = image.opacity,
                 .url = try allocator.dupe(u8, image.url),
                 .alt = try allocator.dupe(u8, image.alt),
                 .request_include_credentials = image.request_include_credentials,
@@ -218,6 +228,7 @@ pub const Command = union(enum) {
                 .pixel_width = canvas.pixel_width,
                 .pixel_height = canvas.pixel_height,
                 .pixels = try allocator.dupe(u8, canvas.pixels),
+                .opacity = canvas.opacity,
             } },
         };
     }
@@ -346,7 +357,10 @@ pub fn addText(self: *DisplayList, allocator: std.mem.Allocator, text: TextComma
         .font_weight = text.font_weight,
         .italic = text.italic,
         .clip_rect = text.clip_rect,
+        .opacity = text.opacity,
         .color = text.color,
+        .letter_spacing = text.letter_spacing,
+        .word_spacing = text.word_spacing,
         .underline = text.underline,
         .text = try allocator.dupe(u8, text.text),
     } });
@@ -377,6 +391,7 @@ pub fn addImage(self: *DisplayList, allocator: std.mem.Allocator, image: ImageCo
         .background_size_height_percent_bp = image.background_size_height_percent_bp,
         .repeat_x = image.repeat_x,
         .repeat_y = image.repeat_y,
+        .opacity = image.opacity,
         .url = try allocator.dupe(u8, image.url),
         .alt = try allocator.dupe(u8, image.alt),
         .request_include_credentials = image.request_include_credentials,
@@ -398,6 +413,7 @@ pub fn addCanvas(self: *DisplayList, allocator: std.mem.Allocator, canvas: Canva
         .pixel_width = canvas.pixel_width,
         .pixel_height = canvas.pixel_height,
         .pixels = canvas.pixels,
+        .opacity = canvas.opacity,
     } });
     self.content_height = @max(self.content_height, canvas.y + canvas.height);
 }
@@ -454,6 +470,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&rect.z_index));
                 hasher.update(std.mem.asBytes(&rect.corner_radius));
                 hasher.update(std.mem.asBytes(&rect.clip_rect));
+                hasher.update(std.mem.asBytes(&rect.opacity));
                 hasher.update(std.mem.asBytes(&rect.color));
             },
             .stroke_rect => |rect| {
@@ -465,6 +482,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&rect.z_index));
                 hasher.update(std.mem.asBytes(&rect.corner_radius));
                 hasher.update(std.mem.asBytes(&rect.clip_rect));
+                hasher.update(std.mem.asBytes(&rect.opacity));
                 hasher.update(std.mem.asBytes(&rect.color));
             },
             .text => |text| {
@@ -479,7 +497,10 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&text.font_weight));
                 hasher.update(std.mem.asBytes(&text.italic));
                 hasher.update(std.mem.asBytes(&text.clip_rect));
+                hasher.update(std.mem.asBytes(&text.opacity));
                 hasher.update(std.mem.asBytes(&text.color));
+                hasher.update(std.mem.asBytes(&text.letter_spacing));
+                hasher.update(std.mem.asBytes(&text.word_spacing));
                 hasher.update(std.mem.asBytes(&text.underline));
                 hasher.update(text.text);
             },
@@ -507,6 +528,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&image.background_size_height_percent_bp));
                 hasher.update(std.mem.asBytes(&image.repeat_x));
                 hasher.update(std.mem.asBytes(&image.repeat_y));
+                hasher.update(std.mem.asBytes(&image.opacity));
                 hasher.update(image.url);
                 hasher.update(image.alt);
                 hasher.update(std.mem.asBytes(&image.request_include_credentials));
@@ -524,6 +546,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&canvas.clip_rect));
                 hasher.update(std.mem.asBytes(&canvas.pixel_width));
                 hasher.update(std.mem.asBytes(&canvas.pixel_height));
+                hasher.update(std.mem.asBytes(&canvas.opacity));
                 hasher.update(canvas.pixels);
             },
         }

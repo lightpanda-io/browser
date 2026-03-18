@@ -1238,11 +1238,19 @@ pub fn getBoundingClientRect(self: *Element, page: *Page) DOMRect {
 // Some cases need a the BoundingClientRect but have already done the
 // visibility check.
 pub fn getBoundingClientRectForVisible(self: *Element, page: *Page) DOMRect {
-    const y = calculateDocumentPosition(self.asNode());
+    var y = calculateDocumentPosition(self.asNode());
     const dims = self.getElementDimensions(page);
 
     // Use sibling position for x coordinate to ensure siblings have different x values
-    const x = calculateSiblingPosition(self.asNode());
+    var x = calculateSiblingPosition(self.asNode());
+
+    var ancestor = self.asNode().parentElement();
+    while (ancestor) |current| : (ancestor = current.parentElement()) {
+        if (page._element_scroll_positions.get(current)) |scroll_position| {
+            x -= @as(f64, @floatFromInt(scroll_position.x));
+            y -= @as(f64, @floatFromInt(scroll_position.y));
+        }
+    }
 
     return .{
         ._x = x,

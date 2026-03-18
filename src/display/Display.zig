@@ -357,6 +357,7 @@ fn browseScreenshotReady(
     body: []const u8,
     display_list: ?*const DisplayList,
 ) bool {
+    const has_body = std.mem.trim(u8, body, &std.ascii.whitespace).len > 0;
     if (navigation_state_seen and is_loading) {
         return false;
     }
@@ -367,11 +368,13 @@ fn browseScreenshotReady(
     }
 
     if (displayListHasSubstantivePresentationCommands(list)) {
-        return true;
+        if (has_body) {
+            return true;
+        }
+        return countSubstantivePresentationCommands(list) >= 2 or displayListHasSubstantiveInteractiveRegions(list);
     }
 
-    return std.mem.trim(u8, body, &std.ascii.whitespace).len > 0 and
-        displayListHasSubstantiveInteractiveRegions(list);
+    return has_body and displayListHasSubstantiveInteractiveRegions(list);
 }
 
 fn displayListHasSubstantivePresentationCommands(list: *const DisplayList) bool {
@@ -385,6 +388,30 @@ fn displayListHasSubstantivePresentationCommands(list: *const DisplayList) bool 
         }
     }
     return false;
+}
+
+fn countSubstantivePresentationCommands(list: *const DisplayList) usize {
+    var count: usize = 0;
+    for (list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (isSubstantivePresentationBox(rect.width, rect.height)) count += 1;
+            },
+            .stroke_rect => |rect| {
+                if (isSubstantivePresentationBox(rect.width, rect.height)) count += 1;
+            },
+            .text => |text| {
+                if (text.text.len > 0 and isSubstantivePresentationBox(text.width, @max(text.height, text.font_size + 8))) count += 1;
+            },
+            .image => |image| {
+                if (isSubstantivePresentationBox(image.width, image.height)) count += 1;
+            },
+            .canvas => |canvas| {
+                if (isSubstantivePresentationBox(canvas.width, canvas.height)) count += 1;
+            },
+        }
+    }
+    return count;
 }
 
 fn isSubstantivePresentationBox(width: i32, height: i32) bool {
@@ -416,11 +443,11 @@ test "browseScreenshotReady ignores root placeholder presentations" {
     try painted_list.addFillRect(std.testing.allocator, .{
         .x = 0,
         .y = 0,
-        .width = 20,
-        .height = 10,
+        .width = 120,
+        .height = 20,
         .color = .{ .r = 220, .g = 30, .b = 30 },
     });
-    try std.testing.expect(browseScreenshotReady(true, false, "", &painted_list));
+    try std.testing.expect(browseScreenshotReady(true, false, "real body", &painted_list));
 }
 
 test "browseScreenshotReady requires positive painted height" {
@@ -447,14 +474,14 @@ test "browseScreenshotReady waits for load completion" {
     try painted_list.addFillRect(std.testing.allocator, .{
         .x = 0,
         .y = 0,
-        .width = 20,
-        .height = 10,
+        .width = 120,
+        .height = 20,
         .color = .{ .r = 220, .g = 30, .b = 30 },
     });
 
-    try std.testing.expect(browseScreenshotReady(false, false, "", &painted_list));
-    try std.testing.expect(!browseScreenshotReady(true, true, "", &painted_list));
-    try std.testing.expect(browseScreenshotReady(true, false, "", &painted_list));
+    try std.testing.expect(browseScreenshotReady(false, false, "real body", &painted_list));
+    try std.testing.expect(!browseScreenshotReady(true, true, "real body", &painted_list));
+    try std.testing.expect(browseScreenshotReady(true, false, "real body", &painted_list));
 }
 
 test "browseScreenshotReady ignores tiny early paint noise" {
@@ -478,7 +505,28 @@ test "browseScreenshotReady ignores tiny early paint noise" {
         .height = 20,
         .color = .{ .r = 255, .g = 0, .b = 0 },
     });
-    try std.testing.expect(browseScreenshotReady(true, false, "", &real));
+    try std.testing.expect(browseScreenshotReady(true, false, "real body", &real));
+}
+
+test "browseScreenshotReady allows bodyless substantive presentation commands" {
+    var list = DisplayList{};
+    defer list.deinit(std.testing.allocator);
+    try list.addFillRect(std.testing.allocator, .{
+        .x = 0,
+        .y = 0,
+        .width = 120,
+        .height = 40,
+        .color = .{ .r = 20, .g = 20, .b = 20 },
+    });
+    try list.addFillRect(std.testing.allocator, .{
+        .x = 0,
+        .y = 50,
+        .width = 120,
+        .height = 40,
+        .color = .{ .r = 220, .g = 30, .b = 30 },
+    });
+
+    try std.testing.expect(browseScreenshotReady(true, false, "", &list));
 }
 
 pub fn chooseFiles(self: *Display, accept: []const u8, multiple: bool) ?ChosenFiles {
