@@ -878,27 +878,6 @@ fn ensureNoActiveConnection(self: *const Client) !void {
     }
 }
 
-pub const RequestCookie = struct {
-    is_http: bool,
-    jar: *CookieJar,
-    is_navigation: bool,
-    origin: [:0]const u8,
-
-    pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url: [:0]const u8, headers: *http.Headers) !void {
-        var arr: std.ArrayList(u8) = .{};
-        try self.jar.forRequest(url, arr.writer(temp), .{
-            .is_http = self.is_http,
-            .is_navigation = self.is_navigation,
-            .origin_url = self.origin,
-        });
-
-        if (arr.items.len > 0) {
-            try arr.append(temp, 0); //null terminate
-            headers.cookies = @as([*c]const u8, @ptrCast(arr.items.ptr));
-        }
-    }
-};
-
 pub const Request = struct {
     frame_id: u32,
     method: Method,
@@ -1087,9 +1066,20 @@ pub const Transfer = struct {
             try wba.signRequest(self.arena.allocator(), &header_list, authority);
         }
 
-        // Add cookies.
-        if (header_list.cookies) |cookies| {
-            try conn.setCookies(cookies);
+        // Add cookies from cookie jar.
+        if (req.cookie_jar) |jar| {
+            const arena = self.arena.allocator();
+            var aw: std.Io.Writer.Allocating = .init(arena);
+            try jar.forRequest(req.url, &aw.writer, .{
+                .is_http = true,
+                .origin_url = req.url,
+                .is_navigation = req.resource_type == .document,
+            });
+            const written = aw.written();
+            if (written.len > 0) {
+                try aw.writer.writeByte(0);
+                try conn.setCookies(@ptrCast(written.ptr));
+            }
         }
 
         try conn.setPrivate(self);
@@ -1162,13 +1152,10 @@ pub const Transfer = struct {
             return error.TooManyRedirects;
         }
 
-        lp.log.warn(.bug, "Redirecting...", .{});
-
         // retrieve cookies from the redirect's response.
         if (req.cookie_jar) |jar| {
             var i: usize = 0;
             while (conn.getResponseHeader("set-cookie", i)) |ct| : (i += 1) {
-                lp.log.warn(.bug, "set-cookie", .{ i, ct.value });
                 try jar.populateFromResponse(transfer.url, ct.value);
 
                 if (i >= ct.amount) {
@@ -1192,23 +1179,6 @@ pub const Transfer = struct {
         if (status == 301 or status == 302 or status == 303) {
             req.method = .GET;
             req.body = null;
-        }
-
-        // set cookies for the following request.
-        if (req.cookie_jar) |jar| {
-            var cookies: std.ArrayList(u8) = .{};
-            try jar.forRequest(url, cookies.writer(arena), .{
-                .is_http = true,
-                .origin_url = url,
-                .is_navigation = req.resource_type == .document,
-            });
-            if (cookies.items.len > 0) {
-                try cookies.append(arena, 0); // null terminate
-                req.headers.cookies = @ptrCast(cookies.items.ptr);
-            } else {
-                req.headers.cookies = null;
-            }
-            lp.log.warn(.bug, "cookie", .{cookies.items[0..]});
         }
     }
 

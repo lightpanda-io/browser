@@ -224,7 +224,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
 
     try self._request_headers.populateHttpHeader(page.call_arena, &headers);
     if (cookie_support) {
-        try page.headersForRequest(self._arena, self._url, &headers);
+        try page.headersForRequest(&headers);
     }
 
     try http_client.request(.{
