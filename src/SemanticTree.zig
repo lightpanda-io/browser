@@ -36,7 +36,7 @@ dom_node: *Node,
 registry: *CDPNode.Registry,
 page: *Page,
 arena: std.mem.Allocator,
-prune: bool = false,
+prune: bool = true,
 interactive_only: bool = false,
 
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {

@@ -65,13 +65,12 @@ fn getSemanticTree(cmd: anytype) !void {
         .registry = &bc.node_registry,
         .page = page,
         .arena = cmd.arena,
-        .prune = params.prune orelse false,
+        .prune = params.prune orelse true,
         .interactive_only = params.interactiveOnly orelse false,
     };
 
     if (params.format) |format| {
         if (format == .text) {
-            st.prune = params.prune orelse true;
             var aw: std.Io.Writer.Allocating = .init(cmd.arena);
             defer aw.deinit();
             try st.textStringify(&aw.writer);
