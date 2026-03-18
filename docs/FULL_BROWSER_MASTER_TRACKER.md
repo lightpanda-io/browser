@@ -708,6 +708,14 @@ Current state inside Gate 3:
   `justify-content` spacing, and `align-items` vertical placement for common
   chip/button-style rows, plus selector compatibility for `:lang(...)`,
   `:dir(...)`, `:open`, and vendor `:-webkit-any-link` / `:-moz-any-link`
+- the headed painter now caches painted element layout boxes so
+  `getBoundingClientRect` and hit-testing can reuse painted geometry for
+  visible elements instead of falling back to the older sibling-position
+  heuristic
+- flex column layout now also respects authored `flex-grow`, `flex-shrink`,
+  `justify-content`, and `column-reverse`, with renderer tests plus bounded
+  headed probes proving the grow, justify, reverse, and stretch paths on the
+  real Win32 surface
 - headed screenshot export now waits for a real painted presentation with
   positive painted height and real draw or interactive regions instead of
   consuming the one-shot capture on the initial root placeholder frame, with a
@@ -728,6 +736,9 @@ Current state inside Gate 3:
 - flex row layout now also supports bounded item growth from `flex-grow` /
   common `flex` shorthand handling, so header and search-bar style middle items
   can expand between fixed siblings instead of staying at their intrinsic width
+- the remaining Gate 3 work is now centered on broader intrinsic sizing,
+  overflow interaction, stronger positioned/fixed behavior, and flex/table edge
+  cases on mainstream sites rather than the cache bridge itself
 - headed screenshot export now also refuses to capture while navigation is
   still explicitly loading, with a bounded slow-image probe proving the export
   waits for the real loaded image instead of the earlier pre-load placeholder
@@ -859,10 +870,10 @@ Exit criteria:
 - dirty-region invalidation avoids full-frame redraws for common interactions
 
 Current slice in progress:
-- the Win32 headed painter now alpha-blends translucent filled and stroked
-  box paint commands through a temporary DIB surface, and the same opacity
-  multiplier now threads through text, image, and canvas presentation
-  commands so `opacity` is no longer ignored on the headed surface
+- the next paint slice should build on the cached layout-box bridge by
+  hardening border/background/stacking edge cases and broader dirty-region
+  invalidation, so mainstream pages like Google stay visually stable as more
+  layout states settle on the real Win32 surface
 
 ### Gate 5: Editing, Forms, And App Interactivity
 
