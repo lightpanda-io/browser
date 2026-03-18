@@ -343,3 +343,123 @@
   testing.expectEqual('', form.elements['choice'].value)
 }
 </script>
+
+<!-- Test: requestSubmit() fires the submit event (unlike submit()) -->
+<form id="test_form2" action="/should-not-navigate2" method="get">
+  <input name="q" value="test2">
+</form>
+
+<script id="requestSubmit_fires_submit_event">
+{
+  const form = $('#test_form2');
+  let submitFired = false;
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitFired = true;
+  });
+
+  form.requestSubmit();
+
+  testing.expectEqual(true, submitFired);
+}
+</script>
+
+<!-- Test: requestSubmit() with preventDefault stops navigation -->
+<form id="test_form3" action="/should-not-navigate3" method="get">
+  <input name="q" value="test3">
+</form>
+
+<script id="requestSubmit_respects_preventDefault">
+{
+  const form = $('#test_form3');
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+  });
+
+  form.requestSubmit();
+
+  // Form submission was prevented, so no navigation should be scheduled
+  testing.expectEqual(true, true);
+}
+</script>
+
+<!-- Test: requestSubmit() with non-submit-button submitter throws TypeError -->
+<form id="test_form_rs1" action="/should-not-navigate4" method="get">
+  <input id="rs1_text" type="text" name="q" value="test">
+  <input id="rs1_submit" type="submit" value="Go">
+  <input id="rs1_image" type="image" src="x.png">
+  <button id="rs1_btn_submit" type="submit">Submit</button>
+  <button id="rs1_btn_reset" type="reset">Reset</button>
+  <button id="rs1_btn_button" type="button">Button</button>
+</form>
+
+<script id="requestSubmit_rejects_non_submit_button">
+{
+  const form = $('#test_form_rs1');
+  form.addEventListener('submit', (e) => e.preventDefault());
+
+  // A text input is not a submit button — should throw TypeError
+  testing.expectError('TypeError', () => {
+    form.requestSubmit($('#rs1_text'));
+  });
+
+  // A reset button is not a submit button — should throw TypeError
+  testing.expectError('TypeError', () => {
+    form.requestSubmit($('#rs1_btn_reset'));
+  });
+
+  // A <button type="button"> is not a submit button — should throw TypeError
+  testing.expectError('TypeError', () => {
+    form.requestSubmit($('#rs1_btn_button'));
+  });
+
+  // A <div> is not a submit button — should throw TypeError
+  const div = document.createElement('div');
+  form.appendChild(div);
+  testing.expectError('TypeError', () => {
+    form.requestSubmit(div);
+  });
+}
+</script>
+
+<!-- Test: requestSubmit() accepts valid submit buttons -->
+<script id="requestSubmit_accepts_submit_buttons">
+{
+  const form = $('#test_form_rs1');
+  let submitCount = 0;
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitCount++; });
+
+  // <input type="submit"> is a valid submitter
+  form.requestSubmit($('#rs1_submit'));
+  testing.expectEqual(1, submitCount);
+
+  // <input type="image"> is a valid submitter
+  form.requestSubmit($('#rs1_image'));
+  testing.expectEqual(2, submitCount);
+
+  // <button type="submit"> is a valid submitter
+  form.requestSubmit($('#rs1_btn_submit'));
+  testing.expectEqual(3, submitCount);
+}
+</script>
+
+<!-- Test: requestSubmit() with submitter not owned by form throws NotFoundError -->
+<form id="test_form_rs2" action="/should-not-navigate5" method="get">
+  <input type="text" name="q" value="test">
+</form>
+<form id="test_form_rs3">
+  <input id="rs3_submit" type="submit" value="Other Submit">
+</form>
+
+<script id="requestSubmit_rejects_wrong_form_submitter">
+{
+  const form = $('#test_form_rs2');
+
+  // Submit button belongs to a different form — should throw NotFoundError
+  testing.expectError('NotFoundError', () => {
+    form.requestSubmit($('#rs3_submit'));
+  });
+}
+</script>
