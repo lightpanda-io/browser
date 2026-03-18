@@ -468,8 +468,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             if (self.http_proxy_changed) {
                 // has to be called after browser.closeSession, since it won't
                 // work if there are active connections.
-                browser.http_client.restoreOriginalProxy() catch |err| {
-                    log.warn(.http, "restoreOriginalProxy", .{ .err = err });
+                browser.http_client.changeProxy(null) catch |err| {
+                    log.warn(.http, "changeProxy", .{ .err = err });
                 };
             }
             self.intercept_state.deinit();

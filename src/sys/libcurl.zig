@@ -516,6 +516,10 @@ pub fn curl_easy_cleanup(easy: *Curl) void {
     c.curl_easy_cleanup(easy);
 }
 
+pub fn curl_easy_reset(easy: *Curl) void {
+    c.curl_easy_reset(easy);
+}
+
 pub fn curl_easy_perform(easy: *Curl) Error!void {
     try errorCheck(c.curl_easy_perform(easy));
 }

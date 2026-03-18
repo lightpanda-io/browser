@@ -132,7 +132,7 @@ pub const HeaderIterator = union(enum) {
         prev: ?*libcurl.CurlHeader = null,
 
         pub fn next(self: *CurlHeaderIterator) ?Header {
-            const h = libcurl.curl_easy_nextheader(self.conn.easy, .header, -1, self.prev) orelse return null;
+            const h = libcurl.curl_easy_nextheader(self.conn._easy, .header, -1, self.prev) orelse return null;
             self.prev = h;
 
             const header = h.*;
@@ -217,77 +217,28 @@ pub const ResponseHead = struct {
 };
 
 pub const Connection = struct {
-    easy: *libcurl.Curl,
+    _easy: *libcurl.Curl,
     node: std.DoublyLinkedList.Node = .{},
 
     pub fn init(
-        ca_blob_: ?libcurl.CurlBlob,
+        ca_blob: ?libcurl.CurlBlob,
         config: *const Config,
     ) !Connection {
         const easy = libcurl.curl_easy_init() orelse return error.FailedToInitializeEasy;
-        errdefer libcurl.curl_easy_cleanup(easy);
 
-        // timeouts
-        try libcurl.curl_easy_setopt(easy, .timeout_ms, config.httpTimeout());
-        try libcurl.curl_easy_setopt(easy, .connect_timeout_ms, config.httpConnectTimeout());
+        const self = Connection{ ._easy = easy };
+        errdefer self.deinit();
 
-        // redirect behavior
-        try libcurl.curl_easy_setopt(easy, .max_redirs, config.httpMaxRedirects());
-        try libcurl.curl_easy_setopt(easy, .follow_location, 2);
-        try libcurl.curl_easy_setopt(easy, .redir_protocols_str, "HTTP,HTTPS"); // remove FTP and FTPS from the default
-
-        // proxy
-        const http_proxy = config.httpProxy();
-        if (http_proxy) |proxy| {
-            try libcurl.curl_easy_setopt(easy, .proxy, proxy.ptr);
-        }
-
-        // tls
-        if (ca_blob_) |ca_blob| {
-            try libcurl.curl_easy_setopt(easy, .ca_info_blob, ca_blob);
-            if (http_proxy != null) {
-                try libcurl.curl_easy_setopt(easy, .proxy_ca_info_blob, ca_blob);
-            }
-        } else {
-            assert(config.tlsVerifyHost() == false, "Http.init tls_verify_host", .{});
-
-            try libcurl.curl_easy_setopt(easy, .ssl_verify_host, false);
-            try libcurl.curl_easy_setopt(easy, .ssl_verify_peer, false);
-
-            if (http_proxy != null) {
-                try libcurl.curl_easy_setopt(easy, .proxy_ssl_verify_host, false);
-                try libcurl.curl_easy_setopt(easy, .proxy_ssl_verify_peer, false);
-            }
-        }
-
-        // compression, don't remove this. CloudFront will send gzip content
-        // even if we don't support it, and then it won't be decompressed.
-        // empty string means: use whatever's available
-        try libcurl.curl_easy_setopt(easy, .accept_encoding, "");
-
-        // debug
-        if (comptime ENABLE_DEBUG) {
-            try libcurl.curl_easy_setopt(easy, .verbose, true);
-
-            // Sometimes the default debug output hides some useful data. You can
-            // uncomment the following line (BUT KEEP THE LIVE ABOVE AS-IS), to
-            // get more control over the data (specifically, the `CURLINFO_TEXT`
-            // can include useful data).
-
-            // try libcurl.curl_easy_setopt(easy, .debug_function, debugCallback);
-        }
-
-        return .{
-            .easy = easy,
-        };
+        try self.reset(config, ca_blob);
+        return self;
     }
 
     pub fn deinit(self: *const Connection) void {
-        libcurl.curl_easy_cleanup(self.easy);
+        libcurl.curl_easy_cleanup(self._easy);
     }
 
     pub fn setURL(self: *const Connection, url: [:0]const u8) !void {
-        try libcurl.curl_easy_setopt(self.easy, .url, url.ptr);
+        try libcurl.curl_easy_setopt(self._easy, .url, url.ptr);
     }
 
     // a libcurl request has 2 methods. The first is the method that
@@ -310,7 +261,7 @@ pub const Connection = struct {
     // can infer that based on the presence of the body, but we also reset it
     // to be safe);
     pub fn setMethod(self: *const Connection, method: Method) !void {
-        const easy = self.easy;
+        const easy = self._easy;
         const m: [:0]const u8 = switch (method) {
             .GET => "GET",
             .POST => "POST",
@@ -325,50 +276,97 @@ pub const Connection = struct {
     }
 
     pub fn setBody(self: *const Connection, body: []const u8) !void {
-        const easy = self.easy;
+        const easy = self._easy;
         try libcurl.curl_easy_setopt(easy, .post, true);
         try libcurl.curl_easy_setopt(easy, .post_field_size, body.len);
         try libcurl.curl_easy_setopt(easy, .copy_post_fields, body.ptr);
     }
 
     pub fn setGetMode(self: *const Connection) !void {
-        try libcurl.curl_easy_setopt(self.easy, .http_get, true);
+        try libcurl.curl_easy_setopt(self._easy, .http_get, true);
     }
 
     pub fn setHeaders(self: *const Connection, headers: *Headers) !void {
-        try libcurl.curl_easy_setopt(self.easy, .http_header, headers.headers);
+        try libcurl.curl_easy_setopt(self._easy, .http_header, headers.headers);
     }
 
     pub fn setCookies(self: *const Connection, cookies: [*c]const u8) !void {
-        try libcurl.curl_easy_setopt(self.easy, .cookie, cookies);
+        try libcurl.curl_easy_setopt(self._easy, .cookie, cookies);
     }
 
     pub fn setPrivate(self: *const Connection, ptr: *anyopaque) !void {
-        try libcurl.curl_easy_setopt(self.easy, .private, ptr);
+        try libcurl.curl_easy_setopt(self._easy, .private, ptr);
     }
 
     pub fn setProxyCredentials(self: *const Connection, creds: [:0]const u8) !void {
-        try libcurl.curl_easy_setopt(self.easy, .proxy_user_pwd, creds.ptr);
+        try libcurl.curl_easy_setopt(self._easy, .proxy_user_pwd, creds.ptr);
     }
 
     pub fn setCredentials(self: *const Connection, creds: [:0]const u8) !void {
-        try libcurl.curl_easy_setopt(self.easy, .user_pwd, creds.ptr);
+        try libcurl.curl_easy_setopt(self._easy, .user_pwd, creds.ptr);
     }
 
     pub fn setCallbacks(
-        self: *const Connection,
+        self: *Connection,
         comptime data_cb: libcurl.CurlWriteFunction,
     ) !void {
-        try libcurl.curl_easy_setopt(self.easy, .write_data, self.easy);
-        try libcurl.curl_easy_setopt(self.easy, .write_function, data_cb);
+        try libcurl.curl_easy_setopt(self._easy, .write_data, self);
+        try libcurl.curl_easy_setopt(self._easy, .write_function, data_cb);
     }
 
-    pub fn reset(self: *const Connection) !void {
-        try libcurl.curl_easy_setopt(self.easy, .proxy, null);
-        try libcurl.curl_easy_setopt(self.easy, .http_header, null);
+    pub fn reset(
+        self: *const Connection,
+        config: *const Config,
+        ca_blob: ?libcurl.CurlBlob,
+    ) !void {
+        libcurl.curl_easy_reset(self._easy);
 
-        try libcurl.curl_easy_setopt(self.easy, .write_data, null);
-        try libcurl.curl_easy_setopt(self.easy, .write_function, discardBody);
+        // timeouts
+        try libcurl.curl_easy_setopt(self._easy, .timeout_ms, config.httpTimeout());
+        try libcurl.curl_easy_setopt(self._easy, .connect_timeout_ms, config.httpConnectTimeout());
+
+        // compression, don't remove this. CloudFront will send gzip content
+        // even if we don't support it, and then it won't be decompressed.
+        // empty string means: use whatever's available
+        try libcurl.curl_easy_setopt(self._easy, .accept_encoding, "");
+
+        // proxy
+        const http_proxy = config.httpProxy();
+        if (http_proxy) |proxy| {
+            try libcurl.curl_easy_setopt(self._easy, .proxy, proxy.ptr);
+        } else {
+            try libcurl.curl_easy_setopt(self._easy, .proxy, null);
+        }
+
+        // tls
+        if (ca_blob) |ca| {
+            try libcurl.curl_easy_setopt(self._easy, .ca_info_blob, ca);
+            if (http_proxy != null) {
+                try libcurl.curl_easy_setopt(self._easy, .proxy_ca_info_blob, ca);
+            }
+        } else {
+            assert(config.tlsVerifyHost() == false, "Http.init tls_verify_host", .{});
+
+            try libcurl.curl_easy_setopt(self._easy, .ssl_verify_host, false);
+            try libcurl.curl_easy_setopt(self._easy, .ssl_verify_peer, false);
+
+            if (http_proxy != null) {
+                try libcurl.curl_easy_setopt(self._easy, .proxy_ssl_verify_host, false);
+                try libcurl.curl_easy_setopt(self._easy, .proxy_ssl_verify_peer, false);
+            }
+        }
+
+        // debug
+        if (comptime ENABLE_DEBUG) {
+            try libcurl.curl_easy_setopt(self._easy, .verbose, true);
+
+            // Sometimes the default debug output hides some useful data. You can
+            // uncomment the following line (BUT KEEP THE LIVE ABOVE AS-IS), to
+            // get more control over the data (specifically, the `CURLINFO_TEXT`
+            // can include useful data).
+
+            // try libcurl.curl_easy_setopt(easy, .debug_function, debugCallback);
+        }
     }
 
     fn discardBody(_: [*]const u8, count: usize, len: usize, _: ?*anyopaque) usize {
@@ -376,31 +374,31 @@ pub const Connection = struct {
     }
 
     pub fn setProxy(self: *const Connection, proxy: ?[:0]const u8) !void {
-        try libcurl.curl_easy_setopt(self.easy, .proxy, if (proxy) |p| p.ptr else null);
+        try libcurl.curl_easy_setopt(self._easy, .proxy, if (proxy) |p| p.ptr else null);
     }
 
     pub fn setFollowLocation(self: *const Connection, follow: bool) !void {
-        try libcurl.curl_easy_setopt(self.easy, .follow_location, @as(c_long, if (follow) 2 else 0));
+        try libcurl.curl_easy_setopt(self._easy, .follow_location, @as(c_long, if (follow) 2 else 0));
     }
 
     pub fn setTlsVerify(self: *const Connection, verify: bool, use_proxy: bool) !void {
-        try libcurl.curl_easy_setopt(self.easy, .ssl_verify_host, verify);
-        try libcurl.curl_easy_setopt(self.easy, .ssl_verify_peer, verify);
+        try libcurl.curl_easy_setopt(self._easy, .ssl_verify_host, verify);
+        try libcurl.curl_easy_setopt(self._easy, .ssl_verify_peer, verify);
         if (use_proxy) {
-            try libcurl.curl_easy_setopt(self.easy, .proxy_ssl_verify_host, verify);
-            try libcurl.curl_easy_setopt(self.easy, .proxy_ssl_verify_peer, verify);
+            try libcurl.curl_easy_setopt(self._easy, .proxy_ssl_verify_host, verify);
+            try libcurl.curl_easy_setopt(self._easy, .proxy_ssl_verify_peer, verify);
         }
     }
 
     pub fn getEffectiveUrl(self: *const Connection) ![*c]const u8 {
         var url: [*c]u8 = undefined;
-        try libcurl.curl_easy_getinfo(self.easy, .effective_url, &url);
+        try libcurl.curl_easy_getinfo(self._easy, .effective_url, &url);
         return url;
     }
 
     pub fn getResponseCode(self: *const Connection) !u16 {
         var status: c_long = undefined;
-        try libcurl.curl_easy_getinfo(self.easy, .response_code, &status);
+        try libcurl.curl_easy_getinfo(self._easy, .response_code, &status);
         if (status < 0 or status > std.math.maxInt(u16)) {
             return 0;
         }
@@ -409,13 +407,13 @@ pub const Connection = struct {
 
     pub fn getRedirectCount(self: *const Connection) !u32 {
         var count: c_long = undefined;
-        try libcurl.curl_easy_getinfo(self.easy, .redirect_count, &count);
+        try libcurl.curl_easy_getinfo(self._easy, .redirect_count, &count);
         return @intCast(count);
     }
 
     pub fn getResponseHeader(self: *const Connection, name: [:0]const u8, index: usize) ?HeaderValue {
         var hdr: ?*libcurl.CurlHeader = null;
-        libcurl.curl_easy_header(self.easy, name, index, .header, -1, &hdr) catch |err| {
+        libcurl.curl_easy_header(self._easy, name, index, .header, -1, &hdr) catch |err| {
             // ErrorHeader includes OutOfMemory — rare but real errors from curl internals.
             // Logged and returned as null since callers don't expect errors.
             log.err(.http, "get response header", .{
@@ -433,7 +431,7 @@ pub const Connection = struct {
 
     pub fn getPrivate(self: *const Connection) !*anyopaque {
         var private: *anyopaque = undefined;
-        try libcurl.curl_easy_getinfo(self.easy, .private, &private);
+        try libcurl.curl_easy_getinfo(self._easy, .private, &private);
         return private;
     }
 
@@ -455,7 +453,7 @@ pub const Connection = struct {
             try self.setCookies(cookies);
         }
 
-        try libcurl.curl_easy_perform(self.easy);
+        try libcurl.curl_easy_perform(self._easy);
         return self.getResponseCode();
     }
 };
@@ -477,11 +475,11 @@ pub const Handles = struct {
     }
 
     pub fn add(self: *Handles, conn: *const Connection) !void {
-        try libcurl.curl_multi_add_handle(self.multi, conn.easy);
+        try libcurl.curl_multi_add_handle(self.multi, conn._easy);
     }
 
     pub fn remove(self: *Handles, conn: *const Connection) !void {
-        try libcurl.curl_multi_remove_handle(self.multi, conn.easy);
+        try libcurl.curl_multi_remove_handle(self.multi, conn._easy);
     }
 
     pub fn perform(self: *Handles) !c_int {
@@ -504,7 +502,7 @@ pub const Handles = struct {
         const msg = libcurl.curl_multi_info_read(self.multi, &messages_count) orelse return null;
         return switch (msg.data) {
             .done => |err| .{
-                .conn = .{ .easy = msg.easy_handle },
+                .conn = .{ ._easy = msg.easy_handle },
                 .err = err,
             },
             else => unreachable,
