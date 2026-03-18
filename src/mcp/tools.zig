@@ -538,7 +538,7 @@ fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
         return error.NavigationFailed;
     };
 
-    _ = server.session.wait(5000);
+    _ = server.session.wait(5000, .load);
 }
 
 const testing = @import("../testing.zig");
@@ -603,7 +603,7 @@ test "MCP - Actions: click, fill, scroll" {
     const page = try server.session.createPage();
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    _ = server.session.wait(5000);
+    _ = server.session.wait(5000, .load);
 
     // Test Click
     const btn = page.document.getElementById("btn", page).?.asNode();

@@ -46,6 +46,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
+    wait_until: Config.WaitUntil = .load,
     dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
     writer: ?*std.Io.Writer = null,
@@ -107,7 +108,7 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
         .reason = .address_bar,
         .kind = .{ .push = null },
     });
-    _ = session.wait(opts.wait_ms);
+    _ = session.wait(opts.wait_ms, opts.wait_until);
 
     const writer = opts.writer orelse return;
     if (opts.dump_mode) |mode| {
