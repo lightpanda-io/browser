@@ -308,14 +308,16 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
     document._page = self;
 
     if (comptime builtin.is_test == false) {
-        // HTML test runner manually calls these as necessary
-        try self.js.scheduler.add(session.browser, struct {
-            fn runIdleTasks(ctx: *anyopaque) !?u32 {
-                const b: *@import("Browser.zig") = @ptrCast(@alignCast(ctx));
-                b.runIdleTasks();
-                return 200;
-            }
-        }.runIdleTasks, 200, .{ .name = "page.runIdleTasks", .low_priority = true });
+        if (parent == null) {
+            // HTML test runner manually calls these as necessary
+            try self.js.scheduler.add(session.browser, struct {
+                fn runIdleTasks(ctx: *anyopaque) !?u32 {
+                    const b: *@import("Browser.zig") = @ptrCast(@alignCast(ctx));
+                    b.runIdleTasks();
+                    return 200;
+                }
+            }.runIdleTasks, 200, .{ .name = "page.runIdleTasks", .low_priority = true });
+        }
     }
 }
 
