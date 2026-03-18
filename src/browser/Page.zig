@@ -886,12 +886,10 @@ fn notifyParentLoadComplete(self: *Page) void {
     parent.iframeCompletedLoading(self.iframe.?);
 }
 
-fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
-    var self: *Page = @ptrCast(@alignCast(transfer.ctx));
+fn pageHeaderDoneCallback(response: HttpClient.Response) !bool {
+    var self: *Page = @ptrCast(@alignCast(response.ctx));
 
-    const header = &transfer.response_header.?;
-
-    const response_url = std.mem.span(header.url);
+    const response_url = response.url();
     if (std.mem.eql(u8, response_url, self.url) == false) {
         // would be different than self.url in the case of a redirect
         self.url = try self.arena.dupeZ(u8, response_url);
@@ -905,8 +903,8 @@ fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     if (comptime IS_DEBUG) {
         log.debug(.page, "navigate header", .{
             .url = self.url,
-            .status = header.status,
-            .content_type = header.contentType(),
+            .status = response.status(),
+            .content_type = response.contentType(),
             .type = self._type,
         });
     }
@@ -927,14 +925,14 @@ fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     return true;
 }
 
-fn pageDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
-    var self: *Page = @ptrCast(@alignCast(transfer.ctx));
+fn pageDataCallback(response: HttpClient.Response, data: []const u8) !void {
+    var self: *Page = @ptrCast(@alignCast(response.ctx));
 
     if (self._parse_state == .pre) {
         // we lazily do this, because we might need the first chunk of data
         // to sniff the content type
         var mime: Mime = blk: {
-            if (transfer.response_header.?.contentType()) |ct| {
+            if (response.contentType()) |ct| {
                 break :blk try Mime.parse(ct);
             }
             break :blk Mime.sniff(data);
