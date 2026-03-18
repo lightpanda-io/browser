@@ -32,6 +32,8 @@ const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
 const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");
 const Robots = @import("../network/Robots.zig");
+const Cache = @import("../network/cache/Cache.zig");
+const CachedResponse = Cache.CachedResponse;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
@@ -1006,57 +1008,67 @@ pub const Response = struct {
     ctx: *anyopaque,
     inner: union(enum) {
         transfer: *Transfer,
+        cached: *const CachedResponse,
     },
 
     pub fn fromTransfer(transfer: *Transfer) Response {
         return .{ .ctx = transfer.req.ctx, .inner = .{ .transfer = transfer } };
     }
 
+    pub fn fromCached(ctx: *anyopaque, resp: *const CachedResponse) Response {
+        return .{ .ctx = ctx, .inner = .{ .cached = resp } };
+    }
+
     pub fn status(self: Response) ?u16 {
         return switch (self.inner) {
             .transfer => |t| if (t.response_header) |rh| rh.status else null,
+            .cached => |c| c.metadata.status,
         };
     }
 
     pub fn contentType(self: Response) ?[]const u8 {
         return switch (self.inner) {
             .transfer => |t| if (t.response_header) |*rh| rh.contentType() else null,
+            .cached => |c| c.metadata.content_type,
         };
     }
 
     pub fn contentLength(self: Response) ?u32 {
         return switch (self.inner) {
             .transfer => |t| t.getContentLength(),
+            .cached => |c| switch (c.data) {
+                .buffer => |buf| @intCast(buf.len),
+                .file => |f| @intCast(f.getEndPos() catch 0),
+            },
         };
     }
 
     pub fn redirectCount(self: Response) ?u32 {
         return switch (self.inner) {
             .transfer => |t| if (t.response_header) |rh| rh.redirect_count else null,
+            .cached => 0,
         };
     }
 
     pub fn url(self: Response) [:0]const u8 {
         return switch (self.inner) {
             .transfer => |t| t.url,
+            .cached => |c| c.metadata.url,
         };
     }
 
     pub fn headerIterator(self: Response) HeaderIterator {
         return switch (self.inner) {
-            .live => |live| live.responseHeaderIterator(),
+            .transfer => |t| t.responseHeaderIterator(),
+            // TODO: Cache HTTP Headers
+            .cached => unreachable,
         };
     }
 
     pub fn abort(self: Response, err: anyerror) void {
         switch (self.inner) {
             .transfer => |t| t.abort(err),
-        }
-    }
-
-    pub fn terminate(self: Response) void {
-        switch (self.inner) {
-            .transfer => |t| t.terminate(),
+            .cached => {},
         }
     }
 };

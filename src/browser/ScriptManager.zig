@@ -753,6 +753,7 @@ pub const Script = struct {
                 self.debug_transfer_auth_challenge = transfer._auth_challenge != null;
                 self.debug_transfer_easy_id = if (transfer._conn) |c| @intFromPtr(c._easy) else 0;
             },
+            else => {},
         }
 
         lp.assert(self.source.remote.capacity == 0, "ScriptManager.Header buffer", .{ .capacity = self.source.remote.capacity });
