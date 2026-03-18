@@ -67,7 +67,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     app.app_dir_path = getAndMakeAppDir(allocator);
 
     app.telemetry = try Telemetry.init(app, config.mode);
-    errdefer app.telemetry.deinit();
+    errdefer app.telemetry.deinit(allocator);
 
     app.arena_pool = ArenaPool.init(allocator, 512, 1024 * 16);
     errdefer app.arena_pool.deinit();
@@ -85,7 +85,7 @@ pub fn deinit(self: *App) void {
         allocator.free(app_dir_path);
         self.app_dir_path = null;
     }
-    self.telemetry.deinit();
+    self.telemetry.deinit(allocator);
     self.network.deinit();
     self.snapshot.deinit();
     self.platform.deinit();
