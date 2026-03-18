@@ -185,9 +185,8 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
     lp.assert(self.origin.rc == 1, "Ref opaque origin", .{ .rc = self.origin.rc });
 
     const origin = try self.session.getOrCreateOrigin(key);
-    errdefer self.session.releaseOrigin(origin);
-    try origin.takeover(self.origin);
 
+    self.session.releaseOrigin(self.origin);
     self.origin = origin;
 
     {
@@ -203,16 +202,16 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
 }
 
 pub fn trackGlobal(self: *Context, global: v8.Global) !void {
-    return self.origin.trackGlobal(global);
+    return self.session.trackGlobal(global);
 }
 
 pub fn trackTemp(self: *Context, global: v8.Global) !void {
-    return self.origin.trackTemp(global);
+    return self.session.trackTemp(global);
 }
 
 pub fn weakRef(self: *Context, obj: anytype) void {
     const resolved = js.Local.resolveValue(obj);
-    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
+    const fc = self.session.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
@@ -224,7 +223,7 @@ pub fn weakRef(self: *Context, obj: anytype) void {
 
 pub fn safeWeakRef(self: *Context, obj: anytype) void {
     const resolved = js.Local.resolveValue(obj);
-    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
+    const fc = self.session.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
@@ -237,7 +236,7 @@ pub fn safeWeakRef(self: *Context, obj: anytype) void {
 
 pub fn strongRef(self: *Context, obj: anytype) void {
     const resolved = js.Local.resolveValue(obj);
-    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
+    const fc = self.session.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);

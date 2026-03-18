@@ -19,6 +19,8 @@
 const js = @import("js.zig");
 const v8 = js.v8;
 
+const Session = @import("../Session.zig");
+
 const Promise = @This();
 
 local: *const js.Local,
@@ -63,10 +65,10 @@ fn _persist(self: *const Promise, comptime is_global: bool) !(if (is_global) Glo
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
     if (comptime is_global) {
         try ctx.trackGlobal(global);
-        return .{ .handle = global, .origin = {} };
+        return .{ .handle = global, .session = {} };
     }
     try ctx.trackTemp(global);
-    return .{ .handle = global, .origin = ctx.origin };
+    return .{ .handle = global, .session = ctx.session };
 }
 
 pub const Temp = G(.temp);
@@ -80,7 +82,7 @@ const GlobalType = enum(u8) {
 fn G(comptime global_type: GlobalType) type {
     return struct {
         handle: v8.Global,
-        origin: if (global_type == .temp) *js.Origin else void,
+        session: if (global_type == .temp) *Session else void,
 
         const Self = @This();
 
@@ -96,7 +98,7 @@ fn G(comptime global_type: GlobalType) type {
         }
 
         pub fn release(self: *const Self) void {
-            self.origin.releaseTemp(self.handle);
+            self.session.releaseTemp(self.handle);
         }
     };
 }

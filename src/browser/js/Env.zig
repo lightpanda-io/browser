@@ -307,16 +307,17 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
     const context_id = self.context_id;
     self.context_id = context_id + 1;
 
-    const origin = try page._session.getOrCreateOrigin(null);
-    errdefer page._session.releaseOrigin(origin);
+    const session = page._session;
+    const origin = try session.getOrCreateOrigin(null);
+    errdefer session.releaseOrigin(origin);
 
     const context = try context_arena.create(Context);
     context.* = .{
         .env = self,
         .page = page,
-        .session = page._session,
         .origin = origin,
         .id = context_id,
+        .session = session,
         .isolate = isolate,
         .arena = context_arena,
         .handle = context_global,
@@ -326,7 +327,15 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         .script_manager = &page._script_manager,
         .scheduler = .init(context_arena),
     };
-    try context.origin.identity_map.putNoClobber(origin.arena, @intFromPtr(page.window), global_global);
+
+    {
+        // Multiple contexts can be created for the same Window (via CDP). We only
+        // need to register the first one.
+        const gop = try session.identity_map.getOrPut(session.page_arena, @intFromPtr(page.window));
+        if (gop.found_existing == false) {
+            gop.value_ptr.* = global_global;
+        }
+    }
 
     // Store a pointer to our context inside the v8 context so that, given
     // a v8 context, we can get our context out

@@ -27,7 +27,6 @@ const v8 = js.v8;
 
 const Caller = @import("Caller.zig");
 const Context = @import("Context.zig");
-const Origin = @import("Origin.zig");
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -117,13 +116,13 @@ pub fn Builder(comptime T: type) type {
                 .from_v8 = struct {
                     fn wrap(handle: ?*const v8.WeakCallbackInfo) callconv(.c) void {
                         const ptr = v8.v8__WeakCallbackInfo__GetParameter(handle.?).?;
-                        const fc: *Origin.FinalizerCallback = @ptrCast(@alignCast(ptr));
+                        const fc: *Session.FinalizerCallback = @ptrCast(@alignCast(ptr));
 
-                        const origin = fc.origin;
+                        const session = fc.session;
                         const value_ptr = fc.ptr;
-                        if (origin.finalizer_callbacks.contains(@intFromPtr(value_ptr))) {
-                            func(@ptrCast(@alignCast(value_ptr)), false, fc.session);
-                            origin.release(value_ptr);
+                        if (session.finalizer_callbacks.contains(@intFromPtr(value_ptr))) {
+                            func(@ptrCast(@alignCast(value_ptr)), false, session);
+                            session.releaseIdentity(value_ptr);
                         } else {
                             // A bit weird, but v8 _requires_ that we release it
                             // If we don't. We'll 100% crash.

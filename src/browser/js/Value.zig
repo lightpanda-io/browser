@@ -25,6 +25,7 @@ const v8 = js.v8;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Allocator = std.mem.Allocator;
+const Session = @import("../Session.zig");
 
 const Value = @This();
 
@@ -300,10 +301,10 @@ fn _persist(self: *const Value, comptime is_global: bool) !(if (is_global) Globa
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
     if (comptime is_global) {
         try ctx.trackGlobal(global);
-        return .{ .handle = global, .origin = {} };
+        return .{ .handle = global, .session = {} };
     }
     try ctx.trackTemp(global);
-    return .{ .handle = global, .origin = ctx.origin };
+    return .{ .handle = global, .session = ctx.session };
 }
 
 pub fn toZig(self: Value, comptime T: type) !T {
@@ -361,7 +362,7 @@ const GlobalType = enum(u8) {
 fn G(comptime global_type: GlobalType) type {
     return struct {
         handle: v8.Global,
-        origin: if (global_type == .temp) *js.Origin else void,
+        session: if (global_type == .temp) *Session else void,
 
         const Self = @This();
 
@@ -381,7 +382,7 @@ fn G(comptime global_type: GlobalType) type {
         }
 
         pub fn release(self: *const Self) void {
-            self.origin.releaseTemp(self.handle);
+            self.session.releaseTemp(self.handle);
         }
     };
 }
