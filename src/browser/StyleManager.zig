@@ -354,7 +354,7 @@ pub fn computeSpecificity(selector: Selector.Selector) u32 {
 
     // Pack into single u32: (ids << 20) | (classes << 10) | elements
     // This gives us 10 bits each, supporting up to 1023 of each type
-    return (@min(ids, 1023) << 20) | (@min(classes, 1023) << 10) | @min(elements, 1023);
+    return (@as(u32, @min(ids, 1023)) << 20) | (@as(u32, @min(classes, 1023)) << 10) | @min(elements, 1023);
 }
 
 fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u32, elements: *u32) void {
@@ -376,7 +376,6 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
                             const spec = computeSpecificity(nested_sel);
                             if (spec > max_nested) max_nested = spec;
                         }
-                    max_nested = @min(max_nested, 1023);
                         // Unpack and add to our counts
                         ids.* += (max_nested >> 20) & 0x3FF;
                         classes.* += (max_nested >> 10) & 0x3FF;
