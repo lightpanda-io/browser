@@ -365,6 +365,11 @@ pub fn createEvent(_: *const Document, event_type: []const u8, page: *Page) !*@i
         return (try KeyboardEvent.init("", null, page)).asEvent();
     }
 
+    if (std.mem.eql(u8, normalized, "inputevent")) {
+        const InputEvent = @import("event/InputEvent.zig");
+        return (try InputEvent.init("", null, page)).asEvent();
+    }
+
     if (std.mem.eql(u8, normalized, "mouseevent") or std.mem.eql(u8, normalized, "mouseevents")) {
         const MouseEvent = @import("event/MouseEvent.zig");
         return (try MouseEvent.init("", null, page)).asEvent();

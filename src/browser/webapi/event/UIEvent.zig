@@ -37,6 +37,7 @@ pub const Type = union(enum) {
     keyboard_event: *@import("KeyboardEvent.zig"),
     focus_event: *@import("FocusEvent.zig"),
     text_event: *@import("TextEvent.zig"),
+    input_event: *@import("InputEvent.zig"),
 };
 
 pub const UIEventOptions = struct {
@@ -88,6 +89,7 @@ pub fn is(self: *UIEvent, comptime T: type) ?*T {
         .keyboard_event => |e| return if (T == @import("KeyboardEvent.zig")) e else null,
         .focus_event => |e| return if (T == @import("FocusEvent.zig")) e else null,
         .text_event => |e| return if (T == @import("TextEvent.zig")) e else null,
+        .input_event => |e| return if (T == @import("InputEvent.zig")) e else null,
     }
     return null;
 }
