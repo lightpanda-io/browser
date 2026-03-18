@@ -90,10 +90,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     self.dirty = false;
     const item_count = self.rules.items.len;
-
-    const arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(self.arena.ptr));
-    _ = arena.reset(.retain_capacity);
-
+    self.page._session.arena_pool.resetRetain(self.arena);
     self.rules = try .initCapacity(self.arena, item_count);
     const sheets = self.page.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
