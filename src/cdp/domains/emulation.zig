@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -24,6 +25,7 @@ pub fn processMessage(cmd: anytype) !void {
         setFocusEmulationEnabled,
         setDeviceMetricsOverride,
         setTouchEmulationEnabled,
+        setUserAgentOverride,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -31,6 +33,7 @@ pub fn processMessage(cmd: anytype) !void {
         .setFocusEmulationEnabled => return setFocusEmulationEnabled(cmd),
         .setDeviceMetricsOverride => return setDeviceMetricsOverride(cmd),
         .setTouchEmulationEnabled => return setTouchEmulationEnabled(cmd),
+        .setUserAgentOverride => return setUserAgentOverride(cmd),
     }
 }
 
@@ -62,5 +65,10 @@ fn setDeviceMetricsOverride(cmd: anytype) !void {
 
 // TODO: noop method
 fn setTouchEmulationEnabled(cmd: anytype) !void {
+    return cmd.sendResult(null, .{});
+}
+
+fn setUserAgentOverride(cmd: anytype) !void {
+    log.info(.app, "setUserAgentOverride ignored", .{});
     return cmd.sendResult(null, .{});
 }
