@@ -9335,3 +9335,84 @@ test "win32 translucent stroke rect opacity blends against background" {
     try std.testing.expect(surface.bits[edge_index + 1] >= 120 and surface.bits[edge_index + 1] <= 140);
     try std.testing.expectEqual(@as(u8, 255), surface.bits[edge_index + 0]);
 }
+
+test "win32 translucent text opacity blends against background" {
+    const base_dc = c.CreateCompatibleDC(null) orelse return error.TranslucentTextOpacityBaseDcMissing;
+    defer _ = c.DeleteDC(base_dc);
+
+    var target = beginAlphaBlendSurface(base_dc, 96, 40) orelse return error.TranslucentTextOpacityTargetMissing;
+    defer target.deinit();
+    @memset(target.bits[0..target.pixel_bytes], 255);
+
+    var source = beginAlphaBlendSurface(target.mem_dc, 96, 40) orelse return error.TranslucentTextOpacitySourceMissing;
+    defer source.deinit();
+
+    _ = c.SetBkMode(source.mem_dc, c.TRANSPARENT);
+    const previous_color = c.SetTextColor(source.mem_dc, c.RGB(0, 0, 0));
+    defer _ = c.SetTextColor(source.mem_dc, previous_color);
+
+    const font_spec = resolvePresentationFontSpec("Arial, sans-serif");
+    const wide_face = std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, font_spec.face_name) catch null;
+    defer if (wide_face) |face| std.heap.c_allocator.free(face);
+    const font = c.CreateFontW(
+        -28,
+        0,
+        0,
+        0,
+        400,
+        0,
+        0,
+        0,
+        c.DEFAULT_CHARSET,
+        c.OUT_DEFAULT_PRECIS,
+        c.CLIP_DEFAULT_PRECIS,
+        c.CLEARTYPE_QUALITY,
+        font_spec.pitch_family,
+        if (wide_face) |face| face.ptr else null,
+    );
+    const previous_font = if (font != null) c.SelectObject(source.mem_dc, font) else null;
+    defer if (font != null) {
+        _ = c.SelectObject(source.mem_dc, previous_font);
+        _ = c.DeleteObject(font);
+    };
+
+    var text_rect = c.RECT{
+        .left = 0,
+        .top = 0,
+        .right = 96,
+        .bottom = 40,
+    };
+    drawPresentationText(
+        source.mem_dc,
+        &text_rect,
+        "MMMMMM",
+        c.DT_LEFT | c.DT_TOP | c.DT_SINGLELINE | c.DT_NOPREFIX,
+    );
+
+    alphaBlendSurfaceToTarget(target.mem_dc, text_rect, &source, 128, true);
+
+    var found_dark_pixel = false;
+    var darkest_sum: u32 = std.math.maxInt(u32);
+    var darkest_pixel: [3]u8 = .{ 255, 255, 255 };
+    var idx: usize = 0;
+    while (idx + 3 < target.pixel_bytes) : (idx += 4) {
+        const b = target.bits[idx + 0];
+        const g = target.bits[idx + 1];
+        const r = target.bits[idx + 2];
+        const sum = @as(u32, r) + @as(u32, g) + @as(u32, b);
+        if (sum < darkest_sum) {
+            darkest_sum = sum;
+            darkest_pixel = .{ r, g, b };
+        }
+        if (r < 245 or g < 245 or b < 245) {
+            found_dark_pixel = true;
+        }
+    }
+
+    try std.testing.expect(found_dark_pixel);
+    try std.testing.expect(darkest_sum > 150);
+    try std.testing.expect(darkest_sum < 700);
+    try std.testing.expect(darkest_pixel[0] > 40 and darkest_pixel[0] < 240);
+    try std.testing.expect(darkest_pixel[1] > 40 and darkest_pixel[1] < 240);
+    try std.testing.expect(darkest_pixel[2] > 40 and darkest_pixel[2] < 240);
+}

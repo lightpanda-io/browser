@@ -88,9 +88,9 @@ The fork already has a real headed Windows foundation:
   consistent alpha multiplier into headed composition
 - overflow:auto containers now keep scrolled link regions visible enough for
   real click activation on the headed surface, and screenshot readiness no
-  longer burns the capture on bodyless-but-substantive frames; bounded scroll
-  and visible-link probes now cover the programmatic scroll state and the
-  resulting navigation path
+  longer burns the capture on bodyless-but-substantive or dense text-only
+  frames; bounded scroll, visible-link, opacity, and text-style probes now
+  cover the programmatic scroll state and the resulting navigation path
 - CSS translate transforms now carry through headed painting and DOM
   hit-testing for translated controls and links, with bounded screenshot and
   interaction coverage proving the transformed button and link geometry both

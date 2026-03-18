@@ -374,6 +374,13 @@ fn browseScreenshotReady(
         return countSubstantivePresentationCommands(list) >= 2 or displayListHasSubstantiveInteractiveRegions(list);
     }
 
+    if (displayListHasSubstantiveTextCommands(list)) {
+        if (has_body) {
+            return true;
+        }
+        return displayListHasSubstantiveInteractiveRegions(list);
+    }
+
     return has_body and displayListHasSubstantiveInteractiveRegions(list);
 }
 
@@ -412,6 +419,23 @@ fn countSubstantivePresentationCommands(list: *const DisplayList) usize {
         }
     }
     return count;
+}
+
+fn displayListHasSubstantiveTextCommands(list: *const DisplayList) bool {
+    var count: usize = 0;
+    var total_width: i32 = 0;
+    for (list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (text.text.len > 0 and text.width >= 16 and text.height >= 12) {
+                    count += 1;
+                    total_width += text.width;
+                }
+            },
+            else => {},
+        }
+    }
+    return count >= 4 and total_width >= 128;
 }
 
 fn isSubstantivePresentationBox(width: i32, height: i32) bool {
@@ -527,6 +551,54 @@ test "browseScreenshotReady allows bodyless substantive presentation commands" {
     });
 
     try std.testing.expect(browseScreenshotReady(true, false, "", &list));
+}
+
+test "browseScreenshotReady allows dense text-only presentation commands" {
+    var list = DisplayList{};
+    defer list.deinit(std.testing.allocator);
+
+    try list.addText(std.testing.allocator, .{
+        .x = 0,
+        .y = 0,
+        .width = 28,
+        .height = 14,
+        .font_size = 13,
+        .font_family = @constCast(""),
+        .color = .{ .r = 0, .g = 0, .b = 0 },
+        .text = @constCast("Mono"),
+    });
+    try list.addText(std.testing.allocator, .{
+        .x = 0,
+        .y = 18,
+        .width = 36,
+        .height = 14,
+        .font_size = 13,
+        .font_family = @constCast(""),
+        .color = .{ .r = 0, .g = 0, .b = 0 },
+        .text = @constCast("Mono"),
+    });
+    try list.addText(std.testing.allocator, .{
+        .x = 0,
+        .y = 36,
+        .width = 52,
+        .height = 14,
+        .font_size = 13,
+        .font_family = @constCast(""),
+        .color = .{ .r = 0, .g = 0, .b = 0 },
+        .text = @constCast("Alpha"),
+    });
+    try list.addText(std.testing.allocator, .{
+        .x = 0,
+        .y = 54,
+        .width = 58,
+        .height = 14,
+        .font_size = 13,
+        .font_family = @constCast(""),
+        .color = .{ .r = 0, .g = 0, .b = 0 },
+        .text = @constCast("Beta"),
+    });
+
+    try std.testing.expect(browseScreenshotReady(true, false, "real body", &list));
 }
 
 pub fn chooseFiles(self: *Display, accept: []const u8, multiple: bool) ?ChosenFiles {

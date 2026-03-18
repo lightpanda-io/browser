@@ -133,6 +133,31 @@
 }
 </script>
 
+<script id="opacityDefault">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  const computed = getComputedStyle(div);
+  testing.expectEqual('1', computed.opacity);
+  div.style.opacity = '0.5';
+  testing.expectEqual('0.5', div.style.opacity);
+}
+</script>
+
+<script id="textStyleDefaults">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  const computed = getComputedStyle(div);
+  testing.expectEqual('normal', computed.lineHeight);
+  testing.expectEqual('normal', computed.letterSpacing);
+  testing.expectEqual('normal', computed.wordSpacing);
+  testing.expectEqual('none', computed.textTransform);
+}
+</script>
+
 <script id="propertyAssignment">
 {
   const div = $('#test-div');
