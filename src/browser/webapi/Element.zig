@@ -1129,18 +1129,13 @@ fn isHitTestVisibleElement(self: *Element) bool {
 fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height: f64 } {
     var width: f64 = 5.0;
     var height: f64 = 5.0;
+    const parent = self.parentElement();
 
-    if (self.getStyle(page)) |style| {
-        const decl = style.asCSSStyleDeclaration();
-        width = CSS.parseDimension(decl.getPropertyValue("width", page)) orelse 5.0;
-        height = CSS.parseDimension(decl.getPropertyValue("height", page)) orelse 5.0;
-    }
-
-    if (width == 5.0) {
-        width = CSS.parseDimension(inlineStyleDeclarationValue(self, "width") orelse "") orelse width;
-    }
-    if (height == 5.0) {
-        height = CSS.parseDimension(inlineStyleDeclarationValue(self, "height") orelse "") orelse height;
+    const style = page.window.getComputedStyle(self, null, page) catch null;
+    if (style) |resolved_style| {
+        const decl = resolved_style.asCSSStyleDeclaration();
+        width = resolveElementDimension(decl.getPropertyValue("width", page), .width, parent, page) orelse 5.0;
+        height = resolveElementDimension(decl.getPropertyValue("height", page), .height, parent, page) orelse 5.0;
     }
 
     if (width == 5.0 or height == 5.0) {
@@ -1180,6 +1175,32 @@ fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height
     }
 
     return .{ .width = width, .height = height };
+}
+
+const DimensionAxis = enum {
+    width,
+    height,
+};
+
+fn resolveElementDimension(value: []const u8, axis: DimensionAxis, parent: ?*Element, page: *Page) ?f64 {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) {
+        return null;
+    }
+
+    if (std.mem.endsWith(u8, trimmed, "%")) {
+        const percent = std.fmt.parseFloat(f64, trimmed[0 .. trimmed.len - 1]) catch return null;
+        const basis = if (parent) |ancestor| blk: {
+            const dims = ancestor.getElementDimensions(page);
+            break :blk switch (axis) {
+                .width => dims.width,
+                .height => dims.height,
+            };
+        } else return null;
+        return basis * percent / 100.0;
+    }
+
+    return CSS.parseDimension(trimmed);
 }
 
 fn inlineStyleDeclarationValue(self: *Element, comptime property: []const u8) ?[]const u8 {
@@ -1252,6 +1273,13 @@ pub fn getBoundingClientRectForVisible(self: *Element, page: *Page) DOMRect {
         }
     }
 
+    var transform_node: ?*Element = self;
+    while (transform_node) |current| : (transform_node = current.parentElement()) {
+        const delta = resolveTranslateTransform(current, page);
+        x += delta.x;
+        y += delta.y;
+    }
+
     return .{
         ._x = x,
         ._y = y,
@@ -1267,6 +1295,68 @@ pub fn getClientRects(self: *Element, page: *Page) ![]DOMRect {
     const rects = try page.call_arena.alloc(DOMRect, 1);
     rects[0] = self.getBoundingClientRectForVisible(page);
     return rects;
+}
+
+const TranslateTransform = struct {
+    x: f64 = 0,
+    y: f64 = 0,
+};
+
+fn resolveTranslateTransform(element: *Element, page: *Page) TranslateTransform {
+    const dims = element.getElementDimensions(page);
+    const style = page.window.getComputedStyle(element, null, page) catch return .{};
+    const decl = style.asCSSStyleDeclaration();
+    const raw = std.mem.trim(u8, decl.getPropertyValue("transform", page), &std.ascii.whitespace);
+    if (raw.len == 0 or std.ascii.eqlIgnoreCase(raw, "none")) {
+        return .{};
+    }
+
+    if (std.mem.startsWith(u8, raw, "translate(") and std.mem.endsWith(u8, raw, ")")) {
+        return parseTranslateArguments(raw["translate(".len .. raw.len - 1], dims.width, dims.height);
+    }
+    if (std.mem.startsWith(u8, raw, "translate3d(") and std.mem.endsWith(u8, raw, ")")) {
+        return parseTranslateArguments(raw["translate3d(".len .. raw.len - 1], dims.width, dims.height);
+    }
+    if (std.mem.startsWith(u8, raw, "translateX(") and std.mem.endsWith(u8, raw, ")")) {
+        return .{ .x = parseTranslateLength(std.mem.trim(u8, raw["translateX(".len .. raw.len - 1], &std.ascii.whitespace), dims.width), .y = 0 };
+    }
+    if (std.mem.startsWith(u8, raw, "translateY(") and std.mem.endsWith(u8, raw, ")")) {
+        return .{ .x = 0, .y = parseTranslateLength(std.mem.trim(u8, raw["translateY(".len .. raw.len - 1], &std.ascii.whitespace), dims.height) };
+    }
+
+    return .{};
+}
+
+fn parseTranslateArguments(raw: []const u8, width: f64, height: f64) TranslateTransform {
+    const comma = std.mem.indexOfScalar(u8, raw, ',');
+    if (comma) |idx| {
+        const x_token = std.mem.trim(u8, raw[0..idx], &std.ascii.whitespace);
+        const tail = std.mem.trim(u8, raw[idx + 1 ..], &std.ascii.whitespace);
+        const y_end = std.mem.indexOfScalar(u8, tail, ',') orelse tail.len;
+        const y_token = std.mem.trim(u8, tail[0..y_end], &std.ascii.whitespace);
+        return .{
+            .x = parseTranslateLength(x_token, width),
+            .y = parseTranslateLength(y_token, height),
+        };
+    }
+
+    const first = std.mem.trim(u8, raw, &std.ascii.whitespace);
+    return .{
+        .x = parseTranslateLength(first, width),
+        .y = 0,
+    };
+}
+
+fn parseTranslateLength(token: []const u8, basis: f64) f64 {
+    if (token.len == 0) return 0;
+    if (std.mem.endsWith(u8, token, "%")) {
+        const parsed = std.fmt.parseFloat(f64, token[0 .. token.len - 1]) catch return 0;
+        return basis * parsed / 100.0;
+    }
+    if (std.mem.endsWith(u8, token, "px")) {
+        return std.fmt.parseFloat(f64, token[0 .. token.len - 2]) catch return 0;
+    }
+    return std.fmt.parseFloat(f64, token) catch 0;
 }
 
 pub fn getScrollTop(self: *Element, page: *Page) u32 {

@@ -180,6 +180,11 @@ const Bounds = struct {
     height: i32,
 };
 
+const TranslateTransform = struct {
+    x: i32 = 0,
+    y: i32 = 0,
+};
+
 fn clipRectFromBounds(bounds: Bounds) ClipRect {
     return .{
         .x = bounds.x,
@@ -306,6 +311,135 @@ fn translateRecentOutput(self: *Painter, command_start: usize, link_start: usize
         self.list.control_regions.items[control_index].x += dx;
         self.list.control_regions.items[control_index].y += dy;
     }
+}
+
+fn nextTransformArgumentToken(args: []const u8, index: *usize) ?[]const u8 {
+    while (index.* < args.len and (std.ascii.isWhitespace(args[index.*]) or args[index.*] == ',')) : (index.* += 1) {}
+    if (index.* >= args.len) return null;
+
+    const start = index.*;
+    while (index.* < args.len and args[index.*] != ',' and !std.ascii.isWhitespace(args[index.*])) : (index.* += 1) {}
+    return std.mem.trim(u8, args[start..index.*], &std.ascii.whitespace);
+}
+
+fn parseTranslateLength(token: []const u8, basis: i32, viewport: i32) ?i32 {
+    const trimmed = std.mem.trim(u8, token, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+    return parseCssLengthPxWithContext(trimmed, basis, viewport);
+}
+
+fn resolveTranslateTransform(
+    value: []const u8,
+    reference_width: i32,
+    reference_height: i32,
+    viewport_width: i32,
+    viewport_height: i32,
+) ?TranslateTransform {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0 or std.ascii.eqlIgnoreCase(trimmed, "none")) {
+        return null;
+    }
+
+    var translate: TranslateTransform = .{};
+    var cursor: usize = 0;
+    while (cursor < trimmed.len) {
+        while (cursor < trimmed.len and std.ascii.isWhitespace(trimmed[cursor])) : (cursor += 1) {}
+        if (cursor >= trimmed.len) break;
+
+        const name_start = cursor;
+        while (cursor < trimmed.len and trimmed[cursor] != '(' and !std.ascii.isWhitespace(trimmed[cursor])) : (cursor += 1) {}
+        const name_end = cursor;
+        while (cursor < trimmed.len and std.ascii.isWhitespace(trimmed[cursor])) : (cursor += 1) {}
+        if (cursor >= trimmed.len or trimmed[cursor] != '(') {
+            return null;
+        }
+
+        const name = std.mem.trim(u8, trimmed[name_start..name_end], &std.ascii.whitespace);
+        cursor += 1;
+        const args_start = cursor;
+        var depth: usize = 1;
+        while (cursor < trimmed.len and depth > 0) : (cursor += 1) {
+            switch (trimmed[cursor]) {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if (depth == 0) break;
+                },
+                else => {},
+            }
+        }
+        if (depth != 0 or cursor >= trimmed.len) {
+            return null;
+        }
+
+        const args = trimmed[args_start..cursor];
+        cursor += 1;
+
+        if (std.ascii.eqlIgnoreCase(name, "translate")) {
+            var arg_index: usize = 0;
+            const x_token = nextTransformArgumentToken(args, &arg_index) orelse return null;
+            const y_token = nextTransformArgumentToken(args, &arg_index);
+            const x = parseTranslateLength(x_token, reference_width, viewport_width) orelse return null;
+            const y = if (y_token) |token|
+                parseTranslateLength(token, reference_height, viewport_height) orelse return null
+            else
+                0;
+            translate.x += x;
+            translate.y += y;
+            continue;
+        }
+
+        if (std.ascii.eqlIgnoreCase(name, "translatex")) {
+            var arg_index: usize = 0;
+            const x_token = nextTransformArgumentToken(args, &arg_index) orelse return null;
+            translate.x += parseTranslateLength(x_token, reference_width, viewport_width) orelse return null;
+            continue;
+        }
+
+        if (std.ascii.eqlIgnoreCase(name, "translatey")) {
+            var arg_index: usize = 0;
+            const y_token = nextTransformArgumentToken(args, &arg_index) orelse return null;
+            translate.y += parseTranslateLength(y_token, reference_height, viewport_height) orelse return null;
+            continue;
+        }
+
+        if (std.ascii.eqlIgnoreCase(name, "translate3d")) {
+            var arg_index: usize = 0;
+            const x_token = nextTransformArgumentToken(args, &arg_index) orelse return null;
+            const y_token = nextTransformArgumentToken(args, &arg_index);
+            translate.x += parseTranslateLength(x_token, reference_width, viewport_width) orelse return null;
+            if (y_token) |token| {
+                translate.y += parseTranslateLength(token, reference_height, viewport_height) orelse return null;
+            }
+            continue;
+        }
+
+        return null;
+    }
+
+    return translate;
+}
+
+fn applyTranslateTransformToRecentOutput(
+    self: *Painter,
+    command_start: usize,
+    link_start: usize,
+    control_start: usize,
+    raw_transform: []const u8,
+    reference_width: i32,
+    reference_height: i32,
+) void {
+    const translate = resolveTranslateTransform(
+        raw_transform,
+        reference_width,
+        reference_height,
+        self.opts.viewport_width,
+        self.opts.viewport_height,
+    ) orelse return;
+    if (translate.x == 0 and translate.y == 0) {
+        return;
+    }
+    translateRecentOutput(self, command_start, link_start, control_start, translate.x, translate.y);
 }
 
 fn recentOutputBounds(self: *const Painter, command_start: usize, link_start: usize, control_start: usize) ?Bounds {
@@ -1016,6 +1150,10 @@ const Painter = struct {
         const font_family = text_style.font_family;
         const font_weight = text_style.font_weight;
         const italic = text_style.italic;
+        const transform_value = std.mem.trim(u8, decl.getPropertyValue("transform", self.page), &std.ascii.whitespace);
+        const element_command_start = self.list.commands.items.len;
+        const element_link_start = self.list.link_regions.items.len;
+        const element_control_start = self.list.control_regions.items.len;
         const inline_content_flow = (block_like or inline_atomic_box) and try usesInlineContentFlowContainer(element, decl, self.page, display);
         const position_value = resolveCssPropertyValue(decl, self.page, element, "position");
         const out_of_flow_positioned = isOutOfFlowPositioned(position_value);
@@ -1040,8 +1178,6 @@ const Painter = struct {
         );
 
         if (inline_passthrough) {
-            const command_start = self.list.commands.items.len;
-
             if (!canvas_surface_present) {
                 var child_it = element.asNode().childrenIterator();
                 while (child_it.next()) |child| {
@@ -1049,7 +1185,20 @@ const Painter = struct {
                 }
             }
 
-            try self.appendInlineLinkRegionsForCommandRange(element, command_start);
+            try self.appendInlineLinkRegionsForCommandRange(element, element_command_start);
+            if (transform_value.len > 0) {
+                if (recentOutputBounds(self, element_command_start, element_link_start, element_control_start)) |bounds| {
+                    applyTranslateTransformToRecentOutput(
+                        self,
+                        element_command_start,
+                        element_link_start,
+                        element_control_start,
+                        transform_value,
+                        bounds.width,
+                        bounds.height,
+                    );
+                }
+            }
             return;
         }
 
@@ -1114,6 +1263,17 @@ const Painter = struct {
             } else {
                 cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
             }
+            if (transform_value.len > 0) {
+                applyTranslateTransformToRecentOutput(
+                    self,
+                    element_command_start,
+                    element_link_start,
+                    element_control_start,
+                    transform_value,
+                    rect.width,
+                    rect.height,
+                );
+            }
             return;
         }
         if ((block_like or inline_atomic_box) and isTableContainerDisplay(display)) {
@@ -1133,6 +1293,17 @@ const Painter = struct {
                 cursor.advanceInlineLeaf(rect, margins, flowSpacingAfter(tag, block_like));
             } else {
                 cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
+            }
+            if (transform_value.len > 0) {
+                applyTranslateTransformToRecentOutput(
+                    self,
+                    element_command_start,
+                    element_link_start,
+                    element_control_start,
+                    transform_value,
+                    rect.width,
+                    rect.height,
+                );
             }
             return;
         }
@@ -1189,6 +1360,17 @@ const Painter = struct {
                     .opacity = combined_opacity,
                     .color = stroke,
                 });
+            }
+            if (transform_value.len > 0) {
+                applyTranslateTransformToRecentOutput(
+                    self,
+                    element_command_start,
+                    element_link_start,
+                    element_control_start,
+                    transform_value,
+                    rect.width,
+                    rect.height,
+                );
             }
             if (!out_of_flow_positioned) {
                 if (inline_box) {
@@ -1459,6 +1641,17 @@ const Painter = struct {
             try self.list.addControlRegion(self.allocator, region);
         }
 
+        if (transform_value.len > 0) {
+            applyTranslateTransformToRecentOutput(
+                self,
+                element_command_start,
+                element_link_start,
+                element_control_start,
+                transform_value,
+                rect.width,
+                rect.height,
+            );
+        }
         if (out_of_flow_positioned) {
             return;
         }
@@ -7997,6 +8190,150 @@ test "paintDocument anchors fixed boxes to the viewport instead of the parent fl
     try std.testing.expect(blue.x > 760);
     try std.testing.expect(blue.y < 30);
     try std.testing.expect(green.y > 180);
+}
+
+test "paintDocument applies translate transforms to centered interactive boxes" {
+    var page = try testing.pageTest("page/transform_translate_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 420,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), display_list.control_regions.items.len);
+
+    const button = display_list.control_regions.items[0];
+    try std.testing.expect(button.x > 130);
+    try std.testing.expect(button.x < 280);
+    try std.testing.expect(button.y > 50);
+    try std.testing.expect(button.y < 100);
+
+    var centered_chunk: ?TextCommand = null;
+    var translate_chunk: ?TextCommand = null;
+    var shell_chunk: ?TextCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                const piece = std.mem.trim(u8, text.text, &std.ascii.whitespace);
+                if (std.mem.eql(u8, piece, "Centered")) {
+                    centered_chunk = text;
+                } else if (std.mem.eql(u8, piece, "Translate")) {
+                    translate_chunk = text;
+                } else if (std.mem.eql(u8, piece, "Shell")) {
+                    shell_chunk = text;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const centered = centered_chunk orelse return error.CenteredTranslateShellTextMissing;
+    const translated = translate_chunk orelse return error.TranslatedChunkMissing;
+    const shell = shell_chunk orelse return error.ShellChunkMissing;
+
+    try std.testing.expect(centered.x > 170);
+    try std.testing.expect(centered.x < 220);
+    try std.testing.expect(centered.y > 150);
+    try std.testing.expect(centered.y < 180);
+    try std.testing.expect(translated.x > 250);
+    try std.testing.expect(translated.x < 340);
+    try std.testing.expect(translated.y > 150);
+    try std.testing.expect(translated.y < 180);
+    try std.testing.expect(shell.x > 170);
+    try std.testing.expect(shell.x < 220);
+    try std.testing.expect(shell.y > 185);
+    try std.testing.expect(shell.y < 215);
+    try std.testing.expectEqual(@as(usize, 0), display_list.link_regions.items.len);
+}
+
+test "paintDocument translates centered link regions" {
+    var page = try testing.pageTest("page/transform_translate_link_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 420,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), display_list.link_regions.items.len);
+
+    const link = display_list.link_regions.items[0];
+    try std.testing.expect(link.x > 180);
+    try std.testing.expect(link.x < 320);
+    try std.testing.expect(link.y > 250);
+    try std.testing.expect(link.y < 340);
+
+    var centered_chunk: ?TextCommand = null;
+    var translated_chunk: ?TextCommand = null;
+    var link_chunk: ?TextCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                const piece = std.mem.trim(u8, text.text, &std.ascii.whitespace);
+                if (std.mem.eql(u8, piece, "Centered")) {
+                    centered_chunk = text;
+                } else if (std.mem.eql(u8, piece, "Translate")) {
+                    translated_chunk = text;
+                } else if (std.mem.eql(u8, piece, "Link")) {
+                    link_chunk = text;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const centered = centered_chunk orelse return error.CenteredTranslateLinkTextMissing;
+    const translated = translated_chunk orelse return error.TranslatedChunkMissing;
+    const link_text = link_chunk orelse return error.LinkChunkMissing;
+    try std.testing.expect(centered.x > 170);
+    try std.testing.expect(centered.x < 220);
+    try std.testing.expect(centered.y > 150);
+    try std.testing.expect(centered.y < 180);
+    try std.testing.expect(translated.x > 250);
+    try std.testing.expect(translated.x < 340);
+    try std.testing.expect(translated.y > 150);
+    try std.testing.expect(translated.y < 180);
+    try std.testing.expect(link_text.x > 170);
+    try std.testing.expect(link_text.x < 220);
+    try std.testing.expect(link_text.y > 185);
+    try std.testing.expect(link_text.y < 215);
+}
+
+test "getComputedStyle exposes translate transforms and default none" {
+    {
+        var translated_page = try testing.pageTest("page/transform_translate_layout.html");
+        defer translated_page._session.removePage();
+
+        const translated_shell = (try translated_page.window._document.querySelector(.wrap(".center-shell"), translated_page)).?;
+        const translated_style = try translated_page.window.getComputedStyle(translated_shell, null, translated_page);
+        try std.testing.expectEqualStrings("translate(-50%, -50%)", translated_style.asCSSStyleDeclaration().getPropertyValue("transform", translated_page));
+    }
+
+    var plain_page = try testing.pageTest("page/transform_default_layout.html");
+    defer plain_page._session.removePage();
+
+    const plain_box = (try plain_page.window._document.querySelector(.wrap(".plain"), plain_page)).?;
+    const plain_style = try plain_page.window.getComputedStyle(plain_box, null, plain_page);
+    try std.testing.expectEqualStrings("none", plain_style.asCSSStyleDeclaration().getPropertyValue("transform", plain_page));
+}
+
+test "elementFromPoint sees translated button region" {
+    {
+        var button_page = try testing.pageTest("page/transform_translate_layout.html");
+        defer button_page._session.removePage();
+
+        const button = (try button_page.window._document.querySelector(.wrap(".offset-pill button"), button_page)).?;
+        const button_rect = button.getBoundingClientRect(button_page);
+        const button_hit = (try button_page.window._document.elementFromPoint(
+            button_rect.getLeft() + button_rect.getWidth() / 2,
+            button_rect.getTop() + button_rect.getHeight() / 2,
+            button_page,
+        )).?;
+        try std.testing.expect(button_hit == button);
+    }
 }
 
 test "paintDocument centers inline children when text-align is center" {

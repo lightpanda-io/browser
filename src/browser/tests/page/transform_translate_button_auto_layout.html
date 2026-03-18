@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Transform Translate Button Layout - Lightpanda Browser</title>
+<style>
+  html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    background: #f3f5f8;
+    font-family: Arial, sans-serif;
+  }
+
+  .stage {
+    position: relative;
+    width: 640px;
+    height: 420px;
+    background: linear-gradient(#ffffff, #eef2ff);
+    overflow: hidden;
+  }
+
+  .center-shell {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 260px;
+    height: 160px;
+    transform: translate(-50%, -50%);
+    background: #1f6feb;
+    border: 4px solid #0f4aa8;
+    border-radius: 24px;
+    color: #ffffff;
+    text-align: center;
+  }
+
+  .center-shell .title {
+    margin-top: 22px;
+    font-size: 22px;
+    font-weight: 700;
+  }
+
+  .offset-pill {
+    position: absolute;
+    left: 72px;
+    top: 52px;
+    width: 132px;
+    height: 40px;
+    transform: translateX(96px);
+    background: #e11d48;
+    color: #ffffff;
+    border-radius: 999px;
+    text-align: center;
+    line-height: 40px;
+    font-weight: 700;
+  }
+
+  .offset-pill button {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .footer {
+    position: absolute;
+    left: 24px;
+    top: 360px;
+    color: #334155;
+    font-size: 18px;
+  }
+</style>
+<script>
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      document.title = 'Transform Translate Button Clicked - Lightpanda Browser';
+    }, 100);
+  });
+</script>
+</head>
+<body>
+  <div class="stage">
+    <div class="center-shell">
+      <div class="title">Centered Translate Shell</div>
+    </div>
+    <div class="offset-pill">
+      <button onclick="document.title='Transform Translate Button Clicked - Lightpanda Browser'">Button</button>
+    </div>
+    <div class="footer">Footer baseline</div>
+  </div>
+</body>
+</html>

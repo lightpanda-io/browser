@@ -121,6 +121,18 @@
 }
 </script>
 
+<script id="transformDefault">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  const computed = getComputedStyle(div);
+  testing.expectEqual('none', computed.transform);
+  div.style.transform = 'translate(20px, 10px)';
+  testing.expectEqual('translate(20px, 10px)', div.style.transform);
+}
+</script>
+
 <script id="propertyAssignment">
 {
   const div = $('#test-div');
