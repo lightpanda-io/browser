@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Box Sizing Layout - Lightpanda Browser</title>
+  <style>
+    body {
+      margin: 0;
+      background: #ffffff;
+      font-family: Arial, sans-serif;
+    }
+
+    .wrap {
+      padding: 56px 0 0 64px;
+    }
+
+    .box {
+      display: block;
+      margin: 0 0 24px 0;
+    }
+
+    #border-box {
+      width: 160px;
+      height: 40px;
+      padding: 20px;
+      box-sizing: border-box;
+      background: #1d63c8;
+    }
+
+    #content-box {
+      width: 160px;
+      height: 40px;
+      padding: 20px;
+      box-sizing: content-box;
+      background: #c83b3b;
+    }
+
+    #below {
+      margin-left: 64px;
+      color: #333333;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="border-box" class="box"></div>
+    <div id="content-box" class="box"></div>
+  </div>
+  <p id="below">Below content</p>
+</body>
+</html>

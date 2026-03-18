@@ -1203,7 +1203,7 @@ const Painter = struct {
         }
 
         const available_width = resolveAvailableWidthForElement(self, element, cursor.*, decl, margins, out_of_flow_positioned);
-        const width = try resolveLayoutWidth(
+        var width = try resolveLayoutWidth(
             self,
             element,
             decl,
@@ -1219,6 +1219,12 @@ const Painter = struct {
         if (width <= 0) {
             return;
         }
+        const content_box_sizing = isContentBoxSizing(decl, self.page);
+        const has_explicit_width = hasExplicitDimensionValue(decl, self.page, "width");
+        const has_explicit_height = hasExplicitDimensionValue(decl, self.page, "height");
+        const box_sizing_extra_width = if (content_box_sizing and has_explicit_width) padding.horizontal() else 0;
+        const box_sizing_extra_height = if (content_box_sizing and has_explicit_height) padding.vertical() else 0;
+        width += box_sizing_extra_width;
 
         const pos = if (out_of_flow_positioned)
             resolveOutOfFlowPosition(self, element, cursor.*, decl, margins, width)
@@ -1329,8 +1335,8 @@ const Painter = struct {
             const height = clampBoxHeight(
                 min_required_height,
                 css_max_height,
-                if (explicit_height > 0)
-                    explicit_height
+                if (has_explicit_height)
+                    explicit_height + box_sizing_extra_height
                 else
                     padding.top + child_height + padding.bottom,
             );
@@ -1430,8 +1436,8 @@ const Painter = struct {
         const height = clampBoxHeight(
             min_required_height,
             css_max_height,
-            if (explicit_height > 0)
-                explicit_height
+            if (has_explicit_height)
+                explicit_height + box_sizing_extra_height
             else
                 padding.top + own_content_height + child_gap + child_height + padding.bottom,
         );
@@ -1707,6 +1713,8 @@ const Painter = struct {
         const min_height_css = resolveCssMinHeightPx(self, element, decl, self.page, self.opts.viewport_height);
         const max_height_css = resolveCssMaxHeightPx(self, element, decl, self.page, self.opts.viewport_height);
         const min_required_height = @max(resolveMinimumHeight(self, tag, block_like, 0), min_height_css);
+        const has_explicit_height = hasExplicitDimensionValue(decl, self.page, "height");
+        const box_sizing_extra_height = if (isContentBoxSizing(decl, self.page) and has_explicit_height) padding.vertical() else 0;
 
         const rect: Bounds = .{
             .x = x,
@@ -1715,8 +1723,8 @@ const Painter = struct {
             .height = clampBoxHeight(
                 min_required_height,
                 max_height_css,
-                if (explicit_height > 0)
-                    explicit_height
+                if (has_explicit_height)
+                    explicit_height + box_sizing_extra_height
                 else
                     padding.top + content_height + padding.bottom,
             ),
@@ -1932,6 +1940,8 @@ const Painter = struct {
         const min_height_css = resolveCssMinHeightPx(self, element, decl, self.page, self.opts.viewport_height);
         const max_height_css = resolveCssMaxHeightPx(self, element, decl, self.page, self.opts.viewport_height);
         const min_required_height = @max(resolveMinimumHeight(self, tag, block_like, 0), min_height_css);
+        const has_explicit_height = hasExplicitDimensionValue(decl, self.page, "height");
+        const box_sizing_extra_height = if (isContentBoxSizing(decl, self.page) and has_explicit_height) padding.vertical() else 0;
 
         const rect: Bounds = .{
             .x = x,
@@ -1940,8 +1950,8 @@ const Painter = struct {
             .height = clampBoxHeight(
                 min_required_height,
                 max_height_css,
-                if (explicit_height > 0)
-                    explicit_height
+                if (has_explicit_height)
+                    explicit_height + box_sizing_extra_height
                 else
                     padding.top + content_height + padding.bottom,
             ),
@@ -3468,6 +3478,16 @@ fn resolveBorderHorizontalPx(decl: anytype, page: *Page) i32 {
     const left = parseBorderWidthPx(decl.getPropertyValue("border-left-width", page)) orelse shorthand;
     const right = parseBorderWidthPx(decl.getPropertyValue("border-right-width", page)) orelse shorthand;
     return left + right;
+}
+
+fn isContentBoxSizing(decl: anytype, page: *Page) bool {
+    const box_sizing = std.mem.trim(u8, decl.getPropertyValue("box-sizing", page), &std.ascii.whitespace);
+    return std.ascii.eqlIgnoreCase(box_sizing, "content-box");
+}
+
+fn hasExplicitDimensionValue(decl: anytype, page: *Page, property_name: []const u8) bool {
+    const raw_value = std.mem.trim(u8, decl.getPropertyValue(property_name, page), &std.ascii.whitespace);
+    return raw_value.len > 0 and !std.ascii.eqlIgnoreCase(raw_value, "auto");
 }
 
 fn borderSideVisible(style_value: []const u8, width_value: []const u8) bool {
@@ -7658,6 +7678,41 @@ test "paintDocument carries border radius on box commands" {
         },
         else => return error.SquareFillWrongCommand,
     }
+}
+
+test "paintDocument expands content-box dimensions from explicit size" {
+    var page = try testing.pageTest("page/box_sizing_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var border_box: ?Bounds = null;
+    var content_box: ?Bounds = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.b >= 180 and rect.color.r <= 80 and rect.color.g >= 80 and rect.color.g <= 120) {
+                    border_box = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.r >= 170 and rect.color.g <= 100 and rect.color.b <= 120) {
+                    content_box = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const border = border_box orelse return error.BorderBoxMissing;
+    const content = content_box orelse return error.ContentBoxMissing;
+
+    try std.testing.expectEqual(@as(i32, 160), border.width);
+    try std.testing.expectEqual(@as(i32, 40), border.height);
+    try std.testing.expectEqual(@as(i32, 200), content.width);
+    try std.testing.expectEqual(@as(i32, 80), content.height);
+    try std.testing.expectEqual(border.x, content.x);
 }
 
 test "paintDocument uses intrinsic image dimensions and aspect ratio" {

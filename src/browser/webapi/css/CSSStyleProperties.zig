@@ -145,6 +145,7 @@ fn isKnownCSSProperty(dash_case: []const u8) bool {
         .{ "transform", {} },
         .{ "transition", {} },
         .{ "position", {} },
+        .{ "box-sizing", {} },
         .{ "top", {} },
         .{ "bottom", {} },
         .{ "left", {} },

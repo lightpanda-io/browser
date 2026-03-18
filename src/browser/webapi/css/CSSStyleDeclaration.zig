@@ -763,6 +763,9 @@ fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, normalized_name: []
     if (std.mem.eql(u8, normalized_name, "transform")) {
         return "none";
     }
+    if (std.mem.eql(u8, normalized_name, "box-sizing")) {
+        return "border-box";
+    }
 
     if (self._element) |element| {
         if (presentationalPropertyValue(element, normalized_name)) |value| {

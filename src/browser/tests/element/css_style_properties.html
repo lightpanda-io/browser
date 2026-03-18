@@ -158,6 +158,18 @@
 }
 </script>
 
+<script id="boxSizingDefaults">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  const computed = getComputedStyle(div);
+  testing.expectEqual('border-box', computed.boxSizing);
+  div.style.boxSizing = 'content-box';
+  testing.expectEqual('content-box', div.style.boxSizing);
+}
+</script>
+
 <script id="propertyAssignment">
 {
   const div = $('#test-div');

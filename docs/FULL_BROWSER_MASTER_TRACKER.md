@@ -806,6 +806,10 @@ Current state inside Gate 3:
   - bounded tests plus headed probes now cover intrinsic image sizing,
     responsive image shrink-to-fit behavior, semantic background positioning,
     and semantic background sizing on the real screenshot path
+  - explicit `box-sizing: content-box` now expands headed block and control
+    boxes by their padding on the real surface instead of treating all used
+    sizes as border-box, with a focused display-list regression and headed
+    width/height probe proving the content-box expansion path
   - `overflow:hidden` now clips both painted descendants and headed
     interaction for block and flex containers, while generic block/flex
     `height`, `min-height`, and `max-height` now affect the used box height
