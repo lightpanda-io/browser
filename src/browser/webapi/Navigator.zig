@@ -18,8 +18,12 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+
+const log = @import("../../log.zig");
+
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+
 const PluginArray = @import("PluginArray.zig");
 const Permissions = @import("Permissions.zig");
 const StorageManager = @import("StorageManager.zig");
@@ -68,8 +72,7 @@ pub fn getStorage(self: *Navigator) *StorageManager {
 }
 
 pub fn getBattery(_: *const Navigator, page: *Page) !js.Promise {
-    // Battery API is not supported in headless mode.
-    // Return a rejected Promise — callers must .catch() this.
+    log.info(.not_implemented, "navigator.getBattery", .{});
     return page.js.local.?.rejectErrorPromise(.{ .dom_exception = error.NotSupported });
 }
 
