@@ -495,6 +495,11 @@ pub fn terminate(self: *const Env) void {
 }
 
 fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) void {
+    const promise_event = v8.v8__PromiseRejectMessage__GetEvent(&message_handle);
+    if (promise_event != v8.kPromiseRejectWithNoHandler and promise_event != v8.kPromiseHandlerAddedAfterReject) {
+        return;
+    }
+
     const promise_handle = v8.v8__PromiseRejectMessage__GetPromise(&message_handle).?;
     const v8_isolate = v8.v8__Object__GetIsolate(@ptrCast(promise_handle)).?;
     const isolate = js.Isolate{ .handle = v8_isolate };
@@ -508,7 +513,7 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
     };
 
     const page = ctx.page;
-    page.window.unhandledPromiseRejection(.{
+    page.window.unhandledPromiseRejection(promise_event == v8.kPromiseRejectWithNoHandler, .{
         .local = &local,
         .handle = &message_handle,
     }, page) catch |err| {
