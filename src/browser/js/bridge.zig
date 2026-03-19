@@ -118,11 +118,10 @@ pub fn Builder(comptime T: type) type {
                         const ptr = v8.v8__WeakCallbackInfo__GetParameter(handle.?).?;
                         const fc: *Session.FinalizerCallback = @ptrCast(@alignCast(ptr));
 
-                        const session = fc.session;
                         const value_ptr = fc.ptr;
-                        if (session.finalizer_callbacks.contains(@intFromPtr(value_ptr))) {
-                            func(@ptrCast(@alignCast(value_ptr)), false, session);
-                            session.releaseIdentity(value_ptr);
+                        if (fc.identity.finalizer_callbacks.contains(@intFromPtr(value_ptr))) {
+                            func(@ptrCast(@alignCast(value_ptr)), false, fc.session);
+                            fc.releaseIdentity();
                         } else {
                             // A bit weird, but v8 _requires_ that we release it
                             // If we don't. We'll 100% crash.

@@ -301,10 +301,10 @@ fn _persist(self: *const Value, comptime is_global: bool) !(if (is_global) Globa
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
     if (comptime is_global) {
         try ctx.trackGlobal(global);
-        return .{ .handle = global, .session = {} };
+        return .{ .handle = global, .temps = {} };
     }
     try ctx.trackTemp(global);
-    return .{ .handle = global, .session = ctx.session };
+    return .{ .handle = global, .temps = &ctx.identity.temps };
 }
 
 pub fn toZig(self: Value, comptime T: type) !T {
@@ -362,7 +362,7 @@ const GlobalType = enum(u8) {
 fn G(comptime global_type: GlobalType) type {
     return struct {
         handle: v8.Global,
-        session: if (global_type == .temp) *Session else void,
+        temps: if (global_type == .temp) *std.AutoHashMapUnmanaged(usize, v8.Global) else void,
 
         const Self = @This();
 
@@ -382,7 +382,10 @@ fn G(comptime global_type: GlobalType) type {
         }
 
         pub fn release(self: *const Self) void {
-            self.session.releaseTemp(self.handle);
+            if (self.temps.fetchRemove(self.handle.data_ptr)) |kv| {
+                var g = kv.value;
+                v8.v8__Global__Reset(&g);
+            }
         }
     };
 }

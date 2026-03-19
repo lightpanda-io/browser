@@ -20,8 +20,9 @@
 // Multiple contexts (frames) from the same origin share a single Origin,
 // which provides the V8 SecurityToken that allows cross-context access.
 //
-// Note: Identity tracking (mapping Zig instances to v8::Objects) is now
-// handled at the Session level, scoped to the root page lifetime.
+// Note: Identity tracking (mapping Zig instances to v8::Objects) is managed
+// separately via js.Identity - Session has the main world Identity, and
+// IsolatedWorlds have their own Identity instances.
 
 const std = @import("std");
 const js = @import("js.zig");
@@ -44,7 +45,7 @@ key: []const u8,
 security_token: v8.Global,
 
 pub fn init(app: *App, isolate: js.Isolate, key: []const u8) !*Origin {
-    const arena = try app.arena_pool.acquire();
+    const arena = try app.arena_pool.acquire(.{ .debug = "Origin" });
     errdefer app.arena_pool.release(arena);
 
     var hs: js.HandleScope = undefined;

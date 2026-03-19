@@ -79,6 +79,16 @@ local: ?*const js.Local = null,
 
 origin: *Origin,
 
+// Identity tracking for this context. For main world contexts, this points to
+// Session's Identity. For isolated world contexts (CDP inspector), this points
+// to IsolatedWorld's Identity. This ensures same-origin frames share object
+// identity while isolated worlds have separate identity tracking.
+identity: *js.Identity,
+
+// Allocator to use for identity map operations. For main world contexts this is
+// session.page_arena, for isolated worlds it's the isolated world's arena.
+identity_arena: Allocator,
+
 // Unlike other v8 types, like functions or objects, modules are not shared
 // across origins.
 global_modules: std.ArrayList(v8.Global) = .empty,
@@ -202,16 +212,16 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
 }
 
 pub fn trackGlobal(self: *Context, global: v8.Global) !void {
-    return self.session.trackGlobal(global);
+    return self.identity.globals.append(self.identity_arena, global);
 }
 
 pub fn trackTemp(self: *Context, global: v8.Global) !void {
-    return self.session.trackTemp(global);
+    return self.identity.temps.put(self.identity_arena, global.data_ptr, global);
 }
 
 pub fn weakRef(self: *Context, obj: anytype) void {
     const resolved = js.Local.resolveValue(obj);
-    const fc = self.session.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
+    const fc = self.identity.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
@@ -223,7 +233,7 @@ pub fn weakRef(self: *Context, obj: anytype) void {
 
 pub fn safeWeakRef(self: *Context, obj: anytype) void {
     const resolved = js.Local.resolveValue(obj);
-    const fc = self.session.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
+    const fc = self.identity.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
@@ -236,7 +246,7 @@ pub fn safeWeakRef(self: *Context, obj: anytype) void {
 
 pub fn strongRef(self: *Context, obj: anytype) void {
     const resolved = js.Local.resolveValue(obj);
-    const fc = self.session.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
+    const fc = self.identity.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
@@ -244,6 +254,48 @@ pub fn strongRef(self: *Context, obj: anytype) void {
         return;
     };
     v8.v8__Global__ClearWeak(&fc.global);
+}
+
+pub const IdentityResult = struct {
+    value_ptr: *v8.Global,
+    found_existing: bool,
+};
+
+pub fn addIdentity(self: *Context, ptr: usize) !IdentityResult {
+    const gop = try self.identity.identity_map.getOrPut(self.identity_arena, ptr);
+    return .{
+        .value_ptr = gop.value_ptr,
+        .found_existing = gop.found_existing,
+    };
+}
+
+pub fn releaseTemp(self: *Context, global: v8.Global) void {
+    if (self.identity.temps.fetchRemove(global.data_ptr)) |kv| {
+        var g = kv.value;
+        v8.v8__Global__Reset(&g);
+    }
+}
+
+pub fn createFinalizerCallback(
+    self: *Context,
+    global: v8.Global,
+    ptr: *anyopaque,
+    zig_finalizer: *const fn (ptr: *anyopaque, session: *Session) void,
+) !*Session.FinalizerCallback {
+    const session = self.session;
+    const arena = try session.getArena(.{ .debug = "FinalizerCallback" });
+    errdefer session.releaseArena(arena);
+    const fc = try arena.create(Session.FinalizerCallback);
+    fc.* = .{
+        .arena = arena,
+        .session = session,
+        .ptr = ptr,
+        .global = global,
+        .zig_finalizer = zig_finalizer,
+        // Store identity pointer for cleanup when V8 GCs the object
+        .identity = self.identity,
+    };
+    return fc;
 }
 
 // Any operation on the context have to be made from a local.

@@ -489,7 +489,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn createIsolatedWorld(self: *Self, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
             const browser = &self.cdp.browser;
-            const arena = try browser.arena_pool.acquire();
+            const arena = try browser.arena_pool.acquire(.{ .debug = "IsolatedWorld" });
             errdefer browser.arena_pool.release(arena);
 
             const world = try arena.create(IsolatedWorld);
@@ -750,8 +750,13 @@ const IsolatedWorld = struct {
     context: ?*js.Context = null,
     grant_universal_access: bool,
 
+    // Identity tracking for this isolated world (separate from main world).
+    // This ensures CDP inspector contexts don't share v8::Globals with main world.
+    identity: js.Identity = .{},
+
     pub fn deinit(self: *IsolatedWorld) void {
         self.removeContext() catch {};
+        self.identity.deinit();
         self.browser.arena_pool.release(self.arena);
     }
 
@@ -768,7 +773,12 @@ const IsolatedWorld = struct {
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, page: *Page) !*js.Context {
         if (self.context == null) {
-            self.context = try self.browser.env.createContext(page);
+            const ctx = try self.browser.env.createContext(page, .{
+                .identity = &self.identity,
+                .identity_arena = self.arena,
+                .debug_name = "IsolatedContext",
+            });
+            self.context = ctx;
         } else {
             log.warn(.cdp, "not implemented", .{
                 .feature = "createContext: Not implemented second isolated context creation",

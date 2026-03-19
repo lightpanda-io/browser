@@ -17,11 +17,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const ArenaPool = @This();
+
+const IS_DEBUG = builtin.mode == .Debug;
 
 allocator: Allocator,
 retain_bytes: usize,
@@ -30,10 +33,17 @@ free_list: ?*Entry = null,
 free_list_max: u16,
 entry_pool: std.heap.MemoryPool(Entry),
 mutex: std.Thread.Mutex = .{},
+// Debug mode: track acquire/release counts per debug name to detect leaks and double-frees
+_leak_track: if (IS_DEBUG) std.StringHashMapUnmanaged(isize) else void = if (IS_DEBUG) .empty else {},
 
 const Entry = struct {
     next: ?*Entry,
     arena: ArenaAllocator,
+    debug: if (IS_DEBUG) []const u8 else void = if (IS_DEBUG) "" else {},
+};
+
+pub const DebugInfo = struct {
+    debug: []const u8 = "",
 };
 
 pub fn init(allocator: Allocator, free_list_max: u16, retain_bytes: usize) ArenaPool {
@@ -42,10 +52,26 @@ pub fn init(allocator: Allocator, free_list_max: u16, retain_bytes: usize) Arena
         .free_list_max = free_list_max,
         .retain_bytes = retain_bytes,
         .entry_pool = .init(allocator),
+        ._leak_track = if (IS_DEBUG) .empty else {},
     };
 }
 
 pub fn deinit(self: *ArenaPool) void {
+    if (IS_DEBUG) {
+        var has_leaks = false;
+        var it = self._leak_track.iterator();
+        while (it.next()) |kv| {
+            if (kv.value_ptr.* != 0) {
+                std.debug.print("ArenaPool leak detected: '{s}' count={d}\n", .{ kv.key_ptr.*, kv.value_ptr.* });
+                has_leaks = true;
+            }
+        }
+        if (has_leaks) {
+            @panic("ArenaPool: leaked arenas detected");
+        }
+        self._leak_track.deinit(self.allocator);
+    }
+
     var entry = self.free_list;
     while (entry) |e| {
         entry = e.next;
@@ -54,13 +80,21 @@ pub fn deinit(self: *ArenaPool) void {
     self.entry_pool.deinit();
 }
 
-pub fn acquire(self: *ArenaPool) !Allocator {
+pub fn acquire(self: *ArenaPool, dbg: DebugInfo) !Allocator {
     self.mutex.lock();
     defer self.mutex.unlock();
 
     if (self.free_list) |entry| {
         self.free_list = entry.next;
         self.free_list_len -= 1;
+        if (IS_DEBUG) {
+            entry.debug = dbg.debug;
+            const gop = try self._leak_track.getOrPut(self.allocator, dbg.debug);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = 0;
+            }
+            gop.value_ptr.* += 1;
+        }
         return entry.arena.allocator();
     }
 
@@ -68,7 +102,16 @@ pub fn acquire(self: *ArenaPool) !Allocator {
     entry.* = .{
         .next = null,
         .arena = ArenaAllocator.init(self.allocator),
+        .debug = if (IS_DEBUG) dbg.debug else {},
     };
+
+    if (IS_DEBUG) {
+        const gop = try self._leak_track.getOrPut(self.allocator, dbg.debug);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = 0;
+        }
+        gop.value_ptr.* += 1;
+    }
 
     return entry.arena.allocator();
 }
@@ -82,6 +125,19 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
 
     self.mutex.lock();
     defer self.mutex.unlock();
+
+    if (IS_DEBUG) {
+        if (self._leak_track.getPtr(entry.debug)) |count| {
+            count.* -= 1;
+            if (count.* < 0) {
+                std.debug.print("ArenaPool double-free detected: '{s}'\n", .{entry.debug});
+                @panic("ArenaPool: double-free detected");
+            }
+        } else {
+            std.debug.print("ArenaPool release of untracked arena: '{s}'\n", .{entry.debug});
+            @panic("ArenaPool: release of untracked arena");
+        }
+    }
 
     const free_list_len = self.free_list_len;
     if (free_list_len == self.free_list_max) {
@@ -106,7 +162,7 @@ test "arena pool - basic acquire and use" {
     var pool = ArenaPool.init(testing.allocator, 512, 1024 * 16);
     defer pool.deinit();
 
-    const alloc = try pool.acquire();
+    const alloc = try pool.acquire(.{ .debug = "test" });
     const buf = try alloc.alloc(u8, 64);
     @memset(buf, 0xAB);
     try testing.expectEqual(@as(u8, 0xAB), buf[0]);
@@ -118,14 +174,14 @@ test "arena pool - reuse entry after release" {
     var pool = ArenaPool.init(testing.allocator, 512, 1024 * 16);
     defer pool.deinit();
 
-    const alloc1 = try pool.acquire();
+    const alloc1 = try pool.acquire(.{ .debug = "test" });
     try testing.expectEqual(@as(u16, 0), pool.free_list_len);
 
     pool.release(alloc1);
     try testing.expectEqual(@as(u16, 1), pool.free_list_len);
 
     // The same entry should be returned from the free list.
-    const alloc2 = try pool.acquire();
+    const alloc2 = try pool.acquire(.{ .debug = "test" });
     try testing.expectEqual(@as(u16, 0), pool.free_list_len);
     try testing.expectEqual(alloc1.ptr, alloc2.ptr);
 
@@ -136,9 +192,9 @@ test "arena pool - multiple concurrent arenas" {
     var pool = ArenaPool.init(testing.allocator, 512, 1024 * 16);
     defer pool.deinit();
 
-    const a1 = try pool.acquire();
-    const a2 = try pool.acquire();
-    const a3 = try pool.acquire();
+    const a1 = try pool.acquire(.{ .debug = "test1" });
+    const a2 = try pool.acquire(.{ .debug = "test2" });
+    const a3 = try pool.acquire(.{ .debug = "test3" });
 
     // All three must be distinct arenas.
     try testing.expect(a1.ptr != a2.ptr);
@@ -161,8 +217,8 @@ test "arena pool - free list respects max limit" {
     var pool = ArenaPool.init(testing.allocator, 1, 1024 * 16);
     defer pool.deinit();
 
-    const a1 = try pool.acquire();
-    const a2 = try pool.acquire();
+    const a1 = try pool.acquire(.{ .debug = "test1" });
+    const a2 = try pool.acquire(.{ .debug = "test2" });
 
     pool.release(a1);
     try testing.expectEqual(@as(u16, 1), pool.free_list_len);
@@ -176,7 +232,7 @@ test "arena pool - reset clears memory without releasing" {
     var pool = ArenaPool.init(testing.allocator, 512, 1024 * 16);
     defer pool.deinit();
 
-    const alloc = try pool.acquire();
+    const alloc = try pool.acquire(.{ .debug = "test" });
 
     const buf = try alloc.alloc(u8, 128);
     @memset(buf, 0xFF);
@@ -200,8 +256,8 @@ test "arena pool - deinit with entries in free list" {
     // detected by the test allocator).
     var pool = ArenaPool.init(testing.allocator, 512, 1024 * 16);
 
-    const a1 = try pool.acquire();
-    const a2 = try pool.acquire();
+    const a1 = try pool.acquire(.{ .debug = "test1" });
+    const a2 = try pool.acquire(.{ .debug = "test2" });
     _ = try a1.alloc(u8, 256);
     _ = try a2.alloc(u8, 512);
     pool.release(a1);

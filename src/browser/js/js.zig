@@ -25,6 +25,7 @@ pub const Env = @import("Env.zig");
 pub const bridge = @import("bridge.zig");
 pub const Caller = @import("Caller.zig");
 pub const Origin = @import("Origin.zig");
+pub const Identity = @import("Identity.zig");
 pub const Context = @import("Context.zig");
 pub const Local = @import("Local.zig");
 pub const Inspector = @import("Inspector.zig");

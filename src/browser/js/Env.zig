@@ -34,6 +34,7 @@ const Snapshot = @import("Snapshot.zig");
 const Inspector = @import("Inspector.zig");
 
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const Window = @import("../webapi/Window.zig");
 
 const JsApis = bridge.JsApis;
@@ -254,8 +255,14 @@ pub fn deinit(self: *Env) void {
     allocator.destroy(self.isolate_params);
 }
 
-pub fn createContext(self: *Env, page: *Page) !*Context {
-    const context_arena = try self.app.arena_pool.acquire();
+pub const ContextParams = struct {
+    identity: *js.Identity,
+    identity_arena: Allocator,
+    debug_name: []const u8 = "Context",
+};
+
+pub fn createContext(self: *Env, page: *Page, params: ContextParams) !*Context {
+    const context_arena = try self.app.arena_pool.acquire(.{ .debug = params.debug_name });
     errdefer self.app.arena_pool.release(context_arena);
 
     const isolate = self.isolate;
@@ -322,12 +329,14 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         .microtask_queue = microtask_queue,
         .script_manager = &page._script_manager,
         .scheduler = .init(context_arena),
+        .identity = params.identity,
+        .identity_arena = params.identity_arena,
     };
 
     {
         // Multiple contexts can be created for the same Window (via CDP). We only
         // need to register the first one.
-        const gop = try session.identity_map.getOrPut(session.page_arena, @intFromPtr(page.window));
+        const gop = try params.identity.identity_map.getOrPut(params.identity_arena, @intFromPtr(page.window));
         if (gop.found_existing == false) {
             // our window wrapped in a v8::Global
             var global_global: v8.Global = undefined;
