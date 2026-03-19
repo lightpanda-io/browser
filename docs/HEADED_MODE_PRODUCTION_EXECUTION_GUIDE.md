@@ -639,6 +639,10 @@ Tasks:
 - document supported emulator or hardware classes, memory floor, input devices,
   and network devices
 - create repeatable boot smoke scripts and artifact capture
+- keep the concrete packaging entry point at
+  `scripts/windows/package_bare_metal_image.ps1` and drive the launch smoke
+  from `tmp-browser-smoke/bare-metal-release/chrome-bare-metal-image-probe.ps1`
+  so a future assistant can reproduce the bundle without guessing
 - keep a fast recovery path for image boot failures
 
 Acceptance:
