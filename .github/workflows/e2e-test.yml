@@ -192,13 +192,15 @@ jobs:
 
       - run: chmod a+x ./lightpanda
 
+      # force a wakup of the auth server before requesting it w/ the test itself
+      - run: curl https://${{ vars.WBA_DOMAIN }}
+
       - name: run wba test
         shell: bash
         run: |
-
           node webbotauth/validator.js &
           VALIDATOR_PID=$!
-          sleep 2
+          sleep 5
 
           exec 3<<< "${{ secrets.WBA_PRIVATE_KEY_PEM }}"
 
