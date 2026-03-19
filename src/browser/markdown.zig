@@ -124,349 +124,359 @@ fn hasVisibleContent(root: *Node) bool {
     return false;
 }
 
-fn ensureNewline(state: *State, writer: *std.Io.Writer) !void {
-    if (!state.last_char_was_newline) {
-        try writer.writeByte('\n');
-        state.last_char_was_newline = true;
+const Context = struct {
+    state: State,
+    writer: *std.Io.Writer,
+    page: *Page,
+
+    fn ensureNewline(self: *Context) !void {
+        if (!self.state.last_char_was_newline) {
+            try self.writer.writeByte('\n');
+            self.state.last_char_was_newline = true;
+        }
     }
-}
+
+    fn render(self: *Context, node: *Node) error{WriteFailed}!void {
+        switch (node._type) {
+            .document, .document_fragment => {
+                try self.renderChildren(node);
+            },
+            .element => |el| {
+                try self.renderElement(el);
+            },
+            .cdata => |cd| {
+                if (node.is(Node.CData.Text)) |_| {
+                    var text = cd.getData().str();
+                    if (self.state.pre_node) |pre| {
+                        if (node.parentNode() == pre and node.nextSibling() == null) {
+                            text = std.mem.trimRight(u8, text, " \t\r\n");
+                        }
+                    }
+                    try self.renderText(text);
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn renderChildren(self: *Context, parent: *Node) !void {
+        var it = parent.childrenIterator();
+        while (it.next()) |child| {
+            try self.render(child);
+        }
+    }
+
+    fn renderElement(self: *Context, el: *Element) !void {
+        const tag = el.getTag();
+
+        if (!isVisibleElement(el)) return;
+
+        // --- Opening Tag Logic ---
+
+        // Ensure block elements start on a new line (double newline for paragraphs etc)
+        if (tag.isBlock() and !self.state.in_table) {
+            try self.ensureNewline();
+            if (shouldAddSpacing(tag)) {
+                try self.writer.writeByte('\n');
+            }
+        } else if (tag == .li or tag == .tr) {
+            try self.ensureNewline();
+        }
+
+        // Prefixes
+        switch (tag) {
+            .h1 => try self.writer.writeAll("# "),
+            .h2 => try self.writer.writeAll("## "),
+            .h3 => try self.writer.writeAll("### "),
+            .h4 => try self.writer.writeAll("#### "),
+            .h5 => try self.writer.writeAll("##### "),
+            .h6 => try self.writer.writeAll("###### "),
+            .ul => {
+                if (self.state.list_depth < self.state.list_stack.len) {
+                    self.state.list_stack[self.state.list_depth] = .{ .type = .unordered, .index = 0 };
+                    self.state.list_depth += 1;
+                }
+            },
+            .ol => {
+                if (self.state.list_depth < self.state.list_stack.len) {
+                    self.state.list_stack[self.state.list_depth] = .{ .type = .ordered, .index = 1 };
+                    self.state.list_depth += 1;
+                }
+            },
+            .li => {
+                const indent = if (self.state.list_depth > 0) self.state.list_depth - 1 else 0;
+                for (0..indent) |_| try self.writer.writeAll("  ");
+
+                if (self.state.list_depth > 0 and self.state.list_stack[self.state.list_depth - 1].type == .ordered) {
+                    const current_list = &self.state.list_stack[self.state.list_depth - 1];
+                    try self.writer.print("{d}. ", .{current_list.index});
+                    current_list.index += 1;
+                } else {
+                    try self.writer.writeAll("- ");
+                }
+                self.state.last_char_was_newline = false;
+            },
+            .table => {
+                self.state.in_table = true;
+                self.state.table_row_index = 0;
+                self.state.table_col_count = 0;
+            },
+            .tr => {
+                self.state.table_col_count = 0;
+                try self.writer.writeByte('|');
+            },
+            .td, .th => {
+                // Note: leading pipe handled by previous cell closing or tr opening
+                self.state.last_char_was_newline = false;
+                try self.writer.writeByte(' ');
+            },
+            .blockquote => {
+                try self.writer.writeAll("> ");
+                self.state.last_char_was_newline = false;
+            },
+            .pre => {
+                try self.writer.writeAll("```\n");
+                self.state.pre_node = el.asNode();
+                self.state.last_char_was_newline = true;
+            },
+            .code => {
+                if (self.state.pre_node == null) {
+                    try self.writer.writeByte('`');
+                    self.state.in_code = true;
+                    self.state.last_char_was_newline = false;
+                }
+            },
+            .b, .strong => {
+                try self.writer.writeAll("**");
+                self.state.last_char_was_newline = false;
+            },
+            .i, .em => {
+                try self.writer.writeAll("*");
+                self.state.last_char_was_newline = false;
+            },
+            .s, .del => {
+                try self.writer.writeAll("~~");
+                self.state.last_char_was_newline = false;
+            },
+            .hr => {
+                try self.writer.writeAll("---\n");
+                self.state.last_char_was_newline = true;
+                return;
+            },
+            .br => {
+                if (self.state.in_table) {
+                    try self.writer.writeByte(' ');
+                } else {
+                    try self.writer.writeByte('\n');
+                    self.state.last_char_was_newline = true;
+                }
+                return;
+            },
+            .img => {
+                try self.writer.writeAll("![");
+                if (el.getAttributeSafe(comptime .wrap("alt"))) |alt| {
+                    try self.escape(alt);
+                }
+                try self.writer.writeAll("](");
+                if (el.getAttributeSafe(comptime .wrap("src"))) |src| {
+                    const absolute_src = URL.resolve(self.page.call_arena, self.page.base(), src, .{ .encode = true }) catch src;
+                    try self.writer.writeAll(absolute_src);
+                }
+                try self.writer.writeAll(")");
+                self.state.last_char_was_newline = false;
+                return;
+            },
+            .anchor => {
+                const has_content = hasVisibleContent(el.asNode());
+                const label = getAnchorLabel(el);
+                const href_raw = el.getAttributeSafe(comptime .wrap("href"));
+
+                if (!has_content and label == null and href_raw == null) return;
+
+                const has_block = hasBlockDescendant(el.asNode());
+                const href = if (href_raw) |h| URL.resolve(self.page.call_arena, self.page.base(), h, .{ .encode = true }) catch h else null;
+
+                if (has_block) {
+                    try self.renderChildren(el.asNode());
+                    if (href) |h| {
+                        if (!self.state.last_char_was_newline) try self.writer.writeByte('\n');
+                        try self.writer.writeAll("([](");
+                        try self.writer.writeAll(h);
+                        try self.writer.writeAll("))\n");
+                        self.state.last_char_was_newline = true;
+                    }
+                    return;
+                }
+
+                if (isStandaloneAnchor(el)) {
+                    if (!self.state.last_char_was_newline) try self.writer.writeByte('\n');
+                    try self.writer.writeByte('[');
+                    if (has_content) {
+                        try self.renderChildren(el.asNode());
+                    } else {
+                        try self.writer.writeAll(label orelse "");
+                    }
+                    try self.writer.writeAll("](");
+                    if (href) |h| {
+                        try self.writer.writeAll(h);
+                    }
+                    try self.writer.writeAll(")\n");
+                    self.state.last_char_was_newline = true;
+                    return;
+                }
+
+                try self.writer.writeByte('[');
+                if (has_content) {
+                    try self.renderChildren(el.asNode());
+                } else {
+                    try self.writer.writeAll(label orelse "");
+                }
+                try self.writer.writeAll("](");
+                if (href) |h| {
+                    try self.writer.writeAll(h);
+                }
+                try self.writer.writeByte(')');
+                self.state.last_char_was_newline = false;
+                return;
+            },
+            .input => {
+                const type_attr = el.getAttributeSafe(comptime .wrap("type")) orelse return;
+                if (std.ascii.eqlIgnoreCase(type_attr, "checkbox")) {
+                    const checked = el.getAttributeSafe(comptime .wrap("checked")) != null;
+                    try self.writer.writeAll(if (checked) "[x] " else "[ ] ");
+                    self.state.last_char_was_newline = false;
+                }
+                return;
+            },
+            else => {},
+        }
+
+        // --- Render Children ---
+        try self.renderChildren(el.asNode());
+
+        // --- Closing Tag Logic ---
+
+        // Suffixes
+        switch (tag) {
+            .pre => {
+                if (!self.state.last_char_was_newline) {
+                    try self.writer.writeByte('\n');
+                }
+                try self.writer.writeAll("```\n");
+                self.state.pre_node = null;
+                self.state.last_char_was_newline = true;
+            },
+            .code => {
+                if (self.state.pre_node == null) {
+                    try self.writer.writeByte('`');
+                    self.state.in_code = false;
+                    self.state.last_char_was_newline = false;
+                }
+            },
+            .b, .strong => {
+                try self.writer.writeAll("**");
+                self.state.last_char_was_newline = false;
+            },
+            .i, .em => {
+                try self.writer.writeAll("*");
+                self.state.last_char_was_newline = false;
+            },
+            .s, .del => {
+                try self.writer.writeAll("~~");
+                self.state.last_char_was_newline = false;
+            },
+            .blockquote => {},
+            .ul, .ol => {
+                if (self.state.list_depth > 0) self.state.list_depth -= 1;
+            },
+            .table => {
+                self.state.in_table = false;
+            },
+            .tr => {
+                try self.writer.writeByte('\n');
+                if (self.state.table_row_index == 0) {
+                    try self.writer.writeByte('|');
+                    for (0..self.state.table_col_count) |_| {
+                        try self.writer.writeAll("---|");
+                    }
+                    try self.writer.writeByte('\n');
+                }
+                self.state.table_row_index += 1;
+                self.state.last_char_was_newline = true;
+            },
+            .td, .th => {
+                try self.writer.writeAll(" |");
+                self.state.table_col_count += 1;
+                self.state.last_char_was_newline = false;
+            },
+            else => {},
+        }
+
+        // Post-block newlines
+        if (tag.isBlock() and !self.state.in_table) {
+            try self.ensureNewline();
+        }
+    }
+
+    fn renderText(self: *Context, text: []const u8) !void {
+        if (text.len == 0) return;
+
+        if (self.state.pre_node) |_| {
+            try self.writer.writeAll(text);
+            self.state.last_char_was_newline = text[text.len - 1] == '\n';
+            return;
+        }
+
+        // Check for pure whitespace
+        if (isAllWhitespace(text)) {
+            if (!self.state.last_char_was_newline) {
+                try self.writer.writeByte(' ');
+            }
+            return;
+        }
+
+        // Collapse whitespace
+        var it = std.mem.tokenizeAny(u8, text, " \t\n\r");
+        var first = true;
+        while (it.next()) |word| {
+            if (!first or (!self.state.last_char_was_newline and std.ascii.isWhitespace(text[0]))) {
+                try self.writer.writeByte(' ');
+            }
+
+            try self.escape(word);
+            self.state.last_char_was_newline = false;
+            first = false;
+        }
+
+        // Handle trailing whitespace from the original text
+        if (!first and !self.state.last_char_was_newline and std.ascii.isWhitespace(text[text.len - 1])) {
+            try self.writer.writeByte(' ');
+        }
+    }
+
+    fn escape(self: *Context, text: []const u8) !void {
+        for (text) |c| {
+            switch (c) {
+                '\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '!', '|' => {
+                    try self.writer.writeByte('\\');
+                    try self.writer.writeByte(c);
+                },
+                else => try self.writer.writeByte(c),
+            }
+        }
+    }
+};
 
 pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) !void {
     _ = opts;
-    var state = State{};
-    try render(node, &state, writer, page);
-    if (!state.last_char_was_newline) {
+    var ctx: Context = .{
+        .state = .{},
+        .writer = writer,
+        .page = page,
+    };
+    try ctx.render(node);
+    if (!ctx.state.last_char_was_newline) {
         try writer.writeByte('\n');
-    }
-}
-
-fn render(node: *Node, state: *State, writer: *std.Io.Writer, page: *Page) error{WriteFailed}!void {
-    switch (node._type) {
-        .document, .document_fragment => {
-            try renderChildren(node, state, writer, page);
-        },
-        .element => |el| {
-            try renderElement(el, state, writer, page);
-        },
-        .cdata => |cd| {
-            if (node.is(Node.CData.Text)) |_| {
-                var text = cd.getData().str();
-                if (state.pre_node) |pre| {
-                    if (node.parentNode() == pre and node.nextSibling() == null) {
-                        text = std.mem.trimRight(u8, text, " \t\r\n");
-                    }
-                }
-                try renderText(text, state, writer);
-            }
-        },
-        else => {},
-    }
-}
-
-fn renderChildren(parent: *Node, state: *State, writer: *std.Io.Writer, page: *Page) !void {
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
-        try render(child, state, writer, page);
-    }
-}
-
-fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Page) !void {
-    const tag = el.getTag();
-
-    if (!isVisibleElement(el)) return;
-
-    // --- Opening Tag Logic ---
-
-    // Ensure block elements start on a new line (double newline for paragraphs etc)
-    if (tag.isBlock() and !state.in_table) {
-        try ensureNewline(state, writer);
-        if (shouldAddSpacing(tag)) {
-            try writer.writeByte('\n');
-        }
-    } else if (tag == .li or tag == .tr) {
-        try ensureNewline(state, writer);
-    }
-
-    // Prefixes
-    switch (tag) {
-        .h1 => try writer.writeAll("# "),
-        .h2 => try writer.writeAll("## "),
-        .h3 => try writer.writeAll("### "),
-        .h4 => try writer.writeAll("#### "),
-        .h5 => try writer.writeAll("##### "),
-        .h6 => try writer.writeAll("###### "),
-        .ul => {
-            if (state.list_depth < state.list_stack.len) {
-                state.list_stack[state.list_depth] = .{ .type = .unordered, .index = 0 };
-                state.list_depth += 1;
-            }
-        },
-        .ol => {
-            if (state.list_depth < state.list_stack.len) {
-                state.list_stack[state.list_depth] = .{ .type = .ordered, .index = 1 };
-                state.list_depth += 1;
-            }
-        },
-        .li => {
-            const indent = if (state.list_depth > 0) state.list_depth - 1 else 0;
-            for (0..indent) |_| try writer.writeAll("  ");
-
-            if (state.list_depth > 0 and state.list_stack[state.list_depth - 1].type == .ordered) {
-                const current_list = &state.list_stack[state.list_depth - 1];
-                try writer.print("{d}. ", .{current_list.index});
-                current_list.index += 1;
-            } else {
-                try writer.writeAll("- ");
-            }
-            state.last_char_was_newline = false;
-        },
-        .table => {
-            state.in_table = true;
-            state.table_row_index = 0;
-            state.table_col_count = 0;
-        },
-        .tr => {
-            state.table_col_count = 0;
-            try writer.writeByte('|');
-        },
-        .td, .th => {
-            // Note: leading pipe handled by previous cell closing or tr opening
-            state.last_char_was_newline = false;
-            try writer.writeByte(' ');
-        },
-        .blockquote => {
-            try writer.writeAll("> ");
-            state.last_char_was_newline = false;
-        },
-        .pre => {
-            try writer.writeAll("```\n");
-            state.pre_node = el.asNode();
-            state.last_char_was_newline = true;
-        },
-        .code => {
-            if (state.pre_node == null) {
-                try writer.writeByte('`');
-                state.in_code = true;
-                state.last_char_was_newline = false;
-            }
-        },
-        .b, .strong => {
-            try writer.writeAll("**");
-            state.last_char_was_newline = false;
-        },
-        .i, .em => {
-            try writer.writeAll("*");
-            state.last_char_was_newline = false;
-        },
-        .s, .del => {
-            try writer.writeAll("~~");
-            state.last_char_was_newline = false;
-        },
-        .hr => {
-            try writer.writeAll("---\n");
-            state.last_char_was_newline = true;
-            return;
-        },
-        .br => {
-            if (state.in_table) {
-                try writer.writeByte(' ');
-            } else {
-                try writer.writeByte('\n');
-                state.last_char_was_newline = true;
-            }
-            return;
-        },
-        .img => {
-            try writer.writeAll("![");
-            if (el.getAttributeSafe(comptime .wrap("alt"))) |alt| {
-                try escapeMarkdown(writer, alt);
-            }
-            try writer.writeAll("](");
-            if (el.getAttributeSafe(comptime .wrap("src"))) |src| {
-                const absolute_src = URL.resolve(page.call_arena, page.base(), src, .{ .encode = true }) catch src;
-                try writer.writeAll(absolute_src);
-            }
-            try writer.writeAll(")");
-            state.last_char_was_newline = false;
-            return;
-        },
-        .anchor => {
-            const has_content = hasVisibleContent(el.asNode());
-            const label = getAnchorLabel(el);
-            const href_raw = el.getAttributeSafe(comptime .wrap("href"));
-
-            if (!has_content and label == null and href_raw == null) return;
-
-            const has_block = hasBlockDescendant(el.asNode());
-            const href = if (href_raw) |h| URL.resolve(page.call_arena, page.base(), h, .{ .encode = true }) catch h else null;
-
-            if (has_block) {
-                try renderChildren(el.asNode(), state, writer, page);
-                if (href) |h| {
-                    if (!state.last_char_was_newline) try writer.writeByte('\n');
-                    try writer.writeAll("([](");
-                    try writer.writeAll(h);
-                    try writer.writeAll("))\n");
-                    state.last_char_was_newline = true;
-                }
-                return;
-            }
-
-            if (isStandaloneAnchor(el)) {
-                if (!state.last_char_was_newline) try writer.writeByte('\n');
-                try writer.writeByte('[');
-                if (has_content) {
-                    try renderChildren(el.asNode(), state, writer, page);
-                } else {
-                    try writer.writeAll(label orelse "");
-                }
-                try writer.writeAll("](");
-                if (href) |h| {
-                    try writer.writeAll(h);
-                }
-                try writer.writeAll(")\n");
-                state.last_char_was_newline = true;
-                return;
-            }
-
-            try writer.writeByte('[');
-            if (has_content) {
-                try renderChildren(el.asNode(), state, writer, page);
-            } else {
-                try writer.writeAll(label orelse "");
-            }
-            try writer.writeAll("](");
-            if (href) |h| {
-                try writer.writeAll(h);
-            }
-            try writer.writeByte(')');
-            state.last_char_was_newline = false;
-            return;
-        },
-        .input => {
-            const type_attr = el.getAttributeSafe(comptime .wrap("type")) orelse return;
-            if (std.ascii.eqlIgnoreCase(type_attr, "checkbox")) {
-                const checked = el.getAttributeSafe(comptime .wrap("checked")) != null;
-                try writer.writeAll(if (checked) "[x] " else "[ ] ");
-                state.last_char_was_newline = false;
-            }
-            return;
-        },
-        else => {},
-    }
-
-    // --- Render Children ---
-    try renderChildren(el.asNode(), state, writer, page);
-
-    // --- Closing Tag Logic ---
-
-    // Suffixes
-    switch (tag) {
-        .pre => {
-            if (!state.last_char_was_newline) {
-                try writer.writeByte('\n');
-            }
-            try writer.writeAll("```\n");
-            state.pre_node = null;
-            state.last_char_was_newline = true;
-        },
-        .code => {
-            if (state.pre_node == null) {
-                try writer.writeByte('`');
-                state.in_code = false;
-                state.last_char_was_newline = false;
-            }
-        },
-        .b, .strong => {
-            try writer.writeAll("**");
-            state.last_char_was_newline = false;
-        },
-        .i, .em => {
-            try writer.writeAll("*");
-            state.last_char_was_newline = false;
-        },
-        .s, .del => {
-            try writer.writeAll("~~");
-            state.last_char_was_newline = false;
-        },
-        .blockquote => {},
-        .ul, .ol => {
-            if (state.list_depth > 0) state.list_depth -= 1;
-        },
-        .table => {
-            state.in_table = false;
-        },
-        .tr => {
-            try writer.writeByte('\n');
-            if (state.table_row_index == 0) {
-                try writer.writeByte('|');
-                for (0..state.table_col_count) |_| {
-                    try writer.writeAll("---|");
-                }
-                try writer.writeByte('\n');
-            }
-            state.table_row_index += 1;
-            state.last_char_was_newline = true;
-        },
-        .td, .th => {
-            try writer.writeAll(" |");
-            state.table_col_count += 1;
-            state.last_char_was_newline = false;
-        },
-        else => {},
-    }
-
-    // Post-block newlines
-    if (tag.isBlock() and !state.in_table) {
-        try ensureNewline(state, writer);
-    }
-}
-
-fn renderText(text: []const u8, state: *State, writer: *std.Io.Writer) !void {
-    if (text.len == 0) return;
-
-    if (state.pre_node) |_| {
-        try writer.writeAll(text);
-        state.last_char_was_newline = text[text.len - 1] == '\n';
-        return;
-    }
-
-    // Check for pure whitespace
-    if (isAllWhitespace(text)) {
-        if (!state.last_char_was_newline) {
-            try writer.writeByte(' ');
-        }
-        return;
-    }
-
-    // Collapse whitespace
-    var it = std.mem.tokenizeAny(u8, text, " \t\n\r");
-    var first = true;
-    while (it.next()) |word| {
-        if (!first or (!state.last_char_was_newline and std.ascii.isWhitespace(text[0]))) {
-            try writer.writeByte(' ');
-        }
-
-        try escapeMarkdown(writer, word);
-        state.last_char_was_newline = false;
-        first = false;
-    }
-
-    // Handle trailing whitespace from the original text
-    if (!first and !state.last_char_was_newline and std.ascii.isWhitespace(text[text.len - 1])) {
-        try writer.writeByte(' ');
-    }
-}
-
-fn escapeMarkdown(writer: *std.Io.Writer, text: []const u8) !void {
-    for (text) |c| {
-        switch (c) {
-            '\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '!', '|' => {
-                try writer.writeByte('\\');
-                try writer.writeByte(c);
-            },
-            else => try writer.writeByte(c),
-        }
     }
 }
 

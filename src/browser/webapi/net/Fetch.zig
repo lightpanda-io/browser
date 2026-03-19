@@ -28,6 +28,8 @@ const URL = @import("../../URL.zig");
 const Blob = @import("../Blob.zig");
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
+const AbortSignal = @import("../AbortSignal.zig");
+const DOMException = @import("../DOMException.zig");
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -39,6 +41,7 @@ _buf: std.ArrayList(u8),
 _response: *Response,
 _resolver: js.PromiseResolver.Global,
 _owns_response: bool,
+_signal: ?*AbortSignal,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
@@ -46,6 +49,13 @@ pub const InitOpts = Request.InitOpts;
 pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     const request = try Request.init(input, options, page);
     const resolver = page.js.local.?.createPromiseResolver();
+
+    if (request._signal) |signal| {
+        if (signal._aborted) {
+            resolver.reject("fetch aborted", DOMException.init("The operation was aborted.", "AbortError"));
+            return resolver.promise();
+        }
+    }
 
     if (std.mem.startsWith(u8, request._url, "blob:")) {
         return handleBlobUrl(request._url, resolver, page);
@@ -62,6 +72,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         ._resolver = try resolver.persist(),
         ._response = response,
         ._owns_response = true,
+        ._signal = request._signal,
     };
 
     const http_client = page._session.browser.http_client;
@@ -126,6 +137,12 @@ fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
 fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
 
+    if (self._signal) |signal| {
+        if (signal._aborted) {
+            return false;
+        }
+    }
+
     const arena = self._response._arena;
     if (transfer.getContentLength()) |cl| {
         try self._buf.ensureTotalCapacity(arena, cl);
@@ -175,6 +192,14 @@ fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
 
 fn httpDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
+
+    // Check if aborted
+    if (self._signal) |signal| {
+        if (signal._aborted) {
+            return error.Abort;
+        }
+    }
+
     try self._buf.appendSlice(self._response._arena, data);
 }
 

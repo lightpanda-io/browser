@@ -10,7 +10,7 @@ env:
 
 on:
   schedule:
-    - cron: "23 2 * * *"
+    - cron: "21 2 * * *"
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -19,8 +19,12 @@ jobs:
   wpt-build-release:
     name: zig build release
 
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    env:
+      ARCH: aarch64
+      OS: linux
+
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v6
@@ -28,9 +32,15 @@ jobs:
           fetch-depth: 0
 
       - uses: ./.github/actions/install
+        with:
+          os: ${{env.OS}}
+          arch: ${{env.ARCH}}
+
+      - name: v8 snapshot
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
 
       - name: zig build release
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=generic
 
       - name: upload artifact
         uses: actions/upload-artifact@v7
@@ -43,7 +53,7 @@ jobs:
   wpt-build-runner:
     name: build wpt runner
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -71,8 +81,8 @@ jobs:
       - wpt-build-runner
 
     # use a self host runner.
-    runs-on: lpd-bench-hetzner
-    timeout-minutes: 180
+    runs-on: lpd-wpt-aws
+    timeout-minutes: 600
 
     steps:
       - uses: actions/checkout@v6
@@ -105,8 +115,8 @@ jobs:
       - name: run test with json output
         run: |
           ./wpt serve 2> /dev/null & echo $! > WPT.pid
-          sleep 10s
-          ./wptrunner -lpd-path ./lightpanda -json -concurrency 10 -pool 3 > wpt.json
+          sleep 20s
+          ./wptrunner -lpd-path ./lightpanda -json -concurrency 5 -pool 5 --mem-limit 400 > wpt.json
           kill `cat WPT.pid`
 
       - name: write commit
