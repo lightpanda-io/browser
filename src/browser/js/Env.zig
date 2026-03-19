@@ -300,10 +300,6 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         v8.v8__Object__SetAlignedPointerInInternalField(global_obj, 0, tao);
     }
 
-    // our window wrapped in a v8::Global
-    var global_global: v8.Global = undefined;
-    v8.v8__Global__New(isolate.handle, global_obj, &global_global);
-
     const context_id = self.context_id;
     self.context_id = context_id + 1;
 
@@ -333,6 +329,9 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         // need to register the first one.
         const gop = try session.identity_map.getOrPut(session.page_arena, @intFromPtr(page.window));
         if (gop.found_existing == false) {
+            // our window wrapped in a v8::Global
+            var global_global: v8.Global = undefined;
+            v8.v8__Global__New(isolate.handle, global_obj, &global_global);
             gop.value_ptr.* = global_global;
         }
     }
