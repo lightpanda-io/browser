@@ -67,7 +67,8 @@ _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
 _on_message: ?js.Function.Global = null,
-_on_unhandled_rejection: ?js.Function.Global = null, // TODO: invoke on error
+_on_rejection_handled: ?js.Function.Global = null,
+_on_unhandled_rejection: ?js.Function.Global = null,
 _current_event: ?*Event = null,
 _location: *Location,
 _timer_id: u30 = 0,
@@ -220,6 +221,14 @@ pub fn getOnMessage(self: *const Window) ?js.Function.Global {
 
 pub fn setOnMessage(self: *Window, setter: ?FunctionSetter) void {
     self._on_message = getFunctionFromSetter(setter);
+}
+
+pub fn getOnRejectionHandled(self: *const Window) ?js.Function.Global {
+    return self._on_rejection_handled;
+}
+
+pub fn setOnRejectionHandled(self: *Window, setter: ?FunctionSetter) void {
+    self._on_rejection_handled = getFunctionFromSetter(setter);
 }
 
 pub fn getOnUnhandledRejection(self: *const Window) ?js.Function.Global {
@@ -572,7 +581,7 @@ pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
     return self.scrollTo(.{ .x = absx }, absy, page);
 }
 
-pub fn unhandledPromiseRejection(self: *Window, rejection: js.PromiseRejection, page: *Page) !void {
+pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.PromiseRejection, page: *Page) !void {
     if (comptime IS_DEBUG) {
         log.debug(.js, "unhandled rejection", .{
             .value = rejection.reason(),
@@ -580,13 +589,20 @@ pub fn unhandledPromiseRejection(self: *Window, rejection: js.PromiseRejection, 
         });
     }
 
+    const event_name, const attribute_callback = blk: {
+        if (no_handler) {
+            break :blk .{ "unhandledrejection", self._on_unhandled_rejection };
+        }
+        break :blk .{ "rejectionhandled", self._on_rejection_handled };
+    };
+
     const target = self.asEventTarget();
-    if (page._event_manager.hasDirectListeners(target, "unhandledrejection", self._on_unhandled_rejection)) {
-        const event = (try @import("event/PromiseRejectionEvent.zig").init("unhandledrejection", .{
+    if (page._event_manager.hasDirectListeners(target, event_name, attribute_callback)) {
+        const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
             .reason = if (rejection.reason()) |r| try r.temp() else null,
             .promise = try rejection.promise().temp(),
         }, page)).asEvent();
-        try page._event_manager.dispatchDirect(target, event, self._on_unhandled_rejection, .{ .context = "window.unhandledrejection" });
+        try page._event_manager.dispatchDirect(target, event, attribute_callback, .{ .context = "window.unhandledrejection" });
     }
 }
 
@@ -813,6 +829,7 @@ pub const JsApi = struct {
     pub const onpopstate = bridge.accessor(Window.getOnPopState, Window.setOnPopState, .{});
     pub const onerror = bridge.accessor(Window.getOnError, Window.setOnError, .{});
     pub const onmessage = bridge.accessor(Window.getOnMessage, Window.setOnMessage, .{});
+    pub const onrejectionhandled = bridge.accessor(Window.getOnRejectionHandled, Window.setOnRejectionHandled, .{});
     pub const onunhandledrejection = bridge.accessor(Window.getOnUnhandledRejection, Window.setOnUnhandledRejection, .{});
     pub const event = bridge.accessor(Window.getEvent, null, .{ .null_as_undefined = true });
     pub const fetch = bridge.function(Window.fetch, .{});
