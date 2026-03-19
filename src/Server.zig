@@ -487,8 +487,17 @@ fn buildJSONVersionResponse(
     allocator: Allocator,
     address: net.Address,
 ) ![]const u8 {
-    const body_format = "{{\"webSocketDebuggerUrl\": \"ws://{f}/\"}}";
-    const body_len = std.fmt.count(body_format, .{address});
+    // When binding to 0.0.0.0, use 127.0.0.1 for the WebSocket URL
+    // since 0.0.0.0 is not a routable address for remote clients
+    const addr_bytes = address.getIp4();
+    const host_ip: []const u8 = if (addr_bytes[0] == 0 and addr_bytes[1] == 0 and
+        addr_bytes[2] == 0 and addr_bytes[3] == 0)
+        "127.0.0.1"
+    else
+        std.fmt.comptimePrint("{}.{}.{}.{}", .{ addr_bytes[0], addr_bytes[1], addr_bytes[2], addr_bytes[3] });
+
+    const body_format = "{{\"webSocketDebuggerUrl\": \"ws://" ++ host_ip ++ ":{d}/\"}}";
+    const body_len = std.fmt.count(body_format, .{address.getPort()});
 
     // We send a Connection: Close (and actually close the connection)
     // because chromedp (Go driver) sends a request to /json/version and then
@@ -502,7 +511,7 @@ fn buildJSONVersionResponse(
         "Connection: Close\r\n" ++
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
         body_format;
-    return try std.fmt.allocPrint(allocator, response_format, .{ body_len, address });
+    return try std.fmt.allocPrint(allocator, response_format, .{ body_len, address.getPort() });
 }
 
 pub const timestamp = @import("datetime.zig").timestamp;
