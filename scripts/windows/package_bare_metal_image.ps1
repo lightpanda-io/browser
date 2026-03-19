@@ -185,6 +185,12 @@ $manifest = [ordered]@{
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -Path $manifestPath -Encoding Ascii
 
+$archivePath = Join-Path (Split-Path -Parent (Split-Path -Parent $PackageRoot)) "bare-metal-release.zip"
+if (Test-Path $archivePath) {
+  Remove-Item $archivePath -Force
+}
+Compress-Archive -Path (Join-Path $PackageRoot "*") -DestinationPath $archivePath -Force
+
 $launchResult = $null
 if ($RunSmoke) {
   $launchResult = & $launchScriptPath -Url $Url | ConvertFrom-Json
@@ -195,6 +201,9 @@ $result = [ordered]@{
   manifest_path = $manifestPath
   launch_script = $launchScriptPath
   boot_binary = (Join-Path $bootDir "lightpanda.exe")
+  archive_path = $archivePath
+  archive_exists = (Test-Path $archivePath)
+  archive_size = if (Test-Path $archivePath) { (Get-Item $archivePath).Length } else { 0 }
   launch_result = $launchResult
 }
 

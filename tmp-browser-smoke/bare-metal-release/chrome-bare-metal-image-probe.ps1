@@ -37,6 +37,14 @@ try {
     throw "boot binary missing: $($result.boot_binary)"
   }
 
+  if (-not (Test-Path $result.archive_path)) {
+    throw "archive missing: $($result.archive_path)"
+  }
+
+  if (-not $result.archive_exists -or $result.archive_size -le 0) {
+    throw "archive was not created correctly"
+  }
+
   if (-not $result.launch_result) {
     throw "launch result missing"
   }

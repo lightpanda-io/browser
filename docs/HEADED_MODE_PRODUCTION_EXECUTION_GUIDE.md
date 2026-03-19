@@ -646,6 +646,9 @@ Tasks:
 - use `zig build bare_metal_release -Dtarget=x86_64-windows-msvc -Dtarget_class=bare_metal`
   as the canonical end-to-end validation command for the package-and-smoke
   slice on Windows
+- expect the release bundle archive at
+  `tmp-browser-smoke/bare-metal-release.zip` and keep the smoke artifacts
+  under `tmp-browser-smoke/bare-metal-release/`
 - keep a fast recovery path for image boot failures
 
 Acceptance:

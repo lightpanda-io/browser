@@ -113,6 +113,7 @@ $artifacts = @(
     (New-ArtifactRecord -Path (Join-Path $RepoRoot "lightpanda-slice.pdb") -Category "Slice output" -DefaultClean $true -Reason "Debug symbols for manual local slice binary." -Kind "file"),
     (New-ArtifactRecord -Path (Join-Path $RepoRoot "lightpanda-slice.lib") -Category "Slice output" -DefaultClean $true -Reason "Import library for manual local slice binary." -Kind "file"),
     (New-ArtifactRecord -Path (Join-Path $RepoRoot "tmp-browser-smoke\bare-metal-release") -Category "Slice output" -DefaultClean $true -Reason "Packaged bare-metal launch bundle and its smoke artifacts." -Kind "directory"),
+    (New-ArtifactRecord -Path (Join-Path $RepoRoot "tmp-browser-smoke\bare-metal-release.zip") -Category "Slice output" -DefaultClean $true -Reason "Packaged bare-metal release archive." -Kind "file"),
     (New-ArtifactRecord -Path (Join-Path $RepoRoot ".lp-cache") -Category "Dependency cache" -DefaultClean $false -Reason "Bootstrap cache for downloaded tools/dependencies. Deleting is safe but costly to regenerate." -Kind "directory"),
     (New-ArtifactRecord -Path (Join-Path $RepoRoot ".lp-cache-win") -Category "Dependency cache" -DefaultClean $false -Reason "Windows V8/depot_tools cache. Large and expensive to rebuild." -Kind "directory"),
     (New-ArtifactRecord -Path (Join-Path $RepoRoot "zig-out") -Category "Primary output" -DefaultClean $false -Reason "Current compiled outputs. Usually keep unless you want a full artifact reset." -Kind "directory")
