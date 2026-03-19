@@ -78,6 +78,21 @@ pub fn createError(self: Isolate, msg: []const u8) *const v8.Value {
     return v8.v8__Exception__Error(message).?;
 }
 
+pub fn createRangeError(self: Isolate, msg: []const u8) *const v8.Value {
+    const message = self.initStringHandle(msg);
+    return v8.v8__Exception__RangeError(message).?;
+}
+
+pub fn createReferenceError(self: Isolate, msg: []const u8) *const v8.Value {
+    const message = self.initStringHandle(msg);
+    return v8.v8__Exception__ReferenceError(message).?;
+}
+
+pub fn createSyntaxError(self: Isolate, msg: []const u8) *const v8.Value {
+    const message = self.initStringHandle(msg);
+    return v8.v8__Exception__SyntaxError(message).?;
+}
+
 pub fn createTypeError(self: Isolate, msg: []const u8) *const v8.Value {
     const message = self.initStringHandle(msg);
     return v8.v8__Exception__TypeError(message).?;
