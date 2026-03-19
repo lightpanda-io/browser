@@ -1,13 +1,24 @@
 [CmdletBinding()]
 param(
-  [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
-  [string]$BrowserExe = $(Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path "zig-out\bin\lightpanda.exe"),
-  [string]$PackageRoot = $(Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path "tmp-browser-smoke\bare-metal-release\image"),
+  [string]$RepoRoot,
+  [string]$BrowserExe,
+  [string]$PackageRoot,
   [string]$Url = "https://example.com/",
   [switch]$RunSmoke
 )
 
 $ErrorActionPreference = 'Stop'
+
+$scriptRoot = $PSScriptRoot
+if (-not $RepoRoot) {
+  $RepoRoot = (Resolve-Path (Join-Path $scriptRoot "..\..")).Path
+}
+if (-not $BrowserExe) {
+  $BrowserExe = Join-Path $RepoRoot "zig-out\bin\lightpanda.exe"
+}
+if (-not $PackageRoot) {
+  $PackageRoot = Join-Path $RepoRoot "tmp-browser-smoke\bare-metal-release\image"
+}
 
 function New-BareMetalLaunchScript {
   param(

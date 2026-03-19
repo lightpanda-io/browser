@@ -169,6 +169,26 @@ pub fn build(b: *Build) !void {
         const run_step = b.step("legacy_test", "Run the app");
         run_step.dependOn(&run_cmd.step);
     }
+
+    if (target_class == .bare_metal and target.result.os.tag == .windows) {
+        const release_cmd = b.addSystemCommand(&.{
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/windows/package_bare_metal_image.ps1",
+            "-PackageRoot",
+            "tmp-browser-smoke/bare-metal-release/image",
+            "-RunSmoke",
+            "-Url",
+            "https://example.com/",
+        });
+        release_cmd.step.dependOn(b.getInstallStep());
+
+        const release_step = b.step("bare_metal_release", "Package and smoke the bare-metal launch bundle");
+        release_step.dependOn(&release_cmd.step);
+    }
 }
 
 fn installArtifactCompat(b: *Build, artifact: *Build.Step.Compile, is_msvc: bool) void {
