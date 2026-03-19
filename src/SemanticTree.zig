@@ -38,6 +38,7 @@ page: *Page,
 arena: std.mem.Allocator,
 prune: bool = true,
 interactive_only: bool = false,
+max_depth: ?u32 = null,
 
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
     var visitor = JsonVisitor{ .jw = jw, .tree = self };
@@ -46,7 +47,7 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
-    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets) catch |err| {
+    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets, 0) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -59,7 +60,7 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
-    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets) catch |err| {
+    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets, 0) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -83,7 +84,11 @@ const NodeData = struct {
     node_name: []const u8,
 };
 
-fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_name: ?[]const u8, visitor: anytype, index: usize, listener_targets: interactive.ListenerTargetMap) !void {
+fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_name: ?[]const u8, visitor: anytype, index: usize, listener_targets: interactive.ListenerTargetMap, current_depth: u32) !void {
+    if (self.max_depth) |max| {
+        if (current_depth > max) return;
+    }
+
     // 1. Skip non-content nodes
     if (node.is(Element)) |el| {
         const tag = el.getTag();
@@ -230,7 +235,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
             }
             gop.value_ptr.* += 1;
 
-            try self.walk(child, xpath_buffer, name, visitor, gop.value_ptr.*, listener_targets);
+            try self.walk(child, xpath_buffer, name, visitor, gop.value_ptr.*, listener_targets, current_depth + 1);
         }
     }
 

@@ -70,7 +70,9 @@ pub const tool_list = [_]protocol.Tool{
             \\{
             \\  "type": "object",
             \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." }
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." },
+            \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root." },
+            \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
             \\  }
             \\}
         ),
@@ -161,6 +163,8 @@ const ToolStreamingText = struct {
     action: enum { markdown, links, semantic_tree },
     registry: ?*CDPNode.Registry = null,
     arena: ?std.mem.Allocator = null,
+    backendNodeId: ?u32 = null,
+    maxDepth: ?u32 = null,
 
     pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) !void {
         try jw.beginWriteRaw();
@@ -196,12 +200,24 @@ const ToolStreamingText = struct {
                 }
             },
             .semantic_tree => {
+                var root_node = self.page.document.asNode();
+                if (self.backendNodeId) |node_id| {
+                    if (self.registry) |registry| {
+                        if (registry.lookup_by_id.get(node_id)) |n| {
+                            root_node = n.dom;
+                        } else {
+                            log.warn(.mcp, "semantic_tree id {} missing", .{node_id});
+                        }
+                    }
+                }
+
                 const st = lp.SemanticTree{
-                    .dom_node = self.page.document.asNode(),
+                    .dom_node = root_node,
                     .registry = self.registry.?,
                     .page = self.page,
                     .arena = self.arena.?,
                     .prune = true,
+                    .max_depth = self.maxDepth,
                 };
 
                 st.textStringify(w) catch |err| {
@@ -328,9 +344,13 @@ fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
 fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const TreeParams = struct {
         url: ?[:0]const u8 = null,
+        backendNodeId: ?u32 = null,
+        maxDepth: ?u32 = null,
     };
+    var tree_args: TreeParams = .{};
     if (arguments) |args_raw| {
         if (std.json.parseFromValueLeaky(TreeParams, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
+            tree_args = args;
             if (args.url) |u| {
                 try performGoto(server, u, id);
             }
@@ -341,7 +361,7 @@ fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Va
     };
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{ .page = page, .action = .semantic_tree, .registry = &server.node_registry, .arena = arena },
+        .text = .{ .page = page, .action = .semantic_tree, .registry = &server.node_registry, .arena = arena, .backendNodeId = tree_args.backendNodeId, .maxDepth = tree_args.maxDepth },
     }};
     try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
 }

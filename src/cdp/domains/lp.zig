@@ -53,12 +53,18 @@ fn getSemanticTree(cmd: anytype) !void {
         format: ?enum { text } = null,
         prune: ?bool = null,
         interactiveOnly: ?bool = null,
+        backendNodeId: ?Node.Id = null,
+        maxDepth: ?u32 = null,
     };
     const params = (try cmd.params(Params)) orelse Params{};
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
-    const dom_node = page.document.asNode();
+
+    const dom_node = if (params.backendNodeId) |nodeId|
+        (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
+    else
+        page.document.asNode();
 
     var st = SemanticTree{
         .dom_node = dom_node,
@@ -67,6 +73,7 @@ fn getSemanticTree(cmd: anytype) !void {
         .arena = cmd.arena,
         .prune = params.prune orelse true,
         .interactive_only = params.interactiveOnly orelse false,
+        .max_depth = params.maxDepth,
     };
 
     if (params.format) |format| {
