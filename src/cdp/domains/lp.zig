@@ -73,7 +73,7 @@ fn getSemanticTree(cmd: anytype) !void {
         .arena = cmd.arena,
         .prune = params.prune orelse true,
         .interactive_only = params.interactiveOnly orelse false,
-        .max_depth = params.maxDepth,
+        .max_depth = params.maxDepth orelse std.math.maxInt(u32) - 1,
     };
 
     if (params.format) |format| {

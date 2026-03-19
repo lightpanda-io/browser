@@ -38,7 +38,7 @@ page: *Page,
 arena: std.mem.Allocator,
 prune: bool = true,
 interactive_only: bool = false,
-max_depth: ?u32 = null,
+max_depth: u32 = std.math.maxInt(u32) - 1,
 
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
     var visitor = JsonVisitor{ .jw = jw, .tree = self };
@@ -85,9 +85,7 @@ const NodeData = struct {
 };
 
 fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_name: ?[]const u8, visitor: anytype, index: usize, listener_targets: interactive.ListenerTargetMap, current_depth: u32) !void {
-    if (self.max_depth) |max| {
-        if (current_depth > max) return;
-    }
+    if (current_depth > self.max_depth) return;
 
     // 1. Skip non-content nodes
     if (node.is(Element)) |el| {
@@ -497,7 +495,7 @@ test "SemanticTree backendDOMNodeId" {
         .arena = testing.arena_allocator,
         .prune = false,
         .interactive_only = false,
-        .max_depth = null,
+        .max_depth = std.math.maxInt(u32) - 1,
     };
 
     const json_str = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});

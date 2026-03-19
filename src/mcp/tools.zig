@@ -206,7 +206,7 @@ const ToolStreamingText = struct {
                         if (registry.lookup_by_id.get(node_id)) |n| {
                             root_node = n.dom;
                         } else {
-                            log.warn(.mcp, "semantic_tree id missing", .{.id = node_id});
+                            log.warn(.mcp, "semantic_tree id missing", .{ .id = node_id });
                         }
                     }
                 }
@@ -217,7 +217,7 @@ const ToolStreamingText = struct {
                     .page = self.page,
                     .arena = self.arena.?,
                     .prune = true,
-                    .max_depth = self.maxDepth,
+                    .max_depth = self.maxDepth orelse std.math.maxInt(u32) - 1,
                 };
 
                 st.textStringify(w) catch |err| {
