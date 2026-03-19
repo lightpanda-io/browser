@@ -225,3 +225,17 @@
     URL.revokeObjectURL(blobUrl);
   });
 </script>
+
+<script id=abort>
+  testing.async(async (restore) => {
+    const controller = new AbortController();
+    controller.abort();
+    try {
+      await fetch('http://127.0.0.1:9582/xhr', { signal: controller.signal });
+      testain.fail('fetch should have been aborted');
+    } catch (e) {
+      restore();
+      testing.expectEqual("AbortError", e.name);
+    }
+  });
+</script>
