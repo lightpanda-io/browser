@@ -222,8 +222,6 @@ pub const WaitUntil = enum {
     domcontentloaded,
     networkidle,
     fixed,
-
-    pub const js_enum_from_string = true;
 };
 
 pub const Fetch = struct {
