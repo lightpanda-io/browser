@@ -100,15 +100,25 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     self.dirty = false;
     errdefer self.dirty = true;
+    const id_rules_count = self.id_rules.count();
+    const class_rules_count = self.class_rules.count();
+    const tag_rules_count = self.tag_rules.count();
+    const other_rules_count = self.other_rules.items.len;
 
     self.page._session.arena_pool.resetRetain(self.arena);
 
-    // Clear all buckets and reset document order
-    self.id_rules = .empty;
-    self.class_rules = .empty;
-    self.tag_rules = .empty;
-    self.other_rules = .empty;
     self.next_doc_order = 0;
+
+    self.id_rules = .empty;
+    try self.id_rules.ensureUnusedCapacity(self.arena, id_rules_count);
+
+    self.class_rules = .empty;
+    try self.class_rules.ensureUnusedCapacity(self.arena, class_rules_count);
+
+    self.tag_rules = .empty;
+    try self.tag_rules.ensureUnusedCapacity(self.arena, tag_rules_count);
+
+    self.other_rules = try .initCapacity(self.arena, other_rules_count);
 
     const sheets = self.page.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
