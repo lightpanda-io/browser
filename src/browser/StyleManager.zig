@@ -478,11 +478,10 @@ const BucketKey = union(enum) {
     other,
 };
 
-/// Returns the bucket key for a compound selector, or null if the selector
-/// ends with a dynamic pseudo-class that we should skip (hover, active, focus, etc.)
+/// Returns the best bucket key for a compound selector, or null if it contains
+/// a dynamic pseudo-class we should skip (hover, active, focus, etc.)
+/// Priority: id > class > tag > other
 fn getBucketKey(compound: Selector.Compound) ?BucketKey {
-    // Iterate parts in reverse to find the most specific bucketing key
-    // Priority: id > class > tag > other
     var best_key: BucketKey = .other;
 
     for (compound.parts) |part| {
