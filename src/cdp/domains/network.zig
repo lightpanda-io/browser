@@ -210,9 +210,21 @@ fn getResponseBody(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const buf = bc.captured_responses.getPtr(request_id) orelse return error.RequestNotFound;
 
+    if (std.unicode.utf8ValidateSlice(buf.items)) {
+        try cmd.sendResult(.{
+            .body = buf.items,
+            .base64Encoded = false,
+        }, .{});
+        return;
+    }
+
+    const encoded_len = std.base64.standard.Encoder.calcSize(buf.items.len);
+    const encoded = try cmd.arena.alloc(u8, encoded_len);
+    _ = std.base64.standard.Encoder.encode(encoded, buf.items);
+
     try cmd.sendResult(.{
-        .body = buf.items,
-        .base64Encoded = false,
+        .body = encoded,
+        .base64Encoded = true,
     }, .{});
 }
 
@@ -522,4 +534,44 @@ test "cdp.Network: cookies" {
         .params = .{ .browserContextId = "BID-S" },
     });
     try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{} }, .{ .id = 10 });
+}
+
+test "cdp.Network.getResponseBody returns plain text for UTF-8 responses" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-GRB", .session_id = "NESI-GRB" });
+    var text_response: std.ArrayList(u8) = .{};
+    try text_response.appendSlice(bc.arena, "hello");
+    try bc.captured_responses.put(bc.arena, 42, text_response);
+
+    try ctx.processMessage(.{
+        .id = 11,
+        .method = "Network.getResponseBody",
+        .params = .{ .requestId = "REQ-42" },
+    });
+    try ctx.expectSentResult(.{
+        .body = "hello",
+        .base64Encoded = false,
+    }, .{ .id = 11 });
+}
+
+test "cdp.Network.getResponseBody base64-encodes non-UTF8 responses" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-GRB-BIN", .session_id = "NESI-GRB-BIN" });
+    var binary_response: std.ArrayList(u8) = .{};
+    try binary_response.appendSlice(bc.arena, &[_]u8{ 0xFF, 0x00, 0x41 });
+    try bc.captured_responses.put(bc.arena, 43, binary_response);
+
+    try ctx.processMessage(.{
+        .id = 12,
+        .method = "Network.getResponseBody",
+        .params = .{ .requestId = "REQ-43" },
+    });
+    try ctx.expectSentResult(.{
+        .body = "/wBB",
+        .base64Encoded = true,
+    }, .{ .id = 12 });
 }
