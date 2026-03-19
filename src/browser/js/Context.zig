@@ -545,13 +545,13 @@ pub fn dynamicModuleCallback(
 
         break :blk js.String.toSliceZ(.{ .local = &local, .handle = resource_name.? }) catch |err| {
             log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback1" });
-            return @constCast((local.rejectPromise("Out of memory") catch return null).handle);
+            return @constCast(local.rejectPromise(.{ .generic_error = "Out of memory" }).handle);
         };
     };
 
     const specifier = js.String.toSliceZ(.{ .local = &local, .handle = v8_specifier.? }) catch |err| {
         log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback2" });
-        return @constCast((local.rejectPromise("Out of memory") catch return null).handle);
+        return @constCast(local.rejectPromise(.{ .generic_error = "Out of memory" }).handle);
     };
 
     const normalized_specifier = self.script_manager.?.resolveSpecifier(
@@ -560,14 +560,14 @@ pub fn dynamicModuleCallback(
         specifier,
     ) catch |err| {
         log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback3" });
-        return @constCast((local.rejectPromise("Out of memory") catch return null).handle);
+        return @constCast(local.rejectPromise(.{ .generic_error = "Out of memory" }).handle);
     };
 
     const promise = self._dynamicModuleCallback(normalized_specifier, resource, &local) catch |err| blk: {
         log.err(.js, "dynamic module callback", .{
             .err = err,
         });
-        break :blk local.rejectPromise("Failed to load module") catch return null;
+        break :blk local.rejectPromise(.{ .generic_error = "Out of memory" });
     };
     return @constCast(promise.handle);
 }

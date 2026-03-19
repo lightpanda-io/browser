@@ -255,7 +255,7 @@ pub fn pipeThrough(self: *ReadableStream, transform: PipeTransform, page: *Page)
 /// Returns a promise that resolves when piping is complete.
 pub fn pipeTo(self: *ReadableStream, destination: *WritableStream, page: *Page) !js.Promise {
     if (self.getLocked()) {
-        return page.js.local.?.rejectPromise("ReadableStream is locked");
+        return page.js.local.?.rejectPromise(.{ .type_error = "ReadableStream is locked" });
     }
 
     const local = page.js.local.?;
