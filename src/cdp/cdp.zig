@@ -191,6 +191,25 @@ pub fn CDPT(comptime TypeProvider: type) type {
             // Stagehand parses the response and error if we don't return a
             // correct one for this call.
             if (std.mem.eql(u8, method, "Page.getFrameTree")) {
+                // If a real page already exists (connectOverCDP flow), return
+                // its actual frame ID so that subsequent lifecycle events
+                // (frameNavigated, etc.) match the driver's frame tracking.
+                if (command.cdp.browser_context) |*bc| {
+                    if (bc.target_id) |*target_id| {
+                        return command.sendResult(.{
+                            .frameTree = .{
+                                .frame = .{
+                                    .id = target_id,
+                                    .loaderId = "LOADERID24DD2FD56CF1EF33C965C79C",
+                                    .securityOrigin = URL_BASE,
+                                    .url = bc.getURL() orelse "about:blank",
+                                    .secureContextType = "Secure",
+                                },
+                            },
+                        }, .{});
+                    }
+                }
+                // No real page yet - return the synthetic STARTUP frame ID.
                 return command.sendResult(.{
                     .frameTree = .{
                         .frame = .{
@@ -985,5 +1004,41 @@ test "cdp: STARTUP sessionId" {
         _ = try ctx.loadBrowserContext(.{ .session_id = "SESS-2" });
         try ctx.processMessage(.{ .id = 4, .method = "Hi", .sessionId = "STARTUP" });
         try ctx.expectSentResult(null, .{ .id = 4, .index = 0, .session_id = "STARTUP" });
+    }
+}
+
+test "cdp: STARTUP getFrameTree returns real frame ID when page exists" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    {
+        // no browser context - should return TID-STARTUP
+        try ctx.processMessage(.{ .id = 1, .method = "Page.getFrameTree", .sessionId = "STARTUP" });
+        try ctx.expectSentResult(.{
+            .frameTree = .{
+                .frame = .{
+                    .id = "TID-STARTUP",
+                    .loaderId = "LOADERID24DD2FD56CF1EF33C965C79C",
+                    .url = "about:blank",
+                    .secureContextType = "Secure",
+                },
+            },
+        }, .{ .id = 1, .session_id = "STARTUP" });
+    }
+
+    {
+        // browser context with target_id - should return real frame ID
+        _ = try ctx.loadBrowserContext(.{ .target_id = "TID-000000000X".* });
+        try ctx.processMessage(.{ .id = 2, .method = "Page.getFrameTree", .sessionId = "STARTUP" });
+        try ctx.expectSentResult(.{
+            .frameTree = .{
+                .frame = .{
+                    .id = "TID-000000000X",
+                    .loaderId = "LOADERID24DD2FD56CF1EF33C965C79C",
+                    .url = "about:blank",
+                    .secureContextType = "Secure",
+                },
+            },
+        }, .{ .id = 2, .session_id = "STARTUP" });
     }
 }
