@@ -1,18 +1,51 @@
-// src/browser/webapi/StorageManager.zig
-// Minimal stub for navigator.storage
-// https://storage.spec.whatwg.org/#storagemanager
+// Copyright (C) 2023-2026 Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 
+pub fn registerTypes() []const type {
+    return &.{ StorageManager, StorageEstimate };
+}
+
 const StorageManager = @This();
+
 _pad: bool = false,
 
-pub const init: StorageManager = .{};
+pub fn estimate(_: *const StorageManager, page: *Page) !js.Promise {
+    const est = try page._factory.create(StorageEstimate{
+        ._usage = 0,
+        ._quota = 1024 * 1024 * 1024, // 1 GiB
+    });
+    return page.js.local.?.resolvePromise(est);
+}
 
 const StorageEstimate = struct {
-    quota: u64,
-    usage: u64,
+    _quota: u64,
+    _usage: u64,
+
+    fn getUsage(self: *const StorageEstimate) u64 {
+        return self._usage;
+    }
+
+    fn getQuota(self: *const StorageEstimate) u64 {
+        return self._quota;
+    }
 
     pub const JsApi = struct {
         pub const bridge = js.Bridge(StorageEstimate);
@@ -20,29 +53,11 @@ const StorageEstimate = struct {
             pub const name = "StorageEstimate";
             pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
-            pub const empty_with_no_proto = true;
         };
         pub const quota = bridge.accessor(getQuota, null, .{});
         pub const usage = bridge.accessor(getUsage, null, .{});
     };
-
-    fn getQuota(self: *const StorageEstimate) u64 {
-        return self.quota;
-    }
-    fn getUsage(self: *const StorageEstimate) u64 {
-        return self.usage;
-    }
 };
-
-// Returns a resolved Promise<StorageEstimate> with plausible stub values.
-// quota = 1GB, usage = 0 (headless browser has no real storage)
-pub fn estimate(_: *const StorageManager, page: *Page) !js.Promise {
-    const est = try page._factory.create(StorageEstimate{
-        .quota = 1024 * 1024 * 1024, // 1 GiB
-        .usage = 0,
-    });
-    return js.Promise.resolve(est, page);
-}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(StorageManager);

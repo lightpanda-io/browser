@@ -27,8 +27,8 @@ const StorageManager = @import("StorageManager.zig");
 const Navigator = @This();
 _pad: bool = false,
 _plugins: PluginArray = .{},
-_permissions: Permissions = Permissions.init,
-_storage: StorageManager = StorageManager.init,
+_permissions: Permissions = .{},
+_storage: StorageManager = .{},
 
 pub const init: Navigator = .{};
 
@@ -70,7 +70,7 @@ pub fn getStorage(self: *Navigator) *StorageManager {
 pub fn getBattery(_: *const Navigator, page: *Page) !js.Promise {
     // Battery API is not supported in headless mode.
     // Return a rejected Promise — callers must .catch() this.
-    return js.Promise.reject(error.NotSupportedError, page);
+    return page.js.local.?.rejectErrorPromise(.{ .dom_exception = error.NotSupported });
 }
 
 pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, page: *const Page) !void {
@@ -179,3 +179,8 @@ pub const JsApi = struct {
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
 };
+
+const testing = @import("../../testing.zig");
+test "WebApi: Navigator" {
+    try testing.htmlRunner("navigator", .{});
+}
