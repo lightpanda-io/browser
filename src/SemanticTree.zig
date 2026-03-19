@@ -73,7 +73,7 @@ const OptionData = struct {
 };
 
 const NodeData = struct {
-    id: u32,
+    id: CDPNode.Id,
     axn: AXNode,
     role: []const u8,
     name: ?[]const u8,
