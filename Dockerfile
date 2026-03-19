@@ -53,8 +53,7 @@ RUN zig build -Doptimize=ReleaseFast \
 # build release
 RUN zig build -Doptimize=ReleaseFast \
     -Dsnapshot_path=../../snapshot.bin \
-    -Dprebuilt_v8_path=v8/libc_v8.a \
-    -Dgit_commit=$(git rev-parse --short HEAD)
+    -Dprebuilt_v8_path=v8/libc_v8.a
 
 FROM debian:stable-slim
 

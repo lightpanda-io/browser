@@ -47,7 +47,7 @@ pub noinline fn crash(
                 writer.print("\nreason: {s}\n", .{reason}) catch abort();
                 writer.print("OS: {s}\n", .{@tagName(builtin.os.tag)}) catch abort();
                 writer.print("mode: {s}\n", .{@tagName(builtin.mode)}) catch abort();
-                writer.print("version: {s}\n", .{lp.build_config.git_commit}) catch abort();
+                writer.print("version: {s}\n", .{lp.build_config.version}) catch abort();
                 inline for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
                     writer.writeAll(f.name ++ ": ") catch break;
                     @import("log.zig").writeValue(.pretty, @field(args, f.name), writer) catch abort();
@@ -86,7 +86,7 @@ fn report(reason: []const u8, begin_addr: usize, args: anytype) !void {
     var url_buffer: [4096]u8 = undefined;
     const url = blk: {
         var writer: std.Io.Writer = .fixed(&url_buffer);
-        try writer.print("https://crash.lightpanda.io/c?v={s}&r=", .{lp.build_config.git_commit});
+        try writer.print("https://crash.lightpanda.io/c?v={s}&r=", .{lp.build_config.version});
         for (reason) |b| {
             switch (b) {
                 'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_' => try writer.writeByte(b),
