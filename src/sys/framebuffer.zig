@@ -58,6 +58,28 @@ pub const Framebuffer = struct {
         }
     }
 
+    pub fn fillRect(self: *Framebuffer, x: i32, y: i32, width: i32, height: i32, color: u32) void {
+        if (width <= 0 or height <= 0 or self.width == 0 or self.height == 0) {
+            return;
+        }
+
+        const start_x = @as(i32, @intCast(@max(x, 0)));
+        const start_y = @as(i32, @intCast(@max(y, 0)));
+        const end_x = @as(i32, @intCast(@min(@as(i64, x) + @as(i64, width), @as(i64, self.width))));
+        const end_y = @as(i32, @intCast(@min(@as(i64, y) + @as(i64, height), @as(i64, self.height))));
+        if (start_x >= end_x or start_y >= end_y) {
+            return;
+        }
+
+        var py = start_y;
+        while (py < end_y) : (py += 1) {
+            var px = start_x;
+            while (px < end_x) : (px += 1) {
+                self.setPixel(@as(u32, @intCast(px)), @as(u32, @intCast(py)), color);
+            }
+        }
+    }
+
     pub fn setPixel(self: *Framebuffer, x: u32, y: u32, color: u32) void {
         if (x >= self.width or y >= self.height) {
             return;
@@ -82,4 +104,17 @@ test "framebuffer fills and reads pixels" {
     fb.setPixel(1, 1, 0x55667788);
     try std.testing.expectEqual(@as(u32, 0x55667788), fb.pixel(1, 1).?);
     try std.testing.expectEqual(@as(?u32, null), fb.pixel(9, 9));
+}
+
+test "framebuffer fillRect clips to bounds" {
+    var fb = try Framebuffer.init(std.testing.allocator, 4, 4);
+    defer fb.deinit(std.testing.allocator);
+
+    fb.fill(0);
+    fb.fillRect(-2, 1, 4, 3, 0xAABBCCDD);
+
+    try std.testing.expectEqual(@as(u32, 0), fb.pixel(0, 0).?);
+    try std.testing.expectEqual(@as(u32, 0xAABBCCDD), fb.pixel(0, 1).?);
+    try std.testing.expectEqual(@as(u32, 0xAABBCCDD), fb.pixel(1, 3).?);
+    try std.testing.expectEqual(@as(u32, 0), fb.pixel(3, 0).?);
 }

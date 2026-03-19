@@ -44,10 +44,25 @@ homepage_url
 }
 
 function Wait-Screenshot($Path) {
+  $stableCount = 0
+  $lastLength = -1
+  $lastWriteTime = $null
   for ($i = 0; $i -lt 80; $i++) {
     Start-Sleep -Milliseconds 250
-    if ((Test-Path $Path) -and ((Get-Item $Path).Length -gt 0)) {
-      return $true
+    if (-not (Test-Path $Path)) {
+      continue
+    }
+    $item = Get-Item $Path
+    if ($item.Length -le 0) {
+      continue
+    }
+    if ($item.Length -eq $lastLength -and $lastWriteTime -ne $null -and $item.LastWriteTimeUtc -eq $lastWriteTime) {
+      $stableCount++
+      if ($stableCount -ge 3) { return $true }
+    } else {
+      $stableCount = 0
+      $lastLength = $item.Length
+      $lastWriteTime = $item.LastWriteTimeUtc
     }
   }
   return $false
@@ -81,6 +96,60 @@ function Find-ColorBounds($Path, [scriptblock]$Predicate) {
         $maxY = -1
         for ($y = 0; $y -lt $bmp.Height; $y++) {
           for ($x = 0; $x -lt $bmp.Width; $x++) {
+            $c = $bmp.GetPixel($x, $y)
+            if (& $Predicate $c) {
+              if ($x -lt $minX) { $minX = $x }
+              if ($y -lt $minY) { $minY = $y }
+              if ($x -gt $maxX) { $maxX = $x }
+              if ($y -gt $maxY) { $maxY = $y }
+            }
+          }
+        }
+        if ($maxX -lt 0 -or $maxY -lt 0) {
+          throw "target color not found in $Path"
+        }
+        return [ordered]@{
+          left = $minX
+          top = $minY
+          right = $maxX
+          bottom = $maxY
+          width = $maxX - $minX + 1
+          height = $maxY - $minY + 1
+        }
+      }
+      finally {
+        $bmp.Dispose()
+      }
+    } catch {
+      if ($attempt -eq 19) { throw }
+      Start-Sleep -Milliseconds 200
+    }
+  }
+}
+
+function Find-ColorBoundsRegion(
+  $Path,
+  [scriptblock]$Predicate,
+  [int]$MinX = 0,
+  [int]$MinY = 0,
+  [int]$MaxX = 2147483647,
+  [int]$MaxY = 2147483647
+) {
+  Add-Type -AssemblyName System.Drawing
+  for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    try {
+      $bmp = [System.Drawing.Bitmap]::new($Path)
+      try {
+        $minX = $bmp.Width
+        $minY = $bmp.Height
+        $maxX = -1
+        $maxY = -1
+        $scanMinX = [Math]::Max(0, $MinX)
+        $scanMinY = [Math]::Max(0, $MinY)
+        $scanMaxX = [Math]::Min($bmp.Width - 1, $MaxX)
+        $scanMaxY = [Math]::Min($bmp.Height - 1, $MaxY)
+        for ($y = $scanMinY; $y -le $scanMaxY; $y++) {
+          for ($x = $scanMinX; $x -le $scanMaxX; $x++) {
             $c = $bmp.GetPixel($x, $y)
             if (& $Predicate $c) {
               if ($x -lt $minX) { $minX = $x }

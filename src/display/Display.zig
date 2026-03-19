@@ -23,6 +23,7 @@ const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 const Http = @import("../http/Http.zig");
 const log = @import("../log.zig");
 const builtin = @import("builtin");
+const Host = @import("../sys/host.zig").Host;
 pub const BrowserCommand = @import("BrowserCommand.zig").BrowserCommand;
 const DisplayList = @import("../render/DisplayList.zig").DisplayList;
 pub const PopupSource = @import("../browser/PopupSource.zig").PopupSource;
@@ -149,7 +150,7 @@ browse_screenshot_png_attempted: bool = false,
 browse_navigation_state_seen: bool = false,
 browse_is_loading: bool = true,
 
-pub fn init(allocator: std.mem.Allocator, config: *const Config) Display {
+pub fn init(allocator: std.mem.Allocator, config: *const Config, host: ?*Host) Display {
     const requested_mode = config.browserMode();
     const default_viewport: Viewport = .{
         .width = config.windowWidth(),
@@ -168,7 +169,7 @@ pub fn init(allocator: std.mem.Allocator, config: *const Config) Display {
         .backend = switch (requested_mode) {
             .headless => .{ .headless = .{} },
             .headed => if (build_config.target_class == .bare_metal)
-                .{ .bare_metal = BareMetalBackend.init(allocator, default_viewport.width, default_viewport.height) }
+                .{ .bare_metal = BareMetalBackend.init(host orelse @panic("bare metal display requires host services"), allocator, default_viewport.width, default_viewport.height) }
             else if (runtime_mode == .headed)
                 .{ .headed_windows = Win32Backend.init(allocator, default_viewport.width, default_viewport.height) }
             else

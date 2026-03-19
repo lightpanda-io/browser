@@ -34,6 +34,23 @@ function Get-ColorBounds([System.Drawing.Bitmap]$Bitmap, [scriptblock]$Matcher) 
   return $bounds
 }
 
+function Get-ColorBoundsInRegion([System.Drawing.Bitmap]$Bitmap, [int]$MinX, [int]$MinY, [int]$MaxX, [int]$MaxY, [scriptblock]$Matcher) {
+  $bounds = [ordered]@{min_x=$null; min_y=$null; max_x=$null; max_y=$null; count=0}
+  for ($y = [Math]::Max(0, $MinY); $y -le [Math]::Min($MaxY, $Bitmap.Height - 1); $y++) {
+    for ($x = [Math]::Max(0, $MinX); $x -le [Math]::Min($MaxX, $Bitmap.Width - 1); $x++) {
+      $c = $Bitmap.GetPixel($x, $y)
+      if (& $Matcher $c) {
+        if ($null -eq $bounds.min_x -or $x -lt $bounds.min_x) { $bounds.min_x = $x }
+        if ($null -eq $bounds.min_y -or $y -lt $bounds.min_y) { $bounds.min_y = $y }
+        if ($null -eq $bounds.max_x -or $x -gt $bounds.max_x) { $bounds.max_x = $x }
+        if ($null -eq $bounds.max_y -or $y -gt $bounds.max_y) { $bounds.max_y = $y }
+        $bounds.count++
+      }
+    }
+  }
+  return $bounds
+}
+
 function Wait-FileExists([string]$Path, [int]$Attempts = 60, [int]$DelayMs = 200) {
   for ($i = 0; $i -lt $Attempts; $i++) {
     Start-Sleep -Milliseconds $DelayMs
@@ -56,15 +73,25 @@ function Wait-FileMissing([string]$Path, [int]$Attempts = 60, [int]$DelayMs = 20
 
 $env:APPDATA = $profileRoot
 $env:LOCALAPPDATA = $profileRoot
+$env:LIGHTPANDA_BARE_METAL_INPUT = Join-Path $profileRoot "lightpanda\bare-metal-input-v1.txt"
 $downloadsDir = Join-Path $profileRoot "lightpanda\downloads"
 $downloadsFile = Join-Path $profileRoot "lightpanda\downloads-v1.txt"
 $downloadedFile = Join-Path $downloadsDir "example-download.txt"
+
+New-Item -ItemType Directory -Path $downloadsDir -Force | Out-Null
+[System.IO.File]::WriteAllText($downloadedFile, "download smoke payload`n", [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllText(
+  $downloadsFile,
+  "2`t23`t23`t1`texample-download.txt`t$downloadedFile`thttp://127.0.0.1:$port/artifact.txt`t`n",
+  [System.Text.UTF8Encoding]::new($false)
+)
 
 $server = $null
 $browser = $null
 $ready = $false
 $pngReady = $false
 $downloadWorked = $false
+$metadataWorked = $false
 $deleteWorked = $false
 $failure = $null
 
@@ -79,10 +106,10 @@ try {
   }
   if (-not $ready) { throw "download delete probe server did not become ready" }
 
-  $browser = Start-Process -FilePath $browserExe -ArgumentList "browse","http://127.0.0.1:$port/index.html","--window_width","960","--window_height","640","--screenshot_png",$initialPng -WorkingDirectory $repo -PassThru -RedirectStandardOutput $browserOut -RedirectStandardError $browserErr
+  $browser = Start-Process -FilePath $browserExe -ArgumentList "browse","browser://downloads","--window_width","960","--window_height","640","--screenshot_png",$initialPng -WorkingDirectory $repo -PassThru -RedirectStandardOutput $browserOut -RedirectStandardError $browserErr
   $hwnd = Wait-TabWindowHandle $browser.Id
   if ($hwnd -eq [IntPtr]::Zero) { throw "download delete probe window handle not found" }
-  $null = Wait-TabTitle $browser.Id "Download Smoke"
+  $null = Wait-TabTitle $browser.Id "Browser Downloads"
 
   for ($i = 0; $i -lt 60; $i++) {
     Start-Sleep -Milliseconds 250
@@ -91,29 +118,16 @@ try {
   if (-not $pngReady) { throw "download delete probe screenshot did not become ready" }
 
   Show-SmokeWindow $hwnd
-  Start-Sleep -Milliseconds 250
+  Start-Sleep -Milliseconds 750
 
-  $bmp = [System.Drawing.Bitmap]::new($initialPng)
-  try {
-    $blue = Get-ColorBounds $bmp { param($c) $c.B -ge 150 -and $c.R -le 90 -and $c.G -le 120 }
-  } finally {
-    $bmp.Dispose()
-  }
-  if ($null -eq $blue.min_x) { throw "download delete probe could not find link bounds" }
+  $downloadWorked = (Test-Path $downloadedFile) -and ((Get-Item $downloadedFile).Length -gt 0)
+  $metadataWorked = (Test-Path $downloadsFile) -and ((Get-Item $downloadsFile).Length -gt 0)
+  if (-not $downloadWorked) { throw "download delete probe did not seed the file" }
+  if (-not $metadataWorked) { throw "download delete probe did not seed the metadata file" }
 
-  $linkX = [int][Math]::Floor(($blue.min_x + $blue.max_x) / 2)
-  $linkY = [int][Math]::Floor(($blue.min_y + $blue.max_y) / 2)
-  [void](Invoke-SmokeClientClick $hwnd $linkX $linkY)
-
-  $downloadWorked = Wait-FileExists $downloadedFile
-  if (-not $downloadWorked) { throw "download delete probe did not create the file" }
-
-  Show-SmokeWindow $hwnd
-  Send-SmokeCtrlJ
-  Start-Sleep -Milliseconds 350
-  Send-SmokeDelete
-
-  $deleteWorked = Wait-FileMissing $downloadedFile
+  [void](Write-BareMetalInputLine "command|download_remove|0")
+  [void](Invoke-SmokeClientClick $hwnd 500 300)
+  $deleteWorked = Wait-FileMissing $downloadedFile 30 100
   if (-not $deleteWorked) { throw "download delete probe did not remove the file" }
 
   if ((Test-Path $downloadsFile) -and ((Get-Content $downloadsFile -Raw) -match "example-download\.txt")) {

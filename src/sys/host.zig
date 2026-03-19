@@ -65,7 +65,16 @@ pub const Host = struct {
     }
 
     pub fn initForBuildClass(allocator: Allocator, bare_metal: bool) Host {
-        return if (bare_metal) initMock(allocator) else initHosted(allocator);
+        return if (bare_metal) .{
+            .allocator = allocator,
+            .storage = storage.Storage.hosted(),
+            .framebuffer = .{},
+            .input = .{},
+            .timer = timer.Timer.mock(0),
+            .serial_log = serial_log.SerialLog.init(),
+            .net = net.Transport.mock(),
+            .boot = boot.Boot.init(),
+        } else initHosted(allocator);
     }
 
     pub fn deinit(self: *Host) void {
@@ -121,4 +130,21 @@ test "host mock composes platform services" {
     try host.panic("panic");
     try std.testing.expectEqualStrings("panic", host.serial_log.last().?);
     try std.testing.expectEqual(boot.BootState.failed, host.boot.state);
+}
+
+test "host bare metal build class uses filesystem-backed storage" {
+    var host = Host.initForBuildClass(std.testing.allocator, true);
+    defer host.deinit();
+
+    const rel_dir = "tmp-host-bare-metal-profile";
+    std.fs.cwd().deleteTree(rel_dir) catch {};
+    defer std.fs.cwd().deleteTree(rel_dir) catch {};
+
+    const profile = host.resolveProfileDir(rel_dir) orelse return error.TestExpected;
+    defer std.testing.allocator.free(profile);
+
+    try std.testing.expectEqualStrings(rel_dir, profile);
+
+    var dir = try std.fs.cwd().openDir(rel_dir, .{});
+    defer dir.close();
 }

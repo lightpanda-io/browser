@@ -46,6 +46,7 @@ function Wait-FileExists([string]$Path, [int]$Attempts = 60, [int]$DelayMs = 200
 
 $env:APPDATA = $profileRoot
 $env:LOCALAPPDATA = $profileRoot
+$env:LIGHTPANDA_BARE_METAL_INPUT = Join-Path $profileRoot "lightpanda\bare-metal-input-v1.txt"
 $downloadsDir = Join-Path $profileRoot "lightpanda\downloads"
 $downloadsFile = Join-Path $profileRoot "lightpanda\downloads-v1.txt"
 $downloadedFile = Join-Path $downloadsDir "example-download.txt"

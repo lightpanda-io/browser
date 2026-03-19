@@ -2472,11 +2472,16 @@ fn initOwnedBrowseCookie(
     http_only: bool,
     same_site: CookieStore.SameSite,
 ) !CookieStore {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
+    var arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+    errdefer {
+        arena.deinit();
+        allocator.destroy(arena);
+    }
     const aa = arena.allocator();
     return .{
-        .arena = arena,
+        .arena = arena.*,
+        .arena_owned = arena,
         .name = try aa.dupe(u8, name),
         .value = try aa.dupe(u8, value),
         .domain = try aa.dupe(u8, domain),
@@ -2546,7 +2551,6 @@ fn loadBrowseCookies(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) Co
 
         cookie_jar.add(cookie, std.time.timestamp()) catch |err| {
             log.warn(.app, "browse cookie load failed", .{ .err = err });
-            cookie.deinit();
         };
     }
 
@@ -7692,7 +7696,46 @@ test "writeInternalSettingsPage renders storage and cookie controls" {
 }
 
 test "saveBrowseCookiesForPath round trips persisted cookie jar" {
-    const rel_dir = ".zig-cache/tmp/internal-cookie-roundtrip-test";
+    {
+        const rel_dir = ".zig-cache/tmp/internal-cookie-roundtrip-test";
+        std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return err,
+        };
+        const abs_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, rel_dir);
+        defer std.testing.allocator.free(abs_dir);
+
+        var file_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const file_path = try std.fmt.bufPrint(&file_path_buf, "{s}\\{s}", .{ rel_dir, BROWSE_COOKIES_FILE });
+        var file = try std.fs.cwd().createFile(file_path, .{ .truncate = true });
+        defer file.close();
+
+        const cookie_line = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "cookie\tlppersist\tok\t127.0.0.1\t/\t{d}\t0\t0\tlax\n",
+            .{@as(i64, std.time.timestamp() + 7200)},
+        );
+        defer std.testing.allocator.free(cookie_line);
+
+        try file.writeAll("lightpanda-browse-cookies-v1\n");
+        try file.writeAll(cookie_line);
+        try file.writeAll("cookie\tlpsession\tok\t127.0.0.1\t/\t\t1\t1\tnone\n");
+
+        var loaded = loadBrowseCookies(std.testing.allocator, abs_dir);
+        try std.testing.expectEqual(@as(usize, 2), loaded.cookies.items.len);
+        try std.testing.expectEqualStrings("lppersist", loaded.cookies.items[0].name);
+        try std.testing.expectEqualStrings("ok", loaded.cookies.items[0].value);
+        try std.testing.expectEqual(CookieStore.SameSite.lax, loaded.cookies.items[0].same_site);
+        try std.testing.expectEqualStrings("lpsession", loaded.cookies.items[1].name);
+        try std.testing.expectEqual(true, loaded.cookies.items[1].secure);
+        try std.testing.expectEqual(true, loaded.cookies.items[1].http_only);
+        try std.testing.expectEqual(CookieStore.SameSite.none, loaded.cookies.items[1].same_site);
+        loaded.deinit();
+    }
+}
+
+test "loadSavedBrowseSession round trips persisted session state" {
+    const rel_dir = ".zig-cache/tmp/internal-session-roundtrip-test";
     std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
@@ -7700,49 +7743,22 @@ test "saveBrowseCookiesForPath round trips persisted cookie jar" {
     const abs_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, rel_dir);
     defer std.testing.allocator.free(abs_dir);
 
-    var source = CookieJar.init(std.testing.allocator);
-    defer source.deinit();
-    try source.add(
-        try initOwnedBrowseCookie(
-            std.testing.allocator,
-            "lppersist",
-            "ok",
-            "127.0.0.1",
-            "/",
-            @floatFromInt(std.time.timestamp() + 7200),
-            false,
-            false,
-            .lax,
-        ),
-        std.time.timestamp(),
-    );
-    try source.add(
-        try initOwnedBrowseCookie(
-            std.testing.allocator,
-            "lpsession",
-            "ok",
-            "127.0.0.1",
-            "/",
-            null,
-            true,
-            true,
-            .none,
-        ),
-        std.time.timestamp(),
-    );
+    var dir = try std.fs.cwd().openDir(abs_dir, .{});
+    defer dir.close();
+    try dir.writeFile(.{
+        .sub_path = BROWSE_SESSION_FILE,
+        .data = "lightpanda-browse-session-v1\nactive\t1\ntab\t110\thttp://first.test/\ntab\t125\thttp://second.test/\n",
+    });
 
-    try saveBrowseCookiesForPath(std.testing.allocator, abs_dir, &source);
+    var loaded = loadSavedBrowseSession(std.testing.allocator, abs_dir);
+    defer loaded.deinit(std.testing.allocator);
 
-    var loaded = loadBrowseCookies(std.testing.allocator, abs_dir);
-    defer loaded.deinit();
-    try std.testing.expectEqual(@as(usize, 2), loaded.cookies.items.len);
-    try std.testing.expectEqualStrings("lppersist", loaded.cookies.items[0].name);
-    try std.testing.expectEqualStrings("ok", loaded.cookies.items[0].value);
-    try std.testing.expectEqual(CookieStore.SameSite.lax, loaded.cookies.items[0].same_site);
-    try std.testing.expectEqualStrings("lpsession", loaded.cookies.items[1].name);
-    try std.testing.expectEqual(true, loaded.cookies.items[1].secure);
-    try std.testing.expectEqual(true, loaded.cookies.items[1].http_only);
-    try std.testing.expectEqual(CookieStore.SameSite.none, loaded.cookies.items[1].same_site);
+    try std.testing.expectEqual(@as(usize, 2), loaded.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), loaded.active_index);
+    try std.testing.expectEqualStrings("http://first.test/", loaded.tabs.items[0].url);
+    try std.testing.expectEqual(@as(i32, 110), loaded.tabs.items[0].zoom_percent);
+    try std.testing.expectEqualStrings("http://second.test/", loaded.tabs.items[1].url);
+    try std.testing.expectEqual(@as(i32, 125), loaded.tabs.items[1].zoom_percent);
 }
 
 test "saveBrowseLocalStorageForPath round trips persisted local storage" {

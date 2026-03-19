@@ -44,17 +44,17 @@ allocator: Allocator,
 arena_pool: ArenaPool,
 robots: RobotStore,
 app_dir_path: ?[]const u8,
-host: ?*const Host = null,
+host: ?*Host = null,
 shutdown: bool = false,
 
-pub fn init(allocator: Allocator, config: *const Config, host: ?*const Host) !*App {
+pub fn init(allocator: Allocator, config: *const Config, host: ?*Host) !*App {
     const app = try allocator.create(App);
     errdefer allocator.destroy(app);
 
     app.* = .{
         .config = config,
         .allocator = allocator,
-        .display = Display.init(allocator, config),
+        .display = Display.init(allocator, config, host),
         .robots = RobotStore.init(allocator),
         .http = undefined,
         .platform = undefined,
