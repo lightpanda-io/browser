@@ -319,11 +319,15 @@ fn findPageBy(page: *Page, comptime field: []const u8, id: u32) ?*Page {
     return null;
 }
 
-pub fn wait(self: *Session, wait_ms: u32, wait_until: lp.Config.WaitUntil) WaitResult {
+const WaitOpts = struct {
+    timeout_ms: u32 = 5000,
+    until: lp.Config.WaitUntil = .load,
+};
+
+pub fn wait(self: *Session, opts: WaitOpts) WaitResult {
+    var page = &(self.page orelse return .no_page);
     while (true) {
-        if (self.page == null) return .no_page;
-        const page = &self.page.?;
-        const wait_result = self._wait(page, wait_ms, wait_until) catch |err| {
+        const wait_result = self._wait(page, opts) catch |err| {
             switch (err) {
                 error.JsError => {}, // already logged (with hopefully more context)
                 else => log.err(.browser, "session wait", .{
@@ -340,15 +344,18 @@ pub fn wait(self: *Session, wait_ms: u32, wait_until: lp.Config.WaitUntil) WaitR
                     return .done;
                 }
                 self.processQueuedNavigation() catch return .done;
+                page = &self.page.?; // might have changed
             },
             else => |result| return result,
         }
     }
 }
 
-fn _wait(self: *Session, page: *Page, wait_ms: u32, wait_until: lp.Config.WaitUntil) !WaitResult {
+fn _wait(self: *Session, page: *Page, opts: WaitOpts) !WaitResult {
+    const wait_until = opts.until;
+
     var timer = try std.time.Timer.start();
-    var ms_remaining = wait_ms;
+    var ms_remaining = opts.timeout_ms;
 
     const browser = self.browser;
     var http_client = browser.http_client;
@@ -454,13 +461,13 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32, wait_until: lp.Config.WaitUn
                         // Same as above, except we have a scheduled task,
                         // it just happens to be too far into the future
                         // compared to how long we were told to wait.
-                        if (!browser.hasBackgroundTasks()) {
-                            if (is_event_done) return .done;
-                        } else {
+                        if (browser.hasBackgroundTasks()) {
                             // _we_ have nothing to run, but v8 is working on
                             // background tasks. We'll wait for them.
                             browser.waitForBackgroundTasks();
                         }
+                        // We're still wait for our wait_until. Not sure for what
+                        // but let's keep waiting. Worst case, we'll timeout.
                         ms = 20;
                     }
 

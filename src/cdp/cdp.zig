@@ -131,7 +131,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // timeouts (or http events) which are ready to be processed.
         pub fn pageWait(self: *Self, ms: u32) Session.WaitResult {
             const session = &(self.browser.session orelse return .no_page);
-            return session.wait(ms, .load);
+            return session.wait(.{ .timeout_ms = ms });
         }
 
         // Called from above, in processMessage which handles client messages
