@@ -206,7 +206,7 @@ const ToolStreamingText = struct {
                         if (registry.lookup_by_id.get(node_id)) |n| {
                             root_node = n.dom;
                         } else {
-                            log.warn(.mcp, "semantic_tree id {} missing", .{node_id});
+                            log.warn(.mcp, "semantic_tree id missing", .{.id = node_id});
                         }
                     }
                 }
