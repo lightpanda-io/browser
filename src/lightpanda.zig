@@ -20,6 +20,7 @@ const std = @import("std");
 pub const App = @import("App.zig");
 pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
+const HostPaths = @import("HostPaths.zig");
 pub const URL = @import("browser/URL.zig");
 pub const Page = @import("browser/Page.zig");
 pub const Browser = @import("browser/Browser.zig");
@@ -37,6 +38,8 @@ pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
 pub const mcp = @import("mcp.zig");
 pub const build_config = @import("build_config");
+pub const sys = @import("sys/host.zig");
+pub const mock_host = @import("sys/mock_host.zig");
 pub const crash_handler = @import("crash_handler.zig");
 const Display = @import("display/Display.zig");
 const BrowserCommand = @import("display/BrowserCommand.zig").BrowserCommand;
@@ -705,8 +708,7 @@ const BrowseDownloads = struct {
     }
 
     fn loadFromDisk(self: *BrowseDownloads, app_dir_path: ?[]const u8) void {
-        const dir_path = app_dir_path orelse return;
-        var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return;
+        var dir = openBrowseProfileDir(app_dir_path) orelse return;
         defer dir.close();
 
         const file = dir.openFile(BROWSE_DOWNLOADS_FILE, .{}) catch |err| switch (err) {
@@ -2338,8 +2340,7 @@ fn initializeBrowseTabs(
 }
 
 fn loadSavedBrowseSession(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) SavedBrowseSession {
-    const dir_path = app_dir_path orelse return .{};
-    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return .{};
+    var dir = openBrowseProfileDir(app_dir_path) orelse return .{};
     defer dir.close();
 
     const file = dir.openFile(BROWSE_SESSION_FILE, .{}) catch |err| switch (err) {
@@ -2400,8 +2401,7 @@ fn shouldAppendStartupUrl(saved_tabs: []const SavedBrowseTab, startup_url: []con
 }
 
 fn clearSavedBrowseSession(app: *App) void {
-    const dir_path = app.app_dir_path orelse return;
-    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return;
+    var dir = openBrowseProfileDir(app.app_dir_path) orelse return;
     defer dir.close();
     dir.deleteFile(BROWSE_SESSION_FILE) catch |err| switch (err) {
         error.FileNotFound => {},
@@ -2410,8 +2410,7 @@ fn clearSavedBrowseSession(app: *App) void {
 }
 
 fn loadBrowseSettings(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) BrowseSettings {
-    const dir_path = app_dir_path orelse return .{};
-    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return .{};
+    var dir = openBrowseProfileDir(app_dir_path) orelse return .{};
     defer dir.close();
 
     const file = dir.openFile(BROWSE_SETTINGS_FILE, .{}) catch |err| switch (err) {
@@ -2427,6 +2426,18 @@ fn loadBrowseSettings(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) B
 
 fn parsePersistedBool(raw: []const u8) bool {
     return std.mem.eql(u8, raw, "1") or std.ascii.eqlIgnoreCase(raw, "true");
+}
+
+fn openBrowseProfileDir(app_dir_path: ?[]const u8) ?std.fs.Dir {
+    const dir_path = app_dir_path orelse return null;
+    return openDirForPath(dir_path);
+}
+
+fn openDirForPath(path: []const u8) ?std.fs.Dir {
+    if (std.fs.path.isAbsolute(path)) {
+        return std.fs.openDirAbsolute(path, .{}) catch return null;
+    }
+    return std.fs.cwd().openDir(path, .{}) catch return null;
 }
 
 fn cookieSameSiteLabel(same_site: CookieStore.SameSite) []const u8 {
@@ -2480,8 +2491,7 @@ fn initOwnedBrowseCookie(
 fn loadBrowseCookies(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) CookieJar {
     var cookie_jar = CookieJar.init(allocator);
 
-    const dir_path = app_dir_path orelse return cookie_jar;
-    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return cookie_jar;
+    var dir = openBrowseProfileDir(app_dir_path) orelse return cookie_jar;
     defer dir.close();
 
     const file = dir.openFile(BROWSE_COOKIES_FILE, .{}) catch |err| switch (err) {
@@ -2579,10 +2589,8 @@ fn saveBrowseCookiesForPath(
     app_dir_path: ?[]const u8,
     cookie_jar: *CookieJar,
 ) !void {
-    const dir_path = app_dir_path orelse return;
+    var dir = openBrowseProfileDir(app_dir_path) orelse return;
     cookie_jar.removeExpired(null);
-
-    var dir = try std.fs.openDirAbsolute(dir_path, .{});
     defer dir.close();
 
     var buf = std.Io.Writer.Allocating.init(allocator);
@@ -2704,8 +2712,7 @@ fn decodePersistedStorageField(allocator: std.mem.Allocator, value: []const u8) 
 fn loadBrowseLocalStorage(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) storage.Shed {
     var storage_shed: storage.Shed = .{};
 
-    const dir_path = app_dir_path orelse return storage_shed;
-    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return storage_shed;
+    var dir = openBrowseProfileDir(app_dir_path) orelse return storage_shed;
     defer dir.close();
 
     const file = dir.openFile(BROWSE_LOCAL_STORAGE_FILE, .{}) catch |err| switch (err) {
@@ -2770,8 +2777,7 @@ fn saveBrowseLocalStorageForPath(
     app_dir_path: ?[]const u8,
     storage_shed: *storage.Shed,
 ) !void {
-    const dir_path = app_dir_path orelse return;
-    var dir = try std.fs.openDirAbsolute(dir_path, .{});
+    var dir = openBrowseProfileDir(app_dir_path) orelse return;
     defer dir.close();
 
     var buf = std.Io.Writer.Allocating.init(allocator);
@@ -3043,8 +3049,7 @@ fn collectBrowseIndexedDbItems(allocator: std.mem.Allocator, indexed_db_shed: *i
 fn loadBrowseIndexedDb(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) indexed_db.Shed {
     var indexed_db_shed: indexed_db.Shed = .{};
 
-    const dir_path = app_dir_path orelse return indexed_db_shed;
-    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return indexed_db_shed;
+    var dir = openBrowseProfileDir(app_dir_path) orelse return indexed_db_shed;
     defer dir.close();
 
     const file = dir.openFile(BROWSE_INDEXED_DB_FILE, .{}) catch |err| switch (err) {
@@ -3241,8 +3246,7 @@ fn saveBrowseIndexedDbForPath(
     app_dir_path: ?[]const u8,
     indexed_db_shed: *indexed_db.Shed,
 ) !void {
-    const dir_path = app_dir_path orelse return;
-    var dir = try std.fs.openDirAbsolute(dir_path, .{});
+    var dir = openBrowseProfileDir(app_dir_path) orelse return;
     defer dir.close();
 
     var buf = std.Io.Writer.Allocating.init(allocator);
@@ -3382,8 +3386,7 @@ fn persistBrowseSettingsIfChanged(app: *App, settings: *const BrowseSettings, la
 }
 
 fn saveBrowseSettings(app: *App, settings: *const BrowseSettings) !void {
-    const dir_path = app.app_dir_path orelse return;
-    var dir = try std.fs.openDirAbsolute(dir_path, .{});
+    var dir = openBrowseProfileDir(app.app_dir_path) orelse return;
     defer dir.close();
 
     var buf = std.Io.Writer.Allocating.init(app.allocator);
@@ -3459,8 +3462,7 @@ fn hashBrowseSessionState(tabs: []const *BrowseTab, active_tab_index: usize) u64
 }
 
 fn saveBrowseSession(app: *App, tabs: []const *BrowseTab, active_tab_index: usize) !void {
-    const dir_path = app.app_dir_path orelse return;
-    var dir = try std.fs.openDirAbsolute(dir_path, .{});
+    var dir = openBrowseProfileDir(app.app_dir_path) orelse return;
     defer dir.close();
 
     var buf = std.Io.Writer.Allocating.init(app.allocator);
@@ -3576,10 +3578,7 @@ fn formatDownloadStatusLabel(allocator: std.mem.Allocator, entry: BrowseDownload
 }
 
 fn ensureBrowseDownloadsDir(allocator: std.mem.Allocator, app_dir_path: []const u8) ![]u8 {
-    var dir = try std.fs.openDirAbsolute(app_dir_path, .{});
-    defer dir.close();
-    try dir.makePath(BROWSE_DOWNLOADS_DIR);
-    return try std.fs.path.join(allocator, &.{ app_dir_path, BROWSE_DOWNLOADS_DIR });
+    return HostPaths.resolveProfileSubdir(allocator, app_dir_path, BROWSE_DOWNLOADS_DIR) orelse error.AppDataUnavailable;
 }
 
 fn downloadShellActionLabel(action: DownloadShellAction) []const u8 {
@@ -3624,10 +3623,7 @@ fn downloadEntryCanUseShellFileActions(downloads: *BrowseDownloads, index: usize
 }
 
 fn resolveBrowseDownloadsDirShellPath(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) ?[]u8 {
-    const root_path = app_dir_path orelse return null;
-    const downloads_dir = ensureBrowseDownloadsDir(allocator, root_path) catch return null;
-    defer allocator.free(downloads_dir);
-    return std.fs.realpathAlloc(allocator, downloads_dir) catch allocator.dupe(u8, downloads_dir) catch null;
+    return HostPaths.resolveProfileSubdir(allocator, app_dir_path, BROWSE_DOWNLOADS_DIR);
 }
 
 fn resolveDownloadEntryShellPath(
@@ -3756,7 +3752,7 @@ fn sanitizeDownloadFileName(allocator: std.mem.Allocator, raw_name: []const u8) 
 }
 
 fn makeUniqueDownloadFileName(allocator: std.mem.Allocator, downloads_dir: []const u8, base_name: []const u8) ![]u8 {
-    var dir = try std.fs.openDirAbsolute(downloads_dir, .{});
+    var dir = openDirForPath(downloads_dir) orelse return error.FileNotFound;
     defer dir.close();
 
     const ext_index = std.mem.lastIndexOfScalar(u8, base_name, '.');
@@ -3805,8 +3801,7 @@ fn saveBrowseDownloads(
     app_dir_path: ?[]const u8,
     entries: []const BrowseDownloadEntry,
 ) void {
-    const dir_path = app_dir_path orelse return;
-    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return;
+    var dir = openBrowseProfileDir(app_dir_path) orelse return;
     defer dir.close();
 
     var buf = std.Io.Writer.Allocating.init(allocator);
@@ -6460,8 +6455,7 @@ fn loadPersistedBookmarks(
     var bookmarks: std.ArrayListUnmanaged([]u8) = .{};
     errdefer deinitOwnedStrings(allocator, &bookmarks);
 
-    const dir_path = app_dir_path orelse return bookmarks;
-    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return bookmarks;
+    var dir = openBrowseProfileDir(app_dir_path) orelse return bookmarks;
     defer dir.close();
 
     const file = dir.openFile(BROWSE_BOOKMARKS_FILE, .{}) catch |err| switch (err) {
@@ -6496,8 +6490,7 @@ fn savePersistedBookmarks(
     app_dir_path: ?[]const u8,
     bookmarks: []const []const u8,
 ) void {
-    const dir_path = app_dir_path orelse return;
-    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return;
+    var dir = openBrowseProfileDir(app_dir_path) orelse return;
     defer dir.close();
 
     var buf = std.Io.Writer.Allocating.init(allocator);

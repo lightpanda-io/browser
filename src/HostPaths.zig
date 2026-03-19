@@ -44,16 +44,14 @@ pub fn resolveProfileDir(allocator: Allocator, override_path: ?[]const u8) ?[]co
         return null;
     };
 
-    if (supportsProfileDirFilesystem()) {
-        std.fs.cwd().makePath(app_dir_path) catch |err| switch (err) {
-            error.PathAlreadyExists => return app_dir_path,
-            else => {
-                allocator.free(app_dir_path);
-                log.warn(.app, "create data dir", .{ .err = err, .path = app_dir_path });
-                return null;
-            },
-        };
-    }
+    std.fs.cwd().makePath(app_dir_path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => {
+            allocator.free(app_dir_path);
+            log.warn(.app, "create data dir", .{ .err = err, .path = app_dir_path });
+            return null;
+        },
+    };
     return app_dir_path;
 }
 
@@ -67,6 +65,28 @@ fn copyAndPrepareDir(allocator: Allocator, path: []const u8) ![]const u8 {
         };
     }
     return owned;
+}
+
+pub fn resolveProfileFile(allocator: Allocator, profile_root: ?[]const u8, name: []const u8) ?[]u8 {
+    const root = profile_root orelse return null;
+    return std.fs.path.join(allocator, &.{ root, name }) catch null;
+}
+
+pub fn resolveProfileSubdir(allocator: Allocator, profile_root: ?[]const u8, subdir: []const u8) ?[]u8 {
+    const path = resolveProfileFile(allocator, profile_root, subdir) orelse return null;
+    if (!supportsProfileDirFilesystem()) {
+        return path;
+    }
+
+    std.fs.cwd().makePath(path) catch |err| switch (err) {
+        error.PathAlreadyExists => return path,
+        else => {
+            log.warn(.app, "create profile subdir", .{ .err = err, .path = path });
+            allocator.free(path);
+            return null;
+        },
+    };
+    return path;
 }
 
 fn supportsProfileDirFilesystem() bool {
@@ -86,5 +106,47 @@ test "resolveProfileDir uses explicit override" {
 
     try std.testing.expectEqualStrings(rel_dir, resolved);
     var dir = try std.fs.cwd().openDir(rel_dir, .{});
+    defer dir.close();
+}
+
+test "resolveProfileFile joins profile root and file name" {
+    const rel_dir = "tmp-host-profile-file";
+    std.fs.cwd().deleteTree(rel_dir) catch {};
+    defer std.fs.cwd().deleteTree(rel_dir) catch {};
+
+    const root = resolveProfileDir(std.testing.allocator, rel_dir).?;
+    defer std.testing.allocator.free(root);
+
+    const resolved = resolveProfileFile(std.testing.allocator, root, "cookies-v1.txt") orelse return error.TestExpected;
+    defer std.testing.allocator.free(resolved);
+
+    const expected = try std.fs.path.join(std.testing.allocator, &.{ root, "cookies-v1.txt" });
+    defer std.testing.allocator.free(expected);
+
+    try std.testing.expectEqualStrings(expected, resolved);
+}
+
+test "resolveProfileSubdir creates profile subdir" {
+    if (!supportsProfileDirFilesystem()) return;
+
+    const rel_dir = "tmp-host-profile-subdir";
+    std.fs.cwd().deleteTree(rel_dir) catch {};
+    defer std.fs.cwd().deleteTree(rel_dir) catch {};
+
+    const root = resolveProfileDir(std.testing.allocator, rel_dir).?;
+    defer std.testing.allocator.free(root);
+
+    const subdir = resolveProfileSubdir(std.testing.allocator, root, "downloads") orelse return error.TestExpected;
+    defer std.testing.allocator.free(subdir);
+
+    const expected = try std.fs.path.join(std.testing.allocator, &.{ root, "downloads" });
+    defer std.testing.allocator.free(expected);
+
+    try std.testing.expect(std.mem.endsWith(u8, subdir, expected));
+
+    var dir = if (std.fs.path.isAbsolute(subdir))
+        try std.fs.openDirAbsolute(subdir, .{})
+    else
+        try std.fs.cwd().openDir(subdir, .{});
     defer dir.close();
 }

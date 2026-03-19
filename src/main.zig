@@ -24,6 +24,7 @@ const Allocator = std.mem.Allocator;
 const log = lp.log;
 const App = lp.App;
 const Config = lp.Config;
+const Host = lp.sys.Host;
 const SigHandler = @import("Sighandler.zig");
 pub const panic = lp.crash_handler.panic;
 
@@ -78,7 +79,10 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
     const requested_browser_mode = args.browserMode();
 
     // _app is global to handle graceful shutdown.
-    var app = try App.init(allocator, &args);
+    var host = Host.initForBuildClass(allocator, lp.build_config.target_class == .bare_metal);
+    defer host.deinit();
+
+    var app = try App.init(allocator, &args, &host);
 
     defer app.deinit();
     const browser_mode = app.display.runtime_mode;

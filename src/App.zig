@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 
 const Config = @import("Config.zig");
 const HostPaths = @import("HostPaths.zig");
+const Host = @import("sys/host.zig").Host;
 const Snapshot = @import("browser/js/Snapshot.zig");
 const Platform = @import("browser/js/Platform.zig");
 const Display = @import("display/Display.zig");
@@ -43,9 +44,10 @@ allocator: Allocator,
 arena_pool: ArenaPool,
 robots: RobotStore,
 app_dir_path: ?[]const u8,
+host: ?*const Host = null,
 shutdown: bool = false,
 
-pub fn init(allocator: Allocator, config: *const Config) !*App {
+pub fn init(allocator: Allocator, config: *const Config, host: ?*const Host) !*App {
     const app = try allocator.create(App);
     errdefer allocator.destroy(app);
 
@@ -60,6 +62,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
         .app_dir_path = undefined,
         .telemetry = undefined,
         .arena_pool = undefined,
+        .host = host,
     };
 
     app.http = try Http.init(allocator, &app.robots, config);
@@ -72,7 +75,10 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     app.snapshot = try Snapshot.load();
     errdefer app.snapshot.deinit();
 
-    app.app_dir_path = HostPaths.resolveProfileDir(allocator, config.profileDir());
+    app.app_dir_path = if (host) |host_ref|
+        host_ref.resolveProfileDir(config.profileDir())
+    else
+        HostPaths.resolveProfileDir(allocator, config.profileDir());
     app.display.setAppDataPath(app.app_dir_path);
 
     app.telemetry = try Telemetry.init(app, config.mode);

@@ -488,7 +488,7 @@ test "tests:beforeAll" {
         },
     } });
 
-    test_app = try App.init(test_allocator, &test_config);
+    test_app = try App.init(test_allocator, &test_config, null);
     errdefer test_app.deinit();
 
     test_http = try test_app.http.createClient(test_allocator);

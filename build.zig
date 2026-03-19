@@ -19,11 +19,19 @@
 const std = @import("std");
 
 const Build = std.Build;
+const TargetClass = enum {
+    hosted,
+    bare_metal,
+};
 
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const is_msvc = target.result.abi == .msvc;
+    const target_class: TargetClass = b.option(TargetClass, "target_class", "Build class: hosted or bare_metal") orelse switch (target.result.os.tag) {
+        .freestanding, .uefi => .bare_metal,
+        else => .hosted,
+    };
 
     const manifest = Manifest.init(b);
 
@@ -35,6 +43,7 @@ pub fn build(b: *Build) !void {
     opts.addOption([]const u8, "version", manifest.version);
     opts.addOption([]const u8, "git_commit", git_commit orelse "dev");
     opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
+    opts.addOption(TargetClass, "target_class", target_class);
 
     const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer") orelse false;
     const enable_asan = b.option(bool, "asan", "Enable Address Sanitizer") orelse false;

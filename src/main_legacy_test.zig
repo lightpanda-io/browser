@@ -40,7 +40,7 @@ pub fn main() !void {
     } });
     defer config.deinit(allocator);
 
-    var app = try lp.App.init(allocator, &config);
+    var app = try lp.App.init(allocator, &config, null);
     defer app.deinit();
 
     var test_arena = std.heap.ArenaAllocator.init(allocator);

@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const Config = @import("../Config.zig");
+const build_config = @import("build_config");
 const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 const Http = @import("../http/Http.zig");
 const log = @import("../log.zig");
@@ -117,9 +118,12 @@ pub const SettingsState = struct {
     homepage_url: []const u8,
 };
 
+const BareMetalBackend = @import("baremetal_backend.zig").BareMetalBackend;
+
 pub const Backend = union(enum) {
     headless: HeadlessBackend,
     headed_stub: HeadedStubBackend,
+    bare_metal: BareMetalBackend,
     headed_windows: Win32Backend,
 };
 
@@ -155,7 +159,7 @@ pub fn init(allocator: std.mem.Allocator, config: *const Config) Display {
 
     const runtime_mode: Config.BrowserMode = switch (requested_mode) {
         .headless => .headless,
-        .headed => if (builtin.os.tag == .windows) .headed else .headless,
+        .headed => if (build_config.target_class == .bare_metal or builtin.os.tag == .windows) .headed else .headless,
     };
 
     return .{
@@ -163,7 +167,9 @@ pub fn init(allocator: std.mem.Allocator, config: *const Config) Display {
         .runtime_mode = runtime_mode,
         .backend = switch (requested_mode) {
             .headless => .{ .headless = .{} },
-            .headed => if (runtime_mode == .headed)
+            .headed => if (build_config.target_class == .bare_metal)
+                .{ .bare_metal = BareMetalBackend.init(allocator, default_viewport.width, default_viewport.height) }
+            else if (runtime_mode == .headed)
                 .{ .headed_windows = Win32Backend.init(allocator, default_viewport.width, default_viewport.height) }
             else
                 .{ .headed_stub = .{} },
@@ -189,6 +195,16 @@ pub fn onPageCreated(self: *Display) void {
             if (!backend.window_open) {
                 backend.window_open = true;
                 log.info(.app, "headed stub window", .{
+                    .event = "open",
+                    .width = self.viewport.width,
+                    .height = self.viewport.height,
+                    .dpr = self.viewport.device_pixel_ratio,
+                });
+            }
+        },
+        .bare_metal => |*backend| {
+            if (backend.onPageCreated()) {
+                log.info(.app, "bare metal backend window", .{
                     .event = "open",
                     .width = self.viewport.width,
                     .height = self.viewport.height,
@@ -223,6 +239,11 @@ pub fn onPageRemoved(self: *Display) void {
                 log.info(.app, "headed stub window", .{ .event = "close" });
             }
         },
+        .bare_metal => |*backend| {
+            if (backend.onPageRemoved()) {
+                log.info(.app, "bare metal backend window", .{ .event = "close" });
+            }
+        },
         .headed_windows => |*backend| {
             if (backend.onPageRemoved()) {
                 log.info(.app, "headed windows window", .{ .event = "close" });
@@ -240,6 +261,7 @@ pub fn setViewport(self: *Display, width: u32, height: u32, device_pixel_ratio: 
     switch (self.backend) {
         .headless => {},
         .headed_stub => |*backend| backend.last_resize_seq += 1,
+        .bare_metal => |*backend| backend.onViewportChanged(self.viewport.width, self.viewport.height),
         .headed_windows => |*backend| backend.onViewportChanged(self.viewport.width, self.viewport.height),
     }
 }
@@ -256,6 +278,7 @@ pub fn setNavigationState(self: *Display, can_go_back: bool, can_go_forward: boo
     self.browse_navigation_state_seen = true;
     self.browse_is_loading = is_loading;
     switch (self.backend) {
+        .bare_metal => |*backend| backend.setNavigationState(can_go_back, can_go_forward, is_loading, zoom_percent),
         .headed_windows => |*backend| backend.setNavigationState(can_go_back, can_go_forward, is_loading, zoom_percent),
         else => {},
     }
@@ -263,6 +286,7 @@ pub fn setNavigationState(self: *Display, can_go_back: bool, can_go_forward: boo
 
 pub fn setHistoryEntries(self: *Display, entries: []const []const u8, current_index: usize) void {
     switch (self.backend) {
+        .bare_metal => |*backend| backend.setHistoryEntries(entries, current_index),
         .headed_windows => |*backend| backend.setHistoryEntries(entries, current_index),
         else => {},
     }
@@ -270,6 +294,7 @@ pub fn setHistoryEntries(self: *Display, entries: []const []const u8, current_in
 
 pub fn setDownloadEntries(self: *Display, entries: []const DownloadEntry) void {
     switch (self.backend) {
+        .bare_metal => |*backend| backend.setDownloadEntries(entries),
         .headed_windows => |*backend| backend.setDownloadEntries(entries),
         else => {},
     }
@@ -277,6 +302,7 @@ pub fn setDownloadEntries(self: *Display, entries: []const DownloadEntry) void {
 
 pub fn setTabEntries(self: *Display, entries: []const TabEntry, active_index: usize) void {
     switch (self.backend) {
+        .bare_metal => |*backend| backend.setTabEntries(entries, active_index),
         .headed_windows => |*backend| backend.setTabEntries(entries, active_index),
         else => {},
     }
@@ -284,6 +310,7 @@ pub fn setTabEntries(self: *Display, entries: []const TabEntry, active_index: us
 
 pub fn setSettingsState(self: *Display, settings: SettingsState) void {
     switch (self.backend) {
+        .bare_metal => |*backend| backend.setSettingsState(settings),
         .headed_windows => |*backend| backend.setSettingsState(settings),
         else => {},
     }
@@ -291,6 +318,7 @@ pub fn setSettingsState(self: *Display, settings: SettingsState) void {
 
 pub fn setAppDataPath(self: *Display, path: ?[]const u8) void {
     switch (self.backend) {
+        .bare_metal => |*backend| backend.setAppDataPath(path),
         .headed_windows => |*backend| backend.setAppDataPath(path),
         else => {},
     }
@@ -298,6 +326,7 @@ pub fn setAppDataPath(self: *Display, path: ?[]const u8) void {
 
 pub fn setHttpRuntime(self: *Display, http: *Http) void {
     switch (self.backend) {
+        .bare_metal => |*backend| backend.setHttpRuntime(http),
         .headed_windows => |*backend| backend.setHttpRuntime(http),
         else => {},
     }
@@ -305,6 +334,7 @@ pub fn setHttpRuntime(self: *Display, http: *Http) void {
 
 pub fn setImageRequestCookieJar(self: *Display, cookie_jar: ?*CookieJar) void {
     switch (self.backend) {
+        .bare_metal => |*backend| backend.setImageRequestCookieJar(cookie_jar),
         .headed_windows => |*backend| backend.setImageRequestCookieJar(cookie_jar),
         else => {},
     }
@@ -312,6 +342,7 @@ pub fn setImageRequestCookieJar(self: *Display, cookie_jar: ?*CookieJar) void {
 
 pub fn dispatchNativeInput(self: *Display, page: anytype) !void {
     switch (self.backend) {
+        .bare_metal => |*backend| try backend.dispatchInput(page),
         .headed_windows => |*backend| try backend.dispatchInput(page),
         else => {},
     }
@@ -319,6 +350,7 @@ pub fn dispatchNativeInput(self: *Display, page: anytype) !void {
 
 pub fn presentDocument(self: *Display, title: []const u8, url: []const u8, body: []const u8) !void {
     switch (self.backend) {
+        .bare_metal => |*backend| try backend.presentDocument(title, url, body),
         .headed_windows => |*backend| try backend.presentDocument(title, url, body),
         else => {},
     }
@@ -326,6 +358,27 @@ pub fn presentDocument(self: *Display, title: []const u8, url: []const u8, body:
 
 pub fn presentPageView(self: *Display, title: []const u8, url: []const u8, body: []const u8, display_list: ?*const DisplayList) !void {
     switch (self.backend) {
+        .bare_metal => |*backend| {
+            try backend.presentPageView(title, url, body, display_list);
+            if (browseScreenshotReady(self.browse_navigation_state_seen, self.browse_is_loading, body, display_list)) {
+                if (self.browse_screenshot_bmp_path) |path| {
+                    if (!self.browse_screenshot_bmp_attempted) {
+                        self.browse_screenshot_bmp_attempted = true;
+                        if (!backend.saveBitmap(path)) {
+                            log.warn(.app, "bare metal bmp export failed", .{ .path = path });
+                        }
+                    }
+                }
+                if (self.browse_screenshot_png_path) |path| {
+                    if (!self.browse_screenshot_png_attempted) {
+                        self.browse_screenshot_png_attempted = true;
+                        if (!backend.savePng(path)) {
+                            log.warn(.app, "bare metal png export failed", .{ .path = path });
+                        }
+                    }
+                }
+            }
+        },
         .headed_windows => |*backend| {
             try backend.presentPageView(title, url, body, display_list);
             if (browseScreenshotReady(self.browse_navigation_state_seen, self.browse_is_loading, body, display_list)) {
@@ -603,6 +656,7 @@ test "browseScreenshotReady allows dense text-only presentation commands" {
 
 pub fn chooseFiles(self: *Display, accept: []const u8, multiple: bool) ?ChosenFiles {
     return switch (self.backend) {
+        .bare_metal => |*backend| backend.chooseFiles(accept, multiple),
         .headed_windows => |*backend| backend.chooseFiles(accept, multiple),
         else => null,
     };
@@ -610,6 +664,7 @@ pub fn chooseFiles(self: *Display, accept: []const u8, multiple: bool) ?ChosenFi
 
 pub fn nextBrowserCommand(self: *Display) ?BrowserCommand {
     return switch (self.backend) {
+        .bare_metal => |*backend| backend.nextBrowserCommand(),
         .headed_windows => |*backend| backend.nextBrowserCommand(),
         else => null,
     };
@@ -617,6 +672,7 @@ pub fn nextBrowserCommand(self: *Display) ?BrowserCommand {
 
 pub fn userClosed(self: *const Display) bool {
     return switch (self.backend) {
+        .bare_metal => |*backend| backend.userClosed(),
         .headed_windows => |*backend| backend.userClosed(),
         else => false,
     };
