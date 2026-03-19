@@ -398,6 +398,13 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--with_frames   Includes the contents of iframes. Defaults to false.
         \\
+        \\--wait_ms       Wait time in milliseconds.
+        \\                Defaults to 5000.
+        \\
+        \\--wait_until    Wait until the specified event.
+        \\                Supported events: load, domcontentloaded, networkidle, fixed.
+        \\                Defaults to 'load'.
+        \\
     ++ common_options ++
         \\
         \\serve command

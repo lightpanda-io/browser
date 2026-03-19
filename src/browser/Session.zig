@@ -320,14 +320,15 @@ fn findPageBy(page: *Page, comptime field: []const u8, id: u32) ?*Page {
 }
 
 pub fn wait(self: *Session, wait_ms: u32, wait_until: lp.Config.WaitUntil) WaitResult {
-    var page = &(self.page orelse return .no_page);
     while (true) {
-        const wait_result = self._wait(&page, wait_ms, wait_until) catch |err| {
+        if (self.page == null) return .no_page;
+        const page = &self.page.?;
+        const wait_result = self._wait(page, wait_ms, wait_until) catch |err| {
             switch (err) {
                 error.JsError => {}, // already logged (with hopefully more context)
                 else => log.err(.browser, "session wait", .{
                     .err = err,
-                    .url = page.*.url,
+                    .url = page.url,
                 }),
             }
             return .done;
@@ -339,14 +340,13 @@ pub fn wait(self: *Session, wait_ms: u32, wait_until: lp.Config.WaitUntil) WaitR
                     return .done;
                 }
                 self.processQueuedNavigation() catch return .done;
-                page = &self.page.?; // might have changed
             },
             else => |result| return result,
         }
     }
 }
 
-fn _wait(self: *Session, page: **Page, wait_ms: u32, wait_until: lp.Config.WaitUntil) !WaitResult {
+fn _wait(self: *Session, page: *Page, wait_ms: u32, wait_until: lp.Config.WaitUntil) !WaitResult {
     var timer = try std.time.Timer.start();
     var ms_remaining = wait_ms;
 
@@ -366,7 +366,7 @@ fn _wait(self: *Session, page: **Page, wait_ms: u32, wait_until: lp.Config.WaitU
     const exit_when_done = http_client.cdp_client == null;
 
     while (true) {
-        switch (page.*._parse_state) {
+        switch (page._parse_state) {
             .pre, .raw, .text, .image => {
                 // The main page hasn't started/finished navigating.
                 // There's no JS to run, and no reason to run the scheduler.
@@ -406,15 +406,15 @@ fn _wait(self: *Session, page: **Page, wait_ms: u32, wait_until: lp.Config.WaitU
                 try browser.runMacrotasks();
 
                 // Each call to this runs scheduled load events.
-                try page.*.dispatchLoad();
+                try page.dispatchLoad();
 
                 const http_active = http_client.active;
                 const total_network_activity = http_active + http_client.intercepted;
-                if (page.*._notified_network_almost_idle.check(total_network_activity <= 2)) {
-                    page.*.notifyNetworkAlmostIdle();
+                if (page._notified_network_almost_idle.check(total_network_activity <= 2)) {
+                    page.notifyNetworkAlmostIdle();
                 }
-                if (page.*._notified_network_idle.check(total_network_activity == 0)) {
-                    page.*.notifyNetworkIdle();
+                if (page._notified_network_idle.check(total_network_activity == 0)) {
+                    page.notifyNetworkIdle();
                 }
 
                 if (http_active == 0 and exit_when_done) {
@@ -427,9 +427,9 @@ fn _wait(self: *Session, page: **Page, wait_ms: u32, wait_until: lp.Config.WaitU
 
                     const is_event_done = switch (wait_until) {
                         .fixed => false,
-                        .domcontentloaded => (page.*._load_state == .load or page.*._load_state == .complete),
-                        .load => (page.*._load_state == .complete),
-                        .networkidle => (page.*._load_state == .complete and http_active == 0),
+                        .domcontentloaded => (page._load_state == .load or page._load_state == .complete),
+                        .load => (page._load_state == .complete),
+                        .networkidle => (page._notified_network_idle == .done),
                     };
 
                     var ms = blk: {
@@ -491,7 +491,7 @@ fn _wait(self: *Session, page: **Page, wait_ms: u32, wait_until: lp.Config.WaitU
                 }
             },
             .err => |err| {
-                page.*._parse_state = .{ .raw_done = @errorName(err) };
+                page._parse_state = .{ .raw_done = @errorName(err) };
                 return err;
             },
             .raw_done => {
