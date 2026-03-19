@@ -38,6 +38,7 @@ page: *Page,
 arena: std.mem.Allocator,
 prune: bool = true,
 interactive_only: bool = false,
+max_depth: u32 = std.math.maxInt(u32) - 1,
 
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
     var visitor = JsonVisitor{ .jw = jw, .tree = self };
@@ -46,7 +47,7 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
-    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets) catch |err| {
+    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets, 0) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -59,7 +60,7 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
-    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets) catch |err| {
+    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets, 0) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -72,7 +73,7 @@ const OptionData = struct {
 };
 
 const NodeData = struct {
-    id: u32,
+    id: CDPNode.Id,
     axn: AXNode,
     role: []const u8,
     name: ?[]const u8,
@@ -83,7 +84,9 @@ const NodeData = struct {
     node_name: []const u8,
 };
 
-fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_name: ?[]const u8, visitor: anytype, index: usize, listener_targets: interactive.ListenerTargetMap) !void {
+fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_name: ?[]const u8, visitor: anytype, index: usize, listener_targets: interactive.ListenerTargetMap, current_depth: u32) !void {
+    if (current_depth > self.max_depth) return;
+
     // 1. Skip non-content nodes
     if (node.is(Element)) |el| {
         const tag = el.getTag();
@@ -230,7 +233,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
             }
             gop.value_ptr.* += 1;
 
-            try self.walk(child, xpath_buffer, name, visitor, gop.value_ptr.*, listener_targets);
+            try self.walk(child, xpath_buffer, name, visitor, gop.value_ptr.*, listener_targets, current_depth + 1);
         }
     }
 
@@ -474,3 +477,56 @@ const TextVisitor = struct {
         }
     }
 };
+
+const testing = @import("testing.zig");
+
+test "SemanticTree backendDOMNodeId" {
+    var registry: CDPNode.Registry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/registry1.html");
+    defer testing.reset();
+    defer page._session.removePage();
+
+    const st: Self = .{
+        .dom_node = page.window._document.asNode(),
+        .registry = &registry,
+        .page = page,
+        .arena = testing.arena_allocator,
+        .prune = false,
+        .interactive_only = false,
+        .max_depth = std.math.maxInt(u32) - 1,
+    };
+
+    const json_str = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
+    defer testing.allocator.free(json_str);
+
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"backendDOMNodeId\":") != null);
+}
+
+test "SemanticTree max_depth" {
+    var registry: CDPNode.Registry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/registry1.html");
+    defer testing.reset();
+    defer page._session.removePage();
+
+    const st: Self = .{
+        .dom_node = page.window._document.asNode(),
+        .registry = &registry,
+        .page = page,
+        .arena = testing.arena_allocator,
+        .prune = false,
+        .interactive_only = false,
+        .max_depth = 1,
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    try st.textStringify(&aw.writer);
+    const text_str = aw.written();
+
+    try testing.expect(std.mem.indexOf(u8, text_str, "other") == null);
+}
