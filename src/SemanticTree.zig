@@ -479,3 +479,56 @@ const TextVisitor = struct {
         }
     }
 };
+
+const testing = @import("testing.zig");
+
+test "SemanticTree backendDOMNodeId" {
+    var registry: CDPNode.Registry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/registry1.html");
+    defer testing.reset();
+    defer page._session.removePage();
+
+    const st: Self = .{
+        .dom_node = page.window._document.asNode(),
+        .registry = &registry,
+        .page = page,
+        .arena = testing.arena_allocator,
+        .prune = false,
+        .interactive_only = false,
+        .max_depth = null,
+    };
+
+    const json_str = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
+    defer testing.allocator.free(json_str);
+
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"backendDOMNodeId\":") != null);
+}
+
+test "SemanticTree max_depth" {
+    var registry: CDPNode.Registry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/registry1.html");
+    defer testing.reset();
+    defer page._session.removePage();
+
+    const st: Self = .{
+        .dom_node = page.window._document.asNode(),
+        .registry = &registry,
+        .page = page,
+        .arena = testing.arena_allocator,
+        .prune = false,
+        .interactive_only = false,
+        .max_depth = 1,
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    try st.textStringify(&aw.writer);
+    const text_str = aw.written();
+
+    try testing.expect(std.mem.indexOf(u8, text_str, "other") == null);
+}
