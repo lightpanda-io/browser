@@ -643,6 +643,10 @@ Tasks:
   `scripts/windows/package_bare_metal_image.ps1` and drive the launch smoke
   from `tmp-browser-smoke/bare-metal-release/chrome-bare-metal-image-probe.ps1`
   so a future assistant can reproduce the bundle without guessing
+- keep the release gate honest by also running
+  `tmp-browser-smoke/bare-metal-release/chrome-bare-metal-policy-probe.ps1`
+  against the localhost request-policy harness so the same browser path proves
+  both launch readiness and request-policy parity
 - use `zig build bare_metal_release -Dtarget=x86_64-windows-msvc -Dtarget_class=bare_metal`
   as the canonical end-to-end validation command for the package-and-smoke
   slice on Windows
