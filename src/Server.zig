@@ -487,8 +487,14 @@ fn buildJSONVersionResponse(
     allocator: Allocator,
     address: net.Address,
 ) ![]const u8 {
-    const body_format = "{{\"webSocketDebuggerUrl\": \"ws://{f}/\"}}";
-    const body_len = std.fmt.count(body_format, .{address});
+    // Replace 0.0.0.0 with 127.0.0.1 for websocket URL since 0.0.0.0 is not a valid
+    // connection address for remote clients (fixes ECONNREFUSED when using Docker --host 0.0.0.0)
+    const is_bind_all = std.mem.eql(u8, address.toIp4String()[0..], "0.0.0.0");
+    const websocket_host: []const u8 = if (is_bind_all) "127.0.0.1" else address.toIp4String();
+    const port = address.getPort();
+
+    const body_format = "{{\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"}}";
+    const body_len = std.fmt.count(body_format, .{ websocket_host, port });
 
     // We send a Connection: Close (and actually close the connection)
     // because chromedp (Go driver) sends a request to /json/version and then
@@ -502,7 +508,7 @@ fn buildJSONVersionResponse(
         "Connection: Close\r\n" ++
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
         body_format;
-    return try std.fmt.allocPrint(allocator, response_format, .{ body_len, address });
+    return try std.fmt.allocPrint(allocator, response_format, .{ body_len, websocket_host, port });
 }
 
 pub const timestamp = @import("datetime.zig").timestamp;
@@ -519,6 +525,19 @@ test "server: buildJSONVersionResponse" {
         "Connection: Close\r\n" ++
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
         "{\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9001/\"}", res);
+}
+
+test "server: buildJSONVersionResponse with 0.0.0.0 bind address" {
+    // Test that 0.0.0.0 is replaced with 127.0.0.1 in websocket URL
+    const address = try net.Address.parseIp4("0.0.0.0", 9222);
+    const res = try buildJSONVersionResponse(testing.allocator, address);
+    defer testing.allocator.free(res);
+
+    try testing.expectEqualStrings("HTTP/1.1 200 OK\r\n" ++
+        "Content-Length: 48\r\n" ++
+        "Connection: Close\r\n" ++
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+        "{\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"}", res);
 }
 
 test "Client: http invalid request" {
