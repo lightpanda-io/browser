@@ -670,7 +670,10 @@ Do not call the bare-metal path production ready until:
   hardware class
 - the browser shell is usable with keyboard and pointer input
 - profile state persists across reboot
-- the network path handles normal navigation and downloads
+- the network path handles normal navigation and downloads, and the packaged
+  release smoke set includes `chrome-bare-metal-image-probe.ps1`,
+  `chrome-bare-metal-policy-probe.ps1`, and
+  `chrome-bare-metal-download-probe.ps1`
 - the same core browser pages work without Win32
 - boot and runtime failures are reproducible from saved logs
 
@@ -785,7 +788,9 @@ Rule, and the whole batch ends with the commit-and-push checkpoint rule.
 22. Back cookies, localStorage, and IndexedDB with the durable storage layer.
     Exit check: storage-backed browser pages still work after power loss.
 23. Implement the minimal bare-metal HTTP and HTTPS navigation path. Exit
-    check: localhost navigation and a download smoke pass on the emulator.
+   check: localhost navigation and
+   `tmp-browser-smoke/bare-metal-release/chrome-bare-metal-download-probe.ps1`
+   pass on the emulator.
 24. Verify one real-site fetch on bare metal with the same request policy as
     Windows. Exit check: the same policy gates content on both hosted and
     bare-metal paths.
