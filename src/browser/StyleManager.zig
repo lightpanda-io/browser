@@ -89,6 +89,8 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     }
 
     self.dirty = false;
+    errdefer self.dirty = true;
+
     const item_count = self.rules.items.len;
     self.page._session.arena_pool.resetRetain(self.arena);
     self.rules = try .initCapacity(self.arena, item_count);
