@@ -125,8 +125,8 @@ pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, page: *Page) 
         return local.resolvePromise(definition.constructor);
     }
 
-    validateName(name) catch |err| {
-        return local.rejectPromise(DOMException.fromError(err) orelse unreachable);
+    validateName(name) catch |err| switch (err) {
+        error.SyntaxError => return local.rejectPromise(.{ .dom_exception = .{ .err = error.SyntaxError } }),
     };
 
     const gop = try self._when_defined.getOrPut(page.arena, name);
