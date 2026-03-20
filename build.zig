@@ -208,8 +208,19 @@ pub fn build(b: *Build) !void {
         release_download_cmd.step.dependOn(b.getInstallStep());
         release_download_cmd.step.dependOn(&release_policy_cmd.step);
 
+        const release_shell_cmd = b.addSystemCommand(&.{
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "tmp-browser-smoke/bare-metal-release/chrome-bare-metal-start-shell-probe.ps1",
+        });
+        release_shell_cmd.step.dependOn(b.getInstallStep());
+        release_shell_cmd.step.dependOn(&release_download_cmd.step);
+
         const release_step = b.step("bare_metal_release", "Package and smoke the bare-metal launch bundle");
-        release_step.dependOn(&release_download_cmd.step);
+        release_step.dependOn(&release_shell_cmd.step);
     }
 }
 

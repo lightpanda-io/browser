@@ -672,8 +672,9 @@ Do not call the bare-metal path production ready until:
 - profile state persists across reboot
 - the network path handles normal navigation and downloads, and the packaged
   release smoke set includes `chrome-bare-metal-image-probe.ps1`,
-  `chrome-bare-metal-policy-probe.ps1`, and
-  `chrome-bare-metal-download-probe.ps1`
+  `chrome-bare-metal-policy-probe.ps1`,
+  `chrome-bare-metal-download-probe.ps1`, and
+  `chrome-bare-metal-start-shell-probe.ps1`
 - the same core browser pages work without Win32
 - boot and runtime failures are reproducible from saved logs
 

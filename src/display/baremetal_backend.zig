@@ -277,6 +277,9 @@ pub const BareMetalBackend = struct {
                         .shift = (key.modifiers & modifier_shift) != 0,
                     };
                     if (key.pressed) {
+                        if (try self.handleShortcutKey(key.code, modifiers)) {
+                            continue;
+                        }
                         if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and key.code == 'J') {
                             try self.queueBrowserCommand(.page_downloads);
                             continue;
@@ -407,6 +410,33 @@ pub const BareMetalBackend = struct {
     fn queueBrowserCommand(self: *@This(), command: BrowserCommand) !void {
         errdefer command.deinit(self.host.allocator);
         try self.command_queue.append(self.host.allocator, command);
+    }
+
+    fn handleShortcutKey(self: *@This(), key: u32, modifiers: anytype) !bool {
+        if (modifiers.ctrl and modifiers.shift and !modifiers.alt and !modifiers.meta and key == 'T') {
+            try self.queueBrowserCommand(.tab_reopen_closed);
+            return true;
+        }
+        if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and key == c.VK_TAB) {
+            try self.queueBrowserCommand(if (modifiers.shift) .tab_previous else .tab_next);
+            return true;
+        }
+        if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and key == 'T') {
+            try self.queueBrowserCommand(.tab_new);
+            return true;
+        }
+        if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and key == 'W') {
+            if (self.tab_entries.items.len == 0) {
+                return false;
+            }
+            try self.queueBrowserCommand(.{ .tab_close = self.active_tab_index });
+            return true;
+        }
+        if ((modifiers.alt or modifiers.meta) and !modifiers.ctrl and !modifiers.shift and key == c.VK_HOME) {
+            try self.queueBrowserCommand(.home);
+            return true;
+        }
+        return false;
     }
 
     fn firstRemovableDownloadIndex(self: *@This()) ?usize {
@@ -2204,6 +2234,94 @@ test "bare metal backend queues downloads shortcut and removal command" {
 
     const command = backend.nextBrowserCommand() orelse return error.TestExpected;
     try std.testing.expectEqual(BrowserCommand{ .download_remove = 0 }, command);
+    try std.testing.expectEqual(@as(?BrowserCommand, null), backend.nextBrowserCommand());
+}
+
+test "bare metal shortcut keys enqueue browser commands" {
+    var host = Host.initMock(std.testing.allocator);
+    defer host.deinit();
+
+    var backend = BareMetalBackend.init(&host, std.testing.allocator, 320, 180);
+    defer backend.deinit();
+
+    const tabs = [_]Display.TabEntry{
+        .{
+            .title = "One",
+            .url = "http://one.test/",
+            .is_loading = false,
+            .has_error = false,
+            .target_name = "",
+            .popup_source = .none,
+        },
+        .{
+            .title = "Two",
+            .url = "http://two.test/",
+            .is_loading = false,
+            .has_error = false,
+            .target_name = "",
+            .popup_source = .none,
+        },
+        .{
+            .title = "Three",
+            .url = "http://three.test/",
+            .is_loading = false,
+            .has_error = false,
+            .target_name = "",
+            .popup_source = .none,
+        },
+    };
+    backend.setTabEntries(tabs[0..], 1);
+
+    const FakePage = struct {
+        key_down: usize = 0,
+        key_up: usize = 0,
+
+        pub fn triggerKeyboardKeyDownWithRepeat(self: *@This(), _: []const u8, _: anytype, _: bool) !bool {
+            self.key_down += 1;
+            return true;
+        }
+
+        pub fn triggerKeyboardKeyUp(self: *@This(), _: []const u8, _: anytype) !bool {
+            self.key_up += 1;
+            return true;
+        }
+
+        pub fn triggerMouseMove(_: *@This(), _: f64, _: f64, _: anytype) !void {}
+
+        pub fn triggerMouseDown(_: *@This(), _: f64, _: f64, _: anytype, _: anytype) !void {}
+
+        pub fn triggerMouseUp(_: *@This(), _: f64, _: f64, _: anytype, _: anytype) !void {}
+
+        pub fn triggerMouseClickWithModifiers(_: *@This(), _: f64, _: f64, _: anytype, _: anytype) !bool {
+            return true;
+        }
+
+        pub fn triggerMouseWheel(_: *@This(), _: f64, _: f64, _: f64, _: f64, _: anytype) !struct { dispatched: bool, default_prevented: bool, scrolled_element: bool } {
+            return .{ .dispatched = true, .default_prevented = false, .scrolled_element = false };
+        }
+    };
+
+    var page = FakePage{};
+    try host.input.pushKey(std.testing.allocator, c.VK_HOME, true, modifier_alt);
+    try host.input.pushKey(std.testing.allocator, c.VK_HOME, false, modifier_alt);
+    try host.input.pushKey(std.testing.allocator, 'T', true, modifier_ctrl);
+    try host.input.pushKey(std.testing.allocator, 'T', false, modifier_ctrl);
+    try host.input.pushKey(std.testing.allocator, c.VK_TAB, true, modifier_ctrl);
+    try host.input.pushKey(std.testing.allocator, c.VK_TAB, false, modifier_ctrl);
+    try host.input.pushKey(std.testing.allocator, c.VK_TAB, true, modifier_ctrl | modifier_shift);
+    try host.input.pushKey(std.testing.allocator, c.VK_TAB, false, modifier_ctrl | modifier_shift);
+    try host.input.pushKey(std.testing.allocator, 'W', true, modifier_ctrl);
+    try host.input.pushKey(std.testing.allocator, 'W', false, modifier_ctrl);
+
+    try backend.dispatchInput(&page);
+
+    try std.testing.expectEqual(@as(usize, 0), page.key_down);
+    try std.testing.expectEqual(@as(usize, 5), page.key_up);
+    try std.testing.expectEqual(BrowserCommand.home, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(BrowserCommand.tab_new, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(BrowserCommand.tab_next, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(BrowserCommand.tab_previous, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(BrowserCommand{ .tab_close = 1 }, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(@as(?BrowserCommand, null), backend.nextBrowserCommand());
 }
 
