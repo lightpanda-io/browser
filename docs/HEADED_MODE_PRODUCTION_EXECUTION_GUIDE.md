@@ -647,6 +647,10 @@ Tasks:
   `tmp-browser-smoke/bare-metal-release/chrome-bare-metal-policy-probe.ps1`
   against the localhost request-policy harness so the same browser path proves
   both launch readiness and request-policy parity
+- keep the bare-metal restart path honest by also running
+  `tmp-browser-smoke/bare-metal-release/chrome-bare-metal-tabs-session-restore-probe.ps1`
+  so the packaged binary proves tab opening, switching, closing, and session
+  restore across a restart with the same profile directory
 - use `zig build bare_metal_release -Dtarget=x86_64-windows-msvc -Dtarget_class=bare_metal`
   as the canonical end-to-end validation command for the package-and-smoke
   slice on Windows
