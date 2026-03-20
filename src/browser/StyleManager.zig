@@ -45,7 +45,7 @@ pub const PointerEventsCache = std.AutoHashMapUnmanaged(*Element, bool);
 const StyleManager = @This();
 
 const Tag = Element.Tag;
-const RuleList = std.ArrayList(VisibilityRule);
+const RuleList = std.MultiArrayList(VisibilityRule);
 
 page: *Page,
 
@@ -74,12 +74,77 @@ pub fn deinit(self: *StyleManager) void {
     self.page.releaseArena(self.arena);
 }
 
-pub fn sheetAdded(self: *StyleManager, sheet: *CSSStyleSheet) !void {
-    const css_rules = sheet._css_rules orelse return;
+fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
+    if (sheet._css_rules) |css_rules| {
+        for (css_rules._rules.items) |rule| {
+            const style_rule = rule.is(CSSStyleRule) orelse continue;
+            try self.addRule(style_rule);
+        }
+        return;
+    }
 
-    for (css_rules._rules.items) |rule| {
-        const style_rule = rule.is(CSSStyleRule) orelse continue;
-        try self.addRule(style_rule);
+    const owner_node = sheet.getOwnerNode() orelse return;
+    if (owner_node.is(Element.Html.Style)) |style| {
+        const text = try style.asNode().getTextContentAlloc(self.arena);
+        var it = CssParser.parseStylesheet(text);
+        while (it.next()) |parsed_rule| {
+            try self.addRawRule(parsed_rule.selector, parsed_rule.block);
+        }
+    }
+}
+
+fn addRawRule(self: *StyleManager, selector_text: []const u8, block_text: []const u8) !void {
+    if (selector_text.len == 0) return;
+
+    var props = VisibilityProperties{};
+    var it = CssParser.parseDeclarationsList(block_text);
+    while (it.next()) |decl| {
+        const name = decl.name;
+        const val = decl.value;
+        if (std.ascii.eqlIgnoreCase(name, "display")) {
+            props.display_none = std.ascii.eqlIgnoreCase(val, "none");
+        } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
+            props.visibility_hidden = std.ascii.eqlIgnoreCase(val, "hidden") or std.ascii.eqlIgnoreCase(val, "collapse");
+        } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
+            props.opacity_zero = std.ascii.eqlIgnoreCase(val, "0");
+        } else if (std.ascii.eqlIgnoreCase(name, "pointer-events")) {
+            props.pointer_events_none = std.ascii.eqlIgnoreCase(val, "none");
+        }
+    }
+
+    if (!props.isRelevant()) return;
+
+    const selectors = SelectorParser.parseList(self.arena, selector_text, self.page) catch return;
+    for (selectors) |selector| {
+        const rightmost = if (selector.segments.len > 0) selector.segments[selector.segments.len - 1].compound else selector.first;
+        const bucket_key = getBucketKey(rightmost) orelse continue;
+        const rule = VisibilityRule{
+            .props = props,
+            .selector = selector,
+            .priority = (@as(u64, computeSpecificity(selector)) << 32) | @as(u64, self.next_doc_order),
+        };
+        self.next_doc_order += 1;
+
+        switch (bucket_key) {
+            .id => |id| {
+                const gop = try self.id_rules.getOrPut(self.arena, id);
+                if (!gop.found_existing) gop.value_ptr.* = .{};
+                try gop.value_ptr.append(self.arena, rule);
+            },
+            .class => |class| {
+                const gop = try self.class_rules.getOrPut(self.arena, class);
+                if (!gop.found_existing) gop.value_ptr.* = .{};
+                try gop.value_ptr.append(self.arena, rule);
+            },
+            .tag => |tag| {
+                const gop = try self.tag_rules.getOrPut(self.arena, tag);
+                if (!gop.found_existing) gop.value_ptr.* = .{};
+                try gop.value_ptr.append(self.arena, rule);
+            },
+            .other => {
+                try self.other_rules.append(self.arena, rule);
+            },
+        }
     }
 }
 
@@ -103,27 +168,28 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     const id_rules_count = self.id_rules.count();
     const class_rules_count = self.class_rules.count();
     const tag_rules_count = self.tag_rules.count();
-    const other_rules_count = self.other_rules.items.len;
+    const other_rules_count = self.other_rules.len;
 
     self.page._session.arena_pool.resetRetain(self.arena);
 
     self.next_doc_order = 0;
 
     self.id_rules = .empty;
-    try self.id_rules.ensureUnusedCapacity(self.arena, id_rules_count);
+    try self.id_rules.ensureTotalCapacity(self.arena, id_rules_count);
 
     self.class_rules = .empty;
-    try self.class_rules.ensureUnusedCapacity(self.arena, class_rules_count);
+    try self.class_rules.ensureTotalCapacity(self.arena, class_rules_count);
 
     self.tag_rules = .empty;
-    try self.tag_rules.ensureUnusedCapacity(self.arena, tag_rules_count);
+    try self.tag_rules.ensureTotalCapacity(self.arena, tag_rules_count);
 
-    self.other_rules = try .initCapacity(self.arena, other_rules_count);
+    self.other_rules = .{};
+    try self.other_rules.ensureTotalCapacity(self.arena, other_rules_count);
 
     const sheets = self.page.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
-        self.sheetAdded(sheet) catch |err| {
-            log.err(.browser, "StyleManager sheetAdded", .{ .err = err });
+        self.parseSheet(sheet) catch |err| {
+            log.err(.browser, "StyleManager parseSheet", .{ .err = err });
             return err;
         };
     }
@@ -165,25 +231,25 @@ pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, opt
 
 /// Check if a single element (not ancestors) is hidden.
 fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions) bool {
-    // Track best match per property (value + specificity)
-    // Initialize spec to INLINE_SPECIFICITY for properties we don't care about - this makes
-    // the loop naturally skip them since no stylesheet rule can have specificity >= INLINE_SPECIFICITY
+    // Track best match per property (value + priority)
+    // Initialize priority to INLINE_PRIORITY for properties we don't care about - this makes
+    // the loop naturally skip them since no stylesheet rule can have priority >= INLINE_PRIORITY
     var display_none: ?bool = null;
-    var display_spec: u32 = 0;
+    var display_priority: u64 = 0;
 
     var visibility_hidden: ?bool = null;
-    var visibility_spec: u32 = 0;
+    var visibility_priority: u64 = 0;
 
     var opacity_zero: ?bool = null;
-    var opacity_spec: u32 = 0;
+    var opacity_priority: u64 = 0;
 
-    // Check inline styles FIRST - they use INLINE_SPECIFICITY so no stylesheet can beat them
+    // Check inline styles FIRST - they use INLINE_PRIORITY so no stylesheet can beat them
     if (getInlineStyleProperty(el, comptime .wrap("display"), self.page)) |property| {
         if (property._value.eql(comptime .wrap("none"))) {
             return true; // Early exit for hiding value
         }
         display_none = false;
-        display_spec = INLINE_SPECIFICITY;
+        display_priority = INLINE_PRIORITY;
     }
 
     if (options.check_visibility) {
@@ -192,13 +258,13 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
                 return true;
             }
             visibility_hidden = false;
-            visibility_spec = INLINE_SPECIFICITY;
+            visibility_priority = INLINE_PRIORITY;
         }
     } else {
         // This can't be beat. Setting this means that, when checking rules
         // we no longer have to check if options.check_visibility is enabled.
-        // We can just compare the specificity.
-        visibility_spec = INLINE_SPECIFICITY;
+        // We can just compare the priority.
+        visibility_priority = INLINE_PRIORITY;
     }
 
     if (options.check_opacity) {
@@ -207,87 +273,86 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
                 return true;
             }
             opacity_zero = false;
-            opacity_spec = INLINE_SPECIFICITY;
+            opacity_priority = INLINE_PRIORITY;
         }
     } else {
-        opacity_spec = INLINE_SPECIFICITY;
+        opacity_priority = INLINE_PRIORITY;
     }
 
-    if (display_spec == INLINE_SPECIFICITY and visibility_spec == INLINE_SPECIFICITY and opacity_spec == INLINE_SPECIFICITY) {
+    if (display_priority == INLINE_PRIORITY and visibility_priority == INLINE_PRIORITY and opacity_priority == INLINE_PRIORITY) {
         return false;
     }
 
     self.rebuildIfDirty() catch return false;
 
-    // Track doc_order for tie-breaking (0 = inline style, which always wins)
-    var display_doc_order: u32 = 0;
-    var visibility_doc_order: u32 = 0;
-    var opacity_doc_order: u32 = 0;
-
     // Helper to check a single rule
     const Ctx = struct {
         display_none: *?bool,
-        display_spec: *u32,
-        display_doc_order: *u32,
+        display_priority: *u64,
         visibility_hidden: *?bool,
-        visibility_spec: *u32,
-        visibility_doc_order: *u32,
+        visibility_priority: *u64,
         opacity_zero: *?bool,
-        opacity_spec: *u32,
-        opacity_doc_order: *u32,
+        opacity_priority: *u64,
         el: *Element,
         page: *Page,
 
-        // Returns true if (spec, doc_order) beats (best_spec, best_doc_order)
-        fn beats(spec: u32, doc_order: u32, best_spec: u32, best_doc_order: u32) bool {
-            return spec > best_spec or (spec == best_spec and doc_order > best_doc_order);
-        }
+        fn checkRules(ctx: @This(), rules: *const RuleList) void {
+            if (ctx.display_priority.* == INLINE_PRIORITY and
+                ctx.visibility_priority.* == INLINE_PRIORITY and
+                ctx.opacity_priority.* == INLINE_PRIORITY)
+            {
+                return;
+            }
 
-        fn checkRule(ctx: @This(), rule: VisibilityRule) void {
-            // Skip rules that can't possibly beat current best for any property
-            const dominated = (rule.props.display_none == null or !beats(rule.specificity, rule.doc_order, ctx.display_spec.*, ctx.display_doc_order.*)) and
-                (rule.props.visibility_hidden == null or !beats(rule.specificity, rule.doc_order, ctx.visibility_spec.*, ctx.visibility_doc_order.*)) and
-                (rule.props.opacity_zero == null or !beats(rule.specificity, rule.doc_order, ctx.opacity_spec.*, ctx.opacity_doc_order.*));
-            if (dominated) return;
+            const priorities = rules.items(.priority);
+            const props_list = rules.items(.props);
+            const selectors = rules.items(.selector);
 
-            if (matchesSelector(ctx.el, rule.selector, ctx.page)) {
-                if (rule.props.display_none != null and beats(rule.specificity, rule.doc_order, ctx.display_spec.*, ctx.display_doc_order.*)) {
-                    ctx.display_none.* = rule.props.display_none;
-                    ctx.display_spec.* = rule.specificity;
-                    ctx.display_doc_order.* = rule.doc_order;
+            for (priorities, props_list, selectors) |p, props, selector| {
+                // Fast skip using packed u64 priority
+                if (p <= ctx.display_priority.* and p <= ctx.visibility_priority.* and p <= ctx.opacity_priority.*) {
+                    continue;
                 }
-                if (rule.props.visibility_hidden != null and beats(rule.specificity, rule.doc_order, ctx.visibility_spec.*, ctx.visibility_doc_order.*)) {
-                    ctx.visibility_hidden.* = rule.props.visibility_hidden;
-                    ctx.visibility_spec.* = rule.specificity;
-                    ctx.visibility_doc_order.* = rule.doc_order;
-                }
-                if (rule.props.opacity_zero != null and beats(rule.specificity, rule.doc_order, ctx.opacity_spec.*, ctx.opacity_doc_order.*)) {
-                    ctx.opacity_zero.* = rule.props.opacity_zero;
-                    ctx.opacity_spec.* = rule.specificity;
-                    ctx.opacity_doc_order.* = rule.doc_order;
+
+                // Logic for property dominance
+                const dominated = (props.display_none == null or p <= ctx.display_priority.*) and
+                    (props.visibility_hidden == null or p <= ctx.visibility_priority.*) and
+                    (props.opacity_zero == null or p <= ctx.opacity_priority.*);
+
+                if (dominated) continue;
+
+                if (matchesSelector(ctx.el, selector, ctx.page)) {
+                    // Update best priorities
+                    if (props.display_none != null and p > ctx.display_priority.*) {
+                        ctx.display_none.* = props.display_none;
+                        ctx.display_priority.* = p;
+                    }
+                    if (props.visibility_hidden != null and p > ctx.visibility_priority.*) {
+                        ctx.visibility_hidden.* = props.visibility_hidden;
+                        ctx.visibility_priority.* = p;
+                    }
+                    if (props.opacity_zero != null and p > ctx.opacity_priority.*) {
+                        ctx.opacity_zero.* = props.opacity_zero;
+                        ctx.opacity_priority.* = p;
+                    }
                 }
             }
         }
     };
     const ctx = Ctx{
         .display_none = &display_none,
-        .display_spec = &display_spec,
-        .display_doc_order = &display_doc_order,
+        .display_priority = &display_priority,
         .visibility_hidden = &visibility_hidden,
-        .visibility_spec = &visibility_spec,
-        .visibility_doc_order = &visibility_doc_order,
+        .visibility_priority = &visibility_priority,
         .opacity_zero = &opacity_zero,
-        .opacity_spec = &opacity_spec,
-        .opacity_doc_order = &opacity_doc_order,
+        .opacity_priority = &opacity_priority,
         .el = el,
         .page = self.page,
     };
 
     if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
         if (self.id_rules.get(id)) |rules| {
-            for (rules.items) |rule| {
-                ctx.checkRule(rule);
-            }
+            ctx.checkRules(&rules);
         }
     }
 
@@ -295,22 +360,16 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
         var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
         while (it.next()) |class| {
             if (self.class_rules.get(class)) |rules| {
-                for (rules.items) |rule| {
-                    ctx.checkRule(rule);
-                }
+                ctx.checkRules(&rules);
             }
         }
     }
 
     if (self.tag_rules.get(el.getTag())) |rules| {
-        for (rules.items) |rule| {
-            ctx.checkRule(rule);
-        }
+        ctx.checkRules(&rules);
     }
 
-    for (self.other_rules.items) |rule| {
-        ctx.checkRule(rule);
-    }
+    ctx.checkRules(&self.other_rules);
 
     return (display_none orelse false) or (visibility_hidden orelse false) or (opacity_zero orelse false);
 }
@@ -362,32 +421,32 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return false;
 
     var result: ?bool = null;
-    var best_spec: u32 = 0;
-    var best_doc_order: u32 = 0;
+    var best_priority: u64 = 0;
 
     // Helper to check a single rule
-    const checkRule = struct {
-        fn beats(spec: u32, doc_order: u32, b_spec: u32, b_doc_order: u32) bool {
-            return spec > b_spec or (spec == b_spec and doc_order > b_doc_order);
-        }
+    const checkRules = struct {
+        fn check(rules: *const RuleList, res: *?bool, current_priority: *u64, elem: *Element, p: *Page) void {
+            if (current_priority.* == INLINE_PRIORITY) return;
 
-        fn check(rule: VisibilityRule, res: *?bool, spec: *u32, doc_order: *u32, elem: *Element, p: *Page) void {
-            if (rule.props.pointer_events_none == null or !beats(rule.specificity, rule.doc_order, spec.*, doc_order.*)) {
-                return;
-            }
-            if (matchesSelector(elem, rule.selector, p)) {
-                res.* = rule.props.pointer_events_none;
-                spec.* = rule.specificity;
-                doc_order.* = rule.doc_order;
+            const priorities = rules.items(.priority);
+            const props_list = rules.items(.props);
+            const selectors = rules.items(.selector);
+
+            for (priorities, props_list, selectors) |priority, props, selector| {
+                if (priority <= current_priority.*) continue;
+                if (props.pointer_events_none == null) continue;
+
+                if (matchesSelector(elem, selector, p)) {
+                    res.* = props.pointer_events_none;
+                    current_priority.* = priority;
+                }
             }
         }
     }.check;
 
     if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
         if (self.id_rules.get(id)) |rules| {
-            for (rules.items) |rule| {
-                checkRule(rule, &result, &best_spec, &best_doc_order, el, page);
-            }
+            checkRules(&rules, &result, &best_priority, el, page);
         }
     }
 
@@ -395,22 +454,16 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
         var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
         while (it.next()) |class| {
             if (self.class_rules.get(class)) |rules| {
-                for (rules.items) |rule| {
-                    checkRule(rule, &result, &best_spec, &best_doc_order, el, page);
-                }
+                checkRules(&rules, &result, &best_priority, el, page);
             }
         }
     }
 
     if (self.tag_rules.get(el.getTag())) |rules| {
-        for (rules.items) |rule| {
-            checkRule(rule, &result, &best_spec, &best_doc_order, el, page);
-        }
+        checkRules(&rules, &result, &best_priority, el, page);
     }
 
-    for (self.other_rules.items) |rule| {
-        checkRule(rule, &result, &best_spec, &best_doc_order, el, page);
-    }
+    checkRules(&self.other_rules, &result, &best_priority, el, page);
 
     return result orelse false;
 }
@@ -452,8 +505,7 @@ fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !void {
         const rule = VisibilityRule{
             .props = props,
             .selector = selector,
-            .specificity = computeSpecificity(selector),
-            .doc_order = self.next_doc_order,
+            .priority = (@as(u64, computeSpecificity(selector)) << 32) | @as(u64, self.next_doc_order),
         };
         self.next_doc_order += 1;
 
@@ -461,17 +513,17 @@ fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !void {
         switch (bucket_key) {
             .id => |id| {
                 const gop = try self.id_rules.getOrPut(self.arena, id);
-                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                if (!gop.found_existing) gop.value_ptr.* = .{};
                 try gop.value_ptr.append(self.arena, rule);
             },
             .class => |class| {
                 const gop = try self.class_rules.getOrPut(self.arena, class);
-                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                if (!gop.found_existing) gop.value_ptr.* = .{};
                 try gop.value_ptr.append(self.arena, rule);
             },
             .tag => |tag| {
                 const gop = try self.tag_rules.getOrPut(self.arena, tag);
-                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                if (!gop.found_existing) gop.value_ptr.* = .{};
                 try gop.value_ptr.append(self.arena, rule);
             },
             .other => {
@@ -629,11 +681,8 @@ const VisibilityRule = struct {
     selector: Selector.Selector, // Single selector, not a list
     props: VisibilityProperties,
 
-    // Packed specificity: (id_count << 20) | (class_count << 10) | element_count
-    specificity: u32,
-
-    // Document order for tie-breaking equal specificity (higher = later in document)
-    doc_order: u32,
+    // Packed priority: (specificity << 32) | doc_order
+    priority: u64,
 };
 
 const CheckVisibilityOptions = struct {
@@ -641,8 +690,8 @@ const CheckVisibilityOptions = struct {
     check_visibility: bool = false,
 };
 
-// Inline styles always win over stylesheets - use max u32 as sentinel
-const INLINE_SPECIFICITY: u32 = std.math.maxInt(u32);
+// Inline styles always win over stylesheets - use max u64 as sentinel
+const INLINE_PRIORITY: u64 = std.math.maxInt(u64);
 
 fn getInlineStyleProperty(el: *Element, property_name: String, page: *Page) ?*CSSStyleProperty {
     const style = el.getOrCreateStyle(page) catch |err| {
