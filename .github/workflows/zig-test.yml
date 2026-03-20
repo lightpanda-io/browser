@@ -5,19 +5,18 @@ env:
   AWS_SECRET_ACCESS_KEY: ${{ secrets.LPD_PERF_AWS_SECRET_ACCESS_KEY }}
   AWS_BUCKET: ${{ vars.LPD_PERF_AWS_BUCKET }}
   AWS_REGION: ${{ vars.LPD_PERF_AWS_REGION }}
+  LIGHTPANDA_DISABLE_TELEMETRY: true
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
-      - "build.zig"
-      - "src/**"
-      - "vendor/zig-js-runtime"
       - ".github/**"
-      - "vendor/**"
-  pull_request:
+      - "src/**"
+      - "build.zig"
+      - "build.zig.zon"
 
+  pull_request:
     # By default GH trigger on types opened, synchronize and reopened.
     # see https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#pull_request
     # Since we skip the job when the PR is in draft state, we want to force CI
@@ -27,28 +26,63 @@ on:
 
     paths:
       - ".github/**"
+      - "src/**"
       - "build.zig"
-      - "src/**/*.zig"
-      - "src/*.zig"
-      - "vendor/**"
-      - ".github/**"
-      - "vendor/**"
+      - "build.zig.zon"
+
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 jobs:
-  zig-test-debug:
-    name: zig test using v8 in debug mode
-    timeout-minutes: 15
+  zig-fmt:
+    name: zig fmt
 
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    if: github.event.pull_request.draft == false
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+
+      # Zig version used from the `minimum_zig_version` field in build.zig.zon
+      - uses: mlugg/setup-zig@v2
+
+      - name: Run zig fmt
+        id: fmt
+        run: |
+          zig fmt --check ./*.zig ./**/*.zig 2> zig-fmt.err > zig-fmt.err2 || echo "Failed"
+          delimiter="$(openssl rand -hex 8)"
+          echo "zig_fmt_errs<<${delimiter}" >> "${GITHUB_OUTPUT}"
+
+          if [ -s zig-fmt.err ]; then
+            echo "// The following errors occurred:" >> "${GITHUB_OUTPUT}"
+            cat zig-fmt.err >> "${GITHUB_OUTPUT}"
+          fi
+
+          if [ -s zig-fmt.err2 ]; then
+            echo "// The following files were not formatted:" >> "${GITHUB_OUTPUT}"
+            cat zig-fmt.err2 >> "${GITHUB_OUTPUT}"
+          fi
+
+          echo "${delimiter}" >> "${GITHUB_OUTPUT}"
+
+      - name: Fail the job
+        if: steps.fmt.outputs.zig_fmt_errs != ''
+        run: exit 1
+
+  zig-test-debug:
+    name: zig test using v8 in debug mode
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # fetch submodules recusively, to get zig-js-runtime submodules also.
-          submodules: recursive
 
       - uses: ./.github/actions/install
         with:
@@ -57,21 +91,18 @@ jobs:
       - name: zig build test
         run: zig build -Dprebuilt_v8_path=v8/libc_v8_debug.a -Dtsan=true test
 
-  zig-test:
+  zig-test-release:
     name: zig test
-    timeout-minutes: 15
-
-    # Don't run the CI with draft PR.
-    if: github.event.pull_request.draft == false
 
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    if: github.event.pull_request.draft == false
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # fetch submodules recusively, to get zig-js-runtime submodules also.
-          submodules: recursive
 
       - uses: ./.github/actions/install
 
@@ -83,7 +114,7 @@ jobs:
           echo "${{github.sha}}" > commit.txt
 
       - name: upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-results
           path: |
@@ -93,23 +124,22 @@ jobs:
 
   bench-fmt:
     name: perf-fmt
-    needs: zig-test
-
-    # Don't execute on PR
-    if: github.event_name != 'pull_request'
+    needs: zig-test-release
 
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    if: github.event_name != 'pull_request'
+
     container:
       image: ghcr.io/lightpanda-io/perf-fmt:latest
       credentials:
-       username: ${{ github.actor }}
-       password: ${{ secrets.GITHUB_TOKEN }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bench-results
 

@@ -68,6 +68,8 @@ temps: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
 // if v8 hasn't called the finalizer directly itself.
 finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *FinalizerCallback) = .empty,
 
+taken_over: std.ArrayList(*Origin),
+
 pub fn init(app: *App, isolate: js.Isolate, key: []const u8) !*Origin {
     const arena = try app.arena_pool.acquire();
     errdefer app.arena_pool.release(arena);
@@ -86,14 +88,19 @@ pub fn init(app: *App, isolate: js.Isolate, key: []const u8) !*Origin {
         .rc = 1,
         .arena = arena,
         .key = owned_key,
-        .globals = .empty,
         .temps = .empty,
+        .globals = .empty,
+        .taken_over = .empty,
         .security_token = token_global,
     };
     return self;
 }
 
 pub fn deinit(self: *Origin, app: *App) void {
+    for (self.taken_over.items) |o| {
+        o.deinit(app);
+    }
+
     // Call finalizers before releasing anything
     {
         var it = self.finalizer_callbacks.valueIterator();
@@ -196,42 +203,44 @@ pub fn createFinalizerCallback(
     return fc;
 }
 
-pub fn transferTo(self: *Origin, dest: *Origin) !void {
-    const arena = dest.arena;
+pub fn takeover(self: *Origin, original: *Origin) !void {
+    const arena = self.arena;
 
-    try dest.globals.ensureUnusedCapacity(arena, self.globals.items.len);
-    for (self.globals.items) |obj| {
-        dest.globals.appendAssumeCapacity(obj);
+    try self.globals.ensureUnusedCapacity(arena, original.globals.items.len);
+    for (original.globals.items) |obj| {
+        self.globals.appendAssumeCapacity(obj);
     }
-    self.globals.clearRetainingCapacity();
+    original.globals.clearRetainingCapacity();
 
     {
-        try dest.temps.ensureUnusedCapacity(arena, self.temps.count());
-        var it = self.temps.iterator();
+        try self.temps.ensureUnusedCapacity(arena, original.temps.count());
+        var it = original.temps.iterator();
         while (it.next()) |kv| {
-            try dest.temps.put(arena, kv.key_ptr.*, kv.value_ptr.*);
+            try self.temps.put(arena, kv.key_ptr.*, kv.value_ptr.*);
         }
-        self.temps.clearRetainingCapacity();
-    }
-
-    {
-        try dest.finalizer_callbacks.ensureUnusedCapacity(arena, self.finalizer_callbacks.count());
-        var it = self.finalizer_callbacks.iterator();
-        while (it.next()) |kv| {
-            kv.value_ptr.*.origin = dest;
-            try dest.finalizer_callbacks.put(arena, kv.key_ptr.*, kv.value_ptr.*);
-        }
-        self.finalizer_callbacks.clearRetainingCapacity();
+        original.temps.clearRetainingCapacity();
     }
 
     {
-        try dest.identity_map.ensureUnusedCapacity(arena, self.identity_map.count());
-        var it = self.identity_map.iterator();
+        try self.finalizer_callbacks.ensureUnusedCapacity(arena, original.finalizer_callbacks.count());
+        var it = original.finalizer_callbacks.iterator();
         while (it.next()) |kv| {
-            try dest.identity_map.put(arena, kv.key_ptr.*, kv.value_ptr.*);
+            kv.value_ptr.*.origin = self;
+            try self.finalizer_callbacks.put(arena, kv.key_ptr.*, kv.value_ptr.*);
         }
-        self.identity_map.clearRetainingCapacity();
+        original.finalizer_callbacks.clearRetainingCapacity();
     }
+
+    {
+        try self.identity_map.ensureUnusedCapacity(arena, original.identity_map.count());
+        var it = original.identity_map.iterator();
+        while (it.next()) |kv| {
+            try self.identity_map.put(arena, kv.key_ptr.*, kv.value_ptr.*);
+        }
+        original.identity_map.clearRetainingCapacity();
+    }
+
+    try self.taken_over.append(self.arena, original);
 }
 
 // A type that has a finalizer can have its finalizer called one of two ways.

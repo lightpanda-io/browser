@@ -25,8 +25,11 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const URL = @import("../../URL.zig");
 
+const Blob = @import("../Blob.zig");
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
+const AbortSignal = @import("../AbortSignal.zig");
+const DOMException = @import("../DOMException.zig");
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -38,16 +41,28 @@ _buf: std.ArrayList(u8),
 _response: *Response,
 _resolver: js.PromiseResolver.Global,
 _owns_response: bool,
+_signal: ?*AbortSignal,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
 
 pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     const request = try Request.init(input, options, page);
+    const resolver = page.js.local.?.createPromiseResolver();
+
+    if (request._signal) |signal| {
+        if (signal._aborted) {
+            resolver.reject("fetch aborted", DOMException.init("The operation was aborted.", "AbortError"));
+            return resolver.promise();
+        }
+    }
+
+    if (std.mem.startsWith(u8, request._url, "blob:")) {
+        return handleBlobUrl(request._url, resolver, page);
+    }
+
     const response = try Response.init(null, .{ .status = 0 }, page);
     errdefer response.deinit(true, page._session);
-
-    const resolver = page.js.local.?.createPromiseResolver();
 
     const fetch = try response._arena.create(Fetch);
     fetch.* = .{
@@ -57,6 +72,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         ._resolver = try resolver.persist(),
         ._response = response,
         ._owns_response = true,
+        ._signal = request._signal,
     };
 
     const http_client = page._session.browser.http_client;
@@ -90,6 +106,26 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     return resolver.promise();
 }
 
+fn handleBlobUrl(url: []const u8, resolver: js.PromiseResolver, page: *Page) !js.Promise {
+    const blob: *Blob = page.lookupBlobUrl(url) orelse {
+        resolver.rejectError("fetch blob error", .{ .type_error = "BlobNotFound" });
+        return resolver.promise();
+    };
+
+    const response = try Response.init(null, .{ .status = 200 }, page);
+    response._body = try response._arena.dupe(u8, blob._slice);
+    response._url = try response._arena.dupeZ(u8, url);
+    response._type = .basic;
+
+    if (blob._mime.len > 0) {
+        try response._headers.append("Content-Type", blob._mime, page);
+    }
+
+    const js_val = try page.js.local.?.zigValueToJs(response, .{});
+    resolver.resolve("fetch blob done", js_val);
+    return resolver.promise();
+}
+
 fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
     if (comptime IS_DEBUG) {
@@ -100,6 +136,12 @@ fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
 
 fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
+
+    if (self._signal) |signal| {
+        if (signal._aborted) {
+            return false;
+        }
+    }
 
     const arena = self._response._arena;
     if (transfer.getContentLength()) |cl| {
@@ -150,6 +192,14 @@ fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
 
 fn httpDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
+
+    // Check if aborted
+    if (self._signal) |signal| {
+        if (signal._aborted) {
+            return error.Abort;
+        }
+    }
+
     try self._buf.appendSlice(self._response._arena, data);
 }
 

@@ -13,7 +13,7 @@ inputs:
   zig-v8:
     description: 'zig v8 version to install'
     required: false
-    default: 'v0.3.3'
+    default: 'v0.3.4'
   v8:
     description: 'v8 version to install'
     required: false
@@ -46,7 +46,7 @@ runs:
 
     - name: Cache v8
       id: cache-v8
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       env:
         cache-name: cache-v8
       with:

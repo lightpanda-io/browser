@@ -66,7 +66,10 @@ _on_load: ?js.Function.Global = null,
 _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
-_on_unhandled_rejection: ?js.Function.Global = null, // TODO: invoke on error
+_on_message: ?js.Function.Global = null,
+_on_rejection_handled: ?js.Function.Global = null,
+_on_unhandled_rejection: ?js.Function.Global = null,
+_current_event: ?*Event = null,
 _location: *Location,
 _timer_id: u30 = 0,
 _timers: std.AutoHashMapUnmanaged(u32, *ScheduleCallback) = .{},
@@ -87,6 +90,10 @@ _scroll_pos: struct {
 
 pub fn asEventTarget(self: *Window) *EventTarget {
     return self._proto;
+}
+
+pub fn getEvent(self: *const Window) ?*Event {
+    return self._current_event;
 }
 
 pub fn getSelf(self: *Window) *Window {
@@ -206,6 +213,22 @@ pub fn getOnError(self: *const Window) ?js.Function.Global {
 
 pub fn setOnError(self: *Window, setter: ?FunctionSetter) void {
     self._on_error = getFunctionFromSetter(setter);
+}
+
+pub fn getOnMessage(self: *const Window) ?js.Function.Global {
+    return self._on_message;
+}
+
+pub fn setOnMessage(self: *Window, setter: ?FunctionSetter) void {
+    self._on_message = getFunctionFromSetter(setter);
+}
+
+pub fn getOnRejectionHandled(self: *const Window) ?js.Function.Global {
+    return self._on_rejection_handled;
+}
+
+pub fn setOnRejectionHandled(self: *Window, setter: ?FunctionSetter) void {
+    self._on_rejection_handled = getFunctionFromSetter(setter);
 }
 
 pub fn getOnUnhandledRejection(self: *const Window) ?js.Function.Global {
@@ -334,7 +357,11 @@ pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
 
     const event = error_event.asEvent();
     event._prevent_default = prevent_default;
-    try page._event_manager.dispatch(self.asEventTarget(), event);
+    // Pass null as handler: onerror was already called above with 5 args.
+    // We still dispatch so that addEventListener('error', ...) listeners fire.
+    try page._event_manager.dispatchDirect(self.asEventTarget(), event, null, .{
+        .context = "window.reportError",
+    });
 
     if (comptime builtin.is_test == false) {
         if (!event._prevent_default) {
@@ -369,19 +396,26 @@ pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]cons
     // In a full implementation, we would validate the origin
     _ = target_origin;
 
-    // postMessage queues a task (not a microtask), so use the scheduler
-    const arena = try page.getArena(.{ .debug = "Window.schedule" });
-    errdefer page.releaseArena(arena);
+    // self = the window that will get the message
+    // page = the context calling postMessage
+    const target_page = self._page;
+    const source_window = target_page.js.getIncumbent().window;
 
-    const origin = try self._location.getOrigin(page);
+    const arena = try target_page.getArena(.{ .debug = "Window.postMessage" });
+    errdefer target_page.releaseArena(arena);
+
+    // Origin should be the source window's origin (where the message came from)
+    const origin = try source_window._location.getOrigin(page);
     const callback = try arena.create(PostMessageCallback);
     callback.* = .{
-        .page = page,
         .arena = arena,
         .message = message,
+        .page = target_page,
+        .source = source_window,
         .origin = try arena.dupe(u8, origin),
     };
-    try page.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
+
+    try target_page.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "postMessage",
         .low_priority = false,
         .finalizer = PostMessageCallback.cancelled,
@@ -547,7 +581,7 @@ pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
     return self.scrollTo(.{ .x = absx }, absy, page);
 }
 
-pub fn unhandledPromiseRejection(self: *Window, rejection: js.PromiseRejection, page: *Page) !void {
+pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.PromiseRejection, page: *Page) !void {
     if (comptime IS_DEBUG) {
         log.debug(.js, "unhandled rejection", .{
             .value = rejection.reason(),
@@ -555,13 +589,20 @@ pub fn unhandledPromiseRejection(self: *Window, rejection: js.PromiseRejection, 
         });
     }
 
+    const event_name, const attribute_callback = blk: {
+        if (no_handler) {
+            break :blk .{ "unhandledrejection", self._on_unhandled_rejection };
+        }
+        break :blk .{ "rejectionhandled", self._on_rejection_handled };
+    };
+
     const target = self.asEventTarget();
-    if (page._event_manager.hasDirectListeners(target, "unhandledrejection", self._on_unhandled_rejection)) {
-        const event = (try @import("event/PromiseRejectionEvent.zig").init("unhandledrejection", .{
+    if (page._event_manager.hasDirectListeners(target, event_name, attribute_callback)) {
+        const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
             .reason = if (rejection.reason()) |r| try r.temp() else null,
             .promise = try rejection.promise().temp(),
         }, page)).asEvent();
-        try page._event_manager.dispatchDirect(target, event, self._on_unhandled_rejection, .{ .context = "window.unhandledrejection" });
+        try page._event_manager.dispatchDirect(target, event, attribute_callback, .{ .context = "window.unhandledrejection" });
     }
 }
 
@@ -702,6 +743,7 @@ const ScheduleCallback = struct {
 
 const PostMessageCallback = struct {
     page: *Page,
+    source: *Window,
     arena: Allocator,
     origin: []const u8,
     message: js.Value.Temp,
@@ -712,7 +754,7 @@ const PostMessageCallback = struct {
 
     fn cancelled(ctx: *anyopaque) void {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
-        self.page.releaseArena(self.arena);
+        self.deinit();
     }
 
     fn run(ctx: *anyopaque) !?u32 {
@@ -722,14 +764,17 @@ const PostMessageCallback = struct {
         const page = self.page;
         const window = page.window;
 
-        const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
-            .data = self.message,
-            .origin = self.origin,
-            .source = window,
-            .bubbles = false,
-            .cancelable = false,
-        }, page)).asEvent();
-        try page._event_manager.dispatch(window.asEventTarget(), event);
+        const event_target = window.asEventTarget();
+        if (page._event_manager.hasDirectListeners(event_target, "message", window._on_message)) {
+            const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
+                .data = self.message,
+                .origin = self.origin,
+                .source = self.source,
+                .bubbles = false,
+                .cancelable = false,
+            }, page)).asEvent();
+            try page._event_manager.dispatchDirect(event_target, event, window._on_message, .{ .context = "window.postMessage" });
+        }
 
         return null;
     }
@@ -783,7 +828,10 @@ pub const JsApi = struct {
     pub const onpageshow = bridge.accessor(Window.getOnPageShow, Window.setOnPageShow, .{});
     pub const onpopstate = bridge.accessor(Window.getOnPopState, Window.setOnPopState, .{});
     pub const onerror = bridge.accessor(Window.getOnError, Window.setOnError, .{});
+    pub const onmessage = bridge.accessor(Window.getOnMessage, Window.setOnMessage, .{});
+    pub const onrejectionhandled = bridge.accessor(Window.getOnRejectionHandled, Window.setOnRejectionHandled, .{});
     pub const onunhandledrejection = bridge.accessor(Window.getOnUnhandledRejection, Window.setOnUnhandledRejection, .{});
+    pub const event = bridge.accessor(Window.getEvent, null, .{ .null_as_undefined = true });
     pub const fetch = bridge.function(Window.fetch, .{});
     pub const queueMicrotask = bridge.function(Window.queueMicrotask, .{});
     pub const setTimeout = bridge.function(Window.setTimeout, .{});
@@ -852,4 +900,8 @@ test "WebApi: Window" {
 
 test "WebApi: Window scroll" {
     try testing.htmlRunner("window_scroll.html", .{});
+}
+
+test "WebApi: Window.onerror" {
+    try testing.htmlRunner("event/report_error.html", .{});
 }

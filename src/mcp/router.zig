@@ -148,7 +148,7 @@ test "MCP.router - handleMessage - synchronous unit tests" {
 
     // 5. Parse error
     {
-        const filter: testing.LogFilter = .init(.mcp);
+        const filter: testing.LogFilter = .init(&.{.mcp});
         defer filter.deinit();
 
         try handleMessage(server, aa, "invalid json");

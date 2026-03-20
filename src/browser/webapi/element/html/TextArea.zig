@@ -26,6 +26,7 @@ const HtmlElement = @import("../Html.zig");
 const Form = @import("Form.zig");
 const Selection = @import("../../Selection.zig");
 const Event = @import("../../Event.zig");
+const InputEvent = @import("../../event/InputEvent.zig");
 
 const TextArea = @This();
 
@@ -53,6 +54,11 @@ pub fn setOnSelectionChange(self: *TextArea, listener: ?js.Function) !void {
 fn dispatchSelectionChangeEvent(self: *TextArea, page: *Page) !void {
     const event = try Event.init("selectionchange", .{ .bubbles = true }, page);
     try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
+}
+
+fn dispatchInputEvent(self: *TextArea, data: ?[]const u8, input_type: []const u8, page: *Page) !void {
+    const event = try InputEvent.initTrusted(comptime .wrap("input"), .{ .data = data, .inputType = input_type }, page);
+    try page._event_manager.dispatch(self.asElement().asEventTarget(), event.asEvent());
 }
 
 pub fn asElement(self: *TextArea) *Element {
@@ -189,6 +195,7 @@ pub fn innerInsert(self: *TextArea, str: []const u8, page: *Page) !void {
             try self.setValue(new_value, page);
         },
     }
+    try self.dispatchInputEvent(str, "insertText", page);
 }
 
 pub fn getSelectionDirection(self: *const TextArea) []const u8 {

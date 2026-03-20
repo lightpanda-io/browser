@@ -63,6 +63,7 @@ const storage = @import("webapi/storage/storage.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
+const MouseEvent = @import("webapi/event/MouseEvent.zig");
 
 const HttpClient = @import("HttpClient.zig");
 const ArenaPool = App.ArenaPool;
@@ -313,14 +314,16 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
     document._page = self;
 
     if (comptime builtin.is_test == false) {
-        // HTML test runner manually calls these as necessary
-        try self.js.scheduler.add(session.browser, struct {
-            fn runIdleTasks(ctx: *anyopaque) !?u32 {
-                const b: *@import("Browser.zig") = @ptrCast(@alignCast(ctx));
-                b.runIdleTasks();
-                return 200;
-            }
-        }.runIdleTasks, 200, .{ .name = "page.runIdleTasks", .low_priority = true });
+        if (parent == null) {
+            // HTML test runner manually calls these as necessary
+            try self.js.scheduler.add(session.browser, struct {
+                fn runIdleTasks(ctx: *anyopaque) !?u32 {
+                    const b: *@import("Browser.zig") = @ptrCast(@alignCast(ctx));
+                    b.runIdleTasks();
+                    return 200;
+                }
+            }.runIdleTasks, 200, .{ .name = "page.runIdleTasks", .low_priority = true });
+        }
     }
 }
 
@@ -414,16 +417,9 @@ pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
     return std.mem.startsWith(u8, url, current_origin);
 }
 
-/// Look up a blob URL in this page's registry, walking up the parent chain.
+/// Look up a blob URL in this page's registry.
 pub fn lookupBlobUrl(self: *Page, url: []const u8) ?*Blob {
-    var current: ?*Page = self;
-    while (current) |page| {
-        if (page._blob_urls.get(url)) |blob| {
-            return blob;
-        }
-        current = page.parent;
-    }
-    return null;
+    return self._blob_urls.get(url);
 }
 
 pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
@@ -464,7 +460,14 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
 
         // Content injection
         if (is_blob) {
-            const blob = self.lookupBlobUrl(request_url) orelse {
+            // For navigation, walk up the parent chain to find blob URLs
+            // (e.g., parent creates blob URL and sets iframe.src to it)
+            const blob = blk: {
+                var current: ?*Page = self.parent;
+                while (current) |page| {
+                    if (page._blob_urls.get(request_url)) |b| break :blk b;
+                    current = page.parent;
+                }
                 log.warn(.js, "invalid blob", .{ .url = request_url });
                 return error.BlobNotFound;
             };
@@ -716,11 +719,14 @@ pub fn scriptsCompletedLoading(self: *Page) void {
 }
 
 pub fn iframeCompletedLoading(self: *Page, iframe: *IFrame) void {
-    blk: {
-        var ls: JS.Local.Scope = undefined;
-        self.js.localScope(&ls);
-        defer ls.deinit();
+    var ls: JS.Local.Scope = undefined;
+    self.js.localScope(&ls);
+    defer ls.deinit();
 
+    const entered = self.js.enter(&ls.handle_scope);
+    defer entered.exit();
+
+    blk: {
         const event = Event.initTrusted(comptime .wrap("load"), .{}, self) catch |err| {
             log.err(.page, "iframe event init", .{ .err = err, .url = iframe._src });
             break :blk;
@@ -729,6 +735,7 @@ pub fn iframeCompletedLoading(self: *Page, iframe: *IFrame) void {
             log.warn(.js, "iframe onload", .{ .err = err, .url = iframe._src });
         };
     }
+
     self.pendingLoadCompleted();
 }
 
@@ -855,12 +862,24 @@ fn pageDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     if (self._parse_state == .pre) {
         // we lazily do this, because we might need the first chunk of data
         // to sniff the content type
-        const mime: Mime = blk: {
+        var mime: Mime = blk: {
             if (transfer.response_header.?.contentType()) |ct| {
                 break :blk try Mime.parse(ct);
             }
             break :blk Mime.sniff(data);
         } orelse .unknown;
+
+        // If the HTTP Content-Type header didn't specify a charset and this is HTML,
+        // prescan the first 1024 bytes for a <meta charset> declaration.
+        if (mime.content_type == .text_html and mime.is_default_charset) {
+            if (Mime.prescanCharset(data)) |charset| {
+                if (charset.len <= 40) {
+                    @memcpy(mime.charset[0..charset.len], charset);
+                    mime.charset[charset.len] = 0;
+                    mime.charset_len = charset.len;
+                }
+            }
+        }
 
         if (comptime IS_DEBUG) {
             log.debug(.page, "navigate first chunk", .{
@@ -3273,14 +3292,14 @@ pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
             .type = self._type,
         });
     }
-    const event = (try @import("webapi/event/MouseEvent.zig").init("click", .{
+    const mouse_event: *MouseEvent = try .initTrusted(comptime .wrap("click"), .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
         .clientX = x,
         .clientY = y,
-    }, self)).asEvent();
-    try self._event_manager.dispatch(target.asEventTarget(), event);
+    }, self);
+    try self._event_manager.dispatch(target.asEventTarget(), mouse_event.asEvent());
 }
 
 // callback when the "click" event reaches the pages.
@@ -3524,13 +3543,16 @@ fn asUint(comptime string: anytype) std.meta.Int(
 
 const testing = @import("../testing.zig");
 test "WebApi: Page" {
-    const filter: testing.LogFilter = .init(.http);
+    const filter: testing.LogFilter = .init(&.{ .http, .js });
     defer filter.deinit();
 
     try testing.htmlRunner("page", .{});
 }
 
 test "WebApi: Frames" {
+    const filter: testing.LogFilter = .init(&.{.js});
+    defer filter.deinit();
+
     try testing.htmlRunner("frames", .{});
 }
 

@@ -451,12 +451,12 @@
   const p1 = $('#p1');
 
   // Test setStart with offset beyond node length
-  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+  testing.expectError('IndexSizeError:', () => {
     range.setStart(p1, 999);
   });
 
   // Test with negative offset (wraps to large u32)
-  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+  testing.expectError('IndexSizeError:', () => {
     range.setStart(p1.firstChild, -1);
   });
 }
@@ -468,12 +468,12 @@
   const p1 = $('#p1');
 
   // Test setEnd with offset beyond node length
-  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+  testing.expectError('IndexSizeError:', () => {
     range.setEnd(p1, 999);
   });
 
   // Test with text node
-  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+  testing.expectError('IndexSizeError:', () => {
     range.setEnd(p1.firstChild, 9999);
   });
 }
@@ -525,11 +525,11 @@
   range.setEnd(p1, 1);
 
   // Test comparePoint with invalid offset
-  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+  testing.expectError('IndexSizeError:', () => {
     range.comparePoint(p1, 20);
   });
 
-  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+  testing.expectError('IndexSizeError:', () => {
     range.comparePoint(p1.firstChild, -1);
   });
 }
@@ -650,11 +650,11 @@
   range.setEnd(p1, 1);
 
   // Invalid offset should throw IndexSizeError
-  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+  testing.expectError('IndexSizeError:', () => {
     range.isPointInRange(p1, 999);
   });
 
-  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+  testing.expectError('IndexSizeError:', () => {
     range.isPointInRange(p1.firstChild, 9999);
   });
 }
@@ -854,11 +854,11 @@
   range2.setStart(p, 0);
 
   // Invalid how parameter should throw NotSupportedError
-  testing.expectError('NotSupportedError: Not Supported', () => {
+  testing.expectError('NotSupportedError:', () => {
     range1.compareBoundaryPoints(4, range2);
   });
 
-  testing.expectError('NotSupportedError: Not Supported', () => {
+  testing.expectError('NotSupportedError:', () => {
     range1.compareBoundaryPoints(99, range2);
   });
 }
@@ -883,7 +883,7 @@
   range2.setEnd(foreignP, 1);
 
   // Comparing ranges in different documents should throw WrongDocumentError
-  testing.expectError('WrongDocumentError: wrong_document_error', () => {
+  testing.expectError('WrongDocumentError:', () => {
     range1.compareBoundaryPoints(Range.START_TO_START, range2);
   });
 }

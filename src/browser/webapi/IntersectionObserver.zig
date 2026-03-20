@@ -93,12 +93,12 @@ pub fn init(callback: js.Function.Temp, options: ?ObserverInit, page: *Page) !*I
 }
 
 pub fn deinit(self: *IntersectionObserver, shutdown: bool, session: *Session) void {
-    self._callback.release();
-    if ((comptime IS_DEBUG) and !shutdown) {
-        std.debug.assert(self._observing.items.len == 0);
+    if (shutdown) {
+        self._callback.release();
+        session.releaseArena(self._arena);
+    } else if (comptime IS_DEBUG) {
+        std.debug.assert(false);
     }
-
-    session.releaseArena(self._arena);
 }
 
 pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void {
@@ -111,7 +111,6 @@ pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void
 
     // Register with page if this is our first observation
     if (self._observing.items.len == 0) {
-        page.js.strongRef(self);
         try page.registerIntersectionObserver(self);
     }
 
@@ -146,22 +145,18 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, page: *Page) voi
             break;
         }
     }
-
-    if (self._observing.items.len == 0) {
-        page.js.safeWeakRef(self);
-    }
 }
 
 pub fn disconnect(self: *IntersectionObserver, page: *Page) void {
-    page.unregisterIntersectionObserver(self);
-    self._observing.clearRetainingCapacity();
     self._previous_states.clearRetainingCapacity();
 
     for (self._pending_entries.items) |entry| {
         entry.deinit(false, page._session);
     }
     self._pending_entries.clearRetainingCapacity();
-    page.js.safeWeakRef(self);
+
+    self._observing.clearRetainingCapacity();
+    page.unregisterIntersectionObserver(self);
 }
 
 pub fn takeRecords(self: *IntersectionObserver, page: *Page) ![]*IntersectionObserverEntry {
@@ -363,7 +358,6 @@ pub const JsApi = struct {
         pub const name = "IntersectionObserver";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
         pub const finalizer = bridge.finalizer(IntersectionObserver.deinit);
     };
 

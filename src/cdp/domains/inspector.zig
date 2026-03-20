@@ -21,9 +21,11 @@ const std = @import("std");
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
+        disable,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .enable => return cmd.sendResult(null, .{}),
+        .disable => return cmd.sendResult(null, .{}),
     }
 }

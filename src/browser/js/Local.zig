@@ -1212,6 +1212,12 @@ pub fn rejectPromise(self: *const Local, value: anytype) !js.Promise {
     return resolver.promise();
 }
 
+pub fn rejectErrorPromise(self: *const Local, value: js.PromiseResolver.RejectError) !js.Promise {
+    var resolver = js.PromiseResolver.init(self);
+    resolver.rejectError("Local.rejectPromise", value);
+    return resolver.promise();
+}
+
 pub fn resolvePromise(self: *const Local, value: anytype) !js.Promise {
     var resolver = js.PromiseResolver.init(self);
     resolver.resolve("Local.resolvePromise", value);

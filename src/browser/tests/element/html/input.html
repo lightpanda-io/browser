@@ -191,14 +191,14 @@
 
     let eventCount = 0;
     let lastEvent = null;
-    
+
     input.addEventListener('selectionchange', (e) => {
       eventCount++;
       lastEvent = e;
     });
-    
+
     testing.expectEqual(0, eventCount);
-    
+
     input.setSelectionRange(0, 5);
     input.select();
     input.selectionStart = 3;

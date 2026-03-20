@@ -99,8 +99,7 @@
     }
   }
 
-  // our test runner sets this to true
-  const IS_TEST_RUNNER = window._lightpanda_skip_auto_assert === true;
+  const IS_TEST_RUNNER = window.navigator.userAgent.startsWith("Lightpanda/");
 
   window.testing = {
     fail: fail,
@@ -114,17 +113,17 @@
     eventually: eventually,
     IS_TEST_RUNNER: IS_TEST_RUNNER,
     HOST: '127.0.0.1',
-    ORIGIN: 'http://127.0.0.1:9582/',
+    ORIGIN: 'http://127.0.0.1:9582',
     BASE_URL: 'http://127.0.0.1:9582/src/browser/tests/',
   };
 
-  if (window.navigator.userAgent.startsWith("Lightpanda/") == false) {
+  if (IS_TEST_RUNNER === false) {
     // The page is running in a different browser. Probably a developer making sure
     // a test is correct. There are a few tweaks we need to do to make this a
     // seemless, namely around adapting paths/urls.
     console.warn(`The page is not being executed in the test runner, certain behavior has been adjusted`);
     window.testing.HOST = location.hostname;
-    window.testing.ORIGIN = location.origin + '/';
+    window.testing.ORIGIN = location.origin;
     window.testing.BASE_URL = location.origin + '/src/browser/tests/';
     window.addEventListener('load', testing.assertOk);
   }

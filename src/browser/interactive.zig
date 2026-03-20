@@ -259,17 +259,52 @@ pub fn classifyInteractivity(
     return null;
 }
 
-fn isInteractiveRole(role: []const u8) bool {
-    const interactive_roles = [_][]const u8{
-        "button",           "link",          "tab",        "menuitem",
-        "menuitemcheckbox", "menuitemradio", "switch",     "checkbox",
-        "radio",            "slider",        "spinbutton", "searchbox",
-        "combobox",         "option",        "treeitem",
-    };
-    for (interactive_roles) |r| {
-        if (std.ascii.eqlIgnoreCase(role, r)) return true;
-    }
-    return false;
+pub fn isInteractiveRole(role: []const u8) bool {
+    const MAX_LEN = "menuitemcheckbox".len;
+    if (role.len > MAX_LEN) return false;
+    var buf: [MAX_LEN]u8 = undefined;
+    const lowered = std.ascii.lowerString(&buf, role);
+    const interactive_roles = std.StaticStringMap(void).initComptime(.{
+        .{ "button", {} },
+        .{ "checkbox", {} },
+        .{ "combobox", {} },
+        .{ "iframe", {} },
+        .{ "link", {} },
+        .{ "listbox", {} },
+        .{ "menuitem", {} },
+        .{ "menuitemcheckbox", {} },
+        .{ "menuitemradio", {} },
+        .{ "option", {} },
+        .{ "radio", {} },
+        .{ "searchbox", {} },
+        .{ "slider", {} },
+        .{ "spinbutton", {} },
+        .{ "switch", {} },
+        .{ "tab", {} },
+        .{ "textbox", {} },
+        .{ "treeitem", {} },
+    });
+    return interactive_roles.has(lowered);
+}
+
+pub fn isContentRole(role: []const u8) bool {
+    const MAX_LEN = "columnheader".len;
+    if (role.len > MAX_LEN) return false;
+    var buf: [MAX_LEN]u8 = undefined;
+    const lowered = std.ascii.lowerString(&buf, role);
+    const content_roles = std.StaticStringMap(void).initComptime(.{
+        .{ "article", {} },
+        .{ "cell", {} },
+        .{ "columnheader", {} },
+        .{ "gridcell", {} },
+        .{ "heading", {} },
+        .{ "listitem", {} },
+        .{ "main", {} },
+        .{ "navigation", {} },
+        .{ "region", {} },
+        .{ "rowheader", {} },
+    });
+    return content_roles.has(lowered);
 }
 
 fn getRole(el: *Element) ?[]const u8 {

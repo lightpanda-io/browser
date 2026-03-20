@@ -63,9 +63,6 @@ shutdown: bool = false,
 
 client: *HttpClient,
 allocator: Allocator,
-buffer_pool: BufferPool,
-
-script_pool: std.heap.MemoryPool(Script),
 
 // We can download multiple sync modules in parallel, but we want to process
 // them in order. We can't use an std.DoublyLinkedList, like the other script types,
@@ -101,18 +98,14 @@ pub fn init(allocator: Allocator, http_client: *HttpClient, page: *Page) ScriptM
         .imported_modules = .empty,
         .client = http_client,
         .static_scripts_done = false,
-        .buffer_pool = BufferPool.init(allocator, 5),
         .page_notified_of_completion = false,
-        .script_pool = std.heap.MemoryPool(Script).init(allocator),
     };
 }
 
 pub fn deinit(self: *ScriptManager) void {
-    // necessary to free any buffers scripts may be referencing
+    // necessary to free any arenas scripts may be referencing
     self.reset();
 
-    self.buffer_pool.deinit();
-    self.script_pool.deinit();
     self.imported_modules.deinit(self.allocator);
     // we don't deinit self.importmap b/c we use the page's arena for its
     // allocations.
@@ -121,7 +114,10 @@ pub fn deinit(self: *ScriptManager) void {
 pub fn reset(self: *ScriptManager) void {
     var it = self.imported_modules.valueIterator();
     while (it.next()) |value_ptr| {
-        self.buffer_pool.release(value_ptr.buffer);
+        switch (value_ptr.state) {
+            .done => |script| script.deinit(),
+            else => {},
+        }
     }
     self.imported_modules.clearRetainingCapacity();
 
@@ -138,13 +134,13 @@ pub fn reset(self: *ScriptManager) void {
 fn clearList(list: *std.DoublyLinkedList) void {
     while (list.popFirst()) |n| {
         const script: *Script = @fieldParentPtr("node", n);
-        script.deinit(true);
+        script.deinit();
     }
 }
 
-pub fn getHeaders(self: *ScriptManager, url: [:0]const u8) !net_http.Headers {
+fn getHeaders(self: *ScriptManager, arena: Allocator, url: [:0]const u8) !net_http.Headers {
     var headers = try self.client.newHeaders();
-    try self.page.headersForRequest(self.page.arena, url, &headers);
+    try self.page.headersForRequest(arena, url, &headers);
     return headers;
 }
 
@@ -191,19 +187,26 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         return;
     };
 
+    var handover = false;
     const page = self.page;
+
+    const arena = try page.getArena(.{ .debug = "addFromElement" });
+    errdefer if (!handover) {
+        page.releaseArena(arena);
+    };
+
     var source: Script.Source = undefined;
     var remote_url: ?[:0]const u8 = null;
     const base_url = page.base();
     if (element.getAttributeSafe(comptime .wrap("src"))) |src| {
-        if (try parseDataURI(page.arena, src)) |data_uri| {
+        if (try parseDataURI(arena, src)) |data_uri| {
             source = .{ .@"inline" = data_uri };
         } else {
-            remote_url = try URL.resolve(page.arena, base_url, src, .{});
+            remote_url = try URL.resolve(arena, base_url, src, .{});
             source = .{ .remote = .{} };
         }
     } else {
-        var buf = std.Io.Writer.Allocating.init(page.arena);
+        var buf = std.Io.Writer.Allocating.init(arena);
         try element.asNode().getChildTextContent(&buf.writer);
         try buf.writer.writeByte(0);
         const data = buf.written();
@@ -211,6 +214,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         if (inline_source.len == 0) {
             // we haven't set script_element._executed = true yet, which is good.
             // If content is appended to the script, we will execute it then.
+            page.releaseArena(arena);
             return;
         }
         source = .{ .@"inline" = inline_source };
@@ -218,15 +222,13 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
 
     // Only set _executed (already-started) when we actually have content to execute
     script_element._executed = true;
-
-    const script = try self.script_pool.create();
-    errdefer self.script_pool.destroy(script);
-
     const is_inline = source == .@"inline";
 
+    const script = try arena.create(Script);
     script.* = .{
         .kind = kind,
         .node = .{},
+        .arena = arena,
         .manager = self,
         .source = source,
         .script_element = script_element,
@@ -270,7 +272,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             if (is_blocking == false) {
                 self.scriptList(script).remove(&script.node);
             }
-            script.deinit(true);
+            // Let the outer errdefer handle releasing the arena if client.request fails
         }
 
         try self.client.request(.{
@@ -278,7 +280,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             .ctx = script,
             .method = .GET,
             .frame_id = page._frame_id,
-            .headers = try self.getHeaders(url),
+            .headers = try self.getHeaders(arena, url),
             .blocking = is_blocking,
             .cookie_jar = &page._session.cookie_jar,
             .resource_type = .script,
@@ -289,6 +291,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             .done_callback = Script.doneCallback,
             .error_callback = Script.errorCallback,
         });
+        handover = true;
 
         if (comptime IS_DEBUG) {
             var ls: js.Local.Scope = undefined;
@@ -318,7 +321,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         }
         if (script.status == 0) {
             // an error (that we already logged)
-            script.deinit(true);
+            script.deinit();
             return;
         }
 
@@ -327,7 +330,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         self.is_evaluating = true;
         defer {
             self.is_evaluating = was_evaluating;
-            script.deinit(true);
+            script.deinit();
         }
         return script.eval(page);
     }
@@ -359,11 +362,14 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
     }
     errdefer _ = self.imported_modules.remove(url);
 
-    const script = try self.script_pool.create();
-    errdefer self.script_pool.destroy(script);
+    const page = self.page;
+    const arena = try page.getArena(.{ .debug = "preloadImport" });
+    errdefer page.releaseArena(arena);
 
+    const script = try arena.create(Script);
     script.* = .{
         .kind = .module,
+        .arena = arena,
         .url = url,
         .node = .{},
         .manager = self,
@@ -373,11 +379,7 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .mode = .import,
     };
 
-    gop.value_ptr.* = ImportedModule{
-        .manager = self,
-    };
-
-    const page = self.page;
+    gop.value_ptr.* = ImportedModule{};
 
     if (comptime IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
@@ -392,12 +394,18 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         });
     }
 
-    try self.client.request(.{
+    // This seems wrong since we're not dealing with an async import (unlike
+    // getAsyncModule below), but all we're trying to do here is pre-load the
+    // script for execution at some point in the future (when waitForImport is
+    // called).
+    self.async_scripts.append(&script.node);
+
+    self.client.request(.{
         .url = url,
         .ctx = script,
         .method = .GET,
         .frame_id = page._frame_id,
-        .headers = try self.getHeaders(url),
+        .headers = try self.getHeaders(arena, url),
         .cookie_jar = &page._session.cookie_jar,
         .resource_type = .script,
         .notification = page._session.notification,
@@ -406,13 +414,10 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .data_callback = Script.dataCallback,
         .done_callback = Script.doneCallback,
         .error_callback = Script.errorCallback,
-    });
-
-    // This seems wrong since we're not dealing with an async import (unlike
-    // getAsyncModule below), but all we're trying to do here is pre-load the
-    // script for execution at some point in the future (when waitForImport is
-    // called).
-    self.async_scripts.append(&script.node);
+    }) catch |err| {
+        self.async_scripts.remove(&script.node);
+        return err;
+    };
 }
 
 pub fn waitForImport(self: *ScriptManager, url: [:0]const u8) !ModuleSource {
@@ -433,12 +438,12 @@ pub fn waitForImport(self: *ScriptManager, url: [:0]const u8) !ModuleSource {
                 _ = try client.tick(200);
                 continue;
             },
-            .done => {
+            .done => |script| {
                 var shared = false;
                 const buffer = entry.value_ptr.buffer;
                 const waiters = entry.value_ptr.waiters;
 
-                if (waiters == 0) {
+                if (waiters == 1) {
                     self.imported_modules.removeByPtr(entry.key_ptr);
                 } else {
                     shared = true;
@@ -447,7 +452,7 @@ pub fn waitForImport(self: *ScriptManager, url: [:0]const u8) !ModuleSource {
                 return .{
                     .buffer = buffer,
                     .shared = shared,
-                    .buffer_pool = &self.buffer_pool,
+                    .script = script,
                 };
             },
             .err => return error.Failed,
@@ -456,11 +461,14 @@ pub fn waitForImport(self: *ScriptManager, url: [:0]const u8) !ModuleSource {
 }
 
 pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.Callback, cb_data: *anyopaque, referrer: []const u8) !void {
-    const script = try self.script_pool.create();
-    errdefer self.script_pool.destroy(script);
+    const page = self.page;
+    const arena = try page.getArena(.{ .debug = "getAsyncImport" });
+    errdefer page.releaseArena(arena);
 
+    const script = try arena.create(Script);
     script.* = .{
         .kind = .module,
+        .arena = arena,
         .url = url,
         .node = .{},
         .manager = self,
@@ -473,7 +481,6 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
         } },
     };
 
-    const page = self.page;
     if (comptime IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
         page.js.localScope(&ls);
@@ -496,11 +503,12 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
     self.is_evaluating = true;
     defer self.is_evaluating = was_evaluating;
 
-    try self.client.request(.{
+    self.async_scripts.append(&script.node);
+    self.client.request(.{
         .url = url,
         .method = .GET,
         .frame_id = page._frame_id,
-        .headers = try self.getHeaders(url),
+        .headers = try self.getHeaders(arena, url),
         .ctx = script,
         .resource_type = .script,
         .cookie_jar = &page._session.cookie_jar,
@@ -510,9 +518,10 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
         .data_callback = Script.dataCallback,
         .done_callback = Script.doneCallback,
         .error_callback = Script.errorCallback,
-    });
-
-    self.async_scripts.append(&script.node);
+    }) catch |err| {
+        self.async_scripts.remove(&script.node);
+        return err;
+    };
 }
 
 // Called from the Page to let us know it's done parsing the HTML. Necessary that
@@ -537,18 +546,18 @@ fn evaluate(self: *ScriptManager) void {
         var script: *Script = @fieldParentPtr("node", n);
         switch (script.mode) {
             .async => {
-                defer script.deinit(true);
+                defer script.deinit();
                 script.eval(page);
             },
             .import_async => |ia| {
-                defer script.deinit(false);
                 if (script.status < 200 or script.status > 299) {
+                    script.deinit();
                     ia.callback(ia.data, error.FailedToLoad);
                 } else {
                     ia.callback(ia.data, .{
                         .shared = false,
+                        .script = script,
                         .buffer = script.source.remote,
-                        .buffer_pool = &self.buffer_pool,
                     });
                 }
             },
@@ -574,7 +583,7 @@ fn evaluate(self: *ScriptManager) void {
         }
         defer {
             _ = self.defer_scripts.popFirst();
-            script.deinit(true);
+            script.deinit();
         }
         script.eval(page);
     }
@@ -625,11 +634,12 @@ fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
 }
 
 pub const Script = struct {
-    complete: bool,
     kind: Kind,
+    complete: bool,
     status: u16 = 0,
     source: Source,
     url: []const u8,
+    arena: Allocator,
     mode: ExecutionMode,
     node: std.DoublyLinkedList.Node,
     script_element: ?*Element.Html.Script,
@@ -680,11 +690,8 @@ pub const Script = struct {
         import_async: ImportAsync,
     };
 
-    fn deinit(self: *Script, comptime release_buffer: bool) void {
-        if ((comptime release_buffer) and self.source == .remote) {
-            self.manager.buffer_pool.release(self.source.remote);
-        }
-        self.manager.script_pool.destroy(self);
+    fn deinit(self: *Script) void {
+        self.manager.page.releaseArena(self.arena);
     }
 
     fn startCallback(transfer: *HttpClient.Transfer) !void {
@@ -750,9 +757,9 @@ pub const Script = struct {
         }
 
         lp.assert(self.source.remote.capacity == 0, "ScriptManager.Header buffer", .{ .capacity = self.source.remote.capacity });
-        var buffer = self.manager.buffer_pool.get();
+        var buffer: std.ArrayList(u8) = .empty;
         if (transfer.getContentLength()) |cl| {
-            try buffer.ensureTotalCapacity(self.manager.allocator, cl);
+            try buffer.ensureTotalCapacity(self.arena, cl);
         }
         self.source = .{ .remote = buffer };
         return true;
@@ -766,7 +773,7 @@ pub const Script = struct {
         };
     }
     fn _dataCallback(self: *Script, _: *HttpClient.Transfer, data: []const u8) !void {
-        try self.source.remote.appendSlice(self.manager.allocator, data);
+        try self.source.remote.appendSlice(self.arena, data);
     }
 
     fn doneCallback(ctx: *anyopaque) !void {
@@ -783,9 +790,8 @@ pub const Script = struct {
         } else if (self.mode == .import) {
             manager.async_scripts.remove(&self.node);
             const entry = manager.imported_modules.getPtr(self.url).?;
-            entry.state = .done;
+            entry.state = .{ .done = self };
             entry.buffer = self.source.remote;
-            self.deinit(false);
         }
         manager.evaluate();
     }
@@ -811,7 +817,7 @@ pub const Script = struct {
         const manager = self.manager;
         manager.scriptList(self).remove(&self.node);
         if (manager.shutdown) {
-            self.deinit(true);
+            self.deinit();
             return;
         }
 
@@ -823,7 +829,7 @@ pub const Script = struct {
             },
             else => {},
         }
-        self.deinit(true);
+        self.deinit();
         manager.evaluate();
     }
 
@@ -951,76 +957,6 @@ pub const Script = struct {
     }
 };
 
-const BufferPool = struct {
-    count: usize,
-    available: List = .{},
-    allocator: Allocator,
-    max_concurrent_transfers: u8,
-    mem_pool: std.heap.MemoryPool(Container),
-
-    const List = std.SinglyLinkedList;
-
-    const Container = struct {
-        node: List.Node,
-        buf: std.ArrayList(u8),
-    };
-
-    fn init(allocator: Allocator, max_concurrent_transfers: u8) BufferPool {
-        return .{
-            .available = .{},
-            .count = 0,
-            .allocator = allocator,
-            .max_concurrent_transfers = max_concurrent_transfers,
-            .mem_pool = std.heap.MemoryPool(Container).init(allocator),
-        };
-    }
-
-    fn deinit(self: *BufferPool) void {
-        const allocator = self.allocator;
-
-        var node = self.available.first;
-        while (node) |n| {
-            const container: *Container = @fieldParentPtr("node", n);
-            container.buf.deinit(allocator);
-            node = n.next;
-        }
-        self.mem_pool.deinit();
-    }
-
-    fn get(self: *BufferPool) std.ArrayList(u8) {
-        const node = self.available.popFirst() orelse {
-            // return a new buffer
-            return .{};
-        };
-
-        self.count -= 1;
-        const container: *Container = @fieldParentPtr("node", node);
-        defer self.mem_pool.destroy(container);
-        return container.buf;
-    }
-
-    fn release(self: *BufferPool, buffer: ArrayList(u8)) void {
-        // create mutable copy
-        var b = buffer;
-
-        if (self.count == self.max_concurrent_transfers) {
-            b.deinit(self.allocator);
-            return;
-        }
-
-        const container = self.mem_pool.create() catch |err| {
-            b.deinit(self.allocator);
-            log.err(.http, "SM BufferPool release", .{ .err = err });
-            return;
-        };
-
-        b.clearRetainingCapacity();
-        container.* = .{ .buf = b, .node = .{} };
-        self.count += 1;
-        self.available.prepend(&container.node);
-    }
-};
-
 const ImportAsync = struct {
     data: *anyopaque,
     callback: ImportAsync.Callback,
@@ -1030,12 +966,12 @@ const ImportAsync = struct {
 
 pub const ModuleSource = struct {
     shared: bool,
-    buffer_pool: *BufferPool,
+    script: *Script,
     buffer: std.ArrayList(u8),
 
     pub fn deinit(self: *ModuleSource) void {
         if (self.shared == false) {
-            self.buffer_pool.release(self.buffer);
+            self.script.deinit();
         }
     }
 
@@ -1045,15 +981,14 @@ pub const ModuleSource = struct {
 };
 
 const ImportedModule = struct {
-    manager: *ScriptManager,
+    waiters: u16 = 1,
     state: State = .loading,
     buffer: std.ArrayList(u8) = .{},
-    waiters: u16 = 1,
 
-    const State = enum {
+    const State = union(enum) {
         err,
-        done,
         loading,
+        done: *Script,
     };
 };
 

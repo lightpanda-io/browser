@@ -19,7 +19,6 @@
   testing.withError((err) => {
     testing.expectEqual(8, err.code);
     testing.expectEqual("NotFoundError", err.name);
-    testing.expectEqual("Not Found", err.message);
   }, () => d1.insertBefore(document.createElement('div'), d2));
 
   let c1 = document.createElement('div');

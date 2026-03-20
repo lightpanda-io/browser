@@ -8,7 +8,7 @@
   testing.expectEqual('https://lightpanda.io/opensource-browser/15', l2.href);
 
   l2.href = '/over/9000';
-  testing.expectEqual(testing.ORIGIN + 'over/9000', l2.href);
+  testing.expectEqual(testing.ORIGIN + '/over/9000', l2.href);
 
   l2.crossOrigin = 'nope';
   testing.expectEqual('anonymous', l2.crossOrigin);
@@ -82,5 +82,26 @@
   link.href = 'https://lightpanda.io/opensource-browser/15';
 
   testing.eventually(() => testing.expectEqual(true, result));
+}
+</script>
+
+<script id="refs">
+{
+  const rels = ['stylesheet', 'preload', 'modulepreload'];
+  const results = rels.map(() => false);
+  rels.forEach((rel, i) => {
+    let link = document.createElement('link')
+    link.rel = rel;
+    link.href = '/nope';
+    link.onload = () => results[i] = true;
+    document.documentElement.appendChild(link);
+  });
+
+
+  testing.eventually(() => {
+    results.forEach((r) => {
+      testing.expectEqual(true, r);
+    });
+  });
 }
 </script>

@@ -18,13 +18,21 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+
+const log = @import("../../log.zig");
+
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+
 const PluginArray = @import("PluginArray.zig");
+const Permissions = @import("Permissions.zig");
+const StorageManager = @import("StorageManager.zig");
 
 const Navigator = @This();
 _pad: bool = false,
 _plugins: PluginArray = .{},
+_permissions: Permissions = .{},
+_storage: StorageManager = .{},
 
 pub const init: Navigator = .{};
 
@@ -53,6 +61,19 @@ pub fn javaEnabled(_: *const Navigator) bool {
 
 pub fn getPlugins(self: *Navigator) *PluginArray {
     return &self._plugins;
+}
+
+pub fn getPermissions(self: *Navigator) *Permissions {
+    return &self._permissions;
+}
+
+pub fn getStorage(self: *Navigator) *StorageManager {
+    return &self._storage;
+}
+
+pub fn getBattery(_: *const Navigator, page: *Page) !js.Promise {
+    log.info(.not_implemented, "navigator.getBattery", .{});
+    return page.js.local.?.rejectErrorPromise(.{ .dom_exception = error.NotSupported });
 }
 
 pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, page: *const Page) !void {
@@ -144,6 +165,7 @@ pub const JsApi = struct {
     pub const onLine = bridge.property(true, .{ .template = false });
     pub const cookieEnabled = bridge.property(true, .{ .template = false });
     pub const hardwareConcurrency = bridge.property(4, .{ .template = false });
+    pub const deviceMemory = bridge.property(@as(f64, 8.0), .{ .template = false });
     pub const maxTouchPoints = bridge.property(0, .{ .template = false });
     pub const vendor = bridge.property("", .{ .template = false });
     pub const product = bridge.property("Gecko", .{ .template = false });
@@ -156,4 +178,12 @@ pub const JsApi = struct {
 
     // Methods
     pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
+    pub const getBattery = bridge.function(Navigator.getBattery, .{});
+    pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
+    pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
 };
+
+const testing = @import("../../testing.zig");
+test "WebApi: Navigator" {
+    try testing.htmlRunner("navigator", .{});
+}

@@ -64,17 +64,17 @@ pub fn init(app: *App, address: net.Address) !*Server {
     return self;
 }
 
-pub fn deinit(self: *Server) void {
-    // Stop all active clients
-    {
-        self.client_mutex.lock();
-        defer self.client_mutex.unlock();
+pub fn shutdown(self: *Server) void {
+    self.client_mutex.lock();
+    defer self.client_mutex.unlock();
 
-        for (self.clients.items) |client| {
-            client.stop();
-        }
+    for (self.clients.items) |client| {
+        client.stop();
     }
+}
 
+pub fn deinit(self: *Server) void {
+    self.shutdown();
     self.joinThreads();
     self.clients.deinit(self.allocator);
     self.clients_pool.deinit();
@@ -242,7 +242,10 @@ pub const Client = struct {
     fn stop(self: *Client) void {
         switch (self.mode) {
             .http => {},
-            .cdp => |*cdp| cdp.browser.env.terminate(),
+            .cdp => |*cdp| {
+                cdp.browser.env.terminate();
+                self.ws.sendClose();
+            },
         }
         self.ws.shutdown();
     }

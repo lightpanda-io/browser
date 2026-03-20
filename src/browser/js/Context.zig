@@ -119,12 +119,22 @@ const ModuleEntry = struct {
     resolver_promise: ?js.Promise.Global = null,
 };
 
-pub fn fromC(c_context: *const v8.Context) *Context {
+pub fn fromC(c_context: *const v8.Context) ?*Context {
     return @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(c_context, 1)));
 }
 
-pub fn fromIsolate(isolate: js.Isolate) *Context {
-    return fromC(v8.v8__Isolate__GetCurrentContext(isolate.handle).?);
+/// Returns the Context and v8::Context for the given isolate.
+/// If the current context is from a destroyed Context (e.g., navigated-away iframe),
+/// falls back to the incumbent context (the calling context).
+pub fn fromIsolate(isolate: js.Isolate) struct { *Context, *const v8.Context } {
+    const v8_context = v8.v8__Isolate__GetCurrentContext(isolate.handle).?;
+    if (fromC(v8_context)) |ctx| {
+        return .{ ctx, v8_context };
+    }
+    // The current context's Context struct has been freed (e.g., iframe navigated away).
+    // Fall back to the incumbent context (the calling context).
+    const v8_incumbent = v8.v8__Isolate__GetIncumbentContext(isolate.handle).?;
+    return .{ fromC(v8_incumbent).?, v8_incumbent };
 }
 
 pub fn deinit(self: *Context) void {
@@ -155,6 +165,11 @@ pub fn deinit(self: *Context) void {
 
     self.session.releaseOrigin(self.origin);
 
+    // Clear the embedder data so that if V8 keeps this context alive
+    // (because objects created in it are still referenced), we don't
+    // have a dangling pointer to our freed Context struct.
+    v8.v8__Context__SetAlignedPointerInEmbedderData(entered.handle, 1, null);
+
     v8.v8__Global__Reset(&self.handle);
     env.isolate.notifyContextDisposed();
     // There can be other tasks associated with this context that we need to
@@ -167,12 +182,11 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
     const env = self.env;
     const isolate = env.isolate;
 
+    lp.assert(self.origin.rc == 1, "Ref opaque origin", .{ .rc = self.origin.rc });
+
     const origin = try self.session.getOrCreateOrigin(key);
     errdefer self.session.releaseOrigin(origin);
-
-    try self.origin.transferTo(origin);
-    lp.assert(self.origin.rc == 1, "Ref opaque origin", .{ .rc = self.origin.rc });
-    self.origin.deinit(env.app);
+    try origin.takeover(self.origin);
 
     self.origin = origin;
 
@@ -255,6 +269,10 @@ pub fn toLocal(self: *Context, global: anytype) js.Local.ToLocalReturnType(@Type
     return l.toLocal(global);
 }
 
+pub fn getIncumbent(self: *Context) *Page {
+    return fromC(v8.v8__Isolate__GetIncumbentContext(self.env.isolate.handle).?).?.page;
+}
+
 pub fn stringToPersistedFunction(
     self: *Context,
     function_body: []const u8,
@@ -306,15 +324,15 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
         }
 
         const owned_url = try arena.dupeZ(u8, url);
+        if (cacheable and !gop.found_existing) {
+            gop.key_ptr.* = owned_url;
+        }
         const m = try compileModule(local, src, owned_url);
 
         if (cacheable) {
             // compileModule is synchronous - nothing can modify the cache during compilation
             lp.assert(gop.value_ptr.module == null, "Context.module has module", .{});
             gop.value_ptr.module = try m.persist();
-            if (!gop.found_existing) {
-                gop.key_ptr.* = owned_url;
-            }
         }
 
         break :blk .{ m, owned_url };
@@ -476,7 +494,7 @@ fn resolveModuleCallback(
 ) callconv(.c) ?*const v8.Module {
     _ = import_attributes;
 
-    const self = fromC(c_context.?);
+    const self = fromC(c_context.?).?;
     const local = js.Local{
         .ctx = self,
         .handle = c_context.?,
@@ -509,7 +527,7 @@ pub fn dynamicModuleCallback(
     _ = host_defined_options;
     _ = import_attrs;
 
-    const self = fromC(c_context.?);
+    const self = fromC(c_context.?).?;
     const local = js.Local{
         .ctx = self,
         .handle = c_context.?,
@@ -556,7 +574,7 @@ pub fn dynamicModuleCallback(
 
 pub fn metaObjectCallback(c_context: ?*v8.Context, c_module: ?*v8.Module, c_meta: ?*v8.Value) callconv(.c) void {
     // @HandleScope  implement this without a fat context/local..
-    const self = fromC(c_context.?);
+    const self = fromC(c_context.?).?;
     var local = js.Local{
         .ctx = self,
         .handle = c_context.?,

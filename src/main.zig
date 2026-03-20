@@ -59,7 +59,11 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             return std.process.cleanExit();
         },
         .version => {
-            std.debug.print("{s}\n", .{lp.build_config.git_commit});
+            if (lp.build_config.git_version) |version| {
+                std.debug.print("{s} ({s})\n", .{ version, lp.build_config.git_commit });
+            } else {
+                std.debug.print("{s}\n", .{lp.build_config.git_commit});
+            }
             return std.process.cleanExit();
         },
         else => {},
@@ -75,18 +79,21 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
         log.opts.filter_scopes = lfs;
     }
 
+    // must be installed before any other threads
+    const sighandler = try main_arena.create(SigHandler);
+    sighandler.* = .{ .arena = main_arena };
+    try sighandler.install();
+
     // _app is global to handle graceful shutdown.
     var app = try App.init(allocator, &args);
-
     defer app.deinit();
+
+    try sighandler.on(lp.Network.stop, .{&app.network});
+
     app.telemetry.record(.{ .run = {} });
 
     switch (args.mode) {
         .serve => |opts| {
-            const sighandler = try main_arena.create(SigHandler);
-            sighandler.* = .{ .arena = main_arena };
-            try sighandler.install();
-
             log.debug(.app, "startup", .{ .mode = "serve", .snapshot = app.snapshot.fromEmbedded() });
             const address = std.net.Address.parseIp(opts.host, opts.port) catch |err| {
                 log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
@@ -94,12 +101,22 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             };
 
             var server = lp.Server.init(app, address) catch |err| {
-                log.fatal(.app, "server run error", .{ .err = err });
+                if (err == error.AddressInUse) {
+                    log.fatal(.app, "address already in use", .{
+                        .host = opts.host,
+                        .port = opts.port,
+                        .hint = "Another process is already listening on this address. " ++
+                            "Stop the other process or use --port to choose a different port.",
+                    });
+                } else {
+                    log.fatal(.app, "server run error", .{ .err = err });
+                }
                 return err;
             };
             defer server.deinit();
 
-            try sighandler.on(lp.Network.stop, .{&app.network});
+            try sighandler.on(lp.Server.shutdown, .{server});
+
             app.network.run();
         },
         .fetch => |opts| {
@@ -122,10 +139,10 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                 fetch_opts.writer = &writer.interface;
             }
 
-            lp.fetch(app, url, fetch_opts) catch |err| {
-                log.fatal(.app, "fetch error", .{ .err = err, .url = url });
-                return err;
-            };
+            var worker_thread = try std.Thread.spawn(.{}, fetchThread, .{ app, url, fetch_opts });
+            defer worker_thread.join();
+
+            app.network.run();
         },
         .mcp => {
             log.info(.mcp, "starting server", .{});
@@ -137,11 +154,27 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             var mcp_server: *lp.mcp.Server = try .init(allocator, app, &stdout.interface);
             defer mcp_server.deinit();
 
-            var stdin_buf: [64 * 1024]u8 = undefined;
-            var stdin = std.fs.File.stdin().reader(&stdin_buf);
+            var worker_thread = try std.Thread.spawn(.{}, mcpThread, .{ mcp_server, app });
+            defer worker_thread.join();
 
-            try lp.mcp.router.processRequests(mcp_server, &stdin.interface);
+            app.network.run();
         },
         else => unreachable,
     }
+}
+
+fn fetchThread(app: *App, url: [:0]const u8, fetch_opts: lp.FetchOpts) void {
+    defer app.network.stop();
+    lp.fetch(app, url, fetch_opts) catch |err| {
+        log.fatal(.app, "fetch error", .{ .err = err, .url = url });
+    };
+}
+
+fn mcpThread(mcp_server: *lp.mcp.Server, app: *App) void {
+    defer app.network.stop();
+    var stdin_buf: [64 * 1024]u8 = undefined;
+    var stdin = std.fs.File.stdin().reader(&stdin_buf);
+    lp.mcp.router.processRequests(mcp_server, &stdin.interface) catch |err| {
+        log.fatal(.mcp, "mcp error", .{ .err = err });
+    };
 }

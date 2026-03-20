@@ -93,13 +93,21 @@ pub fn linkAddedCallback(self: *Link, page: *Page) !void {
     }
 
     const element = self.asElement();
-    // Exit if rel not set.
+
     const rel = element.getAttributeSafe(comptime .wrap("rel")) orelse return;
-    // Exit if rel is not stylesheet.
-    if (!std.mem.eql(u8, rel, "stylesheet")) return;
-    // Exit if href not set.
+    const loadable_rels = std.StaticStringMap(void).initComptime(.{
+        .{ "stylesheet", {} },
+        .{ "preload", {} },
+        .{ "modulepreload", {} },
+    });
+    if (loadable_rels.has(rel) == false) {
+        return;
+    }
+
     const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
-    if (href.len == 0) return;
+    if (href.len == 0) {
+        return;
+    }
 
     try page._to_load.append(page.arena, self._proto);
 }

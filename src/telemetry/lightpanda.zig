@@ -2,140 +2,132 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_config = @import("build_config");
 
-const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 
 const log = @import("../log.zig");
 const App = @import("../App.zig");
 const Config = @import("../Config.zig");
 const telemetry = @import("telemetry.zig");
+const Runtime = @import("../network/Runtime.zig");
 const Connection = @import("../network/http.zig").Connection;
 
 const URL = "https://telemetry.lightpanda.io";
-const MAX_BATCH_SIZE = 20;
+const BUFFER_SIZE = 1024;
+const MAX_BODY_SIZE = 500 * 1024; // 500KB server limit
 
-pub const LightPanda = struct {
-    running: bool,
-    thread: ?std.Thread,
-    allocator: Allocator,
-    mutex: std.Thread.Mutex,
-    cond: Thread.Condition,
-    connection: Connection,
-    config: *const Config,
-    pending: std.DoublyLinkedList,
-    mem_pool: std.heap.MemoryPool(LightPandaEvent),
+const LightPanda = @This();
 
-    pub fn init(app: *App) !LightPanda {
-        const connection = try app.network.newConnection();
-        errdefer connection.deinit();
+allocator: Allocator,
+runtime: *Runtime,
+writer: std.Io.Writer.Allocating,
 
-        try connection.setURL(URL);
-        try connection.setMethod(.POST);
+/// Protects concurrent producers in send().
+mutex: std.Thread.Mutex = .{},
 
-        const allocator = app.allocator;
-        return .{
-            .cond = .{},
-            .mutex = .{},
-            .pending = .{},
-            .thread = null,
-            .running = true,
-            .allocator = allocator,
-            .connection = connection,
-            .config = app.config,
-            .mem_pool = std.heap.MemoryPool(LightPandaEvent).init(allocator),
-        };
+iid: ?[36]u8 = null,
+run_mode: Config.RunMode = .serve,
+
+head: std.atomic.Value(usize) = .init(0),
+tail: std.atomic.Value(usize) = .init(0),
+dropped: std.atomic.Value(usize) = .init(0),
+buffer: [BUFFER_SIZE]telemetry.Event = undefined,
+
+pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode) !void {
+    self.* = .{
+        .iid = iid,
+        .run_mode = run_mode,
+        .allocator = app.allocator,
+        .runtime = &app.network,
+        .writer = std.Io.Writer.Allocating.init(app.allocator),
+    };
+
+    self.runtime.onTick(@ptrCast(self), flushCallback);
+}
+
+pub fn deinit(self: *LightPanda) void {
+    self.writer.deinit();
+}
+
+pub fn send(self: *LightPanda, raw_event: telemetry.Event) !void {
+    self.mutex.lock();
+    defer self.mutex.unlock();
+
+    const t = self.tail.load(.monotonic);
+    const h = self.head.load(.acquire);
+    if (t - h >= BUFFER_SIZE) {
+        _ = self.dropped.fetchAdd(1, .monotonic);
+        return;
     }
 
-    pub fn deinit(self: *LightPanda) void {
-        if (self.thread) |*thread| {
-            self.mutex.lock();
-            self.running = false;
-            self.mutex.unlock();
-            self.cond.signal();
-            thread.join();
-        }
-        self.mem_pool.deinit();
-        self.connection.deinit();
+    self.buffer[t % BUFFER_SIZE] = raw_event;
+    self.tail.store(t + 1, .release);
+}
+
+fn flushCallback(ctx: *anyopaque) void {
+    const self: *LightPanda = @ptrCast(@alignCast(ctx));
+    self.postEvent() catch |err| {
+        log.warn(.telemetry, "flush error", .{ .err = err });
+    };
+}
+
+fn postEvent(self: *LightPanda) !void {
+    const conn = self.runtime.getConnection() orelse {
+        return;
+    };
+    errdefer self.runtime.releaseConnection(conn);
+
+    const h = self.head.load(.monotonic);
+    const t = self.tail.load(.acquire);
+    const dropped = self.dropped.swap(0, .monotonic);
+
+    if (h == t and dropped == 0) {
+        self.runtime.releaseConnection(conn);
+        return;
+    }
+    errdefer _ = self.dropped.fetchAdd(dropped, .monotonic);
+
+    self.writer.clearRetainingCapacity();
+
+    if (dropped > 0) {
+        _ = try self.writeEvent(.{ .buffer_overflow = .{ .dropped = dropped } });
     }
 
-    pub fn send(self: *LightPanda, iid: ?[]const u8, run_mode: Config.RunMode, raw_event: telemetry.Event) !void {
-        const event = try self.mem_pool.create();
-        event.* = .{
-            .iid = iid,
-            .mode = run_mode,
-            .event = raw_event,
-            .node = .{},
-        };
+    var sent: usize = 0;
+    for (h..t) |i| {
+        const fit = try self.writeEvent(self.buffer[i % BUFFER_SIZE]);
+        if (!fit) break;
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        if (self.thread == null) {
-            self.thread = try std.Thread.spawn(.{}, run, .{self});
-        }
-
-        self.pending.append(&event.node);
-        self.cond.signal();
+        sent += 1;
     }
 
-    fn run(self: *LightPanda) void {
-        var aw = std.Io.Writer.Allocating.init(self.allocator);
-        defer aw.deinit();
+    try conn.setURL(URL);
+    try conn.setMethod(.POST);
+    try conn.setBody(self.writer.written());
 
-        var batch: [MAX_BATCH_SIZE]*LightPandaEvent = undefined;
-        self.mutex.lock();
-        while (true) {
-            while (self.pending.first != null) {
-                const b = self.collectBatch(&batch);
-                self.mutex.unlock();
-                self.postEvent(b, &aw) catch |err| {
-                    log.warn(.telemetry, "post error", .{ .err = err });
-                };
-                self.mutex.lock();
-            }
-            if (self.running == false) {
-                return;
-            }
-            self.cond.wait(&self.mutex);
-        }
+    self.head.store(h + sent, .release);
+    self.runtime.submitRequest(conn);
+}
+
+fn writeEvent(self: *LightPanda, event: telemetry.Event) !bool {
+    const iid: ?[]const u8 = if (self.iid) |*id| id else null;
+    const wrapped = LightPandaEvent{ .iid = iid, .mode = self.run_mode, .event = event };
+
+    const checkpoint = self.writer.written().len;
+
+    try std.json.Stringify.value(&wrapped, .{ .emit_null_optional_fields = false }, &self.writer.writer);
+    try self.writer.writer.writeByte('\n');
+
+    if (self.writer.written().len > MAX_BODY_SIZE) {
+        self.writer.shrinkRetainingCapacity(checkpoint);
+        return false;
     }
-
-    fn postEvent(self: *LightPanda, events: []*LightPandaEvent, aw: *std.Io.Writer.Allocating) !void {
-        defer for (events) |e| {
-            self.mem_pool.destroy(e);
-        };
-
-        defer aw.clearRetainingCapacity();
-        for (events) |event| {
-            try std.json.Stringify.value(event, .{ .emit_null_optional_fields = false }, &aw.writer);
-            try aw.writer.writeByte('\n');
-        }
-
-        try self.connection.setBody(aw.written());
-        const status = try self.connection.request(&self.config.http_headers);
-
-        if (status != 200) {
-            log.warn(.telemetry, "server error", .{ .status = status });
-        }
-    }
-
-    fn collectBatch(self: *LightPanda, into: []*LightPandaEvent) []*LightPandaEvent {
-        var i: usize = 0;
-        while (self.pending.popFirst()) |node| {
-            into[i] = @fieldParentPtr("node", node);
-            i += 1;
-            if (i == MAX_BATCH_SIZE) {
-                break;
-            }
-        }
-        return into[0..i];
-    }
-};
+    return true;
+}
 
 const LightPandaEvent = struct {
     iid: ?[]const u8,
     mode: Config.RunMode,
     event: telemetry.Event,
-    node: std.DoublyLinkedList.Node,
 
     pub fn jsonStringify(self: *const LightPandaEvent, writer: anytype) !void {
         try writer.beginObject();
@@ -153,7 +145,7 @@ const LightPandaEvent = struct {
         try writer.write(builtin.cpu.arch);
 
         try writer.objectField("version");
-        try writer.write(build_config.git_commit);
+        try writer.write(build_config.git_version orelse build_config.git_commit);
 
         try writer.objectField("event");
         try writer.write(@tagName(std.meta.activeTag(self.event)));

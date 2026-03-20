@@ -382,8 +382,7 @@ pub fn runMicrotasks(self: *Env) void {
     }
 }
 
-pub fn runMacrotasks(self: *Env) !?u64 {
-    var ms_to_next_task: ?u64 = null;
+pub fn runMacrotasks(self: *Env) !void {
     for (self.contexts[0..self.context_count]) |ctx| {
         if (comptime builtin.is_test == false) {
             // I hate this comptime check as much as you do. But we have tests
@@ -398,13 +397,17 @@ pub fn runMacrotasks(self: *Env) !?u64 {
         var hs: js.HandleScope = undefined;
         const entered = ctx.enter(&hs);
         defer entered.exit();
-
-        const ms = (try ctx.scheduler.run()) orelse continue;
-        if (ms_to_next_task == null or ms < ms_to_next_task.?) {
-            ms_to_next_task = ms;
-        }
+        try ctx.scheduler.run();
     }
-    return ms_to_next_task;
+}
+
+pub fn msToNextMacrotask(self: *Env) ?u64 {
+    var next_task: u64 = std.math.maxInt(u64);
+    for (self.contexts[0..self.context_count]) |ctx| {
+        const candidate = ctx.scheduler.msToNextHigh() orelse continue;
+        next_task = @min(candidate, next_task);
+    }
+    return if (next_task == std.math.maxInt(u64)) null else next_task;
 }
 
 pub fn pumpMessageLoop(self: *const Env) void {
@@ -492,20 +495,25 @@ pub fn terminate(self: *const Env) void {
 }
 
 fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) void {
+    const promise_event = v8.v8__PromiseRejectMessage__GetEvent(&message_handle);
+    if (promise_event != v8.kPromiseRejectWithNoHandler and promise_event != v8.kPromiseHandlerAddedAfterReject) {
+        return;
+    }
+
     const promise_handle = v8.v8__PromiseRejectMessage__GetPromise(&message_handle).?;
     const v8_isolate = v8.v8__Object__GetIsolate(@ptrCast(promise_handle)).?;
-    const js_isolate = js.Isolate{ .handle = v8_isolate };
-    const ctx = Context.fromIsolate(js_isolate);
+    const isolate = js.Isolate{ .handle = v8_isolate };
+    const ctx, const v8_context = Context.fromIsolate(isolate);
 
     const local = js.Local{
         .ctx = ctx,
-        .isolate = js_isolate,
-        .handle = v8.v8__Isolate__GetCurrentContext(v8_isolate).?,
+        .isolate = isolate,
+        .handle = v8_context,
         .call_arena = ctx.call_arena,
     };
 
     const page = ctx.page;
-    page.window.unhandledPromiseRejection(.{
+    page.window.unhandledPromiseRejection(promise_event == v8.kPromiseRejectWithNoHandler, .{
         .local = &local,
         .handle = &message_handle,
     }, page) catch |err| {
