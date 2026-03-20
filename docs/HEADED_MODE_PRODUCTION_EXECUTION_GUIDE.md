@@ -651,6 +651,10 @@ Tasks:
   `tmp-browser-smoke/bare-metal-release/chrome-bare-metal-tabs-session-restore-probe.ps1`
   so the packaged binary proves tab opening, switching, closing, and session
   restore across a restart with the same profile directory
+- keep the profile persistence path honest by also running
+  `tmp-browser-smoke/bare-metal-release/chrome-bare-metal-persistence-probe.ps1`
+  so the packaged binary proves bookmarks, homepage, settings writes, and
+  restore-session changes survive a restart with the same profile directory
 - use `zig build bare_metal_release -Dtarget=x86_64-windows-msvc -Dtarget_class=bare_metal`
   as the canonical end-to-end validation command for the package-and-smoke
   slice on Windows
@@ -678,8 +682,10 @@ Do not call the bare-metal path production ready until:
   release smoke set includes `chrome-bare-metal-image-probe.ps1`,
   `chrome-bare-metal-policy-probe.ps1`,
   `chrome-bare-metal-download-probe.ps1`, and
-  `chrome-bare-metal-start-shell-probe.ps1`, including Ctrl+L address commit
-  coverage
+  `chrome-bare-metal-start-shell-probe.ps1`,
+  `chrome-bare-metal-tabs-session-restore-probe.ps1`, and
+  `chrome-bare-metal-persistence-probe.ps1`, including Ctrl+L address commit
+  and restart-persistence coverage for bookmarks and settings
 - the same core browser pages work without Win32
 - boot and runtime failures are reproducible from saved logs
 

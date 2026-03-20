@@ -230,8 +230,19 @@ pub fn build(b: *Build) !void {
         release_tabs_restore_cmd.step.dependOn(b.getInstallStep());
         release_tabs_restore_cmd.step.dependOn(&release_shell_cmd.step);
 
+        const release_persistence_cmd = b.addSystemCommand(&.{
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "tmp-browser-smoke/bare-metal-release/chrome-bare-metal-persistence-probe.ps1",
+        });
+        release_persistence_cmd.step.dependOn(b.getInstallStep());
+        release_persistence_cmd.step.dependOn(&release_tabs_restore_cmd.step);
+
         const release_step = b.step("bare_metal_release", "Package and smoke the bare-metal launch bundle");
-        release_step.dependOn(&release_tabs_restore_cmd.step);
+        release_step.dependOn(&release_persistence_cmd.step);
     }
 }
 
