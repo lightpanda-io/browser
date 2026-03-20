@@ -45,7 +45,7 @@ pub const PointerEventsCache = std.AutoHashMapUnmanaged(*Element, bool);
 const StyleManager = @This();
 
 const Tag = Element.Tag;
-const RuleList = std.ArrayList(VisibilityRule);
+const RuleList = std.MultiArrayList(VisibilityRule);
 
 page: *Page,
 
@@ -103,22 +103,23 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     const id_rules_count = self.id_rules.count();
     const class_rules_count = self.class_rules.count();
     const tag_rules_count = self.tag_rules.count();
-    const other_rules_count = self.other_rules.items.len;
+    const other_rules_count = self.other_rules.len;
 
     self.page._session.arena_pool.resetRetain(self.arena);
 
     self.next_doc_order = 0;
 
     self.id_rules = .empty;
-    try self.id_rules.ensureUnusedCapacity(self.arena, id_rules_count);
+    try self.id_rules.ensureTotalCapacity(self.arena, id_rules_count);
 
     self.class_rules = .empty;
-    try self.class_rules.ensureUnusedCapacity(self.arena, class_rules_count);
+    try self.class_rules.ensureTotalCapacity(self.arena, class_rules_count);
 
     self.tag_rules = .empty;
-    try self.tag_rules.ensureUnusedCapacity(self.arena, tag_rules_count);
+    try self.tag_rules.ensureTotalCapacity(self.arena, tag_rules_count);
 
-    self.other_rules = try .initCapacity(self.arena, other_rules_count);
+    self.other_rules = .{};
+    try self.other_rules.ensureTotalCapacity(self.arena, other_rules_count);
 
     const sheets = self.page.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
@@ -243,28 +244,52 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
             return spec > best_spec or (spec == best_spec and doc_order > best_doc_order);
         }
 
-        fn checkRule(ctx: @This(), rule: VisibilityRule) void {
-            // Skip rules that can't possibly beat current best for any property
-            const dominated = (rule.props.display_none == null or !beats(rule.specificity, rule.doc_order, ctx.display_spec.*, ctx.display_doc_order.*)) and
-                (rule.props.visibility_hidden == null or !beats(rule.specificity, rule.doc_order, ctx.visibility_spec.*, ctx.visibility_doc_order.*)) and
-                (rule.props.opacity_zero == null or !beats(rule.specificity, rule.doc_order, ctx.opacity_spec.*, ctx.opacity_doc_order.*));
-            if (dominated) return;
+        fn checkRules(ctx: @This(), rules: *const RuleList) void {
+            if (ctx.display_spec.* == INLINE_SPECIFICITY and
+                ctx.visibility_spec.* == INLINE_SPECIFICITY and
+                ctx.opacity_spec.* == INLINE_SPECIFICITY)
+            {
+                return;
+            }
 
-            if (matchesSelector(ctx.el, rule.selector, ctx.page)) {
-                if (rule.props.display_none != null and beats(rule.specificity, rule.doc_order, ctx.display_spec.*, ctx.display_doc_order.*)) {
-                    ctx.display_none.* = rule.props.display_none;
-                    ctx.display_spec.* = rule.specificity;
-                    ctx.display_doc_order.* = rule.doc_order;
+            const len = rules.len;
+            const specificities = rules.items(.specificity);
+            const doc_orders = rules.items(.doc_order);
+
+            for (0..len) |i| {
+                const spec = specificities[i];
+                const doc_order = doc_orders[i];
+
+                if (!beats(spec, doc_order, ctx.display_spec.*, ctx.display_doc_order.*) and
+                    !beats(spec, doc_order, ctx.visibility_spec.*, ctx.visibility_doc_order.*) and
+                    !beats(spec, doc_order, ctx.opacity_spec.*, ctx.opacity_doc_order.*))
+                {
+                    continue;
                 }
-                if (rule.props.visibility_hidden != null and beats(rule.specificity, rule.doc_order, ctx.visibility_spec.*, ctx.visibility_doc_order.*)) {
-                    ctx.visibility_hidden.* = rule.props.visibility_hidden;
-                    ctx.visibility_spec.* = rule.specificity;
-                    ctx.visibility_doc_order.* = rule.doc_order;
-                }
-                if (rule.props.opacity_zero != null and beats(rule.specificity, rule.doc_order, ctx.opacity_spec.*, ctx.opacity_doc_order.*)) {
-                    ctx.opacity_zero.* = rule.props.opacity_zero;
-                    ctx.opacity_spec.* = rule.specificity;
-                    ctx.opacity_doc_order.* = rule.doc_order;
+
+                const props = rules.items(.props)[i];
+                const dominated = (props.display_none == null or !beats(spec, doc_order, ctx.display_spec.*, ctx.display_doc_order.*)) and
+                    (props.visibility_hidden == null or !beats(spec, doc_order, ctx.visibility_spec.*, ctx.visibility_doc_order.*)) and
+                    (props.opacity_zero == null or !beats(spec, doc_order, ctx.opacity_spec.*, ctx.opacity_doc_order.*));
+                if (dominated) continue;
+
+                const selector = rules.items(.selector)[i];
+                if (matchesSelector(ctx.el, selector, ctx.page)) {
+                    if (props.display_none != null and beats(spec, doc_order, ctx.display_spec.*, ctx.display_doc_order.*)) {
+                        ctx.display_none.* = props.display_none;
+                        ctx.display_spec.* = spec;
+                        ctx.display_doc_order.* = doc_order;
+                    }
+                    if (props.visibility_hidden != null and beats(spec, doc_order, ctx.visibility_spec.*, ctx.visibility_doc_order.*)) {
+                        ctx.visibility_hidden.* = props.visibility_hidden;
+                        ctx.visibility_spec.* = spec;
+                        ctx.visibility_doc_order.* = doc_order;
+                    }
+                    if (props.opacity_zero != null and beats(spec, doc_order, ctx.opacity_spec.*, ctx.opacity_doc_order.*)) {
+                        ctx.opacity_zero.* = props.opacity_zero;
+                        ctx.opacity_spec.* = spec;
+                        ctx.opacity_doc_order.* = doc_order;
+                    }
                 }
             }
         }
@@ -285,9 +310,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
 
     if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
         if (self.id_rules.get(id)) |rules| {
-            for (rules.items) |rule| {
-                ctx.checkRule(rule);
-            }
+            ctx.checkRules(&rules);
         }
     }
 
@@ -295,22 +318,16 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
         var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
         while (it.next()) |class| {
             if (self.class_rules.get(class)) |rules| {
-                for (rules.items) |rule| {
-                    ctx.checkRule(rule);
-                }
+                ctx.checkRules(&rules);
             }
         }
     }
 
     if (self.tag_rules.get(el.getTag())) |rules| {
-        for (rules.items) |rule| {
-            ctx.checkRule(rule);
-        }
+        ctx.checkRules(&rules);
     }
 
-    for (self.other_rules.items) |rule| {
-        ctx.checkRule(rule);
-    }
+    ctx.checkRules(&self.other_rules);
 
     return (display_none orelse false) or (visibility_hidden orelse false) or (opacity_zero orelse false);
 }
@@ -366,28 +383,44 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     var best_doc_order: u32 = 0;
 
     // Helper to check a single rule
-    const checkRule = struct {
+    const checkRules = struct {
         fn beats(spec: u32, doc_order: u32, b_spec: u32, b_doc_order: u32) bool {
             return spec > b_spec or (spec == b_spec and doc_order > b_doc_order);
         }
 
-        fn check(rule: VisibilityRule, res: *?bool, spec: *u32, doc_order: *u32, elem: *Element, p: *Page) void {
-            if (rule.props.pointer_events_none == null or !beats(rule.specificity, rule.doc_order, spec.*, doc_order.*)) {
-                return;
-            }
-            if (matchesSelector(elem, rule.selector, p)) {
-                res.* = rule.props.pointer_events_none;
-                spec.* = rule.specificity;
-                doc_order.* = rule.doc_order;
+        fn check(rules: *const RuleList, res: *?bool, spec: *u32, doc_order: *u32, elem: *Element, p: *Page) void {
+            if (spec.* == INLINE_SPECIFICITY) return;
+
+            const len = rules.len;
+            const specificities = rules.items(.specificity);
+            const doc_orders = rules.items(.doc_order);
+
+            for (0..len) |i| {
+                const rule_spec = specificities[i];
+                const rule_doc_order = doc_orders[i];
+
+                if (!beats(rule_spec, rule_doc_order, spec.*, doc_order.*)) {
+                    continue;
+                }
+
+                const props = rules.items(.props)[i];
+                if (props.pointer_events_none == null) {
+                    continue;
+                }
+
+                const selector = rules.items(.selector)[i];
+                if (matchesSelector(elem, selector, p)) {
+                    res.* = props.pointer_events_none;
+                    spec.* = rule_spec;
+                    doc_order.* = rule_doc_order;
+                }
             }
         }
     }.check;
 
     if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
         if (self.id_rules.get(id)) |rules| {
-            for (rules.items) |rule| {
-                checkRule(rule, &result, &best_spec, &best_doc_order, el, page);
-            }
+            checkRules(&rules, &result, &best_spec, &best_doc_order, el, page);
         }
     }
 
@@ -395,22 +428,16 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
         var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
         while (it.next()) |class| {
             if (self.class_rules.get(class)) |rules| {
-                for (rules.items) |rule| {
-                    checkRule(rule, &result, &best_spec, &best_doc_order, el, page);
-                }
+                checkRules(&rules, &result, &best_spec, &best_doc_order, el, page);
             }
         }
     }
 
     if (self.tag_rules.get(el.getTag())) |rules| {
-        for (rules.items) |rule| {
-            checkRule(rule, &result, &best_spec, &best_doc_order, el, page);
-        }
+        checkRules(&rules, &result, &best_spec, &best_doc_order, el, page);
     }
 
-    for (self.other_rules.items) |rule| {
-        checkRule(rule, &result, &best_spec, &best_doc_order, el, page);
-    }
+    checkRules(&self.other_rules, &result, &best_spec, &best_doc_order, el, page);
 
     return result orelse false;
 }
@@ -461,17 +488,17 @@ fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !void {
         switch (bucket_key) {
             .id => |id| {
                 const gop = try self.id_rules.getOrPut(self.arena, id);
-                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                if (!gop.found_existing) gop.value_ptr.* = .{};
                 try gop.value_ptr.append(self.arena, rule);
             },
             .class => |class| {
                 const gop = try self.class_rules.getOrPut(self.arena, class);
-                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                if (!gop.found_existing) gop.value_ptr.* = .{};
                 try gop.value_ptr.append(self.arena, rule);
             },
             .tag => |tag| {
                 const gop = try self.tag_rules.getOrPut(self.arena, tag);
-                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                if (!gop.found_existing) gop.value_ptr.* = .{};
                 try gop.value_ptr.append(self.arena, rule);
             },
             .other => {
