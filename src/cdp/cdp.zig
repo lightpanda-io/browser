@@ -492,9 +492,13 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const arena = try browser.arena_pool.acquire(.{ .debug = "IsolatedWorld" });
             errdefer browser.arena_pool.release(arena);
 
+            const call_arena = try browser.arena_pool.acquire(.{ .debug = "IsolatedWorld.call_arena" });
+            errdefer browser.arena_pool.release(call_arena);
+
             const world = try arena.create(IsolatedWorld);
             world.* = .{
                 .arena = arena,
+                .call_arena = call_arena,
                 .context = null,
                 .browser = browser,
                 .name = try arena.dupe(u8, world_name),
@@ -745,6 +749,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 /// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
 const IsolatedWorld = struct {
     arena: Allocator,
+    call_arena: Allocator,
     browser: *Browser,
     name: []const u8,
     context: ?*js.Context = null,
@@ -757,6 +762,7 @@ const IsolatedWorld = struct {
     pub fn deinit(self: *IsolatedWorld) void {
         self.removeContext() catch {};
         self.identity.deinit();
+        self.browser.arena_pool.release(self.call_arena);
         self.browser.arena_pool.release(self.arena);
     }
 
@@ -764,6 +770,8 @@ const IsolatedWorld = struct {
         const ctx = self.context orelse return error.NoIsolatedContextToRemove;
         self.browser.env.destroyContext(ctx);
         self.context = null;
+        self.identity.deinit();
+        self.identity = .{};
     }
 
     // The isolate world must share at least some of the state with the related page, specifically the DocumentHTML
@@ -776,6 +784,7 @@ const IsolatedWorld = struct {
             const ctx = try self.browser.env.createContext(page, .{
                 .identity = &self.identity,
                 .identity_arena = self.arena,
+                .call_arena = self.call_arena,
                 .debug_name = "IsolatedContext",
             });
             self.context = ctx;

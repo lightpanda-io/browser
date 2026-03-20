@@ -112,7 +112,6 @@ pub fn acquire(self: *ArenaPool, dbg: DebugInfo) !Allocator {
         }
         gop.value_ptr.* += 1;
     }
-
     return entry.arena.allocator();
 }
 

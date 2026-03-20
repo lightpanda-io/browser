@@ -258,6 +258,7 @@ pub fn deinit(self: *Env) void {
 pub const ContextParams = struct {
     identity: *js.Identity,
     identity_arena: Allocator,
+    call_arena: Allocator,
     debug_name: []const u8 = "Context",
 };
 
@@ -325,7 +326,7 @@ pub fn createContext(self: *Env, page: *Page, params: ContextParams) !*Context {
         .arena = context_arena,
         .handle = context_global,
         .templates = self.templates,
-        .call_arena = page.call_arena,
+        .call_arena = params.call_arena,
         .microtask_queue = microtask_queue,
         .script_manager = &page._script_manager,
         .scheduler = .init(context_arena),

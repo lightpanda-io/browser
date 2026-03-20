@@ -63,7 +63,9 @@ templates: []*const v8.FunctionTemplate,
 // Arena for the lifetime of the context
 arena: Allocator,
 
-// The page.call_arena
+// The call_arena for this context. For main world contexts this is
+// page.call_arena. For isolated world contexts this is a separate arena
+// owned by the IsolatedWorld.
 call_arena: Allocator,
 
 // Because calls can be nested (i.e.a function calling a callback),
