@@ -9,6 +9,14 @@ const Parser = @import("../../css/Parser.zig");
 
 const CSSStyleSheet = @This();
 
+pub const CSSError = error{
+    OutOfMemory,
+    IndexSizeError,
+    WriteFailed,
+    StringTooLarge,
+    SyntaxError,
+};
+
 _href: ?[]const u8 = null,
 _title: []const u8 = "",
 _disabled: bool = false,
@@ -93,12 +101,12 @@ pub fn deleteRule(self: *CSSStyleSheet, index: u32, page: *Page) !void {
     page._style_manager.sheetModified();
 }
 
-pub fn replace(self: *CSSStyleSheet, text: []const u8, page: *Page) !js.Promise {
+pub fn replace(self: *CSSStyleSheet, text: []const u8, page: *Page) CSSError!js.Promise {
     try self.replaceSync(text, page);
     return page.js.local.?.resolvePromise(self);
 }
 
-pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, page: *Page) anyerror!void {
+pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, page: *Page) CSSError!void {
     const rules = try self.getCssRules(page);
     rules.clear();
 
