@@ -202,20 +202,20 @@ pub fn compileAndRun(self: *const Local, src: []const u8, name: ?[]const u8) !js
 //      we can just grab it from the identity_map)
 pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, value: anytype) !js.Object {
     const ctx = self.ctx;
-    const origin_arena = ctx.origin.arena;
+    const context_arena = ctx.arena;
 
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .@"struct" => {
             // Struct, has to be placed on the heap
-            const heap = try origin_arena.create(T);
+            const heap = try context_arena.create(T);
             heap.* = value;
             return self.mapZigInstanceToJs(js_obj_handle, heap);
         },
         .pointer => |ptr| {
             const resolved = resolveValue(value);
 
-            const gop = try ctx.origin.addIdentity(@intFromPtr(resolved.ptr));
+            const gop = try ctx.addIdentity(@intFromPtr(resolved.ptr));
             if (gop.found_existing) {
                 // we've seen this instance before, return the same object
                 return (js.Object.Global{ .handle = gop.value_ptr.* }).local(self);
@@ -244,7 +244,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 // The TAO contains the pointer to our Zig instance as
                 // well as any meta data we'll need to use it later.
                 // See the TaggedOpaque struct for more details.
-                const tao = try origin_arena.create(TaggedOpaque);
+                const tao = try context_arena.create(TaggedOpaque);
                 tao.* = .{
                     .value = resolved.ptr,
                     .prototype_chain = resolved.prototype_chain.ptr,
@@ -276,10 +276,10 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 // Instead, we check if the base has finalizer. The assumption
                 // here is that if a resolve type has a finalizer, then the base
                 // should have a finalizer too.
-                const fc = try ctx.origin.createFinalizerCallback(ctx.session, gop.value_ptr.*, resolved.ptr, resolved.finalizer_from_zig.?);
+                const fc = try ctx.createFinalizerCallback(gop.value_ptr.*, resolved.ptr, resolved.finalizer_from_zig.?);
                 {
                     errdefer fc.deinit();
-                    try ctx.origin.finalizer_callbacks.put(ctx.origin.arena, @intFromPtr(resolved.ptr), fc);
+                    try ctx.identity.finalizer_callbacks.put(ctx.identity_arena, @intFromPtr(resolved.ptr), fc);
                 }
 
                 conditionallyReference(value);

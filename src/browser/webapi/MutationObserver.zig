@@ -86,12 +86,12 @@ pub fn init(callback: js.Function.Temp, page: *Page) !*MutationObserver {
 }
 
 pub fn deinit(self: *MutationObserver, shutdown: bool, session: *Session) void {
-    if (shutdown) {
-        self._callback.release();
-        session.releaseArena(self._arena);
-    } else if (comptime IS_DEBUG) {
-        std.debug.assert(false);
+    self._callback.release();
+    if ((comptime IS_DEBUG) and !shutdown) {
+        std.debug.assert(self._observing.items.len == 0);
     }
+
+    session.releaseArena(self._arena);
 }
 
 pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, page: *Page) !void {
@@ -158,6 +158,7 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
 
     // Register with page if this is our first observation
     if (self._observing.items.len == 0) {
+        page.js.strongRef(self);
         try page.registerMutationObserver(self);
     }
 
@@ -168,13 +169,13 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
 }
 
 pub fn disconnect(self: *MutationObserver, page: *Page) void {
+    page.unregisterMutationObserver(self);
+    self._observing.clearRetainingCapacity();
     for (self._pending_records.items) |record| {
         record.deinit(false, page._session);
     }
     self._pending_records.clearRetainingCapacity();
-
-    self._observing.clearRetainingCapacity();
-    page.unregisterMutationObserver(self);
+    page.js.safeWeakRef(self);
 }
 
 pub fn takeRecords(self: *MutationObserver, page: *Page) ![]*MutationRecord {
@@ -440,6 +441,7 @@ pub const JsApi = struct {
         pub const name = "MutationObserver";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
         pub const finalizer = bridge.finalizer(MutationObserver.deinit);
     };
 

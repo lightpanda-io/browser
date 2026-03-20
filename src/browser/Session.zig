@@ -24,6 +24,7 @@ const log = @import("../log.zig");
 const App = @import("../App.zig");
 
 const js = @import("js/js.zig");
+const v8 = js.v8;
 const storage = @import("webapi/storage/storage.zig");
 const Navigation = @import("webapi/navigation/Navigation.zig");
 const History = @import("webapi/History.zig");
@@ -65,16 +66,13 @@ page_arena: Allocator,
 // Origin map for same-origin context sharing. Scoped to the root page lifetime.
 origins: std.StringHashMapUnmanaged(*js.Origin) = .empty,
 
+// Identity tracking for the main world. All main world contexts share this,
+// ensuring object identity works across same-origin frames.
+identity: js.Identity = .{},
+
 // Shared resources for all pages in this session.
 // These live for the duration of the page tree (root + frames).
 arena_pool: *ArenaPool,
-
-// In Debug, we use this to see if anything fails to release an arena back to
-// the pool.
-_arena_pool_leak_track: if (IS_DEBUG) std.AutoHashMapUnmanaged(usize, struct {
-    owner: []const u8,
-    count: usize,
-}) else void = if (IS_DEBUG) .empty else {},
 
 page: ?Page,
 
@@ -84,17 +82,17 @@ queued_navigation: std.ArrayList(*Page),
 // about:blank navigations (which may add to queued_navigation).
 queued_queued_navigation: std.ArrayList(*Page),
 
-page_id_gen: u32,
-frame_id_gen: u32,
+page_id_gen: u32 = 0,
+frame_id_gen: u32 = 0,
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
     const arena_pool = browser.arena_pool;
 
-    const arena = try arena_pool.acquire();
+    const arena = try arena_pool.acquire(.{ .debug = "Session" });
     errdefer arena_pool.release(arena);
 
-    const page_arena = try arena_pool.acquire();
+    const page_arena = try arena_pool.acquire(.{ .debug = "Session.page_arena" });
     errdefer arena_pool.release(page_arena);
 
     self.* = .{
@@ -104,8 +102,6 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .page_arena = page_arena,
         .factory = Factory.init(page_arena),
         .history = .{},
-        .page_id_gen = 0,
-        .frame_id_gen = 0,
         // The prototype (EventTarget) for Navigation is created when a Page is created.
         .navigation = .{ ._proto = undefined },
         .storage_shed = .{},
@@ -171,32 +167,11 @@ pub const GetArenaOpts = struct {
 };
 
 pub fn getArena(self: *Session, opts: GetArenaOpts) !Allocator {
-    const allocator = try self.arena_pool.acquire();
-    if (comptime IS_DEBUG) {
-        // Use session's arena (not page_arena) since page_arena gets reset between pages
-        const gop = try self._arena_pool_leak_track.getOrPut(self.arena, @intFromPtr(allocator.ptr));
-        if (gop.found_existing and gop.value_ptr.count != 0) {
-            log.err(.bug, "ArenaPool Double Use", .{ .owner = gop.value_ptr.*.owner });
-            @panic("ArenaPool Double Use");
-        }
-        gop.value_ptr.* = .{ .owner = opts.debug, .count = 1 };
-    }
-    return allocator;
+    return self.arena_pool.acquire(.{ .debug = opts.debug });
 }
 
 pub fn releaseArena(self: *Session, allocator: Allocator) void {
-    if (comptime IS_DEBUG) {
-        const found = self._arena_pool_leak_track.getPtr(@intFromPtr(allocator.ptr)).?;
-        if (found.count != 1) {
-            log.err(.bug, "ArenaPool Double Free", .{ .owner = found.owner, .count = found.count });
-            if (comptime builtin.is_test) {
-                @panic("ArenaPool Double Free");
-            }
-            return;
-        }
-        found.count = 0;
-    }
-    return self.arena_pool.release(allocator);
+    self.arena_pool.release(allocator);
 }
 
 pub fn getOrCreateOrigin(self: *Session, key_: ?[]const u8) !*js.Origin {
@@ -237,18 +212,9 @@ pub fn releaseOrigin(self: *Session, origin: *js.Origin) void {
 /// Reset page_arena and factory for a clean slate.
 /// Called when root page is removed.
 fn resetPageResources(self: *Session) void {
-    // Check for arena leaks before releasing
-    if (comptime IS_DEBUG) {
-        var it = self._arena_pool_leak_track.valueIterator();
-        while (it.next()) |value_ptr| {
-            if (value_ptr.count > 0) {
-                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner });
-            }
-        }
-        self._arena_pool_leak_track.clearRetainingCapacity();
-    }
+    self.identity.deinit();
+    self.identity = .{};
 
-    // All origins should have been released when contexts were destroyed
     if (comptime IS_DEBUG) {
         std.debug.assert(self.origins.count() == 0);
     }
@@ -259,10 +225,9 @@ fn resetPageResources(self: *Session) void {
         while (it.next()) |value| {
             value.*.deinit(app);
         }
-        self.origins.clearRetainingCapacity();
+        self.origins = .empty;
     }
 
-    // Release old page_arena and acquire fresh one
     self.frame_id_gen = 0;
     self.arena_pool.reset(self.page_arena, 64 * 1024);
     self.factory = Factory.init(self.page_arena);
@@ -646,16 +611,6 @@ fn processRootQueuedNavigation(self: *Session) !void {
 
     defer self.arena_pool.release(qn.arena);
 
-    // HACK
-    // Mark as released in tracking BEFORE removePage clears the map.
-    // We can't call releaseArena() because that would also return the arena
-    // to the pool, making the memory invalid before we use qn.url/qn.opts.
-    if (comptime IS_DEBUG) {
-        if (self._arena_pool_leak_track.getPtr(@intFromPtr(qn.arena.ptr))) |found| {
-            found.count = 0;
-        }
-    }
-
     self.removePage();
 
     self.page = @as(Page, undefined);
@@ -686,3 +641,36 @@ pub fn nextPageId(self: *Session) u32 {
     self.page_id_gen = id;
     return id;
 }
+
+// A type that has a finalizer can have its finalizer called one of two ways.
+// The first is from V8 via the WeakCallback we give to weakRef. But that isn't
+// guaranteed to fire, so we track this in finalizer_callbacks and call them on
+// page reset.
+pub const FinalizerCallback = struct {
+    arena: Allocator,
+    session: *Session,
+    ptr: *anyopaque,
+    global: v8.Global,
+    identity: *js.Identity,
+    zig_finalizer: *const fn (ptr: *anyopaque, session: *Session) void,
+
+    pub fn deinit(self: *FinalizerCallback) void {
+        self.zig_finalizer(self.ptr, self.session);
+        self.session.releaseArena(self.arena);
+    }
+
+    /// Release this item from the identity tracking maps (called after finalizer runs from V8)
+    pub fn releaseIdentity(self: *FinalizerCallback) void {
+        const session = self.session;
+        const id = @intFromPtr(self.ptr);
+
+        if (self.identity.identity_map.fetchRemove(id)) |kv| {
+            var global = kv.value;
+            v8.v8__Global__Reset(&global);
+        }
+
+        _ = self.identity.finalizer_callbacks.remove(id);
+
+        session.releaseArena(self.arena);
+    }
+};

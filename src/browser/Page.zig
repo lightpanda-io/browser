@@ -302,7 +302,11 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
     self._script_manager = ScriptManager.init(browser.allocator, browser.http_client, self);
     errdefer self._script_manager.deinit();
 
-    self.js = try browser.env.createContext(self);
+    self.js = try browser.env.createContext(self, .{
+        .identity = &session.identity,
+        .identity_arena = session.page_arena,
+        .call_arena = self.call_arena,
+    });
     errdefer self.js.deinit();
 
     document._page = self;

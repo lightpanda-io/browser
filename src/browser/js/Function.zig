@@ -21,6 +21,7 @@ const js = @import("js.zig");
 const v8 = js.v8;
 
 const log = @import("../../log.zig");
+const Session = @import("../Session.zig");
 
 const Function = @This();
 
@@ -210,10 +211,10 @@ fn _persist(self: *const Function, comptime is_global: bool) !(if (is_global) Gl
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
     if (comptime is_global) {
         try ctx.trackGlobal(global);
-        return .{ .handle = global, .origin = {} };
+        return .{ .handle = global, .temps = {} };
     }
     try ctx.trackTemp(global);
-    return .{ .handle = global, .origin = ctx.origin };
+    return .{ .handle = global, .temps = &ctx.identity.temps };
 }
 
 pub fn tempWithThis(self: *const Function, value: anytype) !Temp {
@@ -237,7 +238,7 @@ const GlobalType = enum(u8) {
 fn G(comptime global_type: GlobalType) type {
     return struct {
         handle: v8.Global,
-        origin: if (global_type == .temp) *js.Origin else void,
+        temps: if (global_type == .temp) *std.AutoHashMapUnmanaged(usize, v8.Global) else void,
 
         const Self = @This();
 
@@ -257,7 +258,10 @@ fn G(comptime global_type: GlobalType) type {
         }
 
         pub fn release(self: *const Self) void {
-            self.origin.releaseTemp(self.handle);
+            if (self.temps.fetchRemove(self.handle.data_ptr)) |kv| {
+                var g = kv.value;
+                v8.v8__Global__Reset(&g);
+            }
         }
     };
 }
