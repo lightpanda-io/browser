@@ -42,6 +42,8 @@ pub fn put(self: *Cache, key: []const u8, metadata: CachedMetadata, body: []cons
 
 pub const CacheControl = struct {
     max_age: ?u64 = null,
+    s_maxage: ?u64 = null,
+    is_public: bool = false,
     must_revalidate: bool = false,
     no_cache: bool = false,
     no_store: bool = false,
@@ -61,11 +63,14 @@ pub const CacheControl = struct {
                 cc.must_revalidate = true;
             } else if (std.ascii.eqlIgnoreCase(directive, "immutable")) {
                 cc.immutable = true;
+            } else if (std.ascii.eqlIgnoreCase(directive, "public")) {
+                cc.is_public = true;
             } else if (std.ascii.startsWithIgnoreCase(directive, "max-age=")) {
                 cc.max_age = std.fmt.parseInt(u64, directive[8..], 10) catch null;
             } else if (std.ascii.startsWithIgnoreCase(directive, "s-maxage=")) {
+                cc.s_maxage = std.fmt.parseInt(u64, directive[9..], 10) catch null;
                 // s-maxage takes precedence over max-age
-                cc.max_age = std.fmt.parseInt(u64, directive[9..], 10) catch cc.max_age;
+                cc.max_age = cc.s_maxage orelse cc.max_age;
             }
         }
         return cc;
@@ -125,6 +130,8 @@ pub const CachedMetadata = struct {
         var last_modified: ?[]const u8 = null;
         var age_at_store: u64 = 0;
         var content_type: []const u8 = "application/octet-stream";
+        var has_set_cookie = false;
+        var has_authorization = false;
 
         for (headers) |hdr| {
             if (std.ascii.eqlIgnoreCase(hdr.name, "cache-control")) {
@@ -139,13 +146,33 @@ pub const CachedMetadata = struct {
                 age_at_store = std.fmt.parseInt(u64, hdr.value, 10) catch 0;
             } else if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) {
                 content_type = hdr.value;
+            } else if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
+                has_set_cookie = true;
+            } else if (std.ascii.eqlIgnoreCase(hdr.name, "authorization")) {
+                has_authorization = true;
             }
         }
 
-        // return null for uncacheable responses
+        // no-store: must not be stored
         if (cc.no_store) return null;
+
+        // Vary: * means the response cannot be cached
         if (vary) |v| if (v == .wildcard) return null;
+
+        // must have an explicit max-age to be cacheable
         if (cc.max_age == null) return null;
+
+        // Set-Cookie without explicit public
+        if (has_set_cookie and !cc.is_public) return null;
+
+        // Authorization header without explicit public or s-maxage
+        if (has_authorization and !cc.is_public and cc.s_maxage == null) return null;
+
+        // Only cache 200 for now. Technically, we can cache others.
+        switch (status) {
+            200 => {},
+            else => return null,
+        }
 
         return .{
             .url = url,
