@@ -120,7 +120,7 @@ test "MCP.router - handleMessage - synchronous unit tests" {
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
     );
     try testing.expectJson(
-        \\{ "id": 1, "result": { "capabilities": { "tools": {} } } }
+        \\{ "jsonrpc": "2.0", "id": 1, "result": { "capabilities": { "tools": {} } } }
     , out_alloc.writer.buffered());
     out_alloc.writer.end = 0;
 
@@ -128,14 +128,14 @@ test "MCP.router - handleMessage - synchronous unit tests" {
     try handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":2,"method":"ping"}
     );
-    try testing.expectJson(.{ .id = 2, .result = .{} }, out_alloc.writer.buffered());
+    try testing.expectJson(.{ .jsonrpc = "2.0", .id = 2, .result = .{} }, out_alloc.writer.buffered());
     out_alloc.writer.end = 0;
 
     // 3. Tools list
     try handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":3,"method":"tools/list"}
     );
-    try testing.expectJson(.{ .id = 3 }, out_alloc.writer.buffered());
+    try testing.expectJson(.{ .jsonrpc = "2.0", .id = 3 }, out_alloc.writer.buffered());
     try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"name\":\"goto\"") != null);
     out_alloc.writer.end = 0;
 
@@ -143,7 +143,7 @@ test "MCP.router - handleMessage - synchronous unit tests" {
     try handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":4,"method":"unknown_method"}
     );
-    try testing.expectJson(.{ .id = 4, .@"error" = .{ .code = -32601 } }, out_alloc.writer.buffered());
+    try testing.expectJson(.{ .jsonrpc = "2.0", .id = 4, .@"error" = .{ .code = -32601 } }, out_alloc.writer.buffered());
     out_alloc.writer.end = 0;
 
     // 5. Parse error
@@ -152,6 +152,6 @@ test "MCP.router - handleMessage - synchronous unit tests" {
         defer filter.deinit();
 
         try handleMessage(server, aa, "invalid json");
-        try testing.expectJson("{\"id\": null, \"error\": {\"code\": -32700}}", out_alloc.writer.buffered());
+        try testing.expectJson("{\"jsonrpc\": \"2.0\", \"id\": null, \"error\": {\"code\": -32700}}", out_alloc.writer.buffered());
     }
 }
