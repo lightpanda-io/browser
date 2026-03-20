@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Http = @import("../http.zig");
 const FsCache = @import("FsCache.zig");
 
 /// A browser-wide cache for resources across the network.
@@ -39,6 +40,55 @@ pub fn put(self: *Cache, key: []const u8, metadata: CachedMetadata, body: []cons
     };
 }
 
+pub const CacheControl = struct {
+    max_age: ?u64 = null,
+    must_revalidate: bool = false,
+    no_cache: bool = false,
+    no_store: bool = false,
+    immutable: bool = false,
+
+    pub fn parse(value: []const u8) CacheControl {
+        var cc: CacheControl = .{};
+
+        var iter = std.mem.splitScalar(u8, value, ',');
+        while (iter.next()) |part| {
+            const directive = std.mem.trim(u8, part, &std.ascii.whitespace);
+            if (std.ascii.eqlIgnoreCase(directive, "no-store")) {
+                cc.no_store = true;
+            } else if (std.ascii.eqlIgnoreCase(directive, "no-cache")) {
+                cc.no_cache = true;
+            } else if (std.ascii.eqlIgnoreCase(directive, "must-revalidate")) {
+                cc.must_revalidate = true;
+            } else if (std.ascii.eqlIgnoreCase(directive, "immutable")) {
+                cc.immutable = true;
+            } else if (std.ascii.startsWithIgnoreCase(directive, "max-age=")) {
+                cc.max_age = std.fmt.parseInt(u64, directive[8..], 10) catch null;
+            } else if (std.ascii.startsWithIgnoreCase(directive, "s-maxage=")) {
+                // s-maxage takes precedence over max-age
+                cc.max_age = std.fmt.parseInt(u64, directive[9..], 10) catch cc.max_age;
+            }
+        }
+        return cc;
+    }
+};
+
+pub const Vary = union(enum) {
+    wildcard: void,
+    value: []const u8,
+
+    pub fn parse(value: []const u8) Vary {
+        if (std.mem.eql(u8, value, "*")) return .wildcard;
+        return .{ .value = value };
+    }
+
+    pub fn toString(self: Vary) []const u8 {
+        return switch (self) {
+            .wildcard => "*",
+            .value => |v| v,
+        };
+    }
+};
+
 pub const CachedMetadata = struct {
     url: [:0]const u8,
     content_type: []const u8,
@@ -52,17 +102,74 @@ pub const CachedMetadata = struct {
     etag: ?[]const u8,
     // for If-Modified-Since
     last_modified: ?[]const u8,
+    // If non-null, must be incorporated into cache key.
+    vary: ?[]const u8,
 
     must_revalidate: bool,
     no_cache: bool,
     immutable: bool,
 
-    // If non-null, must be incorporated into cache key.
-    vary: ?[]const u8,
+    headers: []const Http.Header,
+
+    pub fn fromHeaders(
+        url: [:0]const u8,
+        status: u16,
+        timestamp: i64,
+        headers: []const Http.Header,
+    ) !?CachedMetadata {
+        var cc: CacheControl = .{};
+        var vary: ?Vary = null;
+        var etag: ?[]const u8 = null;
+        var last_modified: ?[]const u8 = null;
+        var age_at_store: u64 = 0;
+        var content_type: []const u8 = "application/octet-stream";
+
+        for (headers) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, "cache-control")) {
+                cc = CacheControl.parse(hdr.value);
+            } else if (std.ascii.eqlIgnoreCase(hdr.name, "etag")) {
+                etag = hdr.value;
+            } else if (std.ascii.eqlIgnoreCase(hdr.name, "last-modified")) {
+                last_modified = hdr.value;
+            } else if (std.ascii.eqlIgnoreCase(hdr.name, "vary")) {
+                vary = Vary.parse(hdr.value);
+            } else if (std.ascii.eqlIgnoreCase(hdr.name, "age")) {
+                age_at_store = std.fmt.parseInt(u64, hdr.value, 10) catch 0;
+            } else if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) {
+                content_type = hdr.value;
+            }
+        }
+
+        // return null for uncacheable responses
+        if (cc.no_store) return null;
+        if (vary) |v| if (v == .wildcard) return null;
+        const resolved_max_age = cc.max_age orelse return null;
+
+        return .{
+            .url = url,
+            .content_type = content_type,
+            .status = status,
+            .stored_at = timestamp,
+            .age_at_store = age_at_store,
+            .max_age = resolved_max_age,
+            .etag = etag,
+            .last_modified = last_modified,
+            .must_revalidate = cc.must_revalidate,
+            .no_cache = cc.no_cache,
+            .immutable = cc.immutable,
+            .vary = if (vary) |v| v.toString() else null,
+            .headers = headers,
+        };
+    }
 
     pub fn deinit(self: CachedMetadata, allocator: std.mem.Allocator) void {
         allocator.free(self.url);
         allocator.free(self.content_type);
+        for (self.headers) |header| {
+            allocator.free(header.name);
+            allocator.free(header.value);
+        }
+        allocator.free(self.headers);
         if (self.etag) |e| allocator.free(e);
         if (self.last_modified) |lm| allocator.free(lm);
         if (self.vary) |v| allocator.free(v);
