@@ -17,37 +17,26 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const FsCache = @import("FsCache.zig");
 
 /// A browser-wide cache for resources across the network.
 /// This mostly conforms to RFC9111 with regards to caching behavior.
 pub const Cache = @This();
 
-ptr: *anyopaque,
-vtable: *const VTable,
+kind: union(enum) {
+    fs: FsCache,
+},
 
-const VTable = struct {
-    get: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, key: []const u8) ?CachedResponse,
-    put: *const fn (ptr: *anyopaque, key: []const u8, metadata: CachedMetadata, body: []const u8) anyerror!void,
-};
-
-pub fn init(ptr: anytype) Cache {
-    const T = @TypeOf(ptr.*);
-
-    return .{
-        .ptr = ptr,
-        .vtable = &.{
-            .get = T.get,
-            .put = T.put,
-        },
+pub fn get(self: *Cache, allocator: std.mem.Allocator, key: []const u8) ?CachedResponse {
+    return switch (self.kind) {
+        inline else => |*c| c.get(allocator, key),
     };
 }
 
-pub fn get(self: Cache, allocator: std.mem.Allocator, key: []const u8) ?CachedResponse {
-    return self.vtable.get(self.ptr, allocator, key);
-}
-
-pub fn put(self: Cache, key: []const u8, metadata: CachedMetadata, body: []const u8) !void {
-    return self.vtable.put(self.ptr, key, metadata, body);
+pub fn put(self: *Cache, key: []const u8, metadata: CachedMetadata, body: []const u8) !void {
+    return switch (self.kind) {
+        inline else => |*c| c.put(key, metadata, body),
+    };
 }
 
 pub const CachedMetadata = struct {
