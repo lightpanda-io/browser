@@ -1206,9 +1206,9 @@ pub fn stackTrace(self: *const Local) !?[]const u8 {
 }
 
 // == Promise Helpers ==
-pub fn rejectPromise(self: *const Local, comptime kind: js.PromiseResolver.RejectError) js.Promise {
+pub fn rejectPromise(self: *const Local, err: js.PromiseResolver.RejectError) js.Promise {
     var resolver = js.PromiseResolver.init(self);
-    resolver.rejectError("Local.rejectPromise", kind);
+    resolver.rejectError("Local.rejectPromise", err);
     return resolver.promise();
 }
 

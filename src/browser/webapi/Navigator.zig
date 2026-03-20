@@ -73,7 +73,7 @@ pub fn getStorage(self: *Navigator) *StorageManager {
 
 pub fn getBattery(_: *const Navigator, page: *Page) !js.Promise {
     log.info(.not_implemented, "navigator.getBattery", .{});
-    return page.js.local.?.rejectErrorPromise(.{ .dom_exception = error.NotSupported });
+    return page.js.local.?.rejectErrorPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
 }
 
 pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, page: *const Page) !void {
