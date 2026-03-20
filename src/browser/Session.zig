@@ -319,10 +319,15 @@ fn findPageBy(page: *Page, comptime field: []const u8, id: u32) ?*Page {
     return null;
 }
 
-pub fn wait(self: *Session, wait_ms: u32) WaitResult {
+const WaitOpts = struct {
+    timeout_ms: u32 = 5000,
+    until: lp.Config.WaitUntil = .load,
+};
+
+pub fn wait(self: *Session, opts: WaitOpts) WaitResult {
     var page = &(self.page orelse return .no_page);
     while (true) {
-        const wait_result = self._wait(page, wait_ms) catch |err| {
+        const wait_result = self._wait(page, opts) catch |err| {
             switch (err) {
                 error.JsError => {}, // already logged (with hopefully more context)
                 else => log.err(.browser, "session wait", .{
@@ -346,9 +351,11 @@ pub fn wait(self: *Session, wait_ms: u32) WaitResult {
     }
 }
 
-fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
+fn _wait(self: *Session, page: *Page, opts: WaitOpts) !WaitResult {
+    const wait_until = opts.until;
+
     var timer = try std.time.Timer.start();
-    var ms_remaining = wait_ms;
+    var ms_remaining = opts.timeout_ms;
 
     const browser = self.browser;
     var http_client = browser.http_client;
@@ -372,7 +379,9 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                 // There's no JS to run, and no reason to run the scheduler.
                 if (http_client.active == 0 and exit_when_done) {
                     // haven't started navigating, I guess.
-                    return .done;
+                    if (wait_until != .fixed) {
+                        return .done;
+                    }
                 }
                 // Either we have active http connections, or we're in CDP
                 // mode with an extra socket. Either way, we're waiting
@@ -423,17 +432,14 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                         std.debug.assert(http_client.intercepted == 0);
                     }
 
-                    var ms = blk: {
-                        // if (wait_ms - ms_remaining < 100) {
-                        //     if (comptime builtin.is_test) {
-                        //         return .done;
-                        //     }
-                        //     // Look, we want to exit ASAP, but we don't want
-                        //     // to exit so fast that we've run none of the
-                        //     // background jobs.
-                        //     break :blk 50;
-                        // }
+                    const is_event_done = switch (wait_until) {
+                        .fixed => false,
+                        .domcontentloaded => (page._load_state == .load or page._load_state == .complete),
+                        .load => (page._load_state == .complete),
+                        .networkidle => (page._notified_network_idle == .done),
+                    };
 
+                    var ms = blk: {
                         if (browser.hasBackgroundTasks()) {
                             // _we_ have nothing to run, but v8 is working on
                             // background tasks. We'll wait for them.
@@ -441,19 +447,27 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                             break :blk 20;
                         }
 
-                        break :blk browser.msToNextMacrotask() orelse return .done;
+                        const next_task = browser.msToNextMacrotask();
+                        if (next_task == null and is_event_done) {
+                            return .done;
+                        }
+                        break :blk next_task orelse 20;
                     };
 
                     if (ms > ms_remaining) {
+                        if (is_event_done) {
+                            return .done;
+                        }
                         // Same as above, except we have a scheduled task,
                         // it just happens to be too far into the future
                         // compared to how long we were told to wait.
-                        if (!browser.hasBackgroundTasks()) {
-                            return .done;
+                        if (browser.hasBackgroundTasks()) {
+                            // _we_ have nothing to run, but v8 is working on
+                            // background tasks. We'll wait for them.
+                            browser.waitForBackgroundTasks();
                         }
-                        // _we_ have nothing to run, but v8 is working on
-                        // background tasks. We'll wait for them.
-                        browser.waitForBackgroundTasks();
+                        // We're still wait for our wait_until. Not sure for what
+                        // but let's keep waiting. Worst case, we'll timeout.
                         ms = 20;
                     }
 

@@ -288,7 +288,7 @@ test "cdp.lp: action tools" {
     const page = try bc.session.createPage();
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    _ = bc.session.wait(5000);
+    _ = bc.session.wait(.{});
 
     // Test Click
     const btn = page.document.getElementById("btn", page).?.asNode();
