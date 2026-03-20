@@ -72,6 +72,8 @@ $tabsOpened = $false
 $tabsSwitchedForward = $false
 $tabsSwitchedBack = $false
 $tabsClosed = $false
+$addressCommitWorked = $false
+$addressReturnWorked = $false
 $screenshotReady = $false
 $titles = [ordered]@{}
 
@@ -207,6 +209,33 @@ $titles.downloads = Invoke-BrowserPagesDocumentAction $hwnd 4 $browser.Id "Brows
     throw "Ctrl+W did not close the new tab and return to the tabs page"
   }
 
+  Focus-BrowserPagesDocument $hwnd
+  Send-SmokeCtrlL
+  Start-Sleep -Milliseconds 120
+  Send-SmokeCtrlA
+  Start-Sleep -Milliseconds 120
+  Send-SmokeText "browser://tabs"
+  Start-Sleep -Milliseconds 120
+  Send-SmokeEnter
+  $titles.address_tabs = Wait-TabTitle $browser.Id "Browser Tabs (1)" 40
+  $addressCommitWorked = [bool]$titles.address_tabs
+  if (-not $addressCommitWorked) {
+    throw "Ctrl+L navigation to Browser Tabs failed"
+  }
+
+  Send-SmokeCtrlL
+  Start-Sleep -Milliseconds 120
+  Send-SmokeCtrlA
+  Start-Sleep -Milliseconds 120
+  Send-SmokeText "browser://start"
+  Start-Sleep -Milliseconds 120
+  Send-SmokeEnter
+  $titles.address_start = Wait-TabTitle $browser.Id "Browser Start" 40
+  $addressReturnWorked = [bool]$titles.address_start
+  if (-not $addressReturnWorked) {
+    throw "Ctrl+L navigation back to Browser Start failed"
+  }
+
   $result = [ordered]@{
     browser_pid = $browser.Id
     server_pid = $server.Id
@@ -225,6 +254,8 @@ $titles.downloads = Invoke-BrowserPagesDocumentAction $hwnd 4 $browser.Id "Brows
     tabs_switched_forward = $tabsSwitchedForward
     tabs_switched_back = $tabsSwitchedBack
     tabs_closed = $tabsClosed
+    address_commit_worked = $addressCommitWorked
+    address_return_worked = $addressReturnWorked
     titles = $titles
   }
 } catch {
@@ -258,6 +289,8 @@ $titles.downloads = Invoke-BrowserPagesDocumentAction $hwnd 4 $browser.Id "Brows
     tabs_switched_forward = if ($result) { $result.tabs_switched_forward } else { $tabsSwitchedForward }
     tabs_switched_back = if ($result) { $result.tabs_switched_back } else { $tabsSwitchedBack }
     tabs_closed = if ($result) { $result.tabs_closed } else { $tabsClosed }
+    address_commit_worked = if ($result) { $result.address_commit_worked } else { $addressCommitWorked }
+    address_return_worked = if ($result) { $result.address_return_worked } else { $addressReturnWorked }
     titles = if ($result) { $result.titles } else { $titles }
     browser_gone = $browserGone
     server_gone = $serverGone

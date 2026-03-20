@@ -77,6 +77,11 @@ pub const BareMetalBackend = struct {
     last_content_height: i32 = 0,
     last_title: []const u8 = &.{},
     last_url: []const u8 = &.{},
+    address_input: std.ArrayListUnmanaged(u8) = .{},
+    address_input_active: bool = false,
+    address_input_select_all: bool = false,
+    address_pending_high_surrogate: ?u16 = null,
+    address_input_suppressed_key_ups: usize = 0,
     last_is_loading: bool = true,
     last_can_go_back: bool = false,
     last_can_go_forward: bool = false,
@@ -277,6 +282,13 @@ pub const BareMetalBackend = struct {
                         .shift = (key.modifiers & modifier_shift) != 0,
                     };
                     if (key.pressed) {
+                        if (self.address_input_active) {
+                            self.address_input_suppressed_key_ups += 1;
+                            if (try self.handleAddressInputKey(key.code, modifiers)) {
+                                continue;
+                            }
+                            continue;
+                        }
                         if (try self.handleShortcutKey(key.code, modifiers)) {
                             continue;
                         }
@@ -290,6 +302,11 @@ pub const BareMetalBackend = struct {
                             }
                             continue;
                         }
+                    } else if (self.address_input_active or self.address_input_suppressed_key_ups > 0) {
+                        if (self.address_input_suppressed_key_ups > 0) {
+                            self.address_input_suppressed_key_ups -= 1;
+                        }
+                        continue;
                     }
                     if (key.pressed) {
                         _ = try page.triggerKeyboardKeyDownWithRepeat(key_name, modifiers, false);
@@ -425,6 +442,9 @@ pub const BareMetalBackend = struct {
             try self.queueBrowserCommand(.tab_new);
             return true;
         }
+        if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and key == 'L') {
+            return try self.beginAddressEdit();
+        }
         if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and key == 'W') {
             if (self.tab_entries.items.len == 0) {
                 return false;
@@ -437,6 +457,152 @@ pub const BareMetalBackend = struct {
             return true;
         }
         return false;
+    }
+
+    fn beginAddressEdit(self: *@This()) !bool {
+        const source = if (self.last_url.len > 0)
+            self.last_url
+        else if (self.homepage_url) |homepage|
+            homepage
+        else
+            "";
+
+        self.address_input.clearRetainingCapacity();
+        try self.address_input.appendSlice(self.host.allocator, source);
+        self.address_input_active = true;
+        self.address_input_select_all = true;
+        self.address_pending_high_surrogate = null;
+        self.address_input_suppressed_key_ups = 1;
+        self.renderFrame();
+        return true;
+    }
+
+    fn cancelAddressEdit(self: *@This()) bool {
+        if (!self.address_input_active) {
+            return false;
+        }
+        self.address_input_active = false;
+        self.address_input_select_all = false;
+        self.address_pending_high_surrogate = null;
+        self.address_input.clearRetainingCapacity();
+        self.renderFrame();
+        return true;
+    }
+
+    fn commitAddressEdit(self: *@This()) !bool {
+        if (!self.address_input_active) {
+            return false;
+        }
+
+        const trimmed = std.mem.trim(u8, self.address_input.items, &std.ascii.whitespace);
+        if (trimmed.len == 0) {
+            self.address_input_active = false;
+            self.address_input_select_all = false;
+            self.address_pending_high_surrogate = null;
+            self.address_input.clearRetainingCapacity();
+            self.renderFrame();
+            return true;
+        }
+
+        const url = try self.host.allocator.dupe(u8, trimmed);
+        self.address_input_active = false;
+        self.address_input_select_all = false;
+        self.address_pending_high_surrogate = null;
+        self.address_input.clearRetainingCapacity();
+        self.renderFrame();
+        try self.queueBrowserCommand(.{ .navigate = url });
+        return true;
+    }
+
+    fn deleteLastAddressCodepoint(self: *@This()) bool {
+        if (!self.address_input_active or self.address_input.items.len == 0) {
+            return false;
+        }
+        if (self.address_input_select_all) {
+            self.address_input.items.len = 0;
+            self.address_input_select_all = false;
+            self.address_pending_high_surrogate = null;
+            self.renderFrame();
+            return true;
+        }
+
+        var start = self.address_input.items.len;
+        while (start > 0) {
+            start -= 1;
+            if ((self.address_input.items[start] & 0xC0) != 0x80) {
+                break;
+            }
+        }
+        self.address_input.items.len = start;
+        self.address_pending_high_surrogate = null;
+        self.renderFrame();
+        return true;
+    }
+
+    fn selectAllAddressInput(self: *@This()) bool {
+        if (!self.address_input_active) {
+            return false;
+        }
+        self.address_input_select_all = true;
+        self.address_pending_high_surrogate = null;
+        self.renderFrame();
+        return true;
+    }
+
+    fn appendAddressCodePoint(self: *@This(), cp_in: u32) !bool {
+        if (!self.address_input_active) {
+            return false;
+        }
+        if (cp_in == 0 or cp_in > 0x10FFFF) {
+            return false;
+        }
+
+        const code_unit: u16 = @intCast(cp_in);
+        if (std.unicode.utf16IsHighSurrogate(code_unit)) {
+            self.address_pending_high_surrogate = code_unit;
+            return true;
+        }
+        if (std.unicode.utf16IsLowSurrogate(code_unit)) {
+            const high = self.address_pending_high_surrogate orelse return false;
+            self.address_pending_high_surrogate = null;
+            const decoded = std.unicode.utf16DecodeSurrogatePair(&.{ high, code_unit }) catch return false;
+            return try self.appendAddressCodePoint(decoded);
+        }
+
+        self.address_pending_high_surrogate = null;
+
+        const cp: u21 = @intCast(cp_in);
+        if (cp < 0x20 and cp != '\t') {
+            return false;
+        }
+        if (!std.unicode.utf8ValidCodepoint(cp)) {
+            return false;
+        }
+
+        var bytes: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(cp, &bytes) catch return false;
+        if (self.address_input_select_all) {
+            self.address_input.clearRetainingCapacity();
+            self.address_input_select_all = false;
+        }
+        try self.address_input.appendSlice(self.host.allocator, bytes[0..len]);
+        self.renderFrame();
+        return true;
+    }
+
+    fn handleAddressInputKey(self: *@This(), key: u32, modifiers: anytype) !bool {
+        if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and key == 'A') {
+            return self.selectAllAddressInput();
+        }
+        if (modifiers.ctrl or modifiers.alt or modifiers.meta) {
+            return false;
+        }
+        return switch (key) {
+            c.VK_ESCAPE => self.cancelAddressEdit(),
+            c.VK_RETURN => try self.commitAddressEdit(),
+            c.VK_BACK => self.deleteLastAddressCodepoint(),
+            else => try self.appendAddressCodePoint(key),
+        };
     }
 
     fn firstRemovableDownloadIndex(self: *@This()) ?usize {
@@ -489,6 +655,7 @@ pub const BareMetalBackend = struct {
             self.host.allocator.free(path);
             self.app_data_path = null;
         }
+        self.address_input.deinit(self.host.allocator);
         clearPresentationDisplayList(self);
         self.host.boot.shutdown();
     }
@@ -505,6 +672,12 @@ pub const BareMetalBackend = struct {
 
         const width = @as(i32, @intCast(fb.width));
         const height = @as(i32, @intCast(fb.height));
+        const address_value_len = if (self.address_input_active) self.address_input.items.len else self.last_url.len;
+        const address_bar_width = blk: {
+            const max_width = @max(@as(i32, 0), width - 24);
+            const measured = 112 + @as(i32, @intCast(@min(address_value_len, 64))) * 6;
+            break :blk @min(@max(@as(i32, 160), measured), max_width);
+        };
         const bg = switch (self.host.boot.state) {
             .cold, .banner => @as(u32, 0xFF0B1020),
             .running => @as(u32, 0xFF081720),
@@ -527,6 +700,15 @@ pub const BareMetalBackend = struct {
 
         fb.fill(bg);
         fb.fillRect(0, 0, width, 28, chrome);
+        if (address_bar_width > 0) {
+            const address_color = if (self.address_input_active) @as(u32, 0xFF6D95C3) else @as(u32, 0xFF34495E);
+            fb.fillRect(12, 5, address_bar_width, 18, address_color);
+            if (self.address_input_active) {
+                const cursor_units = @min(self.address_input.items.len, 60);
+                const cursor_x = 16 + @as(i32, @intCast(cursor_units)) * 6;
+                fb.fillRect(cursor_x, 7, 2, 14, 0xFFF5F7FA);
+            }
+        }
         fb.fillRect(0, height - 20, width, 20, chrome);
 
         if (self.presentation_display_list) |*list| {
@@ -2322,6 +2504,101 @@ test "bare metal shortcut keys enqueue browser commands" {
     try std.testing.expectEqual(BrowserCommand.tab_next, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand.tab_previous, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand{ .tab_close = 1 }, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(@as(?BrowserCommand, null), backend.nextBrowserCommand());
+}
+
+test "bare metal address edit select-all replaces existing value" {
+    var host = Host.initMock(std.testing.allocator);
+    defer host.deinit();
+
+    var backend = BareMetalBackend.init(&host, std.testing.allocator, 320, 180);
+    defer backend.deinit();
+    backend.last_url = "browser://start";
+
+    try std.testing.expect(try backend.beginAddressEdit());
+    try std.testing.expect(backend.address_input_select_all);
+    try std.testing.expect(try backend.appendAddressCodePoint('x'));
+    try std.testing.expectEqualStrings("x", backend.address_input.items);
+    try std.testing.expect(!backend.address_input_select_all);
+}
+
+test "bare metal address edit ctrl+a then backspace clears all" {
+    var host = Host.initMock(std.testing.allocator);
+    defer host.deinit();
+
+    var backend = BareMetalBackend.init(&host, std.testing.allocator, 320, 180);
+    defer backend.deinit();
+    backend.last_url = "browser://start";
+
+    try std.testing.expect(try backend.beginAddressEdit());
+    try std.testing.expect(backend.selectAllAddressInput());
+    try std.testing.expect(backend.deleteLastAddressCodepoint());
+    try std.testing.expectEqual(@as(usize, 0), backend.address_input.items.len);
+    try std.testing.expect(!backend.address_input_select_all);
+}
+
+test "bare metal address edit ctrl+l commits typed navigation" {
+    var host = Host.initMock(std.testing.allocator);
+    defer host.deinit();
+
+    var backend = BareMetalBackend.init(&host, std.testing.allocator, 320, 180);
+    defer backend.deinit();
+    backend.last_url = "browser://start";
+
+    const FakePage = struct {
+        key_down: usize = 0,
+        key_up: usize = 0,
+
+        pub fn triggerKeyboardKeyDownWithRepeat(self: *@This(), _: []const u8, _: anytype, _: bool) !bool {
+            self.key_down += 1;
+            return true;
+        }
+
+        pub fn triggerKeyboardKeyUp(self: *@This(), _: []const u8, _: anytype) !bool {
+            self.key_up += 1;
+            return true;
+        }
+
+        pub fn triggerMouseMove(_: *@This(), _: f64, _: f64, _: anytype) !void {}
+
+        pub fn triggerMouseDown(_: *@This(), _: f64, _: f64, _: anytype, _: anytype) !void {}
+
+        pub fn triggerMouseUp(_: *@This(), _: f64, _: f64, _: anytype, _: anytype) !void {}
+
+        pub fn triggerMouseClickWithModifiers(_: *@This(), _: f64, _: f64, _: anytype, _: anytype) !bool {
+            return true;
+        }
+
+        pub fn triggerMouseWheel(_: *@This(), _: f64, _: f64, _: f64, _: f64, _: anytype) !struct { dispatched: bool, default_prevented: bool, scrolled_element: bool } {
+            return .{ .dispatched = true, .default_prevented = false, .scrolled_element = false };
+        }
+    };
+
+    var page = FakePage{};
+    try host.input.pushKey(std.testing.allocator, 'L', true, modifier_ctrl);
+    try host.input.pushKey(std.testing.allocator, 'L', false, modifier_ctrl);
+    try host.input.pushKey(std.testing.allocator, 'A', true, modifier_ctrl);
+    try host.input.pushKey(std.testing.allocator, 'A', false, modifier_ctrl);
+    for ("browser://tabs") |ch| {
+        try host.input.pushKey(std.testing.allocator, ch, true, 0);
+        try host.input.pushKey(std.testing.allocator, ch, false, 0);
+    }
+    try host.input.pushKey(std.testing.allocator, c.VK_RETURN, true, 0);
+    try host.input.pushKey(std.testing.allocator, c.VK_RETURN, false, 0);
+
+    try backend.dispatchInput(&page);
+
+    try std.testing.expectEqual(@as(usize, 0), page.key_down);
+    try std.testing.expectEqual(@as(usize, 0), page.key_up);
+    try std.testing.expectEqual(@as(usize, 0), backend.address_input.items.len);
+    try std.testing.expect(!backend.address_input_active);
+
+    const command = backend.nextBrowserCommand() orelse return error.TestExpected;
+    defer command.deinit(std.testing.allocator);
+    switch (command) {
+        .navigate => |url| try std.testing.expectEqualStrings("browser://tabs", url),
+        else => return error.TestUnexpectedResult,
+    }
     try std.testing.expectEqual(@as(?BrowserCommand, null), backend.nextBrowserCommand());
 }
 

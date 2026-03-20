@@ -674,7 +674,8 @@ Do not call the bare-metal path production ready until:
   release smoke set includes `chrome-bare-metal-image-probe.ps1`,
   `chrome-bare-metal-policy-probe.ps1`,
   `chrome-bare-metal-download-probe.ps1`, and
-  `chrome-bare-metal-start-shell-probe.ps1`
+  `chrome-bare-metal-start-shell-probe.ps1`, including Ctrl+L address commit
+  coverage
 - the same core browser pages work without Win32
 - boot and runtime failures are reproducible from saved logs
 
