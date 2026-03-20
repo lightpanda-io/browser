@@ -81,6 +81,13 @@ pub const Vary = union(enum) {
         return .{ .value = value };
     }
 
+    pub fn deinit(self: Vary, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .wildcard => {},
+            .value => |v| allocator.free(v),
+        }
+    }
+
     pub fn toString(self: Vary) []const u8 {
         return switch (self) {
             .wildcard => "*",
@@ -96,19 +103,14 @@ pub const CachedMetadata = struct {
     status: u16,
     stored_at: i64,
     age_at_store: u64,
-    max_age: u64,
 
     // for If-None-Match
     etag: ?[]const u8,
     // for If-Modified-Since
     last_modified: ?[]const u8,
-    // If non-null, must be incorporated into cache key.
-    vary: ?[]const u8,
 
-    must_revalidate: bool,
-    no_cache: bool,
-    immutable: bool,
-
+    cache_control: CacheControl,
+    vary: ?Vary,
     headers: []const Http.Header,
 
     pub fn fromHeaders(
@@ -143,7 +145,7 @@ pub const CachedMetadata = struct {
         // return null for uncacheable responses
         if (cc.no_store) return null;
         if (vary) |v| if (v == .wildcard) return null;
-        const resolved_max_age = cc.max_age orelse return null;
+        if (cc.max_age == null) return null;
 
         return .{
             .url = url,
@@ -151,13 +153,10 @@ pub const CachedMetadata = struct {
             .status = status,
             .stored_at = timestamp,
             .age_at_store = age_at_store,
-            .max_age = resolved_max_age,
             .etag = etag,
             .last_modified = last_modified,
-            .must_revalidate = cc.must_revalidate,
-            .no_cache = cc.no_cache,
-            .immutable = cc.immutable,
-            .vary = if (vary) |v| v.toString() else null,
+            .cache_control = cc,
+            .vary = vary,
             .headers = headers,
         };
     }
@@ -170,15 +169,9 @@ pub const CachedMetadata = struct {
             allocator.free(header.value);
         }
         allocator.free(self.headers);
+        if (self.vary) |v| v.deinit(allocator);
         if (self.etag) |e| allocator.free(e);
         if (self.last_modified) |lm| allocator.free(lm);
-        if (self.vary) |v| allocator.free(v);
-    }
-
-    pub fn isAgeStale(self: *const CachedMetadata) bool {
-        const now = std.time.timestamp();
-        const age = now - self.stored_at + @as(i64, @intCast(self.age_at_store));
-        return age < @as(i64, @intCast(self.max_age));
     }
 };
 
