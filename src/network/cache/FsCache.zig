@@ -59,25 +59,35 @@ fn hashKey(key: []const u8) [HASHED_KEY_LEN]u8 {
 
 fn serializeMeta(writer: *std.Io.Writer, meta: *const CachedMetadata) !void {
     try writer.print("{s}\n{s}\n", .{ meta.url, meta.content_type });
-    try writer.print("{d}\n{d}\n{d}\n{d}\n", .{
+    try writer.print("{d}\n{d}\n{d}\n", .{
         meta.status,
         meta.stored_at,
         meta.age_at_store,
-        meta.max_age,
     });
     try writer.print("{s}\n", .{meta.etag orelse "null"});
     try writer.print("{s}\n", .{meta.last_modified orelse "null"});
-    try writer.print("{s}\n", .{meta.vary orelse "null"});
-    try writer.print("{}\n{}\n{}\n", .{
-        meta.must_revalidate,
-        meta.no_cache,
-        meta.immutable,
+
+    // cache-control
+    try writer.print("{d}\n", .{meta.cache_control.max_age orelse 0});
+    try writer.print("{}\n{}\n{}\n{}\n", .{
+        meta.cache_control.max_age != null,
+        meta.cache_control.must_revalidate,
+        meta.cache_control.no_cache,
+        meta.cache_control.immutable,
     });
+
+    // vary
+    if (meta.vary) |v| {
+        try writer.print("{s}\n", .{v.toString()});
+    } else {
+        try writer.print("null\n", .{});
+    }
     try writer.flush();
 
     try writer.print("{d}\n", .{meta.headers.len});
     for (meta.headers) |hdr| {
         try writer.print("{s}\n{s}\n", .{ hdr.name, hdr.value });
+        try writer.flush();
     }
     try writer.flush();
 }
@@ -121,36 +131,57 @@ fn deserializeMeta(allocator: std.mem.Allocator, file: std.fs.File) !CachedMetad
         const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
         break :blk std.fmt.parseInt(u64, line, 10) catch return error.Malformed;
     };
-    const max_age = blk: {
-        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
-        break :blk std.fmt.parseInt(u64, line, 10) catch return error.Malformed;
-    };
 
     const etag = blk: {
         const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
         break :blk if (std.mem.eql(u8, line, "null")) null else try allocator.dupe(u8, line);
     };
+    errdefer if (etag) |e| allocator.free(e);
+
     const last_modified = blk: {
         const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
         break :blk if (std.mem.eql(u8, line, "null")) null else try allocator.dupe(u8, line);
     };
-    const vary = blk: {
-        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
-        break :blk if (std.mem.eql(u8, line, "null")) null else try allocator.dupe(u8, line);
+    errdefer if (last_modified) |lm| allocator.free(lm);
+
+    // cache-control
+    const cc = cache_control: {
+        const max_age_val = blk: {
+            const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+            break :blk std.fmt.parseInt(u64, line, 10) catch return error.Malformed;
+        };
+        const max_age_present = blk: {
+            const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+            break :blk try deserializeMetaBoolean(line);
+        };
+        const must_revalidate = blk: {
+            const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+            break :blk try deserializeMetaBoolean(line);
+        };
+        const no_cache = blk: {
+            const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+            break :blk try deserializeMetaBoolean(line);
+        };
+        const immutable = blk: {
+            const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+            break :blk try deserializeMetaBoolean(line);
+        };
+        break :cache_control Cache.CacheControl{
+            .max_age = if (max_age_present) max_age_val else null,
+            .must_revalidate = must_revalidate,
+            .no_cache = no_cache,
+            .immutable = immutable,
+        };
     };
 
-    const must_revalidate = blk: {
+    // vary
+    const vary = blk: {
         const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
-        break :blk try deserializeMetaBoolean(line);
+        if (std.mem.eql(u8, line, "null")) break :blk null;
+        const duped = try allocator.dupe(u8, line);
+        break :blk Cache.Vary.parse(duped);
     };
-    const no_cache = blk: {
-        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
-        break :blk try deserializeMetaBoolean(line);
-    };
-    const immutable = blk: {
-        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
-        break :blk try deserializeMetaBoolean(line);
-    };
+    errdefer if (vary) |v| if (v == .value) allocator.free(v.value);
 
     const headers = blk: {
         const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
@@ -184,12 +215,9 @@ fn deserializeMeta(allocator: std.mem.Allocator, file: std.fs.File) !CachedMetad
         .status = status,
         .stored_at = stored_at,
         .age_at_store = age_at_store,
-        .max_age = max_age,
+        .cache_control = cc,
         .etag = etag,
         .last_modified = last_modified,
-        .must_revalidate = must_revalidate,
-        .no_cache = no_cache,
-        .immutable = immutable,
         .vary = vary,
         .headers = headers,
     };
