@@ -304,76 +304,25 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
                 return;
             }
 
-            const len = rules.len;
             const priorities = rules.items(.priority);
+            const props_list = rules.items(.props);
+            const selectors = rules.items(.selector);
 
-            const vec_len = std.simd.suggestVectorLength(u64) orelse 4;
-            var i: usize = 0;
-
-            while (i + vec_len <= len) {
-                const p_chunk: @Vector(vec_len, u64) = priorities[i..][0..vec_len].*;
-                const min_priority = @min(@min(ctx.display_priority.*, ctx.visibility_priority.*), ctx.opacity_priority.*);
-                const min_p_vec: @Vector(vec_len, u64) = @splat(min_priority);
-
-                const cmp = p_chunk > min_p_vec;
-                const any_can_beat = @reduce(.Or, cmp);
-
-                if (!any_can_beat) {
-                    i += vec_len;
-                    continue;
-                }
-
-                for (0..vec_len) |j| {
-                    const idx = i + j;
-                    const p = priorities[idx];
-
-                    if (p <= ctx.display_priority.* and p <= ctx.visibility_priority.* and p <= ctx.opacity_priority.*) {
-                        continue;
-                    }
-
-                    const props = rules.items(.props)[idx];
-                    const dominated = (props.display_none == null or p <= ctx.display_priority.*) and
-                        (props.visibility_hidden == null or p <= ctx.visibility_priority.*) and
-                        (props.opacity_zero == null or p <= ctx.opacity_priority.*);
-
-                    if (dominated) continue;
-
-                    const selector = rules.items(.selector)[idx];
-                    if (matchesSelector(ctx.el, selector, ctx.page)) {
-                        if (props.display_none != null and p > ctx.display_priority.*) {
-                            ctx.display_none.* = props.display_none;
-                            ctx.display_priority.* = p;
-                        }
-                        if (props.visibility_hidden != null and p > ctx.visibility_priority.*) {
-                            ctx.visibility_hidden.* = props.visibility_hidden;
-                            ctx.visibility_priority.* = p;
-                        }
-                        if (props.opacity_zero != null and p > ctx.opacity_priority.*) {
-                            ctx.opacity_zero.* = props.opacity_zero;
-                            ctx.opacity_priority.* = p;
-                        }
-                    }
-                }
-                i += vec_len;
-            }
-
-            // Remainder
-            while (i < len) : (i += 1) {
-                const p = priorities[i];
-
+            for (priorities, props_list, selectors) |p, props, selector| {
+                // Fast skip using packed u64 priority
                 if (p <= ctx.display_priority.* and p <= ctx.visibility_priority.* and p <= ctx.opacity_priority.*) {
                     continue;
                 }
 
-                const props = rules.items(.props)[i];
+                // Logic for property dominance
                 const dominated = (props.display_none == null or p <= ctx.display_priority.*) and
                     (props.visibility_hidden == null or p <= ctx.visibility_priority.*) and
                     (props.opacity_zero == null or p <= ctx.opacity_priority.*);
 
                 if (dominated) continue;
 
-                const selector = rules.items(.selector)[i];
                 if (matchesSelector(ctx.el, selector, ctx.page)) {
+                    // Update best priorities
                     if (props.display_none != null and p > ctx.display_priority.*) {
                         ctx.display_none.* = props.display_none;
                         ctx.display_priority.* = p;
@@ -479,60 +428,14 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
         fn check(rules: *const RuleList, res: *?bool, current_priority: *u64, elem: *Element, p: *Page) void {
             if (current_priority.* == INLINE_PRIORITY) return;
 
-            const len = rules.len;
             const priorities = rules.items(.priority);
+            const props_list = rules.items(.props);
+            const selectors = rules.items(.selector);
 
-            const vec_len = std.simd.suggestVectorLength(u64) orelse 4;
-            var i: usize = 0;
+            for (priorities, props_list, selectors) |priority, props, selector| {
+                if (priority <= current_priority.*) continue;
+                if (props.pointer_events_none == null) continue;
 
-            while (i + vec_len <= len) {
-                const p_chunk: @Vector(vec_len, u64) = priorities[i..][0..vec_len].*;
-                const min_p_vec: @Vector(vec_len, u64) = @splat(current_priority.*);
-
-                const cmp = p_chunk > min_p_vec;
-                const any_can_beat = @reduce(.Or, cmp);
-
-                if (!any_can_beat) {
-                    i += vec_len;
-                    continue;
-                }
-
-                for (0..vec_len) |j| {
-                    const idx = i + j;
-                    const priority = priorities[idx];
-
-                    if (priority <= current_priority.*) {
-                        continue;
-                    }
-
-                    const props = rules.items(.props)[idx];
-                    if (props.pointer_events_none == null) {
-                        continue;
-                    }
-
-                    const selector = rules.items(.selector)[idx];
-                    if (matchesSelector(elem, selector, p)) {
-                        res.* = props.pointer_events_none;
-                        current_priority.* = priority;
-                    }
-                }
-                i += vec_len;
-            }
-
-            // Remainder
-            while (i < len) : (i += 1) {
-                const priority = priorities[i];
-
-                if (priority <= current_priority.*) {
-                    continue;
-                }
-
-                const props = rules.items(.props)[i];
-                if (props.pointer_events_none == null) {
-                    continue;
-                }
-
-                const selector = rules.items(.selector)[i];
                 if (matchesSelector(elem, selector, p)) {
                     res.* = props.pointer_events_none;
                     current_priority.* = priority;
