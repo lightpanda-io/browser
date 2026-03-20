@@ -74,12 +74,77 @@ pub fn deinit(self: *StyleManager) void {
     self.page.releaseArena(self.arena);
 }
 
-pub fn sheetAdded(self: *StyleManager, sheet: *CSSStyleSheet) !void {
-    const css_rules = sheet._css_rules orelse return;
+fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
+    if (sheet._css_rules) |css_rules| {
+        for (css_rules._rules.items) |rule| {
+            const style_rule = rule.is(CSSStyleRule) orelse continue;
+            try self.addRule(style_rule);
+        }
+        return;
+    }
 
-    for (css_rules._rules.items) |rule| {
-        const style_rule = rule.is(CSSStyleRule) orelse continue;
-        try self.addRule(style_rule);
+    const owner_node = sheet.getOwnerNode() orelse return;
+    if (owner_node.is(Element.Html.Style)) |style| {
+        const text = try style.asNode().getTextContentAlloc(self.arena);
+        var it = CssParser.parseStylesheet(text);
+        while (it.next()) |parsed_rule| {
+            try self.addRawRule(parsed_rule.selector, parsed_rule.block);
+        }
+    }
+}
+
+fn addRawRule(self: *StyleManager, selector_text: []const u8, block_text: []const u8) !void {
+    if (selector_text.len == 0) return;
+
+    var props = VisibilityProperties{};
+    var it = CssParser.parseDeclarationsList(block_text);
+    while (it.next()) |decl| {
+        const name = decl.name;
+        const val = decl.value;
+        if (std.ascii.eqlIgnoreCase(name, "display")) {
+            props.display_none = std.ascii.eqlIgnoreCase(val, "none");
+        } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
+            props.visibility_hidden = std.ascii.eqlIgnoreCase(val, "hidden") or std.ascii.eqlIgnoreCase(val, "collapse");
+        } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
+            props.opacity_zero = std.ascii.eqlIgnoreCase(val, "0");
+        } else if (std.ascii.eqlIgnoreCase(name, "pointer-events")) {
+            props.pointer_events_none = std.ascii.eqlIgnoreCase(val, "none");
+        }
+    }
+
+    if (!props.isRelevant()) return;
+
+    const selectors = SelectorParser.parseList(self.arena, selector_text, self.page) catch return;
+    for (selectors) |selector| {
+        const rightmost = if (selector.segments.len > 0) selector.segments[selector.segments.len - 1].compound else selector.first;
+        const bucket_key = getBucketKey(rightmost) orelse continue;
+        const rule = VisibilityRule{
+            .props = props,
+            .selector = selector,
+            .priority = (@as(u64, computeSpecificity(selector)) << 32) | @as(u64, self.next_doc_order),
+        };
+        self.next_doc_order += 1;
+
+        switch (bucket_key) {
+            .id => |id| {
+                const gop = try self.id_rules.getOrPut(self.arena, id);
+                if (!gop.found_existing) gop.value_ptr.* = .{};
+                try gop.value_ptr.append(self.arena, rule);
+            },
+            .class => |class| {
+                const gop = try self.class_rules.getOrPut(self.arena, class);
+                if (!gop.found_existing) gop.value_ptr.* = .{};
+                try gop.value_ptr.append(self.arena, rule);
+            },
+            .tag => |tag| {
+                const gop = try self.tag_rules.getOrPut(self.arena, tag);
+                if (!gop.found_existing) gop.value_ptr.* = .{};
+                try gop.value_ptr.append(self.arena, rule);
+            },
+            .other => {
+                try self.other_rules.append(self.arena, rule);
+            },
+        }
     }
 }
 
@@ -123,8 +188,8 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     const sheets = self.page.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
-        self.sheetAdded(sheet) catch |err| {
-            log.err(.browser, "StyleManager sheetAdded", .{ .err = err });
+        self.parseSheet(sheet) catch |err| {
+            log.err(.browser, "StyleManager parseSheet", .{ .err = err });
             return err;
         };
     }

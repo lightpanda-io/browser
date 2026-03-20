@@ -46,8 +46,17 @@ pub fn setDisabled(self: *CSSStyleSheet, disabled: bool) void {
 
 pub fn getCssRules(self: *CSSStyleSheet, page: *Page) !*CSSRuleList {
     if (self._css_rules) |rules| return rules;
+
     const rules = try CSSRuleList.init(page);
     self._css_rules = rules;
+
+    if (self.getOwnerNode()) |owner| {
+        if (owner.is(Element.Html.Style)) |style| {
+            const text = try style.asNode().getTextContentAlloc(page.call_arena);
+            try self.replaceSync(text, page);
+        }
+    }
+
     return rules;
 }
 
@@ -89,7 +98,7 @@ pub fn replace(self: *CSSStyleSheet, text: []const u8, page: *Page) !js.Promise 
     return page.js.local.?.resolvePromise(self);
 }
 
-pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, page: *Page) !void {
+pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, page: *Page) anyerror!void {
     const rules = try self.getCssRules(page);
     rules.clear();
 
