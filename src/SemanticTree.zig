@@ -196,18 +196,6 @@ fn walk(
         name = null;
     }
 
-    var data = NodeData{
-        .id = cdp_node.id,
-        .axn = axn,
-        .role = role,
-        .name = name,
-        .value = value,
-        .options = options,
-        .xpath = xpath,
-        .is_interactive = is_interactive,
-        .node_name = node_name,
-    };
-
     var should_visit = true;
     if (self.interactive_only) {
         var keep = false;
@@ -239,6 +227,18 @@ fn walk(
 
     var did_visit = false;
     var should_walk_children = true;
+    var data: NodeData = .{
+        .id = cdp_node.id,
+        .axn = axn,
+        .role = role,
+        .name = name,
+        .value = value,
+        .options = options,
+        .xpath = xpath,
+        .is_interactive = is_interactive,
+        .node_name = node_name,
+    };
+
     if (should_visit) {
         should_walk_children = try visitor.visit(node, &data);
         did_visit = true; // Always true if should_visit was true, because visit() executed and opened structures
