@@ -29,6 +29,7 @@ const libcurl = @import("../sys/libcurl.zig");
 const net_http = @import("http.zig");
 const RobotStore = @import("Robots.zig").RobotStore;
 const WebBotAuth = @import("WebBotAuth.zig");
+const Cache = @import("cache/Cache.zig");
 
 const Runtime = @This();
 
@@ -49,6 +50,7 @@ config: *const Config,
 ca_blob: ?net_http.Blob,
 robot_store: RobotStore,
 web_bot_auth: ?WebBotAuth,
+cache: ?Cache,
 
 connections: []net_http.Connection,
 available: std.DoublyLinkedList = .{},
@@ -233,6 +235,11 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
     else
         null;
 
+    const cache = if (config.cacheDir()) |cache_dir_path|
+        Cache{ .kind = .{ .fs = try .init(cache_dir_path) } }
+    else
+        null;
+
     return .{
         .allocator = allocator,
         .config = config,
@@ -246,6 +253,7 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
 
         .robot_store = RobotStore.init(allocator),
         .web_bot_auth = web_bot_auth,
+        .cache = cache,
     };
 }
 
