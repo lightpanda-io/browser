@@ -33,6 +33,7 @@ const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");
 const Robots = @import("../network/Robots.zig");
 const Cache = @import("../network/cache/Cache.zig");
+const CacheMetadata = Cache.CachedMetadata;
 const CachedResponse = Cache.CachedResponse;
 
 const IS_DEBUG = builtin.mode == .Debug;
@@ -950,34 +951,46 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         }
     }
 
+    const allocator = transfer.arena.allocator();
+    var header_list: std.ArrayList(http.Header) = .empty;
+
+    var it = transfer.responseHeaderIterator();
+    while (it.next()) |hdr| {
+        header_list.append(
+            allocator,
+            .{
+                .name = try allocator.dupe(u8, hdr.name),
+                .value = try allocator.dupe(u8, hdr.value),
+            },
+        ) catch |err| {
+            log.warn(.http, "cache header collect failed", .{ .err = err });
+            break;
+        };
+    }
+
     // release conn ASAP so that it's available; some done_callbacks
     // will load more resources.
     transfer.releaseConn();
 
     try transfer.req.done_callback(transfer.req.ctx);
 
-    if (self.network.cache) |*cache| {
-        var headers = &transfer.response_header.?;
+    cache: {
+        if (self.network.cache) |*cache| {
+            const headers = &transfer.response_header.?;
 
-        if (transfer.req.method == .GET and headers.status == 200) {
-            cache.put(
+            const metadata = try CacheMetadata.fromHeaders(
                 transfer.req.url,
-                .{
-                    .url = transfer.req.url,
-                    .content_type = headers.contentType() orelse "application/octet-stream",
-                    .status = headers.status,
-                    .stored_at = std.time.timestamp(),
-                    .age_at_store = 0,
-                    .max_age = 3600,
-                    .etag = null,
-                    .last_modified = null,
-                    .must_revalidate = false,
-                    .no_cache = false,
-                    .immutable = false,
-                    .vary = null,
-                },
-                body,
-            ) catch |err| log.warn(.http, "cache put failed", .{ .err = err });
+                headers.status,
+                std.time.timestamp(),
+                header_list.items,
+            ) orelse break :cache;
+
+            // TODO: Support Vary Keying
+            const cache_key = transfer.req.url;
+
+            log.err(.browser, "http cache", .{ .key = cache_key, .metadata = metadata });
+
+            cache.put(cache_key, metadata, body) catch |err| log.warn(.http, "cache put failed", .{ .err = err });
             log.debug(.browser, "http.cache.put", .{ .url = transfer.req.url });
         }
     }
@@ -1143,8 +1156,7 @@ pub const Response = struct {
     pub fn headerIterator(self: Response) HeaderIterator {
         return switch (self.inner) {
             .transfer => |t| t.responseHeaderIterator(),
-            // TODO: Cache HTTP Headers
-            .cached => unreachable,
+            .cached => |c| HeaderIterator{ .list = .{ .list = c.metadata.headers } },
         };
     }
 

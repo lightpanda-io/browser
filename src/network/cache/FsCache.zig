@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const Cache = @import("Cache.zig");
+const Http = @import("../http.zig");
 const CachedMetadata = Cache.CachedMetadata;
 const CachedResponse = Cache.CachedResponse;
 
@@ -72,6 +73,12 @@ fn serializeMeta(writer: *std.Io.Writer, meta: *const CachedMetadata) !void {
         meta.no_cache,
         meta.immutable,
     });
+    try writer.flush();
+
+    try writer.print("{d}\n", .{meta.headers.len});
+    for (meta.headers) |hdr| {
+        try writer.print("{s}\n{s}\n", .{ hdr.name, hdr.value });
+    }
     try writer.flush();
 }
 
@@ -145,6 +152,32 @@ fn deserializeMeta(allocator: std.mem.Allocator, file: std.fs.File) !CachedMetad
         break :blk try deserializeMetaBoolean(line);
     };
 
+    const headers = blk: {
+        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+        const count = std.fmt.parseInt(usize, line, 10) catch return error.Malformed;
+
+        const hdrs = try allocator.alloc(Http.Header, count);
+        errdefer allocator.free(hdrs);
+
+        for (hdrs) |*hdr| {
+            const name = try reader.takeDelimiter('\n') orelse return error.Malformed;
+            const value = try reader.takeDelimiter('\n') orelse return error.Malformed;
+            hdr.* = .{
+                .name = try allocator.dupe(u8, name),
+                .value = try allocator.dupe(u8, value),
+            };
+        }
+
+        break :blk hdrs;
+    };
+    errdefer {
+        for (headers) |hdr| {
+            allocator.free(hdr.name);
+            allocator.free(hdr.value);
+        }
+        allocator.free(headers);
+    }
+
     return .{
         .url = url,
         .content_type = content_type,
@@ -158,6 +191,7 @@ fn deserializeMeta(allocator: std.mem.Allocator, file: std.fs.File) !CachedMetad
         .no_cache = no_cache,
         .immutable = immutable,
         .vary = vary,
+        .headers = headers,
     };
 }
 
