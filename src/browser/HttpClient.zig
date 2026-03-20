@@ -313,7 +313,62 @@ pub fn request(self: *Client, req: Request) !void {
     return self.fetchRobotsThenProcessRequest(robots_url, req);
 }
 
+fn serveFromCache(allocator: std.mem.Allocator, req: Request, cached: *const CachedResponse) !void {
+    const response = Response.fromCached(req.ctx, cached);
+    defer cached.metadata.deinit(allocator);
+
+    if (req.start_callback) |cb| {
+        try cb(response);
+    }
+
+    const proceed = try req.header_callback(response);
+    if (!proceed) {
+        req.error_callback(req.ctx, error.Abort);
+        return;
+    }
+
+    switch (cached.data) {
+        .buffer => |data| {
+            if (data.len > 0) {
+                try req.data_callback(response, data);
+            }
+        },
+        .file => |file| {
+            var buf: [1024]u8 = undefined;
+            var file_reader = file.reader(&buf);
+
+            const reader = &file_reader.interface;
+            var read_buf: [1024]u8 = undefined;
+
+            while (true) {
+                const curr = try reader.readSliceShort(&read_buf);
+                if (curr == 0) break;
+                try req.data_callback(response, read_buf[0..curr]);
+            }
+        },
+    }
+
+    try req.done_callback(req.ctx);
+}
+
 fn processRequest(self: *Client, req: Request) !void {
+    if (self.network.cache) |*cache| {
+        if (req.method == .GET) {
+            if (cache.get(self.allocator, req.url)) |cached| {
+                log.debug(.browser, "http.cache.get", .{
+                    .url = req.url,
+                    .found = true,
+                    .metadata = cached.metadata,
+                });
+
+                defer req.headers.deinit();
+                return serveFromCache(self.allocator, req, &cached);
+            } else {
+                log.debug(.browser, "http.cache.get", .{ .url = req.url, .found = false });
+            }
+        }
+    }
+
     const transfer = try self.makeTransfer(req);
 
     transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
@@ -878,9 +933,10 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         }
     }
 
+    const body = transfer._stream_buffer.items;
+
     // Replay buffered body through user's data_callback.
     if (transfer._stream_buffer.items.len > 0) {
-        const body = transfer._stream_buffer.items;
         try transfer.req.data_callback(Response.fromTransfer(transfer), body);
 
         transfer.req.notification.dispatch(.http_response_data, &.{
@@ -899,6 +955,33 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     transfer.releaseConn();
 
     try transfer.req.done_callback(transfer.req.ctx);
+
+    if (self.network.cache) |*cache| {
+        var headers = &transfer.response_header.?;
+
+        if (transfer.req.method == .GET and headers.status == 200) {
+            cache.put(
+                transfer.req.url,
+                .{
+                    .url = transfer.req.url,
+                    .content_type = headers.contentType() orelse "application/octet-stream",
+                    .status = headers.status,
+                    .stored_at = std.time.timestamp(),
+                    .age_at_store = 0,
+                    .max_age = 3600,
+                    .etag = null,
+                    .last_modified = null,
+                    .must_revalidate = false,
+                    .no_cache = false,
+                    .immutable = false,
+                    .vary = null,
+                },
+                body,
+            ) catch |err| log.warn(.http, "cache put failed", .{ .err = err });
+            log.debug(.browser, "http.cache.put", .{ .url = transfer.req.url });
+        }
+    }
+
     transfer.req.notification.dispatch(.http_request_done, &.{
         .transfer = transfer,
     });
