@@ -241,8 +241,41 @@ pub fn build(b: *Build) !void {
         release_persistence_cmd.step.dependOn(b.getInstallStep());
         release_persistence_cmd.step.dependOn(&release_tabs_restore_cmd.step);
 
+        const release_cookie_persistence_cmd = b.addSystemCommand(&.{
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "tmp-browser-smoke/bare-metal-release/chrome-bare-metal-cookie-persistence-probe.ps1",
+        });
+        release_cookie_persistence_cmd.step.dependOn(b.getInstallStep());
+        release_cookie_persistence_cmd.step.dependOn(&release_persistence_cmd.step);
+
+        const release_localstorage_persistence_cmd = b.addSystemCommand(&.{
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "tmp-browser-smoke/bare-metal-release/chrome-bare-metal-localstorage-persistence-probe.ps1",
+        });
+        release_localstorage_persistence_cmd.step.dependOn(b.getInstallStep());
+        release_localstorage_persistence_cmd.step.dependOn(&release_cookie_persistence_cmd.step);
+
+        const release_indexeddb_persistence_cmd = b.addSystemCommand(&.{
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "tmp-browser-smoke/bare-metal-release/chrome-bare-metal-indexeddb-persistence-probe.ps1",
+        });
+        release_indexeddb_persistence_cmd.step.dependOn(b.getInstallStep());
+        release_indexeddb_persistence_cmd.step.dependOn(&release_localstorage_persistence_cmd.step);
+
         const release_step = b.step("bare_metal_release", "Package and smoke the bare-metal launch bundle");
-        release_step.dependOn(&release_persistence_cmd.step);
+        release_step.dependOn(&release_indexeddb_persistence_cmd.step);
     }
 }
 
