@@ -728,38 +728,23 @@ fn resolveVersion(b: *std.Build) std.SemanticVersion {
         };
     }
 
+    // If it's a stable release (no pre or build metadata in build.zig.zon), use it as is
     if (lightpanda_version.pre == null and lightpanda_version.build == null) return lightpanda_version;
-    // Check if we're exactly on a tagged release
-    _ = runGit(b, &.{ "describe", "--tags", "--exact-match" }) catch {
-        // Not on a tag, need to create a dev version
-        const git_hash_raw = runGit(b, &.{ "rev-parse", "--short", "HEAD" }) catch return lightpanda_version;
-        const commit_hash = std.mem.trim(u8, git_hash_raw, " \n\r");
-        // Get the commit count - either from base tag or total
-        const commit_count = blk: {
-            // Try to find the most recent base version tag (ending with .0)
-            const base_tag_raw = runGit(b, &.{ "describe", "--tags", "--match=*.0", "--abbrev=0" }) catch {
-                // No .0 tags found, fall back to total commit count
-                const git_count_raw = runGit(b, &.{ "rev-list", "--count", "HEAD" }) catch return lightpanda_version;
-                break :blk std.mem.trim(u8, git_count_raw, " \n\r");
-            };
 
-            const base_tag = std.mem.trim(u8, base_tag_raw, " \n\r");
-            // Count commits since the base tag
-            const count_cmd = b.fmt("{s}..HEAD", .{base_tag});
-            const git_count_raw = runGit(b, &.{ "rev-list", "--count", count_cmd }) catch return lightpanda_version;
-            break :blk std.mem.trim(u8, git_count_raw, " \n\r");
-        };
+    // For dev/nightly versions, calculate the commit count and hash
+    const git_hash_raw = runGit(b, &.{ "rev-parse", "--short", "HEAD" }) catch return lightpanda_version;
+    const commit_hash = std.mem.trim(u8, git_hash_raw, " \n\r");
 
-        return .{
-            .major = lightpanda_version.major,
-            .minor = lightpanda_version.minor,
-            .patch = lightpanda_version.patch,
-            .pre = b.fmt("dev.{s}", .{commit_count}),
-            .build = commit_hash,
-        };
+    const git_count_raw = runGit(b, &.{ "rev-list", "--count", "HEAD" }) catch return lightpanda_version;
+    const commit_count = std.mem.trim(u8, git_count_raw, " \n\r");
+
+    return .{
+        .major = lightpanda_version.major,
+        .minor = lightpanda_version.minor,
+        .patch = lightpanda_version.patch,
+        .pre = b.fmt("{s}.{s}", .{ lightpanda_version.pre.?, commit_count }),
+        .build = commit_hash,
     };
-    // We're exactly on a tag, return the version as-is
-    return lightpanda_version;
 }
 
 /// Helper function to run git commands and return stdout
