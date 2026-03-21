@@ -798,3 +798,19 @@
   testing.expectEqual(true, url2.startsWith('blob:'));
 }
 </script>
+
+<script id="about:blank">
+  {
+    const url = new URL('about:blank');
+    testing.expectEqual('about:blank', url.href);
+    testing.expectEqual('null', url.origin);
+    testing.expectEqual('about:', url.protocol);
+    testing.expectEqual('blank', url.pathname);
+    testing.expectEqual('', url.username);
+    testing.expectEqual('', url.password);
+    testing.expectEqual('', url.host);
+    testing.expectEqual('', url.hostname);
+    testing.expectEqual('', url.port);
+    testing.expectEqual('', url.search);
+  }
+</script>
