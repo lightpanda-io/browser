@@ -34,6 +34,7 @@ const Snapshot = @import("Snapshot.zig");
 const Inspector = @import("Inspector.zig");
 
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const Window = @import("../webapi/Window.zig");
 
 const JsApis = bridge.JsApis;
@@ -254,8 +255,15 @@ pub fn deinit(self: *Env) void {
     allocator.destroy(self.isolate_params);
 }
 
-pub fn createContext(self: *Env, page: *Page) !*Context {
-    const context_arena = try self.app.arena_pool.acquire();
+pub const ContextParams = struct {
+    identity: *js.Identity,
+    identity_arena: Allocator,
+    call_arena: Allocator,
+    debug_name: []const u8 = "Context",
+};
+
+pub fn createContext(self: *Env, page: *Page, params: ContextParams) !*Context {
+    const context_arena = try self.app.arena_pool.acquire(.{ .debug = params.debug_name });
     errdefer self.app.arena_pool.release(context_arena);
 
     const isolate = self.isolate;
@@ -300,33 +308,43 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         v8.v8__Object__SetAlignedPointerInInternalField(global_obj, 0, tao);
     }
 
-    // our window wrapped in a v8::Global
-    var global_global: v8.Global = undefined;
-    v8.v8__Global__New(isolate.handle, global_obj, &global_global);
-
     const context_id = self.context_id;
     self.context_id = context_id + 1;
 
-    const origin = try page._session.getOrCreateOrigin(null);
-    errdefer page._session.releaseOrigin(origin);
+    const session = page._session;
+    const origin = try session.getOrCreateOrigin(null);
+    errdefer session.releaseOrigin(origin);
 
     const context = try context_arena.create(Context);
     context.* = .{
         .env = self,
         .page = page,
-        .session = page._session,
         .origin = origin,
         .id = context_id,
+        .session = session,
         .isolate = isolate,
         .arena = context_arena,
         .handle = context_global,
         .templates = self.templates,
-        .call_arena = page.call_arena,
+        .call_arena = params.call_arena,
         .microtask_queue = microtask_queue,
         .script_manager = &page._script_manager,
         .scheduler = .init(context_arena),
+        .identity = params.identity,
+        .identity_arena = params.identity_arena,
     };
-    try context.origin.identity_map.putNoClobber(origin.arena, @intFromPtr(page.window), global_global);
+
+    {
+        // Multiple contexts can be created for the same Window (via CDP). We only
+        // need to register the first one.
+        const gop = try params.identity.identity_map.getOrPut(params.identity_arena, @intFromPtr(page.window));
+        if (gop.found_existing == false) {
+            // our window wrapped in a v8::Global
+            var global_global: v8.Global = undefined;
+            v8.v8__Global__New(isolate.handle, global_obj, &global_global);
+            gop.value_ptr.* = global_global;
+        }
+    }
 
     // Store a pointer to our context inside the v8 context so that, given
     // a v8 context, we can get our context out
@@ -495,6 +513,11 @@ pub fn terminate(self: *const Env) void {
 }
 
 fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) void {
+    const promise_event = v8.v8__PromiseRejectMessage__GetEvent(&message_handle);
+    if (promise_event != v8.kPromiseRejectWithNoHandler and promise_event != v8.kPromiseHandlerAddedAfterReject) {
+        return;
+    }
+
     const promise_handle = v8.v8__PromiseRejectMessage__GetPromise(&message_handle).?;
     const v8_isolate = v8.v8__Object__GetIsolate(@ptrCast(promise_handle)).?;
     const isolate = js.Isolate{ .handle = v8_isolate };
@@ -508,7 +531,7 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
     };
 
     const page = ctx.page;
-    page.window.unhandledPromiseRejection(.{
+    page.window.unhandledPromiseRejection(promise_event == v8.kPromiseRejectWithNoHandler, .{
         .local = &local,
         .handle = &message_handle,
     }, page) catch |err| {

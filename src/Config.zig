@@ -217,6 +217,13 @@ pub const DumpFormat = enum {
     semantic_tree_text,
 };
 
+pub const WaitUntil = enum {
+    load,
+    domcontentloaded,
+    networkidle,
+    fixed,
+};
+
 pub const Fetch = struct {
     url: [:0]const u8,
     dump_mode: ?DumpFormat = null,
@@ -224,6 +231,8 @@ pub const Fetch = struct {
     with_base: bool = false,
     with_frames: bool = false,
     strip: dump.Opts.Strip = .{},
+    wait_ms: u32 = 5000,
+    wait_until: WaitUntil = .load,
 };
 
 pub const Common = struct {
@@ -386,6 +395,13 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--with_base     Add a <base> tag in dump. Defaults to false.
         \\
         \\--with_frames   Includes the contents of iframes. Defaults to false.
+        \\
+        \\--wait_ms       Wait time in milliseconds.
+        \\                Defaults to 5000.
+        \\
+        \\--wait_until    Wait until the specified event.
+        \\                Supported events: load, domcontentloaded, networkidle, fixed.
+        \\                Defaults to 'load'.
         \\
     ++ common_options ++
         \\
@@ -619,8 +635,34 @@ fn parseFetchArgs(
     var url: ?[:0]const u8 = null;
     var common: Common = .{};
     var strip: dump.Opts.Strip = .{};
+    var wait_ms: u32 = 5000;
+    var wait_until: WaitUntil = .load;
 
     while (args.next()) |opt| {
+        if (std.mem.eql(u8, "--wait_ms", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = "--wait_ms" });
+                return error.InvalidArgument;
+            };
+            wait_ms = std.fmt.parseInt(u32, str, 10) catch |err| {
+                log.fatal(.app, "invalid argument value", .{ .arg = "--wait_ms", .err = err });
+                return error.InvalidArgument;
+            };
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--wait_until", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = "--wait_until" });
+                return error.InvalidArgument;
+            };
+            wait_until = std.meta.stringToEnum(WaitUntil, str) orelse {
+                log.fatal(.app, "invalid argument value", .{ .arg = "--wait_until", .val = str });
+                return error.InvalidArgument;
+            };
+            continue;
+        }
+
         if (std.mem.eql(u8, "--dump", opt)) {
             var peek_args = args.*;
             if (peek_args.next()) |next_arg| {
@@ -709,6 +751,8 @@ fn parseFetchArgs(
         .common = common,
         .with_base = with_base,
         .with_frames = with_frames,
+        .wait_ms = wait_ms,
+        .wait_until = wait_until,
     };
 }
 

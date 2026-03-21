@@ -40,6 +40,7 @@ _mode: Mode,
 _host: *Element,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .{},
 _removed_ids: std.StringHashMapUnmanaged(void) = .{},
+_adopted_style_sheets: ?js.Object.Global = null,
 
 pub fn init(host: *Element, mode: Mode, page: *Page) !*ShadowRoot {
     return page._factory.documentFragment(ShadowRoot{
@@ -99,6 +100,20 @@ pub fn getElementById(self: *ShadowRoot, id: []const u8, page: *Page) ?*Element 
     return null;
 }
 
+pub fn getAdoptedStyleSheets(self: *ShadowRoot, page: *Page) !js.Object.Global {
+    if (self._adopted_style_sheets) |ass| {
+        return ass;
+    }
+    const js_arr = page.js.local.?.newArray(0);
+    const js_obj = js_arr.toObject();
+    self._adopted_style_sheets = try js_obj.persist();
+    return self._adopted_style_sheets.?;
+}
+
+pub fn setAdoptedStyleSheets(self: *ShadowRoot, sheets: js.Object) !void {
+    self._adopted_style_sheets = try sheets.persist();
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(ShadowRoot);
 
@@ -121,6 +136,7 @@ pub const JsApi = struct {
         }
         return self.getElementById(try value.toZig([]const u8), page);
     }
+    pub const adoptedStyleSheets = bridge.accessor(ShadowRoot.getAdoptedStyleSheets, ShadowRoot.setAdoptedStyleSheets, .{});
 };
 
 const testing = @import("../../testing.zig");

@@ -131,7 +131,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // timeouts (or http events) which are ready to be processed.
         pub fn pageWait(self: *Self, ms: u32) Session.WaitResult {
             const session = &(self.browser.session orelse return .no_page);
-            return session.wait(ms);
+            return session.wait(.{ .timeout_ms = ms });
         }
 
         // Called from above, in processMessage which handles client messages
@@ -489,12 +489,16 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn createIsolatedWorld(self: *Self, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
             const browser = &self.cdp.browser;
-            const arena = try browser.arena_pool.acquire();
+            const arena = try browser.arena_pool.acquire(.{ .debug = "IsolatedWorld" });
             errdefer browser.arena_pool.release(arena);
+
+            const call_arena = try browser.arena_pool.acquire(.{ .debug = "IsolatedWorld.call_arena" });
+            errdefer browser.arena_pool.release(call_arena);
 
             const world = try arena.create(IsolatedWorld);
             world.* = .{
                 .arena = arena,
+                .call_arena = call_arena,
                 .context = null,
                 .browser = browser,
                 .name = try arena.dupe(u8, world_name),
@@ -745,13 +749,20 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 /// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
 const IsolatedWorld = struct {
     arena: Allocator,
+    call_arena: Allocator,
     browser: *Browser,
     name: []const u8,
     context: ?*js.Context = null,
     grant_universal_access: bool,
 
+    // Identity tracking for this isolated world (separate from main world).
+    // This ensures CDP inspector contexts don't share v8::Globals with main world.
+    identity: js.Identity = .{},
+
     pub fn deinit(self: *IsolatedWorld) void {
         self.removeContext() catch {};
+        self.identity.deinit();
+        self.browser.arena_pool.release(self.call_arena);
         self.browser.arena_pool.release(self.arena);
     }
 
@@ -759,6 +770,8 @@ const IsolatedWorld = struct {
         const ctx = self.context orelse return error.NoIsolatedContextToRemove;
         self.browser.env.destroyContext(ctx);
         self.context = null;
+        self.identity.deinit();
+        self.identity = .{};
     }
 
     // The isolate world must share at least some of the state with the related page, specifically the DocumentHTML
@@ -768,7 +781,13 @@ const IsolatedWorld = struct {
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, page: *Page) !*js.Context {
         if (self.context == null) {
-            self.context = try self.browser.env.createContext(page);
+            const ctx = try self.browser.env.createContext(page, .{
+                .identity = &self.identity,
+                .identity_arena = self.arena,
+                .call_arena = self.call_arena,
+                .debug_name = "IsolatedContext",
+            });
+            self.context = ctx;
         } else {
             log.warn(.cdp, "not implemented", .{
                 .feature = "createContext: Not implemented second isolated context creation",

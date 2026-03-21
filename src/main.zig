@@ -121,7 +121,8 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             log.debug(.app, "startup", .{ .mode = "fetch", .dump_mode = opts.dump_mode, .url = url, .snapshot = app.snapshot.fromEmbedded() });
 
             var fetch_opts = lp.FetchOpts{
-                .wait_ms = 5000,
+                .wait_ms = opts.wait_ms,
+                .wait_until = opts.wait_until,
                 .dump_mode = opts.dump_mode,
                 .dump = .{
                     .strip = opts.strip,

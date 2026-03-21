@@ -5,7 +5,7 @@
 <div id="host2"></div>
 <div id="host3"></div>
 
-<!-- <script id="attachShadow_open">
+<script id="attachShadow_open">
 {
     const host = $('#host1');
     const shadow = host.attachShadow({ mode: 'open' });
@@ -140,7 +140,7 @@
     shadow.replaceChildren('New content');
     testing.expectEqual('New content', shadow.innerHTML);
 }
-</script> -->
+</script>
 
 <script id="getElementById">
 {
@@ -153,4 +153,17 @@
 
     testing.expectEqual(null, shadow.getElementById('nonexistent'));
 }
+</script>
+
+
+<script id=adoptedStyleSheets>
+  {
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const acss = shadow.adoptedStyleSheets;
+    testing.expectEqual(0, acss.length);
+    acss.push(new CSSStyleSheet());
+    testing.expectEqual(1, acss.length);
+  }
 </script>

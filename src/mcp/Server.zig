@@ -87,7 +87,7 @@ pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
 }
 
 pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {
-    try self.sendResponse(.{
+    try self.sendResponse(protocol.Response{
         .id = id,
         .@"error" = protocol.Error{
             .code = @intFromEnum(code),
@@ -114,7 +114,7 @@ test "MCP.Server - Integration: synchronous smoke test" {
 
     try router.processRequests(server, &in_reader);
 
-    try testing.expectJson(.{ .id = 1 }, out_alloc.writer.buffered());
+    try testing.expectJson(.{ .jsonrpc = "2.0", .id = 1 }, out_alloc.writer.buffered());
 }
 
 test "MCP.Server - Integration: ping request returns an empty result" {
@@ -135,5 +135,5 @@ test "MCP.Server - Integration: ping request returns an empty result" {
 
     try router.processRequests(server, &in_reader);
 
-    try testing.expectJson(.{ .id = "ping-1", .result = .{} }, out_alloc.writer.buffered());
+    try testing.expectJson(.{ .jsonrpc = "2.0", .id = "ping-1", .result = .{} }, out_alloc.writer.buffered());
 }

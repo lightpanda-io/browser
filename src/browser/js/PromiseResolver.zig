@@ -20,6 +20,7 @@ const js = @import("js.zig");
 const v8 = js.v8;
 
 const log = @import("../../log.zig");
+
 const DOMException = @import("../webapi/DOMException.zig");
 
 const PromiseResolver = @This();
@@ -66,19 +67,37 @@ pub fn reject(self: PromiseResolver, comptime source: []const u8, value: anytype
 }
 
 pub const RejectError = union(enum) {
-    generic: []const u8,
+    /// Not to be confused with `DOMException`; this is bare `Error`.
+    generic_error: []const u8,
+    range_error: []const u8,
+    reference_error: []const u8,
+    syntax_error: []const u8,
     type_error: []const u8,
-    dom_exception: anyerror,
+    /// DOM exceptions are unknown to V8, belongs to web standards.
+    dom_exception: struct { err: anyerror },
 };
-pub fn rejectError(self: PromiseResolver, comptime source: []const u8, err: RejectError) void {
+
+/// Rejects the promise w/ an error object.
+pub fn rejectError(
+    self: PromiseResolver,
+    comptime source: []const u8,
+    err: RejectError,
+) void {
     const handle = switch (err) {
-        .type_error => |str| self.local.isolate.createTypeError(str),
-        .generic => |str| self.local.isolate.createError(str),
+        .generic_error => |msg| self.local.isolate.createError(msg),
+        .range_error => |msg| self.local.isolate.createRangeError(msg),
+        .reference_error => |msg| self.local.isolate.createReferenceError(msg),
+        .syntax_error => |msg| self.local.isolate.createSyntaxError(msg),
+        .type_error => |msg| self.local.isolate.createTypeError(msg),
+        // "Exceptional".
         .dom_exception => |exception| {
-            self.reject(source, DOMException.fromError(exception));
+            self._reject(DOMException.fromError(exception.err) orelse unreachable) catch |reject_err| {
+                log.err(.bug, "rejectDomException", .{ .source = source, .err = reject_err, .persistent = false });
+            };
             return;
         },
     };
+
     self._reject(js.Value{ .handle = handle, .local = self.local }) catch |reject_err| {
         log.err(.bug, "rejectError", .{ .source = source, .err = reject_err, .persistent = false });
     };
