@@ -548,35 +548,8 @@ pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, page: *Page) !vo
 }
 
 pub fn replaceChildren(self: *Document, nodes: []const Node.NodeOrText, page: *Page) !void {
-    try validateDocumentNodes(self, nodes, true);
-
-    page.domChanged();
-    const parent = self.asNode();
-
-    // Remove all existing children
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
-        page.removeNode(parent, child, .{ .will_be_reconnected = false });
-    }
-
-    // Append new children
-    const parent_is_connected = parent.isConnected();
-    for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(page);
-
-        // DocumentFragments are special - append all their children
-        if (child.is(Node.DocumentFragment)) |_| {
-            try page.appendAllChildren(child, parent);
-            continue;
-        }
-
-        var child_connected = false;
-        if (child._parent) |previous_parent| {
-            child_connected = child.isConnected();
-            page.removeNode(previous_parent, child, .{ .will_be_reconnected = parent_is_connected });
-        }
-        try page.appendNode(parent, child, .{ .child_already_connected = child_connected });
-    }
+    try validateDocumentNodes(self, nodes, false);
+    return self.asNode().replaceChildren(nodes, page);
 }
 
 pub fn elementFromPoint(self: *Document, x: f64, y: f64, page: *Page) !?*Element {
@@ -896,6 +869,10 @@ fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText, compti
                                 if (has_doctype) {
                                     return error.HierarchyError;
                                 }
+                                if (has_element) {
+                                    // Doctype cannot be inserted if document already has an element
+                                    return error.HierarchyError;
+                                }
                                 has_doctype = true;
                             },
                             .cdata => |cd| switch (cd._type) {
@@ -916,6 +893,10 @@ fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText, compti
                         },
                         .document_type => {
                             if (has_doctype) {
+                                return error.HierarchyError;
+                            }
+                            if (has_element) {
+                                // Doctype cannot be inserted if document already has an element
                                 return error.HierarchyError;
                             }
                             has_doctype = true;
