@@ -784,24 +784,7 @@ pub fn getDataset(self: *Element, page: *Page) !*DOMStringMap {
 }
 
 pub fn replaceChildren(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
-    page.domChanged();
-    var parent = self.asNode();
-
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
-        page.removeNode(parent, child, .{ .will_be_reconnected = false });
-    }
-
-    const parent_is_connected = parent.isConnected();
-    for (nodes) |node_or_text| {
-        var child_connected = false;
-        const child = try node_or_text.toNode(page);
-        if (child._parent) |previous_parent| {
-            child_connected = child.isConnected();
-            page.removeNode(previous_parent, child, .{ .will_be_reconnected = parent_is_connected });
-        }
-        try page.appendNode(parent, child, .{ .child_already_connected = child_connected });
-    }
+    return self.asNode().replaceChildren(nodes, page);
 }
 
 pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
