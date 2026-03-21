@@ -168,7 +168,7 @@ fn fetchThread(app: *App, url: [:0]const u8, fetch_opts: lp.FetchOpts) void {
 
 fn mcpThread(allocator: std.mem.Allocator, app: *App) void {
     defer app.network.stop();
-    
+
     var stdout = std.fs.File.stdout().writer(&.{});
     var mcp_server: *lp.mcp.Server = lp.mcp.Server.init(allocator, app, &stdout.interface) catch |err| {
         log.fatal(.mcp, "mcp init error", .{ .err = err });
