@@ -141,12 +141,12 @@ pub fn collectForms(
         const fields = try collectFormFields(node, arena, page);
         if (fields.len == 0) continue;
 
-        const action = form_el.getAction(page) catch null;
+        const action_attr = el.getAttributeSafe(comptime .wrap("action"));
         const method_str = form_el.getMethod();
 
         try forms.append(arena, .{
             .node = node,
-            .action = if (action) |a| if (a.len > 0) a else null else null,
+            .action = if (action_attr) |a| if (a.len > 0) a else null else null,
             .method = if (method_str.len > 0) method_str else null,
             .fields = fields,
         });
