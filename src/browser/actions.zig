@@ -23,6 +23,7 @@ const Element = @import("webapi/Element.zig");
 const Event = @import("webapi/Event.zig");
 const MouseEvent = @import("webapi/event/MouseEvent.zig");
 const Page = @import("Page.zig");
+const Selector = @import("webapi/selector/Selector.zig");
 
 pub fn click(node: *DOMNode, page: *Page) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
@@ -100,5 +101,26 @@ pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, page: *Page) !void {
             lp.log.err(.app, "scroll failed", .{ .err = err });
             return error.ActionFailed;
         };
+    }
+}
+
+pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, page: *Page) !*DOMNode {
+    var timer = try std.time.Timer.start();
+
+    while (true) {
+        const element = Selector.querySelector(page.document.asNode(), selector, page) catch {
+            return error.InvalidSelector;
+        };
+
+        if (element) |el| {
+            return el.asNode();
+        }
+
+        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        if (elapsed >= timeout_ms) {
+            return error.Timeout;
+        }
+
+        _ = page._session.wait(.{ .timeout_ms = @min(100, timeout_ms - elapsed) });
     }
 }

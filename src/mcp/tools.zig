@@ -561,28 +561,21 @@ fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json
     };
 
     const timeout_ms = args.timeout orelse 5000;
-    var timer = try std.time.Timer.start();
 
-    while (true) {
-        const element = Selector.querySelector(page.document.asNode(), args.selector, page) catch {
+    const node = lp.actions.waitForSelector(args.selector, timeout_ms, page) catch |err| {
+        if (err == error.InvalidSelector) {
             return server.sendError(id, .InvalidParams, "Invalid selector");
-        };
-
-        if (element) |el| {
-            const registered = try server.node_registry.register(el.asNode());
-            const msg = std.fmt.allocPrint(arena, "Element found. backendNodeId: {d}", .{registered.id}) catch "Element found.";
-
-            const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
-            return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-        }
-
-        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
-        if (elapsed >= timeout_ms) {
+        } else if (err == error.Timeout) {
             return server.sendError(id, .InternalError, "Timeout waiting for selector");
         }
+        return server.sendError(id, .InternalError, "Failed waiting for selector");
+    };
 
-        _ = server.session.wait(.{ .timeout_ms = @min(100, timeout_ms - elapsed) });
-    }
+    const registered = try server.node_registry.register(node);
+    const msg = std.fmt.allocPrint(arena, "Element found. backendNodeId: {d}", .{registered.id}) catch "Element found.";
+
+    const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
+    return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn parseArguments(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value, server: *Server, id: std.json.Value, tool_name: []const u8) !T {

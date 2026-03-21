@@ -35,6 +35,7 @@ pub fn processMessage(cmd: anytype) !void {
         clickNode,
         fillNode,
         scrollNode,
+        waitForSelector,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -45,6 +46,7 @@ pub fn processMessage(cmd: anytype) !void {
         .clickNode => return clickNode(cmd),
         .fillNode => return fillNode(cmd),
         .scrollNode => return scrollNode(cmd),
+        .waitForSelector => return waitForSelector(cmd),
     }
 }
 
@@ -230,6 +232,32 @@ fn scrollNode(cmd: anytype) !void {
 
     return cmd.sendResult(.{}, .{});
 }
+
+fn waitForSelector(cmd: anytype) !void {
+    const Params = struct {
+        selector: []const u8,
+        timeout: ?u32 = null,
+    };
+    const params = (try cmd.params(Params)) orelse return error.InvalidParam;
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const timeout_ms = params.timeout orelse 5000;
+    const selector_z = try cmd.arena.dupeZ(u8, params.selector);
+
+    const node = lp.actions.waitForSelector(selector_z, timeout_ms, page) catch |err| {
+        if (err == error.InvalidSelector) return error.InvalidParam;
+        if (err == error.Timeout) return error.InternalError;
+        return error.InternalError;
+    };
+
+    const registered = try bc.node_registry.register(node);
+    return cmd.sendResult(.{
+        .backendNodeId = registered.id,
+    }, .{});
+}
+
 const testing = @import("../testing.zig");
 test "cdp.lp: getMarkdown" {
     var ctx = testing.context();
@@ -338,4 +366,44 @@ test "cdp.lp: action tools" {
     const result = try ls.local.compileAndRun("window.clicked === true && window.inputVal === 'hello' && window.changed === true && window.selChanged === 'opt2' && window.scrolled === true", null);
 
     try testing.expect(result.isTrue());
+}
+
+test "cdp.lp: waitForSelector" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
+    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    _ = bc.session.wait(.{});
+
+    // 1. Existing element
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.waitForSelector",
+        .params = .{ .selector = "#existing", .timeout = 2000 },
+    });
+    var result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    try testing.expect(result.get("backendNodeId") != null);
+    ctx.client.?.sent.clearRetainingCapacity();
+
+    // 2. Delayed element
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "LP.waitForSelector",
+        .params = .{ .selector = "#delayed", .timeout = 5000 },
+    });
+    result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    try testing.expect(result.get("backendNodeId") != null);
+    ctx.client.?.sent.clearRetainingCapacity();
+
+    // 3. Timeout error
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "LP.waitForSelector",
+        .params = .{ .selector = "#nonexistent", .timeout = 100 },
+    });
+    const err_obj = ctx.client.?.sent.items[0].object.get("error").?.object;
+    try testing.expect(err_obj.get("code") != null);
 }
