@@ -103,7 +103,7 @@ pub const tool_list = [_]protocol.Tool{
     },
     .{
         .name = "click",
-        .description = "Click on an interactive element.",
+        .description = "Click on an interactive element. Returns the current page URL and title after the click.",
         .inputSchema = protocol.minify(
             \\{
             \\  "type": "object",
@@ -116,7 +116,7 @@ pub const tool_list = [_]protocol.Tool{
     },
     .{
         .name = "fill",
-        .description = "Fill text into an input element.",
+        .description = "Fill text into an input element. Returns the filled value and current page URL and title.",
         .inputSchema = protocol.minify(
             \\{
             \\  "type": "object",
@@ -130,7 +130,7 @@ pub const tool_list = [_]protocol.Tool{
     },
     .{
         .name = "scroll",
-        .description = "Scroll the page or a specific element.",
+        .description = "Scroll the page or a specific element. Returns the scroll position and current page URL and title.",
         .inputSchema = protocol.minify(
             \\{
             \\  "type": "object",
@@ -489,7 +489,13 @@ fn handleClick(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
         return server.sendError(id, .InternalError, "Failed to click element");
     };
 
-    const content = [_]protocol.TextContent([]const u8){.{ .text = "Clicked successfully." }};
+    const page_title = page.getTitle() catch null;
+    const result_text = try std.fmt.allocPrint(arena, "Clicked element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
+        args.backendNodeId,
+        page.url,
+        page_title orelse "(none)",
+    });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
@@ -515,7 +521,14 @@ fn handleFill(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         return server.sendError(id, .InternalError, "Failed to fill element");
     };
 
-    const content = [_]protocol.TextContent([]const u8){.{ .text = "Filled successfully." }};
+    const page_title = page.getTitle() catch null;
+    const result_text = try std.fmt.allocPrint(arena, "Filled element (backendNodeId: {d}) with \"{s}\". Page url: {s}, title: {s}", .{
+        args.backendNodeId,
+        args.text,
+        page.url,
+        page_title orelse "(none)",
+    });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
@@ -546,7 +559,14 @@ fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
         return server.sendError(id, .InternalError, "Failed to scroll");
     };
 
-    const content = [_]protocol.TextContent([]const u8){.{ .text = "Scrolled successfully." }};
+    const page_title = page.getTitle() catch null;
+    const result_text = try std.fmt.allocPrint(arena, "Scrolled to x: {d}, y: {d}. Page url: {s}, title: {s}", .{
+        args.x orelse 0,
+        args.y orelse 0,
+        page.url,
+        page_title orelse "(none)",
+    });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
