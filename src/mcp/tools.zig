@@ -723,3 +723,104 @@ test "MCP - Actions: click, fill, scroll" {
 
     try testing.expect(result.isTrue());
 }
+
+test "MCP - waitForSelector: existing element" {
+    defer testing.reset();
+    const allocator = testing.allocator;
+    const app = testing.test_app;
+
+    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    defer out_alloc.deinit();
+
+    var server = try Server.init(allocator, app, &out_alloc.writer);
+    defer server.deinit();
+
+    const aa = testing.arena_allocator;
+    const page = try server.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
+    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    _ = server.session.wait(.{});
+
+    // waitForSelector on an element that already exists returns immediately
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#existing","timeout":2000}}}
+    ;
+    try router.handleMessage(server, aa, msg);
+
+    try testing.expectJson(
+        \\{
+        \\  "id": 1,
+        \\  "result": {
+        \\    "content": [
+        \\      { "type": "text" }
+        \\    ]
+        \\  }
+        \\}
+    , out_alloc.writer.buffered());
+}
+
+test "MCP - waitForSelector: delayed element" {
+    defer testing.reset();
+    const allocator = testing.allocator;
+    const app = testing.test_app;
+
+    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    defer out_alloc.deinit();
+
+    var server = try Server.init(allocator, app, &out_alloc.writer);
+    defer server.deinit();
+
+    const aa = testing.arena_allocator;
+    const page = try server.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
+    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    _ = server.session.wait(.{});
+
+    // waitForSelector on an element added after 200ms via setTimeout
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#delayed","timeout":5000}}}
+    ;
+    try router.handleMessage(server, aa, msg);
+
+    try testing.expectJson(
+        \\{
+        \\  "id": 1,
+        \\  "result": {
+        \\    "content": [
+        \\      { "type": "text" }
+        \\    ]
+        \\  }
+        \\}
+    , out_alloc.writer.buffered());
+}
+
+test "MCP - waitForSelector: timeout" {
+    defer testing.reset();
+    const allocator = testing.allocator;
+    const app = testing.test_app;
+
+    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    defer out_alloc.deinit();
+
+    var server = try Server.init(allocator, app, &out_alloc.writer);
+    defer server.deinit();
+
+    const aa = testing.arena_allocator;
+    const page = try server.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
+    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    _ = server.session.wait(.{});
+
+    // waitForSelector with a short timeout on a non-existent element should error
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#nonexistent","timeout":100}}}
+    ;
+    try router.handleMessage(server, aa, msg);
+
+    try testing.expectJson(
+        \\{
+        \\  "id": 1,
+        \\  "error": {}
+        \\}
+    , out_alloc.writer.buffered());
+}
