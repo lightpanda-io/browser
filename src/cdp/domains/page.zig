@@ -75,8 +75,21 @@ const Frame = struct {
 };
 
 fn getFrameTree(cmd: anytype) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const target_id = bc.target_id orelse return error.TargetNotLoaded;
+    // Stagehand parses the response and error if we don't return a
+    // correct one for this call when browser context or target id are missing.
+    const startup = .{
+        .frameTree = .{
+            .frame = .{
+                .id = "TID-STARTUP",
+                .loaderId = "LID-STARTUP",
+                .securityOrigin = @import("../cdp.zig").URL_BASE,
+                .url = "about:blank",
+                .secureContextType = "Secure",
+            },
+        },
+    };
+    const bc = cmd.browser_context orelse return cmd.sendResult(startup, .{});
+    const target_id = bc.target_id orelse return cmd.sendResult(startup, .{});
 
     return cmd.sendResult(.{
         .frameTree = .{
@@ -633,8 +646,18 @@ test "cdp.page: getFrameTree" {
     defer ctx.deinit();
 
     {
-        try ctx.processMessage(.{ .id = 10, .method = "Page.getFrameTree", .params = .{ .targetId = "X" } });
-        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 10 });
+        // no browser context - should return TID-STARTUP
+        try ctx.processMessage(.{ .id = 1, .method = "Page.getFrameTree", .sessionId = "STARTUP" });
+        try ctx.expectSentResult(.{
+            .frameTree = .{
+                .frame = .{
+                    .id = "TID-STARTUP",
+                    .loaderId = "LID-STARTUP",
+                    .url = "about:blank",
+                    .secureContextType = "Secure",
+                },
+            },
+        }, .{ .id = 1, .session_id = "STARTUP" });
     }
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
@@ -658,6 +681,29 @@ test "cdp.page: getFrameTree" {
                 },
             },
         }, .{ .id = 11 });
+    }
+
+    {
+        // STARTUP sesion is handled when a broweser context and a target id exists.
+        try ctx.processMessage(.{ .id = 12, .method = "Page.getFrameTree", .session_id = "STARTUP" });
+        try ctx.expectSentResult(.{
+            .frameTree = .{
+                .frame = .{
+                    .id = "FID-000000000X",
+                    .loaderId = "LID-0000000001",
+                    .url = "http://127.0.0.1:9582/src/browser/tests/hi.html",
+                    .domainAndRegistry = "",
+                    .securityOrigin = bc.security_origin,
+                    .mimeType = "text/html",
+                    .adFrameStatus = .{
+                        .adFrameType = "none",
+                    },
+                    .secureContextType = bc.secure_context_type,
+                    .crossOriginIsolatedContextType = "NotIsolated",
+                    .gatedAPIFeatures = [_][]const u8{},
+                },
+            },
+        }, .{ .id = 12 });
     }
 }
 

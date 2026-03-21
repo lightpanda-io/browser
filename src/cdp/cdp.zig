@@ -189,19 +189,10 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // (I can imagine this logic will become driver-specific)
         fn dispatchStartupCommand(command: anytype, method: []const u8) !void {
             // Stagehand parses the response and error if we don't return a
-            // correct one for this call.
+            // correct one for Page.getFrameTree on startup call.
             if (std.mem.eql(u8, method, "Page.getFrameTree")) {
-                return command.sendResult(.{
-                    .frameTree = .{
-                        .frame = .{
-                            .id = "TID-STARTUP",
-                            .loaderId = "LOADERID24DD2FD56CF1EF33C965C79C",
-                            .securityOrigin = URL_BASE,
-                            .url = "about:blank",
-                            .secureContextType = "Secure",
-                        },
-                    },
-                }, .{});
+                // The Page.getFrameTree handles startup response gracefully.
+                return dispatchCommand(command, method);
             }
 
             return command.sendResult(null, .{});
