@@ -655,10 +655,18 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             if (!gop.found_existing) {
                 gop.value_ptr.* = .{
                     .data = .empty,
-                    .encode = .none,
+                    .encode = .base64,
                 };
             }
-            try gop.value_ptr.data.appendSlice(arena, try arena.dupe(u8, msg.data));
+
+            // Always base64 ecncode the catured response body.
+            // TODO: use the response's content-type to decide to encode or not
+            // the body.
+            const resp = gop.value_ptr;
+            const encoded_len = std.base64.standard.Encoder.calcSize(msg.data.len);
+            const start = resp.data.items.len;
+            try resp.data.resize(arena, start + encoded_len);
+            _ = std.base64.standard.Encoder.encode(resp.data.items[start..], msg.data);
         }
 
         pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
