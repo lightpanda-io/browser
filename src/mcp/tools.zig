@@ -142,6 +142,20 @@ pub const tool_list = [_]protocol.Tool{
             \\}
         ),
     },
+    .{
+        .name = "waitForSelector",
+        .description = "Wait for an element matching a CSS selector to appear in the page. Returns the backend node ID of the matched element.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "selector": { "type": "string", "description": "The CSS selector to wait for." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
+            \\  },
+            \\  "required": ["selector"]
+            \\}
+        ),
+    },
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -243,6 +257,7 @@ const ToolAction = enum {
     click,
     fill,
     scroll,
+    waitForSelector,
 };
 
 const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
@@ -257,6 +272,7 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "click", .click },
     .{ "fill", .fill },
     .{ "scroll", .scroll },
+    .{ "waitForSelector", .waitForSelector },
 });
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -288,6 +304,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .click => try handleClick(server, arena, req.id.?, call_params.arguments),
         .fill => try handleFill(server, arena, req.id.?, call_params.arguments),
         .scroll => try handleScroll(server, arena, req.id.?, call_params.arguments),
+        .waitForSelector => try handleWaitForSelector(server, arena, req.id.?, call_params.arguments),
     }
 }
 
@@ -532,6 +549,42 @@ fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
     const content = [_]protocol.TextContent([]const u8){.{ .text = "Scrolled successfully." }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
+fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const WaitParams = struct {
+        selector: [:0]const u8,
+        timeout: ?u32 = null,
+    };
+    const args = try parseArguments(WaitParams, arena, arguments, server, id, "waitForSelector");
+
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    const timeout_ms = args.timeout orelse 5000;
+    var timer = try std.time.Timer.start();
+
+    while (true) {
+        const element = Selector.querySelector(page.document.asNode(), args.selector, page) catch {
+            return server.sendError(id, .InvalidParams, "Invalid selector");
+        };
+
+        if (element) |el| {
+            const registered = try server.node_registry.register(el.asNode());
+            const msg = std.fmt.allocPrint(arena, "Element found. backendNodeId: {d}", .{registered.id}) catch "Element found.";
+
+            const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
+            return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+        }
+
+        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        if (elapsed >= timeout_ms) {
+            return server.sendError(id, .InternalError, "Timeout waiting for selector");
+        }
+
+        _ = server.session.wait(.{ .timeout_ms = @min(100, timeout_ms - elapsed) });
+    }
+}
+
 fn parseArguments(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value, server: *Server, id: std.json.Value, tool_name: []const u8) !T {
     if (arguments == null) {
         try server.sendError(id, .InvalidParams, "Missing arguments");
@@ -669,4 +722,105 @@ test "MCP - Actions: click, fill, scroll" {
     const result = try ls.local.compileAndRun("window.clicked === true && window.inputVal === 'hello' && window.changed === true && window.selChanged === 'opt2' && window.scrolled === true", null);
 
     try testing.expect(result.isTrue());
+}
+
+test "MCP - waitForSelector: existing element" {
+    defer testing.reset();
+    const allocator = testing.allocator;
+    const app = testing.test_app;
+
+    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    defer out_alloc.deinit();
+
+    var server = try Server.init(allocator, app, &out_alloc.writer);
+    defer server.deinit();
+
+    const aa = testing.arena_allocator;
+    const page = try server.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
+    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    _ = server.session.wait(.{});
+
+    // waitForSelector on an element that already exists returns immediately
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#existing","timeout":2000}}}
+    ;
+    try router.handleMessage(server, aa, msg);
+
+    try testing.expectJson(
+        \\{
+        \\  "id": 1,
+        \\  "result": {
+        \\    "content": [
+        \\      { "type": "text" }
+        \\    ]
+        \\  }
+        \\}
+    , out_alloc.writer.buffered());
+}
+
+test "MCP - waitForSelector: delayed element" {
+    defer testing.reset();
+    const allocator = testing.allocator;
+    const app = testing.test_app;
+
+    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    defer out_alloc.deinit();
+
+    var server = try Server.init(allocator, app, &out_alloc.writer);
+    defer server.deinit();
+
+    const aa = testing.arena_allocator;
+    const page = try server.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
+    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    _ = server.session.wait(.{});
+
+    // waitForSelector on an element added after 200ms via setTimeout
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#delayed","timeout":5000}}}
+    ;
+    try router.handleMessage(server, aa, msg);
+
+    try testing.expectJson(
+        \\{
+        \\  "id": 1,
+        \\  "result": {
+        \\    "content": [
+        \\      { "type": "text" }
+        \\    ]
+        \\  }
+        \\}
+    , out_alloc.writer.buffered());
+}
+
+test "MCP - waitForSelector: timeout" {
+    defer testing.reset();
+    const allocator = testing.allocator;
+    const app = testing.test_app;
+
+    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    defer out_alloc.deinit();
+
+    var server = try Server.init(allocator, app, &out_alloc.writer);
+    defer server.deinit();
+
+    const aa = testing.arena_allocator;
+    const page = try server.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
+    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    _ = server.session.wait(.{});
+
+    // waitForSelector with a short timeout on a non-existent element should error
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#nonexistent","timeout":100}}}
+    ;
+    try router.handleMessage(server, aa, msg);
+
+    try testing.expectJson(
+        \\{
+        \\  "id": 1,
+        \\  "error": {}
+        \\}
+    , out_alloc.writer.buffered());
 }

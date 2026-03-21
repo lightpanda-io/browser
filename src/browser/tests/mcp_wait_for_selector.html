@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<body>
+    <div id="existing">Already here</div>
+    <script>
+        setTimeout(function() {
+            var el = document.createElement("div");
+            el.id = "delayed";
+            el.textContent = "Appeared after delay";
+            document.body.appendChild(el);
+        }, 200);
+    </script>
+</body>
+</html>
