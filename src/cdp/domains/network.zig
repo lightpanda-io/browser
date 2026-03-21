@@ -210,14 +210,6 @@ fn getResponseBody(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const buf = bc.captured_responses.getPtr(request_id) orelse return error.RequestNotFound;
 
-    if (std.unicode.utf8ValidateSlice(buf.items)) {
-        try cmd.sendResult(.{
-            .body = buf.items,
-            .base64Encoded = false,
-        }, .{});
-        return;
-    }
-
     const encoded_len = std.base64.standard.Encoder.calcSize(buf.items.len);
     const encoded = try cmd.arena.alloc(u8, encoded_len);
     _ = std.base64.standard.Encoder.encode(encoded, buf.items);
@@ -536,7 +528,7 @@ test "cdp.Network: cookies" {
     try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{} }, .{ .id = 10 });
 }
 
-test "cdp.Network.getResponseBody returns plain text for UTF-8 responses" {
+test "cdp.Network.getResponseBody base64-encodes UTF-8 responses" {
     var ctx = testing.context();
     defer ctx.deinit();
 
@@ -551,8 +543,8 @@ test "cdp.Network.getResponseBody returns plain text for UTF-8 responses" {
         .params = .{ .requestId = "REQ-42" },
     });
     try ctx.expectSentResult(.{
-        .body = "hello",
-        .base64Encoded = false,
+        .body = "aGVsbG8=",
+        .base64Encoded = true,
     }, .{ .id = 11 });
 }
 
