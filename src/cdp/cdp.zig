@@ -33,6 +33,7 @@ const Page = @import("../browser/Page.zig");
 const Incrementing = @import("id.zig").Incrementing;
 const Notification = @import("../Notification.zig");
 const InterceptState = @import("domains/fetch.zig").InterceptState;
+const Mime = @import("../browser/Mime.zig");
 
 pub const URL_BASE = "chrome://newtab/";
 
@@ -638,6 +639,35 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn onHttpResponseHeadersDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
+
+            const arena = self.page_arena;
+
+            // Prepare the captured response value.
+            const id = msg.transfer.id;
+            const gop = try self.captured_responses.getOrPut(arena, id);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = .{
+                    .data = .empty,
+                    // Encode the data in base64 by default, but use none
+                    // encoding for well known content-type.
+                    .encode = blk: {
+                        const transfer = msg.transfer;
+                        if (transfer.response_header.?.contentType()) |ct| {
+                            const mime = try Mime.parse(ct);
+
+                            if (!mime.isText()) {
+                                break :blk .base64;
+                            }
+
+                            if (std.mem.eql(u8, "UTF-8", mime.charsetString())) {
+                                break :blk .none;
+                            }
+                        }
+                        break :blk .base64;
+                    },
+                };
+            }
+
             return @import("domains/network.zig").httpResponseHeaderDone(self.notification_arena, self, msg);
         }
 
@@ -651,18 +681,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const arena = self.page_arena;
 
             const id = msg.transfer.id;
-            const gop = try self.captured_responses.getOrPut(arena, id);
-            if (!gop.found_existing) {
-                gop.value_ptr.* = .{
-                    .data = .empty,
-                    .encode = .base64,
-                };
+            const resp = self.captured_responses.getPtr(id) orelse lp.assert(false, "onHttpResponseData missinf captured response", .{});
+
+            if (resp.encode == .none) {
+                return resp.data.appendSlice(arena, msg.data);
             }
 
-            // Always base64 ecncode the catured response body.
-            // TODO: use the response's content-type to decide to encode or not
-            // the body.
-            const resp = gop.value_ptr;
             const encoded_len = std.base64.standard.Encoder.calcSize(msg.data.len);
             const start = resp.data.items.len;
             try resp.data.resize(arena, start + encoded_len);
