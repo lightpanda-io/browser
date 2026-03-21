@@ -323,14 +323,22 @@ pub fn getPassword(raw: [:0]const u8) []const u8 {
 }
 
 pub fn getPathname(raw: [:0]const u8) []const u8 {
-    const protocol_end = std.mem.indexOf(u8, raw, "://") orelse 0;
-    const path_start = std.mem.indexOfScalarPos(u8, raw, if (protocol_end > 0) protocol_end + 3 else 0, '/') orelse raw.len;
+    const protocol_end = std.mem.indexOf(u8, raw, "://");
+
+    // Handle scheme:path URLs like about:blank (no "://")
+    if (protocol_end == null) {
+        const colon_pos = std.mem.indexOfScalar(u8, raw, ':') orelse return "";
+        const path = raw[colon_pos + 1 ..];
+        const query_or_hash = std.mem.indexOfAny(u8, path, "?#") orelse path.len;
+        return path[0..query_or_hash];
+    }
+
+    const path_start = std.mem.indexOfScalarPos(u8, raw, protocol_end.? + 3, '/') orelse raw.len;
 
     const query_or_hash_start = std.mem.indexOfAnyPos(u8, raw, path_start, "?#") orelse raw.len;
 
     if (path_start >= query_or_hash_start) {
-        if (std.mem.indexOf(u8, raw, "://") != null) return "/";
-        return "";
+        return "/";
     }
 
     return raw[path_start..query_or_hash_start];

@@ -441,6 +441,12 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     if (is_about_blank or is_blob) {
         self.url = if (is_about_blank) "about:blank" else try self.arena.dupeZ(u8, request_url);
 
+        // even though this might be the same _data_ as `default_location`, we
+        // have to do this to make sure window.location is at a unique _address_.
+        // If we don't do this, mulitple window._location will have the same
+        // address and thus be mapped to the same v8::Object in the identity map.
+        self.window._location = try Location.init(self.url, self);
+
         if (is_blob) {
             // strip out blob:
             self.origin = try URL.getOrigin(self.arena, request_url[5.. :0]);

@@ -37,6 +37,14 @@ pub const resolve = @import("../URL.zig").resolve;
 pub const eqlDocument = @import("../URL.zig").eqlDocument;
 
 pub fn init(url: [:0]const u8, base_: ?[:0]const u8, page: *Page) !*URL {
+    const arena = page.arena;
+
+    if (std.mem.eql(u8, url, "about:blank")) {
+        return page._factory.create(URL{
+            ._raw = "about:blank",
+            ._arena = arena,
+        });
+    }
     const url_is_absolute = @import("../URL.zig").isCompleteHTTPUrl(url);
 
     const base = if (base_) |b| blk: {
@@ -53,7 +61,6 @@ pub fn init(url: [:0]const u8, base_: ?[:0]const u8, page: *Page) !*URL {
         return error.TypeError;
     } else page.url;
 
-    const arena = page.arena;
     const raw = try resolve(arena, base, url, .{ .always_dupe = true });
 
     return page._factory.create(URL{
