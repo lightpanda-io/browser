@@ -140,7 +140,18 @@
 </script>
 
 <script id=count>
+  {
+    let i = document.createElement('iframe');
+    document.documentElement.appendChild(i);
+    i.contentWindow.location.href = 'support/page.html';
+    testing.eventually(() => {
+      testing.expectEqual('<html><head></head><body>a-page\n</body></html>', i.contentDocument.documentElement.outerHTML);
+    });
+  }
+</script>
+
+<script id=count>
   testing.eventually(() => {
-    testing.expectEqual(8, window.length);
+    testing.expectEqual(9, window.length);
   });
 </script>

@@ -587,13 +587,34 @@ pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOp
 // page that it's acting on.
 fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
     const resolved_url, const is_about_blank = blk: {
+        if (URL.isCompleteHTTPUrl(request_url)) {
+            break :blk .{ try arena.dupeZ(u8, request_url), false };
+        }
+
         if (std.mem.eql(u8, request_url, "about:blank")) {
             // navigate will handle this special case
             break :blk .{ "about:blank", true };
         }
+
+        // request_url isn't a "complete" URL, so it has to be resolved with the
+        // originator's base. Unless, originator's base is "about:blank", in which
+        // case we have to walk up the parents and find a real base.
+        const page_base = base_blk: {
+            var maybe_not_blank_page = originator;
+            while (true) {
+                const maybe_base = maybe_not_blank_page.base();
+                if (std.mem.eql(u8, maybe_base, "about:blank") == false) {
+                    break :base_blk maybe_base;
+                }
+                // The orelse here is probably an invalid case, but there isn't
+                // anything we can do about it. It should never happen?
+                maybe_not_blank_page = maybe_not_blank_page.parent orelse break :base_blk "";
+            }
+        };
+
         const u = try URL.resolve(
             arena,
-            originator.base(),
+            page_base,
             request_url,
             .{ .always_dupe = true, .encode = true },
         );
