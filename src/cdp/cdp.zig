@@ -324,6 +324,11 @@ pub fn BrowserContext(comptime CDP_T: type) type {
     const Node = @import("Node.zig");
     const AXNode = @import("AXNode.zig");
 
+    const CapturedResponse = struct {
+        encode: enum { none, base64 },
+        data: std.ArrayList(u8),
+    };
+
     return struct {
         id: []const u8,
         cdp: *CDP_T,
@@ -384,7 +389,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         // ever streamed. So if CDP is the only thing that needs bodies in
         // memory for an arbitrary amount of time, then that's where we're going
         // to store the,
-        captured_responses: std.AutoHashMapUnmanaged(usize, std.ArrayList(u8)),
+        captured_responses: std.AutoHashMapUnmanaged(usize, CapturedResponse),
 
         notification: *Notification,
 
@@ -648,9 +653,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const id = msg.transfer.id;
             const gop = try self.captured_responses.getOrPut(arena, id);
             if (!gop.found_existing) {
-                gop.value_ptr.* = .{};
+                gop.value_ptr.* = .{
+                    .data = .empty,
+                    .encode = .none,
+                };
             }
-            try gop.value_ptr.appendSlice(arena, try arena.dupe(u8, msg.data));
+            try gop.value_ptr.data.appendSlice(arena, try arena.dupe(u8, msg.data));
         }
 
         pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
