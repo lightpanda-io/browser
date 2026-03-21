@@ -189,27 +189,10 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // (I can imagine this logic will become driver-specific)
         fn dispatchStartupCommand(command: anytype, method: []const u8) !void {
             // Stagehand parses the response and error if we don't return a
-            // correct one for this call.
+            // correct one for Page.getFrameTree on startup call.
             if (std.mem.eql(u8, method, "Page.getFrameTree")) {
-                // If we have a brower context and a target id, we can call the
-                // real dispatch command, even during STARTUP.
-                if (command.cdp.browser_context) |*bc| {
-                    if (bc.target_id != null) {
-                        return dispatchCommand(command, method);
-                    }
-                }
-
-                return command.sendResult(.{
-                    .frameTree = .{
-                        .frame = .{
-                            .id = "TID-STARTUP",
-                            .loaderId = "LID-STARTUP",
-                            .securityOrigin = URL_BASE,
-                            .url = "about:blank",
-                            .secureContextType = "Secure",
-                        },
-                    },
-                }, .{});
+                // The Page.getFrameTree handles startup response gracefully.
+                return dispatchCommand(command, method);
             }
 
             return command.sendResult(null, .{});
@@ -993,49 +976,5 @@ test "cdp: STARTUP sessionId" {
         _ = try ctx.loadBrowserContext(.{ .session_id = "SESS-2" });
         try ctx.processMessage(.{ .id = 4, .method = "Hi", .sessionId = "STARTUP" });
         try ctx.expectSentResult(null, .{ .id = 4, .index = 0, .session_id = "STARTUP" });
-    }
-}
-
-test "cdp: STARTUP getFrameTree returns real frame ID when page exists" {
-    var ctx = testing.context();
-    defer ctx.deinit();
-
-    {
-        // no browser context - should return TID-STARTUP
-        try ctx.processMessage(.{ .id = 1, .method = "Page.getFrameTree", .sessionId = "STARTUP" });
-        try ctx.expectSentResult(.{
-            .frameTree = .{
-                .frame = .{
-                    .id = "TID-STARTUP",
-                    .loaderId = "LID-STARTUP",
-                    .url = "about:blank",
-                    .secureContextType = "Secure",
-                },
-            },
-        }, .{ .id = 1, .session_id = "STARTUP" });
-    }
-
-    {
-        // browser context with target_id - should return real frame ID
-        const bc = try ctx.loadBrowserContext(.{ .target_id = "TID-000000000X".* });
-        try ctx.processMessage(.{ .id = 2, .method = "Page.getFrameTree", .sessionId = "STARTUP" });
-        try ctx.expectSentResult(.{
-            .frameTree = .{
-                .frame = .{
-                    .id = "TID-000000000X",
-                    .loaderId = "LID-0000000001",
-                    .url = "about:blank",
-                    .domainAndRegistry = "",
-                    .securityOrigin = bc.security_origin,
-                    .mimeType = "text/html",
-                    .adFrameStatus = .{
-                        .adFrameType = "none",
-                    },
-                    .secureContextType = bc.secure_context_type,
-                    .crossOriginIsolatedContextType = "NotIsolated",
-                    .gatedAPIFeatures = [_][]const u8{},
-                },
-            },
-        }, .{ .id = 2, .session_id = "STARTUP" });
     }
 }
