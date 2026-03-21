@@ -285,23 +285,23 @@ pub fn queueMicrotask(_: *Window, cb: js.Function, page: *Page) void {
 }
 
 pub fn clearTimeout(self: *Window, id: u32) void {
-    var sc = self._timers.get(id) orelse return;
-    sc.removed = true;
+    var sc = self._timers.fetchRemove(id) orelse return;
+    sc.value.removed = true;
 }
 
 pub fn clearInterval(self: *Window, id: u32) void {
-    var sc = self._timers.get(id) orelse return;
-    sc.removed = true;
+    var sc = self._timers.fetchRemove(id) orelse return;
+    sc.value.removed = true;
 }
 
 pub fn clearImmediate(self: *Window, id: u32) void {
-    var sc = self._timers.get(id) orelse return;
-    sc.removed = true;
+    var sc = self._timers.fetchRemove(id) orelse return;
+    sc.value.removed = true;
 }
 
 pub fn cancelAnimationFrame(self: *Window, id: u32) void {
-    var sc = self._timers.get(id) orelse return;
-    sc.removed = true;
+    var sc = self._timers.fetchRemove(id) orelse return;
+    sc.value.removed = true;
 }
 
 const RequestIdleCallbackOpts = struct {
@@ -319,8 +319,8 @@ pub fn requestIdleCallback(self: *Window, cb: js.Function.Temp, opts_: ?RequestI
 }
 
 pub fn cancelIdleCallback(self: *Window, id: u32) void {
-    var sc = self._timers.get(id) orelse return;
-    sc.removed = true;
+    var sc = self._timers.fetchRemove(id) orelse return;
+    sc.value.removed = true;
 }
 
 pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
@@ -704,7 +704,6 @@ const ScheduleCallback = struct {
         const window = page.window;
 
         if (self.removed) {
-            _ = window._timers.remove(self.timer_id);
             self.deinit();
             return null;
         }
