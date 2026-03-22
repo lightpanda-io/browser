@@ -3,6 +3,9 @@
 </p>
 <h1 align="center">Lightpanda Browser</h1>
 <p align="center">
+  <a href="README.md">English</a> | <a href="README.zh.md">中文版</a>
+</p>
+<p align="center">
 <strong>The headless browser built from scratch for AI agents and automation.</strong><br>
 Not a Chromium fork. Not a WebKit patch. A new browser, written in Zig.
 </p>
