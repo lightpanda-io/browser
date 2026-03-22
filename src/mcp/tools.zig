@@ -705,6 +705,9 @@ test "MCP - Actions: click, fill, scroll" {
     const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
     const click_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}" });
     try router.handleMessage(server, aa, click_msg);
+    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "Clicked element") != null);
+    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
+    out_alloc.clearRetainingCapacity();
 
     // Test Fill Input
     const inp = page.document.getElementById("inp", page).?.asNode();
@@ -713,6 +716,9 @@ test "MCP - Actions: click, fill, scroll" {
     const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
     const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"text\":\"hello\"}}}" });
     try router.handleMessage(server, aa, fill_msg);
+    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "Filled element") != null);
+    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "with \\\"hello\\\"") != null);
+    out_alloc.clearRetainingCapacity();
 
     // Test Fill Select
     const sel = page.document.getElementById("sel", page).?.asNode();
@@ -721,6 +727,9 @@ test "MCP - Actions: click, fill, scroll" {
     const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
     const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"text\":\"opt2\"}}}" });
     try router.handleMessage(server, aa, fill_sel_msg);
+    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "Filled element") != null);
+    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "with \\\"opt2\\\"") != null);
+    out_alloc.clearRetainingCapacity();
 
     // Test Scroll
     const scrollbox = page.document.getElementById("scrollbox", page).?.asNode();
@@ -729,6 +738,8 @@ test "MCP - Actions: click, fill, scroll" {
     const scroll_id_str = std.fmt.bufPrint(&scroll_id_buf, "{d}", .{scrollbox_id}) catch unreachable;
     const scroll_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"scroll\",\"arguments\":{\"backendNodeId\":", scroll_id_str, ",\"y\":50}}}" });
     try router.handleMessage(server, aa, scroll_msg);
+    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "Scrolled to x: 0, y: 50") != null);
+    out_alloc.clearRetainingCapacity();
 
     // Evaluate assertions
     var ls: js.Local.Scope = undefined;
