@@ -265,7 +265,7 @@ test "browser.forms: login form" {
     );
     try testing.expectEqual(1, forms.len);
     try testing.expectEqual("/login", forms[0].action.?);
-    try testing.expectEqual("POST", forms[0].method.?);
+    try testing.expectEqual("post", forms[0].method.?);
     try testing.expectEqual(2, forms[0].fields.len);
     try testing.expectEqual("email", forms[0].fields[0].name.?);
     try testing.expectEqual("email", forms[0].fields[0].input_type.?);
