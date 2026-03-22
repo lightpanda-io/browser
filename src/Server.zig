@@ -45,7 +45,7 @@ clients_pool: std.heap.MemoryPool(Client),
 
 pub fn init(app: *App, address: net.Address) !*Server {
     const allocator = app.allocator;
-    const json_version_response = try buildJSONVersionResponse(allocator, address);
+    const json_version_response = try buildJSONVersionResponse(app);
     errdefer allocator.free(json_version_response);
 
     const self = try allocator.create(Server);
@@ -484,11 +484,17 @@ pub const Client = struct {
 // --------
 
 fn buildJSONVersionResponse(
-    allocator: Allocator,
-    address: net.Address,
+    app: *const App,
 ) ![]const u8 {
-    const body_format = "{{\"webSocketDebuggerUrl\": \"ws://{f}/\"}}";
-    const body_len = std.fmt.count(body_format, .{address});
+    const port = app.config.port();
+    const host = app.config.advertiseHost();
+    if (std.mem.eql(u8, host, "0.0.0.0")) {
+        log.info(.cdp, "unreachable advertised host", .{
+            .message = "when --host is set to 0.0.0.0 consider setting --advertise_host to a reachable address",
+        });
+    }
+    const body_format = "{{\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"}}";
+    const body_len = std.fmt.count(body_format, .{host, port});
 
     // We send a Connection: Close (and actually close the connection)
     // because chromedp (Go driver) sends a request to /json/version and then
@@ -502,7 +508,7 @@ fn buildJSONVersionResponse(
         "Connection: Close\r\n" ++
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
         body_format;
-    return try std.fmt.allocPrint(allocator, response_format, .{ body_len, address });
+    return try std.fmt.allocPrint(app.allocator, response_format, .{ body_len, host, port });
 }
 
 pub const timestamp = @import("datetime.zig").timestamp;
