@@ -1,5 +1,8 @@
 <p align="center">
   <a href="https://lightpanda.io"><img src="https://cdn.lightpanda.io/assets/images/logo/lpd-logo.png" alt="Logo" height=170></a>
+  <a href="https://gitcgr.com/lightpanda-io/browser">
+    <img src="https://gitcgr.com/badge/lightpanda-io/browser.svg" alt="gitcgr" />
+  </a>
 </p>
 <h1 align="center">Lightpanda Browser</h1>
 <p align="center">
