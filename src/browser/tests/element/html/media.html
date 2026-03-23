@@ -236,9 +236,11 @@
   {
     const audio = document.createElement('audio');
     testing.expectEqual('', audio.src);
+    testing.expectEqual('', audio.currentSrc);
 
     audio.src = 'test.mp3';
     testing.expectEqual(testing.BASE_URL + 'element/html/test.mp3', audio.src);
+    testing.expectEqual(testing.BASE_URL + 'element/html/test.mp3', audio.currentSrc);
   }
 </script>
 
