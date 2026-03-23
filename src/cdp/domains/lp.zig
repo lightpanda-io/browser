@@ -173,18 +173,17 @@ fn detectForms(cmd: anytype) !void {
     );
 
     // Register form and field nodes for backendNodeId references
-    var form_ids: std.ArrayList(Node.Id) = try .initCapacity(cmd.arena, forms_data.len);
-    for (forms_data) |form| {
+    for (forms_data) |*form| {
         const registered = try bc.node_registry.register(form.node);
-        form_ids.appendAssumeCapacity(registered.id);
-        for (form.fields) |field| {
-            _ = try bc.node_registry.register(field.node);
+        form.backendNodeId = registered.id;
+        for (@constCast(form.fields)) |*field| {
+            const field_registered = try bc.node_registry.register(field.node);
+            field.backendNodeId = field_registered.id;
         }
     }
 
     return cmd.sendResult(.{
         .forms = forms_data,
-        .formNodeIds = form_ids.items,
     }, .{});
 }
 

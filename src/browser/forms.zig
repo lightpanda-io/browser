@@ -40,6 +40,7 @@ pub const SelectOption = struct {
 };
 
 pub const FormField = struct {
+    backendNodeId: ?u32 = null,
     node: *Node,
     tag_name: []const u8,
     name: ?[]const u8,
@@ -51,6 +52,11 @@ pub const FormField = struct {
 
     pub fn jsonStringify(self: *const FormField, jw: anytype) !void {
         try jw.beginObject();
+
+        if (self.backendNodeId) |id| {
+            try jw.objectField("backendNodeId");
+            try jw.write(id);
+        }
 
         try jw.objectField("tagName");
         try jw.write(self.tag_name);
@@ -94,6 +100,7 @@ pub const FormField = struct {
 };
 
 pub const FormInfo = struct {
+    backendNodeId: ?u32 = null,
     node: *Node,
     action: ?[]const u8,
     method: ?[]const u8,
@@ -101,6 +108,11 @@ pub const FormInfo = struct {
 
     pub fn jsonStringify(self: *const FormInfo, jw: anytype) !void {
         try jw.beginObject();
+
+        if (self.backendNodeId) |id| {
+            try jw.objectField("backendNodeId");
+            try jw.write(id);
+        }
 
         if (self.action) |v| {
             try jw.objectField("action");

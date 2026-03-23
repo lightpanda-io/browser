@@ -450,82 +450,6 @@ fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
-const FormWithId = struct {
-    backendNodeId: CDPNode.Id,
-    action: ?[]const u8,
-    method: ?[]const u8,
-    fields: []const FormFieldWithId,
-
-    pub fn jsonStringify(self: *const FormWithId, jw: anytype) !void {
-        try jw.beginObject();
-        try jw.objectField("backendNodeId");
-        try jw.write(self.backendNodeId);
-        if (self.action) |a| {
-            try jw.objectField("action");
-            try jw.write(a);
-        }
-        if (self.method) |m| {
-            try jw.objectField("method");
-            try jw.write(m);
-        }
-        try jw.objectField("fields");
-        try jw.beginArray();
-        for (self.fields) |field| {
-            try field.jsonStringify(jw);
-        }
-        try jw.endArray();
-        try jw.endObject();
-    }
-};
-
-const FormFieldWithId = struct {
-    backendNodeId: CDPNode.Id,
-    tag_name: []const u8,
-    name: ?[]const u8,
-    input_type: ?[]const u8,
-    required: bool,
-    value: ?[]const u8,
-    placeholder: ?[]const u8,
-    options: []const lp.forms.SelectOption,
-
-    pub fn jsonStringify(self: *const FormFieldWithId, jw: anytype) !void {
-        try jw.beginObject();
-        try jw.objectField("backendNodeId");
-        try jw.write(self.backendNodeId);
-        try jw.objectField("tagName");
-        try jw.write(self.tag_name);
-        if (self.name) |v| {
-            try jw.objectField("name");
-            try jw.write(v);
-        }
-        if (self.input_type) |v| {
-            try jw.objectField("inputType");
-            try jw.write(v);
-        }
-        if (self.required) {
-            try jw.objectField("required");
-            try jw.write(true);
-        }
-        if (self.value) |v| {
-            try jw.objectField("value");
-            try jw.write(v);
-        }
-        if (self.placeholder) |v| {
-            try jw.objectField("placeholder");
-            try jw.write(v);
-        }
-        if (self.options.len > 0) {
-            try jw.objectField("options");
-            try jw.beginArray();
-            for (self.options) |opt| {
-                try opt.jsonStringify(jw);
-            }
-            try jw.endArray();
-        }
-        try jw.endObject();
-    }
-};
-
 fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const Params = struct {
         url: ?[:0]const u8 = null,
@@ -546,36 +470,19 @@ fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Val
         return server.sendError(id, .InternalError, "Failed to collect forms");
     };
 
-    // Build output with backendNodeIds
-    var results: std.ArrayList(FormWithId) = .empty;
-    for (forms_data) |form| {
+    // Register form and field nodes for backendNodeId references
+    for (forms_data) |*form| {
         const form_registered = try server.node_registry.register(form.node);
+        form.backendNodeId = form_registered.id;
 
-        var fields_with_ids: std.ArrayList(FormFieldWithId) = .empty;
-        for (form.fields) |field| {
+        for (@constCast(form.fields)) |*field| {
             const field_registered = try server.node_registry.register(field.node);
-            try fields_with_ids.append(arena, .{
-                .backendNodeId = field_registered.id,
-                .tag_name = field.tag_name,
-                .name = field.name,
-                .input_type = field.input_type,
-                .required = field.required,
-                .value = field.value,
-                .placeholder = field.placeholder,
-                .options = field.options,
-            });
+            field.backendNodeId = field_registered.id;
         }
-
-        try results.append(arena, .{
-            .backendNodeId = form_registered.id,
-            .action = form.action,
-            .method = form.method,
-            .fields = fields_with_ids.items,
-        });
     }
 
     var aw: std.Io.Writer.Allocating = .init(arena);
-    try std.json.Stringify.value(results.items, .{}, &aw.writer);
+    try std.json.Stringify.value(forms_data, .{}, &aw.writer);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
