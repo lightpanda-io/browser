@@ -106,7 +106,8 @@ pub fn run(allocator: Allocator, file: []const u8, session: *lp.Session) !void {
     defer try_catch.deinit();
 
     try page.navigate(url, .{});
-    _ = session.wait(.{});
+    var runner = try session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
 
     ls.local.eval("testing.assertOk()", "testing.assertOk()") catch |err| {
         const caught = try_catch.caughtOrError(allocator, err);

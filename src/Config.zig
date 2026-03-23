@@ -236,7 +236,7 @@ pub const WaitUntil = enum {
     load,
     domcontentloaded,
     networkidle,
-    fixed,
+    done,
 };
 
 pub const Fetch = struct {
@@ -415,8 +415,8 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Defaults to 5000.
         \\
         \\--wait_until    Wait until the specified event.
-        \\                Supported events: load, domcontentloaded, networkidle, fixed.
-        \\                Defaults to 'load'.
+        \\                Supported events: load, domcontentloaded, networkidle, done.
+        \\                Defaults to 'done'.
         \\
     ++ common_options ++
         \\

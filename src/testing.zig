@@ -415,7 +415,8 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     defer try_catch.deinit();
 
     try page.navigate(url, .{});
-    _ = test_session.wait(.{});
+    var runner = try test_session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
 
     test_browser.runMicrotasks();
 
@@ -439,7 +440,8 @@ pub fn pageTest(comptime test_file: []const u8) !*Page {
     );
 
     try page.navigate(url, .{});
-    _ = test_session.wait(.{});
+    var runner = try test_session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
     return page;
 }
 
