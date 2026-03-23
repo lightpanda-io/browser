@@ -75,7 +75,15 @@ pub fn getOwnerRule(self: *const CSSStyleSheet) ?*CSSRule {
 pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, page: *Page) !u32 {
     const index = maybe_index orelse 0;
     var it = Parser.parseStylesheet(rule);
-    const parsed_rule = it.next() orelse return error.SyntaxError;
+    const parsed_rule = it.next() orelse {
+        const trimmed = std.mem.trimLeft(u8, rule, &std.ascii.whitespace);
+        if (std.mem.startsWith(u8, trimmed, "@")) {
+            // At-rules (like @keyframes) are currently skipped by the parser.
+            // Returning the index simulates successful insertion without crashing.
+            return index;
+        }
+        return error.SyntaxError;
+    };
 
     const style_rule = try CSSStyleRule.init(page);
     try style_rule.setSelectorText(parsed_rule.selector, page);
