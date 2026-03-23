@@ -3585,12 +3585,7 @@ test "WebApi: Page" {
 }
 
 test "WebApi: Frames" {
-    // TOO FLAKY, disabled for now
-
-    // const filter: testing.LogFilter = .init(&.{.js});
-    // defer filter.deinit();
-
-    // try testing.htmlRunner("frames", .{});
+    try testing.htmlRunner("frames", .{});
 }
 
 test "WebApi: Integration" {

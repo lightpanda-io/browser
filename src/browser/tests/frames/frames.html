@@ -118,23 +118,24 @@
   }
 </script>
 
-<script id=link_click>
-  testing.async(async (restore) => {
-    await new Promise((resolve) => {
-      let count = 0;
-      let f6 = document.createElement('iframe');
-      f6.id = 'f6';
-      f6.addEventListener('load', () => {
-        if (++count == 2) {
-          resolve();
-          return;
-        }
-        f6.contentDocument.querySelector('#link').click();
-      });
-      f6.src = "support/with_link.html";
-      document.documentElement.appendChild(f6);
-    });
-    restore();
+<script id=link_click type=module>
+  const state = await testing.async();
+
+  let count = 0;
+  let f6 = document.createElement('iframe');
+  f6.id = 'f6';
+  f6.addEventListener('load', () => {
+    if (++count == 2) {
+      state.resolve();
+      return;
+    }
+    f6.contentDocument.querySelector('#link').click();
+  });
+
+  f6.src = 'support/with_link.html';
+  document.documentElement.appendChild(f6);
+
+  await state.done(() => {
     testing.expectEqual("<html><head></head><body>It was clicked!\n</body></html>", f6.contentDocument.documentElement.outerHTML);
   });
 </script>
