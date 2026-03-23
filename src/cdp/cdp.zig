@@ -326,7 +326,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
     const AXNode = @import("AXNode.zig");
 
     const CapturedResponse = struct {
-        encode: enum { none, base64 },
+        must_encode: bool,
         data: std.ArrayList(u8),
     };
 
@@ -648,22 +648,22 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             if (!gop.found_existing) {
                 gop.value_ptr.* = .{
                     .data = .empty,
-                    // Encode the data in base64 by default, but use none
-                    // encoding for well known content-type.
-                    .encode = blk: {
+                    // Encode the data in base64 by default, but don't encode
+                    // for well known content-type.
+                    .must_encode = blk: {
                         const transfer = msg.transfer;
                         if (transfer.response_header.?.contentType()) |ct| {
                             const mime = try Mime.parse(ct);
 
                             if (!mime.isText()) {
-                                break :blk .base64;
+                                break :blk true;
                             }
 
                             if (std.mem.eql(u8, "UTF-8", mime.charsetString())) {
-                                break :blk .none;
+                                break :blk false;
                             }
                         }
-                        break :blk .base64;
+                        break :blk true;
                     },
                 };
             }
@@ -683,14 +683,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const id = msg.transfer.id;
             const resp = self.captured_responses.getPtr(id) orelse lp.assert(false, "onHttpResponseData missinf captured response", .{});
 
-            if (resp.encode == .none) {
-                return resp.data.appendSlice(arena, msg.data);
-            }
-
-            const encoded_len = std.base64.standard.Encoder.calcSize(msg.data.len);
-            const start = resp.data.items.len;
-            try resp.data.resize(arena, start + encoded_len);
-            _ = std.base64.standard.Encoder.encode(resp.data.items[start..], msg.data);
+            return resp.data.appendSlice(arena, msg.data);
         }
 
         pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {

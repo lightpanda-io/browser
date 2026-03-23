@@ -210,9 +210,20 @@ fn getResponseBody(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const resp = bc.captured_responses.getPtr(request_id) orelse return error.RequestNotFound;
 
-    try cmd.sendResult(.{
-        .body = resp.data.items,
-        .base64Encoded = resp.encode == .base64,
+    if (!resp.must_encode) {
+        return cmd.sendResult(.{
+            .body = resp.data.items,
+            .base64Encoded = false,
+        }, .{});
+    }
+
+    const encoded_len = std.base64.standard.Encoder.calcSize(resp.data.items.len);
+    const encoded = try cmd.arena.alloc(u8, encoded_len);
+    _ = std.base64.standard.Encoder.encode(encoded, resp.data.items);
+
+    return cmd.sendResult(.{
+        .body = encoded,
+        .base64Encoded = true,
     }, .{});
 }
 
