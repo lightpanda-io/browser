@@ -180,7 +180,7 @@ fn collectFormFields(
 
         switch (el.getTag()) {
             .input => {
-                const input = el.is(Element.Html.Input) orelse continue;
+                const input = el.as(Element.Html.Input);
                 if (input._input_type == .hidden) continue;
                 if (input._input_type == .submit or input._input_type == .button or input._input_type == .image) continue;
 
