@@ -43,6 +43,27 @@ pub const curl_writefunc_error: usize = c.CURL_WRITEFUNC_ERROR;
 pub const curl_readfunc_pause: usize = c.CURL_READFUNC_PAUSE;
 pub const CurlReadFunction = fn ([*]u8, usize, usize, *anyopaque) usize;
 
+pub const CurlSockType = enum(c.curlsocktype) {
+    ipcxn = c.CURLSOCKTYPE_IPCXN,
+    accept = c.CURLSOCKTYPE_ACCEPT,
+};
+
+/// Mirror of curl's struct curl_sockaddr. The addr field is a struct sockaddr
+/// inline (not a pointer), so addrlen tells you how many bytes of addr are valid.
+pub const CurlSockAddr = extern struct {
+    family: c_int,
+    socktype: c_int,
+    protocol: c_int,
+    addrlen: c_uint,
+    addr: std.posix.sockaddr,
+};
+
+pub const CURL_SOCKET_BAD: c.curl_socket_t = c.CURL_SOCKET_BAD;
+
+/// Zig-side opensocket callback: purpose and address first, user data last.
+/// Return a valid socket fd to allow the connection, or CURL_SOCKET_BAD to block.
+pub const CurlOpenSocketFunction = fn (CurlSockType, *CurlSockAddr, ?*anyopaque) c.curl_socket_t;
+
 pub const FreeCallback = fn (ptr: ?*anyopaque) void;
 pub const StrdupCallback = fn (str: [*:0]const u8) ?[*:0]u8;
 pub const MallocCallback = fn (size: usize) ?*anyopaque;
@@ -137,8 +158,17 @@ comptime {
             return 0;
         }
     }.cb;
+    const opensocket_cb_check: c.curl_opensocket_callback = struct {
+        fn cb(clientp: ?*anyopaque, purpose: c.curlsocktype, address: [*c]c.curl_sockaddr) callconv(.c) c.curl_socket_t {
+            _ = clientp;
+            _ = purpose;
+            _ = address;
+            return CURL_SOCKET_BAD;
+        }
+    }.cb;
     _ = debug_cb_check;
     _ = write_cb_check;
+    _ = opensocket_cb_check;
 
     if (@sizeOf(CurlWaitFd) != @sizeOf(c.curl_waitfd)) {
         @compileError("CurlWaitFd size mismatch");
@@ -151,6 +181,17 @@ comptime {
     }
     if (c.CURL_WAIT_POLLIN != 1 or c.CURL_WAIT_POLLPRI != 2 or c.CURL_WAIT_POLLOUT != 4) {
         @compileError("CURL_WAIT_* flag values don't match CurlWaitEvents packed struct bit layout");
+    }
+    if (@sizeOf(CurlSockAddr) != @sizeOf(c.curl_sockaddr)) {
+        @compileError("CurlSockAddr size mismatch with curl_sockaddr");
+    }
+    if (@offsetOf(CurlSockAddr, "family") != @offsetOf(c.curl_sockaddr, "family") or
+        @offsetOf(CurlSockAddr, "socktype") != @offsetOf(c.curl_sockaddr, "socktype") or
+        @offsetOf(CurlSockAddr, "protocol") != @offsetOf(c.curl_sockaddr, "protocol") or
+        @offsetOf(CurlSockAddr, "addrlen") != @offsetOf(c.curl_sockaddr, "addrlen") or
+        @offsetOf(CurlSockAddr, "addr") != @offsetOf(c.curl_sockaddr, "addr"))
+    {
+        @compileError("CurlSockAddr layout mismatch with curl_sockaddr");
     }
 }
 
@@ -190,6 +231,8 @@ pub const CurlOption = enum(c.CURLoption) {
     read_function = c.CURLOPT_READFUNCTION,
     connect_only = c.CURLOPT_CONNECT_ONLY,
     upload = c.CURLOPT_UPLOAD,
+    opensocket_function = c.CURLOPT_OPENSOCKETFUNCTION,
+    opensocket_data = c.CURLOPT_OPENSOCKETDATA,
 };
 
 pub const CurlMOption = enum(c.CURLMoption) {
@@ -620,6 +663,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .header_data,
         .read_data,
         .write_data,
+        .opensocket_data,
         => blk: {
             const ptr: ?*anyopaque = switch (@typeInfo(@TypeOf(value))) {
                 .null => null,
@@ -636,6 +680,20 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
                         const h = handle orelse unreachable;
                         const u = user orelse unreachable;
                         return value(h, @enumFromInt(@intFromEnum(msg_type)), raw, len, u);
+                    }
+                }.cb,
+                else => @compileError("expected Zig function or null for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
+            };
+            break :blk c.curl_easy_setopt(easy, opt, cb);
+        },
+
+        .opensocket_function => blk: {
+            const cb: c.curl_opensocket_callback = switch (@typeInfo(@TypeOf(value))) {
+                .null => null,
+                .@"fn" => struct {
+                    fn cb(clientp: ?*anyopaque, purpose: c.curlsocktype, address: [*c]c.curl_sockaddr) callconv(.c) c.curl_socket_t {
+                        const addr: *CurlSockAddr = @ptrCast(address orelse return CURL_SOCKET_BAD);
+                        return value(@enumFromInt(purpose), addr, clientp);
                     }
                 }.cb,
                 else => @compileError("expected Zig function or null for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
