@@ -302,15 +302,8 @@ pub const Client = struct {
         var ms_remaining = self.ws.timeout_ms;
 
         while (true) {
-            switch (cdp.pageWait(ms_remaining)) {
-                .cdp_socket => {
-                    if (self.readSocket() == false) {
-                        return;
-                    }
-                    last_message = milliTimestamp(.monotonic);
-                    ms_remaining = self.ws.timeout_ms;
-                },
-                .no_page => {
+            const result = cdp.pageWait(ms_remaining) catch |wait_err| switch (wait_err) {
+                error.NoPage => {
                     const status = http.tick(ms_remaining) catch |err| {
                         log.err(.app, "http tick", .{ .err = err });
                         return;
@@ -319,6 +312,18 @@ pub const Client = struct {
                         log.info(.app, "CDP timeout", .{});
                         return;
                     }
+                    if (self.readSocket() == false) {
+                        return;
+                    }
+                    last_message = milliTimestamp(.monotonic);
+                    ms_remaining = self.ws.timeout_ms;
+                    continue;
+                },
+                else => return wait_err,
+            };
+
+            switch (result) {
+                .cdp_socket => {
                     if (self.readSocket() == false) {
                         return;
                     }

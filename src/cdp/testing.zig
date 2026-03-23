@@ -136,7 +136,8 @@ const TestContext = struct {
                 0,
             );
             try page.navigate(full_url, .{});
-            _ = bc.session.wait(.{});
+            var runner = try bc.session.runner(.{});
+            try runner.wait(.{ .ms = 2000 });
         }
         return bc;
     }

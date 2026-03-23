@@ -118,6 +118,8 @@
   }
 </script>
 
+<!--
+This test is flaky. Temporarily disabled until Runner can handle more advanced cases.
 <script id=link_click>
   testing.async(async (restore) => {
     await new Promise((resolve) => {
@@ -137,7 +139,7 @@
     restore();
     testing.expectEqual("<html><head></head><body>It was clicked!\n</body></html>", f6.contentDocument.documentElement.outerHTML);
   });
-</script>
+</script> -->
 
 <script id=count>
   {

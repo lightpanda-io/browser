@@ -569,6 +569,7 @@ fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
+
 fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const WaitParams = struct {
         selector: [:0]const u8,
@@ -576,13 +577,13 @@ fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json
     };
     const args = try parseArguments(WaitParams, arena, arguments, server, id, "waitForSelector");
 
-    const page = server.session.currentPage() orelse {
+    _ = server.session.currentPage() orelse {
         return server.sendError(id, .PageNotLoaded, "Page not loaded");
     };
 
     const timeout_ms = args.timeout orelse 5000;
 
-    const node = lp.actions.waitForSelector(args.selector, timeout_ms, page) catch |err| {
+    const node = lp.actions.waitForSelector(args.selector, timeout_ms, server.session) catch |err| {
         if (err == error.InvalidSelector) {
             return server.sendError(id, .InvalidParams, "Invalid selector");
         } else if (err == error.Timeout) {
@@ -624,7 +625,8 @@ fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
         return error.NavigationFailed;
     };
 
-    _ = server.session.wait(.{});
+    var runner = try session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
 }
 
 const testing = @import("../testing.zig");
@@ -689,7 +691,8 @@ test "MCP - Actions: click, fill, scroll" {
     const page = try server.session.createPage();
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    _ = server.session.wait(.{});
+    var runner = try server.session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
 
     // Test Click
     const btn = page.document.getElementById("btn", page).?.asNode();
@@ -763,7 +766,8 @@ test "MCP - waitForSelector: existing element" {
     const page = try server.session.createPage();
     const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
     try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    _ = server.session.wait(.{});
+    var runner = try server.session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
 
     // waitForSelector on an element that already exists returns immediately
     const msg =
@@ -798,7 +802,8 @@ test "MCP - waitForSelector: delayed element" {
     const page = try server.session.createPage();
     const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
     try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    _ = server.session.wait(.{});
+    var runner = try server.session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
 
     // waitForSelector on an element added after 200ms via setTimeout
     const msg =
@@ -833,7 +838,8 @@ test "MCP - waitForSelector: timeout" {
     const page = try server.session.createPage();
     const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
     try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    _ = server.session.wait(.{});
+    var runner = try server.session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
 
     // waitForSelector with a short timeout on a non-existent element should error
     const msg =
