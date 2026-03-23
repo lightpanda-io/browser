@@ -29,10 +29,12 @@
 
     testing.expectEqual('', img.src);
     testing.expectEqual('', img.alt);
+    testing.expectEqual('', img.currentSrc);
 
     img.src = 'test.png';
     // src property returns resolved absolute URL
     testing.expectEqual(testing.BASE_URL + 'element/html/test.png', img.src);
+    testing.expectEqual(testing.BASE_URL + 'element/html/test.png', img.currentSrc);
     // getAttribute returns the raw attribute value
     testing.expectEqual('test.png', img.getAttribute('src'));
 

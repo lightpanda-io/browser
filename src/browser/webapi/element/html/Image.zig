@@ -150,6 +150,7 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(Image.constructor, .{});
     pub const src = bridge.accessor(Image.getSrc, Image.setSrc, .{});
+    pub const currentSrc = bridge.accessor(Image.getSrc, null, .{});
     pub const alt = bridge.accessor(Image.getAlt, Image.setAlt, .{});
     pub const width = bridge.accessor(Image.getWidth, Image.setWidth, .{});
     pub const height = bridge.accessor(Image.getHeight, Image.setHeight, .{});
