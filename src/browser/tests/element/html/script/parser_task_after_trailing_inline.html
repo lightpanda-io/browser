@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<script src="../../../testing.js"></script>
+
+<script id="schedule_dynamic_script">
+  window.script_order = [];
+  requestAnimationFrame(() => {
+    const dynamic = document.createElement('script');
+    dynamic.src = 'data:text/javascript,window.script_order.push("dynamic")';
+    document.head.appendChild(dynamic);
+  });
+
+  testing.expectEqual('', document.title);
+</script>
+
+<script id="tail_inline_script">
+  window.script_order.push('tail');
+  testing.expectEqual('tail', window.script_order.join(','));
+  testing.eventually(() => {
+    testing.expectEqual('tail,dynamic', window.script_order.join(','));
+  });
+</script>

@@ -17,6 +17,9 @@
   testing.expectEqual(false, event.shiftKey);
   testing.expectEqual(false, event.metaKey);
   testing.expectEqual(false, event.altKey);
+  testing.expectEqual(65, event.keyCode);
+  testing.expectEqual(97, event.charCode);
+  testing.expectEqual(97, event.which);
 </script>
 
 <script id=getModifierState>
@@ -87,6 +90,28 @@
   document.dispatchEvent(event);
 
   testing.expectEqual(true, isKeyPress);
+</script>
+
+<script id=legacyKeyboardCodes>
+  let keyDown = new KeyboardEvent("keydown", { key: "Enter" });
+  testing.expectEqual(13, keyDown.keyCode);
+  testing.expectEqual(13, keyDown.which);
+  testing.expectEqual(0, keyDown.charCode);
+
+  let printableKeyDown = new KeyboardEvent("keydown", { key: "w" });
+  testing.expectEqual(87, printableKeyDown.keyCode);
+  testing.expectEqual(0, printableKeyDown.charCode);
+  testing.expectEqual(87, printableKeyDown.which);
+
+  let keyPress = new KeyboardEvent("keypress", { key: "w" });
+  testing.expectEqual(87, keyPress.keyCode);
+  testing.expectEqual(119, keyPress.charCode);
+  testing.expectEqual(119, keyPress.which);
+
+  let arrow = new KeyboardEvent("keydown", { key: "ArrowLeft" });
+  testing.expectEqual(37, arrow.keyCode);
+  testing.expectEqual(37, arrow.which);
+  testing.expectEqual(0, arrow.charCode);
 </script>
 
 <script id=isTrusted>

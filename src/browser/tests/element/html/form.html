@@ -138,6 +138,18 @@
 }
 </script>
 
+<script id="direct_named_access">
+{
+  const form = $('#form1')
+
+  testing.expectEqual('field1', form.field1.name)
+  testing.expectEqual('btn1', form.btn1.name)
+  testing.expectEqual('select1', form.select1.name)
+  testing.expectEqual('text1', form.text1.name)
+  testing.expectEqual('external', form.external.name)
+}
+</script>
+
 <script id="elements_excludes_orphans">
 {
   const form = $('#form1')
@@ -265,6 +277,7 @@
 
   result.value = 'c'
   testing.expectEqual(true, form.elements[2].checked)
+  testing.expectEqual('RadioNodeList', form.choice.constructor.name)
 }
 </script>
 

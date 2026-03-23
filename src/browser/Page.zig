@@ -234,6 +234,7 @@ frames_sorted: bool = true,
 
 // DOM version used to invalidate cached state of "live" collections
 version: usize = 0,
+presentation_version: usize = 0,
 
 // This is maybe not great. It's a counter on the number of events that we're
 // waiting on before triggering the "load" event. Essentially, we need all
@@ -1407,7 +1408,8 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
 }
 
 pub fn domChanged(self: *Page) void {
-    self.version += 1;
+    self.version +%= 1;
+    self.presentationChanged();
     self.resetElementLayoutBoxes();
 
     if (self._intersection_check_scheduled) {
@@ -1418,6 +1420,14 @@ pub fn domChanged(self: *Page) void {
     self.js.queueIntersectionChecks() catch |err| {
         log.err(.page, "page.schedIntersectChecks", .{ .err = err, .type = self._type, .url = self.url });
     };
+}
+
+pub fn presentationChanged(self: *Page) void {
+    self.presentation_version +%= 1;
+}
+
+pub fn presentationRevision(self: *const Page) usize {
+    return self.presentation_version;
 }
 
 const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
@@ -3388,11 +3398,25 @@ pub fn triggerMouseClickWithResult(
     return self.triggerMouseButtonEventResult("click", x, y, button, modifiers);
 }
 
+pub fn triggerMouseActivateWithResult(
+    self: *Page,
+    x: f64,
+    y: f64,
+    button: MouseButton,
+    modifiers: MouseModifiers,
+) !MouseClickDispatchResult {
+    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return .{
+        .dispatched = false,
+        .default_prevented = false,
+    };
+    return self.dispatchMouseActivationResult(target.asNode(), x, y, button, modifiers);
+}
+
 pub fn mouseClickRequiresRenderedInteractiveTarget(self: *Page, x: f64, y: f64) !bool {
     const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return false;
     const html_element = findClickableHtmlAncestor(target.asNode()) orelse return false;
     return switch (html_element._type) {
-        .anchor, .input, .button, .select, .textarea => true,
+        .anchor => true,
         .label => false,
         else => false,
     };
@@ -3411,6 +3435,45 @@ pub fn triggerMouseClickOnNodePathWithResult(
         .default_prevented = false,
     };
     return self.dispatchMouseButtonEventResult(target, "click", x, y, button, modifiers);
+}
+
+pub fn triggerMouseActivateOnNodePathWithResult(
+    self: *Page,
+    path: []const u16,
+    x: f64,
+    y: f64,
+    button: MouseButton,
+    modifiers: MouseModifiers,
+) !MouseClickDispatchResult {
+    const target = self.resolveNodePath(path) orelse return .{
+        .dispatched = false,
+        .default_prevented = false,
+    };
+    return self.dispatchMouseActivationResult(target, x, y, button, modifiers);
+}
+
+pub fn debugNodeTagForPath(self: *Page, path: []const u16) []const u8 {
+    const target = self.resolveNodePath(path) orelse return "missing";
+    if (target.is(Element)) |element| {
+        return element.getTagNameSpec(&self.buf);
+    }
+    return "node";
+}
+
+pub fn debugNodeTagAtPoint(self: *Page, x: f64, y: f64) []const u8 {
+    const target = self.window._document.elementFromPoint(x, y, self) catch return "error";
+    const node = target orelse return "missing";
+    if (node.is(Element)) |element| {
+        return element.getTagNameSpec(&self.buf);
+    }
+    return "node";
+}
+
+pub fn debugNodePathMatchesPoint(self: *Page, path: []const u16, x: f64, y: f64) bool {
+    const target = self.resolveNodePath(path) orelse return false;
+    const point_target = self.window._document.elementFromPoint(x, y, self) catch return false;
+    const point_node = point_target orelse return false;
+    return target == point_node.asNode();
 }
 
 pub const MouseButton = enum(i32) {
@@ -3645,6 +3708,19 @@ fn dispatchMouseButtonEventResult(
     };
 }
 
+fn dispatchMouseActivationResult(
+    self: *Page,
+    target: *Node,
+    x: f64,
+    y: f64,
+    button: MouseButton,
+    modifiers: MouseModifiers,
+) !MouseClickDispatchResult {
+    _ = try self.dispatchMouseButtonEventResult(target, "mousedown", x, y, button, modifiers);
+    _ = try self.dispatchMouseButtonEventResult(target, "mouseup", x, y, button, modifiers);
+    return self.dispatchMouseButtonEventResult(target, "click", x, y, button, modifiers);
+}
+
 fn resolveNodePath(self: *Page, path: []const u16) ?*Node {
     var current = self.window._document.asNode();
     for (path) |segment| {
@@ -3828,6 +3904,16 @@ fn findClickableHtmlAncestor(target: *Node) ?*Element.Html {
     return null;
 }
 
+pub fn handleMouseDown(self: *Page, target: *Node) !void {
+    const html_element = findClickableHtmlAncestor(target) orelse return;
+    const element = html_element.asElement();
+
+    switch (html_element._type) {
+        .input, .button, .select, .textarea => try element.focus(self),
+        else => {},
+    }
+}
+
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !bool {
     const event = keyboard_event.asEvent();
     const target = blk: {
@@ -3863,8 +3949,19 @@ pub fn triggerKeyboardKeyDown(self: *Page, key: []const u8, modifiers: KeyboardM
 }
 
 pub fn triggerKeyboardKeyDownWithRepeat(self: *Page, key: []const u8, modifiers: KeyboardModifiers, repeat: bool) !bool {
+    return self.triggerKeyboardKeyDownWithCodeAndRepeat(key, null, modifiers, repeat);
+}
+
+pub fn triggerKeyboardKeyDownWithCodeAndRepeat(
+    self: *Page,
+    key: []const u8,
+    code: ?[]const u8,
+    modifiers: KeyboardModifiers,
+    repeat: bool,
+) !bool {
     const keyboard_event = try KeyboardEvent.initTrusted(comptime .wrap("keydown"), .{
         .key = key,
+        .code = code,
         .altKey = modifiers.alt,
         .ctrlKey = modifiers.ctrl,
         .metaKey = modifiers.meta,
@@ -3879,18 +3976,61 @@ pub fn triggerKeyboardKeyDownNoText(self: *Page, key: []const u8, modifiers: Key
 }
 
 pub fn triggerKeyboardKeyDownNoTextWithRepeat(self: *Page, key: []const u8, modifiers: KeyboardModifiers, repeat: bool) !bool {
+    return self.triggerKeyboardKeyDownNoTextWithCodeAndRepeat(key, null, modifiers, repeat);
+}
+
+pub fn triggerKeyboardKeyDownNoTextWithCodeAndRepeat(
+    self: *Page,
+    key: []const u8,
+    code: ?[]const u8,
+    modifiers: KeyboardModifiers,
+    repeat: bool,
+) !bool {
     self._keyboard_text_suppression_depth += 1;
     defer self._keyboard_text_suppression_depth -= 1;
-    return self.triggerKeyboardKeyDownWithRepeat(key, modifiers, repeat);
+    return self.triggerKeyboardKeyDownWithCodeAndRepeat(key, code, modifiers, repeat);
 }
 
 pub fn triggerKeyboardKeyUp(self: *Page, key: []const u8, modifiers: KeyboardModifiers) !bool {
+    return self.triggerKeyboardKeyUpWithCode(key, null, modifiers);
+}
+
+pub fn triggerKeyboardKeyUpWithCode(
+    self: *Page,
+    key: []const u8,
+    code: ?[]const u8,
+    modifiers: KeyboardModifiers,
+) !bool {
     const keyboard_event = try KeyboardEvent.initTrusted(comptime .wrap("keyup"), .{
         .key = key,
+        .code = code,
         .altKey = modifiers.alt,
         .ctrlKey = modifiers.ctrl,
         .metaKey = modifiers.meta,
         .shiftKey = modifiers.shift,
+    }, self);
+    return self.triggerKeyboard(keyboard_event);
+}
+
+pub fn triggerKeyboardKeyPress(self: *Page, key: []const u8, modifiers: KeyboardModifiers, repeat: bool) !bool {
+    return self.triggerKeyboardKeyPressWithCode(key, null, modifiers, repeat);
+}
+
+pub fn triggerKeyboardKeyPressWithCode(
+    self: *Page,
+    key: []const u8,
+    code: ?[]const u8,
+    modifiers: KeyboardModifiers,
+    repeat: bool,
+) !bool {
+    const keyboard_event = try KeyboardEvent.initTrusted(comptime .wrap("keypress"), .{
+        .key = key,
+        .code = code,
+        .altKey = modifiers.alt,
+        .ctrlKey = modifiers.ctrl,
+        .metaKey = modifiers.meta,
+        .shiftKey = modifiers.shift,
+        .repeat = repeat,
     }, self);
     return self.triggerKeyboard(keyboard_event);
 }
@@ -4705,7 +4845,6 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = form_element.asNode() });
 }
 
-// insertText is a shortcut to insert text into the active element.
 pub fn insertText(self: *Page, v: []const u8) !void {
     const html_element = self.document._active_element orelse return;
 
@@ -5122,6 +5261,185 @@ test "Page triggerMouseClickWithResult respects anchor preventDefault" {
     try testing.expectEqual(@as(usize, 0), pending_tabs.items.len);
 
     try testing.expectString("Rendered Prevented Click", (try page.getTitle()).?);
+}
+
+test "Page mouseClickRequiresRenderedInteractiveTarget keeps anchors gated" {
+    var page = try testing.pageTest("page/rendered_link_activation.html");
+    defer page._session.removePage();
+
+    const anchor = (try page.window._document.querySelector(.wrap("#plink"), page)).?;
+    const rect = anchor.getBoundingClientRect(page);
+
+    try testing.expectEqual(
+        true,
+        try page.mouseClickRequiresRenderedInteractiveTarget(
+            rect.getX() + (rect.getWidth() / 2.0),
+            rect.getY() + (rect.getHeight() / 2.0),
+        ),
+    );
+}
+
+test "Page mouseClickRequiresRenderedInteractiveTarget allows form controls" {
+    var page = try testing.pageTest("page/input_submit_sizing_layout.html");
+    defer page._session.removePage();
+
+    const input = (try page.window._document.querySelector(.wrap("#search-box"), page)).?;
+    const rect = input.getBoundingClientRect(page);
+
+    try testing.expectEqual(
+        false,
+        try page.mouseClickRequiresRenderedInteractiveTarget(
+            rect.getX() + (rect.getWidth() / 2.0),
+            rect.getY() + (rect.getHeight() / 2.0),
+        ),
+    );
+}
+
+test "Page body onload property focuses input on load" {
+    var page = try testing.pageTest("page/body_onload_focus.html");
+    defer page._session.removePage();
+
+    const input = page.window._document.getElementById("q", page) orelse return error.TestInputMissing;
+
+    try testing.expectString("BODYLOAD", (try page.getTitle()).?);
+    try testing.expectEqual(input, page.document._active_element.?);
+}
+
+test "Page body onload focused input accepts printable keydown text" {
+    var page = try testing.pageTest("page/body_onload_keyboard_input.html");
+    defer page._session.removePage();
+
+    const input = page.window._document.getElementById("q", page) orelse return error.TestInputMissing;
+
+    try testing.expectString("AUTOFOCUSED", (try page.getTitle()).?);
+    try testing.expectEqual(input, page.document._active_element.?);
+
+    _ = try page.triggerKeyboardKeyDownWithCodeAndRepeat("n", "KeyN", .{}, false);
+    try testing.expectString("TYPED:n", (try page.getTitle()).?);
+
+    var ls: JS.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    const target_value = try ls.local.exec("window.lastBodyKeyTarget", "window.lastBodyKeyTarget");
+    const target_actual = try target_value.toStringSlice();
+    try testing.expectString("INPUT", target_actual);
+
+    const key_value = try ls.local.exec("window.lastInputKey", "window.lastInputKey");
+    const key_actual = try key_value.toStringSlice();
+    try testing.expectString("n", key_actual);
+}
+
+test "Page focus and typed input bump presentation revision" {
+    var page = try testing.pageTest("page/mouse_down_focus_input.html");
+    defer page._session.removePage();
+
+    const input = page.window._document.getElementById("q", page) orelse return error.TestInputMissing;
+
+    const initial_revision = page.presentationRevision();
+    try input.focus(page);
+    const focused_revision = page.presentationRevision();
+    try std.testing.expect(focused_revision > initial_revision);
+
+    try page.insertText("n");
+    try std.testing.expect(page.presentationRevision() > focused_revision);
+}
+
+test "Page runtime keyboard events expose code for focused input" {
+    var page = try testing.pageTest("page/keyboard_code_focus_input.html");
+    defer page._session.removePage();
+
+    const input = page.window._document.getElementById("q", page) orelse return error.TestInputMissing;
+
+    try testing.expectEqual(input, page.document._active_element.?);
+    try testing.expectString("FOCUSED", (try page.getTitle()).?);
+
+    _ = try page.triggerKeyboardKeyDownNoTextWithCodeAndRepeat("a", "KeyA", .{}, false);
+    try testing.expectString("KEYDOWN:a|KeyA|65|65", (try page.getTitle()).?);
+
+    _ = try page.triggerKeyboardKeyPressWithCode("a", "KeyA", .{}, false);
+    var ls: JS.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    const keypress_value = try ls.local.exec("window.lastKeyPress", "window.lastKeyPress");
+    const keypress_actual = try keypress_value.toStringSlice();
+    try testing.expectString("a|KeyA|65|97|97", keypress_actual);
+
+    try page.insertText("a");
+    try testing.expectString("TYPED:a", (try page.getTitle()).?);
+}
+
+test "Page mouse down focuses input before click" {
+    var page = try testing.pageTest("page/mouse_down_focus_input.html");
+    defer page._session.removePage();
+
+    const input = page.window._document.getElementById("q", page) orelse return error.TestInputMissing;
+    const rect = input.getBoundingClientRect(page);
+
+    try page.triggerMouseDown(
+        rect.getX() + (rect.getWidth() / 2.0),
+        rect.getY() + (rect.getHeight() / 2.0),
+        .main,
+        .{},
+    );
+
+    try testing.expectString("FOCUSED", (try page.getTitle()).?);
+    try testing.expectEqual(input, page.document._active_element.?);
+}
+
+test "Page mouse activation sequence focuses input before click" {
+    var page = try testing.pageTest("page/mouse_down_focus_input.html");
+    defer page._session.removePage();
+
+    const input = page.window._document.getElementById("q", page) orelse return error.TestInputMissing;
+    const rect = input.getBoundingClientRect(page);
+
+    const result = try page.dispatchMouseActivationResult(
+        input.asNode(),
+        rect.getX() + (rect.getWidth() / 2.0),
+        rect.getY() + (rect.getHeight() / 2.0),
+        .main,
+        .{},
+    );
+
+    try testing.expectEqual(true, result.dispatched);
+    try testing.expectString("FOCUSED", (try page.getTitle()).?);
+    try testing.expectEqual(input, page.document._active_element.?);
+}
+
+test "Page parser completes when a trailing inline script follows a scheduled dynamic script" {
+    var page = try testing.pageTest("page/trailing_inline_after_scheduled_script.html");
+    defer page._session.removePage();
+
+    _ = page._session.wait(250);
+
+    try std.testing.expect(page._parse_state == .complete);
+
+    var ls: JS.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    const value = try ls.local.exec("window.scriptOrder.join(',')", "window.scriptOrder.join(',')");
+    const actual = try value.toStringSlice();
+    try std.testing.expectEqualStrings("tail,dynamic", actual);
+}
+
+test "Page parser completes when a trailing inline script follows a timeout-scheduled dynamic script" {
+    var page = try testing.pageTest("page/trailing_inline_after_timeout_script.html");
+    defer page._session.removePage();
+
+    _ = page._session.wait(250);
+
+    try std.testing.expect(page._parse_state == .complete);
+
+    var ls: JS.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    const value = try ls.local.exec("window.scriptOrder.join(',')", "window.scriptOrder.join(',')");
+    const actual = try value.toStringSlice();
+    try std.testing.expectEqualStrings("tail,dynamic", actual);
 }
 
 test "Page triggerMouseClickWithResult uses href mutated by onclick" {

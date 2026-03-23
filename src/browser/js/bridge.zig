@@ -118,6 +118,17 @@ pub fn Builder(comptime T: type) type {
                         const fc: *Context.FinalizerCallback = @ptrCast(@alignCast(ptr));
 
                         const ctx = fc.ctx;
+                        ctx.isolate.enter();
+                        defer ctx.isolate.exit();
+
+                        // Weak finalizers can release persisted JS handles or
+                        // run deinit paths that transiently materialize locals.
+                        // Establish a HandleScope before touching any V8-backed
+                        // state so GC-driven cleanup cannot trip V8 fatals.
+                        var hs: js.HandleScope = undefined;
+                        hs.init(ctx.isolate);
+                        defer hs.deinit();
+
                         const value_ptr = fc.ptr;
                         if (ctx.finalizer_callbacks.contains(@intFromPtr(value_ptr))) {
                             func(@ptrCast(@alignCast(value_ptr)), false, ctx.page);

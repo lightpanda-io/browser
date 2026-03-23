@@ -10,10 +10,18 @@ function Get-TabProbeEnvironment([string]$ProfileRoot) {
 function Wait-TabWindowHandle([int]$ProcessId, [int]$Attempts = 60) {
   for ($i = 0; $i -lt $Attempts; $i++) {
     Start-Sleep -Milliseconds 250
-    $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
-    if ($proc -and $proc.MainWindowHandle -ne 0) {
-      return [IntPtr]$proc.MainWindowHandle
+    $hwnd = Get-TabWindowHandle $ProcessId
+    if ($hwnd -ne [IntPtr]::Zero) {
+      return $hwnd
     }
+  }
+  return [IntPtr]::Zero
+}
+
+function Get-TabWindowHandle([int]$ProcessId) {
+  $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+  if ($proc -and $proc.MainWindowHandle -ne 0) {
+    return [IntPtr]$proc.MainWindowHandle
   }
   return [IntPtr]::Zero
 }

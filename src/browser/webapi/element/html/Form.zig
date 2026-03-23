@@ -23,6 +23,7 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 const collections = @import("../../collections.zig");
+const HTMLFormControlsCollection = @import("../../collections/HTMLFormControlsCollection.zig");
 
 pub const Input = @import("Input.zig");
 pub const Button = @import("Button.zig");
@@ -90,6 +91,15 @@ pub fn getLength(self: *Form, page: *Page) !u32 {
     return elements.length(page);
 }
 
+pub fn namedItem(self: *Form, name: []const u8, page: *Page) !?HTMLFormControlsCollection.NamedItemResult {
+    if (name.len == 0) {
+        return null;
+    }
+
+    const elements = try self.getElements(page);
+    return elements.namedItem(name, page);
+}
+
 pub fn submit(self: *Form, page: *Page) !void {
     return page.submitForm(null, self, .{ .fire_event = false });
 }
@@ -106,6 +116,7 @@ pub const JsApi = struct {
     pub const method = bridge.accessor(Form.getMethod, Form.setMethod, .{});
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
+    pub const @"[str]" = bridge.namedIndexed(Form.namedItem, null, null, .{ .null_as_undefined = true });
     pub const submit = bridge.function(Form.submit, .{});
 };
 

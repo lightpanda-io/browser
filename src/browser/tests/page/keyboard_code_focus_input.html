@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Keyboard Code Pending</title>
+</head>
+<body>
+  <input id="q" name="q" value="">
+  <script>
+    const q = document.getElementById("q");
+    document.body.onload = function () {
+      q.focus();
+    };
+    q.addEventListener("focus", () => {
+      document.title = "FOCUSED";
+    });
+    q.addEventListener("keydown", (e) => {
+      window.lastKeyDown = [e.key, e.code, e.keyCode, e.which].join("|");
+      document.title = "KEYDOWN:" + window.lastKeyDown;
+    });
+    q.addEventListener("keypress", (e) => {
+      window.lastKeyPress = [e.key, e.code, e.keyCode, e.which, e.charCode].join("|");
+    });
+    q.addEventListener("input", () => {
+      document.title = "TYPED:" + q.value;
+    });
+  </script>
+</body>
+</html>

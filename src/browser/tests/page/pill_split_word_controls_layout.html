@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #f1f3f4;
+      font: 14px Arial, sans-serif;
+    }
+
+    .actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      width: 360px;
+    }
+
+    .pill {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 40px;
+      padding: 0 16px;
+      border-radius: 20px;
+      border: 0;
+      background: #1a73e8;
+      color: #fff;
+    }
+
+    .pill.secondary {
+      background: #fff;
+      color: #1a73e8;
+      border: 1px solid #1a73e8;
+    }
+
+    .pill span {
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="actions">
+    <button id="more-pill" class="pill secondary">
+      <span>More</span>
+      <span> options</span>
+    </button>
+    <button id="sign-pill" class="pill">
+      <span>Sign</span>
+      <span> in</span>
+    </button>
+  </div>
+</body>
+</html>

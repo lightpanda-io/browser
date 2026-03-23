@@ -281,6 +281,107 @@ pub fn getModifierState(self: *const KeyboardEvent, str: []const u8) !bool {
     return false;
 }
 
+fn asciiUpper(byte: u8) u8 {
+    return if (byte >= 'a' and byte <= 'z') byte - 32 else byte;
+}
+
+fn standardKeyCode(str: []const u8) u32 {
+    if (str.len == 0) return 0;
+    if (str.len == 1) {
+        return asciiUpper(str[0]);
+    }
+    const len = std.unicode.utf8ByteSequenceLength(str[0]) catch return 0;
+    if (len == 0 or len > str.len) return 0;
+    return std.unicode.utf8Decode(str[0..len]) catch 0;
+}
+
+fn standardCharCode(str: []const u8) u32 {
+    if (str.len == 0) return 0;
+    if (str.len == 1) {
+        return str[0];
+    }
+    const len = std.unicode.utf8ByteSequenceLength(str[0]) catch return 0;
+    if (len == 0 or len > str.len) return 0;
+    return std.unicode.utf8Decode(str[0..len]) catch 0;
+}
+
+fn legacyKeyCodeForKey(key: Key) u32 {
+    return switch (key) {
+        .standard => |s| standardKeyCode(s),
+        .Enter => 13,
+        .Tab => 9,
+        .Backspace => 8,
+        .Delete => 46,
+        .Escape => 27,
+        .Insert => 45,
+        .Home => 36,
+        .End => 35,
+        .PageUp => 33,
+        .PageDown => 34,
+        .ArrowLeft => 37,
+        .ArrowUp => 38,
+        .ArrowRight => 39,
+        .ArrowDown => 40,
+        .F1 => 112,
+        .F2 => 113,
+        .F3 => 114,
+        .F4 => 115,
+        .F5 => 116,
+        .F6 => 117,
+        .F7 => 118,
+        .F8 => 119,
+        .F9 => 120,
+        .F10 => 121,
+        .F11 => 122,
+        .F12 => 123,
+        .Shift => 16,
+        .Control => 17,
+        .Alt => 18,
+        .Meta => 91,
+        .CapsLock => 20,
+        .NumLock => 144,
+        .ScrollLock => 145,
+        .Clear => 12,
+        .Pause => 19,
+        .ContextMenu => 93,
+        else => 0,
+    };
+}
+
+fn charCodeForKey(key: Key) u32 {
+    return switch (key) {
+        .standard => |s| standardCharCode(s),
+        .Enter => 13,
+        else => 0,
+    };
+}
+
+fn usesLegacyPrintableCharCode(self: *const KeyboardEvent) bool {
+    const event_type = self._proto._proto.getType();
+    return !std.mem.eql(u8, event_type, "keydown") and !std.mem.eql(u8, event_type, "keyup");
+}
+
+pub fn getKeyCode(self: *const KeyboardEvent) u32 {
+    return legacyKeyCodeForKey(self._key);
+}
+
+pub fn getCharCode(self: *const KeyboardEvent) u32 {
+    if (!self.usesLegacyPrintableCharCode()) {
+        return 0;
+    }
+    return charCodeForKey(self._key);
+}
+
+pub fn getWhich(self: *const KeyboardEvent) u32 {
+    if (self.usesLegacyPrintableCharCode()) {
+        const char_code = self.getCharCode();
+        if (char_code != 0) {
+            return char_code;
+        }
+    }
+    return self.getKeyCode();
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(KeyboardEvent);
 
@@ -306,6 +407,9 @@ pub const JsApi = struct {
     pub const metaKey = bridge.accessor(KeyboardEvent.getMetaKey, null, .{});
     pub const repeat = bridge.accessor(KeyboardEvent.getRepeat, null, .{});
     pub const shiftKey = bridge.accessor(KeyboardEvent.getShiftKey, null, .{});
+    pub const keyCode = bridge.accessor(KeyboardEvent.getKeyCode, null, .{});
+    pub const charCode = bridge.accessor(KeyboardEvent.getCharCode, null, .{});
+    pub const which = bridge.accessor(KeyboardEvent.getWhich, null, .{});
     pub const getModifierState = bridge.function(KeyboardEvent.getModifierState, .{});
 };
 

@@ -91,6 +91,12 @@ public static class SmokeProbeUser32 {
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetActiveWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
     public static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -101,6 +107,9 @@ public static class SmokeProbeUser32 {
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern int GetWindowTextW(IntPtr hWnd, StringBuilder text, int count);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr SendMessageW(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     private static void EnsureSent(uint sent, int expected, string label) {
         if (sent == (uint)expected) {
@@ -650,6 +659,69 @@ function Use-BareMetalInput {
   return -not [string]::IsNullOrWhiteSpace($env:LIGHTPANDA_BARE_METAL_INPUT)
 }
 
+function Use-HeadedMailboxInput {
+  return -not [string]::IsNullOrWhiteSpace($env:LIGHTPANDA_WIN32_INPUT)
+}
+
+function Get-HeadedMailboxInputPath {
+  if (Use-HeadedMailboxInput) {
+    return $env:LIGHTPANDA_WIN32_INPUT
+  }
+  return $null
+}
+
+function Write-HeadedMailboxLine([string]$Line) {
+  $path = Get-HeadedMailboxInputPath
+  if (-not $path) {
+    return $false
+  }
+
+  $parent = Split-Path -Parent $path
+  if ($parent) {
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+  }
+
+  $encoding = [System.Text.UTF8Encoding]::new($false)
+  [System.IO.File]::AppendAllText($path, $Line + [Environment]::NewLine, $encoding)
+  return $true
+}
+
+function Send-HeadedKeyStroke([int]$Code, [int]$Modifiers = 0) {
+  [void](Write-HeadedMailboxLine ("key|{0}|1|{1}" -f $Code, $Modifiers))
+  [void](Write-HeadedMailboxLine ("key|{0}|0|{1}" -f $Code, $Modifiers))
+}
+
+function Send-HeadedPointerClick([int]$X, [int]$Y, [string]$Button = 'left', [int]$Modifiers = 0) {
+  [void](Write-HeadedMailboxLine ("click|{0}|{1}|{2}|{3}" -f $X, $Y, $Button, $Modifiers))
+}
+
+function Send-HeadedWheel([int]$X, [int]$Y, [int]$Delta, [int]$Modifiers = 0) {
+  [void](Write-HeadedMailboxLine ("wheel|{0}|{1}|0|{2}|{3}" -f $X, $Y, $Delta, $Modifiers))
+}
+
+function Send-SmokeAsciiText([string]$Text) {
+  if (Use-HeadedMailboxInput) {
+    [void](Write-HeadedMailboxLine ("text|{0}" -f $Text))
+    return
+  }
+  if (Use-BareMetalInput) {
+    foreach ($ch in $Text.ToCharArray()) {
+      if ($ch -eq ' ') {
+        Send-SmokeSpace
+        Start-Sleep -Milliseconds 25
+        continue
+      }
+
+      $upper = [char]::ToUpperInvariant($ch)
+      Send-BareMetalKeyStroke -Code ([int][char]$upper)
+      Start-Sleep -Milliseconds 25
+    }
+    return
+  }
+
+  [SmokeProbeUser32]::SendUnicodeString($Text)
+}
+
 function Get-BareMetalInputPath {
   if (Use-BareMetalInput) {
     return $env:LIGHTPANDA_BARE_METAL_INPUT
@@ -699,9 +771,57 @@ function Get-SmokeWindowTitle([IntPtr]$Hwnd) {
   return $builder.ToString()
 }
 
+function Get-SmokeClientLParam([int]$X, [int]$Y) {
+  $xPart = [int]($X -band 0xFFFF)
+  $yPart = [int](($Y -band 0xFFFF) -shl 16)
+  return [IntPtr]($xPart -bor $yPart)
+}
+
 function Show-SmokeWindow([IntPtr]$Hwnd) {
   [void][SmokeProbeUser32]::ShowWindow($Hwnd, 5)
+  $HWND_TOPMOST = [IntPtr](-1)
+  $HWND_NOTOPMOST = [IntPtr](-2)
+  $SWP_NOMOVE = 0x0002
+  $SWP_NOSIZE = 0x0001
+  $SWP_SHOWWINDOW = 0x0040
+  [void][SmokeProbeUser32]::SetWindowPos($Hwnd, $HWND_TOPMOST, 0, 0, 0, 0, ($SWP_NOMOVE -bor $SWP_NOSIZE -bor $SWP_SHOWWINDOW))
+  [void][SmokeProbeUser32]::SetWindowPos($Hwnd, $HWND_NOTOPMOST, 0, 0, 0, 0, ($SWP_NOMOVE -bor $SWP_NOSIZE -bor $SWP_SHOWWINDOW))
+  [void][SmokeProbeUser32]::SetActiveWindow($Hwnd)
   [void][SmokeProbeUser32]::SetForegroundWindow($Hwnd)
+  Start-Sleep -Milliseconds 120
+}
+
+function Invoke-SmokeClientClickDirect([IntPtr]$Hwnd, [int]$X, [int]$Y) {
+  $WM_MOUSEMOVE = 0x0200
+  $WM_LBUTTONDOWN = 0x0201
+  $WM_LBUTTONUP = 0x0202
+  $MK_LBUTTON = 0x0001
+  $lParam = Get-SmokeClientLParam -X $X -Y $Y
+  [void][SmokeProbeUser32]::SendMessageW($Hwnd, $WM_MOUSEMOVE, [IntPtr]::Zero, $lParam)
+  [void][SmokeProbeUser32]::SendMessageW($Hwnd, $WM_LBUTTONDOWN, [IntPtr]$MK_LBUTTON, $lParam)
+  Start-Sleep -Milliseconds 30
+  [void][SmokeProbeUser32]::SendMessageW($Hwnd, $WM_LBUTTONUP, [IntPtr]::Zero, $lParam)
+}
+
+function Send-SmokeWindowText([IntPtr]$Hwnd, [string]$Text) {
+  $WM_CHAR = 0x0102
+  foreach ($ch in $Text.ToCharArray()) {
+    [void][SmokeProbeUser32]::SendMessageW($Hwnd, $WM_CHAR, [IntPtr][int][char]$ch, [IntPtr]::Zero)
+    Start-Sleep -Milliseconds 20
+  }
+}
+
+function Send-SmokeWindowVirtualKey([IntPtr]$Hwnd, [int]$Vk) {
+  $WM_KEYDOWN = 0x0100
+  $WM_KEYUP = 0x0101
+  [void][SmokeProbeUser32]::SendMessageW($Hwnd, $WM_KEYDOWN, [IntPtr]$Vk, [IntPtr]::Zero)
+  Start-Sleep -Milliseconds 20
+  [void][SmokeProbeUser32]::SendMessageW($Hwnd, $WM_KEYUP, [IntPtr]$Vk, [IntPtr]::Zero)
+}
+
+function Send-SmokeWindowEnter([IntPtr]$Hwnd) {
+  Send-SmokeWindowVirtualKey -Hwnd $Hwnd -Vk 13
+  [void][SmokeProbeUser32]::SendMessageW($Hwnd, 0x0102, [IntPtr]13, [IntPtr]::Zero)
 }
 
 function Invoke-SmokeClientClick([IntPtr]$Hwnd, [int]$X, [int]$Y) {
@@ -710,6 +830,10 @@ function Invoke-SmokeClientClick([IntPtr]$Hwnd, [int]$X, [int]$Y) {
   $point.Y = $Y
   if (Use-BareMetalInput) {
     Send-BareMetalPointerClick -X $X -Y $Y -Button 'left'
+    return $point
+  }
+  if (Use-HeadedMailboxInput) {
+    Send-HeadedPointerClick -X $X -Y $Y -Button 'left'
     return $point
   }
 
@@ -730,6 +854,10 @@ function Invoke-SmokeClientWheel([IntPtr]$Hwnd, [int]$X, [int]$Y, [int]$Delta) {
     Send-BareMetalWheel -X $X -Y $Y -Delta $Delta
     return $point
   }
+  if (Use-HeadedMailboxInput) {
+    Send-HeadedWheel -X $X -Y $Y -Delta $Delta
+    return $point
+  }
 
   [void][SmokeProbeUser32]::ClientToScreen($Hwnd, [ref]$point)
   [void][SmokeProbeUser32]::SetCursorPos($point.X, $point.Y)
@@ -744,6 +872,10 @@ function Invoke-SmokeClientCtrlWheel([IntPtr]$Hwnd, [int]$X, [int]$Y, [int]$Delt
   $point.Y = $Y
   if (Use-BareMetalInput) {
     Send-BareMetalWheel -X $X -Y $Y -Delta $Delta -Modifiers 2
+    return $point
+  }
+  if (Use-HeadedMailboxInput) {
+    Send-HeadedWheel -X $X -Y $Y -Delta $Delta -Modifiers 2
     return $point
   }
 
@@ -942,6 +1074,10 @@ function Send-SmokeAltHome {
 }
 
 function Send-SmokeEnter {
+  if (Use-HeadedMailboxInput) {
+    Send-HeadedKeyStroke -Code 13
+    return
+  }
   if (Use-BareMetalInput) {
     Send-BareMetalKeyStroke -Code 13
     return

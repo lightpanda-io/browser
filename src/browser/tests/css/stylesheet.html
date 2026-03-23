@@ -357,3 +357,56 @@
     testing.expectEqual('red', div.style.getPropertyValue('color'));
 }
 </script>
+
+<script id="CSSStyleDeclaration_custom_property_var_resolution">
+{
+    const wrapper = document.createElement('div');
+    wrapper.style.setProperty('--card-gap', '18px');
+    wrapper.style.setProperty('--brand-color', '#112233');
+    wrapper.style.setProperty('--chip-color', '#1a73e8');
+
+    const child = document.createElement('div');
+    child.style.marginLeft = 'var(--card-gap)';
+    child.style.color = 'var(--missing-brand, #445566)';
+    child.style.paddingTop = 'var(--card-gap)';
+    child.style.backgroundColor = 'var(--chip-color)';
+
+    wrapper.appendChild(child);
+    document.body.appendChild(wrapper);
+
+    const computed = getComputedStyle(child);
+    testing.expectEqual('18px', computed.getPropertyValue('margin-left'));
+    testing.expectEqual('18px', computed.getPropertyValue('padding-top'));
+    testing.expectEqual('#1a73e8', computed.getPropertyValue('background-color'));
+    testing.expectEqual('#445566', computed.getPropertyValue('color'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_stylesheet_custom_property_var_resolution">
+{
+    const style = document.createElement('style');
+    style.textContent = `
+      .theme-vars {
+        --chip-pad: 20px;
+        --chip-color: #1a73e8;
+      }
+      .theme-vars .chip {
+        padding-left: var(--chip-pad);
+        background-color: var(--chip-color);
+      }
+    `;
+    document.head.appendChild(style);
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'theme-vars';
+
+    const child = document.createElement('div');
+    child.className = 'chip';
+    wrapper.appendChild(child);
+    document.body.appendChild(wrapper);
+
+    const computed = getComputedStyle(child);
+    testing.expectEqual('20px', computed.getPropertyValue('padding-left'));
+    testing.expectEqual('#1a73e8', computed.getPropertyValue('background-color'));
+}
+</script>

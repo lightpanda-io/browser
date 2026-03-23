@@ -954,12 +954,16 @@ pub const Script = struct {
         if (comptime IS_DEBUG) {
             log.debug(.browser, "executed script", .{ .src = url, .success = success });
         }
-
         defer {
             local.runMacrotasks(); // also runs microtasks
-            _ = page.js.scheduler.run() catch |err| {
-                log.err(.page, "scheduler", .{ .err = err });
-            };
+            // Timer and animation-frame tasks should not run re-entrantly while
+            // the HTML parser is still inside parser-blocking scripts. Let the
+            // normal browser/session loop run them once parsing has committed.
+            if (page._parse_state == .complete) {
+                _ = page.js.scheduler.run() catch |err| {
+                    log.err(.page, "scheduler", .{ .err = err });
+                };
+            }
         }
 
         if (success) {

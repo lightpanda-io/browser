@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<script>
+  window.scriptOrder = [];
+  setTimeout(() => {
+    const dynamic = document.createElement('script');
+    dynamic.src = 'data:text/javascript,window.scriptOrder.push("dynamic")';
+    (document.body || document.head).appendChild(dynamic);
+  }, 0);
+</script>
+<script>
+  window.scriptOrder.push('tail');
+</script>
+<body>ok</body>

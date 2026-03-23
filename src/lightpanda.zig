@@ -70,6 +70,7 @@ const CommittedBrowseSurface = struct {
     body: []u8 = &.{},
     display_list: ?@import("render/DisplayList.zig") = null,
     hash: u64 = 0,
+    state_hash: u64 = 0,
 
     fn deinit(self: *CommittedBrowseSurface, allocator: std.mem.Allocator) void {
         allocator.free(self.title);
@@ -89,6 +90,7 @@ const CommittedBrowseSurface = struct {
         body: []const u8,
         display_list: *const @import("render/DisplayList.zig"),
         hash: u64,
+        state_hash: u64,
     ) !void {
         const next_title = try allocator.dupe(u8, title);
         errdefer allocator.free(next_title);
@@ -109,6 +111,7 @@ const CommittedBrowseSurface = struct {
             .body = next_body,
             .display_list = next_display_list,
             .hash = hash,
+            .state_hash = state_hash,
         };
     }
 
@@ -211,6 +214,7 @@ const BrowseTab = struct {
     downloads: ?*BrowseDownloads = null,
     target_name: []u8 = &.{},
     popup_source: PopupSource = .none,
+    pending_restore_url: ?[]u8 = null,
     committed_surface: CommittedBrowseSurface = .{},
     error_state: BrowseErrorState = .{},
     internal_filters: InternalBrowseFilters = .{},
@@ -221,6 +225,10 @@ const BrowseTab = struct {
 
     fn deinit(self: *BrowseTab, allocator: std.mem.Allocator) void {
         freeOwnedBrowseTabTargetName(allocator, self.target_name);
+        if (self.pending_restore_url) |pending_restore_url| {
+            allocator.free(pending_restore_url);
+            self.pending_restore_url = null;
+        }
         self.committed_surface.deinit(allocator);
         self.error_state.deinit(allocator);
         self.internal_filters.deinit(allocator);
@@ -991,6 +999,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
         .closed_tabs = &closed_tabs,
         .active_tab_index = &active_tab_index,
     };
+    try activatePendingRestoreForTabIfNeeded(app, &shell, active_tab_index, &settings, &downloads);
     for (tabs.items, 0..) |tab, index| {
         const page = tab.session.currentPage() orelse continue;
         const internal_page = parseInternalBrowsePage(page.url) orelse continue;
@@ -1021,6 +1030,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
 
         active_tab_index = normalizeActiveTabIndex(active_tab_index, tabs.items.len);
         if (handled_command) {
+            try activatePendingRestoreForTabIfNeeded(app, &shell, active_tab_index, &settings, &downloads);
             try updateActiveBrowseDisplay(app, tabs.items, &settings, &downloads, active_tab_index, &displayed_tab_index);
         }
 
@@ -1050,6 +1060,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
         }
 
         active_tab_index = normalizeActiveTabIndex(active_tab_index, tabs.items.len);
+        try activatePendingRestoreForTabIfNeeded(app, &shell, active_tab_index, &settings, &downloads);
         if (tabs.items[active_tab_index].session.currentPage()) |active_page| {
             const active_internal_page = parseInternalBrowsePage(active_page.url);
             if (pageHasRuntimeError(active_page) and (active_internal_page == null or active_internal_page.? != .error_page)) {
@@ -1310,6 +1321,13 @@ fn handleBrowseCommand(
             const active_index = normalizeActiveTabIndex(shell.active_tab_index.*, shell.tabs.items.len);
             const tab = shell.tabs.items[active_index];
             const page = tab.session.currentPage() orelse return;
+            if (comptime IS_DEBUG) {
+                log.debug(.app, "browse ctrl act", .{
+                    .tab_index = active_index,
+                    .url = page.url,
+                    .dom_path_len = activation.dom_path.len,
+                });
+            }
             if (try handleRenderedControlActivation(tab, page, activation)) {
                 tab.last_presented_hash = 0;
             }
@@ -2031,7 +2049,7 @@ fn handleRenderedLinkActivation(
     const had_pending_tab_opens = tab.session.hasPendingTabOpens();
     const had_pending_downloads = tab.session.hasPendingDownloads();
     var result = if (activation.dom_path.len > 0)
-        try page.triggerMouseClickOnNodePathWithResult(activation.dom_path, activation.x, activation.y, .main, .{})
+        try page.triggerMouseActivateOnNodePathWithResult(activation.dom_path, activation.x, activation.y, .main, .{})
     else
         Page.MouseClickDispatchResult{
             .dispatched = false,
@@ -2073,15 +2091,27 @@ fn handleRenderedControlActivation(
     const had_pending_tab_opens = tab.session.hasPendingTabOpens();
     const had_pending_downloads = tab.session.hasPendingDownloads();
     var result = if (activation.dom_path.len > 0)
-        try page.triggerMouseClickOnNodePathWithResult(activation.dom_path, activation.x, activation.y, .main, .{})
+        try page.triggerMouseActivateOnNodePathWithResult(activation.dom_path, activation.x, activation.y, .main, .{})
     else
-        Page.MouseClickDispatchResult{
-            .dispatched = false,
-            .default_prevented = false,
-        };
+        try page.triggerMouseActivateWithResult(activation.x, activation.y, .main, .{});
 
     if (!result.dispatched) {
-        result = try page.triggerMouseClickWithResult(activation.x, activation.y, .main, .{});
+        result = try page.triggerMouseActivateWithResult(activation.x, activation.y, .main, .{});
+    }
+
+    if (comptime IS_DEBUG) {
+        const active_tag = if (page.document._active_element) |active|
+            active.getTagNameSpec(&page.buf)
+        else
+            "none";
+        log.debug(.app, "rendered control activation", .{
+            .url = page.url,
+            .dispatched = result.dispatched,
+            .default_prevented = result.default_prevented,
+            .dom_path_len = activation.dom_path.len,
+            .active_tag = active_tag,
+            .queued_navigation = page._queued_navigation != null,
+        });
     }
 
     if (!result.dispatched) {
@@ -2316,22 +2346,29 @@ fn initializeBrowseTabs(
         return 0;
     }
 
-    for (saved.tabs.items) |saved_tab| {
+    const startup_saved_index = findSavedStartupUrlIndex(saved.tabs.items, startup_url);
+    const append_startup_url = startup_saved_index == null and shouldAppendStartupUrl(saved.tabs.items, startup_url);
+    const saved_active_index = resolveRestoredStartupActiveIndex(saved.tabs.items, saved.active_index, startup_url);
+    for (saved.tabs.items, 0..) |saved_tab, index| {
         var restored_url_z: ?[:0]u8 = null;
         defer if (restored_url_z) |owned| app.allocator.free(owned);
-        const initial_url = if (std.mem.eql(u8, saved_tab.url, "about:blank"))
+        const should_restore_immediately = !append_startup_url and index == saved_active_index;
+        const initial_url = if (!should_restore_immediately or std.mem.eql(u8, saved_tab.url, "about:blank"))
             null
         else blk: {
             restored_url_z = try app.allocator.dupeZ(u8, saved_tab.url);
             break :blk restored_url_z.?;
         };
         const tab = try createBrowseTabWithCookieJar(app, initial_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed, shared_indexed_db_shed);
+        if (!should_restore_immediately and !std.mem.eql(u8, saved_tab.url, "about:blank")) {
+            tab.pending_restore_url = try app.allocator.dupe(u8, saved_tab.url);
+        }
         tab.zoom_percent = saved_tab.zoom_percent;
         try tabs.append(app.allocator, tab);
     }
 
-    var active_index = normalizeActiveTabIndex(saved.active_index, tabs.items.len);
-    if (shouldAppendStartupUrl(saved.tabs.items, startup_url)) {
+    var active_index = normalizeActiveTabIndex(saved_active_index, tabs.items.len);
+    if (append_startup_url) {
         try tabs.append(app.allocator, try createBrowseTabWithCookieJar(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed, shared_indexed_db_shed));
         active_index = tabs.items.len - 1;
     }
@@ -2398,6 +2435,26 @@ fn shouldAppendStartupUrl(saved_tabs: []const SavedBrowseTab, startup_url: []con
         }
     }
     return true;
+}
+
+fn findSavedStartupUrlIndex(saved_tabs: []const SavedBrowseTab, startup_url: []const u8) ?usize {
+    const trimmed_startup = std.mem.trim(u8, startup_url, &std.ascii.whitespace);
+    if (trimmed_startup.len == 0) {
+        return null;
+    }
+    for (saved_tabs, 0..) |saved_tab, index| {
+        if (std.mem.eql(u8, saved_tab.url, trimmed_startup)) {
+            return index;
+        }
+    }
+    return null;
+}
+
+fn resolveRestoredStartupActiveIndex(saved_tabs: []const SavedBrowseTab, saved_active_index: usize, startup_url: []const u8) usize {
+    if (findSavedStartupUrlIndex(saved_tabs, startup_url)) |startup_index| {
+        return normalizeActiveTabIndex(startup_index, saved_tabs.len);
+    }
+    return normalizeActiveTabIndex(saved_active_index, saved_tabs.len);
 }
 
 fn clearSavedBrowseSession(app: *App) void {
@@ -3907,6 +3964,7 @@ fn createBrowseTabWithCookieJar(
     const page = try tab.session.createPage();
     tab.target_name = &.{};
     tab.popup_source = .none;
+    tab.pending_restore_url = null;
     tab.committed_surface = .{};
     tab.error_state = .{};
     tab.internal_filters = .{};
@@ -4209,6 +4267,19 @@ fn browseTabEntryTitle(
     };
 
     if (pageIsBlankIdle(page)) {
+        if (tab.pending_restore_url) |pending_restore_url| {
+            if (parseInternalBrowsePage(pending_restore_url)) |internal_page| {
+                return makeInternalBrowsePageDisplayTitle(
+                    allocator,
+                    app_dir_path,
+                    tabs,
+                    tab_index,
+                    downloads,
+                    internal_page,
+                );
+            }
+            return allocator.dupe(u8, pending_restore_url);
+        }
         return allocator.dupe(u8, "New Tab");
     }
 
@@ -4246,9 +4317,11 @@ fn browseTabEntry(tab: *BrowseTab, title: []const u8) Display.TabEntry {
     const page = tab.session.currentPage();
     const url = if (page) |current_page|
         trimmedOrNull(current_page.url) orelse
+            trimmedOrNull(tab.pending_restore_url orelse "") orelse
             trimmedOrNull(tab.committed_surface.url) orelse
             "about:blank"
     else
+        trimmedOrNull(tab.pending_restore_url orelse "") orelse
         trimmedOrNull(tab.committed_surface.url) orelse
             "about:blank";
 
@@ -4264,6 +4337,11 @@ fn browseTabEntry(tab: *BrowseTab, title: []const u8) Display.TabEntry {
 
 fn browseTabPersistentUrl(tab: *BrowseTab) []const u8 {
     const page = tab.session.currentPage() orelse return "about:blank";
+    if (pageIsBlankIdle(page)) {
+        if (trimmedOrNull(tab.pending_restore_url orelse "")) |pending_restore_url| {
+            return pending_restore_url;
+        }
+    }
     if (parseInternalBrowsePage(page.url)) |internal_page| {
         if (internal_page == .error_page) {
             if (trimmedOrNull(tab.error_state.retry_value)) |retry_value| {
@@ -4278,6 +4356,41 @@ fn browseTabPersistentUrl(tab: *BrowseTab) []const u8 {
         return url;
     }
     return "about:blank";
+}
+
+fn activatePendingRestoreForTabIfNeeded(
+    app: *App,
+    shell: *BrowseShell,
+    tab_index: usize,
+    settings: *const BrowseSettings,
+    downloads: *BrowseDownloads,
+) !void {
+    if (tab_index >= shell.tabs.items.len) {
+        return;
+    }
+    const tab = shell.tabs.items[tab_index];
+    const pending_restore_url = tab.pending_restore_url orelse return;
+    const page = tab.session.currentPage() orelse return;
+    if (!pageIsBlankIdle(page)) {
+        app.allocator.free(pending_restore_url);
+        tab.pending_restore_url = null;
+        return;
+    }
+
+    if (parseInternalBrowsePage(pending_restore_url)) |internal_page| {
+        try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, internal_page);
+    } else {
+        const pending_restore_url_z = try page.call_arena.dupeZ(u8, pending_restore_url);
+        const encoded_url = try URL.ensureEncoded(page.call_arena, pending_restore_url_z);
+        tab.restore_committed_surface = false;
+        tab.last_presented_hash = 0;
+        _ = try page.navigate(encoded_url, .{
+            .reason = .address_bar,
+            .kind = .{ .push = null },
+        });
+    }
+    app.allocator.free(pending_restore_url);
+    tab.pending_restore_url = null;
 }
 
 fn browseTabHomepageCandidateUrl(tab: *BrowseTab) ?[]const u8 {
@@ -6731,6 +6844,23 @@ fn presentPage(
         return;
     }
 
+    var presentation_state_hasher = std.hash.Wyhash.init(0);
+    presentation_state_hasher.update(page.url);
+    presentation_state_hasher.update(std.mem.asBytes(&zoom_percent));
+    const presentation_revision = page.presentationRevision();
+    presentation_state_hasher.update(std.mem.asBytes(&presentation_revision));
+    if (title_override) |override| {
+        presentation_state_hasher.update(override);
+    }
+    const presentation_state_hash = presentation_state_hasher.final();
+
+    if (committed_surface.available() and
+        last_presented_hash.* == committed_surface.hash and
+        committed_surface.state_hash == presentation_state_hash)
+    {
+        return;
+    }
+
     var body = std.Io.Writer.Allocating.init(app.allocator);
     defer body.deinit();
 
@@ -6757,7 +6887,7 @@ fn presentPage(
     }
 
     last_presented_hash.* = next_hash;
-    try committed_surface.replace(app.allocator, title, url, text, &display_list, next_hash);
+    try committed_surface.replace(app.allocator, title, url, text, &display_list, next_hash, presentation_state_hash);
     try app.display.presentPageView(title, url, text, &display_list);
 }
 
@@ -6945,6 +7075,42 @@ test "shouldAppendStartupUrl skips restored duplicates" {
 
     try std.testing.expect(!shouldAppendStartupUrl(saved.tabs.items, "http://two.test/"));
     try std.testing.expect(shouldAppendStartupUrl(saved.tabs.items, "http://three.test/"));
+}
+
+test "findSavedStartupUrlIndex finds existing startup tab" {
+    var saved = SavedBrowseSession{};
+    defer saved.deinit(std.testing.allocator);
+
+    try saved.tabs.append(std.testing.allocator, .{
+        .url = try std.testing.allocator.dupe(u8, "browser://start"),
+        .zoom_percent = 100,
+    });
+    try saved.tabs.append(std.testing.allocator, .{
+        .url = try std.testing.allocator.dupe(u8, "https://example.com/"),
+        .zoom_percent = 110,
+    });
+
+    try std.testing.expectEqual(@as(?usize, 0), findSavedStartupUrlIndex(saved.tabs.items, "browser://start"));
+    try std.testing.expectEqual(@as(?usize, 1), findSavedStartupUrlIndex(saved.tabs.items, "https://example.com/"));
+    try std.testing.expectEqual(@as(?usize, null), findSavedStartupUrlIndex(saved.tabs.items, "https://missing.test/"));
+}
+
+test "resolveRestoredStartupActiveIndex prefers explicit startup match" {
+    var saved = SavedBrowseSession{};
+    defer saved.deinit(std.testing.allocator);
+
+    try saved.tabs.append(std.testing.allocator, .{
+        .url = try std.testing.allocator.dupe(u8, "browser://start"),
+        .zoom_percent = 100,
+    });
+    try saved.tabs.append(std.testing.allocator, .{
+        .url = try std.testing.allocator.dupe(u8, "https://example.com/"),
+        .zoom_percent = 110,
+    });
+
+    try std.testing.expectEqual(@as(usize, 0), resolveRestoredStartupActiveIndex(saved.tabs.items, 1, "browser://start"));
+    try std.testing.expectEqual(@as(usize, 1), resolveRestoredStartupActiveIndex(saved.tabs.items, 0, "https://example.com/"));
+    try std.testing.expectEqual(@as(usize, 1), resolveRestoredStartupActiveIndex(saved.tabs.items, 1, "https://missing.test/"));
 }
 
 test "targetAlwaysOpensFreshTab only matches _blank" {

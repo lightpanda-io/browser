@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Body Load Keyboard Pending</title>
+</head>
+<body>
+  <input id="q" name="q" value="">
+  <script>
+    const q = document.getElementById("q");
+    window.lastBodyKeyTarget = "NONE";
+    window.lastInputKey = "NONE";
+    document.body.addEventListener("keydown", function (e) {
+      window.lastBodyKeyTarget = e.target && e.target.tagName ? e.target.tagName : "NONE";
+    }, true);
+    q.addEventListener("keydown", function (e) {
+      window.lastInputKey = e.key || "";
+    });
+    q.addEventListener("input", function () {
+      document.title = "TYPED:" + q.value;
+    });
+    document.body.onload = function () {
+      q.focus();
+      document.title = "AUTOFOCUSED";
+    };
+  </script>
+</body>
+</html>

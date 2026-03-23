@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Body Load Pending</title>
+</head>
+<body>
+  <input id="q" name="q" value="">
+  <script>
+    document.body.onload = function () {
+      document.title = "BODYLOAD";
+      document.getElementById("q").focus();
+    };
+  </script>
+</body>
+</html>

@@ -284,11 +284,14 @@ fn isIdentStart(self: *Tokenizer) bool {
     var b = self.nextByteUnchecked();
     if (b == '-') {
         b = if (self.hasAtLeast(1)) self.byteAt(1) else return false;
+        if (b == '-') {
+            return true;
+        }
     }
 
     return switch (b) {
         'a'...'z', 'A'...'Z', '_', 0x0 => true,
-        '\\' => !self.hasNewlineAt(1),
+        '\\' => !self.hasNewlineAt(if (self.nextByteUnchecked() == '-') 2 else 1),
         else => b > 0x7F, // not is ascii
     };
 }
@@ -859,5 +862,17 @@ test "smoke" {
         .{ .ident = "red" },
         .semicolon,
         .close_curly_bracket,
+    });
+}
+
+test "tokenizes custom property names as identifiers" {
+    try expectTokensEqual(
+        \\--chip-color: #1a73e8;
+    , &.{
+        .{ .ident = "--chip-color" },
+        .colon,
+        .{ .white_space = " " },
+        .{ .unrestricted_hash = "1a73e8" },
+        .semicolon,
     });
 }

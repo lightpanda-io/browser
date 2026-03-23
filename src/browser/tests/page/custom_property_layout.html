@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+<head>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      font: 16px Arial, sans-serif;
+    }
+
+    .theme {
+      --card-width: 240px;
+      --card-pad-x: 20px;
+      --card-pad-y: 14px;
+      --chip-color: #1a73e8;
+      --chip-pad-x: 18px;
+      --chip-pad-y: 8px;
+      --copy-gap: 16px;
+    }
+
+    .card {
+      width: var(--card-width);
+      padding: var(--card-pad-y) var(--card-pad-x);
+      background-color: #eceff1;
+      color: #202124;
+    }
+
+    .chip {
+      display: inline-block;
+      padding: var(--chip-pad-y) var(--chip-pad-x);
+      background-color: var(--chip-color);
+      color: #fff;
+    }
+
+    .copy {
+      margin-top: var(--copy-gap);
+    }
+  </style>
+</head>
+<body>
+  <div class="theme">
+    <div class="card">
+      <span class="chip">Accept all</span>
+      <div class="copy">Cookies and data</div>
+    </div>
+  </div>
+</body>
+</html>

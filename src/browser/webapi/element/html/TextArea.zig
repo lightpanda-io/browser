@@ -83,6 +83,7 @@ pub fn getValue(self: *const TextArea) []const u8 {
 pub fn setValue(self: *TextArea, value: []const u8, page: *Page) !void {
     const owned = try page.arena.dupe(u8, value);
     self._value = owned;
+    page.presentationChanged();
 }
 
 pub fn getDefaultValue(self: *const TextArea) []const u8 {

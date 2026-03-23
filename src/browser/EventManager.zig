@@ -435,6 +435,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         // Execute default action if not prevented
         if (event._prevent_default) {
             // can't return in a defer (╯°□°)╯︵ ┻━┻
+        } else if (event._type_string.eql(comptime .wrap("mousedown"))) {
+            page.handleMouseDown(target) catch |err| {
+                log.warn(.event, "page.mousedown", .{ .err = err });
+            };
         } else if (event._type_string.eql(comptime .wrap("click"))) {
             page.handleClick(target) catch |err| {
                 log.warn(.event, "page.click", .{ .err = err });

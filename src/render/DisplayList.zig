@@ -42,6 +42,7 @@ pub const TextCommand = struct {
     letter_spacing: i32 = 0,
     word_spacing: i32 = 0,
     underline: bool = false,
+    nowrap: bool = false,
     text: []u8,
 };
 
@@ -184,22 +185,23 @@ pub const Command = union(enum) {
         return switch (self) {
             .fill_rect => |rect| .{ .fill_rect = rect },
             .stroke_rect => |rect| .{ .stroke_rect = rect },
-                .text => |text| .{ .text = .{
-                    .x = text.x,
-                    .y = text.y,
-                    .width = text.width,
-                    .height = text.height,
-                    .z_index = text.z_index,
-                    .font_size = text.font_size,
-                    .font_family = try allocator.dupe(u8, text.font_family),
-                    .font_weight = text.font_weight,
-                    .italic = text.italic,
-                    .clip_rect = text.clip_rect,
-                    .opacity = text.opacity,
-                    .color = text.color,
-                    .letter_spacing = text.letter_spacing,
-                    .word_spacing = text.word_spacing,
-                    .underline = text.underline,
+            .text => |text| .{ .text = .{
+                .x = text.x,
+                .y = text.y,
+                .width = text.width,
+                .height = text.height,
+                .z_index = text.z_index,
+                .font_size = text.font_size,
+                .font_family = try allocator.dupe(u8, text.font_family),
+                .font_weight = text.font_weight,
+                .italic = text.italic,
+                .clip_rect = text.clip_rect,
+                .opacity = text.opacity,
+                .color = text.color,
+                .letter_spacing = text.letter_spacing,
+                .word_spacing = text.word_spacing,
+                .underline = text.underline,
+                .nowrap = text.nowrap,
                 .text = try allocator.dupe(u8, text.text),
             } },
             .image => |image| .{ .image = .{
@@ -384,6 +386,7 @@ pub fn addText(self: *DisplayList, allocator: std.mem.Allocator, text: TextComma
         .letter_spacing = text.letter_spacing,
         .word_spacing = text.word_spacing,
         .underline = text.underline,
+        .nowrap = text.nowrap,
         .text = try allocator.dupe(u8, text.text),
     } });
     self.content_height = @max(self.content_height, text.y + @max(text.height, text.font_size + 8));

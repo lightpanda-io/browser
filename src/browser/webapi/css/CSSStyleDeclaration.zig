@@ -89,14 +89,21 @@ pub fn item(self: *const CSSStyleDeclaration, index: u32) []const u8 {
 
 pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const u8, page: *Page) []const u8 {
     const normalized = normalizePropertyName(property_name, &page.buf);
-    const prop = self.findProperty(normalized) orelse {
-        // Only return default values for computed styles
-        if (self._is_computed) {
-            return getDefaultPropertyValue(self, normalized);
-        }
-        return "";
-    };
-    return prop._value.str();
+    if (std.mem.startsWith(u8, normalized, "--")) {
+        return resolveCustomPropertyValue(self, normalized, page, 0);
+    }
+
+    const raw_value = if (self.findProperty(normalized)) |prop|
+        prop._value.str()
+    else if (self._is_computed)
+        getDefaultPropertyValue(self, normalized)
+    else
+        "";
+
+    if (!self._is_computed) {
+        return raw_value;
+    }
+    return resolveComputedPropertyValue(self, raw_value, page, 0);
 }
 
 pub fn getSpecifiedPropertyValue(self: *const CSSStyleDeclaration, property_name: []const u8, page: *Page) []const u8 {
@@ -727,6 +734,180 @@ fn normalizePropertyName(name: []const u8, buf: []u8) []const u8 {
         return name;
     }
     return std.ascii.lowerString(buf, name);
+}
+
+fn resolveCustomPropertyValue(
+    self: *const CSSStyleDeclaration,
+    property_name: []const u8,
+    page: *Page,
+    depth: usize,
+) []const u8 {
+    if (depth >= 16) {
+        return "";
+    }
+
+    const stable_name = if (page.call_arena.dupe(u8, property_name)) |copied|
+        copied
+    else |_|
+        property_name;
+
+    if (self.findProperty(stable_name)) |prop| {
+        return resolveComputedPropertyValue(self, prop._value.str(), page, depth + 1);
+    }
+
+    if (!self._is_computed) {
+        return "";
+    }
+
+    const element = self._element orelse return "";
+    const parent = element.parentElement() orelse return "";
+    const parent_style = page.window.getComputedStyle(parent, null, page) catch return "";
+    return parent_style.asCSSStyleDeclaration().getPropertyValue(stable_name, page);
+}
+
+fn resolveComputedPropertyValue(
+    self: *const CSSStyleDeclaration,
+    raw_value: []const u8,
+    page: *Page,
+    depth: usize,
+) []const u8 {
+    if (depth >= 16 or std.mem.indexOf(u8, raw_value, "var(") == null) {
+        return raw_value;
+    }
+
+    var out = std.ArrayList(u8){};
+    errdefer out.deinit(page.arena);
+
+    var cursor: usize = 0;
+    while (cursor < raw_value.len) {
+        const var_pos = std.mem.indexOfPos(u8, raw_value, cursor, "var(") orelse {
+            out.appendSlice(page.arena, raw_value[cursor..]) catch return raw_value;
+            return out.toOwnedSlice(page.arena) catch raw_value;
+        };
+
+        if (var_pos > cursor) {
+            out.appendSlice(page.arena, raw_value[cursor..var_pos]) catch return raw_value;
+        }
+
+        const open_paren = var_pos + 3;
+        const close_paren = matchingParenIndex(raw_value, open_paren) orelse return raw_value;
+        const replacement = resolveVarFunctionArguments(
+            self,
+            raw_value[open_paren + 1 .. close_paren],
+            page,
+            depth + 1,
+        );
+        out.appendSlice(page.arena, replacement) catch return raw_value;
+        cursor = close_paren + 1;
+    }
+
+    return out.toOwnedSlice(page.arena) catch raw_value;
+}
+
+fn resolveVarFunctionArguments(
+    self: *const CSSStyleDeclaration,
+    args: []const u8,
+    page: *Page,
+    depth: usize,
+) []const u8 {
+    if (depth >= 16) {
+        return "";
+    }
+
+    const trimmed = std.mem.trim(u8, args, &std.ascii.whitespace);
+    if (trimmed.len == 0) {
+        return "";
+    }
+
+    const comma_pos = topLevelCommaIndex(trimmed);
+    const property_name = std.mem.trim(u8, trimmed[0..comma_pos], &std.ascii.whitespace);
+    if (!std.mem.startsWith(u8, property_name, "--")) {
+        return if (comma_pos < trimmed.len)
+            resolveComputedPropertyValue(self, std.mem.trim(u8, trimmed[comma_pos + 1 ..], &std.ascii.whitespace), page, depth + 1)
+        else
+            "";
+    }
+
+    const resolved = resolveCustomPropertyValue(self, property_name, page, depth + 1);
+    if (std.mem.trim(u8, resolved, &std.ascii.whitespace).len > 0) {
+        return resolved;
+    }
+
+    if (comma_pos < trimmed.len) {
+        const fallback = std.mem.trim(u8, trimmed[comma_pos + 1 ..], &std.ascii.whitespace);
+        return resolveComputedPropertyValue(self, fallback, page, depth + 1);
+    }
+
+    return "";
+}
+
+fn topLevelCommaIndex(input: []const u8) usize {
+    var depth: usize = 0;
+    var quote: u8 = 0;
+    var i: usize = 0;
+    while (i < input.len) : (i += 1) {
+        const c = input[i];
+        if (quote != 0) {
+            if (c == '\\' and i + 1 < input.len) {
+                i += 1;
+                continue;
+            }
+            if (c == quote) {
+                quote = 0;
+            }
+            continue;
+        }
+
+        switch (c) {
+            '"', '\'' => quote = c,
+            '(' => depth += 1,
+            ')' => {
+                if (depth > 0) depth -= 1;
+            },
+            ',' => {
+                if (depth == 0) return i;
+            },
+            else => {},
+        }
+    }
+    return input.len;
+}
+
+fn matchingParenIndex(input: []const u8, open_index: usize) ?usize {
+    if (open_index >= input.len or input[open_index] != '(') {
+        return null;
+    }
+
+    var depth: usize = 0;
+    var quote: u8 = 0;
+    var i: usize = open_index;
+    while (i < input.len) : (i += 1) {
+        const c = input[i];
+        if (quote != 0) {
+            if (c == '\\' and i + 1 < input.len) {
+                i += 1;
+                continue;
+            }
+            if (c == quote) {
+                quote = 0;
+            }
+            continue;
+        }
+
+        switch (c) {
+            '"', '\'' => quote = c,
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if (depth == 0) {
+                    return i;
+                }
+            },
+            else => {},
+        }
+    }
+
+    return null;
 }
 
 fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, normalized_name: []const u8) []const u8 {

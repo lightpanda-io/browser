@@ -35,6 +35,8 @@ pub const RunMode = enum {
 pub const CDP_MAX_HTTP_REQUEST_SIZE = 4096;
 pub const DEFAULT_VIEWPORT_WIDTH: u32 = 1920;
 pub const DEFAULT_VIEWPORT_HEIGHT: u32 = 1080;
+pub const DEFAULT_HTTP_TIMEOUT_MS: u31 = 5000;
+pub const DEFAULT_INTERACTIVE_HTTP_TIMEOUT_MS: u31 = 30000;
 
 // max message size
 // +14 for max websocket payload overhead
@@ -112,7 +114,12 @@ pub fn httpConnectTimeout(self: *const Config) u31 {
 
 pub fn httpTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .browse, .mcp => |opts| opts.common.http_timeout orelse 5000,
+        .browse => |opts| opts.common.http_timeout orelse DEFAULT_INTERACTIVE_HTTP_TIMEOUT_MS,
+        .serve => |opts| opts.common.http_timeout orelse if (opts.common.browser_mode == .headed)
+            DEFAULT_INTERACTIVE_HTTP_TIMEOUT_MS
+        else
+            DEFAULT_HTTP_TIMEOUT_MS,
+        inline .fetch, .mcp => |opts| opts.common.http_timeout orelse DEFAULT_HTTP_TIMEOUT_MS,
         else => unreachable,
     };
 }
@@ -1080,4 +1087,46 @@ fn parseCommonArg(
     }
 
     return false;
+}
+
+test "browse defaults to interactive http timeout" {
+    var config = try Config.init(std.testing.allocator, "test", .{
+        .browse = .{ .url = "https://example.com/" },
+    });
+    defer config.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(DEFAULT_INTERACTIVE_HTTP_TIMEOUT_MS, config.httpTimeout());
+}
+
+test "headed serve defaults to interactive http timeout" {
+    var config = try Config.init(std.testing.allocator, "test", .{
+        .serve = .{ .common = .{ .browser_mode = .headed } },
+    });
+    defer config.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(DEFAULT_INTERACTIVE_HTTP_TIMEOUT_MS, config.httpTimeout());
+}
+
+test "headless serve keeps shorter default http timeout" {
+    var config = try Config.init(std.testing.allocator, "test", .{
+        .serve = .{},
+    });
+    defer config.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(DEFAULT_HTTP_TIMEOUT_MS, config.httpTimeout());
+}
+
+test "explicit http timeout overrides interactive defaults" {
+    var config = try Config.init(std.testing.allocator, "test", .{
+        .browse = .{
+            .url = "https://example.com/",
+            .common = .{
+                .browser_mode = .headed,
+                .http_timeout = 1234,
+            },
+        },
+    });
+    defer config.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(u31, 1234), config.httpTimeout());
 }

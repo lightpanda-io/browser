@@ -163,6 +163,16 @@ pub fn getForms(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
     return collections.NodeLive(.tag).init(self.asNode(), .form, page);
 }
 
+pub fn getNamedForm(self: *HTMLDocument, name: []const u8, page: *Page) !?*Element.Html.Form {
+    if (name.len == 0) {
+        return null;
+    }
+
+    var forms = try self.getForms(page);
+    const element = forms.getByName(name, page) orelse return null;
+    return element.is(Element.Html.Form);
+}
+
 pub fn getEmbeds(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
     return collections.NodeLive(.tag).init(self.asNode(), .embed, page);
 }
@@ -268,4 +278,5 @@ pub const JsApi = struct {
     pub const all = bridge.accessor(HTMLDocument.getAll, null, .{});
     pub const cookie = bridge.accessor(HTMLDocument.getCookie, HTMLDocument.setCookie, .{});
     pub const doctype = bridge.accessor(HTMLDocument.getDocType, null, .{});
+    pub const @"[str]" = bridge.namedIndexed(HTMLDocument.getNamedForm, null, null, .{ .null_as_undefined = true });
 };

@@ -1,7 +1,9 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
-<form id="form1"></form>
+<form id="form1" name="f">
+  <input id="q" name="q">
+</form>
 <img id="img1" src="about:blank">
 <script></script>
 <a id="link1" href="#"></a>
@@ -21,4 +23,9 @@
   testing.expectEqual(2, document.links.length);
   testing.expectEqual($('#link1'), document.links[0]);
   testing.expectEqual($('#link2'), document.links[1]);
+</script>
+
+<script id=document_named_form_access>
+  testing.expectEqual($('#form1'), document.f);
+  testing.expectEqual($('#q'), document.f.q);
 </script>

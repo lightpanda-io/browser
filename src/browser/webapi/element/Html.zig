@@ -814,10 +814,17 @@ pub fn getOnKeyUp(self: *HtmlElement, page: *Page) !?js.Function.Global {
 }
 
 pub fn setOnLoad(self: *HtmlElement, callback: ?js.Function.Global, page: *Page) !void {
+    if (self._type == .body) {
+        page.window._on_load = callback;
+        return;
+    }
     return self.setAttributeListener(.onload, callback, page);
 }
 
 pub fn getOnLoad(self: *HtmlElement, page: *Page) !?js.Function.Global {
+    if (self._type == .body) {
+        return page.window._on_load;
+    }
     return self.getAttributeFunction(.onload, page);
 }
 

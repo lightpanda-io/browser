@@ -910,13 +910,14 @@ pub fn focus(self: *Element, page: *Page) !void {
 
     const new_target = self.asEventTarget();
     const old_active = page.document._active_element;
+    if (old_active == self) {
+        return;
+    }
+
     page.document._active_element = self;
+    page.domChanged();
 
     if (old_active) |old| {
-        if (old == self) {
-            return;
-        }
-
         const old_target = old.asEventTarget();
 
         // Dispatch blur on old element (no bubble, composed)
@@ -945,6 +946,7 @@ pub fn blur(self: *Element, page: *Page) !void {
     if (page.document._active_element != self) return;
 
     page.document._active_element = null;
+    page.domChanged();
 
     const FocusEvent = @import("event/FocusEvent.zig");
     const old_target = self.asEventTarget();

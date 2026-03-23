@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Mouse Down Focus</title>
+<style>
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: #f3f4f6;
+    font: 24px/1.4 "Segoe UI", sans-serif;
+  }
+  body {
+    min-height: 720px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  form {
+    width: 760px;
+  }
+  input {
+    width: 100%;
+    padding: 14px 18px;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: white;
+    font: inherit;
+    box-sizing: border-box;
+  }
+</style>
+<form>
+  <input id="q" name="q" autocomplete="off" />
+</form>
+<script>
+  const q = document.getElementById("q");
+  q.addEventListener("focus", () => {
+    document.title = "FOCUSED";
+  });
+</script>

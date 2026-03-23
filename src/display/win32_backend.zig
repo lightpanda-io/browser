@@ -31,6 +31,13 @@ const DisplayList = @import("../render/DisplayList.zig").DisplayList;
 const DisplayColor = @import("../render/DisplayList.zig").Color;
 const ImageCommand = @import("../render/DisplayList.zig").ImageCommand;
 const PopupSource = Display.PopupSource;
+const builtin = @import("builtin");
+const IS_DEBUG = builtin.mode == .Debug;
+const modifier_shift = 1 << 0;
+const modifier_ctrl = 1 << 1;
+const modifier_alt = 1 << 2;
+const modifier_meta = 1 << 3;
+const win32_input_mailbox_env = "LIGHTPANDA_WIN32_INPUT";
 
 const c = @cImport({
     @cDefine("WIN32_LEAN_AND_MEAN", "1");
@@ -207,6 +214,8 @@ pub const Win32Backend = struct {
     pending_high_surrogate: ?u16 = null,
     ime_composing: bool = false,
     suppress_wm_char_units: u32 = 0,
+    input_mailbox_path: ?[]u8 = null,
+    input_mailbox_offset: u64 = 0,
 
     input_lock: std.Thread.Mutex = .{},
     input_events: std.ArrayListUnmanaged(InputEvent) = .{},
@@ -284,6 +293,7 @@ pub const Win32Backend = struct {
         mouse_up: MouseEvent,
         mouse_move: MouseMoveEvent,
         mouse_wheel: MouseWheelEvent,
+        rendered_control_activate: BrowserCommand.ActivateControlRegion,
         key_down: KeyEvent,
         key_up: KeyEvent,
         text_input: TextInputEvent,
@@ -324,11 +334,16 @@ pub const Win32Backend = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) Win32Backend {
-        return .{
+        const backend: Win32Backend = .{
             .allocator = allocator,
             .requested_width = .init(width),
             .requested_height = .init(height),
+            .input_mailbox_path = std.process.getEnvVarOwned(allocator, win32_input_mailbox_env) catch null,
         };
+        if (backend.input_mailbox_path) |path| {
+            log.warn(.app, "win mailbox enabled", .{ .path = path });
+        }
+        return backend;
     }
 
     pub fn onPageCreated(self: *Win32Backend) bool {
@@ -736,10 +751,17 @@ pub const Win32Backend = struct {
             thread.join();
             self.thread = null;
         }
+        for (self.input_events.items) |*event| {
+            deinitInputEvent(self, event);
+        }
         self.input_events.deinit(self.allocator);
         if (self.app_data_path) |path| {
             self.allocator.free(path);
             self.app_data_path = null;
+        }
+        if (self.input_mailbox_path) |path| {
+            self.allocator.free(path);
+            self.input_mailbox_path = null;
         }
         self.command_lock.lock();
         for (self.command_queue.items) |command| {
@@ -789,13 +811,21 @@ pub const Win32Backend = struct {
     }
 
     pub fn dispatchInput(self: *Win32Backend, page: *Page) !void {
+        try pollMailboxInput(self);
+
         var pending: std.ArrayListUnmanaged(InputEvent) = .{};
         self.input_lock.lock();
         std.mem.swap(std.ArrayListUnmanaged(InputEvent), &pending, &self.input_events);
         self.input_lock.unlock();
-        defer pending.deinit(self.allocator);
+        defer {
+            for (pending.items) |*event| {
+                deinitInputEvent(self, event);
+            }
+            pending.deinit(self.allocator);
+        }
 
         var key_buf: [2]u8 = undefined;
+        var suppress_text_input_events: u32 = 0;
         for (pending.items) |event| {
             switch (event) {
                 .mouse_down => |mouse| try page.triggerMouseDown(mouse.x, mouse.y, mouse.button, mouse.modifiers),
@@ -823,13 +853,77 @@ pub const Win32Backend = struct {
                         }
                     }
                 },
+                .rendered_control_activate => |activation| {
+                    const path_tag = page.debugNodeTagForPath(activation.dom_path);
+                    const point_tag = page.debugNodeTagAtPoint(activation.x, activation.y);
+                    const path_matches_point = activation.dom_path.len > 0 and
+                        page.debugNodePathMatchesPoint(activation.dom_path, activation.x, activation.y);
+                    const point_prefers = isInteractiveControlTag(point_tag) and
+                        (!path_matches_point or !isInteractiveControlTag(path_tag));
+                    var dispatched: Page.MouseClickDispatchResult = .{
+                        .dispatched = false,
+                        .default_prevented = false,
+                    };
+                    if (point_prefers) {
+                        dispatched = try page.triggerMouseActivateWithResult(activation.x, activation.y, .main, .{});
+                    }
+                    if (!dispatched.dispatched and activation.dom_path.len > 0) {
+                        dispatched = try page.triggerMouseActivateOnNodePathWithResult(activation.dom_path, activation.x, activation.y, .main, .{});
+                    }
+                    if ((!dispatched.dispatched or page.document._active_element == null or
+                        (isInteractiveControlTag(point_tag) and !path_matches_point)) and !point_prefers)
+                    {
+                        const point_result = try page.triggerMouseActivateWithResult(activation.x, activation.y, .main, .{});
+                        if (point_result.dispatched) {
+                            dispatched = point_result;
+                        }
+                    }
+                    if (comptime IS_DEBUG) {
+                        const active_tag = if (page.document._active_element) |active|
+                            active.getTagNameSpec(&page.buf)
+                        else
+                            "none";
+                        log.debug(.app, "win ctrl act", .{
+                            .dispatched = dispatched.dispatched,
+                            .active_tag = active_tag,
+                        });
+                    }
+                },
                 .key_down => |key_down| {
                     const key = mapVirtualKey(key_down.vk, key_down.modifiers.shift, &key_buf) orelse continue;
-                    const default_allowed = try page.triggerKeyboardKeyDownNoTextWithRepeat(
+                    const code = mapVirtualKeyCode(key_down.vk);
+                    if (comptime IS_DEBUG) {
+                        const active_tag = if (page.document._active_element) |active|
+                            active.getTagNameSpec(&page.buf)
+                        else
+                            "none";
+                        log.debug(.app, "win key down", .{
+                            .key = key,
+                            .vk = key_down.vk,
+                            .active_tag = active_tag,
+                        });
+                    }
+                    const default_allowed = try page.triggerKeyboardKeyDownNoTextWithCodeAndRepeat(
                         key,
+                        code,
                         key_down.modifiers,
                         key_down.repeat,
                     );
+                    var allow_text_input = default_allowed;
+                    if (default_allowed and shouldDispatchKeyPress(key, key_down.modifiers)) {
+                        allow_text_input = try page.triggerKeyboardKeyPressWithCode(
+                            key,
+                            code,
+                            key_down.modifiers,
+                            key_down.repeat,
+                        );
+                    }
+                    if (emitsTextInput(key, key_down.modifiers)) {
+                        if (allow_text_input) {
+                            try page.insertText(key);
+                        }
+                        suppress_text_input_events +|= 1;
+                    }
                     if (default_allowed) {
                         if (clipboardShortcutAction(key_down.vk, key_down.modifiers)) |action| {
                             try handleClipboardShortcut(self.allocator, page, action);
@@ -838,9 +932,24 @@ pub const Win32Backend = struct {
                 },
                 .key_up => |key_up| {
                     const key = mapVirtualKey(key_up.vk, key_up.modifiers.shift, &key_buf) orelse continue;
-                    _ = try page.triggerKeyboardKeyUp(key, key_up.modifiers);
+                    const code = mapVirtualKeyCode(key_up.vk);
+                    _ = try page.triggerKeyboardKeyUpWithCode(key, code, key_up.modifiers);
                 },
                 .text_input => |text_input| {
+                    if (suppress_text_input_events > 0) {
+                        suppress_text_input_events -= 1;
+                        continue;
+                    }
+                    if (comptime IS_DEBUG) {
+                        const active_tag = if (page.document._active_element) |active|
+                            active.getTagNameSpec(&page.buf)
+                        else
+                            "none";
+                        log.debug(.app, "win text in", .{
+                            .text = text_input.bytes[0..text_input.len],
+                            .active_tag = active_tag,
+                        });
+                    }
                     try page.insertText(text_input.bytes[0..text_input.len]);
                 },
                 .window_blur => try page.triggerWindowBlur(),
@@ -933,7 +1042,11 @@ pub const Win32Backend = struct {
             return null;
         }
 
-        return self.command_queue.orderedRemove(0);
+        const command = self.command_queue.orderedRemove(0);
+        log.debug(.app, "win browser cmd", .{
+            .kind = @tagName(std.meta.activeTag(command)),
+        });
+        return command;
     }
 
     fn ensureThreadStarted(self: *Win32Backend) bool {
@@ -1029,12 +1142,368 @@ pub const Win32Backend = struct {
     }
 };
 
+fn deinitInputEvent(backend: *Win32Backend, event: *const Win32Backend.InputEvent) void {
+    switch (event.*) {
+        .rendered_control_activate => |activation| backend.allocator.free(activation.dom_path),
+        else => {},
+    }
+}
+
 fn queueInputEvent(self: *Win32Backend, event: Win32Backend.InputEvent) void {
     self.input_lock.lock();
     defer self.input_lock.unlock();
     self.input_events.append(self.allocator, event) catch |err| {
+        deinitInputEvent(self, &event);
         log.warn(.app, "win input queue overflow", .{ .err = err });
+        return;
     };
+}
+
+fn parseMailboxBool(value: []const u8) !bool {
+    if (std.mem.eql(u8, value, "1") or
+        std.ascii.eqlIgnoreCase(value, "true") or
+        std.ascii.eqlIgnoreCase(value, "yes") or
+        std.ascii.eqlIgnoreCase(value, "down") or
+        std.ascii.eqlIgnoreCase(value, "pressed"))
+    {
+        return true;
+    }
+    if (std.mem.eql(u8, value, "0") or
+        std.ascii.eqlIgnoreCase(value, "false") or
+        std.ascii.eqlIgnoreCase(value, "no") or
+        std.ascii.eqlIgnoreCase(value, "up") or
+        std.ascii.eqlIgnoreCase(value, "released"))
+    {
+        return false;
+    }
+    return error.InvalidMailboxInput;
+}
+
+fn parseMailboxMouseButton(value: []const u8) !Page.MouseButton {
+    if (std.ascii.eqlIgnoreCase(value, "left") or std.ascii.eqlIgnoreCase(value, "main")) {
+        return .main;
+    }
+    if (std.ascii.eqlIgnoreCase(value, "middle") or std.ascii.eqlIgnoreCase(value, "auxiliary")) {
+        return .auxiliary;
+    }
+    if (std.ascii.eqlIgnoreCase(value, "right") or std.ascii.eqlIgnoreCase(value, "secondary")) {
+        return .secondary;
+    }
+    if (std.ascii.eqlIgnoreCase(value, "fourth") or
+        std.ascii.eqlIgnoreCase(value, "x1") or
+        std.ascii.eqlIgnoreCase(value, "back"))
+    {
+        return .fourth;
+    }
+    if (std.ascii.eqlIgnoreCase(value, "fifth") or
+        std.ascii.eqlIgnoreCase(value, "x2") or
+        std.ascii.eqlIgnoreCase(value, "forward"))
+    {
+        return .fifth;
+    }
+    return error.InvalidMailboxInput;
+}
+
+fn parseMailboxI32(value: []const u8) !i32 {
+    return std.fmt.parseInt(i32, value, 10) catch error.InvalidMailboxInput;
+}
+
+fn parseMailboxU8(value: []const u8) !u8 {
+    return std.fmt.parseInt(u8, value, 10) catch error.InvalidMailboxInput;
+}
+
+fn parseMailboxU32(value: []const u8) !u32 {
+    return std.fmt.parseInt(u32, value, 10) catch error.InvalidMailboxInput;
+}
+
+fn mailboxKeyboardModifiers(modifiers: u8) Page.KeyboardModifiers {
+    return .{
+        .shift = (modifiers & modifier_shift) != 0,
+        .ctrl = (modifiers & modifier_ctrl) != 0,
+        .alt = (modifiers & modifier_alt) != 0,
+        .meta = (modifiers & modifier_meta) != 0,
+    };
+}
+
+fn mouseButtonMask(button: Page.MouseButton) u16 {
+    return switch (button) {
+        .main => 1,
+        .secondary => 2,
+        .auxiliary => 4,
+        .fourth => 8,
+        .fifth => 16,
+    };
+}
+
+fn mailboxMouseModifiers(modifiers: u8, buttons: u16) Page.MouseModifiers {
+    const key_modifiers = mailboxKeyboardModifiers(modifiers);
+    return .{
+        .alt = key_modifiers.alt,
+        .ctrl = key_modifiers.ctrl,
+        .meta = key_modifiers.meta,
+        .shift = key_modifiers.shift,
+        .buttons = buttons,
+    };
+}
+
+fn mailboxClientToPage(
+    backend: *Win32Backend,
+    x: i32,
+    y: i32,
+) ?ClientPoint {
+    if (presentationHasContent(backend)) {
+        return presentationClientToPage(
+            backend,
+            @as(f64, @floatFromInt(x)),
+            @as(f64, @floatFromInt(y)),
+        );
+    }
+    return .{
+        .x = @floatFromInt(x),
+        .y = @floatFromInt(y),
+    };
+}
+
+fn queueMailboxPointerEvent(
+    backend: *Win32Backend,
+    x: i32,
+    y: i32,
+    button: Page.MouseButton,
+    pressed: bool,
+    modifiers: u8,
+) void {
+    const pos = mailboxClientToPage(backend, x, y) orelse return;
+    if (pressed) {
+        queueInputEvent(backend, .{ .mouse_down = .{
+            .x = pos.x,
+            .y = pos.y,
+            .button = button,
+            .modifiers = mailboxMouseModifiers(modifiers, mouseButtonMask(button)),
+        } });
+        return;
+    }
+
+    const rendered_interactive_hit = button == .main and presentationHasContent(backend) and
+        (presentationHasNavigateAtClientPoint(
+            backend,
+            @as(f64, @floatFromInt(x)),
+            @as(f64, @floatFromInt(y)),
+        ) or presentationHasControlAtClientPoint(
+            backend,
+            @as(f64, @floatFromInt(x)),
+            @as(f64, @floatFromInt(y)),
+        ));
+    queueInputEvent(backend, .{ .mouse_up = .{
+        .x = pos.x,
+        .y = pos.y,
+        .button = button,
+        .modifiers = mailboxMouseModifiers(modifiers, 0),
+        .rendered_interactive_hit = rendered_interactive_hit,
+    } });
+}
+
+fn queueMailboxClick(
+    backend: *Win32Backend,
+    x: i32,
+    y: i32,
+    button: Page.MouseButton,
+    modifiers: u8,
+) void {
+    if (button == .main and presentationHasContent(backend)) {
+        if (presentationCommandAtClientPointWithClient(
+            backend,
+            null,
+            @as(f64, @floatFromInt(x)),
+            @as(f64, @floatFromInt(y)),
+        )) |command| {
+            switch (command) {
+                .activate_control_region => |activation| {
+                    queueInputEvent(backend, .{ .rendered_control_activate = activation });
+                },
+                else => queueBrowserCommand(backend, command),
+            }
+            return;
+        }
+    }
+
+    const pos = mailboxClientToPage(backend, x, y) orelse return;
+    queueInputEvent(backend, .{ .mouse_down = .{
+        .x = pos.x,
+        .y = pos.y,
+        .button = button,
+        .modifiers = mailboxMouseModifiers(modifiers, mouseButtonMask(button)),
+    } });
+    queueInputEvent(backend, .{ .mouse_up = .{
+        .x = pos.x,
+        .y = pos.y,
+        .button = button,
+        .modifiers = mailboxMouseModifiers(modifiers, 0),
+        .rendered_interactive_hit = false,
+    } });
+}
+
+fn queueMailboxMoveEvent(
+    backend: *Win32Backend,
+    x: i32,
+    y: i32,
+    modifiers: u8,
+) void {
+    const pos = mailboxClientToPage(backend, x, y) orelse return;
+    queueInputEvent(backend, .{ .mouse_move = .{
+        .x = pos.x,
+        .y = pos.y,
+        .modifiers = mailboxMouseModifiers(modifiers, 0),
+    } });
+}
+
+fn queueMailboxWheelEvent(
+    backend: *Win32Backend,
+    x: i32,
+    y: i32,
+    delta_x: i32,
+    delta_y: i32,
+    modifiers: u8,
+) void {
+    const pos = mailboxClientToPage(backend, x, y) orelse return;
+    queueInputEvent(backend, .{ .mouse_wheel = .{
+        .x = pos.x,
+        .y = pos.y,
+        .delta_x = @floatFromInt(delta_x),
+        .delta_y = @floatFromInt(delta_y),
+        .modifiers = mailboxMouseModifiers(modifiers, 0),
+    } });
+}
+
+fn queueMailboxTextUtf8(backend: *Win32Backend, text: []const u8) !void {
+    var index: usize = 0;
+    while (index < text.len) {
+        const cp_len = std.unicode.utf8ByteSequenceLength(text[index]) catch return error.InvalidMailboxInput;
+        if (index + cp_len > text.len) {
+            return error.InvalidMailboxInput;
+        }
+        const code_point = std.unicode.utf8Decode(text[index .. index + cp_len]) catch return error.InvalidMailboxInput;
+        queueTextCodePoint(backend, code_point);
+        index += cp_len;
+    }
+}
+
+fn processMailboxLine(backend: *Win32Backend, line: []const u8) !void {
+    const trimmed = std.mem.trim(u8, line, " \t\r");
+    if (trimmed.len == 0) {
+        return error.InvalidMailboxInput;
+    }
+
+    if (std.mem.startsWith(u8, trimmed, "text|")) {
+        try queueMailboxTextUtf8(backend, trimmed["text|".len..]);
+        return;
+    }
+
+    var parts = std.mem.splitScalar(u8, trimmed, '|');
+    const kind = parts.next() orelse return error.InvalidMailboxInput;
+    if (std.mem.eql(u8, kind, "key")) {
+        const code = try parseMailboxU32(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const pressed = try parseMailboxBool(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const modifiers = try parseMailboxU8(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const event: Win32Backend.InputEvent = if (pressed)
+            .{ .key_down = .{
+                .vk = code,
+                .modifiers = mailboxKeyboardModifiers(modifiers),
+            } }
+        else
+            .{ .key_up = .{
+                .vk = code,
+                .modifiers = mailboxKeyboardModifiers(modifiers),
+            } };
+        queueInputEvent(backend, event);
+        return;
+    }
+    if (std.mem.eql(u8, kind, "move")) {
+        const x = try parseMailboxI32(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const y = try parseMailboxI32(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const modifiers = try parseMailboxU8(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        queueMailboxMoveEvent(backend, x, y, modifiers);
+        return;
+    }
+    if (std.mem.eql(u8, kind, "pointer")) {
+        const x = try parseMailboxI32(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const y = try parseMailboxI32(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const button = try parseMailboxMouseButton(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const pressed = try parseMailboxBool(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const modifiers = try parseMailboxU8(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        queueMailboxPointerEvent(backend, x, y, button, pressed, modifiers);
+        return;
+    }
+    if (std.mem.eql(u8, kind, "click")) {
+        const x = try parseMailboxI32(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const y = try parseMailboxI32(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const button = try parseMailboxMouseButton(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const modifiers = try parseMailboxU8(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        queueMailboxClick(backend, x, y, button, modifiers);
+        return;
+    }
+    if (std.mem.eql(u8, kind, "wheel")) {
+        const x = try parseMailboxI32(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const y = try parseMailboxI32(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const delta_x = try parseMailboxI32(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const delta_y = try parseMailboxI32(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        const modifiers = try parseMailboxU8(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        queueMailboxWheelEvent(backend, x, y, delta_x, delta_y, modifiers);
+        return;
+    }
+
+    return error.InvalidMailboxInput;
+}
+
+fn pollMailboxInput(backend: *Win32Backend) !void {
+    const mailbox_path = backend.input_mailbox_path orelse return;
+    const file = if (std.fs.path.isAbsolute(mailbox_path))
+        std.fs.openFileAbsolute(mailbox_path, .{}) catch |err| {
+            if (err != error.FileNotFound) {
+                log.warn(.app, "win mailbox open failed", .{ .path = mailbox_path, .err = err });
+            }
+            return;
+        }
+    else
+        std.fs.cwd().openFile(mailbox_path, .{}) catch |err| {
+            if (err != error.FileNotFound) {
+                log.warn(.app, "win mailbox open failed", .{ .path = mailbox_path, .err = err });
+            }
+            return;
+        };
+    defer file.close();
+
+    const stat = file.stat() catch |err| {
+        log.warn(.app, "win mailbox stat failed", .{ .path = mailbox_path, .err = err });
+        return;
+    };
+    if (backend.input_mailbox_offset > stat.size) {
+        backend.input_mailbox_offset = 0;
+    }
+    try file.seekTo(backend.input_mailbox_offset);
+
+    const data = file.readToEndAlloc(backend.allocator, 64 * 1024) catch return;
+    defer backend.allocator.free(data);
+    if (data.len == 0) {
+        return;
+    }
+
+    var complete_len = data.len;
+    if (data[data.len - 1] != '\n') {
+        if (std.mem.lastIndexOfScalar(u8, data, '\n')) |last_newline| {
+            complete_len = last_newline + 1;
+        } else {
+            return;
+        }
+    }
+
+    var it = std.mem.splitScalar(u8, data[0..complete_len], '\n');
+    while (it.next()) |raw_line| {
+        processMailboxLine(backend, raw_line) catch |err| switch (err) {
+            error.InvalidMailboxInput => continue,
+            else => return err,
+        };
+    }
+    backend.input_mailbox_offset += complete_len;
 }
 
 const PresentationSnapshot = struct {
@@ -1492,6 +1961,17 @@ fn presentationControlCommandAtClientPoint(backend: *Win32Backend, x: f64, y: f6
     const display_list = backend.presentation_display_list orelse return null;
     const point = presentationClientToDisplayListLocked(backend, x, y) orelse return null;
     const region = findPresentationControlRegionLocked(backend, x, y) orelse return null;
+    log.debug(.app, "win control hit", .{
+        .client_x = x,
+        .client_y = y,
+        .page_x = point.x,
+        .page_y = point.y,
+        .region_x = region.x,
+        .region_y = region.y,
+        .region_width = region.width,
+        .region_height = region.height,
+        .dom_path_len = region.dom_path.len,
+    });
     const owned_dom_path = backend.allocator.dupe(u16, region.dom_path) catch |err| {
         log.warn(.app, "win control dom path hit dupe", .{ .err = err });
         return null;
@@ -1512,6 +1992,11 @@ fn beginPendingPresentationCommand(backend: *Win32Backend, hwnd: c.HWND, x: f64,
     if (backend.pending_presentation_command) |pending| {
         pending.deinit(backend.allocator);
     }
+    log.debug(.app, "win pending begin", .{
+        .kind = @tagName(std.meta.activeTag(command)),
+        .x = x,
+        .y = y,
+    });
     backend.pending_presentation_command = command;
     return true;
 }
@@ -1522,6 +2007,9 @@ fn takePendingPresentationCommand(backend: *Win32Backend) ?BrowserCommand {
 
     const command = backend.pending_presentation_command orelse return null;
     backend.pending_presentation_command = null;
+    log.debug(.app, "win pending take", .{
+        .kind = @tagName(std.meta.activeTag(command)),
+    });
     return command;
 }
 
@@ -1530,6 +2018,9 @@ fn cancelPendingPresentationCommand(backend: *Win32Backend) void {
     defer backend.presentation_lock.unlock();
 
     if (backend.pending_presentation_command) |command| {
+        log.debug(.app, "win pending cancel", .{
+            .kind = @tagName(std.meta.activeTag(command)),
+        });
         command.deinit(backend.allocator);
         backend.pending_presentation_command = null;
     }
@@ -2597,6 +3088,9 @@ fn loadCursorResource(cursor_id: usize) c.HCURSOR {
 fn queueBrowserCommand(backend: *Win32Backend, command: BrowserCommand) void {
     backend.command_lock.lock();
     defer backend.command_lock.unlock();
+    log.debug(.app, "win browser command queue", .{
+        .kind = @tagName(std.meta.activeTag(command)),
+    });
     backend.command_queue.append(backend.allocator, command) catch |err| {
         command.deinit(backend.allocator);
         log.warn(.app, "win command queue failed", .{ .err = err });
@@ -3157,7 +3651,11 @@ fn syncWindowPresentation(hwnd: c.HWND, backend: *Win32Backend) void {
     defer backend.allocator.free(title);
 
     setWindowTextUtf8(hwnd, title);
+    if (c.GetForegroundWindow() == hwnd) {
+        _ = c.SetFocus(hwnd);
+    }
     _ = c.InvalidateRect(hwnd, null, c.TRUE);
+    _ = c.UpdateWindow(hwnd);
 }
 
 fn formatWindowTitle(allocator: std.mem.Allocator, title: []const u8, url: []const u8) ![]u8 {
@@ -5493,6 +5991,10 @@ fn renderPresentationDisplayList(
                 }
                 const space_count = countPresentationTextSpaces(text_cmd.text);
                 const text_alpha = combinePresentationAlpha(text_cmd.color.a, text_cmd.opacity);
+                const text_flags: c.UINT = @as(c.UINT, c.DT_LEFT) |
+                    @as(c.UINT, c.DT_TOP) |
+                    @as(c.UINT, if (text_cmd.nowrap) c.DT_SINGLELINE else c.DT_WORDBREAK) |
+                    @as(c.UINT, c.DT_NOPREFIX);
                 if (text_alpha > 0) {
                     if (text_alpha == 255) {
                         const previous = c.SetTextColor(hdc, colorRef(text_cmd.color));
@@ -5531,7 +6033,7 @@ fn renderPresentationDisplayList(
                             hdc,
                             &rect,
                             text_cmd.text,
-                            c.DT_LEFT | c.DT_TOP | c.DT_WORDBREAK | c.DT_NOPREFIX,
+                            text_flags,
                         );
                         _ = c.SetTextColor(hdc, previous);
                     } else {
@@ -5580,7 +6082,7 @@ fn renderPresentationDisplayList(
                             surface.mem_dc,
                             &local_rect,
                             text_cmd.text,
-                            c.DT_LEFT | c.DT_TOP | c.DT_WORDBREAK | c.DT_NOPREFIX,
+                            text_flags,
                         );
                         _ = c.SetTextColor(surface.mem_dc, previous);
                         alphaBlendSurfaceToTarget(hdc, rect, &surface, text_alpha, true);
@@ -6466,6 +6968,13 @@ fn presentationAddressEditing(backend: *Win32Backend) bool {
     return backend.address_input_active;
 }
 
+fn isInteractiveControlTag(tag: []const u8) bool {
+    return std.mem.eql(u8, tag, "INPUT") or
+        std.mem.eql(u8, tag, "BUTTON") or
+        std.mem.eql(u8, tag, "SELECT") or
+        std.mem.eql(u8, tag, "TEXTAREA");
+}
+
 fn handlePresentationShortcutKey(
     hwnd: c.HWND,
     backend: *Win32Backend,
@@ -7045,6 +7554,150 @@ fn mapShiftedDigit(digit: u8) u8 {
     };
 }
 
+fn mapVirtualKeyCode(vk: u32) ?[]const u8 {
+    return switch (vk) {
+        c.VK_SHIFT => "Shift",
+        c.VK_LSHIFT => "ShiftLeft",
+        c.VK_RSHIFT => "ShiftRight",
+        c.VK_CONTROL => "Control",
+        c.VK_LCONTROL => "ControlLeft",
+        c.VK_RCONTROL => "ControlRight",
+        c.VK_MENU => "Alt",
+        c.VK_LMENU => "AltLeft",
+        c.VK_RMENU => "AltRight",
+        c.VK_LWIN => "MetaLeft",
+        c.VK_RWIN => "MetaRight",
+        c.VK_CAPITAL => "CapsLock",
+        c.VK_NUMLOCK => "NumLock",
+        c.VK_SCROLL => "ScrollLock",
+        c.VK_PAUSE => "Pause",
+        c.VK_RETURN => "Enter",
+        c.VK_TAB => "Tab",
+        c.VK_BACK => "Backspace",
+        c.VK_DELETE => "Delete",
+        c.VK_INSERT => "Insert",
+        c.VK_CLEAR => "Numpad5",
+        c.VK_SNAPSHOT => "PrintScreen",
+        c.VK_APPS => "ContextMenu",
+        c.VK_ESCAPE => "Escape",
+        c.VK_SPACE => "Space",
+        c.VK_LEFT => "ArrowLeft",
+        c.VK_RIGHT => "ArrowRight",
+        c.VK_UP => "ArrowUp",
+        c.VK_DOWN => "ArrowDown",
+        c.VK_HOME => "Home",
+        c.VK_END => "End",
+        c.VK_PRIOR => "PageUp",
+        c.VK_NEXT => "PageDown",
+        c.VK_F1 => "F1",
+        c.VK_F2 => "F2",
+        c.VK_F3 => "F3",
+        c.VK_F4 => "F4",
+        c.VK_F5 => "F5",
+        c.VK_F6 => "F6",
+        c.VK_F7 => "F7",
+        c.VK_F8 => "F8",
+        c.VK_F9 => "F9",
+        c.VK_F10 => "F10",
+        c.VK_F11 => "F11",
+        c.VK_F12 => "F12",
+        c.VK_OEM_MINUS => "Minus",
+        c.VK_OEM_PLUS => "Equal",
+        c.VK_OEM_COMMA => "Comma",
+        c.VK_OEM_PERIOD => "Period",
+        c.VK_OEM_1 => "Semicolon",
+        c.VK_OEM_2 => "Slash",
+        c.VK_OEM_3 => "Backquote",
+        c.VK_OEM_4 => "BracketLeft",
+        c.VK_OEM_5 => "Backslash",
+        c.VK_OEM_6 => "BracketRight",
+        c.VK_OEM_7 => "Quote",
+        c.VK_MULTIPLY => "NumpadMultiply",
+        c.VK_ADD => "NumpadAdd",
+        c.VK_SUBTRACT => "NumpadSubtract",
+        c.VK_DECIMAL => "NumpadDecimal",
+        c.VK_DIVIDE => "NumpadDivide",
+        else => blk: {
+            if (vk >= 0x41 and vk <= 0x5A) {
+                break :blk switch (@as(u8, @intCast(vk))) {
+                    'A' => "KeyA",
+                    'B' => "KeyB",
+                    'C' => "KeyC",
+                    'D' => "KeyD",
+                    'E' => "KeyE",
+                    'F' => "KeyF",
+                    'G' => "KeyG",
+                    'H' => "KeyH",
+                    'I' => "KeyI",
+                    'J' => "KeyJ",
+                    'K' => "KeyK",
+                    'L' => "KeyL",
+                    'M' => "KeyM",
+                    'N' => "KeyN",
+                    'O' => "KeyO",
+                    'P' => "KeyP",
+                    'Q' => "KeyQ",
+                    'R' => "KeyR",
+                    'S' => "KeyS",
+                    'T' => "KeyT",
+                    'U' => "KeyU",
+                    'V' => "KeyV",
+                    'W' => "KeyW",
+                    'X' => "KeyX",
+                    'Y' => "KeyY",
+                    'Z' => "KeyZ",
+                    else => null,
+                };
+            }
+            if (vk >= 0x30 and vk <= 0x39) {
+                break :blk switch (@as(u8, @intCast(vk))) {
+                    '0' => "Digit0",
+                    '1' => "Digit1",
+                    '2' => "Digit2",
+                    '3' => "Digit3",
+                    '4' => "Digit4",
+                    '5' => "Digit5",
+                    '6' => "Digit6",
+                    '7' => "Digit7",
+                    '8' => "Digit8",
+                    '9' => "Digit9",
+                    else => null,
+                };
+            }
+            if (vk >= c.VK_NUMPAD0 and vk <= c.VK_NUMPAD9) {
+                break :blk switch (vk - c.VK_NUMPAD0) {
+                    0 => "Numpad0",
+                    1 => "Numpad1",
+                    2 => "Numpad2",
+                    3 => "Numpad3",
+                    4 => "Numpad4",
+                    5 => "Numpad5",
+                    6 => "Numpad6",
+                    7 => "Numpad7",
+                    8 => "Numpad8",
+                    9 => "Numpad9",
+                    else => null,
+                };
+            }
+            break :blk null;
+        },
+    };
+}
+
+fn shouldDispatchKeyPress(key: []const u8, modifiers: Page.KeyboardModifiers) bool {
+    if (modifiers.ctrl or modifiers.meta or modifiers.alt) {
+        return false;
+    }
+    return key.len == 1 or std.mem.eql(u8, key, "Enter");
+}
+
+fn emitsTextInput(key: []const u8, modifiers: Page.KeyboardModifiers) bool {
+    if (modifiers.ctrl or modifiers.meta or modifiers.alt) {
+        return false;
+    }
+    return key.len == 1;
+}
+
 fn keyStateDown(vk: c_int) bool {
     return (@as(u16, @bitCast(c.GetKeyState(vk))) & 0x8000) != 0;
 }
@@ -7305,9 +7958,7 @@ fn createWindow(backend: *Win32Backend, width: u32, height: u32) !c.HWND {
 
     _ = c.ShowWindow(hwnd, c.SW_SHOW);
     _ = c.UpdateWindow(hwnd);
-    _ = c.SetForegroundWindow(hwnd);
-    _ = c.SetActiveWindow(hwnd);
-    _ = c.SetFocus(hwnd);
+    activateWindowForInput(hwnd);
 
     return hwnd;
 }
@@ -7316,6 +7967,12 @@ fn destroyWindow(hwnd: c.HWND) void {
     if (c.IsWindow(hwnd) != 0) {
         _ = c.DestroyWindow(hwnd);
     }
+}
+
+fn activateWindowForInput(hwnd: c.HWND) void {
+    _ = c.SetForegroundWindow(hwnd);
+    _ = c.SetActiveWindow(hwnd);
+    _ = c.SetFocus(hwnd);
 }
 
 fn setClientSize(hwnd: c.HWND, width: u32, height: u32) void {
@@ -7391,6 +8048,12 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
             _ = c.DestroyWindow(hwnd);
             return 0;
         },
+        c.WM_SETFOCUS => {
+            return 0;
+        },
+        c.WM_ACTIVATE => {
+            return c.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
         c.WM_KILLFOCUS => {
             if (getBackendPtr(hwnd)) |backend| {
                 backend.pending_high_surrogate = null;
@@ -7410,7 +8073,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     if (presentationSettingsOverlayOpen(backend)) {
                         cancelPendingPresentationCommand(backend);
                         backend.presentation_left_mouse_consumed = true;
-                        _ = c.SetFocus(hwnd);
+                        activateWindowForInput(hwnd);
                         if (handleSettingsOverlayChromeClick(hwnd, backend, client, client_pos.x, client_pos.y)) {
                             return 0;
                         }
@@ -7429,7 +8092,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     if (presentationDownloadOverlayOpen(backend)) {
                         cancelPendingPresentationCommand(backend);
                         backend.presentation_left_mouse_consumed = true;
-                        _ = c.SetFocus(hwnd);
+                        activateWindowForInput(hwnd);
                         if (handleDownloadOverlayChromeClick(hwnd, backend, client, client_pos.x, client_pos.y)) {
                             return 0;
                         }
@@ -7445,7 +8108,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     if (presentationBookmarkOverlayOpen(backend)) {
                         cancelPendingPresentationCommand(backend);
                         backend.presentation_left_mouse_consumed = true;
-                        _ = c.SetFocus(hwnd);
+                        activateWindowForInput(hwnd);
                         if (handleBookmarkOverlayChromeClick(hwnd, backend, client, client_pos.x, client_pos.y)) {
                             return 0;
                         }
@@ -7465,7 +8128,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     if (presentationHistoryOverlayOpen(backend)) {
                         cancelPendingPresentationCommand(backend);
                         backend.presentation_left_mouse_consumed = true;
-                        _ = c.SetFocus(hwnd);
+                        activateWindowForInput(hwnd);
                         if (handleHistoryOverlayChromeClick(hwnd, backend, client, client_pos.x, client_pos.y)) {
                             return 0;
                         }
@@ -7490,7 +8153,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     if (addressBarHitTest(client_pos.x, client_pos.y)) {
                         cancelPendingPresentationCommand(backend);
                         backend.presentation_left_mouse_consumed = true;
-                        _ = c.SetFocus(hwnd);
+                        activateWindowForInput(hwnd);
                         if (beginAddressEdit(backend)) {
                             _ = c.InvalidateRect(hwnd, null, c.TRUE);
                         }
@@ -7499,7 +8162,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
 
                     if (beginPendingPresentationCommand(backend, hwnd, client_pos.x, client_pos.y)) {
                         backend.presentation_left_mouse_consumed = true;
-                        _ = c.SetFocus(hwnd);
+                        activateWindowForInput(hwnd);
                         _ = c.SetCapture(hwnd);
                         return 0;
                     }
@@ -7514,7 +8177,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     c.WM_RBUTTONDOWN => .secondary,
                     else => .main,
                 };
-                _ = c.SetFocus(hwnd);
+                activateWindowForInput(hwnd);
                 _ = c.SetCapture(hwnd);
                 queueInputEvent(backend, .{ .mouse_down = .{
                     .x = pos.x,
@@ -7533,7 +8196,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                         presentationClientToPage(backend, client_pos.x, client_pos.y) orelse return 1
                     else
                         client_pos;
-                    _ = c.SetFocus(hwnd);
+                    activateWindowForInput(hwnd);
                     _ = c.SetCapture(hwnd);
                     queueInputEvent(backend, .{ .mouse_down = .{
                         .x = pos.x,
@@ -7553,7 +8216,12 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     backend.presentation_left_mouse_consumed = false;
                     if (takePendingPresentationCommand(backend)) |command| {
                         _ = c.ReleaseCapture();
-                        queueBrowserCommand(backend, command);
+                        switch (command) {
+                            .activate_control_region => |activation| {
+                                queueInputEvent(backend, .{ .rendered_control_activate = activation });
+                            },
+                            else => queueBrowserCommand(backend, command),
+                        }
                         return 0;
                     }
                     if (consumed) {
@@ -7765,15 +8433,14 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
         },
         c.WM_CHAR, c.WM_SYSCHAR => {
             if (getBackendPtr(hwnd)) |backend| {
+                const code_unit: u16 = @intCast(wparam & 0xFFFF);
                 if (presentationAddressEditing(backend)) {
-                    const code_unit: u16 = @intCast(wparam & 0xFFFF);
                     if (code_unit != '\r' and code_unit != 0x0008 and appendAddressUtf16Unit(backend, code_unit)) {
                         _ = c.InvalidateRect(hwnd, null, c.TRUE);
                     }
                     return 0;
                 }
                 if (presentationFindEditing(backend)) {
-                    const code_unit: u16 = @intCast(wparam & 0xFFFF);
                     if (code_unit != '\r' and code_unit != 0x0008 and appendFindUtf16Unit(backend, code_unit)) {
                         _ = updateFindSelection(hwnd, backend, .preserve);
                         _ = c.InvalidateRect(hwnd, null, c.TRUE);
@@ -7791,7 +8458,6 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     backend.suppress_wm_char_units -= 1;
                     return 0;
                 }
-                const code_unit: u16 = @intCast(wparam & 0xFFFF);
                 queueTextFromUtf16Unit(backend, code_unit);
             }
             return 0;
@@ -8183,6 +8849,136 @@ test "win32 utf16 text queue normalizes enter and decodes surrogate pair" {
     }
     switch (second) {
         .text_input => |input| try std.testing.expectEqualSlices(u8, "\xF0\x9F\x98\x80", input.bytes[0..input.len]),
+        else => return error.TestUnexpectedEventType,
+    }
+}
+
+test "win32 mailbox parser queues pointer key and text events" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    try processMailboxLine(&backend, "move|20|30|3");
+    try processMailboxLine(&backend, "pointer|20|30|left|1|1");
+    try processMailboxLine(&backend, "pointer|20|30|left|0|0");
+    try processMailboxLine(&backend, "key|13|1|4");
+    try processMailboxLine(&backend, "text|ok");
+
+    try std.testing.expectEqual(@as(usize, 6), backend.input_events.items.len);
+    switch (backend.input_events.items[0]) {
+        .mouse_move => |mouse| {
+            try std.testing.expectApproxEqAbs(@as(f64, 20), mouse.x, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f64, 30), mouse.y, 0.001);
+            try std.testing.expect(mouse.modifiers.shift);
+            try std.testing.expect(mouse.modifiers.ctrl);
+            try std.testing.expectEqual(@as(u16, 0), mouse.modifiers.buttons);
+        },
+        else => return error.TestUnexpectedEventType,
+    }
+    switch (backend.input_events.items[1]) {
+        .mouse_down => |mouse| {
+            try std.testing.expectEqual(Page.MouseButton.main, mouse.button);
+            try std.testing.expect(mouse.modifiers.shift);
+            try std.testing.expectEqual(@as(u16, 1), mouse.modifiers.buttons);
+        },
+        else => return error.TestUnexpectedEventType,
+    }
+    switch (backend.input_events.items[2]) {
+        .mouse_up => |mouse| {
+            try std.testing.expectEqual(Page.MouseButton.main, mouse.button);
+            try std.testing.expectEqual(@as(u16, 0), mouse.modifiers.buttons);
+            try std.testing.expect(!mouse.rendered_interactive_hit);
+        },
+        else => return error.TestUnexpectedEventType,
+    }
+    switch (backend.input_events.items[3]) {
+        .key_down => |key| {
+            try std.testing.expectEqual(@as(u32, 13), key.vk);
+            try std.testing.expect(key.modifiers.alt);
+            try std.testing.expect(!key.modifiers.ctrl);
+        },
+        else => return error.TestUnexpectedEventType,
+    }
+    switch (backend.input_events.items[4]) {
+        .text_input => |text| try std.testing.expectEqualStrings("o", text.bytes[0..text.len]),
+        else => return error.TestUnexpectedEventType,
+    }
+    switch (backend.input_events.items[5]) {
+        .text_input => |text| try std.testing.expectEqualStrings("k", text.bytes[0..text.len]),
+        else => return error.TestUnexpectedEventType,
+    }
+}
+
+test "win32 mailbox click queues rendered control activation" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    backend.presentation_body = try std.testing.allocator.dupe(u8, "probe");
+    var display_list: DisplayList = .{};
+    defer if (backend.presentation_display_list == null) display_list.deinit(std.testing.allocator);
+    try display_list.addControlRegion(std.testing.allocator, .{
+        .x = 24,
+        .y = 32,
+        .width = 220,
+        .height = 40,
+        .dom_path = @constCast(&[_]u16{ 1, 4, 2 }),
+    });
+    backend.presentation_display_list = display_list;
+
+    var line_buf: [64]u8 = undefined;
+    const line = try std.fmt.bufPrint(&line_buf, "click|{d}|{d}|left|0", .{
+        PRESENTATION_MARGIN + 24 + 8,
+        PRESENTATION_HEADER_HEIGHT + 8 + 32 + 8,
+    });
+    try processMailboxLine(&backend, line);
+
+    try std.testing.expectEqual(@as(usize, 1), backend.input_events.items.len);
+    switch (backend.input_events.items[0]) {
+        .rendered_control_activate => |activation| {
+            try std.testing.expectEqual(@as(usize, 3), activation.dom_path.len);
+            try std.testing.expect(activation.x > 0 and activation.y > 0);
+        },
+        else => return error.TestUnexpectedEventType,
+    }
+}
+
+test "win32 mailbox poll reads appended input once" {
+    const allocator = std.testing.allocator;
+    const rel_dir = ".zig-cache/tmp/win32-mailbox-poll-test";
+    std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const root = try std.fs.cwd().realpathAlloc(allocator, rel_dir);
+    defer allocator.free(root);
+    const mailbox_path = try std.fs.path.join(allocator, &.{ root, "input.txt" });
+    defer allocator.free(mailbox_path);
+
+    {
+        var file = try std.fs.createFileAbsolute(mailbox_path, .{ .truncate = true });
+        defer file.close();
+        try file.writeAll("text|go\nkey|13|1|0\n");
+    }
+
+    var backend = Win32Backend.init(allocator, 1, 1);
+    defer backend.deinit();
+    backend.input_mailbox_path = try allocator.dupe(u8, mailbox_path);
+
+    try pollMailboxInput(&backend);
+    try std.testing.expectEqual(@as(usize, 3), backend.input_events.items.len);
+    try pollMailboxInput(&backend);
+    try std.testing.expectEqual(@as(usize, 3), backend.input_events.items.len);
+
+    {
+        var file = try std.fs.openFileAbsolute(mailbox_path, .{ .mode = .read_write });
+        defer file.close();
+        try file.seekFromEnd(0);
+        try file.writeAll("key|13|0|0\n");
+    }
+
+    try pollMailboxInput(&backend);
+    try std.testing.expectEqual(@as(usize, 4), backend.input_events.items.len);
+    switch (backend.input_events.items[3]) {
+        .key_up => |key| try std.testing.expectEqual(@as(u32, 13), key.vk),
         else => return error.TestUnexpectedEventType,
     }
 }

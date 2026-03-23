@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const String = @import("../../../../string.zig").String;
-
 const js = @import("../../../js/js.zig");
 const Page = @import("../../../Page.zig");
 
@@ -156,13 +155,16 @@ pub fn setValue(self: *Input, value: []const u8, page: *Page) !void {
     // else throws.
     if (self._input_type == .file) {
         if (value.len == 0) {
-            _ = self.clearSelectedFile();
+            if (self.clearSelectedFile()) {
+                page.presentationChanged();
+            }
             return;
         }
         return error.InvalidStateError;
     }
     // This should _not_ call setAttribute. It updates the current state only
     self._value = try self.sanitizeValue(true, value, page);
+    page.presentationChanged();
 }
 
 pub fn getDefaultValue(self: *const Input) []const u8 {
@@ -185,6 +187,7 @@ pub fn setChecked(self: *Input, checked: bool, page: *Page) !void {
     // This should _not_ call setAttribute. It updates the current state only
     self._checked = checked;
     self._checked_dirty = true;
+    page.presentationChanged();
 }
 
 pub fn getIndeterminate(self: *const Input) bool {
@@ -424,7 +427,11 @@ pub fn setSelectedFile(self: *Input, path: []const u8, content_type: ?[]const u8
 
 pub fn setSelectedFiles(self: *Input, files: []const SelectedFileSpec, page: *Page) !bool {
     if (files.len == 0) {
-        return self.clearSelectedFile();
+        const changed = self.clearSelectedFile();
+        if (changed) {
+            page.presentationChanged();
+        }
+        return changed;
     }
 
     const selected_files = try page.arena.alloc(SelectedFile, files.len);
@@ -447,6 +454,7 @@ pub fn setSelectedFiles(self: *Input, files: []const SelectedFileSpec, page: *Pa
     self._selected_file_name = selected_files[0].name;
     self._selected_file_content_type = selected_files[0].content_type;
     self._selected_file_value = try std.fmt.allocPrint(page.arena, "C:\\fakepath\\{s}", .{selected_files[0].name});
+    page.presentationChanged();
     return true;
 }
 
