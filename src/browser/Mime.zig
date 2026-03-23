@@ -386,6 +386,14 @@ pub fn isHTML(self: *const Mime) bool {
     return self.content_type == .text_html;
 }
 
+pub fn isText(mime: *const Mime) bool {
+    return switch (mime.content_type) {
+        .text_xml, .text_html, .text_javascript, .text_plain, .text_css => true,
+        .application_json => true,
+        else => false,
+    };
+}
+
 // we expect value to be lowercase
 fn parseContentType(value: []const u8) !struct { ContentType, usize } {
     const end = std.mem.indexOfScalarPos(u8, value, 0, ';') orelse value.len;
