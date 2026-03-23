@@ -176,7 +176,7 @@ fn detectForms(cmd: anytype) !void {
     for (forms_data) |*form| {
         const registered = try bc.node_registry.register(form.node);
         form.backendNodeId = registered.id;
-        for (@constCast(form.fields)) |*field| {
+        for (form.fields) |*field| {
             const field_registered = try bc.node_registry.register(field.node);
             field.backendNodeId = field_registered.id;
         }

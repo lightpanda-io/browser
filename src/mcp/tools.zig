@@ -475,7 +475,7 @@ fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Val
         const form_registered = try server.node_registry.register(form.node);
         form.backendNodeId = form_registered.id;
 
-        for (@constCast(form.fields)) |*field| {
+        for (form.fields) |*field| {
             const field_registered = try server.node_registry.register(field.node);
             field.backendNodeId = field_registered.id;
         }

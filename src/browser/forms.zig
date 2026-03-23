@@ -48,7 +48,7 @@ pub const FormField = struct {
     required: bool,
     value: ?[]const u8,
     placeholder: ?[]const u8,
-    options: []const SelectOption,
+    options: []SelectOption,
 
     pub fn jsonStringify(self: *const FormField, jw: anytype) !void {
         try jw.beginObject();
@@ -104,7 +104,7 @@ pub const FormInfo = struct {
     node: *Node,
     action: ?[]const u8,
     method: ?[]const u8,
-    fields: []const FormField,
+    fields: []FormField,
 
     pub fn jsonStringify(self: *const FormInfo, jw: anytype) !void {
         try jw.beginObject();
@@ -159,7 +159,7 @@ pub fn collectForms(
         try forms.append(arena, .{
             .node = node,
             .action = if (action_attr) |a| if (a.len > 0) a else null else null,
-            .method = if (method_str.len > 0) method_str else null,
+            .method = method_str,
             .fields = fields,
         });
     }
