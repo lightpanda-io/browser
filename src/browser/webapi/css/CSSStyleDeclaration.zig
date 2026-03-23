@@ -256,8 +256,16 @@ fn normalizePropertyValue(arena: Allocator, property_name: []const u8, value: []
     }
 
     // Canonicalize anchor-size() function: anchor name (dashed ident) comes before size keyword
-    if (std.mem.indexOf(u8, value, "anchor-size(") != null) {
-        return try canonicalizeAnchorSize(arena, value);
+    if (std.mem.indexOf(u8, value, "anchor-size(")) |idx| {
+        return canonicalizeAnchorSize(arena, value, idx);
+    }
+
+    // Canonicalize anchor() function: anchor name (dashed ident) comes before position keyword
+    // Note: indexOf finds first occurrence, so we check it's not part of "anchor-size("
+    if (std.mem.indexOf(u8, value, "anchor(")) |idx| {
+        if (idx == 0 or value[idx - 1] != '-') {
+            return canonicalizeAnchor(arena, value, idx);
+        }
     }
 
     return value;
@@ -265,9 +273,13 @@ fn normalizePropertyValue(arena: Allocator, property_name: []const u8, value: []
 
 // Canonicalize anchor-size() so that the dashed ident (anchor name) comes before the size keyword.
 // e.g. "anchor-size(width --foo)" -> "anchor-size(--foo width)"
-fn canonicalizeAnchorSize(arena: Allocator, value: []const u8) ![]const u8 {
+fn canonicalizeAnchorSize(arena: Allocator, value: []const u8, start_index: usize) ![]const u8 {
     var buf = std.Io.Writer.Allocating.init(arena);
-    var i: usize = 0;
+
+    // Copy everything before the first anchor-size(
+    try buf.writer.writeAll(value[0..start_index]);
+
+    var i: usize = start_index;
 
     while (i < value.len) {
         // Look for "anchor-size("
@@ -276,7 +288,7 @@ fn canonicalizeAnchorSize(arena: Allocator, value: []const u8) ![]const u8 {
             i += "anchor-size(".len;
 
             // Parse and canonicalize the arguments
-            i = try canonicalizeAnchorSizeArgs(value, i, &buf.writer);
+            i = try canonicalizeAnchorFnArgs(value, i, &buf.writer, .anchor_size);
         } else {
             try buf.writer.writeByte(value[i]);
             i += 1;
@@ -286,21 +298,24 @@ fn canonicalizeAnchorSize(arena: Allocator, value: []const u8) ![]const u8 {
     return buf.written();
 }
 
-// Parse anchor-size arguments and write them in canonical order
-fn canonicalizeAnchorSizeArgs(value: []const u8, start: usize, writer: *std.Io.Writer) !usize {
+const AnchorFnKind = enum { anchor, anchor_size };
+
+// Parse anchor/anchor-size arguments and write them in canonical order
+fn canonicalizeAnchorFnArgs(value: []const u8, start: usize, writer: *std.Io.Writer, kind: AnchorFnKind) !usize {
     var i = start;
     var depth: usize = 1;
 
     // Skip leading whitespace
     while (i < value.len and value[i] == ' ') : (i += 1) {}
 
-    // Collect tokens before the comma or close paren
-    var first_token_start: ?usize = null;
-    var first_token_end: usize = 0;
-    var second_token_start: ?usize = null;
-    var second_token_end: usize = 0;
-    var comma_pos: ?usize = null;
     var token_count: usize = 0;
+    var comma_pos: ?usize = null;
+
+    var first_token_end: usize = 0;
+    var first_token_start: ?usize = null;
+
+    var second_token_end: usize = 0;
+    var second_token_start: ?usize = null;
 
     const args_start = i;
     var in_token = false;
@@ -378,13 +393,16 @@ fn canonicalizeAnchorSizeArgs(value: []const u8, start: usize, writer: *std.Io.W
         const first_token = value[first_start..first_token_end];
         const second_token = value[second_start..second_token_end];
 
-        // If second token is a dashed ident and first is a size keyword, swap them
-        if (std.mem.startsWith(u8, second_token, "--") and isAnchorSizeKeyword(first_token)) {
+        // If second token is a dashed ident, it should come first
+        // For anchor-size, also check that first token is a size keyword
+        const should_swap = std.mem.startsWith(u8, second_token, "--") and
+            (kind == .anchor or isAnchorSizeKeyword(first_token));
+
+        if (should_swap) {
             try writer.writeAll(second_token);
             try writer.writeByte(' ');
             try writer.writeAll(first_token);
         } else {
-            // Keep original order
             try writer.writeAll(first_token);
             try writer.writeByte(' ');
             try writer.writeAll(second_token);
@@ -394,20 +412,26 @@ fn canonicalizeAnchorSizeArgs(value: []const u8, start: usize, writer: *std.Io.W
         try writer.writeAll(value[fts..first_token_end]);
     }
 
-    // Handle comma and fallback value (may contain nested anchor-size)
+    // Handle comma and fallback value (may contain nested functions)
     if (comma_pos) |cp| {
         try writer.writeAll(", ");
         i = cp + 1;
         // Skip whitespace after comma
         while (i < value.len and value[i] == ' ') : (i += 1) {}
 
-        // Copy the fallback, recursively handling nested anchor-size
+        // Copy the fallback, recursively handling nested anchor/anchor-size
         while (i < value.len and depth > 0) {
             if (std.mem.startsWith(u8, value[i..], "anchor-size(")) {
                 try writer.writeAll("anchor-size(");
                 i += "anchor-size(".len;
                 depth += 1;
-                i = try canonicalizeAnchorSizeArgs(value, i, writer);
+                i = try canonicalizeAnchorFnArgs(value, i, writer, .anchor_size);
+                depth -= 1;
+            } else if (std.mem.startsWith(u8, value[i..], "anchor(")) {
+                try writer.writeAll("anchor(");
+                i += "anchor(".len;
+                depth += 1;
+                i = try canonicalizeAnchorFnArgs(value, i, writer, .anchor);
                 depth -= 1;
             } else if (value[i] == '(') {
                 depth += 1;
@@ -441,6 +465,33 @@ fn isAnchorSizeKeyword(token: []const u8) bool {
         .{ "self-inline", {} },
     });
     return keywords.has(token);
+}
+
+// Canonicalize anchor() so that the dashed ident (anchor name) comes before the position keyword.
+// e.g. "anchor(left --foo)" -> "anchor(--foo left)"
+fn canonicalizeAnchor(arena: Allocator, value: []const u8, start_index: usize) ![]const u8 {
+    var buf = std.Io.Writer.Allocating.init(arena);
+
+    // Copy everything before the first anchor(
+    try buf.writer.writeAll(value[0..start_index]);
+
+    var i: usize = start_index;
+
+    while (i < value.len) {
+        // Look for "anchor(" but not "anchor-size("
+        if (std.mem.startsWith(u8, value[i..], "anchor(") and (i == 0 or value[i - 1] != '-')) {
+            try buf.writer.writeAll("anchor(");
+            i += "anchor(".len;
+
+            // Parse and canonicalize the arguments
+            i = try canonicalizeAnchorFnArgs(value, i, &buf.writer, .anchor);
+        } else {
+            try buf.writer.writeByte(value[i]);
+            i += 1;
+        }
+    }
+
+    return buf.written();
 }
 
 // Check if a value is "X X" (duplicate) and return just "X"
@@ -745,8 +796,7 @@ pub const JsApi = struct {
     pub const cssFloat = bridge.accessor(CSSStyleDeclaration.getFloat, CSSStyleDeclaration.setFloat, .{});
 };
 
-const testing = @import("std").testing;
-
+const testing = @import("../../../testing.zig");
 test "normalizePropertyValue: unitless zero to 0px" {
     const cases = .{
         .{ "width", "0", "0px" },
@@ -767,16 +817,16 @@ test "normalizePropertyValue: unitless zero to 0px" {
     };
     inline for (cases) |case| {
         const result = try normalizePropertyValue(testing.allocator, case[0], case[1]);
-        try testing.expectEqualStrings(case[2], result);
+        try testing.expectEqual(case[2], result);
     }
 }
 
 test "normalizePropertyValue: first baseline to baseline" {
     const result = try normalizePropertyValue(testing.allocator, "align-items", "first baseline");
-    try testing.expectEqualStrings("baseline", result);
+    try testing.expectEqual("baseline", result);
 
     const result2 = try normalizePropertyValue(testing.allocator, "align-self", "last baseline");
-    try testing.expectEqualStrings("last baseline", result2);
+    try testing.expectEqual("last baseline", result2);
 }
 
 test "normalizePropertyValue: collapse duplicate two-value shorthands" {
@@ -793,6 +843,27 @@ test "normalizePropertyValue: collapse duplicate two-value shorthands" {
     };
     inline for (cases) |case| {
         const result = try normalizePropertyValue(testing.allocator, case[0], case[1]);
-        try testing.expectEqualStrings(case[2], result);
+        try testing.expectEqual(case[2], result);
+    }
+}
+
+test "normalizePropertyValue: anchor() canonical order" {
+    defer testing.reset();
+    const cases = .{
+        // Dashed ident should come before keyword
+        .{ "left", "anchor(left --foo)", "anchor(--foo left)" },
+        .{ "left", "anchor(inside --foo)", "anchor(--foo inside)" },
+        .{ "left", "anchor(50% --foo)", "anchor(--foo 50%)" },
+        // Already canonical order - keep as-is
+        .{ "left", "anchor(--foo left)", "anchor(--foo left)" },
+        .{ "left", "anchor(left)", "anchor(left)" },
+        // With fallback
+        .{ "left", "anchor(left --foo, 1px)", "anchor(--foo left, 1px)" },
+        // Nested anchor in fallback
+        .{ "left", "anchor(left --foo, anchor(right --bar))", "anchor(--foo left, anchor(--bar right))" },
+    };
+    inline for (cases) |case| {
+        const result = try normalizePropertyValue(testing.arena_allocator, case[0], case[1]);
+        try testing.expectEqual(case[2], result);
     }
 }
