@@ -629,22 +629,14 @@ fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
     try runner.wait(.{ .ms = 2000 });
 }
 
-const testing = @import("../testing.zig");
 const router = @import("router.zig");
+const testing = @import("../testing.zig");
 
 test "MCP - evaluate error reporting" {
     defer testing.reset();
-    const allocator = testing.allocator;
-    const app = testing.test_app;
-
-    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
-    defer out_alloc.deinit();
-
-    var server = try Server.init(allocator, app, &out_alloc.writer);
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
-    _ = try server.session.createPage();
-
-    const aa = testing.arena_allocator;
 
     // Call evaluate with a script that throws an error
     const msg =
@@ -661,81 +653,74 @@ test "MCP - evaluate error reporting" {
         \\}
     ;
 
-    try router.handleMessage(server, aa, msg);
+    try router.handleMessage(server, testing.arena_allocator, msg);
 
-    try testing.expectJson(
-        \\{
-        \\  "id": 1,
-        \\  "result": {
-        \\    "isError": true,
-        \\    "content": [
-        \\      { "type": "text" }
-        \\    ]
-        \\  }
-        \\}
-    , out_alloc.writer.buffered());
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .isError = true,
+        .content = &.{.{ .type = "text" }},
+    } }, out.written());
 }
 
 test "MCP - Actions: click, fill, scroll" {
     defer testing.reset();
-    const allocator = testing.allocator;
-    const app = testing.test_app;
+    const aa = testing.arena_allocator;
 
-    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
-    defer out_alloc.deinit();
-
-    var server = try Server.init(allocator, app, &out_alloc.writer);
+    var out: std.io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
-    const aa = testing.arena_allocator;
-    const page = try server.session.createPage();
-    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
-    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    var runner = try server.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    const page = &server.session.page.?;
 
-    // Test Click
-    const btn = page.document.getElementById("btn", page).?.asNode();
-    const btn_id = (try server.node_registry.register(btn)).id;
-    var btn_id_buf: [12]u8 = undefined;
-    const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
-    const click_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}" });
-    try router.handleMessage(server, aa, click_msg);
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "Clicked element") != null);
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
-    out_alloc.clearRetainingCapacity();
+    {
+        // Test Click
+        const btn = page.document.getElementById("btn", page).?.asNode();
+        const btn_id = (try server.node_registry.register(btn)).id;
+        var btn_id_buf: [12]u8 = undefined;
+        const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
+        const click_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}" });
+        try router.handleMessage(server, aa, click_msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Clicked element") != null);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
+        out.clearRetainingCapacity();
+    }
 
-    // Test Fill Input
-    const inp = page.document.getElementById("inp", page).?.asNode();
-    const inp_id = (try server.node_registry.register(inp)).id;
-    var inp_id_buf: [12]u8 = undefined;
-    const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
-    const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"text\":\"hello\"}}}" });
-    try router.handleMessage(server, aa, fill_msg);
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "Filled element") != null);
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "with \\\"hello\\\"") != null);
-    out_alloc.clearRetainingCapacity();
+    {
+        // Test Fill Input
+        const inp = page.document.getElementById("inp", page).?.asNode();
+        const inp_id = (try server.node_registry.register(inp)).id;
+        var inp_id_buf: [12]u8 = undefined;
+        const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
+        const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"text\":\"hello\"}}}" });
+        try router.handleMessage(server, aa, fill_msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Filled element") != null);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "with \\\"hello\\\"") != null);
+        out.clearRetainingCapacity();
+    }
 
-    // Test Fill Select
-    const sel = page.document.getElementById("sel", page).?.asNode();
-    const sel_id = (try server.node_registry.register(sel)).id;
-    var sel_id_buf: [12]u8 = undefined;
-    const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
-    const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"text\":\"opt2\"}}}" });
-    try router.handleMessage(server, aa, fill_sel_msg);
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "Filled element") != null);
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "with \\\"opt2\\\"") != null);
-    out_alloc.clearRetainingCapacity();
+    {
+        // Test Fill Select
+        const sel = page.document.getElementById("sel", page).?.asNode();
+        const sel_id = (try server.node_registry.register(sel)).id;
+        var sel_id_buf: [12]u8 = undefined;
+        const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
+        const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"text\":\"opt2\"}}}" });
+        try router.handleMessage(server, aa, fill_sel_msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Filled element") != null);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "with \\\"opt2\\\"") != null);
+        out.clearRetainingCapacity();
+    }
 
-    // Test Scroll
-    const scrollbox = page.document.getElementById("scrollbox", page).?.asNode();
-    const scrollbox_id = (try server.node_registry.register(scrollbox)).id;
-    var scroll_id_buf: [12]u8 = undefined;
-    const scroll_id_str = std.fmt.bufPrint(&scroll_id_buf, "{d}", .{scrollbox_id}) catch unreachable;
-    const scroll_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"scroll\",\"arguments\":{\"backendNodeId\":", scroll_id_str, ",\"y\":50}}}" });
-    try router.handleMessage(server, aa, scroll_msg);
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "Scrolled to x: 0, y: 50") != null);
-    out_alloc.clearRetainingCapacity();
+    {
+        // Test Scroll
+        const scrollbox = page.document.getElementById("scrollbox", page).?.asNode();
+        const scrollbox_id = (try server.node_registry.register(scrollbox)).id;
+        var scroll_id_buf: [12]u8 = undefined;
+        const scroll_id_str = std.fmt.bufPrint(&scroll_id_buf, "{d}", .{scrollbox_id}) catch unreachable;
+        const scroll_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"scroll\",\"arguments\":{\"backendNodeId\":", scroll_id_str, ",\"y\":50}}}" });
+        try router.handleMessage(server, aa, scroll_msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Scrolled to x: 0, y: 50") != null);
+        out.clearRetainingCapacity();
+    }
 
     // Evaluate assertions
     var ls: js.Local.Scope = undefined;
@@ -746,111 +731,79 @@ test "MCP - Actions: click, fill, scroll" {
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
-    const result = try ls.local.compileAndRun("window.clicked === true && window.inputVal === 'hello' && window.changed === true && window.selChanged === 'opt2' && window.scrolled === true", null);
+    const result = try ls.local.exec(
+        \\ window.clicked === true && window.inputVal === 'hello' &&
+        \\ window.changed === true && window.selChanged === 'opt2' &&
+        \\ window.scrolled === true
+    , null);
 
     try testing.expect(result.isTrue());
 }
 
 test "MCP - waitForSelector: existing element" {
     defer testing.reset();
-    const allocator = testing.allocator;
-    const app = testing.test_app;
-
-    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
-    defer out_alloc.deinit();
-
-    var server = try Server.init(allocator, app, &out_alloc.writer);
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage(
+        "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html",
+        &out.writer,
+    );
     defer server.deinit();
-
-    const aa = testing.arena_allocator;
-    const page = try server.session.createPage();
-    const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
-    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    var runner = try server.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
 
     // waitForSelector on an element that already exists returns immediately
     const msg =
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#existing","timeout":2000}}}
     ;
-    try router.handleMessage(server, aa, msg);
+    try router.handleMessage(server, testing.arena_allocator, msg);
 
-    try testing.expectJson(
-        \\{
-        \\  "id": 1,
-        \\  "result": {
-        \\    "content": [
-        \\      { "type": "text" }
-        \\    ]
-        \\  }
-        \\}
-    , out_alloc.writer.buffered());
+    try testing.expectJson(.{ .id = 1, .result = .{ .content = &.{.{ .type = "text" }} } }, out.written());
 }
 
 test "MCP - waitForSelector: delayed element" {
     defer testing.reset();
-    const allocator = testing.allocator;
-    const app = testing.test_app;
-
-    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
-    defer out_alloc.deinit();
-
-    var server = try Server.init(allocator, app, &out_alloc.writer);
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage(
+        "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html",
+        &out.writer,
+    );
     defer server.deinit();
-
-    const aa = testing.arena_allocator;
-    const page = try server.session.createPage();
-    const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
-    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    var runner = try server.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
 
     // waitForSelector on an element added after 200ms via setTimeout
     const msg =
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#delayed","timeout":5000}}}
     ;
-    try router.handleMessage(server, aa, msg);
+    try router.handleMessage(server, testing.arena_allocator, msg);
 
-    try testing.expectJson(
-        \\{
-        \\  "id": 1,
-        \\  "result": {
-        \\    "content": [
-        \\      { "type": "text" }
-        \\    ]
-        \\  }
-        \\}
-    , out_alloc.writer.buffered());
+    try testing.expectJson(.{ .id = 1, .result = .{ .content = &.{.{ .type = "text" }} } }, out.written());
 }
 
 test "MCP - waitForSelector: timeout" {
     defer testing.reset();
-    const allocator = testing.allocator;
-    const app = testing.test_app;
-
-    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
-    defer out_alloc.deinit();
-
-    var server = try Server.init(allocator, app, &out_alloc.writer);
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage(
+        "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html",
+        &out.writer,
+    );
     defer server.deinit();
-
-    const aa = testing.arena_allocator;
-    const page = try server.session.createPage();
-    const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
-    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    var runner = try server.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
 
     // waitForSelector with a short timeout on a non-existent element should error
     const msg =
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#nonexistent","timeout":100}}}
     ;
-    try router.handleMessage(server, aa, msg);
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expectJson(.{
+        .id = 1,
+        .@"error" = struct {}{},
+    }, out.written());
+}
 
-    try testing.expectJson(
-        \\{
-        \\  "id": 1,
-        \\  "error": {}
-        \\}
-    , out_alloc.writer.buffered());
+fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {
+    var server = try Server.init(testing.allocator, testing.test_app, writer);
+    errdefer server.deinit();
+
+    const page = try server.session.createPage();
+    try page.navigate(url, .{});
+
+    var runner = try server.session.runner(.{});
+    try runner.wait(.{ .ms = 2000 });
+    return server;
 }
