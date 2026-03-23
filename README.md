@@ -25,23 +25,37 @@ Not a Chromium fork. Not a WebKit patch. A new browser, written in Zig.
 ](https://github.com/lightpanda-io/demo)
 </div>
 
-_Puppeteer requesting 100 pages from a local website on a AWS EC2 m5.large instance.
-See [benchmark details](https://github.com/lightpanda-io/demo)._
+## Table of Contents
 
-Lightpanda is the open-source browser made for headless usage:
+- [Benchmarks](#benchmarks)
+- [Quick Start](#quick-start)
+  - [Install](#install)
+  - [Dump a URL](#dump-a-url)
+  - [Start a CDP Server](#start-a-cdp-server)
+  - [Telemetry](#telemetry)
+- [Lightpanda vs Headless Chrome](#lightpanda-vs-headless-chrome)
+  - [What Lightpanda supports today](#what-lightpanda-supports-today)
+- [Use Cases](#use-cases)
+- [Architecture](#architecture)
+- [Why Lightpanda?](#why-lightpanda)
+- [Build from Source](#build-from-source)
+- [Test](#test)
+- [Contributing](#contributing)
+- [Compatibility Note](#compatibility-note)
+- [FAQ](#faq)
 
-- Javascript execution
-- Support of Web APIs (partial, WIP)
-- Compatible with Playwright[^1], Puppeteer, chromedp through [CDP](https://chromedevtools.github.io/devtools-protocol/)
+---
 
-Fast web automation for AI agents, LLM training, scraping and testing:
+## Benchmarks
 
-- Ultra-low memory footprint (9x less than Chrome)
-- Exceptionally fast execution (11x faster than Chrome)
-- Instant startup
+_Puppeteer requesting 100 pages from a local website on an AWS EC2 m5.large instance. See [benchmark details](https://github.com/lightpanda-io/demo)._
 
-[^1]: **Playwright support disclaimer:**
-Due to the nature of Playwright, a script that works with the current version of the browser may not function correctly with a future version. Playwright uses an intermediate JavaScript layer that selects an execution strategy based on the browser's available features. If Lightpanda adds a new [Web API](https://developer.mozilla.org/en-US/docs/Web/API), Playwright may choose to execute different code for the same script. This new code path could attempt to use features that are not yet implemented. Lightpanda makes an effort to add compatibility tests, but we can't cover all scenarios. If you encounter an issue, please create a [GitHub issue](https://github.com/lightpanda-io/browser/issues) and include the last known working version of the script.
+| Metric | Lightpanda | Headless Chrome | Difference |
+| :---- | :---- | :---- | :---- |
+| Memory (peak, 100 pages) | 24 MB | 207 MB | ~9x less |
+| Execution time (100 pages) | 2.3s | 25.2s | ~11x faster |
+
+---
 
 ## Quick start
 
@@ -84,6 +98,10 @@ docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly
 ```console
 ./lightpanda fetch --obey_robots --log_format pretty  --log_level info https://demo-browser.lightpanda.io/campfire-commerce/
 ```
+
+<details>
+<summary>Example output</summary>
+
 ```console
 INFO  telemetry : telemetry status . . . . . . . . . . . . .  [+0ms]
       disabled = false
@@ -114,11 +132,17 @@ INFO  http : request complete . . . . . . . . . . . . . . . . [+141ms]
 <!DOCTYPE html>
 ```
 
+</details>
+
 ### Start a CDP server
 
 ```console
 ./lightpanda serve --obey_robots --log_format pretty  --log_level info --host 127.0.0.1 --port 9222
 ```
+
+<details>
+<summary>Example output</summary>
+
 ```console
 INFO  telemetry : telemetry status . . . . . . . . . . . . .  [+0ms]
       disabled = false
@@ -127,8 +151,13 @@ INFO  app : server running . . . . . . . . . . . . . . . . .  [+0ms]
       address = 127.0.0.1:9222
 ```
 
+</details>
+
 Once the CDP server started, you can run a Puppeteer script by configuring the
 `browserWSEndpoint`.
+
+<details>
+<summary>Example Puppeteer script</summary>
 
 ```js
 'use strict'
@@ -160,50 +189,114 @@ await context.close();
 await browser.disconnect();
 ```
 
+</details>
+
 ### Telemetry
 By default, Lightpanda collects and sends usage telemetry. This can be disabled by setting an environment variable `LIGHTPANDA_DISABLE_TELEMETRY=true`. You can read Lightpanda's privacy policy at: [https://lightpanda.io/privacy-policy](https://lightpanda.io/privacy-policy).
 
-## Status
+## Lightpanda vs Headless Chrome
 
-Lightpanda is in Beta and currently a work in progress. Stability and coverage are improving and many websites now work.
-You may still encounter errors or crashes. Please open an issue with specifics if so.
+Lightpanda is not a general-purpose browser. It is built specifically for headless workloads.
 
-Here are the key features we have implemented:
+**Use Lightpanda when you need:**
 
-- [x] HTTP loader ([Libcurl](https://curl.se/libcurl/))
-- [x] HTML parser ([html5ever](https://github.com/servo/html5ever))
-- [x] DOM tree
-- [x] Javascript support ([v8](https://v8.dev/))
-- [x] DOM APIs
-- [x] Ajax
-  - [x] XHR API
-  - [x] Fetch API
-- [x] DOM dump
-- [x] CDP/websockets server
-- [x] Click
-- [x] Input form
-- [x] Cookies
-- [x] Custom HTTP headers
-- [x] Proxy support
-- [x] Network interception
-- [x] Respect `robots.txt` with option `--obey_robots`
+- Low-memory scraping or data extraction at scale
+- AI agent browsing (via MCP or CDP)
+- Fast CI test runs against a headless browser
+- Markdown/text extraction from JS-rendered pages
+- Minimal footprint: single binary, no Chromium install
 
-NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
+**Use Headless Chrome when you need:**
 
-## Build from sources
+- Full visual rendering, screenshots, or PDFs
+- WebGL or advanced CSS layout
+- Complete Web API coverage (Canvas, WebRTC, etc.)
+- Pixel-perfect visual testing
+
+### What Lightpanda supports today
+
+- HTTP loader ([Libcurl](https://curl.se/libcurl/))
+- HTML parser ([html5ever](https://github.com/servo/html5ever))
+- DOM tree + DOM APIs
+- Javascript ([v8](https://v8.dev/))
+- Ajax (XHR + Fetch)
+- CDP/WebSocket server
+- Click, input/form, cookies
+- Custom HTTP headers
+- Proxy support
+- Network interception
+- robots.txt compliance (`--obey_robots`)
+
+**Note:** There are hundreds of Web APIs. Coverage increases with each release. If you hit a gap, [open an issue](https://github.com/lightpanda-io/browser/issues).
+
+## Use Cases
+
+### AI Agents and LLM Tools
+
+Give your AI agent a real browser that is fast and cheap to run. Lightpanda Cloud exposes an MCP endpoint at `cloud.lightpanda.io/mcp/sse` with tools for search, goto, markdown, and links. Works with Claude, Cursor, Windsurf, or any CDP-based agent framework.
+
+- [agent-skill repo](https://github.com/lightpanda-io/agent-skill)
+
+### Web Scraping and Data Extraction
+
+Lightpanda uses 9x less memory than Chrome. It works with Crawlee, Puppeteer, and Playwright.
+
+```console
+lightpanda fetch --dump markdown --obey_robots https://example.com
+```
+
+### Automated Testing
+
+Drop-in replacement for headless Chrome in CI pipelines. If your tests use Puppeteer or Playwright, change the connection URL to `ws://127.0.0.1:9222` and run them.
+
+### LLM Training Data Collection
+
+Use `--dump markdown` to extract clean text from JS-rendered pages at volume.
+
+---
+
+## Architecture
+
+![Architecture Diagram](architecture-diagram-highres.png)
+
+The client connects over CDP via WebSocket. The server parses HTML into a DOM tree, applies CSS, and executes JavaScript through V8. Page content is returned to the client as HTML, markdown, or structured data depending on the request.
+
+---
+
+## Why Lightpanda?
+
+### Javascript execution is mandatory for the modern web
+
+Simple HTTP requests used to be enough for scraping. That's no longer the case. Javascript now drives most of the web:
+
+- Ajax, Single Page Apps, infinite loading, instant search
+- JS frameworks: React, Vue, Angular, and others
+
+### Chrome is not the right tool
+
+Running a full desktop browser on a server works, but it does not scale well. Chrome at hundreds or thousands of instances is expensive:
+
+- Heavy on RAM and CPU
+- Hard to package, deploy, and maintain at scale
+- Many features are irrelevant in headless usage
+
+### Lightpanda is built for performance
+
+Supporting Javascript with real performance meant building from scratch rather than forking Chromium:
+
+- Not based on Chromium, Blink, or WebKit
+- Written in Zig, a low-level language with explicit memory control
+- No graphical rendering engine
+
+---
+
+## Build from Source
 
 ### Prerequisites
 
-Lightpanda is written with [Zig](https://ziglang.org/) `0.15.2`. You have to
-install it with the right version in order to build the project.
+Lightpanda is written with [Zig](https://ziglang.org/) `0.15.2` and depends on: [v8](https://chromium.googlesource.com/v8/v8.git), [Libcurl](https://curl.se/libcurl/), [html5ever](https://github.com/servo/html5ever).
 
-Lightpanda also depends on
-[v8](https://chromium.googlesource.com/v8/v8.git),
-[Libcurl](https://curl.se/libcurl/) and [html5ever](https://github.com/servo/html5ever).
-
-To be able to build the v8 engine, you have to install some libs:
-
-For **Debian/Ubuntu based Linux**:
+**Debian/Ubuntu:**
 
 ```
 sudo apt install xz-utils ca-certificates \
@@ -212,55 +305,60 @@ sudo apt install xz-utils ca-certificates \
 ```
 You also need to [install Rust](https://rust-lang.org/tools/install/).
 
-For systems with [**Nix**](https://nixos.org/download/), you can use the devShell:
+**Nix:**
+
 ```
 nix develop
 ```
 
-For **MacOS**, you need cmake and [Rust](https://rust-lang.org/tools/install/).
+**macOS:**
+
 ```
 brew install cmake
 ```
 
+You also need [Rust](https://rust-lang.org/tools/install/).
+
 ### Build and run
 
-You an build the entire browser with `make build` or `make build-dev` for debug
-env.
+Build the browser:
 
-But you can directly use the zig command: `zig build run`.
+```
+make build       # release
+make build-dev   # debug
+```
+
+Or directly: `zig build run`.
 
 #### Embed v8 snapshot
 
-Lighpanda uses v8 snapshot. By default, it is created on startup but you can
-embed it by using the following commands:
+Generate the snapshot:
 
-Generate the snapshot.
 ```
 zig build snapshot_creator -- src/snapshot.bin
 ```
 
-Build using the snapshot binary.
+Build using the snapshot:
+
 ```
 zig build -Dsnapshot_path=../../snapshot.bin
 ```
 
-See [#1279](https://github.com/lightpanda-io/browser/pull/1279) for more details.
+See [#1279](https://github.com/lightpanda-io/browser/pull/1279) for details.
+
+---
 
 ## Test
 
 ### Unit Tests
 
-You can test Lightpanda by running `make test`.
+```
+make test
+```
 
-### End to end tests
+### End to End Tests
 
-To run end to end tests, you need to clone the [demo
-repository](https://github.com/lightpanda-io/demo) into `../demo` dir.
-
-You have to install the [demo's node
-requirements](https://github.com/lightpanda-io/demo?tab=readme-ov-file#dependencies-1)
-
-You also need to install [Go](https://go.dev) > v1.24.
+Clone the [demo repository](https://github.com/lightpanda-io/demo) into `../demo`. Install the [demo's node requirements](https://github.com/lightpanda-io/demo?tab=readme-ov-file#dependencies-1) and [Go](https://go.dev) >= v1.24.
 
 ```
 make end2end
@@ -268,107 +366,124 @@ make end2end
 
 ### Web Platform Tests
 
-Lightpanda is tested against the standardized [Web Platform
-Tests](https://web-platform-tests.org/).
+Lightpanda is tested against the standardized [Web Platform Tests](https://web-platform-tests.org/) using [a fork](https://github.com/lightpanda-io/wpt/tree/fork) with a custom [`testharnessreport.js`](https://github.com/lightpanda-io/wpt/commit/01a3115c076a3ad0c84849dbbf77a6e3d199c56f).
 
-We use [a fork](https://github.com/lightpanda-io/wpt/tree/fork) including a custom
-[`testharnessreport.js`](https://github.com/lightpanda-io/wpt/commit/01a3115c076a3ad0c84849dbbf77a6e3d199c56f).
+You can also run individual WPT test cases in your browser via [wpt.live](https://wpt.live).
 
-For reference, you can easily execute a WPT test case with your browser via
-[wpt.live](https://wpt.live).
+**Setup WPT HTTP server:**
 
-#### Configure WPT HTTP server
-
-To run the test, you must clone the repository, configure the custom hosts and generate the
-`MANIFEST.json` file.
-
-Clone the repository with the `fork` branch.
 ```
 git clone -b fork --depth=1 git@github.com:lightpanda-io/wpt.git
-```
-
-Enter into the `wpt/` dir.
-
-Install custom domains in your `/etc/hosts`
-```
+cd wpt
 ./wpt make-hosts-file | sudo tee -a /etc/hosts
-```
-
-Generate `MANIFEST.json`
-```
 ./wpt manifest
 ```
-Use the [WPT's setup
-guide](https://web-platform-tests.org/running-tests/from-local-system.html) for
-details.
 
-#### Run WPT test suite
+See the [WPT setup guide](https://web-platform-tests.org/running-tests/from-local-system.html) for details.
 
-An external [Go](https://go.dev) runner is provided by
-[github.com/lightpanda-io/demo/](https://github.com/lightpanda-io/demo/)
-repository, located into `wptrunner/` dir.
-You need to clone the project first.
+**Run WPT tests:**
 
-First start the WPT's HTTP server from your `wpt/` clone dir.
+Start the WPT HTTP server:
+
 ```
 ./wpt serve
 ```
 
-Run a Lightpanda browser
+Run Lightpanda:
 
 ```
 zig build run -- --insecure_disable_tls_host_verification
 ```
 
-Then you can start the wptrunner from the Demo's clone dir:
+Run the test suite (from [demo](https://github.com/lightpanda-io/demo/) clone):
+
 ```
 cd wptrunner && go run .
 ```
 
-Or one specific test:
+Run a specific test:
 
 ```
 cd wptrunner && go run . Node-childNodes.html
 ```
 
-`wptrunner` command accepts `--summary` and `--json` options modifying output.
-Also `--concurrency` define the concurrency limit.
+Options: `--summary`, `--json`, `--concurrency`.
 
-:warning: Running the whole test suite will take a long time. In this case,
-it's useful to build in `releaseFast` mode to make tests faster.
+**Note:** The full suite takes a long time. Build with `zig build -Doptimize=ReleaseFast run` for faster test execution.
 
-```
-zig build -Doptimize=ReleaseFast run
-```
+---
 
 ## Contributing
 
-Lightpanda accepts pull requests through GitHub.
+See [CONTRIBUTING.md](https://github.com/lightpanda-io/browser/blob/main/CONTRIBUTING.md) for guidelines.
 
-You have to sign our [CLA](CLA.md) during the pull request process otherwise
-we're not able to accept your contributions.
+You must sign our [CLA](CLA.md) during the pull request process.
 
-## Why?
+- [Good first issues](https://github.com/lightpanda-io/browser/labels/good%20first%20issue)
+- [Discord](https://discord.gg/K63XeymfB5)
 
-### Javascript execution is mandatory for the modern web
+---
 
-In the good old days, scraping a webpage was as easy as making an HTTP request, cURL-like. It’s not possible anymore, because Javascript is everywhere, like it or not:
+## Compatibility Note
 
-- Ajax, Single Page App, infinite loading, “click to display”, instant search, etc.
-- JS web frameworks: React, Vue, Angular & others
+**Playwright compatibility note:** A Playwright script that works today may break after a Lightpanda update. Playwright selects its execution strategy based on which browser APIs are available. When Lightpanda adds a new [Web API](https://developer.mozilla.org/en-US/docs/Web/API), Playwright may switch to a code path that uses features not yet implemented. We test for compatibility, but cannot cover every scenario. If you hit a regression, [open a GitHub issue](https://github.com/lightpanda-io/browser/issues) and include the last version of the script that worked.
 
-### Chrome is not the right tool
+---
 
-If we need Javascript, why not use a real web browser? Take a huge desktop application, hack it, and run it on the server. Hundreds or thousands of instances of Chrome if you use it at scale. Are you sure it’s such a good idea?
+## FAQ
 
-- Heavy on RAM and CPU, expensive to run
-- Hard to package, deploy and maintain at scale
-- Bloated, lots of features are not useful in headless usage
+<details>
+<summary><strong>Q: What is Lightpanda?</strong></summary>
 
-### Lightpanda is built for performance
+Lightpanda is an open-source headless browser written in Zig. It targets AI agents, web scraping, and automated testing. It uses 9x less memory and runs 11x faster than headless Chrome.
 
-If we want both Javascript and performance in a true headless browser, we need to start from scratch. Not another iteration of Chromium, really from a blank page. Crazy right? But that’s what we did:
+</details>
 
-- Not based on Chromium, Blink or WebKit
-- Low-level system programming language (Zig) with optimisations in mind
-- Opinionated: without graphical rendering
+<details>
+<summary><strong>Q: How does Lightpanda compare to Headless Chrome?</strong></summary>
+
+About 24 MB peak memory vs 207 MB for Chrome when loading 100 pages via Puppeteer. Task completion: 2.3s vs 25.2s. It supports the same CDP protocol, so most Puppeteer and Playwright scripts work without code changes. See the [Lightpanda vs Headless Chrome](#lightpanda-vs-headless-chrome) section for what Lightpanda can and cannot do.
+
+</details>
+
+<details>
+<summary><strong>Q: Is Lightpanda a Chromium fork?</strong></summary>
+
+No. It is written in Zig and implements web standards independently (W3C DOM, CSS, JavaScript via V8).
+
+</details>
+
+<details>
+<summary><strong>Q: Does Lightpanda work with Playwright?</strong></summary>
+
+Yes. Connect with `chromium.connectOverCDP("ws://127.0.0.1:9222")` locally, or use a cloud endpoint for managed infrastructure. See the [compatibility note](#compatibility-note) for caveats.
+
+</details>
+
+<details>
+<summary><strong>Q: Is there a cloud/hosted version?</strong></summary>
+
+Yes. [console.lightpanda.io](https://console.lightpanda.io) provides managed browser infrastructure with regional endpoints (EU West, US West), MCP integration, and both Lightpanda and Chromium browser options.
+
+</details>
+
+<details>
+<summary><strong>Q: Why is Lightpanda written in Zig?</strong></summary>
+
+Zig provides precise memory control and deterministic performance without a garbage collector. It compiles to a single static binary with no runtime dependencies. Learn more: [Why We Built Lightpanda in Zig](https://lightpanda.io/blog/posts/why-we-built-lightpanda-in-zig).
+
+</details>
+
+<details>
+<summary><strong>Q: What operating systems does Lightpanda support?</strong></summary>
+
+Linux (Debian 12, Ubuntu 22.04/24.04), macOS 13+, and Windows 10+ via WSL2.
+
+</details>
+
+<details>
+<summary><strong>Q: Does Lightpanda respect robots.txt?</strong></summary>
+
+Yes, when the `--obey_robots` flag is enabled.
+
+</details>
