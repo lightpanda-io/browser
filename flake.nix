@@ -31,6 +31,11 @@
     flake-utils.lib.eachDefaultSystem (
       system:
       let
+        zigVersion = "0.15.2";
+        zigV8Version = "v0.3.4";
+        v8Version = "14.0.365.4";
+        cargoRoot = "src/html5ever";
+
         overlays = [
           (final: prev: {
             zigpkgs = zigPkgs.packages.${prev.system};
@@ -56,8 +61,8 @@
           multiArch = true;
           targetPkgs =
             pkgs: with pkgs; [
-              # Build Tools
-              zigpkgs."0.15.2"
+              # Build tools
+              zigpkgs.${zigVersion}
               zls
               rustToolchain
               python3
@@ -70,7 +75,7 @@
               gcc.cc.lib
               crtFiles
 
-              # Libaries
+              # Libraries
               expat.dev
               glib.dev
               glibc.dev
@@ -78,22 +83,21 @@
             ];
         };
 
-        deps = pkgs.callPackage ./deps.nix { };
+        zigDeps = pkgs.callPackage ./deps.nix { };
 
         cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
           src = ./.;
-          cargoRoot = "src/html5ever";
+          inherit cargoRoot;
           hash = "sha256-2eUx3gG6ufaEuHESGq33UGMNIN2W4LF96/QjyUFIops=";
         };
 
         prebuiltV8 =
           if pkgs.stdenv.hostPlatform.isLinux then
+            let
+              arch = if pkgs.stdenv.hostPlatform.isAarch64 then "aarch64" else "x86_64";
+            in
             pkgs.fetchurl {
-              url =
-                let
-                  arch = if pkgs.stdenv.hostPlatform.isAarch64 then "aarch64" else "x86_64";
-                in
-                "https://github.com/lightpanda-io/zig-v8-fork/releases/download/v0.3.4/libc_v8_14.0.365.4_linux_${arch}.a";
+              url = "https://github.com/lightpanda-io/zig-v8-fork/releases/download/${zigV8Version}/libc_v8_${v8Version}_linux_${arch}.a";
               hash =
                 if pkgs.stdenv.hostPlatform.isAarch64 then
                   "sha256-Zg5/e4c4r4zIQ7D7vCnnDPyxwU8H05HcIqfMSHFFE6k="
@@ -114,8 +118,7 @@
             src = ./.;
 
             nativeBuildInputs = [ pkgs.rustPlatform.cargoSetupHook ];
-            inherit cargoDeps;
-            cargoRoot = "src/html5ever";
+            inherit cargoDeps cargoRoot;
 
             dontConfigure = true;
 
@@ -134,7 +137,7 @@
               export RUSTUP_HOME="$TMPDIR/rustup"
               export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
               mkdir -p "$HOME" "$XDG_CACHE_HOME" "$CARGO_HOME" "$RUSTUP_HOME" "$ZIG_GLOBAL_CACHE_DIR"
-              ln -s ${deps} "$ZIG_GLOBAL_CACHE_DIR/p"
+              ln -s ${zigDeps} "$ZIG_GLOBAL_CACHE_DIR/p"
 
               cp -r "$src" source
               chmod -R u+w source
