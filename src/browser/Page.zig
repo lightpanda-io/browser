@@ -2617,8 +2617,10 @@ pub fn appendAllChildren(self: *Page, parent: *Node, target: *Node) !void {
     self.domChanged();
     const dest_connected = target.isConnected();
 
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
+    // Use firstChild() instead of iterator to handle cases where callbacks
+    // (like custom element connectedCallback) modify the parent during iteration.
+    // The iterator captures "next" pointers that can become stale.
+    while (parent.firstChild()) |child| {
         // Check if child was connected BEFORE removing it from parent
         const child_was_connected = child.isConnected();
         self.removeNode(parent, child, .{ .will_be_reconnected = dest_connected });
@@ -2630,8 +2632,10 @@ pub fn insertAllChildrenBefore(self: *Page, fragment: *Node, parent: *Node, ref_
     self.domChanged();
     const dest_connected = parent.isConnected();
 
-    var it = fragment.childrenIterator();
-    while (it.next()) |child| {
+    // Use firstChild() instead of iterator to handle cases where callbacks
+    // (like custom element connectedCallback) modify the fragment during iteration.
+    // The iterator captures "next" pointers that can become stale.
+    while (fragment.firstChild()) |child| {
         // Check if child was connected BEFORE removing it from fragment
         const child_was_connected = child.isConnected();
         self.removeNode(fragment, child, .{ .will_be_reconnected = dest_connected });
