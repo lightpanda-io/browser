@@ -196,7 +196,7 @@ fn collectFormFields(
                 });
             },
             .textarea => {
-                const textarea = el.is(Element.Html.TextArea) orelse continue;
+                const textarea = el.as(Element.Html.TextArea);
 
                 try fields.append(arena, .{
                     .node = node,
