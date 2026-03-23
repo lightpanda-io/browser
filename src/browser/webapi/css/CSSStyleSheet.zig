@@ -76,10 +76,11 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, pag
     const index = maybe_index orelse 0;
     var it = Parser.parseStylesheet(rule);
     const parsed_rule = it.next() orelse {
-        const trimmed = std.mem.trimLeft(u8, rule, &std.ascii.whitespace);
-        if (std.mem.startsWith(u8, trimmed, "@")) {
-            // At-rules (like @keyframes) are currently skipped by the parser.
-            // Returning the index simulates successful insertion without crashing.
+        if (it.has_skipped_at_rule) {
+            // Lightpanda currently skips at-rules (e.g., @keyframes, @media) in its
+            // CSS parser. To prevent JS apps (like Expo/Reanimated) from crashing
+            // during initialization, we simulate a successful insertion by returning
+            // the requested index.
             return index;
         }
         return error.SyntaxError;

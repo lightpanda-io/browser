@@ -306,6 +306,7 @@ pub fn parseStylesheet(input: []const u8) RulesIterator {
 pub const RulesIterator = struct {
     input: []const u8,
     stream: TokenStream,
+    has_skipped_at_rule: bool = false,
 
     pub fn init(input: []const u8) RulesIterator {
         return .{
@@ -358,6 +359,7 @@ pub const RulesIterator = struct {
             }
 
             if (peeked.token == .at_keyword) {
+                self.has_skipped_at_rule = true;
                 self.skipAtRule();
                 selector_start = null;
                 selector_end = null;
