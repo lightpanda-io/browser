@@ -378,7 +378,7 @@ test "cdp.lp: waitForSelector" {
     const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
     try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
     var runner = try bc.session.runner(.{});
-    try runner.wait(.{.ms = 2000});
+    try runner.wait(.{ .ms = 2000 });
 
     // 1. Existing element
     try ctx.processMessage(.{

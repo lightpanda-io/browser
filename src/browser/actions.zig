@@ -108,7 +108,7 @@ pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, page: *Page) !void {
 pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, session: *Session) !*DOMNode {
     var timer = try std.time.Timer.start();
     var runner = try session.runner(.{});
-    try runner.wait(.{.ms = timeout_ms, .until = .load});
+    try runner.wait(.{ .ms = timeout_ms, .until = .load });
 
     while (true) {
         const page = runner.page;
@@ -124,14 +124,14 @@ pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, session: *Sessio
         if (elapsed >= timeout_ms) {
             return error.Timeout;
         }
-        switch (try runner.tick(.{.ms = timeout_ms - elapsed})) {
+        switch (try runner.tick(.{ .ms = timeout_ms - elapsed })) {
             .done => return error.Timeout,
             .ok => |recommended_sleep_ms| {
                 if (recommended_sleep_ms > 0) {
                     // guanrateed to be <= 20ms
                     std.Thread.sleep(std.time.ns_per_ms * recommended_sleep_ms);
                 }
-            }
+            },
         }
     }
 }
