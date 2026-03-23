@@ -18,15 +18,15 @@ Not a Chromium fork. Not a WebKit patch. A new browser, written in Zig.
 </div>
 <div align="center">
 
-[<img width="350px" src="https://cdn.lightpanda.io/assets/images/github/execution-time.svg">
+[<img width="350px" src="https://cdn.lightpanda.io/assets/images/github/execution-time-v2.svg">
 ](https://github.com/lightpanda-io/demo)
 &emsp;
-[<img width="350px" src="https://cdn.lightpanda.io/assets/images/github/memory-frame.svg">
+[<img width="350px" src="https://cdn.lightpanda.io/assets/images/github/memory-frame-v2.svg">
 ](https://github.com/lightpanda-io/demo)
 </div>
 
-_Puppeteer requesting 100 pages from a local website on a AWS EC2 m5.large instance.
-See [benchmark details](https://github.com/lightpanda-io/demo)._
+_chromedp requesting 933 real web pages over the network on a AWS EC2 m5.large instance.
+See [benchmark details](https://github.com/lightpanda-io/demo/blob/main/BENCHMARKS.md#crawler-benchmark)._
 
 Lightpanda is the open-source browser made for headless usage:
 
