@@ -210,7 +210,7 @@ fn collectFormFields(
                 });
             },
             .select => {
-                const select = el.is(Element.Html.Select) orelse continue;
+                const select = el.as(Element.Html.Select);
 
                 const options = try collectSelectOptions(node, arena, page);
 
