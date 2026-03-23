@@ -73,6 +73,8 @@ const Runner = struct {
         var slowest = SlowTracker.init(self.allocator, 5);
         defer slowest.deinit();
 
+        var fail_list: std.ArrayList([]const u8) = .empty;
+
         var pass: usize = 0;
         var fail: usize = 0;
         var skip: usize = 0;
@@ -175,6 +177,7 @@ const Runner = struct {
                     if (self.env.fail_first) {
                         break;
                     }
+                    try fail_list.append(self.allocator, try self.allocator.dupe(u8, friendly_name));
                 },
             }
 
@@ -210,9 +213,9 @@ const Runner = struct {
             Printer.status(.fail, "{d} test{s} leaked\n", .{ leak, if (leak != 1) "s" else "" });
         }
         Printer.fmt("\n", .{});
+
         try slowest.display();
         Printer.fmt("\n", .{});
-
         // stats
         if (self.env.metrics) {
             var stdout = std.fs.File.stdout();
@@ -232,6 +235,15 @@ const Runner = struct {
                     .alloc_size = v8_peak_memory,
                 } },
             }, .{ .whitespace = .indent_2 }, &writer.interface);
+            Printer.fmt("\n", .{});
+        }
+
+        if (fail_list.items.len > 0) {
+            Printer.status(.fail, "Failed Test Summary: \n", .{});
+            for (fail_list.items) |name| {
+                Printer.status(.fail, "- {s}\n", .{name});
+            }
+            Printer.fmt("\n", .{});
         }
 
         std.posix.exit(if (fail == 0) 0 else 1);
