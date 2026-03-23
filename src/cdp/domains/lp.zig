@@ -167,8 +167,8 @@ fn detectForms(cmd: anytype) !void {
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
     const forms_data = try lp.forms.collectForms(
-        page.document.asNode(),
         cmd.arena,
+        page.document.asNode(),
         page,
     );
 

@@ -137,8 +137,8 @@ pub const FormInfo = struct {
 
 /// Collect all forms and their fields under `root`.
 pub fn collectForms(
-    root: *Node,
     arena: Allocator,
+    root: *Node,
     page: *Page,
 ) ![]FormInfo {
     var forms: std.ArrayList(FormInfo) = .empty;
@@ -150,7 +150,7 @@ pub fn collectForms(
 
         const form_el = el.is(Element.Html.Form) orelse continue;
 
-        const fields = try collectFormFields(node, arena, page);
+        const fields = try collectFormFields(arena, node, page);
         if (fields.len == 0) continue;
 
         const action_attr = el.getAttributeSafe(comptime .wrap("action"));
@@ -168,8 +168,8 @@ pub fn collectForms(
 }
 
 fn collectFormFields(
-    form_node: *Node,
     arena: Allocator,
+    form_node: *Node,
     page: *Page,
 ) ![]FormField {
     var fields: std.ArrayList(FormField) = .empty;
@@ -180,7 +180,7 @@ fn collectFormFields(
 
         switch (el.getTag()) {
             .input => {
-                const input = el.as(Element.Html.Input);
+                const input = el.is(Element.Html.Input) orelse continue;
                 if (input._input_type == .hidden) continue;
                 if (input._input_type == .submit or input._input_type == .button or input._input_type == .image) continue;
 
@@ -196,7 +196,7 @@ fn collectFormFields(
                 });
             },
             .textarea => {
-                const textarea = el.as(Element.Html.TextArea);
+                const textarea = el.is(Element.Html.TextArea) orelse continue;
 
                 try fields.append(arena, .{
                     .node = node,
@@ -210,9 +210,9 @@ fn collectFormFields(
                 });
             },
             .select => {
-                const select = el.as(Element.Html.Select);
+                const select = el.is(Element.Html.Select) orelse continue;
 
-                const options = try collectSelectOptions(node, arena, page);
+                const options = try collectSelectOptions(arena, node, page);
 
                 try fields.append(arena, .{
                     .node = node,
@@ -233,8 +233,8 @@ fn collectFormFields(
 }
 
 fn collectSelectOptions(
-    select_node: *Node,
     arena: Allocator,
+    select_node: *Node,
     page: *Page,
 ) ![]SelectOption {
     var options: std.ArrayList(SelectOption) = .empty;
@@ -258,16 +258,17 @@ const testing = @import("../testing.zig");
 
 fn testForms(html: []const u8) ![]FormInfo {
     const page = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
 
     const doc = page.window._document;
     const div = try doc.createElement("div", null, page);
     try page.parseHtmlAsChildren(div.asNode(), html);
 
-    return collectForms(div.asNode(), page.call_arena, page);
+    return collectForms(page.call_arena, div.asNode(), page);
 }
 
 test "browser.forms: login form" {
+    defer testing.reset();
+    defer testing.test_session.removePage();
     const forms = try testForms(
         \\<form action="/login" method="POST">
         \\  <input type="email" name="email" required placeholder="Email">
@@ -286,6 +287,8 @@ test "browser.forms: login form" {
 }
 
 test "browser.forms: form with select" {
+    defer testing.reset();
+    defer testing.test_session.removePage();
     const forms = try testForms(
         \\<form>
         \\  <select name="color">
@@ -303,6 +306,8 @@ test "browser.forms: form with select" {
 }
 
 test "browser.forms: form with textarea" {
+    defer testing.reset();
+    defer testing.test_session.removePage();
     const forms = try testForms(
         \\<form method="POST">
         \\  <textarea name="message" placeholder="Your message"></textarea>
@@ -315,6 +320,8 @@ test "browser.forms: form with textarea" {
 }
 
 test "browser.forms: empty form skipped" {
+    defer testing.reset();
+    defer testing.test_session.removePage();
     const forms = try testForms(
         \\<form action="/empty">
         \\  <p>No fields here</p>
@@ -324,6 +331,8 @@ test "browser.forms: empty form skipped" {
 }
 
 test "browser.forms: hidden inputs excluded" {
+    defer testing.reset();
+    defer testing.test_session.removePage();
     const forms = try testForms(
         \\<form>
         \\  <input type="hidden" name="csrf" value="token123">
@@ -336,6 +345,8 @@ test "browser.forms: hidden inputs excluded" {
 }
 
 test "browser.forms: multiple forms" {
+    defer testing.reset();
+    defer testing.test_session.removePage();
     const forms = try testForms(
         \\<form action="/search" method="GET">
         \\  <input type="text" name="q" placeholder="Search">

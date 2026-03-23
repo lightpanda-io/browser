@@ -465,7 +465,7 @@ fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Val
         return server.sendError(id, .PageNotLoaded, "Page not loaded");
     };
 
-    const forms_data = lp.forms.collectForms(page.document.asNode(), arena, page) catch |err| {
+    const forms_data = lp.forms.collectForms(arena, page.document.asNode(), page) catch |err| {
         log.err(.mcp, "form collection failed", .{ .err = err });
         return server.sendError(id, .InternalError, "Failed to collect forms");
     };
