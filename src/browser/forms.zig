@@ -46,6 +46,7 @@ pub const FormField = struct {
     name: ?[]const u8,
     input_type: ?[]const u8,
     required: bool,
+    disabled: bool,
     value: ?[]const u8,
     placeholder: ?[]const u8,
     options: []SelectOption,
@@ -73,6 +74,11 @@ pub const FormField = struct {
 
         if (self.required) {
             try jw.objectField("required");
+            try jw.write(true);
+        }
+
+        if (self.disabled) {
+            try jw.objectField("disabled");
             try jw.write(true);
         }
 
@@ -136,6 +142,8 @@ pub const FormInfo = struct {
 };
 
 /// Collect all forms and their fields under `root`.
+/// Uses Form.getElements() to include fields outside the <form> that
+/// reference it via the form="id" attribute, matching browser behavior.
 pub fn collectForms(
     arena: Allocator,
     root: *Node,
@@ -145,16 +153,14 @@ pub fn collectForms(
 
     var tw = TreeWalker.Full.init(root, .{});
     while (tw.next()) |node| {
-        const el = node.is(Element) orelse continue;
-        if (el.getTag() != .form) continue;
+        const form = node.is(Element.Html.Form) orelse continue;
+        const el = form.asElement();
 
-        const form_el = el.is(Element.Html.Form) orelse continue;
-
-        const fields = try collectFormFields(arena, node, page);
+        const fields = try collectFormFields(arena, form, page);
         if (fields.len == 0) continue;
 
         const action_attr = el.getAttributeSafe(comptime .wrap("action"));
-        const method_str = form_el.getMethod();
+        const method_str = form.getMethod();
 
         try forms.append(arena, .{
             .node = node,
@@ -169,64 +175,71 @@ pub fn collectForms(
 
 fn collectFormFields(
     arena: Allocator,
-    form_node: *Node,
+    form: *Element.Html.Form,
     page: *Page,
 ) ![]FormField {
     var fields: std.ArrayList(FormField) = .empty;
+    const form_node = form.asNode();
 
-    var tw = TreeWalker.Full.init(form_node, .{});
-    while (tw.next()) |node| {
-        const el = node.is(Element) orelse continue;
+    var elements = try form.getElements(page);
+    var it = try elements.iterator();
+    while (it.next()) |el| {
+        const node = el.asNode();
 
-        switch (el.getTag()) {
-            .input => {
-                const input = el.is(Element.Html.Input) orelse continue;
-                if (input._input_type == .hidden) continue;
-                if (input._input_type == .submit or input._input_type == .button or input._input_type == .image) continue;
+        const is_disabled = el.getAttributeSafe(comptime .wrap("disabled")) != null or
+            isDisabledByFieldset(el, form_node);
 
-                try fields.append(arena, .{
-                    .node = node,
-                    .tag_name = "input",
-                    .name = el.getAttributeSafe(comptime .wrap("name")),
-                    .input_type = input._input_type.toString(),
-                    .required = el.getAttributeSafe(comptime .wrap("required")) != null,
-                    .value = input.getValue(),
-                    .placeholder = el.getAttributeSafe(comptime .wrap("placeholder")),
-                    .options = &.{},
-                });
-            },
-            .textarea => {
-                const textarea = el.is(Element.Html.TextArea) orelse continue;
+        if (el.is(Element.Html.Input)) |input| {
+            if (input._input_type == .hidden) continue;
+            if (input._input_type == .submit or input._input_type == .button or input._input_type == .image) continue;
 
-                try fields.append(arena, .{
-                    .node = node,
-                    .tag_name = "textarea",
-                    .name = el.getAttributeSafe(comptime .wrap("name")),
-                    .input_type = null,
-                    .required = el.getAttributeSafe(comptime .wrap("required")) != null,
-                    .value = textarea.getValue(),
-                    .placeholder = el.getAttributeSafe(comptime .wrap("placeholder")),
-                    .options = &.{},
-                });
-            },
-            .select => {
-                const select = el.is(Element.Html.Select) orelse continue;
-
-                const options = try collectSelectOptions(arena, node, page);
-
-                try fields.append(arena, .{
-                    .node = node,
-                    .tag_name = "select",
-                    .name = el.getAttributeSafe(comptime .wrap("name")),
-                    .input_type = null,
-                    .required = el.getAttributeSafe(comptime .wrap("required")) != null,
-                    .value = select.getValue(page),
-                    .placeholder = null,
-                    .options = options,
-                });
-            },
-            else => {},
+            try fields.append(arena, .{
+                .node = node,
+                .tag_name = "input",
+                .name = el.getAttributeSafe(comptime .wrap("name")),
+                .input_type = input._input_type.toString(),
+                .required = el.getAttributeSafe(comptime .wrap("required")) != null,
+                .disabled = is_disabled,
+                .value = input.getValue(),
+                .placeholder = el.getAttributeSafe(comptime .wrap("placeholder")),
+                .options = &.{},
+            });
+            continue;
         }
+
+        if (el.is(Element.Html.TextArea)) |textarea| {
+            try fields.append(arena, .{
+                .node = node,
+                .tag_name = "textarea",
+                .name = el.getAttributeSafe(comptime .wrap("name")),
+                .input_type = null,
+                .required = el.getAttributeSafe(comptime .wrap("required")) != null,
+                .disabled = is_disabled,
+                .value = textarea.getValue(),
+                .placeholder = el.getAttributeSafe(comptime .wrap("placeholder")),
+                .options = &.{},
+            });
+            continue;
+        }
+
+        if (el.is(Element.Html.Select)) |select| {
+            const options = try collectSelectOptions(arena, node, page);
+
+            try fields.append(arena, .{
+                .node = node,
+                .tag_name = "select",
+                .name = el.getAttributeSafe(comptime .wrap("name")),
+                .input_type = null,
+                .required = el.getAttributeSafe(comptime .wrap("required")) != null,
+                .disabled = is_disabled,
+                .value = select.getValue(page),
+                .placeholder = null,
+                .options = options,
+            });
+            continue;
+        }
+
+        // Button elements from getElements() - skip (not fillable)
     }
 
     return fields.items;
@@ -252,6 +265,38 @@ fn collectSelectOptions(
     }
 
     return options.items;
+}
+
+/// Returns true if `element` is disabled by an ancestor <fieldset disabled>,
+/// stopping at the form boundary.
+/// Per spec, elements inside the first <legend> child of a disabled fieldset
+/// are NOT disabled by that fieldset.
+fn isDisabledByFieldset(element: *Element, form_node: *Node) bool {
+    const element_node = element.asNode();
+    var current: ?*Node = element_node._parent;
+    while (current) |node| {
+        if (node == form_node) {
+            return false;
+        }
+
+        current = node._parent;
+        const el = node.is(Element) orelse continue;
+
+        if (el.getTag() == .fieldset and el.getAttributeSafe(comptime .wrap("disabled")) != null) {
+            var child = el.firstElementChild();
+            while (child) |c| {
+                if (c.getTag() == .legend) {
+                    if (c.asNode().contains(element_node)) {
+                        return false;
+                    }
+                    break;
+                }
+                child = c.nextElementSibling();
+            }
+            return true;
+        }
+    }
+    return false;
 }
 
 const testing = @import("../testing.zig");
@@ -283,6 +328,7 @@ test "browser.forms: login form" {
     try testing.expectEqual("email", forms[0].fields[0].name.?);
     try testing.expectEqual("email", forms[0].fields[0].input_type.?);
     try testing.expect(forms[0].fields[0].required);
+    try testing.expect(!forms[0].fields[0].disabled);
     try testing.expectEqual("password", forms[0].fields[1].name.?);
 }
 
@@ -359,4 +405,49 @@ test "browser.forms: multiple forms" {
     try testing.expectEqual(2, forms.len);
     try testing.expectEqual(1, forms[0].fields.len);
     try testing.expectEqual(2, forms[1].fields.len);
+}
+
+test "browser.forms: disabled fields flagged" {
+    defer testing.reset();
+    defer testing.test_session.removePage();
+    const forms = try testForms(
+        \\<form>
+        \\  <input type="text" name="enabled_field">
+        \\  <input type="text" name="disabled_field" disabled>
+        \\</form>
+    );
+    try testing.expectEqual(1, forms.len);
+    try testing.expectEqual(2, forms[0].fields.len);
+    try testing.expect(!forms[0].fields[0].disabled);
+    try testing.expect(forms[0].fields[1].disabled);
+}
+
+test "browser.forms: disabled fieldset" {
+    defer testing.reset();
+    defer testing.test_session.removePage();
+    const forms = try testForms(
+        \\<form>
+        \\  <fieldset disabled>
+        \\    <input type="text" name="in_disabled_fieldset">
+        \\  </fieldset>
+        \\  <input type="text" name="outside_fieldset">
+        \\</form>
+    );
+    try testing.expectEqual(1, forms.len);
+    try testing.expectEqual(2, forms[0].fields.len);
+    try testing.expect(forms[0].fields[0].disabled);
+    try testing.expect(!forms[0].fields[1].disabled);
+}
+
+test "browser.forms: external field via form attribute" {
+    defer testing.reset();
+    defer testing.test_session.removePage();
+    const forms = try testForms(
+        \\<input type="text" name="external" form="myform">
+        \\<form id="myform" action="/submit">
+        \\  <input type="text" name="internal">
+        \\</form>
+    );
+    try testing.expectEqual(1, forms.len);
+    try testing.expectEqual(2, forms[0].fields.len);
 }

@@ -455,11 +455,12 @@ fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Val
         url: ?[:0]const u8 = null,
     };
     if (arguments) |args_raw| {
-        if (std.json.parseFromValueLeaky(Params, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
-            if (args.url) |u| {
-                try performGoto(server, u, id);
-            }
-        } else |_| {}
+        const args = std.json.parseFromValueLeaky(Params, arena, args_raw, .{ .ignore_unknown_fields = true }) catch {
+            return server.sendError(id, .InvalidParams, "Invalid arguments for detectForms");
+        };
+        if (args.url) |u| {
+            try performGoto(server, u, id);
+        }
     }
     const page = server.session.currentPage() orelse {
         return server.sendError(id, .PageNotLoaded, "Page not loaded");
