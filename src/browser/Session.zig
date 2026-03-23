@@ -514,9 +514,12 @@ fn processQueuedNavigation(self: *Session) !void {
     const about_blank_queue = &self.queued_queued_navigation;
     defer about_blank_queue.clearRetainingCapacity();
 
-    // First pass: process async navigations (non-about:blank)
-    // These cannot cause re-entrant navigation scheduling
-    for (navigations.items) |page| {
+    // First pass: process non-about:blank navigations.
+    // Note: processFrameNavigation can cause re-entrant navigation scheduling
+    // when navigations complete synchronously (e.g. blob URLs), triggering
+    // cascading load events that schedule new navigations into the queue.
+    const original_count = navigations.items.len;
+    for (navigations.items[0..original_count]) |page| {
         const qn = page._queued_navigation.?;
 
         if (qn.is_about_blank) {
@@ -530,8 +533,13 @@ fn processQueuedNavigation(self: *Session) !void {
         };
     }
 
-    // Clear the queue after first pass
-    navigations.clearRetainingCapacity();
+    // Remove the processed items, preserving any navigations that were
+    // added to the queue during the first pass (re-entrant scheduling).
+    const new_count = navigations.items.len - original_count;
+    if (new_count > 0) {
+        std.mem.copyForwards(*Page, navigations.items[0..new_count], navigations.items[original_count..navigations.items.len]);
+    }
+    navigations.items.len = new_count;
 
     // Second pass: process synchronous navigations (about:blank)
     // These may trigger new navigations which go into queued_navigation
