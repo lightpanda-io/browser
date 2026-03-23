@@ -686,6 +686,20 @@
 }
 
 {
+  const url = new URL('https://example.com/path');
+  url.hash = '#a b';
+  testing.expectEqual('https://example.com/path#a%20b', url.href);
+  testing.expectEqual('#a%20b', url.hash);
+}
+
+{
+  const url = new URL('https://example.com/path');
+  url.hash = 'a b';
+  testing.expectEqual('https://example.com/path#a%20b', url.href);
+  testing.expectEqual('#a%20b', url.hash);
+}
+
+{
   const url = new URL('https://example.com/path?a=b');
   url.search = '';
   testing.expectEqual('https://example.com/path', url.href);
@@ -700,6 +714,20 @@
 
   testing.expectEqual('d', url.searchParams.get('c'));
   testing.expectEqual(null, url.searchParams.get('a'));
+}
+
+{
+  const url = new URL('https://example.com/path?a=b');
+  const sp = url.searchParams;
+  testing.expectEqual('b', sp.get('a'));
+  url.search = 'c=d b';
+
+  testing.expectEqual('d b', url.searchParams.get('c'));
+  testing.expectEqual(null, url.searchParams.get('a'));
+
+  url.search = 'c d=d b';
+  testing.expectEqual('d b', url.searchParams.get('c d'));
+  testing.expectEqual(null, url.searchParams.get('c'));
 }
 
 {

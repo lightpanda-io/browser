@@ -204,7 +204,7 @@ pub fn ensureEncoded(allocator: Allocator, url: [:0]const u8) ![:0]const u8 {
     return buf.items[0 .. buf.items.len - 1 :0];
 }
 
-const EncodeSet = enum { path, query, userinfo };
+const EncodeSet = enum { path, query, userinfo, fragment };
 
 fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime encode_set: EncodeSet) ![]const u8 {
     // Check if encoding is needed
@@ -256,8 +256,10 @@ fn shouldPercentEncode(c: u8, comptime encode_set: EncodeSet) bool {
         ';', '=' => encode_set == .userinfo,
         // Separators: userinfo must encode these
         '/', ':', '@' => encode_set == .userinfo,
-        // '?' is allowed in queries but not in paths or userinfo
+        // '?' is allowed in queries only
         '?' => encode_set != .query,
+        // '#' is allowed in fragments only
+        '#' => encode_set != .fragment,
         // Everything else needs encoding (including space)
         else => true,
     };
@@ -595,7 +597,6 @@ pub fn setPathname(current: [:0]const u8, value: []const u8, allocator: Allocato
     const search = getSearch(current);
     const hash = getHash(current);
 
-    // Percent-encode the pathname per the URL spec (spaces → %20, etc.)
     const encoded = try percentEncodeSegment(allocator, value, .path);
 
     // Add / prefix if not present and value is not empty
@@ -613,11 +614,13 @@ pub fn setSearch(current: [:0]const u8, value: []const u8, allocator: Allocator)
     const pathname = getPathname(current);
     const hash = getHash(current);
 
+    const encoded = try percentEncodeSegment(allocator, value, .query);
+
     // Add ? prefix if not present and value is not empty
-    const search = if (value.len > 0 and value[0] != '?')
-        try std.fmt.allocPrint(allocator, "?{s}", .{value})
+    const search = if (encoded.len > 0 and value[0] != '?')
+        try std.fmt.allocPrint(allocator, "?{s}", .{encoded})
     else
-        value;
+        encoded;
 
     return buildUrl(allocator, protocol, host, pathname, search, hash);
 }
@@ -628,11 +631,13 @@ pub fn setHash(current: [:0]const u8, value: []const u8, allocator: Allocator) !
     const pathname = getPathname(current);
     const search = getSearch(current);
 
+    const encoded = try percentEncodeSegment(allocator, value, .fragment);
+
     // Add # prefix if not present and value is not empty
-    const hash = if (value.len > 0 and value[0] != '#')
-        try std.fmt.allocPrint(allocator, "#{s}", .{value})
+    const hash = if (encoded.len > 0 and encoded[0] != '#')
+        try std.fmt.allocPrint(allocator, "#{s}", .{encoded})
     else
-        value;
+        encoded;
 
     return buildUrl(allocator, protocol, host, pathname, search, hash);
 }
