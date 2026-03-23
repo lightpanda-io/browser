@@ -77,7 +77,15 @@ arena_pool: *ArenaPool,
 
 page: ?Page,
 
-queued_navigation: std.ArrayList(*Page),
+// Double buffer so that, as we process one list of queued navigations, new entries
+// are added to the separate buffer. This ensures that we don't end up with
+// endless navigation loops AND that we don't invalidate the list while iterating
+// if a new entry gets appended
+queued_navigation_1: std.ArrayList(*Page),
+queued_navigation_2: std.ArrayList(*Page),
+// pointer to either queued_navigation_1 or queued_navigation_2
+queued_navigation: *std.ArrayList(*Page),
+
 // Temporary buffer for about:blank navigations during processing.
 // We process async navigations first (safe from re-entrance), then sync
 // about:blank navigations (which may add to queued_navigation).
@@ -107,11 +115,14 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .navigation = .{ ._proto = undefined },
         .storage_shed = .{},
         .browser = browser,
-        .queued_navigation = .{},
+        .queued_navigation = undefined,
+        .queued_navigation_1 = .{},
+        .queued_navigation_2 = .{},
         .queued_queued_navigation = .{},
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
     };
+    self.queued_navigation = &self.queued_navigation_1;
 }
 
 pub fn deinit(self: *Session) void {
@@ -284,7 +295,7 @@ pub fn runner(self: *Session, opts: Runner.Opts) !Runner {
 }
 
 pub fn scheduleNavigation(self: *Session, page: *Page) !void {
-    const list = &self.queued_navigation;
+    const list = self.queued_navigation;
 
     // Check if page is already queued
     for (list.items) |existing| {
@@ -298,7 +309,12 @@ pub fn scheduleNavigation(self: *Session, page: *Page) !void {
 }
 
 pub fn processQueuedNavigation(self: *Session) !void {
-    const navigations = &self.queued_navigation;
+    const navigations = self.queued_navigation;
+    if (self.queued_navigation == &self.queued_navigation_1) {
+        self.queued_navigation = &self.queued_navigation_2;
+    } else {
+        self.queued_navigation = &self.queued_navigation_1;
+    }
 
     if (self.page.?._queued_navigation != null) {
         // This is both an optimization and a simplification of sorts. If the
@@ -314,7 +330,6 @@ pub fn processQueuedNavigation(self: *Session) !void {
     defer about_blank_queue.clearRetainingCapacity();
 
     // First pass: process async navigations (non-about:blank)
-    // These cannot cause re-entrant navigation scheduling
     for (navigations.items) |page| {
         const qn = page._queued_navigation.?;
 
@@ -329,7 +344,6 @@ pub fn processQueuedNavigation(self: *Session) !void {
         };
     }
 
-    // Clear the queue after first pass
     navigations.clearRetainingCapacity();
 
     // Second pass: process synchronous navigations (about:blank)
@@ -339,15 +353,17 @@ pub fn processQueuedNavigation(self: *Session) !void {
         try self.processFrameNavigation(page, qn);
     }
 
-    // Safety: Remove any about:blank navigations that were queued during the
-    // second pass to prevent infinite loops
+    // Safety: Remove any about:blank navigations that were queued during
+    // processing to prevent infinite loops. New navigations have been queued
+    // in the other buffer.
+    const new_navigations = self.queued_navigation;
     var i: usize = 0;
-    while (i < navigations.items.len) {
-        const page = navigations.items[i];
+    while (i < new_navigations.items.len) {
+        const page = new_navigations.items[i];
         if (page._queued_navigation) |qn| {
             if (qn.is_about_blank) {
-                log.warn(.page, "recursive about    blank", .{});
-                _ = navigations.swapRemove(i);
+                log.warn(.page, "recursive about blank", .{});
+                _ = self.queued_navigation.swapRemove(i);
                 continue;
             }
         }
