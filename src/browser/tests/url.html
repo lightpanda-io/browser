@@ -591,6 +591,35 @@
   testing.expectEqual('/new/path', url.pathname);
 }
 
+// Pathname setter must percent-encode spaces and special characters
+{
+  const url = new URL('http://a/');
+  url.pathname = 'c d';
+  testing.expectEqual('http://a/c%20d', url.href);
+}
+
+{
+  const url = new URL('https://example.com/path');
+  url.pathname = '/path with spaces/file name';
+  testing.expectEqual('https://example.com/path%20with%20spaces/file%20name', url.href);
+  testing.expectEqual('/path%20with%20spaces/file%20name', url.pathname);
+}
+
+// Already-encoded sequences should not be double-encoded
+{
+  const url = new URL('https://example.com/path');
+  url.pathname = '/already%20encoded';
+  testing.expectEqual('https://example.com/already%20encoded', url.href);
+}
+
+// This is the exact check the URL polyfill uses to decide if native URL is sufficient
+{
+  const url = new URL('b', 'http://a');
+  url.pathname = 'c d';
+  testing.expectEqual('http://a/c%20d', url.href);
+  testing.expectEqual(true, !!url.searchParams);
+}
+
 {
   const url = new URL('https://example.com/path');
   url.search = '?a=b';

@@ -595,11 +595,14 @@ pub fn setPathname(current: [:0]const u8, value: []const u8, allocator: Allocato
     const search = getSearch(current);
     const hash = getHash(current);
 
+    // Percent-encode the pathname per the URL spec (spaces → %20, etc.)
+    const encoded = try percentEncodeSegment(allocator, value, .path);
+
     // Add / prefix if not present and value is not empty
-    const pathname = if (value.len > 0 and value[0] != '/')
-        try std.fmt.allocPrint(allocator, "/{s}", .{value})
+    const pathname = if (encoded.len > 0 and encoded[0] != '/')
+        try std.fmt.allocPrint(allocator, "/{s}", .{encoded})
     else
-        value;
+        encoded;
 
     return buildUrl(allocator, protocol, host, pathname, search, hash);
 }
@@ -1421,4 +1424,23 @@ test "URL: getHost" {
     try testing.expectEqualSlices(u8, "example.com", getHost("https://user:pass@example.com/page"));
     try testing.expectEqualSlices(u8, "example.com:8080", getHost("https://user:pass@example.com:8080/page"));
     try testing.expectEqualSlices(u8, "", getHost("not-a-url"));
+}
+
+test "URL: setPathname percent-encodes" {
+    // Use arena allocator to match production usage (setPathname makes intermediate allocations)
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // Spaces must be encoded as %20
+    const result1 = try setPathname("http://a/", "c d", allocator);
+    try testing.expectEqualSlices(u8, "http://a/c%20d", result1);
+
+    // Already-encoded sequences must not be double-encoded
+    const result2 = try setPathname("https://example.com/path", "/already%20encoded", allocator);
+    try testing.expectEqualSlices(u8, "https://example.com/already%20encoded", result2);
+
+    // Query and hash must be preserved
+    const result3 = try setPathname("https://example.com/path?a=b#hash", "/new path", allocator);
+    try testing.expectEqualSlices(u8, "https://example.com/new%20path?a=b#hash", result3);
 }
