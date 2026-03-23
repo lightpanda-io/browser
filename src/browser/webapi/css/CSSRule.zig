@@ -2,28 +2,41 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 
+const CSSStyleRule = @import("CSSStyleRule.zig");
+
 const CSSRule = @This();
 
-pub const Type = enum(u16) {
-    style = 1,
-    charset = 2,
-    import = 3,
-    media = 4,
-    font_face = 5,
-    page = 6,
-    keyframes = 7,
-    keyframe = 8,
-    margin = 9,
-    namespace = 10,
-    counter_style = 11,
-    supports = 12,
-    document = 13,
-    font_feature_values = 14,
-    viewport = 15,
-    region_style = 16,
+pub const Type = union(enum) {
+    style: *CSSStyleRule,
+    charset: void,
+    import: void,
+    media: void,
+    font_face: void,
+    page: void,
+    keyframes: void,
+    keyframe: void,
+    margin: void,
+    namespace: void,
+    counter_style: void,
+    supports: void,
+    document: void,
+    font_feature_values: void,
+    viewport: void,
+    region_style: void,
 };
 
 _type: Type,
+
+pub fn as(self: *CSSRule, comptime T: type) *T {
+    return self.is(T).?;
+}
+
+pub fn is(self: *CSSRule, comptime T: type) ?*T {
+    switch (self._type) {
+        .style => |r| return if (T == CSSStyleRule) r else null,
+        else => return null,
+    }
+}
 
 pub fn init(rule_type: Type, page: *Page) !*CSSRule {
     return page._factory.create(CSSRule{
@@ -32,23 +45,14 @@ pub fn init(rule_type: Type, page: *Page) !*CSSRule {
 }
 
 pub fn getType(self: *const CSSRule) u16 {
-    return @intFromEnum(self._type);
+    return @as(u16, @intFromEnum(std.meta.activeTag(self._type))) + 1;
 }
 
-pub fn getCssText(self: *const CSSRule, page: *Page) []const u8 {
-    _ = self;
-    _ = page;
+pub fn getCssText(_: *const CSSRule, _: *Page) []const u8 {
     return "";
 }
 
-pub fn setCssText(self: *CSSRule, text: []const u8, page: *Page) !void {
-    _ = self;
-    _ = text;
-    _ = page;
-}
-
-pub fn getParentRule(self: *const CSSRule) ?*CSSRule {
-    _ = self;
+pub fn getParentRule(_: *const CSSRule) ?*CSSRule {
     return null;
 }
 
@@ -62,8 +66,8 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "CSSRule";
-        pub var class_id: bridge.ClassId = undefined;
         pub const prototype_chain = bridge.prototypeChain();
+        pub var class_id: bridge.ClassId = undefined;
     };
 
     pub const STYLE_RULE = 1;
@@ -84,7 +88,7 @@ pub const JsApi = struct {
     pub const REGION_STYLE_RULE = 16;
 
     pub const @"type" = bridge.accessor(CSSRule.getType, null, .{});
-    pub const cssText = bridge.accessor(CSSRule.getCssText, CSSRule.setCssText, .{});
+    pub const cssText = bridge.accessor(CSSRule.getCssText, null, .{});
     pub const parentRule = bridge.accessor(CSSRule.getParentRule, null, .{});
     pub const parentStyleSheet = bridge.accessor(CSSRule.getParentStyleSheet, null, .{});
 };

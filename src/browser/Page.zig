@@ -35,6 +35,7 @@ const Factory = @import("Factory.zig");
 const Session = @import("Session.zig");
 const EventManager = @import("EventManager.zig");
 const ScriptManager = @import("ScriptManager.zig");
+const StyleManager = @import("StyleManager.zig");
 
 const Parser = @import("parser/Parser.zig");
 
@@ -144,6 +145,7 @@ _blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
 /// A call to `documentIsComplete` (which calls `_documentIsComplete`) resets it.
 _to_load: std.ArrayList(*Element.Html) = .{},
 
+_style_manager: StyleManager,
 _script_manager: ScriptManager,
 
 // List of active live ranges (for mutation updates per DOM spec)
@@ -269,6 +271,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         ._factory = factory,
         ._pending_loads = 1, // always 1 for the ScriptManager
         ._type = if (parent == null) .root else .frame,
+        ._style_manager = undefined,
         ._script_manager = undefined,
         ._event_manager = EventManager.init(session.page_arena, self),
     };
@@ -297,6 +300,9 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         ._screen = screen,
         ._visual_viewport = visual_viewport,
     });
+
+    self._style_manager = try StyleManager.init(self);
+    errdefer self._style_manager.deinit();
 
     const browser = session.browser;
     self._script_manager = ScriptManager.init(browser.allocator, browser.http_client, self);
@@ -360,6 +366,7 @@ pub fn deinit(self: *Page, abort_http: bool) void {
     }
 
     self._script_manager.deinit();
+    self._style_manager.deinit();
 
     session.releaseArena(self.call_arena);
 }
@@ -2588,6 +2595,17 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
         }
 
         Element.Html.Custom.invokeDisconnectedCallbackOnElement(el, self);
+
+        // If a <style> element is being removed, remove its sheet from the list
+        if (el.is(Element.Html.Style)) |style| {
+            if (style._sheet) |sheet| {
+                if (self.document._style_sheets) |sheets| {
+                    sheets.remove(sheet);
+                }
+                style._sheet = null;
+            }
+            self._style_manager.sheetModified();
+        }
     }
 }
 
