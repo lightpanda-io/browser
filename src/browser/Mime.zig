@@ -27,6 +27,9 @@ charset: [41]u8 = default_charset,
 charset_len: usize = default_charset_len,
 is_default_charset: bool = true,
 
+type_buf: [127]u8 = @splat(0),
+sub_type_buf: [127]u8 = @splat(0),
+
 /// String "UTF-8" continued by null characters.
 const default_charset = .{ 'U', 'T', 'F', '-', '8' } ++ .{0} ** 36;
 const default_charset_len = 5;
@@ -61,7 +64,10 @@ pub const ContentType = union(ContentTypeEnum) {
     image_webp: void,
     application_json: void,
     unknown: void,
-    other: struct { type: []const u8, sub_type: []const u8 },
+    other: struct {
+        type: []const u8,
+        sub_type: []const u8,
+    },
 };
 
 pub fn contentTypeString(mime: *const Mime) []const u8 {
@@ -121,7 +127,9 @@ pub fn parse(input: []const u8) !Mime {
     const normalized = std.ascii.lowerString(&buf, std.mem.trim(u8, input, &std.ascii.whitespace));
     _ = std.ascii.lowerString(normalized, normalized);
 
-    const content_type, const type_len = try parseContentType(normalized);
+    var mime = Mime{ .content_type = undefined };
+
+    const content_type, const type_len = try parseContentType(normalized, &mime.type_buf, &mime.sub_type_buf);
     if (type_len >= normalized.len) {
         return .{ .content_type = content_type };
     }
@@ -162,13 +170,12 @@ pub fn parse(input: []const u8) !Mime {
         }
     }
 
-    return .{
-        .params = params,
-        .charset = charset,
-        .charset_len = charset_len,
-        .content_type = content_type,
-        .is_default_charset = !has_explicit_charset,
-    };
+    mime.params = params;
+    mime.charset = charset;
+    mime.charset_len = charset_len;
+    mime.content_type = content_type;
+    mime.is_default_charset = !has_explicit_charset;
+    return mime;
 }
 
 /// Prescan the first 1024 bytes of an HTML document for a charset declaration.
@@ -394,7 +401,7 @@ pub fn isText(mime: *const Mime) bool {
 }
 
 // we expect value to be lowercase
-fn parseContentType(value: []const u8) !struct { ContentType, usize } {
+fn parseContentType(value: []const u8, type_buf: []u8, sub_type_buf: []u8) !struct { ContentType, usize } {
     const end = std.mem.indexOfScalarPos(u8, value, 0, ';') orelse value.len;
     const type_name = trimRight(value[0..end]);
     const attribute_start = end + 1;
@@ -443,10 +450,18 @@ fn parseContentType(value: []const u8) !struct { ContentType, usize } {
         return error.Invalid;
     }
 
-    return .{ .{ .other = .{
-        .type = main_type,
-        .sub_type = sub_type,
-    } }, attribute_start };
+    @memcpy(type_buf[0..main_type.len], main_type);
+    @memcpy(sub_type_buf[0..sub_type.len], sub_type);
+
+    return .{
+        .{
+            .other = .{
+                .type = type_buf[0..main_type.len],
+                .sub_type = sub_type_buf[0..sub_type.len],
+            },
+        },
+        attribute_start,
+    };
 }
 
 const VALID_CODEPOINTS = blk: {
@@ -459,6 +474,13 @@ const VALID_CODEPOINTS = blk: {
     }
     break :blk v;
 };
+
+pub fn typeString(self: *const Mime) []const u8 {
+    return switch (self.content_type) {
+        .other => |o| o.type[0..o.type_len],
+        else => "",
+    };
+}
 
 fn validType(value: []const u8) bool {
     for (value) |b| {
