@@ -39,8 +39,9 @@ pub fn asNode(self: *IFrame) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getContentWindow(self: *const IFrame) ?*Window {
-    return self._window;
+pub fn getContentWindow(self: *const IFrame, page: *Page) ?Window.Access {
+    const frame_window = self._window orelse return null;
+    return Window.Access.init(page.window, frame_window);
 }
 
 pub fn getContentDocument(self: *const IFrame) ?*Document {

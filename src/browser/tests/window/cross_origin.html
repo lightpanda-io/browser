@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<iframe src=support/frame1.html></iframe>
+
+<script id=post_message type=module>
+  const state = await testing.async();
+
+{
+  const ALT_BASE = testing.BASE_URL.replace('127.0.0.1', 'localhost');
+
+  {
+    let iframe2 = document.createElement('iframe');
+    iframe2.src = ALT_BASE + 'window/support/frame1.html';
+    document.documentElement.appendChild(iframe2);
+  }
+
+  {
+    let iframe3 = document.createElement('iframe');
+    iframe3.src = ALT_BASE + 'window/support/frame2.html';
+    document.documentElement.appendChild(iframe3);
+  }
+
+  let captures = [];
+  window.addEventListener('message', (e) => {
+    captures.push(e.data);
+    if (captures.length == 3) {
+      state.resolve();
+    }
+  });
+
+  await state.done(() => {
+    const expected_urls = [
+      testing.BASE_URL + 'window/support/frame1.html',
+      ALT_BASE + 'window/support/frame1.html',
+      ALT_BASE + 'window/support/frame2.html',
+    ];
+
+    // No strong order guarantee for messaages, and we don't care about the order
+    // so long as it's the correct data.
+    testing.expectEqual(expected_urls.sort(), captures.map((c) => {return c.url}).sort());
+    captures.forEach((c) => {
+      if (c.url.includes(testing.BASE_URL)) {
+        testing.expectEqual(false, c.document_is_undefined);
+      } else {
+        testing.expectEqual(true, c.document_is_undefined);
+      }
+    });
+  });
+}
+</script>

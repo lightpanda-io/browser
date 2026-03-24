@@ -299,7 +299,9 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         ._performance = Performance.init(),
         ._screen = screen,
         ._visual_viewport = visual_viewport,
+        ._cross_origin_wrapper = undefined,
     });
+    self.window._cross_origin_wrapper = .{ .window = self.window };
 
     self._style_manager = try StyleManager.init(self);
     errdefer self._style_manager.deinit();
