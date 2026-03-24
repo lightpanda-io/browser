@@ -8,7 +8,7 @@
   // If support/history.html has a failed assertion, it'll log the error and
   // stop the script. If it succeeds, it'll set support_history_completed
   // which we can use here to assume everything passed.
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(true, window.support_history_completed);
     testing.expectEqual(true, window.support_history_popstateEventFired);
     testing.expectEqual({testInProgress: true }, window.support_history_popstateEventState);

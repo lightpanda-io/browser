@@ -582,7 +582,7 @@
     document.removeEventListener('selectionchange', listener);
     textNode.textContent = "The quick brown fox";
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(14, eventCount);
       testing.expectEqual('selectionchange', lastEvent.type);
       testing.expectEqual(document, lastEvent.target);

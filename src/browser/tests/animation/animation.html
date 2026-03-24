@@ -15,7 +15,7 @@
     a1.play();
     cb.push(a1.playState);
   });
-  testing.eventually(() => testing.expectEqual(['idle', 'running', 'finished', true], cb));
+  testing.onload(() => testing.expectEqual(['idle', 'running', 'finished', true], cb));
 </script>
 
 <!-- <script id=startTime>
@@ -39,7 +39,7 @@
   // onfinish callback should be scheduled and called asynchronously
   a3.onfinish = function() { calls.push('finish'); };
   a3.play();
-  testing.eventually(() => testing.expectEqual(['finish'], calls));
+  testing.onload(() => testing.expectEqual(['finish'], calls));
 </script>
 
 <script id=pause>
@@ -52,7 +52,7 @@
     a4.pause();
     cb4.push(a4.playState)
   });
-  testing.eventually(() => testing.expectEqual(['running', 'paused'], cb4));
+  testing.onload(() => testing.expectEqual(['running', 'paused'], cb4));
 </script>
 
 <script id=finish>
@@ -65,6 +65,6 @@
     cb5.push(a5.playState);
     a5.play();
   });
-  testing.eventually(() => testing.expectEqual(['idle', 'finished'], cb5));
+  testing.onload(() => testing.expectEqual(['idle', 'finished'], cb5));
 </script>
  -->

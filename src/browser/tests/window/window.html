@@ -43,7 +43,7 @@
 
   // noop
   window.removeEventListener('load', fn);
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(1, call1);
     testing.expectEqual(2, call2);
   });
@@ -285,6 +285,6 @@
       unhandledCalled += 1;
     });
     Promise.reject({x: 'Fail'});
-    testing.eventually(() => testing.expectEqual(2, unhandledCalled));
+    testing.onload(() => testing.expectEqual(2, unhandledCalled));
   }
 </script>

@@ -427,7 +427,7 @@
     div.setAttribute('slot', 'content');
     host.appendChild(div);
 
-    testing.eventually(() => {
+    testing.onload(() => {
         testing.expectEqual(1, calls);
     });
 }
@@ -455,7 +455,7 @@
 
     div.setAttribute('slot', 'other');
 
-    testing.eventually(() => {
+    testing.onload(() => {
         testing.expectEqual(1, calls);
     });
 }
@@ -483,7 +483,7 @@
 
     div.remove();
 
-    testing.eventually(() => {
+    testing.onload(() => {
         testing.expectEqual(1, calls);
     });
 }
@@ -511,7 +511,7 @@
 
     div.slot = 'other';
 
-    testing.eventually(() => {
+    testing.onload(() => {
         testing.expectEqual(1, calls);
     });
 }

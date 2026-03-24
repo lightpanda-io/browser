@@ -21,7 +21,7 @@
    testing.expectEqual(testing.BASE_URL + 'element/html/script/empty.js', s.src);
    document.head.appendChild(s);
 
-   testing.eventually(() => {
+   testing.onload(() => {
       testing.expectEqual(true, dom_load);
       testing.expectEqual(true, attribute_load);
    });

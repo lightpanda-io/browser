@@ -31,7 +31,7 @@
 
 <script id=timeout>
   var s3 = AbortSignal.timeout(10);
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(true, s3.aborted);
     testing.expectEqual('TimeoutError', s3.reason);
     testing.expectError('Error: TimeoutError', () => {

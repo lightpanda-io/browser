@@ -8,14 +8,14 @@
   script1.async = false;
   script1.src = "dynamic1.js";
   document.getElementsByTagName('head')[0].appendChild(script1);
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(1, loaded1);
   });
 </script>
 
 <script id=no_double_execute>
   document.getElementsByTagName('head')[0].appendChild(script1);
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(1, loaded1);
   });
 </script>
@@ -25,7 +25,7 @@
   const script2a = document.createElement('script');
   script2a.src = "dynamic2.js";
   document.getElementsByTagName('head')[0].appendChild(script2a);
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(2, loaded2);
   });
 </script>
@@ -38,7 +38,7 @@
 </script>
 
 <script id=src_after_append>
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(2, loaded2);
   });
 </script>
