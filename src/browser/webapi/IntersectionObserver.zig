@@ -25,6 +25,8 @@ const Allocator = std.mem.Allocator;
 
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
+
+const Node = @import("Node.zig");
 const Element = @import("Element.zig");
 const DOMRect = @import("DOMRect.zig");
 
@@ -55,7 +57,7 @@ var zero_rect: DOMRect = .{
 };
 
 pub const ObserverInit = struct {
-    root: ?*Element = null,
+    root: ?*Node = null,
     rootMargin: ?[]const u8 = null,
     threshold: Threshold = .{ .scalar = 0.0 },
 
@@ -81,11 +83,25 @@ pub fn init(callback: js.Function.Temp, options: ?ObserverInit, page: *Page) !*I
         .array => |arr| try arena.dupe(f64, arr),
     };
 
+    const root: ?*Element = blk: {
+        const root_opt = opts.root orelse break :blk null;
+        switch (root_opt._type) {
+            .element => |el| break :blk el,
+            .document => {
+                // not strictly correct, `null` means the viewport, not the
+                // entire document, but since we don't render anything, this
+                // should be fine.
+                break :blk null;
+            },
+            else => return error.TypeError,
+        }
+    };
+
     const self = try arena.create(IntersectionObserver);
     self.* = .{
         ._arena = arena,
         ._callback = callback,
-        ._root = opts.root,
+        ._root = root,
         ._root_margin = root_margin,
         ._threshold = threshold,
     };
