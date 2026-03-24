@@ -532,6 +532,6 @@
     testing.expectEqual(true, result);
   });
 
-  testing.eventually(() => testing.expectEqual(true, asyncBlockDispatched));
+  testing.onload(() => testing.expectEqual(true, asyncBlockDispatched));
 }
 </script>

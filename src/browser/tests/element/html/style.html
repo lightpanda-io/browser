@@ -128,6 +128,20 @@
     });
   });
 
-  testing.eventually(() => testing.expectEqual(true, result));
+  testing.onload(() => testing.expectEqual(true, result));
+}
+</script>
+
+<script id="style-tag-content-parsing">
+{
+  const style = document.createElement("style");
+  style.textContent = '.content-test { padding: 5px; }';
+  document.head.appendChild(style);
+
+  const sheet = style.sheet;
+  testing.expectTrue(sheet instanceof CSSStyleSheet);
+  testing.expectEqual(1, sheet.cssRules.length);
+  testing.expectEqual('.content-test', sheet.cssRules[0].selectorText);
+  testing.expectEqual('5px', sheet.cssRules[0].style.padding);
 }
 </script>

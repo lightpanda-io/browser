@@ -52,10 +52,10 @@
     throw new Error('no error');
   }
 
-  function eventually(cb) {
+  function onload(cb) {
     const script_id = _currentScriptId();
     if (!script_id) {
-      throw new Error('testing.eventually called outside of a script');
+      throw new Error('testing.onload called outside of a script');
     }
     eventuallies.push({
       callback: cb,
@@ -110,7 +110,7 @@
     expectEqual: expectEqual,
     expectError: expectError,
     withError: withError,
-    eventually: eventually,
+    onload: onload,
     IS_TEST_RUNNER: IS_TEST_RUNNER,
     HOST: '127.0.0.1',
     ORIGIN: 'http://127.0.0.1:9582',

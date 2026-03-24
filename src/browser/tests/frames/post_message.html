@@ -17,7 +17,7 @@
     iframe.contentWindow.postMessage('ping', '*');
   });
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual('pong', reply.data);
     testing.expectEqual(testing.ORIGIN, reply.origin);
   });

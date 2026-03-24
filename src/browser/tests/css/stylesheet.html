@@ -419,3 +419,117 @@
     testing.expectEqual('anchor-size(--foo width, anchor-size(--bar height))', div.style.width);
 }
 </script>
+
+<script id="CSSStyleSheet_insertRule_deleteRule">
+{
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    testing.expectEqual(0, sheet.cssRules.length);
+
+    sheet.insertRule('.test { color: green; }', 0);
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual('.test', sheet.cssRules[0].selectorText);
+    testing.expectEqual('green', sheet.cssRules[0].style.color);
+
+    sheet.deleteRule(0);
+    testing.expectEqual(0, sheet.cssRules.length);
+
+    let caught = false;
+    try {
+        sheet.deleteRule(5);
+    } catch (e) {
+        caught = true;
+        testing.expectEqual('IndexSizeError', e.name);
+    }
+    testing.expectTrue(caught);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_default_index">
+{
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    testing.expectEqual(0, sheet.cssRules.length);
+
+    // Call without index, should default to 0
+    sheet.insertRule('.test-default { color: blue; }');
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual('.test-default', sheet.cssRules[0].selectorText);
+
+    // Insert another rule without index, should default to 0 and push the first one to index 1
+    sheet.insertRule('.test-at-0 { color: red; }');
+    testing.expectEqual(2, sheet.cssRules.length);
+    testing.expectEqual('.test-at-0', sheet.cssRules[0].selectorText);
+    testing.expectEqual('.test-default', sheet.cssRules[1].selectorText);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_semicolon">
+{
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    // Should not throw even with trailing semicolon
+    sheet.insertRule('*{};');
+    testing.expectEqual(1, sheet.cssRules.length);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_multiple_rules">
+{
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    let caught = false;
+    try {
+        sheet.insertRule('a { color: red; } b { color: blue; }');
+    } catch (e) {
+        caught = true;
+        testing.expectEqual('SyntaxError', e.name);
+    }
+    testing.expectTrue(caught);
+    testing.expectEqual(0, sheet.cssRules.length);
+}
+</script>
+
+<script id="CSSStyleSheet_replaceSync">
+{
+    const sheet = new CSSStyleSheet();
+    testing.expectEqual(0, sheet.cssRules.length);
+
+    sheet.replaceSync('.test { color: blue; }');
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual('.test', sheet.cssRules[0].selectorText);
+    testing.expectEqual('blue', sheet.cssRules[0].style.color);
+
+    let replacedAsync = false;
+    testing.async(async () => {
+        const result = await sheet.replace('.async-test { margin: 10px; }');
+        testing.expectTrue(result === sheet);
+        testing.expectEqual(1, sheet.cssRules.length);
+        testing.expectEqual('.async-test', sheet.cssRules[0].selectorText);
+        replacedAsync = true;
+    });
+    testing.onload(() => testing.expectTrue(replacedAsync));
+}
+</script>
+
+<script id="CSSStyleRule_cssText">
+{
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync('.test { color: red; margin: 10px; }');
+
+    // Check serialization format
+    const cssText = sheet.cssRules[0].cssText;
+    testing.expectTrue(cssText.includes('.test { '));
+    testing.expectTrue(cssText.includes('color: red;'));
+    testing.expectTrue(cssText.includes('margin: 10px;'));
+    testing.expectTrue(cssText.includes('}'));
+}
+</script>

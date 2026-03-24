@@ -71,7 +71,7 @@
 
     document.fonts.load("italic bold 16px Roboto");
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(true, loading);
       testing.expectEqual(true, loadingdone);
     });

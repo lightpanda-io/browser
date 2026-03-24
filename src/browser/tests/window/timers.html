@@ -17,7 +17,7 @@
   testing.expectEqual(true, timer1 != timer2);
 
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(true, set_interval1);
     testing.expectEqual(false, set_interval2);
   });
@@ -29,7 +29,7 @@
   window.setTimeout((a, b) => {
     wst2 = a + b;
   }, 1, 2, 3);
-  testing.eventually(() => testing.expectEqual(5, wst2));
+  testing.onload(() => testing.expectEqual(5, wst2));
 </script>
 
 <script id=invalid-timer-clear>

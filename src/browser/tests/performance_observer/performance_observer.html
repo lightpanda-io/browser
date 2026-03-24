@@ -86,7 +86,7 @@
   // With buffered: true, existing marks should be delivered
   observer.observe({ type: "mark", buffered: true });
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(true, receivedEntries !== null);
     testing.expectEqual(2, receivedEntries.length);
     testing.expectEqual("early1", receivedEntries[0].name);

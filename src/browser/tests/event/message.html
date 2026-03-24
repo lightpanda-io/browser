@@ -61,7 +61,7 @@
 
   window.postMessage('test data', '*');
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual('test data', receivedEvent.data);
     testing.expectEqual(window, receivedEvent.source);
     testing.expectEqual('message', receivedEvent.type);
@@ -81,7 +81,7 @@
   const testObj = { type: 'test', value: 123, nested: { key: 'value' } };
   window.postMessage(testObj, '*');
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(testObj, receivedData);
   });
 }
@@ -111,7 +111,7 @@
 
   window.postMessage(42, '*');
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(42, received);
   });
 }
@@ -129,7 +129,7 @@
   const arr = [1, 2, 3, 'test'];
   window.postMessage(arr, '*');
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(arr, received);
   });
 }
@@ -146,7 +146,7 @@
 
   window.postMessage(null, '*');
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(null, received);
   });
 }
@@ -163,7 +163,7 @@
 
   window.postMessage('test', '*');
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual('http://127.0.0.1:9582', receivedOrigin);
   });
 }

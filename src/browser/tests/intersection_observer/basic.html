@@ -14,7 +14,7 @@
 
     observer.observe(target);
 
-    testing.eventually(() => {
+    testing.onload(() => {
         testing.expectEqual(true, callbackCalled);
         testing.expectEqual(1, entries.length);
 
@@ -41,7 +41,7 @@
       count += 1;
     }).observe(div);
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(0, count);
     });
   }
@@ -56,7 +56,7 @@
     }).observe(div1);
 
     div2.appendChild(div1);
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(1, count);
     });
   }

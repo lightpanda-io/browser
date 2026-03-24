@@ -564,7 +564,7 @@ pub fn elementFromPoint(self: *Document, x: f64, y: f64, page: *Page) !?*Element
     while (stack.items.len > 0) {
         const node = stack.pop() orelse break;
         if (node.is(Element)) |element| {
-            if (element.checkVisibility(page)) {
+            if (element.checkVisibilityCached(null, page)) {
                 const rect = element.getBoundingClientRectForVisible(page);
                 if (x >= rect.getLeft() and x <= rect.getRight() and y >= rect.getTop() and y <= rect.getBottom()) {
                     topmost = element;
@@ -690,9 +690,16 @@ pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
     }
 
     // Determine insertion point:
-    // - If _write_insertion_point is set, continue from there (subsequent write)
-    // - Otherwise, start after the script (first write)
-    var insert_after: ?*Node = self._write_insertion_point orelse script.asNode();
+    // - If _write_insertion_point is set and still parented correctly, continue from there
+    // - Otherwise, start after the script (first write, or previous insertion point was removed)
+    var insert_after: ?*Node = blk: {
+        if (self._write_insertion_point) |wip| {
+            if (wip._parent == parent) {
+                break :blk wip;
+            }
+        }
+        break :blk script.asNode();
+    };
 
     for (children_to_insert.items) |child| {
         // Clear parent pointer (child is currently parented to fragment/HTML wrapper)

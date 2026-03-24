@@ -20,7 +20,7 @@
     observer.unobserve(target1);
     observer.observe(target2);
 
-    testing.eventually(() => {
+    testing.onload(() => {
         // Should only see target2, not target1
         testing.expectEqual(1, seenTargets.length);
         testing.expectEqual(target2, seenTargets[0]);

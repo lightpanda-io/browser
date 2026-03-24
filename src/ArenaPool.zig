@@ -155,6 +155,11 @@ pub fn reset(_: *const ArenaPool, allocator: Allocator, retain: usize) void {
     _ = arena.reset(.{ .retain_with_limit = retain });
 }
 
+pub fn resetRetain(_: *const ArenaPool, allocator: Allocator) void {
+    const arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(allocator.ptr));
+    _ = arena.reset(.retain_capacity);
+}
+
 const testing = std.testing;
 
 test "arena pool - basic acquire and use" {

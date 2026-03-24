@@ -16,7 +16,7 @@
     start = timestamp;
   }
   requestAnimationFrame(step);
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(true, start > 0)
   });
 
@@ -24,23 +24,23 @@
     start = 0;
   });
   cancelAnimationFrame(request_id);
-  testing.eventually(() => testing.expectEqual(true, start > 0));
+  testing.onload(() => testing.expectEqual(true, start > 0));
 </script>
 
 <script id=setTimeout>
   let longCall = false;
   window.setTimeout(() => {longCall = true}, 5001);
-  testing.eventually(() => testing.expectEqual(false, longCall));
+  testing.onload(() => testing.expectEqual(false, longCall));
 
   let wst1 = 0;
   window.setTimeout(() => {wst1 += 1}, 1);
-  testing.eventually(() => testing.expectEqual(1, wst1));
+  testing.onload(() => testing.expectEqual(1, wst1));
 
   let wst2 = 1;
   window.setTimeout((a, b) => {
     wst2 = a + b;
   }, 1, 2, 3);
-  testing.eventually(() => testing.expectEqual(5, wst2));
+  testing.onload(() => testing.expectEqual(5, wst2));
 </script>
 
 <script id=eventTarget>
@@ -70,7 +70,7 @@
 <script id=queueMicroTask>
   var qm = false;
   window.queueMicrotask(() => {qm = true });
-  testing.eventually(() => testing.expectEqual(true, qm));
+  testing.onload(() => testing.expectEqual(true, qm));
 </script>
 
 <script id=DOMContentLoaded>
@@ -79,7 +79,7 @@
   window.addEventListener('DOMContentLoaded', (e) => {
     dcl = e.target == document;
   });
-  testing.eventually(() => testing.expectEqual(true, dcl));
+  testing.onload(() => testing.expectEqual(true, dcl));
 </script>
 
 <script id=window.onload>
@@ -97,7 +97,7 @@
   window.onload = callback;
   testing.expectEqual(callback, window.onload);
 
-  testing.eventually(() => testing.expectEqual(true, isDocumentTarget));
+  testing.onload(() => testing.expectEqual(true, isDocumentTarget));
 </script>
 
 <script id=reportError>

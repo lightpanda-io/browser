@@ -27,6 +27,7 @@ pub const ErrorCode = enum(i64) {
     InvalidParams = -32602,
     InternalError = -32603,
     PageNotLoaded = -32604,
+    NotFound = -32605,
 };
 
 pub const Notification = struct {

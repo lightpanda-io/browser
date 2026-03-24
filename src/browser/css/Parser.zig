@@ -293,3 +293,191 @@ fn isBang(token: Tokenizer.Token) bool {
         else => false,
     };
 }
+
+pub const Rule = struct {
+    selector: []const u8,
+    block: []const u8,
+};
+
+pub fn parseStylesheet(input: []const u8) RulesIterator {
+    return RulesIterator.init(input);
+}
+
+pub const RulesIterator = struct {
+    input: []const u8,
+    stream: TokenStream,
+    has_skipped_at_rule: bool = false,
+
+    pub fn init(input: []const u8) RulesIterator {
+        return .{
+            .input = input,
+            .stream = TokenStream.init(input),
+        };
+    }
+
+    pub fn next(self: *RulesIterator) ?Rule {
+        var selector_start: ?usize = null;
+        var selector_end: ?usize = null;
+
+        while (true) {
+            const peeked = self.stream.peek() orelse return null;
+
+            if (peeked.token == .curly_bracket_block) {
+                if (selector_start == null) {
+                    self.skipBlock();
+                    continue;
+                }
+
+                const open_brace = self.stream.next() orelse return null;
+                const block_start = open_brace.end;
+                var block_end = block_start;
+
+                var depth: usize = 1;
+                while (true) {
+                    const span = self.stream.next() orelse {
+                        block_end = self.input.len;
+                        break;
+                    };
+                    if (span.token == .curly_bracket_block) {
+                        depth += 1;
+                    } else if (span.token == .close_curly_bracket) {
+                        depth -= 1;
+                        if (depth == 0) {
+                            block_end = span.start;
+                            break;
+                        }
+                    }
+                }
+
+                var selector = self.input[selector_start.?..selector_end.?];
+                selector = std.mem.trim(u8, selector, &std.ascii.whitespace);
+
+                return .{
+                    .selector = selector,
+                    .block = self.input[block_start..block_end],
+                };
+            }
+
+            if (peeked.token == .at_keyword) {
+                self.has_skipped_at_rule = true;
+                self.skipAtRule();
+                selector_start = null;
+                selector_end = null;
+                continue;
+            }
+
+            if (selector_start == null and (isWhitespaceOrComment(peeked.token) or isSemicolon(peeked.token))) {
+                _ = self.stream.next();
+                continue;
+            }
+
+            const span = self.stream.next() orelse return null;
+            if (!isWhitespaceOrComment(span.token)) {
+                if (selector_start == null) selector_start = span.start;
+                selector_end = span.end;
+            }
+        }
+    }
+
+    fn skipBlock(self: *RulesIterator) void {
+        const span = self.stream.next() orelse return;
+        if (span.token != .curly_bracket_block) return;
+
+        var depth: usize = 1;
+        while (true) {
+            const next_span = self.stream.next() orelse return;
+            if (next_span.token == .curly_bracket_block) {
+                depth += 1;
+            } else if (next_span.token == .close_curly_bracket) {
+                depth -= 1;
+                if (depth == 0) return;
+            }
+        }
+    }
+
+    fn skipAtRule(self: *RulesIterator) void {
+        _ = self.stream.next(); // consume @keyword
+        var depth: usize = 0;
+        var saw_block = false;
+
+        while (true) {
+            const peeked = self.stream.peek() orelse return;
+            if (!saw_block and isSemicolon(peeked.token) and depth == 0) {
+                _ = self.stream.next();
+                return;
+            }
+
+            const span = self.stream.next() orelse return;
+            if (isWhitespaceOrComment(span.token)) continue;
+
+            if (span.token == .curly_bracket_block) {
+                depth += 1;
+                saw_block = true;
+            } else if (span.token == .close_curly_bracket) {
+                if (depth > 0) depth -= 1;
+                if (saw_block and depth == 0) return;
+            }
+        }
+    }
+};
+
+const testing = std.testing;
+
+test "RulesIterator: single rule" {
+    var it = RulesIterator.init(".test { color: red; }");
+    const rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings(".test", rule.selector);
+    try testing.expectEqualStrings(" color: red; ", rule.block);
+    try testing.expectEqual(@as(?Rule, null), it.next());
+}
+
+test "RulesIterator: multiple rules" {
+    var it = RulesIterator.init("h1 { margin: 0; } p { padding: 10px; }");
+
+    var rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings("h1", rule.selector);
+    try testing.expectEqualStrings(" margin: 0; ", rule.block);
+
+    rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings("p", rule.selector);
+    try testing.expectEqualStrings(" padding: 10px; ", rule.block);
+
+    try testing.expectEqual(@as(?Rule, null), it.next());
+}
+
+test "RulesIterator: skips at-rules without block" {
+    var it = RulesIterator.init("@import url('style.css'); .test { color: red; }");
+
+    const rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings(".test", rule.selector);
+    try testing.expectEqualStrings(" color: red; ", rule.block);
+    try testing.expectEqual(@as(?Rule, null), it.next());
+}
+
+test "RulesIterator: skips at-rules with block" {
+    var it = RulesIterator.init("@media screen { .test { color: blue; } } .test2 { color: green; }");
+
+    const rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings(".test2", rule.selector);
+    try testing.expectEqualStrings(" color: green; ", rule.block);
+    try testing.expectEqual(@as(?Rule, null), it.next());
+}
+
+test "RulesIterator: comments and whitespace" {
+    var it = RulesIterator.init("  /* comment */  .test  /* comment */ { /* comment */ color: red; } \n\t");
+
+    const rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings(".test", rule.selector);
+    try testing.expectEqualStrings(" /* comment */ color: red; ", rule.block);
+    try testing.expectEqual(@as(?Rule, null), it.next());
+}
+
+test "RulesIterator: top-level semicolons" {
+    var it = RulesIterator.init("*{}; ; p{}");
+    var rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings("*", rule.selector);
+
+    rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings("p", rule.selector);
+    try testing.expectEqual(@as(?Rule, null), it.next());
+}
