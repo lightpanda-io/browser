@@ -899,6 +899,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/canvas/OffscreenCanvas.zig"),
     @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
     @import("../webapi/SubtleCrypto.zig"),
+    @import("../webapi/CryptoKey.zig"),
     @import("../webapi/Selection.zig"),
     @import("../webapi/ImageData.zig"),
 });
