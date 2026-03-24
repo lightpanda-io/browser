@@ -317,71 +317,71 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
     //                                                                     MAX_HELP_LEN|
     const common_options =
         \\
-        \\--insecure_disable_tls_host_verification
+        \\--insecure-disable-tls-host-verification
         \\                Disables host verification on all HTTP requests. This is an
         \\                advanced option which should only be set if you understand
         \\                and accept the risk of disabling host verification.
         \\
-        \\--obey_robots
+        \\--obey-robots
         \\                Fetches and obeys the robots.txt (if available) of the web pages
         \\                we make requests towards.
         \\                Defaults to false.
         \\
-        \\--http_proxy    The HTTP proxy to use for all HTTP requests.
+        \\--http-proxy    The HTTP proxy to use for all HTTP requests.
         \\                A username:password can be included for basic authentication.
         \\                Defaults to none.
         \\
-        \\--proxy_bearer_token
+        \\--proxy-bearer-token
         \\                The <token> to send for bearer authentication with the proxy
         \\                Proxy-Authorization: Bearer <token>
         \\
-        \\--http_max_concurrent
+        \\--http-max-concurrent
         \\                The maximum number of concurrent HTTP requests.
         \\                Defaults to 10.
         \\
-        \\--http_max_host_open
+        \\--http-max-host-open
         \\                The maximum number of open connection to a given host:port.
         \\                Defaults to 4.
         \\
-        \\--http_connect_timeout
+        \\--http-connect-timeout
         \\                The time, in milliseconds, for establishing an HTTP connection
         \\                before timing out. 0 means it never times out.
         \\                Defaults to 0.
         \\
-        \\--http_timeout
+        \\--http-timeout
         \\                The maximum time, in milliseconds, the transfer is allowed
         \\                to complete. 0 means it never times out.
         \\                Defaults to 10000.
         \\
-        \\--http_max_response_size
+        \\--http-max-response-size
         \\                Limits the acceptable response size for any request
         \\                (e.g. XHR, fetch, script loading, ...).
         \\                Defaults to no limit.
         \\
-        \\--log_level     The log level: debug, info, warn, error or fatal.
+        \\--log-level     The log level: debug, info, warn, error or fatal.
         \\                Defaults to
     ++ (if (builtin.mode == .Debug) " info." else "warn.") ++
         \\
         \\
-        \\--log_format    The log format: pretty or logfmt.
+        \\--log-format    The log format: pretty or logfmt.
         \\                Defaults to
     ++ (if (builtin.mode == .Debug) " pretty." else " logfmt.") ++
         \\
         \\
-        \\--log_filter_scopes
+        \\--log-filter-scopes
         \\                Filter out too verbose logs per scope:
         \\                http, unknown_prop, event, ...
         \\
-        \\--user_agent_suffix
+        \\--user-agent-suffix
         \\                Suffix to append to the Lightpanda/X.Y User-Agent
         \\
-        \\--web_bot_auth_key_file
+        \\--web-bot-auth-key-file
         \\                Path to the Ed25519 private key PEM file.
         \\
-        \\--web_bot_auth_keyid
+        \\--web-bot-auth-keyid
         \\                The JWK thumbprint of your public key.
         \\
-        \\--web_bot_auth_domain
+        \\--web-bot-auth-domain
         \\                Your domain e.g. yourdomain.com
     ;
 
@@ -400,21 +400,21 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Argument must be 'html', 'markdown', 'semantic_tree', or 'semantic_tree_text'.
         \\                Defaults to no dump.
         \\
-        \\--strip_mode    Comma separated list of tag groups to remove from dump
-        \\                the dump. e.g. --strip_mode js,css
+        \\--strip-mode    Comma separated list of tag groups to remove from dump
+        \\                the dump. e.g. --strip-mode js,css
         \\                  - "js" script and link[as=script, rel=preload]
         \\                  - "ui" includes img, picture, video, css and svg
         \\                  - "css" includes style and link[rel=stylesheet]
         \\                  - "full" includes js, ui and css
         \\
-        \\--with_base     Add a <base> tag in dump. Defaults to false.
+        \\--with-base     Add a <base> tag in dump. Defaults to false.
         \\
-        \\--with_frames   Includes the contents of iframes. Defaults to false.
+        \\--with-frames   Includes the contents of iframes. Defaults to false.
         \\
-        \\--wait_ms       Wait time in milliseconds.
+        \\--wait-ms       Wait time in milliseconds.
         \\                Defaults to 5000.
         \\
-        \\--wait_until    Wait until the specified event.
+        \\--wait-until    Wait until the specified event.
         \\                Supported events: load, domcontentloaded, networkidle, done.
         \\                Defaults to 'done'.
         \\
@@ -431,7 +431,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--port          Port of the CDP server
         \\                Defaults to 9222
         \\
-        \\--advertise_host
+        \\--advertise-host
         \\                The host to advertise, e.g. in the /json/version response.
         \\                Useful, for example, when --host is 0.0.0.0.
         \\                Defaults to --host value
@@ -439,11 +439,11 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--timeout       Inactivity timeout in seconds before disconnecting clients
         \\                Defaults to 10 (seconds). Limited to 604800 (1 week).
         \\
-        \\--cdp_max_connections
+        \\--cdp-max-connections
         \\                Maximum number of simultaneous CDP connections.
         \\                Defaults to 16.
         \\
-        \\--cdp_max_pending_connections
+        \\--cdp-max-pending-connections
         \\                Maximum pending connections in the accept queue.
         \\                Defaults to 128.
         \\
@@ -521,15 +521,15 @@ fn inferMode(opt: []const u8) ?RunMode {
         return .fetch;
     }
 
-    if (std.mem.eql(u8, opt, "--strip_mode")) {
+    if (std.mem.eql(u8, opt, "--strip-mode") or std.mem.eql(u8, opt, "--strip_mode")) {
         return .fetch;
     }
 
-    if (std.mem.eql(u8, opt, "--with_base")) {
+    if (std.mem.eql(u8, opt, "--with-base") or std.mem.eql(u8, opt, "--with_base")) {
         return .fetch;
     }
 
-    if (std.mem.eql(u8, opt, "--with_frames")) {
+    if (std.mem.eql(u8, opt, "--with-frames") or std.mem.eql(u8, opt, "--with_frames")) {
         return .fetch;
     }
 
@@ -577,9 +577,9 @@ fn parseServeArgs(
             continue;
         }
 
-        if (std.mem.eql(u8, "--advertise_host", opt)) {
+        if (std.mem.eql(u8, "--advertise-host", opt) or std.mem.eql(u8, "--advertise_host", opt)) {
             const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--advertise_host" });
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
                 return error.InvalidArgument;
             };
             serve.advertise_host = try allocator.dupe(u8, str);
@@ -599,27 +599,27 @@ fn parseServeArgs(
             continue;
         }
 
-        if (std.mem.eql(u8, "--cdp_max_connections", opt)) {
+        if (std.mem.eql(u8, "--cdp-max-connections", opt) or std.mem.eql(u8, "--cdp_max_connections", opt)) {
             const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--cdp_max_connections" });
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
                 return error.InvalidArgument;
             };
 
             serve.cdp_max_connections = std.fmt.parseInt(u16, str, 10) catch |err| {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--cdp_max_connections", .err = err });
+                log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
                 return error.InvalidArgument;
             };
             continue;
         }
 
-        if (std.mem.eql(u8, "--cdp_max_pending_connections", opt)) {
+        if (std.mem.eql(u8, "--cdp-max-pending-connections", opt) or std.mem.eql(u8, "--cdp_max_pending_connections", opt)) {
             const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--cdp_max_pending_connections" });
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
                 return error.InvalidArgument;
             };
 
             serve.cdp_max_pending_connections = std.fmt.parseInt(u16, str, 10) catch |err| {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--cdp_max_pending_connections", .err = err });
+                log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
                 return error.InvalidArgument;
             };
             continue;
@@ -668,25 +668,25 @@ fn parseFetchArgs(
     var wait_until: WaitUntil = .load;
 
     while (args.next()) |opt| {
-        if (std.mem.eql(u8, "--wait_ms", opt)) {
+        if (std.mem.eql(u8, "--wait-ms", opt) or std.mem.eql(u8, "--wait_ms", opt)) {
             const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--wait_ms" });
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
                 return error.InvalidArgument;
             };
             wait_ms = std.fmt.parseInt(u32, str, 10) catch |err| {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--wait_ms", .err = err });
+                log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
                 return error.InvalidArgument;
             };
             continue;
         }
 
-        if (std.mem.eql(u8, "--wait_until", opt)) {
+        if (std.mem.eql(u8, "--wait-until", opt) or std.mem.eql(u8, "--wait_until", opt)) {
             const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--wait_until" });
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
                 return error.InvalidArgument;
             };
             wait_until = std.meta.stringToEnum(WaitUntil, str) orelse {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--wait_until", .val = str });
+                log.fatal(.app, "invalid argument value", .{ .arg = opt, .val = str });
                 return error.InvalidArgument;
             };
             continue;
@@ -710,25 +710,25 @@ fn parseFetchArgs(
         if (std.mem.eql(u8, "--noscript", opt)) {
             log.warn(.app, "deprecation warning", .{
                 .feature = "--noscript argument",
-                .hint = "use '--strip_mode js' instead",
+                .hint = "use '--strip-mode js' instead",
             });
             strip.js = true;
             continue;
         }
 
-        if (std.mem.eql(u8, "--with_base", opt)) {
+        if (std.mem.eql(u8, "--with-base", opt) or std.mem.eql(u8, "--with_base", opt)) {
             with_base = true;
             continue;
         }
 
-        if (std.mem.eql(u8, "--with_frames", opt)) {
+        if (std.mem.eql(u8, "--with-frames", opt) or std.mem.eql(u8, "--with_frames", opt)) {
             with_frames = true;
             continue;
         }
 
-        if (std.mem.eql(u8, "--strip_mode", opt)) {
+        if (std.mem.eql(u8, "--strip-mode", opt) or std.mem.eql(u8, "--strip_mode", opt)) {
             const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--strip_mode" });
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
                 return error.InvalidArgument;
             };
 
@@ -746,7 +746,7 @@ fn parseFetchArgs(
                     strip.ui = true;
                     strip.css = true;
                 } else {
-                    log.fatal(.app, "invalid option choice", .{ .arg = "--strip_mode", .value = trimmed });
+                    log.fatal(.app, "invalid option choice", .{ .arg = opt, .value = trimmed });
                 }
             }
             continue;
@@ -791,102 +791,102 @@ fn parseCommonArg(
     args: *std.process.ArgIterator,
     common: *Common,
 ) !bool {
-    if (std.mem.eql(u8, "--insecure_disable_tls_host_verification", opt)) {
+    if (std.mem.eql(u8, "--insecure-disable-tls-host-verification", opt) or std.mem.eql(u8, "--insecure_disable_tls_host_verification", opt)) {
         common.tls_verify_host = false;
         return true;
     }
 
-    if (std.mem.eql(u8, "--obey_robots", opt)) {
+    if (std.mem.eql(u8, "--obey-robots", opt) or std.mem.eql(u8, "--obey_robots", opt)) {
         common.obey_robots = true;
         return true;
     }
 
-    if (std.mem.eql(u8, "--http_proxy", opt)) {
+    if (std.mem.eql(u8, "--http-proxy", opt) or std.mem.eql(u8, "--http_proxy", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--http_proxy" });
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
         common.http_proxy = try allocator.dupeZ(u8, str);
         return true;
     }
 
-    if (std.mem.eql(u8, "--proxy_bearer_token", opt)) {
+    if (std.mem.eql(u8, "--proxy-bearer-token", opt) or std.mem.eql(u8, "--proxy_bearer_token", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--proxy_bearer_token" });
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
         common.proxy_bearer_token = try allocator.dupeZ(u8, str);
         return true;
     }
 
-    if (std.mem.eql(u8, "--http_max_concurrent", opt)) {
+    if (std.mem.eql(u8, "--http-max-concurrent", opt) or std.mem.eql(u8, "--http_max_concurrent", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--http_max_concurrent" });
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
 
         common.http_max_concurrent = std.fmt.parseInt(u8, str, 10) catch |err| {
-            log.fatal(.app, "invalid argument value", .{ .arg = "--http_max_concurrent", .err = err });
+            log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
             return error.InvalidArgument;
         };
         return true;
     }
 
-    if (std.mem.eql(u8, "--http_max_host_open", opt)) {
+    if (std.mem.eql(u8, "--http-max-host-open", opt) or std.mem.eql(u8, "--http_max_host_open", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--http_max_host_open" });
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
 
         common.http_max_host_open = std.fmt.parseInt(u8, str, 10) catch |err| {
-            log.fatal(.app, "invalid argument value", .{ .arg = "--http_max_host_open", .err = err });
+            log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
             return error.InvalidArgument;
         };
         return true;
     }
 
-    if (std.mem.eql(u8, "--http_connect_timeout", opt)) {
+    if (std.mem.eql(u8, "--http-connect-timeout", opt) or std.mem.eql(u8, "--http_connect_timeout", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--http_connect_timeout" });
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
 
         common.http_connect_timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
-            log.fatal(.app, "invalid argument value", .{ .arg = "--http_connect_timeout", .err = err });
+            log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
             return error.InvalidArgument;
         };
         return true;
     }
 
-    if (std.mem.eql(u8, "--http_timeout", opt)) {
+    if (std.mem.eql(u8, "--http-timeout", opt) or std.mem.eql(u8, "--http_timeout", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--http_timeout" });
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
 
         common.http_timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
-            log.fatal(.app, "invalid argument value", .{ .arg = "--http_timeout", .err = err });
+            log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
             return error.InvalidArgument;
         };
         return true;
     }
 
-    if (std.mem.eql(u8, "--http_max_response_size", opt)) {
+    if (std.mem.eql(u8, "--http-max-response-size", opt) or std.mem.eql(u8, "--http_max_response_size", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--http_max_response_size" });
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
 
         common.http_max_response_size = std.fmt.parseInt(usize, str, 10) catch |err| {
-            log.fatal(.app, "invalid argument value", .{ .arg = "--http_max_response_size", .err = err });
+            log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
             return error.InvalidArgument;
         };
         return true;
     }
 
-    if (std.mem.eql(u8, "--log_level", opt)) {
+    if (std.mem.eql(u8, "--log-level", opt) or std.mem.eql(u8, "--log_level", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--log_level" });
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
 
@@ -894,26 +894,26 @@ fn parseCommonArg(
             if (std.mem.eql(u8, str, "error")) {
                 break :blk .err;
             }
-            log.fatal(.app, "invalid option choice", .{ .arg = "--log_level", .value = str });
+            log.fatal(.app, "invalid option choice", .{ .arg = opt, .value = str });
             return error.InvalidArgument;
         };
         return true;
     }
 
-    if (std.mem.eql(u8, "--log_format", opt)) {
+    if (std.mem.eql(u8, "--log-format", opt) or std.mem.eql(u8, "--log_format", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--log_format" });
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
 
         common.log_format = std.meta.stringToEnum(log.Format, str) orelse {
-            log.fatal(.app, "invalid option choice", .{ .arg = "--log_format", .value = str });
+            log.fatal(.app, "invalid option choice", .{ .arg = opt, .value = str });
             return error.InvalidArgument;
         };
         return true;
     }
 
-    if (std.mem.eql(u8, "--log_filter_scopes", opt)) {
+    if (std.mem.eql(u8, "--log-filter-scopes", opt) or std.mem.eql(u8, "--log_filter_scopes", opt)) {
         if (builtin.mode != .Debug) {
             log.fatal(.app, "experimental", .{ .help = "log scope filtering is only available in debug builds" });
             return false;
@@ -930,7 +930,7 @@ fn parseCommonArg(
         var it = std.mem.splitScalar(u8, str, ',');
         while (it.next()) |part| {
             try arr.append(allocator, std.meta.stringToEnum(log.Scope, part) orelse {
-                log.fatal(.app, "invalid option choice", .{ .arg = "--log_filter_scopes", .value = part });
+                log.fatal(.app, "invalid option choice", .{ .arg = opt, .value = part });
                 return false;
             });
         }
@@ -938,14 +938,14 @@ fn parseCommonArg(
         return true;
     }
 
-    if (std.mem.eql(u8, "--user_agent_suffix", opt)) {
+    if (std.mem.eql(u8, "--user-agent-suffix", opt) or std.mem.eql(u8, "--user_agent_suffix", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--user_agent_suffix" });
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
         for (str) |c| {
             if (!std.ascii.isPrint(c)) {
-                log.fatal(.app, "not printable character", .{ .arg = "--user_agent_suffix" });
+                log.fatal(.app, "not printable character", .{ .arg = opt });
                 return error.InvalidArgument;
             }
         }
@@ -953,27 +953,27 @@ fn parseCommonArg(
         return true;
     }
 
-    if (std.mem.eql(u8, "--web_bot_auth_key_file", opt)) {
+    if (std.mem.eql(u8, "--web-bot-auth-key-file", opt) or std.mem.eql(u8, "--web_bot_auth_key_file", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--web_bot_auth_key_file" });
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
         common.web_bot_auth_key_file = try allocator.dupe(u8, str);
         return true;
     }
 
-    if (std.mem.eql(u8, "--web_bot_auth_keyid", opt)) {
+    if (std.mem.eql(u8, "--web-bot-auth-keyid", opt) or std.mem.eql(u8, "--web_bot_auth_keyid", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--web_bot_auth_keyid" });
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
         common.web_bot_auth_keyid = try allocator.dupe(u8, str);
         return true;
     }
 
-    if (std.mem.eql(u8, "--web_bot_auth_domain", opt)) {
+    if (std.mem.eql(u8, "--web-bot-auth-domain", opt) or std.mem.eql(u8, "--web_bot_auth_domain", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--web_bot_auth_domain" });
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
         common.web_bot_auth_domain = try allocator.dupe(u8, str);

@@ -82,7 +82,7 @@ docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly
 ### Dump a URL
 
 ```console
-./lightpanda fetch --obey_robots --log_format pretty  --log_level info https://demo-browser.lightpanda.io/campfire-commerce/
+./lightpanda fetch --obey-robots --log-format pretty  --log-level info https://demo-browser.lightpanda.io/campfire-commerce/
 ```
 ```console
 INFO  telemetry : telemetry status . . . . . . . . . . . . .  [+0ms]
@@ -117,7 +117,7 @@ INFO  http : request complete . . . . . . . . . . . . . . . . [+141ms]
 ### Start a CDP server
 
 ```console
-./lightpanda serve --obey_robots --log_format pretty  --log_level info --host 127.0.0.1 --port 9222
+./lightpanda serve --obey-robots --log-format pretty  --log-level info --host 127.0.0.1 --port 9222
 ```
 ```console
 INFO  telemetry : telemetry status . . . . . . . . . . . . .  [+0ms]
@@ -186,7 +186,7 @@ Here are the key features we have implemented:
 - [x] Custom HTTP headers
 - [x] Proxy support
 - [x] Network interception
-- [x] Respect `robots.txt` with option `--obey_robots`
+- [x] Respect `robots.txt` with option `--obey-robots`
 
 NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
 
@@ -317,7 +317,7 @@ First start the WPT's HTTP server from your `wpt/` clone dir.
 Run a Lightpanda browser
 
 ```
-zig build run -- --insecure_disable_tls_host_verification
+zig build run -- --insecure-disable-tls-host-verification
 ```
 
 Then you can start the wptrunner from the Demo's clone dir:

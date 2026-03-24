@@ -495,7 +495,7 @@ fn buildJSONVersionResponse(
     const host = app.config.advertiseHost();
     if (std.mem.eql(u8, host, "0.0.0.0")) {
         log.info(.cdp, "unreachable advertised host", .{
-            .message = "when --host is set to 0.0.0.0 consider setting --advertise_host to a reachable address",
+            .message = "when --host is set to 0.0.0.0 consider setting --advertise-host to a reachable address",
         });
     }
     const body_format = "{{\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"}}";
