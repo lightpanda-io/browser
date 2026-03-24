@@ -480,6 +480,24 @@
 }
 </script>
 
+<script id="CSSStyleSheet_insertRule_multiple_rules">
+{
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    let caught = false;
+    try {
+        sheet.insertRule('a { color: red; } b { color: blue; }');
+    } catch (e) {
+        caught = true;
+        testing.expectEqual('SyntaxError', e.name);
+    }
+    testing.expectTrue(caught);
+    testing.expectEqual(0, sheet.cssRules.length);
+}
+</script>
+
 <script id="CSSStyleSheet_replaceSync">
 {
     const sheet = new CSSStyleSheet();
