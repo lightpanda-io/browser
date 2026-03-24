@@ -463,3 +463,44 @@
   });
 }
 </script>
+
+<!-- Test: requestSubmit(submitter) sets SubmitEvent.submitter -->
+<form id="test_form_submitter" action="/should-not-navigate6" method="get">
+  <button id="submitter_btn" type="submit">Save</button>
+</form>
+
+<script id="requestSubmit_sets_submitter">
+{
+  const form = $('#test_form_submitter');
+  const btn = $('#submitter_btn');
+  let capturedSubmitter = undefined;
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    capturedSubmitter = e.submitter;
+  });
+
+  form.requestSubmit(btn);
+  testing.expectEqual(btn, capturedSubmitter);
+}
+</script>
+
+<!-- Test: requestSubmit() without submitter sets submitter to the form element -->
+<form id="test_form_submitter2" action="/should-not-navigate7" method="get">
+  <input type="text" name="q" value="test">
+</form>
+
+<script id="requestSubmit_default_submitter_is_form">
+{
+  const form = $('#test_form_submitter2');
+  let capturedSubmitter = undefined;
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    capturedSubmitter = e.submitter;
+  });
+
+  form.requestSubmit();
+  testing.expectEqual(form, capturedSubmitter);
+}
+</script>

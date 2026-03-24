@@ -76,6 +76,7 @@ pub const Type = union(enum) {
     pop_state_event: *@import("event/PopStateEvent.zig"),
     ui_event: *@import("event/UIEvent.zig"),
     promise_rejection_event: *@import("event/PromiseRejectionEvent.zig"),
+    submit_event: *@import("event/SubmitEvent.zig"),
 };
 
 pub const Options = struct {
