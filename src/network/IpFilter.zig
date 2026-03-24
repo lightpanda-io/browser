@@ -40,6 +40,8 @@ pub const CidrV6 = struct {
 block_private: bool,
 custom_v4: []const CidrV4,
 custom_v6: []const CidrV6,
+allow_v4: []const CidrV4,
+allow_v6: []const CidrV6,
 
 // ── Comptime helpers ─────────────────────────────────────────────────────────
 
@@ -167,11 +169,13 @@ fn matchesCidrV6(addr: Ipv6Addr, cidr: CidrV6) bool {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-pub const ParsedCidrs = struct { v4: []CidrV4, v6: []CidrV6 };
+pub const ParsedCidrs = struct { v4: []CidrV4, v6: []CidrV6, allow_v4: []CidrV4, allow_v6: []CidrV6 };
 
 /// Parse a comma-separated list of CIDR strings (e.g. "10.0.0.0/8,2001:db8::/32")
-/// into separate IPv4 and IPv6 slices. Caller owns the returned slices and must
-/// free them with the same allocator. Returns error.InvalidCidr on any malformed entry.
+/// into separate IPv4 and IPv6 slices. Entries prefixed with '-' are added to the
+/// allow list (e.g. "-10.0.0.42/32" exempts that IP from blocking).
+/// Caller owns the returned slices and must free them with the same allocator.
+/// Returns error.InvalidCidr on any malformed entry.
 pub fn parseCidrList(
     allocator: std.mem.Allocator,
     cidr_str: []const u8,
@@ -180,24 +184,41 @@ pub fn parseCidrList(
     errdefer v4_list.deinit(allocator);
     var v6_list: std.ArrayList(CidrV6) = .empty;
     errdefer v6_list.deinit(allocator);
+    var allow_v4_list: std.ArrayList(CidrV4) = .empty;
+    errdefer allow_v4_list.deinit(allocator);
+    var allow_v6_list: std.ArrayList(CidrV6) = .empty;
+    errdefer allow_v6_list.deinit(allocator);
 
     var it = std.mem.splitScalar(u8, cidr_str, ',');
     while (it.next()) |entry| {
         const trimmed = std.mem.trim(u8, entry, " \t");
         if (trimmed.len == 0) continue;
 
-        const slash = std.mem.indexOfScalar(u8, trimmed, '/') orelse return error.InvalidCidr;
-        const addr_str = trimmed[0..slash];
-        const prefix_str = trimmed[slash + 1 ..];
+        const is_allow = trimmed[0] == '-';
+        const cidr_part = if (is_allow) trimmed[1..] else trimmed;
+
+        const slash = std.mem.indexOfScalar(u8, cidr_part, '/') orelse return error.InvalidCidr;
+        const addr_str = cidr_part[0..slash];
+        const prefix_str = cidr_part[slash + 1 ..];
 
         if (parseIpv4(addr_str)) |v4| {
             const prefix = std.fmt.parseInt(u8, prefix_str, 10) catch return error.InvalidCidr;
             if (prefix > 32) return error.InvalidCidr;
-            try v4_list.append(allocator, .{ .network = v4, .prefix_len = @intCast(prefix) });
+            const cidr = CidrV4{ .network = v4, .prefix_len = @intCast(prefix) };
+            if (is_allow) {
+                try allow_v4_list.append(allocator, cidr);
+            } else {
+                try v4_list.append(allocator, cidr);
+            }
         } else if (parseIpv6(addr_str)) |v6| {
             const prefix = std.fmt.parseInt(u8, prefix_str, 10) catch return error.InvalidCidr;
             if (prefix > 128) return error.InvalidCidr;
-            try v6_list.append(allocator, .{ .network = v6, .prefix_len = prefix });
+            const cidr = CidrV6{ .network = v6, .prefix_len = prefix };
+            if (is_allow) {
+                try allow_v6_list.append(allocator, cidr);
+            } else {
+                try v6_list.append(allocator, cidr);
+            }
         } else {
             return error.InvalidCidr;
         }
@@ -206,22 +227,39 @@ pub fn parseCidrList(
     const v4 = try v4_list.toOwnedSlice(allocator);
     errdefer allocator.free(v4);
     const v6 = try v6_list.toOwnedSlice(allocator);
-    return .{ .v4 = v4, .v6 = v6 };
+    errdefer allocator.free(v6);
+    const allow_v4 = try allow_v4_list.toOwnedSlice(allocator);
+    errdefer allocator.free(allow_v4);
+    const allow_v6 = try allow_v6_list.toOwnedSlice(allocator);
+    return .{ .v4 = v4, .v6 = v6, .allow_v4 = allow_v4, .allow_v6 = allow_v6 };
 }
 
 /// Create an IpFilter. Set block_private to block outbound requests to
 /// RFC1918, localhost, link-local, and ULA ranges — useful for sandboxing
 /// and preventing access to internal infrastructure. custom_v4/custom_v6
-/// are additional user-defined ranges (caller owns the slices).
-pub fn init(block_private: bool, custom_v4: []const CidrV4, custom_v6: []const CidrV6) IpFilter {
+/// are additional user-defined ranges to block; allow_v4/allow_v6 are
+/// exemptions that take precedence over all block rules.
+/// Caller owns the slices.
+pub fn init(
+    block_private: bool,
+    custom_v4: []const CidrV4,
+    custom_v6: []const CidrV6,
+    allow_v4: []const CidrV4,
+    allow_v6: []const CidrV6,
+) IpFilter {
     return .{
         .block_private = block_private,
         .custom_v4 = custom_v4,
         .custom_v6 = custom_v6,
+        .allow_v4 = allow_v4,
+        .allow_v6 = allow_v6,
     };
 }
 
 fn isBlockedV4(self: *const IpFilter, addr: Ipv4Addr) bool {
+    for (self.allow_v4) |cidr| {
+        if (matchesCidrV4(addr, cidr)) return false;
+    }
     if (self.block_private) {
         for (PRIVATE_V4) |cidr| {
             if (matchesCidrV4(addr, cidr)) return true;
@@ -234,6 +272,9 @@ fn isBlockedV4(self: *const IpFilter, addr: Ipv4Addr) bool {
 }
 
 fn isBlockedV6(self: *const IpFilter, addr: Ipv6Addr) bool {
+    for (self.allow_v6) |cidr| {
+        if (matchesCidrV6(addr, cidr)) return false;
+    }
     if (self.block_private) {
         for (PRIVATE_V6) |cidr| {
             if (matchesCidrV6(addr, cidr)) return true;
@@ -280,7 +321,7 @@ fn testBlocked(self: *const IpFilter, ip: []const u8) bool {
 }
 
 test "IPv4 CIDR matching: private group boundaries" {
-    const filter = IpFilter.init(true, &.{}, &.{});
+    const filter = IpFilter.init(true, &.{}, &.{}, &.{}, &.{});
     const t = std.testing;
 
     // Loopback
@@ -314,7 +355,7 @@ test "IPv4 CIDR matching: private group boundaries" {
 }
 
 test "IPv6 CIDR matching: private group" {
-    const filter = IpFilter.init(true, &.{}, &.{});
+    const filter = IpFilter.init(true, &.{}, &.{}, &.{}, &.{});
     const t = std.testing;
 
     try t.expect(filter.testBlocked("::1")); // localhost
@@ -326,7 +367,7 @@ test "IPv6 CIDR matching: private group" {
 }
 
 test "IPv4-mapped IPv6 bypass prevention" {
-    const filter = IpFilter.init(true, &.{}, &.{});
+    const filter = IpFilter.init(true, &.{}, &.{}, &.{}, &.{});
     const t = std.testing;
 
     // ::ffff:127.0.0.1 must be blocked (maps to loopback)
@@ -338,7 +379,7 @@ test "IPv4-mapped IPv6 bypass prevention" {
 }
 
 test "fail-closed: unknown address family blocked by isBlockedSockaddr" {
-    const filter = IpFilter.init(false, &.{}, &.{});
+    const filter = IpFilter.init(false, &.{}, &.{}, &.{}, &.{});
     const t = std.testing;
 
     // Construct a sockaddr with an unknown address family
@@ -356,7 +397,7 @@ test "custom CIDR ranges" {
     const custom_v4 = [_]CidrV4{
         .{ .network = .{ 203, 0, 113, 0 }, .prefix_len = 24 }, // TEST-NET-3
     };
-    const filter = IpFilter.init(false, &custom_v4, &.{});
+    const filter = IpFilter.init(false, &custom_v4, &.{}, &.{}, &.{});
     const t = std.testing;
 
     try t.expect(filter.testBlocked("203.0.113.1")); // in custom range
@@ -368,8 +409,8 @@ test "custom CIDR ranges" {
 test "private group blocks cloud metadata IP via link-local" {
     // 169.254.169.254 is in link-local (169.254.0.0/16) which is in the private group.
     // Users who want targeted cloud-metadata-only blocking can use --block_cidrs.
-    const filter_private = IpFilter.init(true, &.{}, &.{});
-    const filter_none = IpFilter.init(false, &.{}, &.{});
+    const filter_private = IpFilter.init(true, &.{}, &.{}, &.{}, &.{});
+    const filter_none = IpFilter.init(false, &.{}, &.{}, &.{}, &.{});
     const t = std.testing;
 
     try t.expect(filter_private.testBlocked("169.254.169.254")); // blocked via link-local
@@ -381,17 +422,74 @@ test "parseCidrList: mixed IPv4 and IPv6" {
     const result = try parseCidrList(t.allocator, "203.0.113.0/24, 2001:db8::/32, 192.168.1.0/24");
     defer t.allocator.free(result.v4);
     defer t.allocator.free(result.v6);
+    defer t.allocator.free(result.allow_v4);
+    defer t.allocator.free(result.allow_v6);
 
     try t.expectEqual(2, result.v4.len);
     try t.expectEqual(1, result.v6.len);
 
     // spot-check: 203.0.113.0/24 and 192.168.1.0/24
-    const f = IpFilter.init(false, result.v4, result.v6);
+    const f = IpFilter.init(false, result.v4, result.v6, result.allow_v4, result.allow_v6);
     try t.expect(f.testBlocked("203.0.113.1"));
     try t.expect(!f.testBlocked("203.0.114.0"));
     try t.expect(f.testBlocked("192.168.1.1"));
     try t.expect(f.testBlocked("2001:db8::1"));
     try t.expect(!f.testBlocked("2001:db9::1"));
+}
+
+test "allow list exempts from private blocking" {
+    const allow_v4 = [_]CidrV4{
+        .{ .network = .{ 10, 0, 0, 42 }, .prefix_len = 32 },
+    };
+    const allow_v6 = [_]CidrV6{
+        makeCidrV6(.{ 0xfc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, 128),
+    };
+    const filter = IpFilter.init(true, &.{}, &.{}, &allow_v4, &allow_v6);
+    const t = std.testing;
+
+    // Allowed IPs pass through despite being in private ranges
+    try t.expect(!filter.testBlocked("10.0.0.42"));
+    try t.expect(!filter.testBlocked("fc00::1"));
+
+    // Other private IPs still blocked
+    try t.expect(filter.testBlocked("10.0.0.43"));
+    try t.expect(filter.testBlocked("10.0.0.41"));
+    try t.expect(filter.testBlocked("192.168.1.1"));
+    try t.expect(filter.testBlocked("fc00::2"));
+}
+
+test "allow list exempts from custom CIDR blocking" {
+    const custom_v4 = [_]CidrV4{
+        .{ .network = .{ 203, 0, 113, 0 }, .prefix_len = 24 },
+    };
+    const allow_v4 = [_]CidrV4{
+        .{ .network = .{ 203, 0, 113, 100 }, .prefix_len = 32 },
+    };
+    const filter = IpFilter.init(false, &custom_v4, &.{}, &allow_v4, &.{});
+    const t = std.testing;
+
+    try t.expect(!filter.testBlocked("203.0.113.100")); // allowed
+    try t.expect(filter.testBlocked("203.0.113.99")); // blocked
+    try t.expect(filter.testBlocked("203.0.113.101")); // blocked
+}
+
+test "parseCidrList: allow entries with '-' prefix" {
+    const t = std.testing;
+    const result = try parseCidrList(t.allocator, "10.0.0.0/8,-10.0.0.42/32,-fc00::1/128");
+    defer t.allocator.free(result.v4);
+    defer t.allocator.free(result.v6);
+    defer t.allocator.free(result.allow_v4);
+    defer t.allocator.free(result.allow_v6);
+
+    try t.expectEqual(1, result.v4.len);
+    try t.expectEqual(0, result.v6.len);
+    try t.expectEqual(1, result.allow_v4.len);
+    try t.expectEqual(1, result.allow_v6.len);
+
+    const f = IpFilter.init(false, result.v4, result.v6, result.allow_v4, result.allow_v6);
+    try t.expect(!f.testBlocked("10.0.0.42")); // allowed
+    try t.expect(f.testBlocked("10.0.0.43")); // blocked
+    try t.expect(!f.testBlocked("fc00::1")); // allowed (not blocked by custom, but allow-listed)
 }
 
 test "parseCidrList: invalid input returns error" {

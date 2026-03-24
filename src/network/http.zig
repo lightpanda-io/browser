@@ -658,7 +658,7 @@ fn makeSockAddrV4(ip: [4]u8) libcurl.CurlSockAddr {
 }
 
 test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {
-    const filter = IpFilter.init(true, &.{}, &.{});
+    const filter = IpFilter.init(true, &.{}, &.{}, &.{}, &.{});
     var sa = makeSockAddrV4(.{ 127, 0, 0, 1 });
     const result = opensocketCallback(.ipcxn, &sa, @ptrCast(@constCast(&filter)));
     try std.testing.expectEqual(libcurl.CURL_SOCKET_BAD, result);
@@ -666,7 +666,7 @@ test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {
 
 test "opensocketCallback: public IPv4 opens a real socket" {
     // 8.8.8.8 — not in any blocked range; callback should create a real socket
-    const filter = IpFilter.init(true, &.{}, &.{});
+    const filter = IpFilter.init(true, &.{}, &.{}, &.{}, &.{});
     var sa = makeSockAddrV4(.{ 8, 8, 8, 8 });
     const fd = opensocketCallback(.ipcxn, &sa, @ptrCast(@constCast(&filter)));
     // A real fd is always >= 0
@@ -682,7 +682,7 @@ test "opensocketCallback: null clientp returns CURL_SOCKET_BAD (fail-closed)" {
 
 test "opensocketCallback: block_private=false allows private IP" {
     // When block_private is false the filter blocks nothing
-    const filter = IpFilter.init(false, &.{}, &.{});
+    const filter = IpFilter.init(false, &.{}, &.{}, &.{}, &.{});
     var sa = makeSockAddrV4(.{ 127, 0, 0, 1 });
     const fd = opensocketCallback(.ipcxn, &sa, @ptrCast(@constCast(&filter)));
     try std.testing.expect(fd >= 0);

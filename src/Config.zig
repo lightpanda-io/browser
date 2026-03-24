@@ -378,7 +378,9 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--block_cidrs
         \\                Additional CIDR ranges to block, comma-separated.
+        \\                Prefix with '-' to allow (exempt from blocking).
         \\                e.g. --block_cidrs 169.254.169.254/32,fd00:ec2::254/128
+        \\                e.g. --block_cidrs 10.0.0.0/8,-10.0.0.42/32
         \\                Can be used standalone or combined with --block_private_networks.
         \\
         \\--http-proxy    The HTTP proxy to use for all HTTP requests.
