@@ -848,14 +848,29 @@ fn processMessages(self: *Client) !bool {
             }
         }
 
+        // When the server sends "Connection: close" and closes the TLS
+        // connection without a close_notify alert, BoringSSL reports
+        // RecvError. If we already received valid HTTP headers, this is
+        // a normal end-of-body (the connection closure signals the end
+        // of the response per HTTP/1.1 when there is no Content-Length).
+        // We must check this before endTransfer, which may reset the
+        // easy handle.
+        const is_conn_close_recv = blk: {
+            const err = msg.err orelse break :blk false;
+            if (err != error.RecvError) break :blk false;
+            if (!transfer._header_done_called) break :blk false;
+            const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk false;
+            break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
+        };
+
         // release it ASAP so that it's available; some done_callbacks
         // will load more resources.
         self.endTransfer(transfer);
 
         defer transfer.deinit();
 
-        if (msg.err) |err| {
-            requestFailed(transfer, err, true);
+        if (msg.err != null and !is_conn_close_recv) {
+            requestFailed(transfer, msg.err.?, true);
         } else blk: {
             // make sure the transfer can't be immediately aborted from a callback
             // since we still need it here.
