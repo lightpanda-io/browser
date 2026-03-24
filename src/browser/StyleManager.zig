@@ -199,6 +199,8 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 // By default only checks display:none.
 // Walks up the tree to check ancestors.
 pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, options: CheckVisibilityOptions) bool {
+    self.rebuildIfDirty() catch return false;
+
     var current: ?*Element = el;
 
     while (current) |elem| {
@@ -282,8 +284,6 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     if (display_priority == INLINE_PRIORITY and visibility_priority == INLINE_PRIORITY and opacity_priority == INLINE_PRIORITY) {
         return false;
     }
-
-    self.rebuildIfDirty() catch return false;
 
     // Helper to check a single rule
     const Ctx = struct {
@@ -378,6 +378,8 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
 /// Checks inline style first - if set, skips stylesheet lookup.
 /// Walks up the tree to check ancestors.
 pub fn hasPointerEventsNone(self: *StyleManager, el: *Element, cache: ?*PointerEventsCache) bool {
+    self.rebuildIfDirty() catch return false;
+
     var current: ?*Element = el;
 
     while (current) |elem| {
@@ -416,9 +418,6 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
         }
         return false;
     }
-
-    // Check stylesheet rules
-    self.rebuildIfDirty() catch return false;
 
     var result: ?bool = null;
     var best_priority: u64 = 0;
