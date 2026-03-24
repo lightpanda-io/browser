@@ -344,7 +344,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                we make requests towards.
         \\                Defaults to false.
         \\
-        \\--block_private_networks
+        \\--block-private-networks
         \\                Blocks HTTP requests to private/internal IP addresses
         \\                after DNS resolution. Useful for sandboxing, multi-tenant
         \\                deployments, and preventing access to internal infrastructure
@@ -352,12 +352,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                resources, redirects, etc.).
         \\                Defaults to false.
         \\
-        \\--block_cidrs
+        \\--block-cidrs
         \\                Additional CIDR ranges to block, comma-separated.
         \\                Prefix with '-' to allow (exempt from blocking).
-        \\                e.g. --block_cidrs 169.254.169.254/32,fd00:ec2::254/128
-        \\                e.g. --block_cidrs 10.0.0.0/8,-10.0.0.42/32
-        \\                Can be used standalone or combined with --block_private_networks.
+        \\                e.g. --block-cidrs 169.254.169.254/32,fd00:ec2::254/128
+        \\                e.g. --block-cidrs 10.0.0.0/8,-10.0.0.42/32
+        \\                Can be used standalone or combined with --block-private-networks.
         \\
         \\--http-proxy    The HTTP proxy to use for all HTTP requests.
         \\                A username:password can be included for basic authentication.
@@ -1012,14 +1012,14 @@ fn parseCommonArg(
         return true;
     }
 
-    if (std.mem.eql(u8, "--block_private_networks", opt)) {
+    if (std.mem.eql(u8, "--block-private-networks", opt)) {
         common.block_private_networks = true;
         return true;
     }
 
-    if (std.mem.eql(u8, "--block_cidrs", opt)) {
+    if (std.mem.eql(u8, "--block-cidrs", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--block_cidrs" });
+            log.fatal(.app, "missing argument value", .{ .arg = "--block-cidrs" });
             return error.InvalidArgument;
         };
         common.block_cidrs = try allocator.dupe(u8, str);

@@ -408,7 +408,7 @@ test "custom CIDR ranges" {
 
 test "private group blocks cloud metadata IP via link-local" {
     // 169.254.169.254 is in link-local (169.254.0.0/16) which is in the private group.
-    // Users who want targeted cloud-metadata-only blocking can use --block_cidrs.
+    // Users who want targeted cloud-metadata-only blocking can use --block-cidrs.
     const filter_private = IpFilter.init(true, &.{}, &.{}, &.{}, &.{});
     const filter_none = IpFilter.init(false, &.{}, &.{}, &.{}, &.{});
     const t = std.testing;
