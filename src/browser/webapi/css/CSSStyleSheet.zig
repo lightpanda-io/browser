@@ -88,6 +88,8 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, pag
         return error.SyntaxError;
     };
 
+    if (it.next() != null) return error.SyntaxError;
+
     const style_rule = try CSSStyleRule.init(page);
     try style_rule.setSelectorText(parsed_rule.selector, page);
 
