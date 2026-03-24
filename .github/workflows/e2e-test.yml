@@ -98,7 +98,7 @@ jobs:
       - name: run end to end tests through proxy
         run: |
           ./proxy/proxy & echo $! > PROXY.id
-          ./lightpanda serve --http_proxy 'http://127.0.0.1:3000' & echo $! > LPD.pid
+          ./lightpanda serve --http-proxy 'http://127.0.0.1:3000' & echo $! > LPD.pid
           go run runner/main.go
           kill `cat LPD.pid` `cat PROXY.id`
 
@@ -139,9 +139,9 @@ jobs:
       - name: run end to end tests
         run: |
           ./lightpanda serve \
-            --web_bot_auth_key_file private_key.pem \
-            --web_bot_auth_keyid ${{ vars.WBA_KEY_ID }} \
-            --web_bot_auth_domain ${{ vars.WBA_DOMAIN }} \
+            --web-bot-auth-key-file private_key.pem \
+            --web-bot-auth-keyid ${{ vars.WBA_KEY_ID }} \
+            --web-bot-auth-domain ${{ vars.WBA_DOMAIN }} \
             & echo $! > LPD.pid
           go run runner/main.go
           kill `cat LPD.pid`
@@ -155,10 +155,10 @@ jobs:
         run: |
           ./proxy/proxy & echo $! > PROXY.id
           ./lightpanda serve \
-            --web_bot_auth_key_file private_key.pem \
-            --web_bot_auth_keyid ${{ vars.WBA_KEY_ID }} \
-            --web_bot_auth_domain ${{ vars.WBA_DOMAIN }} \
-            --http_proxy 'http://127.0.0.1:3000' \
+            --web-bot-auth-key-file private_key.pem \
+            --web-bot-auth-keyid ${{ vars.WBA_KEY_ID }} \
+            --web-bot-auth-domain ${{ vars.WBA_DOMAIN }} \
+            --http-proxy 'http://127.0.0.1:3000' \
             & echo $! > LPD.pid
           go run runner/main.go
           kill `cat LPD.pid` `cat PROXY.id`
@@ -205,9 +205,9 @@ jobs:
           exec 3<<< "${{ secrets.WBA_PRIVATE_KEY_PEM }}"
 
           ./lightpanda fetch --dump http://127.0.0.1:8989/ \
-            --web_bot_auth_key_file /proc/self/fd/3 \
-            --web_bot_auth_keyid ${{ vars.WBA_KEY_ID }} \
-            --web_bot_auth_domain ${{ vars.WBA_DOMAIN }}
+            --web-bot-auth-key-file /proc/self/fd/3 \
+            --web-bot-auth-keyid ${{ vars.WBA_KEY_ID }} \
+            --web-bot-auth-domain ${{ vars.WBA_DOMAIN }}
 
           wait $VALIDATOR_PID
           exec 3>&-
