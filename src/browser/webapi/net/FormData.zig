@@ -125,15 +125,10 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, page: *Pa
     var list: KeyValueList = .empty;
     const form = form_ orelse return list;
 
-    const form_node = form.asNode();
-
     var elements = try form.getElements(page);
     var it = try elements.iterator();
     while (it.next()) |element| {
-        if (element.getAttributeSafe(comptime .wrap("disabled")) != null) {
-            continue;
-        }
-        if (isDisabledByFieldset(element, form_node)) {
+        if (element.isDisabled()) {
             continue;
         }
 
@@ -200,41 +195,6 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, page: *Pa
         try list.append(arena, name, value);
     }
     return list;
-}
-
-// Returns true if `element` is disabled by an ancestor <fieldset disabled>,
-// stopping the upward walk when the form node is reached.
-// Per spec, elements inside the first <legend> child of a disabled fieldset
-// are NOT disabled by that fieldset.
-fn isDisabledByFieldset(element: *Element, form_node: *Node) bool {
-    const element_node = element.asNode();
-    var current: ?*Node = element_node._parent;
-    while (current) |node| {
-        // Stop at the form boundary (common case optimisation)
-        if (node == form_node) {
-            return false;
-        }
-
-        current = node._parent;
-        const el = node.is(Element) orelse continue;
-
-        if (el.getTag() == .fieldset and el.getAttributeSafe(comptime .wrap("disabled")) != null) {
-            // Check if `element` is inside the first <legend> child of this fieldset
-            var child = el.firstElementChild();
-            while (child) |c| {
-                if (c.getTag() == .legend) {
-                    // Found the first legend; exempt if element is a descendant
-                    if (c.asNode().contains(element_node)) {
-                        return false;
-                    }
-                    break;
-                }
-                child = c.nextElementSibling();
-            }
-            return true;
-        }
-    }
-    return false;
 }
 
 pub const JsApi = struct {

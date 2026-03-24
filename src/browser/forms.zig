@@ -179,15 +179,13 @@ fn collectFormFields(
     page: *Page,
 ) ![]FormField {
     var fields: std.ArrayList(FormField) = .empty;
-    const form_node = form.asNode();
 
     var elements = try form.getElements(page);
     var it = try elements.iterator();
     while (it.next()) |el| {
         const node = el.asNode();
 
-        const is_disabled = el.getAttributeSafe(comptime .wrap("disabled")) != null or
-            isDisabledByFieldset(el, form_node);
+        const is_disabled = el.isDisabled();
 
         if (el.is(Element.Html.Input)) |input| {
             if (input._input_type == .hidden) continue;
@@ -265,38 +263,6 @@ fn collectSelectOptions(
     }
 
     return options.items;
-}
-
-/// Returns true if `element` is disabled by an ancestor <fieldset disabled>,
-/// stopping at the form boundary.
-/// Per spec, elements inside the first <legend> child of a disabled fieldset
-/// are NOT disabled by that fieldset.
-fn isDisabledByFieldset(element: *Element, form_node: *Node) bool {
-    const element_node = element.asNode();
-    var current: ?*Node = element_node._parent;
-    while (current) |node| {
-        if (node == form_node) {
-            return false;
-        }
-
-        current = node._parent;
-        const el = node.is(Element) orelse continue;
-
-        if (el.getTag() == .fieldset and el.getAttributeSafe(comptime .wrap("disabled")) != null) {
-            var child = el.firstElementChild();
-            while (child) |c| {
-                if (c.getTag() == .legend) {
-                    if (c.asNode().contains(element_node)) {
-                        return false;
-                    }
-                    break;
-                }
-                child = c.nextElementSibling();
-            }
-            return true;
-        }
-    }
-    return false;
 }
 
 const testing = @import("../testing.zig");

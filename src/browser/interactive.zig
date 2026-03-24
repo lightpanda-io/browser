@@ -162,7 +162,7 @@ pub fn collectInteractiveElements(
             .name = try getAccessibleName(el, arena),
             .interactivity_type = itype,
             .listener_types = listener_types,
-            .disabled = isDisabled(el),
+            .disabled = el.isDisabled(),
             .tab_index = html_el.getTabIndex(),
             .id = el.getAttributeSafe(comptime .wrap("id")),
             .class = el.getAttributeSafe(comptime .wrap("class")),
@@ -411,36 +411,6 @@ fn getTextContent(node: *Node, arena: Allocator) !?[]const u8 {
 
     // strip out trailing space
     return arr.items[0 .. arr.items.len - 1];
-}
-fn isDisabled(el: *Element) bool {
-    if (el.getAttributeSafe(comptime .wrap("disabled")) != null) return true;
-    return isDisabledByFieldset(el);
-}
-
-/// Check if an element is disabled by an ancestor <fieldset disabled>.
-/// Per spec, elements inside the first <legend> child of a disabled fieldset
-/// are NOT disabled by that fieldset.
-fn isDisabledByFieldset(el: *Element) bool {
-    const element_node = el.asNode();
-    var current: ?*Node = element_node._parent;
-    while (current) |node| {
-        current = node._parent;
-        const ancestor = node.is(Element) orelse continue;
-
-        if (ancestor.getTag() == .fieldset and ancestor.getAttributeSafe(comptime .wrap("disabled")) != null) {
-            // Check if element is inside the first <legend> child of this fieldset
-            var child = ancestor.firstElementChild();
-            while (child) |c| {
-                if (c.getTag() == .legend) {
-                    if (c.asNode().contains(element_node)) return false;
-                    break;
-                }
-                child = c.nextElementSibling();
-            }
-            return true;
-        }
-    }
-    return false;
 }
 
 fn getInputType(el: *Element) ?[]const u8 {

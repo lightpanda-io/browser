@@ -573,6 +573,32 @@ pub fn hasAttributeSafe(self: *const Element, name: String) bool {
     return attributes.hasSafe(name);
 }
 
+pub fn isDisabled(self: *Element) bool {
+    if (self.getAttributeSafe(comptime .wrap("disabled")) != null) {
+        return true;
+    }
+
+    const element_node = self.asNode();
+    var current: ?*Node = element_node._parent;
+    while (current) |node| {
+        current = node._parent;
+        const ancestor = node.is(Element) orelse continue;
+
+        if (ancestor.getTag() == .fieldset and ancestor.getAttributeSafe(comptime .wrap("disabled")) != null) {
+            var child = ancestor.firstElementChild();
+            while (child) |c| {
+                if (c.getTag() == .legend) {
+                    if (c.asNode().contains(element_node)) return false;
+                    break;
+                }
+                child = c.nextElementSibling();
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
 pub fn hasAttributes(self: *const Element) bool {
     const attributes = self._attributes orelse return false;
     return attributes.isEmpty() == false;
