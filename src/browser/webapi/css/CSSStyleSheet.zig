@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("../../../log.zig");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
@@ -77,6 +78,7 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, pag
     var it = Parser.parseStylesheet(rule);
     const parsed_rule = it.next() orelse {
         if (it.has_skipped_at_rule) {
+            log.debug(.not_implemented, "CSSStyleSheet.insertRule", .{});
             // Lightpanda currently skips at-rules (e.g., @keyframes, @media) in its
             // CSS parser. To prevent JS apps (like Expo/Reanimated) from crashing
             // during initialization, we simulate a successful insertion by returning
