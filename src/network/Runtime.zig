@@ -245,16 +245,20 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
     errdefer if (custom_cidrs) |c| {
         allocator.free(c.v4);
         allocator.free(c.v6);
+        allocator.free(c.allow_v4);
+        allocator.free(c.allow_v6);
     };
 
     const ip_filter: ?*IpFilter = blk: {
-        const has_custom = if (custom_cidrs) |c| c.v4.len > 0 or c.v6.len > 0 else false;
+        const has_custom = if (custom_cidrs) |c| c.v4.len > 0 or c.v6.len > 0 or c.allow_v4.len > 0 or c.allow_v6.len > 0 else false;
         if (!block_private and !has_custom) break :blk null;
         const f = try allocator.create(IpFilter);
         f.* = IpFilter.init(
             block_private,
             if (custom_cidrs) |c| c.v4 else &.{},
             if (custom_cidrs) |c| c.v6 else &.{},
+            if (custom_cidrs) |c| c.allow_v4 else &.{},
+            if (custom_cidrs) |c| c.allow_v6 else &.{},
         );
         break :blk f;
     };
