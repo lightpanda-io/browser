@@ -33,6 +33,7 @@ const Page = @import("../browser/Page.zig");
 const Incrementing = @import("id.zig").Incrementing;
 const Notification = @import("../Notification.zig");
 const InterceptState = @import("domains/fetch.zig").InterceptState;
+const Mime = @import("../browser/Mime.zig");
 
 pub const URL_BASE = "chrome://newtab/";
 
@@ -129,9 +130,10 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // A bit hacky right now. The main server loop doesn't unblock for
         // scheduled task. So we run this directly in order to process any
         // timeouts (or http events) which are ready to be processed.
-        pub fn pageWait(self: *Self, ms: u32) Session.WaitResult {
-            const session = &(self.browser.session orelse return .no_page);
-            return session.wait(.{ .timeout_ms = ms });
+        pub fn pageWait(self: *Self, ms: u32) !Session.Runner.CDPWaitResult {
+            const session = &(self.browser.session orelse return error.NoPage);
+            var runner = try session.runner(.{});
+            return runner.waitCDP(.{ .ms = ms });
         }
 
         // Called from above, in processMessage which handles client messages
@@ -189,19 +191,10 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // (I can imagine this logic will become driver-specific)
         fn dispatchStartupCommand(command: anytype, method: []const u8) !void {
             // Stagehand parses the response and error if we don't return a
-            // correct one for this call.
+            // correct one for Page.getFrameTree on startup call.
             if (std.mem.eql(u8, method, "Page.getFrameTree")) {
-                return command.sendResult(.{
-                    .frameTree = .{
-                        .frame = .{
-                            .id = "TID-STARTUP",
-                            .loaderId = "LOADERID24DD2FD56CF1EF33C965C79C",
-                            .securityOrigin = URL_BASE,
-                            .url = "about:blank",
-                            .secureContextType = "Secure",
-                        },
-                    },
-                }, .{});
+                // The Page.getFrameTree handles startup response gracefully.
+                return dispatchCommand(command, method);
             }
 
             return command.sendResult(null, .{});
@@ -324,6 +317,11 @@ pub fn BrowserContext(comptime CDP_T: type) type {
     const Node = @import("Node.zig");
     const AXNode = @import("AXNode.zig");
 
+    const CapturedResponse = struct {
+        must_encode: bool,
+        data: std.ArrayList(u8),
+    };
+
     return struct {
         id: []const u8,
         cdp: *CDP_T,
@@ -384,7 +382,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         // ever streamed. So if CDP is the only thing that needs bodies in
         // memory for an arbitrary amount of time, then that's where we're going
         // to store the,
-        captured_responses: std.AutoHashMapUnmanaged(usize, std.ArrayList(u8)),
+        captured_responses: std.AutoHashMapUnmanaged(usize, CapturedResponse),
 
         notification: *Notification,
 
@@ -637,6 +635,35 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn onHttpResponseHeadersDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
+
+            const arena = self.page_arena;
+
+            // Prepare the captured response value.
+            const id = msg.transfer.id;
+            const gop = try self.captured_responses.getOrPut(arena, id);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = .{
+                    .data = .empty,
+                    // Encode the data in base64 by default, but don't encode
+                    // for well known content-type.
+                    .must_encode = blk: {
+                        const transfer = msg.transfer;
+                        if (transfer.response_header.?.contentType()) |ct| {
+                            const mime = try Mime.parse(ct);
+
+                            if (!mime.isText()) {
+                                break :blk true;
+                            }
+
+                            if (std.mem.eql(u8, "UTF-8", mime.charsetString())) {
+                                break :blk false;
+                            }
+                        }
+                        break :blk true;
+                    },
+                };
+            }
+
             return @import("domains/network.zig").httpResponseHeaderDone(self.notification_arena, self, msg);
         }
 
@@ -650,11 +677,9 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const arena = self.page_arena;
 
             const id = msg.transfer.id;
-            const gop = try self.captured_responses.getOrPut(arena, id);
-            if (!gop.found_existing) {
-                gop.value_ptr.* = .{};
-            }
-            try gop.value_ptr.appendSlice(arena, try arena.dupe(u8, msg.data));
+            const resp = self.captured_responses.getPtr(id) orelse lp.assert(false, "onHttpResponseData missinf captured response", .{});
+
+            return resp.data.appendSlice(arena, msg.data);
         }
 
         pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {

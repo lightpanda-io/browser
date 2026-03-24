@@ -62,7 +62,7 @@ const Filters = union(Mode) {
     selected_options,
     links,
     anchors,
-    form: *Form,
+    form: struct { form: *Form, form_id: ?[]const u8 },
 
     fn TypeOf(comptime mode: Mode) type {
         @setEvalBranchQuota(2000);
@@ -304,9 +304,13 @@ pub fn NodeLive(comptime mode: Mode) type {
                         return false;
                     }
 
-                    if (el.getAttributeSafe(comptime .wrap("form"))) |form_attr| {
-                        const form_id = self._filter.asElement().getAttributeSafe(comptime .wrap("id")) orelse return false;
-                        return std.mem.eql(u8, form_attr, form_id);
+                    if (self._filter.form_id) |form_id| {
+                        if (el.getAttributeSafe(comptime .wrap("form"))) |element_form_attr| {
+                            return std.mem.eql(u8, element_form_attr, form_id);
+                        }
+                    } else if (el.hasAttributeSafe(comptime .wrap("form"))) {
+                        // Form has no id, element explicitly references another form
+                        return false;
                     }
 
                     // No form attribute - match if descendant of our form
@@ -324,7 +328,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                     // This trades one O(form_size) reverse walk for N O(depth) ancestor
                     // checks, where N = number of controls. For forms with many nested
                     // controls, this could be significantly faster.
-                    return self._filter.asNode().contains(node);
+                    return self._filter.form.asNode().contains(node);
                 },
             }
         }

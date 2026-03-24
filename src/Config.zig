@@ -163,6 +163,20 @@ pub fn cdpTimeout(self: *const Config) usize {
     };
 }
 
+pub fn port(self: *const Config) u16 {
+    return switch (self.mode) {
+        .serve => |opts| opts.port,
+        else => unreachable,
+    };
+}
+
+pub fn advertiseHost(self: *const Config) []const u8 {
+    return switch (self.mode) {
+        .serve => |opts| opts.advertise_host orelse opts.host,
+        else => unreachable,
+    };
+}
+
 pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp => |opts| WebBotAuthConfig{
@@ -199,6 +213,7 @@ pub const Mode = union(RunMode) {
 pub const Serve = struct {
     host: []const u8 = "127.0.0.1",
     port: u16 = 9222,
+    advertise_host: ?[]const u8 = null,
     timeout: u31 = 10,
     cdp_max_connections: u16 = 16,
     cdp_max_pending_connections: u16 = 128,
@@ -221,7 +236,7 @@ pub const WaitUntil = enum {
     load,
     domcontentloaded,
     networkidle,
-    fixed,
+    done,
 };
 
 pub const Fetch = struct {
@@ -400,8 +415,8 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Defaults to 5000.
         \\
         \\--wait_until    Wait until the specified event.
-        \\                Supported events: load, domcontentloaded, networkidle, fixed.
-        \\                Defaults to 'load'.
+        \\                Supported events: load, domcontentloaded, networkidle, done.
+        \\                Defaults to 'done'.
         \\
     ++ common_options ++
         \\
@@ -415,6 +430,11 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--port          Port of the CDP server
         \\                Defaults to 9222
+        \\
+        \\--advertise_host
+        \\                The host to advertise, e.g. in the /json/version response.
+        \\                Useful, for example, when --host is 0.0.0.0.
+        \\                Defaults to --host value
         \\
         \\--timeout       Inactivity timeout in seconds before disconnecting clients
         \\                Defaults to 10 (seconds). Limited to 604800 (1 week).
@@ -554,6 +574,15 @@ fn parseServeArgs(
                 log.fatal(.app, "invalid argument value", .{ .arg = "--port", .err = err });
                 return error.InvalidArgument;
             };
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--advertise_host", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = "--advertise_host" });
+                return error.InvalidArgument;
+            };
+            serve.advertise_host = try allocator.dupe(u8, str);
             continue;
         }
 

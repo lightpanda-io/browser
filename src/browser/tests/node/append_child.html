@@ -28,3 +28,40 @@
   d1.appendChild(p2);
   assertChildren(['p1', 'p2'], d1);
 </script>
+
+<div id=d3></div>
+<script id=appendChild_fragment_mutation>
+  // Test that appendChild with DocumentFragment handles synchronous callbacks
+  // (like custom element connectedCallback) that modify the fragment during iteration.
+  // This reproduces a bug where the iterator captures "next" node pointers
+  // before processing, but callbacks can remove those nodes from the fragment.
+  const d3 = $('#d3');
+  const fragment = document.createDocumentFragment();
+
+  // Create custom element whose connectedCallback modifies the fragment
+  let bElement = null;
+  class ModifyingElement extends HTMLElement {
+    connectedCallback() {
+      // When this element is connected, remove 'b' from the fragment
+      if (bElement && bElement.parentNode === fragment) {
+        fragment.removeChild(bElement);
+      }
+    }
+  }
+  customElements.define('modifying-element', ModifyingElement);
+
+  const a = document.createElement('modifying-element');
+  a.id = 'a';
+  const b = document.createElement('span');
+  b.id = 'b';
+  bElement = b;
+  fragment.appendChild(a);
+  fragment.appendChild(b);
+
+  // This should not crash - appendChild should handle the modification gracefully
+  d3.appendChild(fragment);
+
+  // 'a' should be in d3, 'b' was removed by connectedCallback and is now detached
+  assertChildren(['a'], d3);
+  testing.expectEqual(null, b.parentNode);
+</script>

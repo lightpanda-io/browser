@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<head>
+  <title>element.replaceChildren Tests</title>
+</head>
+<body>
+  <div id="test">Original content</div>
+</body>
+
+<script id=error_replace_with_self>
+  {
+    // Test that element.replaceChildren(element) throws HierarchyRequestError
+    const doc = document.implementation.createHTMLDocument("title");
+    testing.expectError('HierarchyRequest', () => {
+      doc.body.replaceChildren(doc.body);
+    });
+  }
+</script>
+
+<script id=error_replace_with_ancestor>
+  {
+    // Test that replacing with an ancestor throws HierarchyRequestError
+    const doc = document.implementation.createHTMLDocument("title");
+    const child = doc.createElement('div');
+    doc.body.appendChild(child);
+
+    testing.expectError('HierarchyRequest', () => {
+      child.replaceChildren(doc.body);
+    });
+  }
+</script>
+
+<script id=replace_children_basic>
+  {
+    // Test basic element.replaceChildren
+    const doc = document.implementation.createHTMLDocument("title");
+    const child1 = doc.createElement('div');
+    const child2 = doc.createElement('span');
+    doc.body.appendChild(child1);
+
+    doc.body.replaceChildren(child2);
+
+    testing.expectEqual(1, doc.body.childNodes.length);
+    testing.expectEqual(child2, doc.body.firstChild);
+    testing.expectEqual(null, child1.parentNode);
+  }
+</script>
+
+<script id=replace_children_empty>
+  {
+    // Test element.replaceChildren with no arguments removes all children
+    const doc = document.implementation.createHTMLDocument("title");
+    doc.body.appendChild(doc.createElement('div'));
+    doc.body.appendChild(doc.createElement('span'));
+
+    doc.body.replaceChildren();
+
+    testing.expectEqual(0, doc.body.childNodes.length);
+  }
+</script>
+
+<script id=replace_children_fragment>
+  {
+    // Test element.replaceChildren with DocumentFragment
+    const doc = document.implementation.createHTMLDocument("title");
+    const frag = doc.createDocumentFragment();
+    frag.appendChild(doc.createElement('div'));
+    frag.appendChild(doc.createElement('span'));
+
+    doc.body.replaceChildren(frag);
+
+    testing.expectEqual(2, doc.body.childNodes.length);
+    testing.expectEqual('DIV', doc.body.firstChild.tagName);
+    testing.expectEqual('SPAN', doc.body.lastChild.tagName);
+    testing.expectEqual(0, frag.childNodes.length);
+  }
+</script>
+
+<script id=error_fragment_replace_with_self>
+  {
+    // Test that replacing with a fragment containing self throws
+    const doc = document.implementation.createHTMLDocument("title");
+    const frag = doc.createDocumentFragment();
+    const child = doc.createElement('div');
+    frag.appendChild(child);
+
+    testing.expectError('HierarchyRequest', () => {
+      child.replaceChildren(frag);
+    });
+  }
+</script>
+
+<script id=replace_children_text>
+  {
+    // Test element.replaceChildren with text
+    const doc = document.implementation.createHTMLDocument("title");
+    doc.body.appendChild(doc.createElement('div'));
+
+    doc.body.replaceChildren('Hello', 'World');
+
+    testing.expectEqual(2, doc.body.childNodes.length);
+    testing.expectEqual('Hello', doc.body.firstChild.textContent);
+    testing.expectEqual('World', doc.body.lastChild.textContent);
+  }
+</script>
+
+<script id=replace_children_mixed>
+  {
+    // Test element.replaceChildren with mixed nodes and text
+    const doc = document.implementation.createHTMLDocument("title");
+    const span = doc.createElement('span');
+    span.textContent = 'middle';
+
+    doc.body.replaceChildren('start', span, 'end');
+
+    testing.expectEqual(3, doc.body.childNodes.length);
+    testing.expectEqual('start', doc.body.childNodes[0].textContent);
+    testing.expectEqual('SPAN', doc.body.childNodes[1].tagName);
+    testing.expectEqual('end', doc.body.childNodes[2].textContent);
+  }
+</script>
+
+<script id=replace_children_reparents>
+  {
+    // Test that replaceChildren properly reparents nodes from another parent
+    const doc = document.implementation.createHTMLDocument("title");
+    const div1 = doc.createElement('div');
+    const div2 = doc.createElement('div');
+    const child = doc.createElement('span');
+
+    div1.appendChild(child);
+    testing.expectEqual(div1, child.parentNode);
+
+    div2.replaceChildren(child);
+    testing.expectEqual(div2, child.parentNode);
+    testing.expectEqual(0, div1.childNodes.length);
+  }
+</script>

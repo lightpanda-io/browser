@@ -308,6 +308,7 @@ pub const JsApi = struct {
     pub const HAVE_ENOUGH_DATA = bridge.property(@intFromEnum(ReadyState.HAVE_ENOUGH_DATA), .{ .template = true });
 
     pub const src = bridge.accessor(Media.getSrc, Media.setSrc, .{});
+    pub const currentSrc = bridge.accessor(Media.getSrc, null, .{});
     pub const autoplay = bridge.accessor(Media.getAutoplay, Media.setAutoplay, .{});
     pub const controls = bridge.accessor(Media.getControls, Media.setControls, .{});
     pub const loop = bridge.accessor(Media.getLoop, Media.setLoop, .{});

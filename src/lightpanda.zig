@@ -109,7 +109,8 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
         .reason = .address_bar,
         .kind = .{ .push = null },
     });
-    _ = session.wait(.{ .timeout_ms = opts.wait_ms, .until = opts.wait_until });
+    var runner = try session.runner(.{});
+    try runner.wait(.{ .ms = opts.wait_ms, .until = opts.wait_until });
 
     const writer = opts.writer orelse return;
     if (opts.dump_mode) |mode| {

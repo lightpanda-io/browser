@@ -24,6 +24,7 @@ const String = @import("../../string.zig").String;
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const StyleManager = @import("../StyleManager.zig");
 const reflect = @import("../reflect.zig");
 
 const Node = @import("Node.zig");
@@ -784,24 +785,7 @@ pub fn getDataset(self: *Element, page: *Page) !*DOMStringMap {
 }
 
 pub fn replaceChildren(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
-    page.domChanged();
-    var parent = self.asNode();
-
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
-        page.removeNode(parent, child, .{ .will_be_reconnected = false });
-    }
-
-    const parent_is_connected = parent.isConnected();
-    for (nodes) |node_or_text| {
-        var child_connected = false;
-        const child = try node_or_text.toNode(page);
-        if (child._parent) |previous_parent| {
-            child_connected = child.isConnected();
-            page.removeNode(previous_parent, child, .{ .will_be_reconnected = parent_is_connected });
-        }
-        try page.appendNode(parent, child, .{ .child_already_connected = child_connected });
-    }
+    return self.asNode().replaceChildren(nodes, page);
 }
 
 pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
@@ -1041,20 +1025,32 @@ pub fn parentElement(self: *Element) ?*Element {
     return self._proto.parentElement();
 }
 
-pub fn checkVisibility(self: *Element, page: *Page) bool {
-    var current: ?*Element = self;
+/// Cache for visibility checks - re-exported from StyleManager for convenience.
+pub const VisibilityCache = StyleManager.VisibilityCache;
 
-    while (current) |el| {
-        if (el.getStyle(page)) |style| {
-            const display = style.asCSSStyleDeclaration().getPropertyValue("display", page);
-            if (std.mem.eql(u8, display, "none")) {
-                return false;
-            }
-        }
-        current = el.parentElement();
-    }
+/// Cache for pointer-events checks - re-exported from StyleManager for convenience.
+pub const PointerEventsCache = StyleManager.PointerEventsCache;
 
-    return true;
+pub fn hasPointerEventsNone(self: *Element, cache: ?*PointerEventsCache, page: *Page) bool {
+    return page._style_manager.hasPointerEventsNone(self, cache);
+}
+
+pub fn checkVisibilityCached(self: *Element, cache: ?*VisibilityCache, page: *Page) bool {
+    return !page._style_manager.isHidden(self, cache, .{});
+}
+
+const CheckVisibilityOpts = struct {
+    checkOpacity: bool = false,
+    opacityProperty: bool = false,
+    checkVisibilityCSS: bool = false,
+    visibilityProperty: bool = false,
+};
+pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, page: *Page) bool {
+    const opts = opts_ orelse CheckVisibilityOpts{};
+    return !page._style_manager.isHidden(self, null, .{
+        .check_opacity = opts.checkOpacity or opts.opacityProperty,
+        .check_visibility = opts.visibilityProperty or opts.checkVisibilityCSS,
+    });
 }
 
 fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height: f64 } {
@@ -1091,7 +1087,7 @@ fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height
 }
 
 pub fn getClientWidth(self: *Element, page: *Page) f64 {
-    if (!self.checkVisibility(page)) {
+    if (!self.checkVisibilityCached(null, page)) {
         return 0.0;
     }
     const dims = self.getElementDimensions(page);
@@ -1099,7 +1095,7 @@ pub fn getClientWidth(self: *Element, page: *Page) f64 {
 }
 
 pub fn getClientHeight(self: *Element, page: *Page) f64 {
-    if (!self.checkVisibility(page)) {
+    if (!self.checkVisibilityCached(null, page)) {
         return 0.0;
     }
     const dims = self.getElementDimensions(page);
@@ -1107,7 +1103,7 @@ pub fn getClientHeight(self: *Element, page: *Page) f64 {
 }
 
 pub fn getBoundingClientRect(self: *Element, page: *Page) DOMRect {
-    if (!self.checkVisibility(page)) {
+    if (!self.checkVisibilityCached(null, page)) {
         return .{
             ._x = 0.0,
             ._y = 0.0,
@@ -1137,7 +1133,7 @@ pub fn getBoundingClientRectForVisible(self: *Element, page: *Page) DOMRect {
 }
 
 pub fn getClientRects(self: *Element, page: *Page) ![]DOMRect {
-    if (!self.checkVisibility(page)) {
+    if (!self.checkVisibilityCached(null, page)) {
         return &.{};
     }
     const rects = try page.call_arena.alloc(DOMRect, 1);
@@ -1182,7 +1178,7 @@ pub fn getScrollWidth(self: *Element, page: *Page) f64 {
 }
 
 pub fn getOffsetHeight(self: *Element, page: *Page) f64 {
-    if (!self.checkVisibility(page)) {
+    if (!self.checkVisibilityCached(null, page)) {
         return 0.0;
     }
     const dims = self.getElementDimensions(page);
@@ -1190,7 +1186,7 @@ pub fn getOffsetHeight(self: *Element, page: *Page) f64 {
 }
 
 pub fn getOffsetWidth(self: *Element, page: *Page) f64 {
-    if (!self.checkVisibility(page)) {
+    if (!self.checkVisibilityCached(null, page)) {
         return 0.0;
     }
     const dims = self.getElementDimensions(page);
@@ -1198,14 +1194,14 @@ pub fn getOffsetWidth(self: *Element, page: *Page) f64 {
 }
 
 pub fn getOffsetTop(self: *Element, page: *Page) f64 {
-    if (!self.checkVisibility(page)) {
+    if (!self.checkVisibilityCached(null, page)) {
         return 0.0;
     }
     return calculateDocumentPosition(self.asNode());
 }
 
 pub fn getOffsetLeft(self: *Element, page: *Page) f64 {
-    if (!self.checkVisibility(page)) {
+    if (!self.checkVisibilityCached(null, page)) {
         return 0.0;
     }
     return calculateSiblingPosition(self.asNode());

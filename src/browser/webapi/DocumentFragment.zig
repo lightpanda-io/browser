@@ -143,25 +143,7 @@ pub fn prepend(self: *DocumentFragment, nodes: []const Node.NodeOrText, page: *P
 }
 
 pub fn replaceChildren(self: *DocumentFragment, nodes: []const Node.NodeOrText, page: *Page) !void {
-    page.domChanged();
-    var parent = self.asNode();
-
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
-        page.removeNode(parent, child, .{ .will_be_reconnected = false });
-    }
-
-    const parent_is_connected = parent.isConnected();
-    for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(page);
-
-        // If the new children has already a parent, remove from it.
-        if (child._parent) |p| {
-            page.removeNode(p, child, .{ .will_be_reconnected = true });
-        }
-
-        try page.appendNode(parent, child, .{ .child_already_connected = parent_is_connected });
-    }
+    return self.asNode().replaceChildren(nodes, page);
 }
 
 pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer, page: *Page) !void {

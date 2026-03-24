@@ -47,7 +47,15 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
-    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets, 0) catch |err| {
+    var visibility_cache: Element.VisibilityCache = .empty;
+    var pointer_events_cache: Element.PointerEventsCache = .empty;
+    var ctx: WalkContext = .{
+        .xpath_buffer = &xpath_buffer,
+        .listener_targets = listener_targets,
+        .visibility_cache = &visibility_cache,
+        .pointer_events_cache = &pointer_events_cache,
+    };
+    self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -60,7 +68,15 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
-    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets, 0) catch |err| {
+    var visibility_cache: Element.VisibilityCache = .empty;
+    var pointer_events_cache: Element.PointerEventsCache = .empty;
+    var ctx: WalkContext = .{
+        .xpath_buffer = &xpath_buffer,
+        .listener_targets = listener_targets,
+        .visibility_cache = &visibility_cache,
+        .pointer_events_cache = &pointer_events_cache,
+    };
+    self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -84,7 +100,22 @@ const NodeData = struct {
     node_name: []const u8,
 };
 
-fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_name: ?[]const u8, visitor: anytype, index: usize, listener_targets: interactive.ListenerTargetMap, current_depth: u32) !void {
+const WalkContext = struct {
+    xpath_buffer: *std.ArrayList(u8),
+    listener_targets: interactive.ListenerTargetMap,
+    visibility_cache: *Element.VisibilityCache,
+    pointer_events_cache: *Element.PointerEventsCache,
+};
+
+fn walk(
+    self: @This(),
+    ctx: *WalkContext,
+    node: *Node,
+    parent_name: ?[]const u8,
+    visitor: anytype,
+    index: usize,
+    current_depth: u32,
+) !void {
     if (current_depth > self.max_depth) return;
 
     // 1. Skip non-content nodes
@@ -96,7 +127,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
         if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
         // Check visibility using the engine's checkVisibility which handles CSS display: none
-        if (!el.checkVisibility(self.page)) {
+        if (!el.checkVisibilityCached(ctx.visibility_cache, self.page)) {
             return;
         }
 
@@ -137,7 +168,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
         }
 
         if (el.is(Element.Html)) |html_el| {
-            if (interactive.classifyInteractivity(el, html_el, listener_targets) != null) {
+            if (interactive.classifyInteractivity(self.page, el, html_el, ctx.listener_targets, ctx.pointer_events_cache) != null) {
                 is_interactive = true;
             }
         }
@@ -145,9 +176,9 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
         node_name = "root";
     }
 
-    const initial_xpath_len = xpath_buffer.items.len;
-    try appendXPathSegment(node, xpath_buffer.writer(self.arena), index);
-    const xpath = xpath_buffer.items;
+    const initial_xpath_len = ctx.xpath_buffer.items.len;
+    try appendXPathSegment(node, ctx.xpath_buffer.writer(self.arena), index);
+    const xpath = ctx.xpath_buffer.items;
 
     var name = try axn.getName(self.page, self.arena);
 
@@ -164,18 +195,6 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
     if (name != null and structural and !has_explicit_label) {
         name = null;
     }
-
-    var data = NodeData{
-        .id = cdp_node.id,
-        .axn = axn,
-        .role = role,
-        .name = name,
-        .value = value,
-        .options = options,
-        .xpath = xpath,
-        .is_interactive = is_interactive,
-        .node_name = node_name,
-    };
 
     var should_visit = true;
     if (self.interactive_only) {
@@ -208,6 +227,18 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
 
     var did_visit = false;
     var should_walk_children = true;
+    var data: NodeData = .{
+        .id = cdp_node.id,
+        .axn = axn,
+        .role = role,
+        .name = name,
+        .value = value,
+        .options = options,
+        .xpath = xpath,
+        .is_interactive = is_interactive,
+        .node_name = node_name,
+    };
+
     if (should_visit) {
         should_walk_children = try visitor.visit(node, &data);
         did_visit = true; // Always true if should_visit was true, because visit() executed and opened structures
@@ -233,7 +264,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
             }
             gop.value_ptr.* += 1;
 
-            try self.walk(child, xpath_buffer, name, visitor, gop.value_ptr.*, listener_targets, current_depth + 1);
+            try self.walk(ctx, child, name, visitor, gop.value_ptr.*, current_depth + 1);
         }
     }
 
@@ -241,11 +272,11 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
         try visitor.leave();
     }
 
-    xpath_buffer.shrinkRetainingCapacity(initial_xpath_len);
+    ctx.xpath_buffer.shrinkRetainingCapacity(initial_xpath_len);
 }
 
 fn extractSelectOptions(node: *Node, page: *Page, arena: std.mem.Allocator) ![]OptionData {
-    var options = std.ArrayListUnmanaged(OptionData){};
+    var options: std.ArrayList(OptionData) = .empty;
     var it = node.childrenIterator();
     while (it.next()) |child| {
         if (child.is(Element)) |el| {
