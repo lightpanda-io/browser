@@ -7,7 +7,7 @@
   // Verify: handler fires exactly once, and body.onload reflects to window.onload.
   let called = 0;
 
-  testing.eventually(() => {
+  testing.onload(() => {
     // The attribute handler should have fired exactly once.
     testing.expectEqual(1, called);
 

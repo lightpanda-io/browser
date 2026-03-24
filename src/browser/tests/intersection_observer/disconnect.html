@@ -12,7 +12,7 @@
 
     observer.observe(target);
 
-    testing.eventually(() => {
+    testing.onload(() => {
         testing.expectEqual(1, callCount);
 
         observer.disconnect();
@@ -22,7 +22,7 @@
         const observer2 = new IntersectionObserver(() => {});
         observer2.observe(target);
 
-        testing.eventually(() => {
+        testing.onload(() => {
             observer2.disconnect();
             testing.expectEqual(1, callCount);
         });

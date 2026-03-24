@@ -11,5 +11,5 @@
     cb.push('finished');
     cb.push(x == a1);
   });
-  testing.eventually(() => testing.expectEqual(['finished', true], cb));
+  testing.onload(() => testing.expectEqual(['finished', true], cb));
 </script>

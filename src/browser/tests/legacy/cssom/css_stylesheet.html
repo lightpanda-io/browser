@@ -12,5 +12,5 @@
 
   let replaced = false;
   css.replace('body{}').then(() => replaced = true);
-  testing.eventually(() => testing.expectEqual(true, replaced));
+  testing.onload(() => testing.expectEqual(true, replaced));
 </script>

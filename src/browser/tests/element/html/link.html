@@ -54,7 +54,7 @@
   link.rel = 'stylesheet';
   link.addEventListener('load', () => { fired = true; });
   document.head.appendChild(link);
-  testing.eventually(() => testing.expectEqual(false, fired));
+  testing.onload(() => testing.expectEqual(false, fired));
 }
 </script>
 
@@ -66,7 +66,7 @@
   link.href = 'https://lightpanda.io/opensource-browser/15';
   link.addEventListener('load', () => { fired = true; });
   document.head.appendChild(link);
-  testing.eventually(() => testing.expectEqual(false, fired));
+  testing.onload(() => testing.expectEqual(false, fired));
 }
 </script>
 
@@ -81,7 +81,7 @@
   // then set href.
   link.href = 'https://lightpanda.io/opensource-browser/15';
 
-  testing.eventually(() => testing.expectEqual(true, result));
+  testing.onload(() => testing.expectEqual(true, result));
 }
 </script>
 
@@ -98,7 +98,7 @@
   });
 
 
-  testing.eventually(() => {
+  testing.onload(() => {
     results.forEach((r) => {
       testing.expectEqual(true, r);
     });

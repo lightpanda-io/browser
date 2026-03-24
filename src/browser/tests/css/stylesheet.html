@@ -516,7 +516,7 @@
         testing.expectEqual('.async-test', sheet.cssRules[0].selectorText);
         replacedAsync = true;
     });
-    testing.eventually(() => testing.expectTrue(replacedAsync));
+    testing.onload(() => testing.expectTrue(replacedAsync));
 }
 </script>
 

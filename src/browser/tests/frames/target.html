@@ -5,7 +5,7 @@
 <a id=l1 target=f1 href=support/page.html></a>
 <script id=anchor>
   $('#l1').click();
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual('<html><head></head><body>a-page\n</body></html>', $('#frame1').contentDocument.documentElement.outerHTML);
   });
 </script>
@@ -21,7 +21,7 @@
     form.action = 'support/page.html';
     form.submit();
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual('<html><head></head><body>a-page\n</body></html>', frame2.contentDocument.documentElement.outerHTML);
     });
   }
@@ -35,7 +35,7 @@
 <script id=formtarget>
   {
     $('#submit1').click();
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual('<html><head></head><body>a-page\n</body></html>', $('#f3').contentDocument.documentElement.outerHTML);
     });
   }

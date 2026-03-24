@@ -12,7 +12,7 @@
 
   window.postMessage('trigger', '*');
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(2, count);
   });
 }

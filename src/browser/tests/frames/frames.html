@@ -28,7 +28,7 @@
   $('#f2').src = 'support/sub2.html';
   testing.expectEqual(true, true);
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(undefined, window[20]);
 
     testing.expectEqual(window, window[1].top);
@@ -84,7 +84,7 @@
     f3.src = 'invalid'; // still fires load!
     document.documentElement.appendChild(f3);
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual('f1_onload_loaded', window.f1_onload);
       testing.expectEqual(true, f3_load_event);
     });
@@ -98,7 +98,7 @@
     f4.src = "about:blank";
     document.documentElement.appendChild(f4);
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual("<html><head></head><body></body></html>", f4.contentDocument.documentElement.outerHTML);
     });
   }
@@ -112,7 +112,7 @@
     document.documentElement.appendChild(f5);
     f5.src = "about:blank";
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual("<html><head></head><body></body></html>", f5.contentDocument.documentElement.outerHTML);
     });
   }
@@ -144,14 +144,14 @@
     let i = document.createElement('iframe');
     document.documentElement.appendChild(i);
     i.contentWindow.location.href = 'support/page.html';
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual('<html><head></head><body>a-page\n</body></html>', i.contentDocument.documentElement.outerHTML);
     });
   }
 </script>
 
 <script id=count>
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(9, window.length);
   });
 </script>

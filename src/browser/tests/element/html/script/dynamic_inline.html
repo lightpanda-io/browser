@@ -48,7 +48,7 @@
   s6.type = 'module';
   s6.textContent = 'window.module_executed = true;';
   document.head.appendChild(s6);
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectTrue(window.module_executed);
   });
 </script>

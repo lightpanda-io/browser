@@ -9,7 +9,7 @@
     call1 = true;
   });
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(document, ex1.target);
     testing.expectEqual('DOMContentLoaded', ex1.type);
     testing.expectEqual(true, call1);

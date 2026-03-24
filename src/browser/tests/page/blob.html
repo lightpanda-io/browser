@@ -12,7 +12,7 @@
     document.body.appendChild(iframe);
     iframe.src = blob_url;
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual('Hello Blob', iframe.contentDocument.getElementById('test').textContent);
     });
   }
@@ -33,7 +33,7 @@
     document.body.appendChild(iframe2);
     iframe2.src = url2;
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual('First', iframe1.contentDocument.body.textContent);
       testing.expectEqual('Second', iframe2.contentDocument.body.textContent);
     });

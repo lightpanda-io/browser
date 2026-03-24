@@ -94,7 +94,7 @@
     lp.appendChild(div);
     testing.expectEqual(slot, div.assignedSlot);
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(1, calls)
     });
   }
@@ -113,7 +113,7 @@
 
     const div = $('#s2');
     div.removeAttribute('slot');
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(1, calls)
     });
   }
@@ -132,7 +132,7 @@
 
     const div = $('#s3');
     div.slot = 'other';
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(1, calls)
     });
   }
@@ -154,7 +154,7 @@
     div.slot = 'other';
     lp.appendChild(div);
     div.slot = 'slot-1'
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(1, calls)
     });
   }
@@ -172,7 +172,7 @@
     });
 
     $('#s5').remove();
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(1, calls)
     });
   }

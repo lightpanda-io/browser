@@ -256,7 +256,7 @@
 
     textarea.select();
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(1, eventCount);
       testing.expectEqual('select', lastEvent.type);
       testing.expectEqual(textarea, lastEvent.target);
@@ -295,7 +295,7 @@
     });
     textarea.setSelectionRange(1, 4);
     
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(5, eventCount);
       testing.expectEqual('selectionchange', lastEvent.type);
       testing.expectEqual(textarea, lastEvent.target);

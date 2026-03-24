@@ -7,7 +7,7 @@
   // Verify: handler fires, "event" parameter is a proper Event, and handler is a function.
   let loadEvent = null;
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual("function", typeof document.body.onload);
     testing.expectTrue(loadEvent instanceof Event);
     testing.expectEqual("load", loadEvent.type);

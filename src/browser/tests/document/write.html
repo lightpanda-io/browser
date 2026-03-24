@@ -131,7 +131,7 @@
     document.open();
   }, 5);
 
-  testing.eventually(() => {
+  testing.onload(() => {
     // The element should be gone now
     const afterOpen = document.getElementById('will_be_removed');
     testing.expectEqual(null, afterOpen);

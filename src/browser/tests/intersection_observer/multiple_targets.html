@@ -19,7 +19,7 @@
     observer.observe(target1);
     observer.observe(target2);
 
-    testing.eventually(() => {
+    testing.onload(() => {
         testing.expectEqual(2, entryCount);
         testing.expectTrue(seenTargets.has(target1));
         testing.expectTrue(seenTargets.has(target2));

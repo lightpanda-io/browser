@@ -139,7 +139,7 @@
     });
   });
 
-  testing.eventually(() => testing.expectEqual(true, result));
+  testing.onload(() => testing.expectEqual(true, result));
 }
 </script>
 
@@ -150,7 +150,7 @@
   const img = document.createElement("img");
   img.addEventListener("load", () => { fired = true; });
   document.body.appendChild(img);
-  testing.eventually(() => testing.expectEqual(false, fired));
+  testing.onload(() => testing.expectEqual(false, fired));
 }
 </script>
 
@@ -163,7 +163,7 @@
   document.body.appendChild(img);
   img.src = "https://cdn.lightpanda.io/website/assets/images/docs/hn.png";
 
-  testing.eventually(() => testing.expectEqual(true, result));
+  testing.onload(() => testing.expectEqual(true, result));
 }
 </script>
 

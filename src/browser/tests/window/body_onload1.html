@@ -10,7 +10,7 @@
     testing.expectEqual(window, e.currentTarget);
   }
 
-  testing.eventually(() => {
+  testing.onload(() => {
     testing.expectEqual(1, called);
   });
 </script>

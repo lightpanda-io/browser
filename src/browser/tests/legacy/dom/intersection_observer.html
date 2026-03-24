@@ -11,7 +11,7 @@
       count += 1;
     }).observe(div);
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(0, count);
     });
   }
@@ -27,7 +27,7 @@
     }).observe(div1);
 
     div2.appendChild(div1);
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(1, count);
     });
   }
@@ -51,7 +51,7 @@
     observer.observe(div1);
     testing.expectEqual(0, count);
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(1, count);
     });
   }
@@ -75,7 +75,7 @@
     testing.expectEqual(0, count);
 
     observer.unobserve(div1);
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(0, count);
     });
   }
@@ -100,7 +100,7 @@
     testing.expectEqual(0, count);
     observer.disconnect();
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(0, count);
     });
   }
@@ -117,7 +117,7 @@
     document.body.appendChild(div1);
     new IntersectionObserver(entries => { entry = entries[0]; }).observe(div1);
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual(125, entry.boundingClientRect.x);
       testing.expectEqual(1, entry.intersectionRatio);
       testing.expectEqual(125, entry.intersectionRect.x);
@@ -150,7 +150,7 @@
     observer.observe(div);
     capture.push('post-observe');
 
-    testing.eventually(() => {
+    testing.onload(() => {
       testing.expectEqual([
         'pre-append',
         'post-append',
