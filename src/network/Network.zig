@@ -86,9 +86,9 @@ callbacks: [MAX_TICK_CALLBACKS]TickCallback = undefined,
 callbacks_len: usize = 0,
 callbacks_mutex: std.Thread.Mutex = .{},
 
-/// Optional IP filter for blocking requests to private/internal networks (--block_private_networks).
+/// Optional IP filter for blocking requests to private/internal networks (--block-private-networks).
 ip_filter: ?*IpFilter = null,
-// Custom CIDR slices backing ip_filter; null when --block_cidrs was not set.
+// Custom CIDR slices backing ip_filter; null when --block-cidrs was not set.
 ip_filter_custom_v4: ?[]IpFilter.CidrV4 = null,
 ip_filter_custom_v6: ?[]IpFilter.CidrV6 = null,
 
