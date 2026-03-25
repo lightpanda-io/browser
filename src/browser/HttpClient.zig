@@ -858,7 +858,6 @@ fn processMessages(self: *Client) !bool {
         const is_conn_close_recv = blk: {
             const err = msg.err orelse break :blk false;
             if (err != error.RecvError) break :blk false;
-            if (!transfer._header_done_called) break :blk false;
             const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk false;
             break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
         };
