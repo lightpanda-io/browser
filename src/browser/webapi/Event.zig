@@ -76,6 +76,7 @@ pub const Type = union(enum) {
     pop_state_event: *@import("event/PopStateEvent.zig"),
     ui_event: *@import("event/UIEvent.zig"),
     promise_rejection_event: *@import("event/PromiseRejectionEvent.zig"),
+    submit_event: *@import("event/SubmitEvent.zig"),
 };
 
 pub const Options = struct {
@@ -174,6 +175,7 @@ pub fn is(self: *Event, comptime T: type) ?*T {
         .page_transition_event => |e| return if (T == @import("event/PageTransitionEvent.zig")) e else null,
         .pop_state_event => |e| return if (T == @import("event/PopStateEvent.zig")) e else null,
         .promise_rejection_event => |e| return if (T == @import("event/PromiseRejectionEvent.zig")) e else null,
+        .submit_event => |e| return if (T == @import("event/SubmitEvent.zig")) e else null,
         .ui_event => |e| {
             if (T == @import("event/UIEvent.zig")) {
                 return e;
