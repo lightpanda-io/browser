@@ -72,15 +72,11 @@ pub const FormField = struct {
             try jw.write(v);
         }
 
-        if (self.required) {
-            try jw.objectField("required");
-            try jw.write(true);
-        }
+        try jw.objectField("required");
+        try jw.write(self.required);
 
-        if (self.disabled) {
-            try jw.objectField("disabled");
-            try jw.write(true);
-        }
+        try jw.objectField("disabled");
+        try jw.write(self.disabled);
 
         if (self.value) |v| {
             try jw.objectField("value");
