@@ -351,18 +351,9 @@ pub const TransferAsRequestWriter = struct {
                 try jws.objectField(hdr.name);
                 try jws.write(hdr.value);
             }
-            if (transfer.req.cookie_jar) |jar| {
-                var aw: std.Io.Writer.Allocating = .init(transfer.arena.allocator());
-                try jar.forRequest(transfer.req.url, &aw.writer, .{
-                    .is_http = true,
-                    .origin_url = transfer.req.url,
-                    .is_navigation = transfer.req.resource_type == .document,
-                });
-                const cookie_str = aw.written();
-                if (cookie_str.len > 0) {
-                    try jws.objectField("Cookie");
-                    try jws.write(cookie_str);
-                }
+            if (try transfer.getCookieString()) |cookies| {
+                try jws.objectField("Cookie");
+                try jws.write(cookies[0 .. cookies.len - 1]);
             }
             try jws.endObject();
         }

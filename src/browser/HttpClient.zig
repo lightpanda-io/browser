@@ -1110,19 +1110,8 @@ pub const Transfer = struct {
         }
 
         // Add cookies from cookie jar.
-        if (req.cookie_jar) |jar| {
-            const arena = self.arena.allocator();
-            var aw: std.Io.Writer.Allocating = .init(arena);
-            try jar.forRequest(req.url, &aw.writer, .{
-                .is_http = true,
-                .origin_url = req.url,
-                .is_navigation = req.resource_type == .document,
-            });
-            const written = aw.written();
-            if (written.len > 0) {
-                try aw.writer.writeByte(0);
-                try conn.setCookies(@ptrCast(written.ptr));
-            }
+        if (try self.getCookieString()) |cookies| {
+            try conn.setCookies(@ptrCast(cookies.ptr));
         }
 
         try conn.setPrivate(self);
@@ -1174,6 +1163,20 @@ pub const Transfer = struct {
             hdr._content_type_len = len;
             @memcpy(hdr._content_type[0..len], value[0..len]);
         }
+    }
+
+    pub fn getCookieString(self: *Transfer) !?[:0]const u8 {
+        const jar = self.req.cookie_jar orelse return null;
+        var aw: std.Io.Writer.Allocating = .init(self.arena.allocator());
+        try jar.forRequest(self.req.url, &aw.writer, .{
+            .is_http = true,
+            .origin_url = self.req.url,
+            .is_navigation = self.req.resource_type == .document,
+        });
+        const written = aw.written();
+        if (written.len == 0) return null;
+        try aw.writer.writeByte(0);
+        return written.ptr[0..written.len :0];
     }
 
     pub fn format(self: *Transfer, writer: *std.Io.Writer) !void {
