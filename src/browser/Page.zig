@@ -1027,6 +1027,7 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
             });
 
             parser.parse(html);
+            self._parse_state = .complete;
             self.documentIsComplete();
         },
         else => unreachable,
