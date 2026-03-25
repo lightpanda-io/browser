@@ -427,3 +427,34 @@ test "browser.forms: external field via form attribute" {
     try testing.expectEqual(1, forms.len);
     try testing.expectEqual(2, forms[0].fields.len);
 }
+
+test "browser.forms: checkbox and radio return value attribute" {
+    defer testing.reset();
+    defer testing.test_session.removePage();
+    const forms = try testForms(
+        \\<form>
+        \\  <input type="checkbox" name="agree" value="yes" checked>
+        \\  <input type="radio" name="color" value="red">
+        \\</form>
+    );
+    try testing.expectEqual(1, forms.len);
+    try testing.expectEqual(2, forms[0].fields.len);
+    try testing.expectEqual("checkbox", forms[0].fields[0].input_type.?);
+    try testing.expectEqual("yes", forms[0].fields[0].value.?);
+    try testing.expectEqual("radio", forms[0].fields[1].input_type.?);
+    try testing.expectEqual("red", forms[0].fields[1].value.?);
+}
+
+test "browser.forms: form without action or method" {
+    defer testing.reset();
+    defer testing.test_session.removePage();
+    const forms = try testForms(
+        \\<form>
+        \\  <input type="text" name="q">
+        \\</form>
+    );
+    try testing.expectEqual(1, forms.len);
+    try testing.expectEqual(null, forms[0].action);
+    try testing.expectEqual("get", forms[0].method.?);
+    try testing.expectEqual(1, forms[0].fields.len);
+}
