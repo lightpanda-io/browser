@@ -22,295 +22,292 @@ const lp = @import("lightpanda");
 const Allocator = std.mem.Allocator;
 const json = std.json;
 
-const log = @import("../log.zig");
-const js = @import("../browser/js/js.zig");
+const Incrementing = @import("id.zig").Incrementing;
 
+const log = @import("../log.zig");
 const App = @import("../App.zig");
+const Notification = @import("../Notification.zig");
+
+const Client = @import("../Server.zig").Client;
+
+const js = @import("../browser/js/js.zig");
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
-const HttpClient = @import("../browser/HttpClient.zig");
 const Page = @import("../browser/Page.zig");
-const Incrementing = @import("id.zig").Incrementing;
-const Notification = @import("../Notification.zig");
-const InterceptState = @import("domains/fetch.zig").InterceptState;
 const Mime = @import("../browser/Mime.zig");
+const HttpClient = @import("../browser/HttpClient.zig");
+
+const InterceptState = @import("domains/fetch.zig").InterceptState;
 
 pub const URL_BASE = "chrome://newtab/";
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
-pub const CDP = CDPT(struct {
-    const Client = *@import("../Server.zig").Client;
-});
-
-const SessionIdGen = Incrementing(u32, "SID");
 const TargetIdGen = Incrementing(u32, "TID");
+const SessionIdGen = Incrementing(u32, "SID");
 const BrowserContextIdGen = Incrementing(u32, "BID");
 
 // Generic so that we can inject mocks into it.
-pub fn CDPT(comptime TypeProvider: type) type {
-    return struct {
-        // Used for sending message to the client and closing on error
-        client: TypeProvider.Client,
+const CDP = @This();
 
-        allocator: Allocator,
+// Used for sending message to the client and closing on error
+client: *Client,
 
-        // The active browser
-        browser: Browser,
+allocator: Allocator,
 
-        // when true, any target creation must be attached.
-        target_auto_attach: bool = false,
+// The active browser
+browser: Browser,
 
-        target_id_gen: TargetIdGen = .{},
-        session_id_gen: SessionIdGen = .{},
-        browser_context_id_gen: BrowserContextIdGen = .{},
+// when true, any target creation must be attached.
+target_auto_attach: bool = false,
 
-        browser_context: ?BrowserContext(Self),
+target_id_gen: TargetIdGen = .{},
+session_id_gen: SessionIdGen = .{},
+browser_context_id_gen: BrowserContextIdGen = .{},
 
-        // Re-used arena for processing a message. We're assuming that we're getting
-        // 1 message at a time.
-        message_arena: std.heap.ArenaAllocator,
+browser_context: ?BrowserContext(CDP),
 
-        // Used for processing notifications within a browser context.
-        notification_arena: std.heap.ArenaAllocator,
+// Re-used arena for processing a message. We're assuming that we're getting
+// 1 message at a time.
+message_arena: std.heap.ArenaAllocator,
 
-        // Valid for 1 page navigation (what CDP calls a "renderer")
-        page_arena: std.heap.ArenaAllocator,
+// Used for processing notifications within a browser context.
+notification_arena: std.heap.ArenaAllocator,
 
-        // Valid for the entire lifetime of the BrowserContext. Should minimize
-        // (or altogether elimiate) our use of this.
-        browser_context_arena: std.heap.ArenaAllocator,
+// Valid for 1 page navigation (what CDP calls a "renderer")
+page_arena: std.heap.ArenaAllocator,
 
-        const Self = @This();
+// Valid for the entire lifetime of the BrowserContext. Should minimize
+// (or altogether elimiate) our use of this.
+browser_context_arena: std.heap.ArenaAllocator,
 
-        pub fn init(app: *App, http_client: *HttpClient, client: TypeProvider.Client) !Self {
-            const allocator = app.allocator;
-            const browser = try Browser.init(app, .{
-                .env = .{ .with_inspector = true },
-                .http_client = http_client,
-            });
-            errdefer browser.deinit();
+pub fn init(client: *Client) !CDP {
+    const app = client.app;
+    const allocator = app.allocator;
+    const browser = try Browser.init(app, .{
+        .env = .{ .with_inspector = true },
+        .http_client = client.http,
+    });
+    errdefer browser.deinit();
 
-            return .{
-                .client = client,
-                .browser = browser,
-                .allocator = allocator,
-                .browser_context = null,
-                .page_arena = std.heap.ArenaAllocator.init(allocator),
-                .message_arena = std.heap.ArenaAllocator.init(allocator),
-                .notification_arena = std.heap.ArenaAllocator.init(allocator),
-                .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
-            };
-        }
-
-        pub fn deinit(self: *Self) void {
-            if (self.browser_context) |*bc| {
-                bc.deinit();
-            }
-            self.browser.deinit();
-            self.page_arena.deinit();
-            self.message_arena.deinit();
-            self.notification_arena.deinit();
-            self.browser_context_arena.deinit();
-        }
-
-        pub fn handleMessage(self: *Self, msg: []const u8) bool {
-            // if there's an error, it's already been logged
-            self.processMessage(msg) catch return false;
-            return true;
-        }
-
-        pub fn processMessage(self: *Self, msg: []const u8) !void {
-            const arena = &self.message_arena;
-            defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
-            return self.dispatch(arena.allocator(), self, msg);
-        }
-
-        // @newhttp
-        // A bit hacky right now. The main server loop doesn't unblock for
-        // scheduled task. So we run this directly in order to process any
-        // timeouts (or http events) which are ready to be processed.
-        pub fn pageWait(self: *Self, ms: u32) !Session.Runner.CDPWaitResult {
-            const session = &(self.browser.session orelse return error.NoPage);
-            var runner = try session.runner(.{});
-            return runner.waitCDP(.{ .ms = ms });
-        }
-
-        // Called from above, in processMessage which handles client messages
-        // but can also be called internally. For example, Target.sendMessageToTarget
-        // calls back into dispatch to capture the response.
-        pub fn dispatch(self: *Self, arena: Allocator, sender: anytype, str: []const u8) !void {
-            const input = json.parseFromSliceLeaky(InputMessage, arena, str, .{
-                .ignore_unknown_fields = true,
-            }) catch return error.InvalidJSON;
-
-            var command = Command(Self, @TypeOf(sender)){
-                .input = .{
-                    .json = str,
-                    .id = input.id,
-                    .action = "",
-                    .params = input.params,
-                    .session_id = input.sessionId,
-                },
-                .cdp = self,
-                .arena = arena,
-                .sender = sender,
-                .browser_context = if (self.browser_context) |*bc| bc else null,
-            };
-
-            // See dispatchStartupCommand for more info on this.
-            var is_startup = false;
-            if (input.sessionId) |input_session_id| {
-                if (std.mem.eql(u8, input_session_id, "STARTUP")) {
-                    is_startup = true;
-                } else if (self.isValidSessionId(input_session_id) == false) {
-                    return command.sendError(-32001, "Unknown sessionId", .{});
-                }
-            }
-
-            if (is_startup) {
-                dispatchStartupCommand(&command, input.method) catch |err| {
-                    command.sendError(-31999, @errorName(err), .{}) catch return err;
-                };
-            } else {
-                dispatchCommand(&command, input.method) catch |err| {
-                    command.sendError(-31998, @errorName(err), .{}) catch return err;
-                };
-            }
-        }
-
-        // A CDP session isn't 100% fully driven by the driver. There's are
-        // independent actions that the browser is expected to take. For example
-        // Puppeteer expects the browser to startup a tab and thus have existing
-        // targets.
-        // To this end, we create a [very] dummy BrowserContext, Target and
-        // Session. There isn't actually a BrowserContext, just a special id.
-        // When messages are received with the "STARTUP" sessionId, we do
-        // "special" handling - the bare minimum we need to do until the driver
-        // switches to a real BrowserContext.
-        // (I can imagine this logic will become driver-specific)
-        fn dispatchStartupCommand(command: anytype, method: []const u8) !void {
-            // Stagehand parses the response and error if we don't return a
-            // correct one for Page.getFrameTree on startup call.
-            if (std.mem.eql(u8, method, "Page.getFrameTree")) {
-                // The Page.getFrameTree handles startup response gracefully.
-                return dispatchCommand(command, method);
-            }
-
-            return command.sendResult(null, .{});
-        }
-
-        fn dispatchCommand(command: anytype, method: []const u8) !void {
-            const domain = blk: {
-                const i = std.mem.indexOfScalarPos(u8, method, 0, '.') orelse {
-                    return error.InvalidMethod;
-                };
-                command.input.action = method[i + 1 ..];
-                break :blk method[0..i];
-            };
-
-            switch (domain.len) {
-                2 => switch (@as(u16, @bitCast(domain[0..2].*))) {
-                    asUint(u16, "LP") => return @import("domains/lp.zig").processMessage(command),
-                    else => {},
-                },
-                3 => switch (@as(u24, @bitCast(domain[0..3].*))) {
-                    asUint(u24, "DOM") => return @import("domains/dom.zig").processMessage(command),
-                    asUint(u24, "Log") => return @import("domains/log.zig").processMessage(command),
-                    asUint(u24, "CSS") => return @import("domains/css.zig").processMessage(command),
-                    else => {},
-                },
-                4 => switch (@as(u32, @bitCast(domain[0..4].*))) {
-                    asUint(u32, "Page") => return @import("domains/page.zig").processMessage(command),
-                    else => {},
-                },
-                5 => switch (@as(u40, @bitCast(domain[0..5].*))) {
-                    asUint(u40, "Fetch") => return @import("domains/fetch.zig").processMessage(command),
-                    asUint(u40, "Input") => return @import("domains/input.zig").processMessage(command),
-                    else => {},
-                },
-                6 => switch (@as(u48, @bitCast(domain[0..6].*))) {
-                    asUint(u48, "Target") => return @import("domains/target.zig").processMessage(command),
-                    else => {},
-                },
-                7 => switch (@as(u56, @bitCast(domain[0..7].*))) {
-                    asUint(u56, "Browser") => return @import("domains/browser.zig").processMessage(command),
-                    asUint(u56, "Runtime") => return @import("domains/runtime.zig").processMessage(command),
-                    asUint(u56, "Network") => return @import("domains/network.zig").processMessage(command),
-                    asUint(u56, "Storage") => return @import("domains/storage.zig").processMessage(command),
-                    else => {},
-                },
-                8 => switch (@as(u64, @bitCast(domain[0..8].*))) {
-                    asUint(u64, "Security") => return @import("domains/security.zig").processMessage(command),
-                    else => {},
-                },
-                9 => switch (@as(u72, @bitCast(domain[0..9].*))) {
-                    asUint(u72, "Emulation") => return @import("domains/emulation.zig").processMessage(command),
-                    asUint(u72, "Inspector") => return @import("domains/inspector.zig").processMessage(command),
-                    else => {},
-                },
-                11 => switch (@as(u88, @bitCast(domain[0..11].*))) {
-                    asUint(u88, "Performance") => return @import("domains/performance.zig").processMessage(command),
-                    else => {},
-                },
-                13 => switch (@as(u104, @bitCast(domain[0..13].*))) {
-                    asUint(u104, "Accessibility") => return @import("domains/accessibility.zig").processMessage(command),
-                    else => {},
-                },
-
-                else => {},
-            }
-
-            return error.UnknownDomain;
-        }
-
-        fn isValidSessionId(self: *const Self, input_session_id: []const u8) bool {
-            const browser_context = &(self.browser_context orelse return false);
-            const session_id = browser_context.session_id orelse return false;
-            return std.mem.eql(u8, session_id, input_session_id);
-        }
-
-        pub fn createBrowserContext(self: *Self) ![]const u8 {
-            if (self.browser_context != null) {
-                return error.AlreadyExists;
-            }
-            const id = self.browser_context_id_gen.next();
-
-            self.browser_context = @as(BrowserContext(Self), undefined);
-            const browser_context = &self.browser_context.?;
-
-            try BrowserContext(Self).init(browser_context, id, self);
-            return id;
-        }
-
-        pub fn disposeBrowserContext(self: *Self, browser_context_id: []const u8) bool {
-            const bc = &(self.browser_context orelse return false);
-            if (std.mem.eql(u8, bc.id, browser_context_id) == false) {
-                return false;
-            }
-            bc.deinit();
-            self.browser.closeSession();
-            self.browser_context = null;
-            return true;
-        }
-
-        const SendEventOpts = struct {
-            session_id: ?[]const u8 = null,
-        };
-        pub fn sendEvent(self: *Self, method: []const u8, p: anytype, opts: SendEventOpts) !void {
-            return self.sendJSON(.{
-                .method = method,
-                .params = if (comptime @typeInfo(@TypeOf(p)) == .null) struct {}{} else p,
-                .sessionId = opts.session_id,
-            });
-        }
-
-        pub fn sendJSON(self: *Self, message: anytype) !void {
-            return self.client.sendJSON(message, .{
-                .emit_null_optional_fields = false,
-            });
-        }
+    return .{
+        .client = client,
+        .browser = browser,
+        .allocator = allocator,
+        .browser_context = null,
+        .page_arena = std.heap.ArenaAllocator.init(allocator),
+        .message_arena = std.heap.ArenaAllocator.init(allocator),
+        .notification_arena = std.heap.ArenaAllocator.init(allocator),
+        .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
     };
+}
+
+pub fn deinit(self: *CDP) void {
+    if (self.browser_context) |*bc| {
+        bc.deinit();
+    }
+    self.browser.deinit();
+    self.page_arena.deinit();
+    self.message_arena.deinit();
+    self.notification_arena.deinit();
+    self.browser_context_arena.deinit();
+}
+
+pub fn handleMessage(self: *CDP, msg: []const u8) bool {
+    // if there's an error, it's already been logged
+    self.processMessage(msg) catch return false;
+    return true;
+}
+
+pub fn processMessage(self: *CDP, msg: []const u8) !void {
+    const arena = &self.message_arena;
+    defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
+    return self.dispatch(arena.allocator(), self, msg);
+}
+
+// @newhttp
+// A bit hacky right now. The main server loop doesn't unblock for
+// scheduled task. So we run this directly in order to process any
+// timeouts (or http events) which are ready to be processed.
+pub fn pageWait(self: *CDP, ms: u32) !Session.Runner.CDPWaitResult {
+    const session = &(self.browser.session orelse return error.NoPage);
+    var runner = try session.runner(.{});
+    return runner.waitCDP(.{ .ms = ms });
+}
+
+// Called from above, in processMessage which handles client messages
+// but can also be called internally. For example, Target.sendMessageToTarget
+// calls back into dispatch to capture the response.
+pub fn dispatch(self: *CDP, arena: Allocator, sender: anytype, str: []const u8) !void {
+    const input = json.parseFromSliceLeaky(InputMessage, arena, str, .{
+        .ignore_unknown_fields = true,
+    }) catch return error.InvalidJSON;
+
+    var command = Command(CDP, @TypeOf(sender)){
+        .input = .{
+            .json = str,
+            .id = input.id,
+            .action = "",
+            .params = input.params,
+            .session_id = input.sessionId,
+        },
+        .cdp = self,
+        .arena = arena,
+        .sender = sender,
+        .browser_context = if (self.browser_context) |*bc| bc else null,
+    };
+
+    // See dispatchStartupCommand for more info on this.
+    var is_startup = false;
+    if (input.sessionId) |input_session_id| {
+        if (std.mem.eql(u8, input_session_id, "STARTUP")) {
+            is_startup = true;
+        } else if (self.isValidSessionId(input_session_id) == false) {
+            return command.sendError(-32001, "Unknown sessionId", .{});
+        }
+    }
+
+    if (is_startup) {
+        dispatchStartupCommand(&command, input.method) catch |err| {
+            command.sendError(-31999, @errorName(err), .{}) catch return err;
+        };
+    } else {
+        dispatchCommand(&command, input.method) catch |err| {
+            command.sendError(-31998, @errorName(err), .{}) catch return err;
+        };
+    }
+}
+
+// A CDP session isn't 100% fully driven by the driver. There's are
+// independent actions that the browser is expected to take. For example
+// Puppeteer expects the browser to startup a tab and thus have existing
+// targets.
+// To this end, we create a [very] dummy BrowserContext, Target and
+// Session. There isn't actually a BrowserContext, just a special id.
+// When messages are received with the "STARTUP" sessionId, we do
+// "special" handling - the bare minimum we need to do until the driver
+// switches to a real BrowserContext.
+// (I can imagine this logic will become driver-specific)
+fn dispatchStartupCommand(command: anytype, method: []const u8) !void {
+    // Stagehand parses the response and error if we don't return a
+    // correct one for Page.getFrameTree on startup call.
+    if (std.mem.eql(u8, method, "Page.getFrameTree")) {
+        // The Page.getFrameTree handles startup response gracefully.
+        return dispatchCommand(command, method);
+    }
+
+    return command.sendResult(null, .{});
+}
+
+fn dispatchCommand(command: anytype, method: []const u8) !void {
+    const domain = blk: {
+        const i = std.mem.indexOfScalarPos(u8, method, 0, '.') orelse {
+            return error.InvalidMethod;
+        };
+        command.input.action = method[i + 1 ..];
+        break :blk method[0..i];
+    };
+
+    switch (domain.len) {
+        2 => switch (@as(u16, @bitCast(domain[0..2].*))) {
+            asUint(u16, "LP") => return @import("domains/lp.zig").processMessage(command),
+            else => {},
+        },
+        3 => switch (@as(u24, @bitCast(domain[0..3].*))) {
+            asUint(u24, "DOM") => return @import("domains/dom.zig").processMessage(command),
+            asUint(u24, "Log") => return @import("domains/log.zig").processMessage(command),
+            asUint(u24, "CSS") => return @import("domains/css.zig").processMessage(command),
+            else => {},
+        },
+        4 => switch (@as(u32, @bitCast(domain[0..4].*))) {
+            asUint(u32, "Page") => return @import("domains/page.zig").processMessage(command),
+            else => {},
+        },
+        5 => switch (@as(u40, @bitCast(domain[0..5].*))) {
+            asUint(u40, "Fetch") => return @import("domains/fetch.zig").processMessage(command),
+            asUint(u40, "Input") => return @import("domains/input.zig").processMessage(command),
+            else => {},
+        },
+        6 => switch (@as(u48, @bitCast(domain[0..6].*))) {
+            asUint(u48, "Target") => return @import("domains/target.zig").processMessage(command),
+            else => {},
+        },
+        7 => switch (@as(u56, @bitCast(domain[0..7].*))) {
+            asUint(u56, "Browser") => return @import("domains/browser.zig").processMessage(command),
+            asUint(u56, "Runtime") => return @import("domains/runtime.zig").processMessage(command),
+            asUint(u56, "Network") => return @import("domains/network.zig").processMessage(command),
+            asUint(u56, "Storage") => return @import("domains/storage.zig").processMessage(command),
+            else => {},
+        },
+        8 => switch (@as(u64, @bitCast(domain[0..8].*))) {
+            asUint(u64, "Security") => return @import("domains/security.zig").processMessage(command),
+            else => {},
+        },
+        9 => switch (@as(u72, @bitCast(domain[0..9].*))) {
+            asUint(u72, "Emulation") => return @import("domains/emulation.zig").processMessage(command),
+            asUint(u72, "Inspector") => return @import("domains/inspector.zig").processMessage(command),
+            else => {},
+        },
+        11 => switch (@as(u88, @bitCast(domain[0..11].*))) {
+            asUint(u88, "Performance") => return @import("domains/performance.zig").processMessage(command),
+            else => {},
+        },
+        13 => switch (@as(u104, @bitCast(domain[0..13].*))) {
+            asUint(u104, "Accessibility") => return @import("domains/accessibility.zig").processMessage(command),
+            else => {},
+        },
+
+        else => {},
+    }
+
+    return error.UnknownDomain;
+}
+
+fn isValidSessionId(self: *const CDP, input_session_id: []const u8) bool {
+    const browser_context = &(self.browser_context orelse return false);
+    const session_id = browser_context.session_id orelse return false;
+    return std.mem.eql(u8, session_id, input_session_id);
+}
+
+pub fn createBrowserContext(self: *CDP) ![]const u8 {
+    if (self.browser_context != null) {
+        return error.AlreadyExists;
+    }
+    const id = self.browser_context_id_gen.next();
+
+    self.browser_context = @as(BrowserContext(CDP), undefined);
+    const browser_context = &self.browser_context.?;
+
+    try BrowserContext(CDP).init(browser_context, id, self);
+    return id;
+}
+
+pub fn disposeBrowserContext(self: *CDP, browser_context_id: []const u8) bool {
+    const bc = &(self.browser_context orelse return false);
+    if (std.mem.eql(u8, bc.id, browser_context_id) == false) {
+        return false;
+    }
+    bc.deinit();
+    self.browser.closeSession();
+    self.browser_context = null;
+    return true;
+}
+
+const SendEventOpts = struct {
+    session_id: ?[]const u8 = null,
+};
+pub fn sendEvent(self: *CDP, method: []const u8, p: anytype, opts: SendEventOpts) !void {
+    return self.sendJSON(.{
+        .method = method,
+        .params = if (comptime @typeInfo(@TypeOf(p)) == .null) struct {}{} else p,
+        .sessionId = opts.session_id,
+    });
+}
+
+pub fn sendJSON(self: *CDP, message: anytype) !void {
+    return self.client.sendJSON(message, .{
+        .emit_null_optional_fields = false,
+    });
 }
 
 pub fn BrowserContext(comptime CDP_T: type) type {
@@ -958,7 +955,7 @@ fn asUint(comptime T: type, comptime string: []const u8) T {
 
 const testing = @import("testing.zig");
 test "cdp: invalid json" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     try testing.expectError(error.InvalidJSON, ctx.processMessage("invalid"));
@@ -983,7 +980,7 @@ test "cdp: invalid json" {
 }
 
 test "cdp: invalid sessionId" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     {
@@ -1008,7 +1005,7 @@ test "cdp: invalid sessionId" {
 }
 
 test "cdp: STARTUP sessionId" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     {
@@ -1021,13 +1018,13 @@ test "cdp: STARTUP sessionId" {
         // we have a brower context but no session_id
         _ = try ctx.loadBrowserContext(.{});
         try ctx.processMessage(.{ .id = 3, .method = "Hi", .sessionId = "STARTUP" });
-        try ctx.expectSentResult(null, .{ .id = 3, .index = 0, .session_id = "STARTUP" });
+        try ctx.expectSentResult(null, .{ .id = 3, .index = 1, .session_id = "STARTUP" });
     }
 
     {
         // we have a brower context with a different session_id
         _ = try ctx.loadBrowserContext(.{ .session_id = "SESS-2" });
         try ctx.processMessage(.{ .id = 4, .method = "Hi", .sessionId = "STARTUP" });
-        try ctx.expectSentResult(null, .{ .id = 4, .index = 0, .session_id = "STARTUP" });
+        try ctx.expectSentResult(null, .{ .id = 4, .index = 2, .session_id = "STARTUP" });
     }
 }

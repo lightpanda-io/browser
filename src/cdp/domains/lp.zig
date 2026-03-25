@@ -279,7 +279,7 @@ fn waitForSelector(cmd: anytype) !void {
 
 const testing = @import("../testing.zig");
 test "cdp.lp: getMarkdown" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
@@ -290,12 +290,12 @@ test "cdp.lp: getMarkdown" {
         .method = "LP.getMarkdown",
     });
 
-    const result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expect(result.get("markdown") != null);
 }
 
 test "cdp.lp: getInteractiveElements" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
@@ -306,13 +306,13 @@ test "cdp.lp: getInteractiveElements" {
         .method = "LP.getInteractiveElements",
     });
 
-    const result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expect(result.get("elements") != null);
     try testing.expect(result.get("nodeIds") != null);
 }
 
 test "cdp.lp: getStructuredData" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
@@ -323,12 +323,12 @@ test "cdp.lp: getStructuredData" {
         .method = "LP.getStructuredData",
     });
 
-    const result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expect(result.get("structuredData") != null);
 }
 
 test "cdp.lp: action tools" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
@@ -389,7 +389,7 @@ test "cdp.lp: action tools" {
 }
 
 test "cdp.lp: waitForSelector" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
@@ -405,9 +405,8 @@ test "cdp.lp: waitForSelector" {
         .method = "LP.waitForSelector",
         .params = .{ .selector = "#existing", .timeout = 2000 },
     });
-    var result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    var result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expect(result.get("backendNodeId") != null);
-    ctx.client.?.sent.clearRetainingCapacity();
 
     // 2. Delayed element
     try ctx.processMessage(.{
@@ -415,9 +414,8 @@ test "cdp.lp: waitForSelector" {
         .method = "LP.waitForSelector",
         .params = .{ .selector = "#delayed", .timeout = 5000 },
     });
-    result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    result = (try ctx.getSentMessage(1)).?.object.get("result").?.object;
     try testing.expect(result.get("backendNodeId") != null);
-    ctx.client.?.sent.clearRetainingCapacity();
 
     // 3. Timeout error
     try ctx.processMessage(.{
@@ -425,6 +423,6 @@ test "cdp.lp: waitForSelector" {
         .method = "LP.waitForSelector",
         .params = .{ .selector = "#nonexistent", .timeout = 100 },
     });
-    const err_obj = ctx.client.?.sent.items[0].object.get("error").?.object;
+    const err_obj = (try ctx.getSentMessage(2)).?.object.get("error").?.object;
     try testing.expect(err_obj.get("code") != null);
 }

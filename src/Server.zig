@@ -27,7 +27,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const log = @import("log.zig");
 const App = @import("App.zig");
 const Config = @import("Config.zig");
-const CDP = @import("cdp/cdp.zig").CDP;
+const CDP = @import("cdp/CDP.zig");
 const Net = @import("network/websocket.zig");
 const HttpClient = @import("browser/HttpClient.zig");
 
@@ -212,7 +212,7 @@ pub const Client = struct {
     http: *HttpClient,
     ws: Net.WsConnection,
 
-    fn init(
+    pub fn init(
         socket: posix.socket_t,
         allocator: Allocator,
         app: *App,
@@ -250,7 +250,7 @@ pub const Client = struct {
         self.ws.shutdown();
     }
 
-    fn deinit(self: *Client) void {
+    pub fn deinit(self: *Client) void {
         switch (self.mode) {
             .cdp => |*cdp| cdp.deinit(),
             .http => {},
@@ -461,7 +461,7 @@ pub const Client = struct {
 
     fn upgradeConnection(self: *Client, request: []u8) !void {
         try self.ws.upgrade(request);
-        self.mode = .{ .cdp = try CDP.init(self.app, self.http, self) };
+        self.mode = .{ .cdp = try CDP.init(self) };
     }
 
     fn writeHTTPErrorResponse(self: *Client, comptime status: u16, comptime body: []const u8) void {

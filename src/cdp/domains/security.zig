@@ -44,7 +44,7 @@ fn setIgnoreCertificateErrors(cmd: anytype) !void {
 const testing = @import("../testing.zig");
 
 test "cdp.Security: setIgnoreCertificateErrors" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-9" });

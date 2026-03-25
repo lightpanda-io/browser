@@ -82,7 +82,7 @@ fn getFrameTree(cmd: anytype) !void {
             .frame = .{
                 .id = "TID-STARTUP",
                 .loaderId = "LID-STARTUP",
-                .securityOrigin = @import("../cdp.zig").URL_BASE,
+                .securityOrigin = @import("../CDP.zig").URL_BASE,
                 .url = "about:blank",
                 .secureContextType = "Secure",
             },
@@ -642,7 +642,7 @@ fn getLayoutMetrics(cmd: anytype) !void {
 
 const testing = @import("../testing.zig");
 test "cdp.page: getFrameTree" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     {
@@ -712,7 +712,7 @@ test "cdp.page: captureScreenshot" {
     const filter: LogFilter = .init(&.{.not_implemented});
     defer filter.deinit();
 
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
     {
         try ctx.processMessage(.{ .id = 10, .method = "Page.captureScreenshot", .params = .{ .format = "jpg" } });
@@ -728,7 +728,7 @@ test "cdp.page: captureScreenshot" {
 }
 
 test "cdp.page: getLayoutMetrics" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });

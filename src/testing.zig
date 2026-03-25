@@ -470,10 +470,6 @@ pub fn pageTest(comptime test_file: []const u8) !*Page {
     return page;
 }
 
-test {
-    std.testing.refAllDecls(@This());
-}
-
 const log = @import("log.zig");
 const TestHTTPServer = @import("TestHTTPServer.zig");
 

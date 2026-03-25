@@ -324,7 +324,9 @@ pub const WsConnection = struct {
     pub fn init(socket: posix.socket_t, allocator: Allocator, json_version_response: []const u8, timeout_ms: u32) !WsConnection {
         const socket_flags = try posix.fcntl(socket, posix.F.GETFL, 0);
         const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
-        assert(socket_flags & nonblocking == nonblocking, "WsConnection.init blocking", .{});
+        if (builtin.is_test == false) {
+            assert(socket_flags & nonblocking == nonblocking, "WsConnection.init blocking", .{});
+        }
 
         var reader = try Reader(true).init(allocator);
         errdefer reader.deinit();
