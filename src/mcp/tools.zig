@@ -102,6 +102,18 @@ pub const tool_list = [_]protocol.Tool{
         ),
     },
     .{
+        .name = "detectForms",
+        .description = "Detect all forms on the page and return their structure including fields, types, and required status. If a url is provided, it navigates to that url first.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before detecting forms." }
+            \\  }
+            \\}
+        ),
+    },
+    .{
         .name = "click",
         .description = "Click on an interactive element. Returns the current page URL and title after the click.",
         .inputSchema = protocol.minify(
@@ -252,6 +264,7 @@ const ToolAction = enum {
     links,
     interactiveElements,
     structuredData,
+    detectForms,
     evaluate,
     semantic_tree,
     click,
@@ -267,6 +280,7 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "links", .links },
     .{ "interactiveElements", .interactiveElements },
     .{ "structuredData", .structuredData },
+    .{ "detectForms", .detectForms },
     .{ "evaluate", .evaluate },
     .{ "semantic_tree", .semantic_tree },
     .{ "click", .click },
@@ -299,6 +313,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .links => try handleLinks(server, arena, req.id.?, call_params.arguments),
         .interactiveElements => try handleInteractiveElements(server, arena, req.id.?, call_params.arguments),
         .structuredData => try handleStructuredData(server, arena, req.id.?, call_params.arguments),
+        .detectForms => try handleDetectForms(server, arena, req.id.?, call_params.arguments),
         .evaluate => try handleEvaluate(server, arena, req.id.?, call_params.arguments),
         .semantic_tree => try handleSemanticTree(server, arena, req.id.?, call_params.arguments),
         .click => try handleClick(server, arena, req.id.?, call_params.arguments),
@@ -430,6 +445,39 @@ fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.
     };
     var aw: std.Io.Writer.Allocating = .init(arena);
     try std.json.Stringify.value(data, .{}, &aw.writer);
+
+    const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        url: ?[:0]const u8 = null,
+    };
+    if (arguments) |args_raw| {
+        const args = std.json.parseFromValueLeaky(Params, arena, args_raw, .{ .ignore_unknown_fields = true }) catch {
+            return server.sendError(id, .InvalidParams, "Invalid arguments for detectForms");
+        };
+        if (args.url) |u| {
+            try performGoto(server, u, id);
+        }
+    }
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    const forms_data = lp.forms.collectForms(arena, page.document.asNode(), page) catch |err| {
+        log.err(.mcp, "form collection failed", .{ .err = err });
+        return server.sendError(id, .InternalError, "Failed to collect forms");
+    };
+
+    lp.forms.registerNodes(forms_data, &server.node_registry) catch |err| {
+        log.err(.mcp, "form node registration failed", .{ .err = err });
+        return server.sendError(id, .InternalError, "Failed to register form nodes");
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try std.json.Stringify.value(forms_data, .{}, &aw.writer);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });

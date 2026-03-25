@@ -120,9 +120,10 @@
 
 <script id=link_click>
   testing.async(async (restore) => {
+    let f6;
     await new Promise((resolve) => {
       let count = 0;
-      let f6 = document.createElement('iframe');
+      f6 = document.createElement('iframe');
       f6.id = 'f6';
       f6.addEventListener('load', () => {
         if (++count == 2) {

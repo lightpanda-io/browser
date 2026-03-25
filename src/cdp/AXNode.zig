@@ -295,7 +295,7 @@ pub const Writer = struct {
                 },
                 .input => {
                     const input = el.as(DOMNode.Element.Html.Input);
-                    const is_disabled = el.hasAttributeSafe(comptime .wrap("disabled"));
+                    const is_disabled = el.isDisabled();
 
                     switch (input._input_type) {
                         .text, .email, .tel, .url, .search, .password, .number => {
@@ -332,7 +332,7 @@ pub const Writer = struct {
                     }
                 },
                 .textarea => {
-                    const is_disabled = el.hasAttributeSafe(comptime .wrap("disabled"));
+                    const is_disabled = el.isDisabled();
 
                     try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                     if (!is_disabled) {
@@ -347,7 +347,7 @@ pub const Writer = struct {
                     try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeSafe(comptime .wrap("required")) } }, w);
                 },
                 .select => {
-                    const is_disabled = el.hasAttributeSafe(comptime .wrap("disabled"));
+                    const is_disabled = el.isDisabled();
 
                     try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                     if (!is_disabled) {
@@ -391,7 +391,7 @@ pub const Writer = struct {
                     }
                 },
                 .button => {
-                    const is_disabled = el.hasAttributeSafe(comptime .wrap("disabled"));
+                    const is_disabled = el.isDisabled();
                     try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
                     if (!is_disabled) {
                         try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);

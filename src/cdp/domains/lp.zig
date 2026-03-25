@@ -32,6 +32,7 @@ pub fn processMessage(cmd: anytype) !void {
         getSemanticTree,
         getInteractiveElements,
         getStructuredData,
+        detectForms,
         clickNode,
         fillNode,
         scrollNode,
@@ -43,6 +44,7 @@ pub fn processMessage(cmd: anytype) !void {
         .getSemanticTree => return getSemanticTree(cmd),
         .getInteractiveElements => return getInteractiveElements(cmd),
         .getStructuredData => return getStructuredData(cmd),
+        .detectForms => return detectForms(cmd),
         .clickNode => return clickNode(cmd),
         .fillNode => return fillNode(cmd),
         .scrollNode => return scrollNode(cmd),
@@ -159,6 +161,23 @@ fn getStructuredData(cmd: anytype) !void {
 
     return cmd.sendResult(.{
         .structuredData = data,
+    }, .{});
+}
+
+fn detectForms(cmd: anytype) !void {
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const forms_data = try lp.forms.collectForms(
+        cmd.arena,
+        page.document.asNode(),
+        page,
+    );
+
+    try lp.forms.registerNodes(forms_data, &bc.node_registry);
+
+    return cmd.sendResult(.{
+        .forms = forms_data,
     }, .{});
 }
 
