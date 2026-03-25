@@ -157,6 +157,7 @@ pub fn registerNodes(forms_data: []FormInfo, registry: anytype) !void {
 /// Collect all forms and their fields under `root`.
 /// Uses Form.getElements() to include fields outside the <form> that
 /// reference it via the form="id" attribute, matching browser behavior.
+/// `arena` must be an arena allocator — returned slices borrow its memory.
 pub fn collectForms(
     arena: Allocator,
     root: *Node,
