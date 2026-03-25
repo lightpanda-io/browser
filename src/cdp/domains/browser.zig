@@ -112,7 +112,7 @@ fn resetPermissions(cmd: anytype) !void {
 
 const testing = @import("../testing.zig");
 test "cdp.browser: getVersion" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     try ctx.processMessage(.{
@@ -131,7 +131,7 @@ test "cdp.browser: getVersion" {
 }
 
 test "cdp.browser: getWindowForTarget" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     try ctx.processMessage(.{

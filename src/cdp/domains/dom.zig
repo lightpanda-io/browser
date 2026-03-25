@@ -547,7 +547,7 @@ fn requestNode(cmd: anytype) !void {
 
 const testing = @import("../testing.zig");
 test "cdp.dom: getSearchResults unknown search id" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     try ctx.processMessage(.{
@@ -559,7 +559,7 @@ test "cdp.dom: getSearchResults unknown search id" {
 }
 
 test "cdp.dom: search flow" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom1.html" });
@@ -614,7 +614,7 @@ test "cdp.dom: search flow" {
 }
 
 test "cdp.dom: querySelector unknown search id" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom1.html" });
@@ -635,7 +635,7 @@ test "cdp.dom: querySelector unknown search id" {
 }
 
 test "cdp.dom: querySelector Node not found" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom1.html" });
@@ -663,7 +663,7 @@ test "cdp.dom: querySelector Node not found" {
 }
 
 test "cdp.dom: querySelector Nodes found" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom2.html" });
@@ -693,7 +693,7 @@ test "cdp.dom: querySelector Nodes found" {
 }
 
 test "cdp.dom: getBoxModel" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom2.html" });

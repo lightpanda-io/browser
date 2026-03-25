@@ -439,7 +439,7 @@ fn idFromRequestId(request_id: []const u8) !u64 {
 
 const testing = @import("../testing.zig");
 test "cdp.network setExtraHTTPHeaders" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     _ = try ctx.loadBrowserContext(.{ .id = "NID-A", .session_id = "NESI-A" });
@@ -465,7 +465,7 @@ test "cdp.Network: cookies" {
     const ResCookie = CdpStorage.ResCookie;
     const CdpCookie = CdpStorage.CdpCookie;
 
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-S" });
 

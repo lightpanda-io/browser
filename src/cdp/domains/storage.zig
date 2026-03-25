@@ -243,7 +243,7 @@ pub fn writeCookie(cookie: *const Cookie, w: anytype) !void {
 const testing = @import("../testing.zig");
 
 test "cdp.Storage: cookies" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-S" });
 
