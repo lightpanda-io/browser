@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<script>
+  window.top.postMessage({
+    url: location.toString(),
+    document_is_undefined: window.top.document === undefined,
+  }, '*')
+</script>
