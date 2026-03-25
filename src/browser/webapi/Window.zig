@@ -829,7 +829,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = .{ .internal = 1 } });
+    pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = .{ .internal = 1 }, .deletable = false });
     pub const console = bridge.accessor(Window.getConsole, null, .{ .cache = .{ .internal = 2 } });
 
     pub const top = bridge.accessor(Window.getTop, null, .{});
@@ -842,7 +842,7 @@ pub const JsApi = struct {
     pub const performance = bridge.accessor(Window.getPerformance, null, .{});
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{});
-    pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{});
+    pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{ .deletable = false });
     pub const history = bridge.accessor(Window.getHistory, null, .{});
     pub const navigation = bridge.accessor(Window.getNavigation, null, .{});
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{});

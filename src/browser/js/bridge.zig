@@ -198,6 +198,7 @@ pub const Function = struct {
 
 pub const Accessor = struct {
     static: bool = false,
+    deletable: bool = true,
     cache: ?Caller.Function.Opts.Caching = null,
     getter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
     setter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
@@ -206,6 +207,7 @@ pub const Accessor = struct {
         var accessor = Accessor{
             .cache = opts.cache,
             .static = opts.static,
+            .deletable = opts.deletable,
         };
 
         if (@typeInfo(@TypeOf(getter)) != .null) {
