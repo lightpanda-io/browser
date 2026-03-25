@@ -82,7 +82,7 @@ fn getFrameTree(cmd: anytype) !void {
             .frame = .{
                 .id = "TID-STARTUP",
                 .loaderId = "LID-STARTUP",
-                .securityOrigin = @import("../cdp.zig").URL_BASE,
+                .securityOrigin = @import("../CDP.zig").URL_BASE,
                 .url = "about:blank",
                 .secureContextType = "Secure",
             },
