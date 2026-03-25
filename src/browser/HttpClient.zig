@@ -724,153 +724,163 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
     return status;
 }
 
+fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) !bool {
+    // Detect auth challenge from response headers.
+    if (msg.err == null) {
+        transfer.detectAuthChallenge(&msg.conn);
+    }
+
+    // In case of auth challenge
+    // TODO give a way to configure the number of auth retries.
+    if (transfer._auth_challenge != null and transfer._tries < 10) {
+        var wait_for_interception = false;
+        transfer.req.notification.dispatch(.http_request_auth_required, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
+        if (wait_for_interception) {
+            self.intercepted += 1;
+            if (comptime IS_DEBUG) {
+                log.debug(.http, "wait for auth interception", .{ .intercepted = self.intercepted });
+            }
+            transfer._intercept_state = .pending;
+
+            // Wether or not this is a blocking request, we're not going
+            // to process it now. We can end the transfer, which will
+            // release the easy handle back into the pool. The transfer
+            // is still valid/alive (just has no handle).
+            transfer.releaseConn();
+            if (!transfer.req.blocking) {
+                // In the case of an async request, we can just "forget"
+                // about this transfer until it gets updated asynchronously
+                // from some CDP command.
+                return false;
+            }
+
+            // In the case of a sync request, we need to block until we
+            // get the CDP command for handling this case.
+            if (try self.waitForInterceptedResponse(transfer)) {
+                // we've been asked to continue with the request
+                // we can't process it here, since we're already inside
+                // a process, so we need to queue it and wait for the
+                // next tick (this is why it was safe to releaseConn
+                // above, because even in the "blocking" path, we still
+                // only process it on the next tick).
+                self.queue.append(&transfer._node);
+            } else {
+                // aborted, already cleaned up
+            }
+
+            return false;
+        }
+    }
+
+    // Handle redirects: reuse the same connection to preserve TCP state.
+    if (msg.err == null) {
+        const status = try msg.conn.getResponseCode();
+        if (status >= 300 and status <= 399) {
+            try transfer.handleRedirect();
+
+            const conn = transfer._conn.?;
+
+            try self.handles.remove(conn);
+            transfer._conn = null;
+            transfer._detached_conn = conn; // signal orphan for processMessages cleanup
+
+            transfer.reset();
+            try transfer.configureConn(conn);
+            try self.handles.add(conn);
+            transfer._detached_conn = null;
+            transfer._conn = conn; // reattach after successful re-add
+
+            _ = try self.perform(0);
+
+            return false;
+        }
+    }
+
+    // Transfer is done (success or error). Caller (processMessages) owns deinit.
+    // Return true = done (caller will deinit), false = continues (redirect/auth).
+
+    // When the server sends "Connection: close" and closes the TLS
+    // connection without a close_notify alert, BoringSSL reports
+    // RecvError. If we already received valid HTTP headers, this is
+    // a normal end-of-body (the connection closure signals the end
+    // of the response per HTTP/1.1 when there is no Content-Length).
+    // We must check this before endTransfer, which may reset the
+    // easy handle.
+    const is_conn_close_recv = blk: {
+        const err = msg.err orelse break :blk false;
+        if (err != error.RecvError) break :blk false;
+        const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk false;
+        break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
+    };
+
+    if (msg.err != null and !is_conn_close_recv) {
+        transfer.requestFailed(transfer._callback_error orelse msg.err.?, true);
+        return true;
+    }
+
+    // make sure the transfer can't be immediately aborted from a callback
+    // since we still need it here.
+    transfer._performing = true;
+    defer transfer._performing = false;
+
+    if (!transfer._header_done_called) {
+        // In case of request w/o data, we need to call the header done
+        // callback now.
+        const proceed = try transfer.headerDoneCallback(&msg.conn);
+        if (!proceed) {
+            transfer.requestFailed(error.Abort, true);
+            return true;
+        }
+    }
+
+    // Replay buffered body through user's data_callback.
+    if (transfer._stream_buffer.items.len > 0) {
+        const body = transfer._stream_buffer.items;
+        try transfer.req.data_callback(transfer, body);
+
+        transfer.req.notification.dispatch(.http_response_data, &.{
+            .data = body,
+            .transfer = transfer,
+        });
+
+        if (transfer.aborted) {
+            transfer.requestFailed(error.Abort, true);
+            return true;
+        }
+    }
+
+    // release conn ASAP so that it's available; some done_callbacks
+    // will load more resources.
+    transfer.releaseConn();
+
+    try transfer.req.done_callback(transfer.ctx);
+    transfer.req.notification.dispatch(.http_request_done, &.{
+        .transfer = transfer,
+    });
+
+    return true;
+}
+
 fn processMessages(self: *Client) !bool {
     var processed = false;
     while (self.handles.readMessage()) |msg| {
         const transfer = try Transfer.fromConnection(&msg.conn);
 
-        // Detect auth challenge from response headers.
-        if (msg.err == null) {
-            transfer.detectAuthChallenge(&msg.conn);
-        }
-
-        // In case of auth challenge
-        // TODO give a way to configure the number of auth retries.
-        if (transfer._auth_challenge != null and transfer._tries < 10) {
-            var wait_for_interception = false;
-            transfer.req.notification.dispatch(.http_request_auth_required, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
-            if (wait_for_interception) {
-                self.intercepted += 1;
-                if (comptime IS_DEBUG) {
-                    log.debug(.http, "wait for auth interception", .{ .intercepted = self.intercepted });
-                }
-                transfer._intercept_state = .pending;
-
-                // Wether or not this is a blocking request, we're not going
-                // to process it now. We can end the transfer, which will
-                // release the easy handle back into the pool. The transfer
-                // is still valid/alive (just has no handle).
-                transfer.releaseConn();
-                if (!transfer.req.blocking) {
-                    // In the case of an async request, we can just "forget"
-                    // about this transfer until it gets updated asynchronously
-                    // from some CDP command.
-                    continue;
-                }
-
-                // In the case of a sync request, we need to block until we
-                // get the CDP command for handling this case.
-                if (try self.waitForInterceptedResponse(transfer)) {
-                    // we've been asked to continue with the request
-                    // we can't process it here, since we're already inside
-                    // a process, so we need to queue it and wait for the
-                    // next tick (this is why it was safe to releaseConn
-                    // above, because even in the "blocking" path, we still
-                    // only process it on the next tick).
-                    self.queue.append(&transfer._node);
-                } else {
-                    // aborted, already cleaned up
-                }
-
-                continue;
+        const done = self.processOneMessage(msg, transfer) catch |err| blk: {
+            log.err(.http, "process_messages", .{ .err = err, .req = transfer });
+            transfer.requestFailed(err, true);
+            if (transfer._detached_conn) |c| {
+                // Conn was removed from handles during redirect reconfiguration
+                // but not re-added. Release it directly to avoid double-remove.
+                self.in_use.remove(&c.node);
+                self.active -= 1;
+                self.releaseConn(c);
+                transfer._detached_conn = null;
             }
-        }
-
-        // Handle redirects: reuse the same connection to preserve TCP state.
-        if (msg.err == null) {
-            const status = try msg.conn.getResponseCode();
-            if (status >= 300 and status <= 399) {
-                transfer.handleRedirect() catch |err| {
-                    transfer.requestFailed(err, true);
-                    transfer.deinit();
-                    continue;
-                };
-
-                const conn = transfer._conn.?;
-
-                try self.handles.remove(conn);
-                transfer.reset();
-                try transfer.configureConn(conn);
-                try self.handles.add(conn);
-
-                _ = try self.perform(0);
-
-                continue;
-            }
-        }
-
-        defer transfer.deinit();
-
-        // When the server sends "Connection: close" and closes the TLS
-        // connection without a close_notify alert, BoringSSL reports
-        // RecvError. If we already received valid HTTP headers, this is
-        // a normal end-of-body (the connection closure signals the end
-        // of the response per HTTP/1.1 when there is no Content-Length).
-        // We must check this before endTransfer, which may reset the
-        // easy handle.
-        const is_conn_close_recv = blk: {
-            const err = msg.err orelse break :blk false;
-            if (err != error.RecvError) break :blk false;
-            const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk false;
-            break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
+            break :blk true;
         };
-
-        if (msg.err != null and !is_conn_close_recv) {
-            transfer.requestFailed(transfer._callback_error orelse msg.err.?, true);
-        } else blk: {
-            // make sure the transfer can't be immediately aborted from a callback
-            // since we still need it here.
-            transfer._performing = true;
-            defer transfer._performing = false;
-
-            if (!transfer._header_done_called) {
-                // In case of request w/o data, we need to call the header done
-                // callback now.
-                const proceed = transfer.headerDoneCallback(&msg.conn) catch |err| {
-                    log.err(.http, "header_done_callback", .{ .err = err, .req = transfer });
-                    transfer.requestFailed(err, true);
-                    continue;
-                };
-                if (!proceed) {
-                    transfer.requestFailed(error.Abort, true);
-                    break :blk;
-                }
-            }
-
-            // Replay buffered body through user's data_callback.
-            if (transfer._stream_buffer.items.len > 0) {
-                const body = transfer._stream_buffer.items;
-                transfer.req.data_callback(transfer, body) catch |err| {
-                    log.err(.http, "data_callback", .{ .err = err, .req = transfer });
-                    transfer.requestFailed(err, true);
-                    break :blk;
-                };
-
-                transfer.req.notification.dispatch(.http_response_data, &.{
-                    .data = body,
-                    .transfer = transfer,
-                });
-
-                if (transfer.aborted) {
-                    transfer.requestFailed(error.Abort, true);
-                    break :blk;
-                }
-            }
-
-            // release conn ASAP so that it's available; some done_callbacks
-            // will load more resources.
-            transfer.releaseConn();
-
-            transfer.req.done_callback(transfer.ctx) catch |err| {
-                // transfer isn't valid at this point, don't use it.
-                log.err(.http, "done_callback", .{ .err = err });
-                transfer.requestFailed(err, true);
-                continue;
-            };
-
-            transfer.req.notification.dispatch(.http_request_done, &.{
-                .transfer = transfer,
-            });
+        if (done) {
+            transfer.deinit();
             processed = true;
         }
     }
@@ -973,6 +983,10 @@ pub const Transfer = struct {
     _notified_fail: bool = false,
 
     _conn: ?*http.Connection = null,
+    // Set when conn is temporarily detached from transfer during redirect
+    // reconfiguration. Used by processMessages to release the orphaned conn
+    // if reconfiguration fails.
+    _detached_conn: ?*http.Connection = null,
 
     _auth_challenge: ?http.AuthChallenge = null,
 
@@ -981,11 +995,13 @@ pub const Transfer = struct {
     _tries: u8 = 0,
     _performing: bool = false,
     _redirect_count: u8 = 0,
+    _skip_body: bool = false,
+    _first_data_received: bool = false,
 
-    // Buffered response body. Filled by bufferDataCallback, consumed in processMessages.
+    // Buffered response body. Filled by dataCallback, consumed in processMessages.
     _stream_buffer: std.ArrayList(u8) = .{},
 
-    // Error captured in bufferDataCallback to be reported in processMessages.
+    // Error captured in dataCallback to be reported in processMessages.
     _callback_error: ?anyerror = null,
 
     // for when a Transfer is queued in the client.queue
@@ -1129,6 +1145,8 @@ pub const Transfer = struct {
         self._tries += 1;
         self._stream_buffer.clearRetainingCapacity();
         self._callback_error = null;
+        self._skip_body = false;
+        self._first_data_received = false;
     }
 
     fn buildResponseHeader(self: *Transfer, conn: *const http.Connection) !void {
@@ -1272,14 +1290,6 @@ pub const Transfer = struct {
 
         try transfer.buildResponseHeader(conn);
 
-        if (conn.getResponseHeader("content-type", 0)) |ct| {
-            var hdr = &transfer.response_header.?;
-            const value = ct.value;
-            const len = @min(value.len, ResponseHead.MAX_CONTENT_TYPE_LEN);
-            hdr._content_type_len = len;
-            @memcpy(hdr._content_type[0..len], value[0..len]);
-        }
-
         if (transfer.req.cookie_jar) |jar| {
             var i: usize = 0;
             while (true) {
@@ -1326,11 +1336,32 @@ pub const Transfer = struct {
             return http.writefunc_error;
         };
 
-        // Skip body for responses that will be retried (redirects, auth challenges).
-        const status = conn.getResponseCode() catch return http.writefunc_error;
-        if ((status >= 300 and status <= 399) or status == 401 or status == 407) {
-            return @intCast(chunk_len);
+        if (!transfer._first_data_received) {
+            transfer._first_data_received = true;
+
+            // Skip body for responses that will be retried (redirects, auth challenges).
+            const status = conn.getResponseCode() catch |err| {
+                log.err(.http, "getResponseCode", .{ .err = err, .source = "body callback" });
+                return http.writefunc_error;
+            };
+            if ((status >= 300 and status <= 399) or status == 401 or status == 407) {
+                transfer._skip_body = true;
+                return @intCast(chunk_len);
+            }
+
+            // Pre-size buffer from Content-Length.
+            if (transfer.getContentLength()) |cl| {
+                if (transfer.max_response_size) |max_size| {
+                    if (cl > max_size) {
+                        transfer._callback_error = error.ResponseTooLarge;
+                        return http.writefunc_error;
+                    }
+                }
+                transfer._stream_buffer.ensureTotalCapacity(transfer.arena.allocator(), cl) catch {};
+            }
         }
+
+        if (transfer._skip_body) return @intCast(chunk_len);
 
         transfer.bytes_received += chunk_len;
         if (transfer.max_response_size) |max_size| {
