@@ -1,3 +1,21 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 //! libcrypto utilities we use throughout browser.
 
 const std = @import("std");
@@ -203,6 +221,7 @@ pub extern fn EVP_sha256() *const EVP_MD;
 pub extern fn EVP_sha384() *const EVP_MD;
 pub extern fn EVP_sha512() *const EVP_MD;
 
+pub const EVP_MAX_MD_SIZE = 64;
 pub const EVP_MAX_MD_BLOCK_SIZE = 128;
 
 pub extern fn EVP_MD_size(md: ?*const EVP_MD) usize;
@@ -242,7 +261,29 @@ pub extern fn EVP_PKEY_free(pkey: ?*EVP_PKEY) void;
 
 pub extern fn EVP_DigestSignInit(ctx: ?*EVP_MD_CTX, pctx: ?*?*EVP_PKEY_CTX, typ: ?*const EVP_MD, e: ?*ENGINE, pkey: ?*EVP_PKEY) c_int;
 pub extern fn EVP_DigestSign(ctx: ?*EVP_MD_CTX, sig: [*c]u8, sig_len: *usize, data: [*c]const u8, data_len: usize) c_int;
+pub extern fn EVP_Digest(data: ?*const anyopaque, len: usize, md_out: [*c]u8, md_out_size: [*c]c_uint, @"type": ?*const EVP_MD, impl: ?*ENGINE) c_int;
 pub extern fn EVP_MD_CTX_new() ?*EVP_MD_CTX;
 pub extern fn EVP_MD_CTX_free(ctx: ?*EVP_MD_CTX) void;
 pub const struct_evp_md_ctx_st = opaque {};
 pub const EVP_MD_CTX = struct_evp_md_ctx_st;
+
+/// Returns the desired digest by its name.
+pub fn findDigest(name: []const u8) error{Invalid}!*const EVP_MD {
+    if (std.mem.eql(u8, "SHA-256", name)) {
+        return EVP_sha256();
+    }
+
+    if (std.mem.eql(u8, "SHA-384", name)) {
+        return EVP_sha384();
+    }
+
+    if (std.mem.eql(u8, "SHA-512", name)) {
+        return EVP_sha512();
+    }
+
+    if (std.mem.eql(u8, "SHA-1", name)) {
+        return EVP_sha1();
+    }
+
+    return error.Invalid;
+}

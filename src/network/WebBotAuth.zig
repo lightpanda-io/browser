@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const crypto = @import("../crypto.zig");
+const crypto = @import("../sys/libcrypto.zig");
 
 const Http = @import("../network/http.zig");
 
