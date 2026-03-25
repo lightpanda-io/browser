@@ -192,9 +192,9 @@ fn dumpWPT(page: *Page, writer: *std.Io.Writer) !void {
 
 pub inline fn assert(ok: bool, comptime ctx: []const u8, args: anytype) void {
     if (!ok) {
-        // if (comptime IS_DEBUG) {
-        //     unreachable;
-        // }
+        if (comptime IS_DEBUG) {
+            unreachable;
+        }
         assertionFailure(ctx, args);
     }
 }
