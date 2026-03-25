@@ -39,6 +39,7 @@ pub fn processMessage(cmd: anytype) !void {
         addScriptToEvaluateOnNewDocument,
         createIsolatedWorld,
         navigate,
+        reload,
         stopLoading,
         close,
         captureScreenshot,
@@ -52,6 +53,7 @@ pub fn processMessage(cmd: anytype) !void {
         .addScriptToEvaluateOnNewDocument => return addScriptToEvaluateOnNewDocument(cmd),
         .createIsolatedWorld => return createIsolatedWorld(cmd),
         .navigate => return navigate(cmd),
+        .reload => return doReload(cmd),
         .stopLoading => return cmd.sendResult(null, .{}),
         .close => return close(cmd),
         .captureScreenshot => return captureScreenshot(cmd),
@@ -249,6 +251,40 @@ fn navigate(cmd: anytype) !void {
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
         .kind = .{ .push = null },
+    });
+}
+
+fn doReload(cmd: anytype) !void {
+    const params = try cmd.params(struct {
+        ignoreCache: ?bool = null,
+        scriptToEvaluateOnLoad: ?[]const u8 = null,
+    });
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    if (bc.session_id == null) {
+        return error.SessionIdNotLoaded;
+    }
+
+    const session = bc.session;
+    var page = session.currentPage() orelse return error.PageNotLoaded;
+
+    // Copy URL to stack before replacePage() frees the old page's arena.
+    var url_buf: [8192:0]u8 = undefined;
+    const len = @min(page.url.len, url_buf.len);
+    @memcpy(url_buf[0..len], page.url[0..len]);
+    url_buf[len] = 0;
+    const reload_url: [:0]const u8 = url_buf[0..len :0];
+
+    if (page._load_state != .waiting) {
+        page = try session.replacePage();
+    }
+
+    try page.navigate(reload_url, .{
+        .reason = .address_bar,
+        .cdp_id = cmd.input.id,
+        .kind = .reload,
+        .force = if (params) |p| p.ignoreCache orelse false else false,
     });
 }
 
@@ -783,4 +819,28 @@ test "cdp.page: getLayoutMetrics" {
             .height = height,
         },
     }, .{ .id = 12 });
+}
+
+test "cdp.page: reload" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    {
+        // reload without browser context — should error
+        try ctx.processMessage(.{ .id = 30, .method = "Page.reload" });
+        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 30 });
+    }
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    {
+        // reload with no params — should not error (navigation is async,
+        // so no result is sent synchronously; we just verify no error)
+        try ctx.processMessage(.{ .id = 31, .method = "Page.reload" });
+    }
+
+    {
+        // reload with ignoreCache param
+        try ctx.processMessage(.{ .id = 32, .method = "Page.reload", .params = .{ .ignoreCache = true } });
+    }
 }
