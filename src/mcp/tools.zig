@@ -471,16 +471,10 @@ fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Val
         return server.sendError(id, .InternalError, "Failed to collect forms");
     };
 
-    // Register form and field nodes for backendNodeId references
-    for (forms_data) |*form| {
-        const form_registered = try server.node_registry.register(form.node);
-        form.backendNodeId = form_registered.id;
-
-        for (form.fields) |*field| {
-            const field_registered = try server.node_registry.register(field.node);
-            field.backendNodeId = field_registered.id;
-        }
-    }
+    lp.forms.registerNodes(forms_data, &server.node_registry) catch |err| {
+        log.err(.mcp, "form node registration failed", .{ .err = err });
+        return server.sendError(id, .InternalError, "Failed to register form nodes");
+    };
 
     var aw: std.Io.Writer.Allocating = .init(arena);
     try std.json.Stringify.value(forms_data, .{}, &aw.writer);

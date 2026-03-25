@@ -174,15 +174,7 @@ fn detectForms(cmd: anytype) !void {
         page,
     );
 
-    // Register form and field nodes for backendNodeId references
-    for (forms_data) |*form| {
-        const registered = try bc.node_registry.register(form.node);
-        form.backendNodeId = registered.id;
-        for (form.fields) |*field| {
-            const field_registered = try bc.node_registry.register(field.node);
-            field.backendNodeId = field_registered.id;
-        }
-    }
+    try lp.forms.registerNodes(forms_data, &bc.node_registry);
 
     return cmd.sendResult(.{
         .forms = forms_data,

@@ -141,6 +141,19 @@ pub const FormInfo = struct {
     }
 };
 
+/// Populate backendNodeId on each form and its fields by registering
+/// their nodes in the given registry. Works with both CDP and MCP registries.
+pub fn registerNodes(forms_data: []FormInfo, registry: anytype) !void {
+    for (forms_data) |*form| {
+        const form_registered = try registry.register(form.node);
+        form.backendNodeId = form_registered.id;
+        for (form.fields) |*field| {
+            const field_registered = try registry.register(field.node);
+            field.backendNodeId = field_registered.id;
+        }
+    }
+}
+
 /// Collect all forms and their fields under `root`.
 /// Uses Form.getElements() to include fields outside the <form> that
 /// reference it via the form="id" attribute, matching browser behavior.
