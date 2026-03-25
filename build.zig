@@ -17,24 +17,37 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
-const Build = std.Build;
+const lightpanda_version = std.SemanticVersion.parse(@import("build.zig.zon").version) catch unreachable;
+const min_zig_version = std.SemanticVersion.parse(@import("build.zig.zon").minimum_zig_version) catch unreachable;
+
+const Build = blk: {
+    if (builtin.zig_version.order(min_zig_version) == .lt) {
+        const message = std.fmt.comptimePrint(
+            \\Zig version is too old:
+            \\  current Zig version: {f}
+            \\  minimum Zig version: {f}
+        , .{ builtin.zig_version, min_zig_version });
+        @compileError(message);
+    } else {
+        break :blk std.Build;
+    }
+};
 
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const manifest = Manifest.init(b);
-
-    const git_commit = b.option([]const u8, "git_commit", "Current git commit");
-    const git_version = b.option([]const u8, "git_version", "Current git version (from tag)");
     const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
 
+    const version = resolveVersion(b);
+    var stdout = std.fs.File.stdout().writer(&.{});
+    try stdout.interface.print("Lightpanda {f}\n", .{version});
+
     var opts = b.addOptions();
-    opts.addOption([]const u8, "version", manifest.version);
-    opts.addOption([]const u8, "git_commit", git_commit orelse "dev");
-    opts.addOption(?[]const u8, "git_version", git_version orelse null);
+    opts.addOption([]const u8, "version", b.fmt("{f}", .{version}));
     opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
 
     const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer") orelse false;
@@ -96,6 +109,11 @@ pub fn build(b: *Build) !void {
         }
         const run_step = b.step("run", "Run the app");
         run_step.dependOn(&run_cmd.step);
+
+        const version_info_step = b.step("version", "Print the resolved version information");
+        const version_info_run = b.addRunArtifact(exe);
+        version_info_run.addArg("version");
+        version_info_step.dependOn(&version_info_run.step);
     }
 
     {
@@ -701,27 +719,41 @@ fn buildCurl(
     return lib;
 }
 
-const Manifest = struct {
-    version: []const u8,
-    minimum_zig_version: []const u8,
-
-    fn init(b: *std.Build) Manifest {
-        const input = @embedFile("build.zig.zon");
-
-        var diagnostics: std.zon.parse.Diagnostics = .{};
-        defer diagnostics.deinit(b.allocator);
-
-        return std.zon.parse.fromSlice(Manifest, b.allocator, input, &diagnostics, .{
-            .free_on_error = true,
-            .ignore_unknown_fields = true,
-        }) catch |err| {
-            switch (err) {
-                error.OutOfMemory => @panic("OOM"),
-                error.ParseZon => {
-                    std.debug.print("Parse diagnostics:\n{f}\n", .{diagnostics});
-                    std.process.exit(1);
-                },
-            }
+/// Returns `MAJOR.MINOR.PATCH-dev` when `git describe` fails.
+fn resolveVersion(b: *std.Build) std.SemanticVersion {
+    const version_string = b.option([]const u8, "version_string", "Override the version of this build");
+    if (version_string) |semver_string| {
+        return std.SemanticVersion.parse(semver_string) catch |err| {
+            std.debug.panic("Expected -Dversion-string={s} to be a semantic version: {}", .{ semver_string, err });
         };
     }
-};
+
+    // If it's a stable release (no pre or build metadata in build.zig.zon), use it as is
+    if (lightpanda_version.pre == null and lightpanda_version.build == null) return lightpanda_version;
+
+    // For dev/nightly versions, calculate the commit count and hash
+    const git_hash_raw = runGit(b, &.{ "rev-parse", "--short", "HEAD" }) catch return lightpanda_version;
+    const commit_hash = std.mem.trim(u8, git_hash_raw, " \n\r");
+
+    const git_count_raw = runGit(b, &.{ "rev-list", "--count", "HEAD" }) catch return lightpanda_version;
+    const commit_count = std.mem.trim(u8, git_count_raw, " \n\r");
+
+    return .{
+        .major = lightpanda_version.major,
+        .minor = lightpanda_version.minor,
+        .patch = lightpanda_version.patch,
+        .pre = b.fmt("{s}.{s}", .{ lightpanda_version.pre.?, commit_count }),
+        .build = commit_hash,
+    };
+}
+
+/// Helper function to run git commands and return stdout
+fn runGit(b: *std.Build, args: []const []const u8) ![]const u8 {
+    var code: u8 = undefined;
+    const dir = b.pathFromRoot(".");
+    var command: std.ArrayList([]const u8) = .empty;
+    defer command.deinit(b.allocator);
+    try command.appendSlice(b.allocator, &.{ "git", "-C", dir });
+    try command.appendSlice(b.allocator, args);
+    return b.runAllowFail(command.items, &code, .Ignore);
+}

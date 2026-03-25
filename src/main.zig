@@ -59,11 +59,8 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             return std.process.cleanExit();
         },
         .version => {
-            if (lp.build_config.git_version) |version| {
-                std.debug.print("{s} ({s})\n", .{ version, lp.build_config.git_commit });
-            } else {
-                std.debug.print("{s}\n", .{lp.build_config.git_commit});
-            }
+            var stdout = std.fs.File.stdout().writer(&.{});
+            try stdout.interface.print("{s}\n", .{lp.build_config.version});
             return std.process.cleanExit();
         },
         else => {},
