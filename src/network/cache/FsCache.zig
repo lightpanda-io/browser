@@ -137,6 +137,8 @@ pub fn put(self: *FsCache, key: []const u8, meta: CachedMetadata, body: []const 
     const body_p = bodyPath(&hashed_key);
     const body_tmp_p = bodyTmpPath(&hashed_key);
 
+    var writer_buf: [512]u8 = undefined;
+
     {
         const meta_file = try self.dir.createFile(&meta_tmp_p, .{});
         errdefer {
@@ -144,8 +146,7 @@ pub fn put(self: *FsCache, key: []const u8, meta: CachedMetadata, body: []const 
             self.dir.deleteFile(&meta_tmp_p) catch {};
         }
 
-        var meta_file_writer_buf: [512]u8 = undefined;
-        var meta_file_writer = meta_file.writer(&meta_file_writer_buf);
+        var meta_file_writer = meta_file.writer(&writer_buf);
         const meta_file_writer_iface = &meta_file_writer.interface;
         try std.json.Stringify.value(
             CacheMetadataFile{ .version = CACHE_VERSION, .metadata = meta },
@@ -164,7 +165,11 @@ pub fn put(self: *FsCache, key: []const u8, meta: CachedMetadata, body: []const 
             body_file.close();
             self.dir.deleteFile(&body_tmp_p) catch {};
         }
-        try body_file.writeAll(body);
+
+        var body_file_writer = body_file.writer(&writer_buf);
+        const body_file_writer_iface = &body_file_writer.interface;
+        try body_file_writer_iface.writeAll(body);
+        try body_file_writer_iface.flush();
         body_file.close();
     }
     errdefer self.dir.deleteFile(&body_tmp_p) catch {};
