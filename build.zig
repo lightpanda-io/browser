@@ -728,8 +728,17 @@ fn resolveVersion(b: *std.Build) std.SemanticVersion {
         };
     }
 
+    const pre_version = b.option([]const u8, "pre_version", "Override the pre version of this build");
+    const pre = blk: {
+        if (pre_version) |pre| {
+            break :blk pre;
+        }
+
+        break :blk lightpanda_version.pre;
+    };
+
     // If it's a stable release (no pre or build metadata in build.zig.zon), use it as is
-    if (lightpanda_version.pre == null and lightpanda_version.build == null) return lightpanda_version;
+    if (pre == null and lightpanda_version.build == null) return lightpanda_version;
 
     // For dev/nightly versions, calculate the commit count and hash
     const git_hash_raw = runGit(b, &.{ "rev-parse", "--short", "HEAD" }) catch return lightpanda_version;
@@ -742,7 +751,7 @@ fn resolveVersion(b: *std.Build) std.SemanticVersion {
         .major = lightpanda_version.major,
         .minor = lightpanda_version.minor,
         .patch = lightpanda_version.patch,
-        .pre = b.fmt("{s}.{s}", .{ lightpanda_version.pre.?, commit_count }),
+        .pre = b.fmt("{s}.{s}", .{ pre.?, commit_count }),
         .build = commit_hash,
     };
 }
