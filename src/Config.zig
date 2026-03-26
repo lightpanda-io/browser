@@ -247,7 +247,7 @@ pub const Fetch = struct {
     with_frames: bool = false,
     strip: dump.Opts.Strip = .{},
     wait_ms: u32 = 5000,
-    wait_until: WaitUntil = .load,
+    wait_until: WaitUntil = .done,
 };
 
 pub const Common = struct {
@@ -665,7 +665,7 @@ fn parseFetchArgs(
     var common: Common = .{};
     var strip: dump.Opts.Strip = .{};
     var wait_ms: u32 = 5000;
-    var wait_until: WaitUntil = .load;
+    var wait_until: WaitUntil = .done;
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--wait-ms", opt) or std.mem.eql(u8, "--wait_ms", opt)) {
