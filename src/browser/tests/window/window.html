@@ -262,6 +262,31 @@
   }
 </script>
 
+<script id=cached_getter_wrong_this>
+  // Test that extracting a cached property getter and calling it with wrong `this`
+  // doesn't crash (V8 internal field out of bounds). V8's Signature validation
+  // should throw "Illegal invocation" for wrong receiver types.
+  const documentGetter = Object.getOwnPropertyDescriptor(Window.prototype, 'document').get;
+
+  // Verify we get an error with wrong this values
+  let errorCount = 0;
+  const testValues = [{}, null, undefined, 42, 'string', [], () => {}];
+  for (const val of testValues) {
+    try {
+      documentGetter.call(val);
+    } catch (e) {
+      if (e.message.includes('Illegal invocation')) {
+        errorCount++;
+      }
+    }
+  }
+  // At least some should throw (null/undefined/primitives get coerced in sloppy mode)
+  testing.expectEqual(true, errorCount > 0);
+
+  // Calling with correct this should still work
+  testing.expectEqual(document, documentGetter.call(window));
+</script>
+
 <script id=unhandled_rejection>
   {
     let unhandledCalled = 0;
