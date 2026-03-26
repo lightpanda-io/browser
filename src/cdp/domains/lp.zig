@@ -135,17 +135,10 @@ fn getInteractiveElements(cmd: anytype) !void {
         page.document.asNode();
 
     const elements = try interactive.collectInteractiveElements(root, cmd.arena, page);
-
-    // Register nodes so nodeIds are valid for subsequent CDP calls.
-    var node_ids: std.ArrayList(Node.Id) = try .initCapacity(cmd.arena, elements.len);
-    for (elements) |el| {
-        const registered = try bc.node_registry.register(el.node);
-        node_ids.appendAssumeCapacity(registered.id);
-    }
+    try interactive.registerNodes(elements, &bc.node_registry);
 
     return cmd.sendResult(.{
         .elements = elements,
-        .nodeIds = node_ids.items,
     }, .{});
 }
 
@@ -308,7 +301,6 @@ test "cdp.lp: getInteractiveElements" {
 
     const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expect(result.get("elements") != null);
-    try testing.expect(result.get("nodeIds") != null);
 }
 
 test "cdp.lp: getStructuredData" {
