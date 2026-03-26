@@ -23,15 +23,22 @@ const CachedMetadata = Cache.CachedMetadata;
 const CachedResponse = Cache.CachedResponse;
 
 const CACHE_VERSION: usize = 1;
+const LOCK_STRIPES = 16;
 
 pub const FsCache = @This();
 
 dir: std.fs.Dir,
+locks: [LOCK_STRIPES]std.Thread.Mutex = .{std.Thread.Mutex{}} ** LOCK_STRIPES,
 
 const CacheMetadataFile = struct {
     version: usize,
     metadata: CachedMetadata,
 };
+
+fn getLockPtr(self: *FsCache, key: *const [HASHED_KEY_LEN]u8) *std.Thread.Mutex {
+    const lock_idx: usize = @truncate(std.hash.Wyhash.hash(0, key) % LOCK_STRIPES);
+    return &self.locks[lock_idx];
+}
 
 const HASHED_KEY_LEN = 64;
 const HASHED_PATH_LEN = HASHED_KEY_LEN + 5;
@@ -94,6 +101,10 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, key: []const u8) ?Cache.Cac
     const meta_p = metaPath(&hashed_key);
     const body_p = bodyPath(&hashed_key);
 
+    const lock = self.getLockPtr(&hashed_key);
+    lock.lock();
+    defer lock.unlock();
+
     const meta_file = self.dir.openFile(&meta_p, .{ .mode = .read_only }) catch return null;
     defer meta_file.close();
 
@@ -136,8 +147,11 @@ pub fn put(self: *FsCache, key: []const u8, meta: CachedMetadata, body: []const 
     const meta_tmp_p = metaTmpPath(&hashed_key);
     const body_p = bodyPath(&hashed_key);
     const body_tmp_p = bodyTmpPath(&hashed_key);
-
     var writer_buf: [512]u8 = undefined;
+
+    const lock = self.getLockPtr(&hashed_key);
+    lock.lock();
+    defer lock.unlock();
 
     {
         const meta_file = try self.dir.createFile(&meta_tmp_p, .{});
