@@ -125,6 +125,19 @@
 </script>
 
 
+<script id="CanvasRenderingContext2D#canvas">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+  testing.expectEqual(ctx.canvas, element);
+  // Setting dimensions via ctx.canvas should update the element.
+  ctx.canvas.width = 40;
+  ctx.canvas.height = 25;
+  testing.expectEqual(element.width, 40);
+  testing.expectEqual(element.height, 25);
+}
+</script>
+
 <script id="getter">
 {
   const element = document.createElement("canvas");

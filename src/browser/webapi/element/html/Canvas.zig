@@ -67,9 +67,9 @@ const DrawingContext = union(enum) {
     webgl: *WebGLRenderingContext,
 };
 
-pub fn getContext(_: *Canvas, context_type: []const u8, page: *Page) !?DrawingContext {
+pub fn getContext(self: *Canvas, context_type: []const u8, page: *Page) !?DrawingContext {
     if (std.mem.eql(u8, context_type, "2d")) {
-        const ctx = try page._factory.create(CanvasRenderingContext2D{});
+        const ctx = try page._factory.create(CanvasRenderingContext2D{ ._canvas = self });
         return .{ .@"2d" = ctx };
     }
 
