@@ -28,15 +28,15 @@ kind: union(enum) {
     fs: FsCache,
 },
 
-pub fn get(self: *Cache, arena: std.mem.Allocator, key: []const u8) ?CachedResponse {
+pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheRequest) ?CachedResponse {
     return switch (self.kind) {
-        inline else => |*c| c.get(arena, key),
+        inline else => |*c| c.get(arena, req),
     };
 }
 
-pub fn put(self: *Cache, key: []const u8, metadata: CachedMetadata, body: []const u8) !void {
+pub fn put(self: *Cache, req: CacheRequest, metadata: CachedMetadata, body: []const u8) !void {
     return switch (self.kind) {
-        inline else => |*c| c.put(key, metadata, body),
+        inline else => |*c| c.put(req, metadata, body),
     };
 }
 
@@ -187,6 +187,10 @@ pub const CachedMetadata = struct {
             .headers = headers,
         };
     }
+};
+
+pub const CacheRequest = struct {
+    url: []const u8,
 };
 
 pub const CachedData = union(enum) {
