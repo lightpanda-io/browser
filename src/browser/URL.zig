@@ -357,25 +357,38 @@ pub fn isHTTPS(raw: [:0]const u8) bool {
 
 pub fn getHostname(raw: [:0]const u8) []const u8 {
     const host = getHost(raw);
-    const pos = std.mem.lastIndexOfScalar(u8, host, ':') orelse return host;
-    return host[0..pos];
+    const port_sep = findPortSeparator(host) orelse return host;
+    return host[0..port_sep];
 }
 
 pub fn getPort(raw: [:0]const u8) []const u8 {
     const host = getHost(raw);
-    const pos = std.mem.lastIndexOfScalar(u8, host, ':') orelse return "";
+    const port_sep = findPortSeparator(host) orelse return "";
+    return host[port_sep + 1 ..];
+}
 
-    if (pos + 1 >= host.len) {
-        return "";
+// Finds the colon separating host from port, handling IPv6 bracket notation.
+// For IPv6 like "[::1]:8080", returns position of ":" after "]".
+// For IPv6 like "[::1]" (no port), returns null.
+// For regular hosts, returns position of last ":" if followed by digits.
+fn findPortSeparator(host: []const u8) ?usize {
+    if (host.len > 0 and host[0] == '[') {
+        // IPv6: find closing bracket, port separator must be after it
+        const bracket_end = std.mem.indexOfScalar(u8, host, ']') orelse return null;
+        if (bracket_end + 1 < host.len and host[bracket_end + 1] == ':') {
+            return bracket_end + 1;
+        }
+        return null;
     }
+
+    // Regular host: find last colon and verify it's followed by digits
+    const pos = std.mem.lastIndexOfScalar(u8, host, ':') orelse return null;
+    if (pos + 1 >= host.len) return null;
 
     for (host[pos + 1 ..]) |c| {
-        if (c < '0' or c > '9') {
-            return "";
-        }
+        if (c < '0' or c > '9') return null;
     }
-
-    return host[pos + 1 ..];
+    return pos;
 }
 
 pub fn getSearch(raw: [:0]const u8) []const u8 {
@@ -403,21 +416,12 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
         return null;
     }
 
-    var authority_start = scheme_end + 3;
-    const has_user_info = if (std.mem.indexOf(u8, raw[authority_start..], "@")) |pos| blk: {
-        authority_start += pos + 1;
-        break :blk true;
-    } else false;
-
-    // Find end of authority (start of path/query/fragment or end of string)
-    const authority_end_relative = std.mem.indexOfAny(u8, raw[authority_start..], "/?#");
-    const authority_end = if (authority_end_relative) |end|
-        authority_start + end
-    else
-        raw.len;
+    const auth = parseAuthority(raw) orelse return null;
+    const has_user_info = auth.has_user_info;
+    const authority_end = auth.host_end;
 
     // Check for port in the host:port section
-    const host_part = raw[authority_start..authority_end];
+    const host_part = auth.getHost(raw);
     if (std.mem.lastIndexOfScalar(u8, host_part, ':')) |colon_pos_in_host| {
         const port = host_part[colon_pos_in_host + 1 ..];
 
@@ -458,31 +462,18 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
 }
 
 fn getUserInfo(raw: [:0]const u8) ?[]const u8 {
-    const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return null;
+    const auth = parseAuthority(raw) orelse return null;
+    if (!auth.has_user_info) return null;
+
+    // User info is from authority_start to host_start - 1 (excluding the @)
+    const scheme_end = std.mem.indexOf(u8, raw, "://").?;
     const authority_start = scheme_end + 3;
-
-    const pos = std.mem.indexOfScalar(u8, raw[authority_start..], '@') orelse return null;
-    const path_start = std.mem.indexOfScalarPos(u8, raw, authority_start, '/') orelse raw.len;
-
-    const full_pos = authority_start + pos;
-    if (full_pos < path_start) {
-        return raw[authority_start..full_pos];
-    }
-
-    return null;
+    return raw[authority_start .. auth.host_start - 1];
 }
 
 pub fn getHost(raw: [:0]const u8) []const u8 {
-    const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return "";
-
-    var authority_start = scheme_end + 3;
-    if (std.mem.indexOf(u8, raw[authority_start..], "@")) |pos| {
-        authority_start += pos + 1;
-    }
-
-    const authority = raw[authority_start..];
-    const path_start = std.mem.indexOfAny(u8, authority, "/?#") orelse return authority;
-    return authority[0..path_start];
+    const auth = parseAuthority(raw) orelse return "";
+    return auth.getHost(raw);
 }
 
 // Returns true if these two URLs point to the same document.
@@ -759,6 +750,47 @@ pub fn unescape(arena: Allocator, input: []const u8) ![]const u8 {
     }
 
     return result.items;
+}
+
+const AuthorityInfo = struct {
+    host_start: usize,
+    host_end: usize,
+    has_user_info: bool,
+
+    fn getHost(self: AuthorityInfo, raw: []const u8) []const u8 {
+        return raw[self.host_start..self.host_end];
+    }
+};
+
+// Parses the authority component of a URL, correctly handling userinfo.
+// Returns null if the URL doesn't have a valid scheme (no "://").
+// SECURITY: Only looks for @ within the authority portion (before /?#)
+// to prevent path-based @ injection attacks.
+fn parseAuthority(raw: []const u8) ?AuthorityInfo {
+    const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return null;
+    const authority_start = scheme_end + 3;
+
+    // Find end of authority FIRST (start of path/query/fragment or end of string)
+    const authority_end = if (std.mem.indexOfAny(u8, raw[authority_start..], "/?#")) |end|
+        authority_start + end
+    else
+        raw.len;
+
+    // Only look for @ within the authority portion, not in path/query/fragment
+    const authority_portion = raw[authority_start..authority_end];
+    if (std.mem.indexOf(u8, authority_portion, "@")) |pos| {
+        return .{
+            .host_start = authority_start + pos + 1,
+            .host_end = authority_end,
+            .has_user_info = true,
+        };
+    }
+
+    return .{
+        .host_start = authority_start,
+        .host_end = authority_end,
+        .has_user_info = false,
+    };
 }
 
 const testing = @import("../testing.zig");
@@ -1429,6 +1461,42 @@ test "URL: getHost" {
     try testing.expectEqualSlices(u8, "example.com", getHost("https://user:pass@example.com/page"));
     try testing.expectEqualSlices(u8, "example.com:8080", getHost("https://user:pass@example.com:8080/page"));
     try testing.expectEqualSlices(u8, "", getHost("not-a-url"));
+
+    // SECURITY: @ in path must NOT be treated as userinfo separator
+    try testing.expectEqualSlices(u8, "evil.example.com", getHost("http://evil.example.com/@victim.example.com/"));
+    try testing.expectEqualSlices(u8, "evil.example.com", getHost("https://evil.example.com/path/@victim.example.com"));
+
+    // IPv6 addresses
+    try testing.expectEqualSlices(u8, "[::1]:8080", getHost("http://[::1]:8080/path"));
+    try testing.expectEqualSlices(u8, "[::1]", getHost("http://[::1]/path"));
+    try testing.expectEqualSlices(u8, "[2001:db8::1]", getHost("https://[2001:db8::1]/"));
+}
+
+test "URL: getHostname" {
+    // Regular hosts
+    try testing.expectEqualSlices(u8, "example.com", getHostname("https://example.com:8080/path"));
+    try testing.expectEqualSlices(u8, "example.com", getHostname("https://example.com/path"));
+
+    // IPv6 with port
+    try testing.expectEqualSlices(u8, "[::1]", getHostname("http://[::1]:8080/path"));
+
+    // IPv6 without port - must return full bracket notation
+    try testing.expectEqualSlices(u8, "[::1]", getHostname("http://[::1]/path"));
+    try testing.expectEqualSlices(u8, "[2001:db8::1]", getHostname("https://[2001:db8::1]/"));
+}
+
+test "URL: getPort" {
+    // Regular hosts
+    try testing.expectEqualSlices(u8, "8080", getPort("https://example.com:8080/path"));
+    try testing.expectEqualSlices(u8, "", getPort("https://example.com/path"));
+
+    // IPv6 with port
+    try testing.expectEqualSlices(u8, "8080", getPort("http://[::1]:8080/path"));
+    try testing.expectEqualSlices(u8, "3000", getPort("http://[2001:db8::1]:3000/"));
+
+    // IPv6 without port - colons inside brackets must not be treated as port separator
+    try testing.expectEqualSlices(u8, "", getPort("http://[::1]/path"));
+    try testing.expectEqualSlices(u8, "", getPort("https://[2001:db8::1]/"));
 }
 
 test "URL: setPathname percent-encodes" {
@@ -1448,4 +1516,57 @@ test "URL: setPathname percent-encodes" {
     // Query and hash must be preserved
     const result3 = try setPathname("https://example.com/path?a=b#hash", "/new path", allocator);
     try testing.expectEqualSlices(u8, "https://example.com/new%20path?a=b#hash", result3);
+}
+
+test "URL: getOrigin" {
+    defer testing.reset();
+
+    const Case = struct {
+        url: [:0]const u8,
+        expected: ?[]const u8,
+    };
+
+    const cases = [_]Case{
+        // Basic HTTP/HTTPS origins
+        .{ .url = "http://example.com/path", .expected = "http://example.com" },
+        .{ .url = "https://example.com/path", .expected = "https://example.com" },
+        .{ .url = "https://example.com:8080/path", .expected = "https://example.com:8080" },
+
+        // Default ports should be stripped
+        .{ .url = "http://example.com:80/path", .expected = "http://example.com" },
+        .{ .url = "https://example.com:443/path", .expected = "https://example.com" },
+
+        // User info should be stripped from origin
+        .{ .url = "http://user:pass@example.com/path", .expected = "http://example.com" },
+        .{ .url = "https://user@example.com:8080/path", .expected = "https://example.com:8080" },
+
+        // Non-HTTP schemes return null
+        .{ .url = "ftp://example.com/path", .expected = null },
+        .{ .url = "file:///path/to/file", .expected = null },
+        .{ .url = "about:blank", .expected = null },
+
+        // Query and fragment should not affect origin
+        .{ .url = "https://example.com?query=1", .expected = "https://example.com" },
+        .{ .url = "https://example.com#fragment", .expected = "https://example.com" },
+        .{ .url = "https://example.com/path?q=1#frag", .expected = "https://example.com" },
+
+        // SECURITY: @ in path must NOT be treated as userinfo separator
+        // This would be a Same-Origin Policy bypass if mishandled
+        .{ .url = "http://evil.example.com/@victim.example.com/", .expected = "http://evil.example.com" },
+        .{ .url = "https://evil.example.com/path/@victim.example.com/steal", .expected = "https://evil.example.com" },
+        .{ .url = "http://evil.example.com/@victim.example.com:443/", .expected = "http://evil.example.com" },
+
+        // @ in query/fragment must also not affect origin
+        .{ .url = "https://example.com/path?user=foo@bar.com", .expected = "https://example.com" },
+        .{ .url = "https://example.com/path#user@host", .expected = "https://example.com" },
+    };
+
+    for (cases) |case| {
+        const result = try getOrigin(testing.arena_allocator, case.url);
+        if (case.expected) |expected| {
+            try testing.expectString(expected, result.?);
+        } else {
+            try testing.expectEqual(null, result);
+        }
+    }
 }
