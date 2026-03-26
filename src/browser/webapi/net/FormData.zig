@@ -35,10 +35,22 @@ _arena: Allocator,
 _list: KeyValueList,
 
 pub fn init(form: ?*Form, submitter: ?*Element, page: *Page) !*FormData {
-    return page._factory.create(FormData{
+    const form_data = try page._factory.create(FormData{
         ._arena = page.arena,
         ._list = try collectForm(page.arena, form, submitter, page),
     });
+
+    // Dispatch `formdata` event if form provided.
+    if (form) |_form| {
+        const form_data_event = try (@import("../event/FormDataEvent.zig")).initTrusted(
+            comptime .wrap("formdata"),
+            .{ .bubbles = true, .cancelable = false, .formData = form_data },
+            page,
+        );
+        try page._event_manager.dispatch(_form.asNode().asEventTarget(), form_data_event.asEvent());
+    }
+
+    return form_data;
 }
 
 pub fn get(self: *const FormData, name: []const u8) ?[]const u8 {
