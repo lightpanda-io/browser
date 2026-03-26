@@ -46,14 +46,15 @@ pub fn cache(self: *FsCache) Cache {
     return Cache.init(self);
 }
 
-const HASHED_KEY_LEN = 16;
+const HASHED_KEY_LEN = 64;
 const HASHED_PATH_LEN = HASHED_KEY_LEN + 5;
 const HASHED_TMP_PATH_LEN = HASHED_PATH_LEN + 4;
 
 fn hashKey(key: []const u8) [HASHED_KEY_LEN]u8 {
-    const h = std.hash.Wyhash.hash(0, key);
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(key, &digest, .{});
     var hex: [HASHED_KEY_LEN]u8 = undefined;
-    _ = std.fmt.bufPrint(&hex, "{x:0>16}", .{h}) catch unreachable;
+    _ = std.fmt.bufPrint(&hex, "{s}", .{std.fmt.bytesToHex(&digest, .lower)}) catch unreachable;
     return hex;
 }
 
