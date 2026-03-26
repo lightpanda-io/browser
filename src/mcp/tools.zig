@@ -827,12 +827,3 @@ fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {
     try runner.wait(.{ .ms = 2000 });
     return server;
 }
-    errdefer server.deinit();
-
-    const page = try server.session.createPage();
-    try page.navigate(url, .{});
-
-    var runner = try server.session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
-    return server;
-}
