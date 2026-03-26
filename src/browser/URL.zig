@@ -404,10 +404,6 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
     }
 
     var authority_start = scheme_end + 3;
-    const has_user_info = if (std.mem.indexOf(u8, raw[authority_start..], "@")) |pos| blk: {
-        authority_start += pos + 1;
-        break :blk true;
-    } else false;
 
     // Find end of authority (start of path/query/fragment or end of string)
     const authority_end_relative = std.mem.indexOfAny(u8, raw[authority_start..], "/?#");
@@ -415,6 +411,12 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
         authority_start + end
     else
         raw.len;
+
+    // We mustn't search the `@` after the first path separator.
+    const has_user_info = if (std.mem.indexOf(u8, raw[authority_start..authority_end], "@")) |pos| blk: {
+        authority_start += pos + 1;
+        break :blk true;
+    } else false;
 
     // Check for port in the host:port section
     const host_part = raw[authority_start..authority_end];
@@ -461,8 +463,15 @@ fn getUserInfo(raw: [:0]const u8) ?[]const u8 {
     const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return null;
     const authority_start = scheme_end + 3;
 
-    const pos = std.mem.indexOfScalar(u8, raw[authority_start..], '@') orelse return null;
-    const path_start = std.mem.indexOfScalarPos(u8, raw, authority_start, '/') orelse raw.len;
+    // We mustn't search the `@` after the first path separator.
+    const path_start = blk: {
+        if (std.mem.indexOfAny(u8, raw[authority_start..], "/?#")) |idx| {
+            break :blk authority_start + idx;
+        }
+        break :blk raw.len;
+    };
+
+    const pos = std.mem.indexOfScalar(u8, raw[authority_start..path_start], '@') orelse return null;
 
     const full_pos = authority_start + pos;
     if (full_pos < path_start) {
@@ -476,13 +485,20 @@ pub fn getHost(raw: [:0]const u8) []const u8 {
     const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return "";
 
     var authority_start = scheme_end + 3;
-    if (std.mem.indexOf(u8, raw[authority_start..], "@")) |pos| {
+
+    // We mustn't search the `@` after the first path separator.
+    const path_start = blk: {
+        if (std.mem.indexOfAny(u8, raw[authority_start..], "/?#")) |idx| {
+            break :blk authority_start + idx;
+        }
+        break :blk raw.len;
+    };
+
+    if (std.mem.indexOf(u8, raw[authority_start..path_start], "@")) |pos| {
         authority_start += pos + 1;
     }
 
-    const authority = raw[authority_start..];
-    const path_start = std.mem.indexOfAny(u8, authority, "/?#") orelse return authority;
-    return authority[0..path_start];
+    return raw[authority_start..path_start];
 }
 
 // Returns true if these two URLs point to the same document.
@@ -1448,4 +1464,37 @@ test "URL: setPathname percent-encodes" {
     // Query and hash must be preserved
     const result3 = try setPathname("https://example.com/path?a=b#hash", "/new path", allocator);
     try testing.expectEqualSlices(u8, "https://example.com/new%20path?a=b#hash", result3);
+}
+
+test "URL: getOrigin" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    try testing.expectEqualSlices(u8, "http://example.com:8080", try getOrigin(allocator, "http://example.com:8080/path") orelse unreachable);
+    try testing.expectEqualSlices(u8, "https://example.com:8080", try getOrigin(allocator, "https://example.com:8080/path") orelse unreachable);
+    try testing.expectEqualSlices(u8, "https://example.com", try getOrigin(allocator, "https://example.com/path") orelse unreachable);
+    try testing.expectEqualSlices(u8, "https://example.com", try getOrigin(allocator, "https://example.com:443/") orelse unreachable);
+    try testing.expectEqualSlices(u8, "https://example.com", try getOrigin(allocator, "https://user:pass@example.com/page") orelse unreachable);
+    try testing.expectEqualSlices(u8, "https://example.com:8080", try getOrigin(allocator, "https://user:pass@example.com:8080/page") orelse unreachable);
+    try testing.expectEqual(null, try getOrigin(allocator, "not-a-url"));
+}
+
+test "URL: SOP bypass" {
+    // SOP Bypass
+    try testing.expectEqualSlices(u8, "attacker.com", getHost("http://attacker.com/@bank.com/"));
+    try testing.expectEqualSlices(u8, "attacker.com", getHost("https://attacker.com/@bank.com/"));
+    try testing.expectEqualSlices(u8, "attacker.com", getHost("http://attacker.com?@bank.com/"));
+    try testing.expectEqualSlices(u8, "attacker.com", getHost("http://attacker.com#@bank.com/"));
+    try testing.expectEqualSlices(u8, "attacker.com", getHostname("http://attacker.com/@bank.com/"));
+    try testing.expectEqualSlices(u8, "attacker.com", getHostname("https://attacker.com/@bank.com/"));
+    try testing.expectEqualSlices(u8, "attacker.com", getHostname("http://attacker.com?@bank.com/"));
+    try testing.expectEqualSlices(u8, "attacker.com", getHostname("http://attacker.com#@bank.com/"));
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    try testing.expectEqualSlices(u8, "http://attacker.com", try getOrigin(allocator, "http://attacker.com/@bank.com/") orelse unreachable);
+    try testing.expectEqualSlices(u8, "https://attacker.com", try getOrigin(allocator, "https://attacker.com/@bank.com/") orelse unreachable);
+    try testing.expectEqualSlices(u8, "http://attacker.com", try getOrigin(allocator, "http://attacker.com?bank.com/") orelse unreachable);
+    try testing.expectEqualSlices(u8, "http://attacker.com", try getOrigin(allocator, "http://attacker.com#bank.com/") orelse unreachable);
 }

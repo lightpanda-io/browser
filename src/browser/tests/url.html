@@ -871,3 +871,33 @@
     testing.expectEqual('', url.search);
   }
 </script>
+
+<script id="SOP Bypass">
+  {
+    const url = new URL('http://example.com/@bank.com');
+    testing.expectEqual('http:', url.protocol);
+    testing.expectEqual('example.com', url.hostname);
+    testing.expectEqual('', url.port);
+    testing.expectEqual('http://example.com', url.origin);
+    testing.expectEqual('', url.username);
+    testing.expectEqual('', url.password);
+  }
+  {
+    const url = new URL('http://example.com?@bank.com');
+    testing.expectEqual('http:', url.protocol);
+    testing.expectEqual('example.com', url.hostname);
+    testing.expectEqual('', url.port);
+    testing.expectEqual('http://example.com', url.origin);
+    testing.expectEqual('', url.username);
+    testing.expectEqual('', url.password);
+  }
+  {
+    const url = new URL('http://example.com#@bank.com');
+    testing.expectEqual('http:', url.protocol);
+    testing.expectEqual('example.com', url.hostname);
+    testing.expectEqual('', url.port);
+    testing.expectEqual('http://example.com', url.origin);
+    testing.expectEqual('', url.username);
+    testing.expectEqual('', url.password);
+  }
+</script>
