@@ -269,12 +269,8 @@ fn doReload(cmd: anytype) !void {
     const session = bc.session;
     var page = session.currentPage() orelse return error.PageNotLoaded;
 
-    // Copy URL to stack before replacePage() frees the old page's arena.
-    var url_buf: [8192:0]u8 = undefined;
-    const len = @min(page.url.len, url_buf.len);
-    @memcpy(url_buf[0..len], page.url[0..len]);
-    url_buf[len] = 0;
-    const reload_url: [:0]const u8 = url_buf[0..len :0];
+    // Dupe URL before replacePage() frees the old page's arena.
+    const reload_url = try cmd.arena.dupeZ(u8, page.url);
 
     if (page._load_state != .waiting) {
         page = try session.replacePage();
@@ -822,7 +818,7 @@ test "cdp.page: getLayoutMetrics" {
 }
 
 test "cdp.page: reload" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     {
