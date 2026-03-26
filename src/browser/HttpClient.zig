@@ -323,6 +323,10 @@ fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
 
     const proceed = try req.header_callback(response);
     if (!proceed) {
+        switch (cached.data) {
+            .buffer => |_| {},
+            .file => |file| file.close(),
+        }
         req.error_callback(req.ctx, error.Abort);
         return;
     }
@@ -334,6 +338,7 @@ fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
             }
         },
         .file => |file| {
+            defer file.close();
             var buf: [1024]u8 = undefined;
             var file_reader = file.reader(&buf);
 
