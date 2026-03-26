@@ -179,6 +179,10 @@ const GotoParams = struct {
     url: [:0]const u8,
 };
 
+const UrlParams = struct {
+    url: ?[:0]const u8 = null,
+};
+
 const EvaluateParams = struct {
     script: [:0]const u8,
     url: ?[:0]const u8 = null,
@@ -324,7 +328,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 }
 
 fn handleGoto(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseArguments(GotoParams, arena, arguments, server, id, "goto");
+    const args = try parseArgs(GotoParams, arena, arguments, server, id, "goto");
     try performGoto(server, args.url, id);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = "Navigated successfully." }};
@@ -332,19 +336,8 @@ fn handleGoto(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
 }
 
 fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const MarkdownParams = struct {
-        url: ?[:0]const u8 = null,
-    };
-    if (arguments) |args_raw| {
-        if (std.json.parseFromValueLeaky(MarkdownParams, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
-            if (args.url) |u| {
-                try performGoto(server, u, id);
-            }
-        } else |_| {}
-    }
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
+    const args = parseArgsOrDefault(UrlParams, arena, arguments);
+    const page = try ensurePage(server, id, args.url);
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{ .page = page, .action = .markdown },
@@ -353,19 +346,8 @@ fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
 }
 
 fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const LinksParams = struct {
-        url: ?[:0]const u8 = null,
-    };
-    if (arguments) |args_raw| {
-        if (std.json.parseFromValueLeaky(LinksParams, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
-            if (args.url) |u| {
-                try performGoto(server, u, id);
-            }
-        } else |_| {}
-    }
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
+    const args = parseArgsOrDefault(UrlParams, arena, arguments);
+    const page = try ensurePage(server, id, args.url);
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{ .page = page, .action = .links },
@@ -379,39 +361,25 @@ fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Va
         backendNodeId: ?u32 = null,
         maxDepth: ?u32 = null,
     };
-    var tree_args: TreeParams = .{};
-    if (arguments) |args_raw| {
-        if (std.json.parseFromValueLeaky(TreeParams, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
-            tree_args = args;
-            if (args.url) |u| {
-                try performGoto(server, u, id);
-            }
-        } else |_| {}
-    }
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
+    const args = parseArgsOrDefault(TreeParams, arena, arguments);
+    const page = try ensurePage(server, id, args.url);
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{ .page = page, .action = .semantic_tree, .registry = &server.node_registry, .arena = arena, .backendNodeId = tree_args.backendNodeId, .maxDepth = tree_args.maxDepth },
+        .text = .{
+            .page = page,
+            .action = .semantic_tree,
+            .registry = &server.node_registry,
+            .arena = arena,
+            .backendNodeId = args.backendNodeId,
+            .maxDepth = args.maxDepth,
+        },
     }};
     try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
 }
 
 fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const Params = struct {
-        url: ?[:0]const u8 = null,
-    };
-    if (arguments) |args_raw| {
-        if (std.json.parseFromValueLeaky(Params, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
-            if (args.url) |u| {
-                try performGoto(server, u, id);
-            }
-        } else |_| {}
-    }
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
+    const args = parseArgsOrDefault(UrlParams, arena, arguments);
+    const page = try ensurePage(server, id, args.url);
 
     const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch |err| {
         log.err(.mcp, "elements collection failed", .{ .err = err });
@@ -425,19 +393,8 @@ fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.
 }
 
 fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const Params = struct {
-        url: ?[:0]const u8 = null,
-    };
-    if (arguments) |args_raw| {
-        if (std.json.parseFromValueLeaky(Params, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
-            if (args.url) |u| {
-                try performGoto(server, u, id);
-            }
-        } else |_| {}
-    }
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
+    const args = parseArgsOrDefault(UrlParams, arena, arguments);
+    const page = try ensurePage(server, id, args.url);
 
     const data = lp.structured_data.collectStructuredData(page.document.asNode(), arena, page) catch |err| {
         log.err(.mcp, "struct data collection failed", .{ .err = err });
@@ -451,20 +408,8 @@ fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.
 }
 
 fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const Params = struct {
-        url: ?[:0]const u8 = null,
-    };
-    if (arguments) |args_raw| {
-        const args = std.json.parseFromValueLeaky(Params, arena, args_raw, .{ .ignore_unknown_fields = true }) catch {
-            return server.sendError(id, .InvalidParams, "Invalid arguments for detectForms");
-        };
-        if (args.url) |u| {
-            try performGoto(server, u, id);
-        }
-    }
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
+    const args = parseArgsOrDefault(UrlParams, arena, arguments);
+    const page = try ensurePage(server, id, args.url);
 
     const forms_data = lp.forms.collectForms(arena, page.document.asNode(), page) catch |err| {
         log.err(.mcp, "form collection failed", .{ .err = err });
@@ -484,14 +429,8 @@ fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Val
 }
 
 fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseArguments(EvaluateParams, arena, arguments, server, id, "evaluate");
-
-    if (args.url) |url| {
-        try performGoto(server, url, id);
-    }
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
+    const args = try parseArgs(EvaluateParams, arena, arguments, server, id, "evaluate");
+    const page = try ensurePage(server, id, args.url);
 
     var ls: js.Local.Scope = undefined;
     page.js.localScope(&ls);
@@ -520,7 +459,7 @@ fn handleClick(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
     const ClickParams = struct {
         backendNodeId: CDPNode.Id,
     };
-    const args = try parseArguments(ClickParams, arena, arguments, server, id, "click");
+    const args = try parseArgs(ClickParams, arena, arguments, server, id, "click");
 
     const page = server.session.currentPage() orelse {
         return server.sendError(id, .PageNotLoaded, "Page not loaded");
@@ -552,7 +491,7 @@ fn handleFill(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         backendNodeId: CDPNode.Id,
         text: []const u8,
     };
-    const args = try parseArguments(FillParams, arena, arguments, server, id, "fill");
+    const args = try parseArgs(FillParams, arena, arguments, server, id, "fill");
 
     const page = server.session.currentPage() orelse {
         return server.sendError(id, .PageNotLoaded, "Page not loaded");
@@ -586,7 +525,7 @@ fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
         x: ?i32 = null,
         y: ?i32 = null,
     };
-    const args = try parseArguments(ScrollParams, arena, arguments, server, id, "scroll");
+    const args = try parseArgs(ScrollParams, arena, arguments, server, id, "scroll");
 
     const page = server.session.currentPage() orelse {
         return server.sendError(id, .PageNotLoaded, "Page not loaded");
@@ -623,7 +562,7 @@ fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json
         selector: [:0]const u8,
         timeout: ?u32 = null,
     };
-    const args = try parseArguments(WaitParams, arena, arguments, server, id, "waitForSelector");
+    const args = try parseArgs(WaitParams, arena, arguments, server, id, "waitForSelector");
 
     _ = server.session.currentPage() orelse {
         return server.sendError(id, .PageNotLoaded, "Page not loaded");
@@ -647,7 +586,31 @@ fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json
     return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
-fn parseArguments(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value, server: *Server, id: std.json.Value, tool_name: []const u8) !T {
+fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8) !*lp.Page {
+    if (url) |u| {
+        try performGoto(server, u, id);
+    }
+    return server.session.currentPage() orelse {
+        try server.sendError(id, .PageNotLoaded, "Page not loaded");
+        return error.PageNotLoaded;
+    };
+}
+
+/// Parses JSON arguments into a given struct type `T`.
+/// If the arguments are missing or invalid, it returns a default-initialized `T` (e.g., `.{}`).
+/// Use this for tools where all arguments are optional and validation failures should be silently ignored.
+fn parseArgsOrDefault(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) T {
+    if (arguments) |args_raw| {
+        return std.json.parseFromValueLeaky(T, arena, args_raw, .{ .ignore_unknown_fields = true }) catch .{};
+    }
+    return .{};
+}
+
+/// Parses JSON arguments into a given struct type `T`.
+/// If the arguments are missing or invalid, it automatically sends an MCP error response to the client
+/// and returns an `error.InvalidParams`.
+/// Use this for tools that require strict validation or mandatory arguments.
+fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value, server: *Server, id: std.json.Value, tool_name: []const u8) !T {
     if (arguments == null) {
         try server.sendError(id, .InvalidParams, "Missing arguments");
         return error.InvalidParams;
@@ -664,7 +627,10 @@ fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
     if (session.page != null) {
         session.removePage();
     }
-    const page = try session.createPage();
+    const page = session.createPage() catch {
+        try server.sendError(id, .InternalError, "Failed to create page");
+        return error.NavigationFailed;
+    };
     page.navigate(url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
@@ -673,8 +639,14 @@ fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
         return error.NavigationFailed;
     };
 
-    var runner = try session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    var runner = session.runner(.{}) catch {
+        try server.sendError(id, .InternalError, "Failed to start page runner");
+        return error.NavigationFailed;
+    };
+    runner.wait(.{ .ms = 2000 }) catch {
+        try server.sendError(id, .InternalError, "Timeout waiting for page load");
+        return error.NavigationFailed;
+    };
 }
 
 const router = @import("router.zig");
