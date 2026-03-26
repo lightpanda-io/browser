@@ -62,5 +62,6 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(ResizeObserver.init, .{});
     pub const observe = bridge.function(ResizeObserver.observe, .{});
+    pub const unobserve = bridge.function(ResizeObserver.unobserve, .{});
     pub const disconnect = bridge.function(ResizeObserver.disconnect, .{});
 };
