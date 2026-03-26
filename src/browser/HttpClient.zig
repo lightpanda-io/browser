@@ -354,10 +354,10 @@ fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
 fn processRequest(self: *Client, req: Request) !void {
     if (self.network.cache) |*cache| {
         if (req.method == .GET) {
-            const arena = try self.network.app.arena_pool.acquire();
+            const arena = try self.network.app.arena_pool.acquire(.{ .debug = "HttpClient.processRequest.cache" });
             defer self.network.app.arena_pool.release(arena);
 
-            if (cache.get(arena, req.url)) |cached| {
+            if (cache.get(arena, .{ .url = req.url })) |cached| {
                 log.debug(.browser, "http.cache.get", .{
                     .url = req.url,
                     .found = true,
@@ -992,7 +992,11 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 
             log.err(.browser, "http cache", .{ .key = cache_key, .metadata = metadata });
 
-            cache.put(cache_key, metadata, body) catch |err| log.warn(.http, "cache put failed", .{ .err = err });
+            cache.put(
+                .{ .url = cache_key },
+                metadata,
+                body,
+            ) catch |err| log.warn(.http, "cache put failed", .{ .err = err });
             log.debug(.browser, "http.cache.put", .{ .url = transfer.req.url });
         }
     }
