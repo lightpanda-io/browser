@@ -28,9 +28,9 @@ kind: union(enum) {
     fs: FsCache,
 },
 
-pub fn get(self: *Cache, allocator: std.mem.Allocator, key: []const u8) ?CachedResponse {
+pub fn get(self: *Cache, arena: std.mem.Allocator, key: []const u8) ?CachedResponse {
     return switch (self.kind) {
-        inline else => |*c| c.get(allocator, key),
+        inline else => |*c| c.get(arena, key),
     };
 }
 
@@ -186,19 +186,6 @@ pub const CachedMetadata = struct {
             .vary = vary,
             .headers = headers,
         };
-    }
-
-    pub fn deinit(self: CachedMetadata, allocator: std.mem.Allocator) void {
-        allocator.free(self.url);
-        allocator.free(self.content_type);
-        for (self.headers) |header| {
-            allocator.free(header.name);
-            allocator.free(header.value);
-        }
-        allocator.free(self.headers);
-        if (self.vary) |v| v.deinit(allocator);
-        if (self.etag) |e| allocator.free(e);
-        if (self.last_modified) |lm| allocator.free(lm);
     }
 };
 

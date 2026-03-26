@@ -31,6 +31,7 @@ const RobotStore = @import("Robots.zig").RobotStore;
 const WebBotAuth = @import("WebBotAuth.zig");
 const Cache = @import("cache/Cache.zig");
 
+const App = @import("../App.zig");
 const Network = @This();
 
 const Listener = struct {
@@ -46,6 +47,7 @@ const MAX_TICK_CALLBACKS = 16;
 
 allocator: Allocator,
 
+app: *App,
 config: *const Config,
 ca_blob: ?http.Blob,
 robot_store: RobotStore,
@@ -202,7 +204,7 @@ fn globalDeinit() void {
     libcurl.curl_global_cleanup();
 }
 
-pub fn init(allocator: Allocator, config: *const Config) !Network {
+pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     globalInit(allocator);
     errdefer globalDeinit();
 
@@ -251,6 +253,7 @@ pub fn init(allocator: Allocator, config: *const Config) !Network {
         .available = available,
         .connections = connections,
 
+        .app = app,
         .robot_store = RobotStore.init(allocator),
         .web_bot_auth = web_bot_auth,
         .cache = cache,

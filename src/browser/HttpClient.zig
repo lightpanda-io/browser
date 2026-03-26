@@ -314,9 +314,8 @@ pub fn request(self: *Client, req: Request) !void {
     return self.fetchRobotsThenProcessRequest(robots_url, req);
 }
 
-fn serveFromCache(allocator: std.mem.Allocator, req: Request, cached: *const CachedResponse) !void {
+fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
     const response = Response.fromCached(req.ctx, cached);
-    defer cached.metadata.deinit(allocator);
 
     if (req.start_callback) |cb| {
         try cb(response);
@@ -355,7 +354,10 @@ fn serveFromCache(allocator: std.mem.Allocator, req: Request, cached: *const Cac
 fn processRequest(self: *Client, req: Request) !void {
     if (self.network.cache) |*cache| {
         if (req.method == .GET) {
-            if (cache.get(self.allocator, req.url)) |cached| {
+            const arena = try self.network.app.arena_pool.acquire();
+            defer self.network.app.arena_pool.release(arena);
+
+            if (cache.get(arena, req.url)) |cached| {
                 log.debug(.browser, "http.cache.get", .{
                     .url = req.url,
                     .found = true,
@@ -363,7 +365,7 @@ fn processRequest(self: *Client, req: Request) !void {
                 });
 
                 defer req.headers.deinit();
-                return serveFromCache(self.allocator, req, &cached);
+                return serveFromCache(req, &cached);
             } else {
                 log.debug(.browser, "http.cache.get", .{ .url = req.url, .found = false });
             }
