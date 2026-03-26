@@ -336,7 +336,7 @@ fn processRequest(self: *Client, req: Request) !void {
             const arena = try self.network.app.arena_pool.acquire();
             defer self.network.app.arena_pool.release(arena);
 
-            if (cache.get(arena, req.url)) |cached| {
+            if (cache.get(arena, .{ .url = req.url })) |cached| {
                 log.debug(.browser, "http.cache.get", .{
                     .url = req.url,
                     .found = true,
@@ -978,7 +978,7 @@ fn processMessages(self: *Client) !bool {
                     log.err(.browser, "http cache", .{ .key = cache_key, .metadata = metadata });
 
                     cache.put(
-                        cache_key,
+                        .{ .url = cache_key },
                         metadata,
                         transfer.body.items,
                     ) catch |err| log.warn(.http, "cache put failed", .{ .err = err });
