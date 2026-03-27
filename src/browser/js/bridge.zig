@@ -18,15 +18,12 @@
 
 const std = @import("std");
 const js = @import("js.zig");
-const lp = @import("lightpanda");
-const log = @import("../../log.zig");
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
 
 const v8 = js.v8;
 
 const Caller = @import("Caller.zig");
-const Context = @import("Context.zig");
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 

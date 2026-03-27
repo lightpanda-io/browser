@@ -4,9 +4,7 @@ const lp = @import("lightpanda");
 const log = lp.log;
 const js = lp.js;
 
-const Element = @import("../browser/webapi/Element.zig");
 const DOMNode = @import("../browser/webapi/Node.zig");
-const Selector = @import("../browser/webapi/selector/Selector.zig");
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
 const CDPNode = @import("../cdp/Node.zig");

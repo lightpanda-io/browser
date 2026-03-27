@@ -32,7 +32,6 @@ const js = @import("js.zig");
 const Session = @import("../Session.zig");
 
 const v8 = js.v8;
-const Allocator = std.mem.Allocator;
 
 const Identity = @This();
 

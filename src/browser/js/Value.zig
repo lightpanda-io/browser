@@ -25,7 +25,6 @@ const v8 = js.v8;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Allocator = std.mem.Allocator;
-const Session = @import("../Session.zig");
 
 const Value = @This();
 

@@ -19,16 +19,12 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
 
 const js = @import("js/js.zig");
-const log = @import("../log.zig");
 const App = @import("../App.zig");
 const HttpClient = @import("HttpClient.zig");
 
 const ArenaPool = App.ArenaPool;
-
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Session = @import("Session.zig");
 const Notification = @import("../Notification.zig");

@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub fn toPageId(comptime id_type: enum { frame_id, loader_id }, input: []const u8) !u32 {
     const err = switch (comptime id_type) {

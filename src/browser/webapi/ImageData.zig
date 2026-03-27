@@ -19,10 +19,8 @@
 const std = @import("std");
 
 const String = @import("../../string.zig").String;
-const log = @import("../../log.zig");
 
 const js = @import("../js/js.zig");
-const color = @import("../color.zig");
 const Page = @import("../Page.zig");
 
 /// https://developer.mozilla.org/en-US/docs/Web/API/ImageData/ImageData

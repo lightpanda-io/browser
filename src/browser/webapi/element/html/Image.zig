@@ -5,10 +5,6 @@ const URL = @import("../../../URL.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
-const Event = @import("../../Event.zig");
-const log = @import("../../../../log.zig");
-
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Image = @This();
 _proto: *HtmlElement,

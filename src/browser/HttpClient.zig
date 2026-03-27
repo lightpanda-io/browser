@@ -24,13 +24,10 @@ const lp = @import("lightpanda");
 const log = @import("../log.zig");
 const Net = @import("../network/http.zig");
 const Network = @import("../network/Runtime.zig");
-const Config = @import("../Config.zig");
 const URL = @import("../browser/URL.zig");
 const Notification = @import("../Notification.zig");
 const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 const Robots = @import("../network/Robots.zig");
-const RobotStore = Robots.RobotStore;
-const WebBotAuth = @import("../network/WebBotAuth.zig");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;

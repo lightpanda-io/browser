@@ -17,10 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const builtin = @import("builtin");
-const posix = std.posix;
-const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
 
 const Config = @import("../Config.zig");
 const libcurl = @import("../sys/libcurl.zig");
@@ -29,18 +25,12 @@ const log = @import("lightpanda").log;
 const assert = @import("lightpanda").assert;
 
 pub const ENABLE_DEBUG = false;
-const IS_DEBUG = builtin.mode == .Debug;
 
 pub const Blob = libcurl.CurlBlob;
 pub const WaitFd = libcurl.CurlWaitFd;
 pub const writefunc_error = libcurl.curl_writefunc_error;
 
 const Error = libcurl.Error;
-const ErrorMulti = libcurl.ErrorMulti;
-const errorFromCode = libcurl.errorFromCode;
-const errorMFromCode = libcurl.errorMFromCode;
-const errorCheck = libcurl.errorCheck;
-const errorMCheck = libcurl.errorMCheck;
 
 pub fn curl_version() [*c]const u8 {
     return libcurl.curl_version();

@@ -27,7 +27,6 @@ const IS_DEBUG = builtin.mode == .Debug;
 
 const log = @import("../log.zig");
 
-const App = @import("../App.zig");
 const String = @import("../string.zig").String;
 
 const Mime = @import("Mime.zig");
@@ -43,7 +42,6 @@ const URL = @import("URL.zig");
 const Blob = @import("webapi/Blob.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
-const EventTarget = @import("webapi/EventTarget.zig");
 const CData = @import("webapi/CData.zig");
 const Element = @import("webapi/Element.zig");
 const HtmlElement = @import("webapi/element/Html.zig");
@@ -59,7 +57,6 @@ const AbstractRange = @import("webapi/AbstractRange.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
-const storage = @import("webapi/storage/storage.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const SubmitEvent = @import("webapi/event/SubmitEvent.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
@@ -67,7 +64,6 @@ const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const MouseEvent = @import("webapi/event/MouseEvent.zig");
 
 const HttpClient = @import("HttpClient.zig");
-const ArenaPool = App.ArenaPool;
 
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;

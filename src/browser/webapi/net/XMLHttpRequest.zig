@@ -29,7 +29,6 @@ const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
 
 const Node = @import("../Node.zig");
-const Blob = @import("../Blob.zig");
 const Event = @import("../Event.zig");
 const Headers = @import("Headers.zig");
 const EventTarget = @import("../EventTarget.zig");

@@ -28,8 +28,6 @@ const DocumentFragment = @import("DocumentFragment.zig");
 const AbstractRange = @import("AbstractRange.zig");
 const DOMRect = @import("DOMRect.zig");
 
-const Allocator = std.mem.Allocator;
-
 const Range = @This();
 
 _proto: *AbstractRange,

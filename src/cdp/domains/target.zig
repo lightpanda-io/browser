@@ -24,9 +24,6 @@ const log = @import("../../log.zig");
 const URL = @import("../../browser/URL.zig");
 const js = @import("../../browser/js/js.zig");
 
-// TODO: hard coded IDs
-const LOADER_ID = "LOADERID42AA389647D702B4D805F49A";
-
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
         getTargets,

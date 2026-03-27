@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const log = @import("log.zig");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -62,7 +63,7 @@ pub fn deinit(self: *ArenaPool) void {
         var it = self._leak_track.iterator();
         while (it.next()) |kv| {
             if (kv.value_ptr.* != 0) {
-                std.debug.print("ArenaPool leak detected: '{s}' count={d}\n", .{ kv.key_ptr.*, kv.value_ptr.* });
+                log.err(.bug, "ArenaPool leak", .{ .name = kv.key_ptr.*, .count = kv.value_ptr.* });
                 has_leaks = true;
             }
         }
@@ -129,11 +130,11 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
         if (self._leak_track.getPtr(entry.debug)) |count| {
             count.* -= 1;
             if (count.* < 0) {
-                std.debug.print("ArenaPool double-free detected: '{s}'\n", .{entry.debug});
+                log.err(.bug, "ArenaPool double-free", .{ .name = entry.debug });
                 @panic("ArenaPool: double-free detected");
             }
         } else {
-            std.debug.print("ArenaPool release of untracked arena: '{s}'\n", .{entry.debug});
+            log.err(.bug, "ArenaPool release unknown", .{ .name = entry.debug });
             @panic("ArenaPool: release of untracked arena");
         }
     }

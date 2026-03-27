@@ -28,12 +28,10 @@ const String = @import("../string.zig").String;
 const js = @import("js/js.zig");
 const URL = @import("URL.zig");
 const Page = @import("Page.zig");
-const Browser = @import("Browser.zig");
 
 const Element = @import("webapi/Element.zig");
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
 
 const IS_DEBUG = builtin.mode == .Debug;
 

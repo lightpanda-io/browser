@@ -22,7 +22,6 @@ const reflect = @import("../../reflect.zig");
 const log = @import("../../../log.zig");
 
 const global_event_handlers = @import("../global_event_handlers.zig");
-const GlobalEventHandlersLookup = global_event_handlers.Lookup;
 const GlobalEventHandler = global_event_handlers.Handler;
 
 const Page = @import("../../Page.zig");

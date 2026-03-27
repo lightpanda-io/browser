@@ -22,7 +22,6 @@ const net = std.net;
 const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
 
 const log = @import("log.zig");
 const App = @import("App.zig");

@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const log = @import("../../log.zig");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
@@ -27,7 +26,6 @@ const Range = @import("Range.zig");
 const AbstractRange = @import("AbstractRange.zig");
 const Node = @import("Node.zig");
 const Event = @import("Event.zig");
-const Document = @import("Document.zig");
 
 /// https://w3c.github.io/selection-api/
 const Selection = @This();

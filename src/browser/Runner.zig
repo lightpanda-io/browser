@@ -21,12 +21,9 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const log = @import("../log.zig");
-const App = @import("../App.zig");
 
 const Page = @import("Page.zig");
 const Session = @import("Session.zig");
-const Browser = @import("Browser.zig");
-const Factory = @import("Factory.zig");
 const HttpClient = @import("HttpClient.zig");
 
 const IS_DEBUG = builtin.mode == .Debug;

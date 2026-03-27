@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const log = @import("../../log.zig");
 const markdown = lp.markdown;
 const SemanticTree = lp.SemanticTree;
 const interactive = lp.interactive;
