@@ -131,6 +131,14 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.C
         return null;
     }
 
+    const now = std.time.timestamp();
+    const age = (now - metadata.stored_at) + @as(i64, @intCast(metadata.age_at_store));
+    if (age < 0 or @as(u64, @intCast(age)) >= metadata.cache_control.max_age) {
+        self.dir.deleteFile(&meta_p) catch {};
+        self.dir.deleteFile(&body_p) catch {};
+        return null;
+    }
+
     const body_file = self.dir.openFile(
         &body_p,
         .{ .mode = .read_only },
