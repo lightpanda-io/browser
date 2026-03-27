@@ -719,39 +719,45 @@ fn buildCurl(
     return lib;
 }
 
-/// Returns `MAJOR.MINOR.PATCH-dev` when `git describe` fails.
+/// Resolves the semantic version of the build.
+///
+/// The base version is read from `build.zig.zon`. This can be overridden
+/// using the `-Dversion` command-line flag:
+/// - If the flag contains a full semantic version (e.g., `1.2.3`), it replaces
+///   the base version entirely.
+/// - If the flag contains a simple string (e.g., `nightly`), it replaces only
+///   the pre-release tag of the base version (e.g., `1.0.0-dev` -> `1.0.0-nightly`).
+///
+/// For versions that have a pre-release tag and no explicit build metadata,
+/// this function automatically enriches the version with the git commit count
+/// and short hash (e.g., `1.0.0-dev.5243+dbe45229`).
 fn resolveVersion(b: *std.Build) std.SemanticVersion {
-    const version_string = b.option([]const u8, "version_string", "Override the version of this build");
-    if (version_string) |semver_string| {
-        return std.SemanticVersion.parse(semver_string) catch |err| {
-            std.debug.panic("Expected -Dversion-string={s} to be a semantic version: {}", .{ semver_string, err });
-        };
-    }
+    const opt_version = b.option([]const u8, "version", "Override the version of this build");
 
-    const pre_version = b.option([]const u8, "pre_version", "Override the pre version of this build");
-    const pre = blk: {
-        if (pre_version) |pre| {
-            break :blk pre;
+    const version = if (opt_version) |v|
+        std.SemanticVersion.parse(v) catch blk: {
+            var fallback = lightpanda_version;
+            fallback.pre = v;
+            break :blk fallback;
         }
+    else
+        lightpanda_version;
 
-        break :blk lightpanda_version.pre;
-    };
-
-    // If it's a stable release (no pre or build metadata in build.zig.zon), use it as is
-    if (pre == null and lightpanda_version.build == null) return lightpanda_version;
+    // Only enrich versions that have a pre-release field and no explicit build metadata.
+    if (version.pre == null or version.build != null) return version;
 
     // For dev/nightly versions, calculate the commit count and hash
-    const git_hash_raw = runGit(b, &.{ "rev-parse", "--short", "HEAD" }) catch return lightpanda_version;
+    const git_hash_raw = runGit(b, &.{ "rev-parse", "--short", "HEAD" }) catch return version;
     const commit_hash = std.mem.trim(u8, git_hash_raw, " \n\r");
 
-    const git_count_raw = runGit(b, &.{ "rev-list", "--count", "HEAD" }) catch return lightpanda_version;
+    const git_count_raw = runGit(b, &.{ "rev-list", "--count", "HEAD" }) catch return version;
     const commit_count = std.mem.trim(u8, git_count_raw, " \n\r");
 
     return .{
-        .major = lightpanda_version.major,
-        .minor = lightpanda_version.minor,
-        .patch = lightpanda_version.patch,
-        .pre = b.fmt("{s}.{s}", .{ pre.?, commit_count }),
+        .major = version.major,
+        .minor = version.minor,
+        .patch = version.patch,
+        .pre = b.fmt("{s}.{s}", .{ version.pre.?, commit_count }),
         .build = commit_hash,
     };
 }
