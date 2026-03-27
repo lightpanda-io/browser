@@ -88,7 +88,17 @@
             ];
         };
 
-        zigDeps = pkgs.callPackage ./deps.nix { };
+        zigDeps = import ./deps.nix {
+          inherit (pkgs) linkFarm fetchgit;
+          fetchzip =
+            args:
+            pkgs.fetchzip (
+              args
+              // pkgs.lib.optionalAttrs (pkgs.lib.hasPrefix "https://codeload.github.com/" args.url) {
+                extension = "tar.gz";
+              }
+            );
+        };
 
         cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
           src = ./.;
