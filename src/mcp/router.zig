@@ -16,6 +16,7 @@ pub fn processRequests(server: *Server, reader: *std.io.Reader) !void {
         const buffered_line = reader.takeDelimiter('\n') catch |err| switch (err) {
             error.StreamTooLong => {
                 log.err(.mcp, "Message too long", .{});
+                try server.sendError(.null, .InvalidRequest, "Message too long");
                 continue;
             },
             else => return err,
