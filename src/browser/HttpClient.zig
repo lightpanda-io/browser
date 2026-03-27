@@ -382,6 +382,7 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
             .blocking = false,
             .frame_id = req.frame_id,
             .cookie_jar = req.cookie_jar,
+            .cookie_origin = req.cookie_origin,
             .notification = req.notification,
             .resource_type = .fetch,
             .header_callback = robotsHeaderCallback,
@@ -923,6 +924,7 @@ pub const Request = struct {
     headers: http.Headers,
     body: ?[]const u8 = null,
     cookie_jar: ?*CookieJar,
+    cookie_origin: [:0]const u8,
     resource_type: ResourceType,
     credentials: ?[:0]const u8 = null,
     notification: *Notification,
@@ -1178,7 +1180,7 @@ pub const Transfer = struct {
         var aw: std.Io.Writer.Allocating = .init(self.arena.allocator());
         try jar.forRequest(self.req.url, &aw.writer, .{
             .is_http = true,
-            .origin_url = self.req.url,
+            .origin_url = self.req.cookie_origin,
             .is_navigation = self.req.resource_type == .document,
         });
         const written = aw.written();

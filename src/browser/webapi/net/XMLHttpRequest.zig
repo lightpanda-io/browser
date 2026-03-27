@@ -235,6 +235,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         .frame_id = page._frame_id,
         .body = self._request_body,
         .cookie_jar = if (cookie_support) &page._session.cookie_jar else null,
+        .cookie_origin = page.url,
         .resource_type = .xhr,
         .notification = page._session.notification,
         .start_callback = httpStartCallback,
