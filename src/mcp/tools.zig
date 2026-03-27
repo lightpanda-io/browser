@@ -205,17 +205,18 @@ const ToolStreamingText = struct {
         switch (self.action) {
             .markdown => lp.markdown.dump(self.page.document.asNode(), .{}, w, self.page) catch |err| {
                 log.err(.mcp, "markdown dump failed", .{ .err = err });
+                return error.WriteFailed;
             },
             .links => {
-                if (lp.links.collectLinks(self.page.call_arena, self.page.document.asNode(), self.page)) |links| {
-                    var first = true;
-                    for (links) |href| {
-                        if (!first) try w.writeByte('\n');
-                        try w.writeAll(href);
-                        first = false;
-                    }
-                } else |err| {
+                const links = lp.links.collectLinks(self.page.call_arena, self.page.document.asNode(), self.page) catch |err| {
                     log.err(.mcp, "query links failed", .{ .err = err });
+                    return error.WriteFailed;
+                };
+                var first = true;
+                for (links) |href| {
+                    if (!first) try w.writeByte('\n');
+                    try w.writeAll(href);
+                    first = false;
                 }
             },
             .semantic_tree => {
@@ -241,6 +242,7 @@ const ToolStreamingText = struct {
 
                 st.textStringify(w) catch |err| {
                     log.err(.mcp, "semantic tree dump failed", .{ .err = err });
+                    return error.WriteFailed;
                 };
             },
         }
@@ -331,7 +333,9 @@ fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{ .page = page, .action = .markdown },
     }};
-    try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
+    server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
+        return server.sendError(id, .InternalError, "Failed to serialize markdown content");
+    };
 }
 
 fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -341,7 +345,9 @@ fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{ .page = page, .action = .links },
     }};
-    try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
+    server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
+        return server.sendError(id, .InternalError, "Failed to serialize links content");
+    };
 }
 
 fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -363,7 +369,9 @@ fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Va
             .maxDepth = args.maxDepth,
         },
     }};
-    try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
+    server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
+        return server.sendError(id, .InternalError, "Failed to serialize semantic tree content");
+    };
 }
 
 fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
