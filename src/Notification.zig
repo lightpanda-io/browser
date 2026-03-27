@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 
 const log = @import("log.zig");
 const Page = @import("browser/Page.zig");
-const Transfer = @import("browser/HttpClient.zig").Transfer;
+const LiveTransfer = @import("browser/HttpClient.zig").LiveTransfer;
 
 const Allocator = std.mem.Allocator;
 
@@ -138,34 +138,34 @@ pub const PageFrameCreated = struct {
 };
 
 pub const RequestStart = struct {
-    transfer: *Transfer,
+    transfer: *LiveTransfer,
 };
 
 pub const RequestIntercept = struct {
-    transfer: *Transfer,
+    transfer: *LiveTransfer,
     wait_for_interception: *bool,
 };
 
 pub const RequestAuthRequired = struct {
-    transfer: *Transfer,
+    transfer: *LiveTransfer,
     wait_for_interception: *bool,
 };
 
 pub const ResponseData = struct {
     data: []const u8,
-    transfer: *Transfer,
+    transfer: *LiveTransfer,
 };
 
 pub const ResponseHeaderDone = struct {
-    transfer: *Transfer,
+    transfer: *LiveTransfer,
 };
 
 pub const RequestDone = struct {
-    transfer: *Transfer,
+    transfer: *LiveTransfer,
 };
 
 pub const RequestFail = struct {
-    transfer: *Transfer,
+    transfer: *LiveTransfer,
     err: anyerror,
 };
 
