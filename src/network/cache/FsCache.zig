@@ -142,8 +142,8 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.C
     };
 }
 
-pub fn put(self: *FsCache, req: CacheRequest, meta: CachedMetadata, body: []const u8) !void {
-    const hashed_key = hashKey(req.url);
+pub fn put(self: *FsCache, meta: CachedMetadata, body: []const u8) !void {
+    const hashed_key = hashKey(meta.url);
     const meta_p = metaPath(&hashed_key);
     const meta_tmp_p = metaTmpPath(&hashed_key);
     const body_p = bodyPath(&hashed_key);

@@ -34,45 +34,57 @@ pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheRequest) ?CachedRes
     };
 }
 
-pub fn put(self: *Cache, req: CacheRequest, metadata: CachedMetadata, body: []const u8) !void {
+pub fn put(self: *Cache, metadata: CachedMetadata, body: []const u8) !void {
     return switch (self.kind) {
-        inline else => |*c| c.put(req, metadata, body),
+        inline else => |*c| c.put(metadata, body),
     };
 }
 
 pub const CacheControl = struct {
-    max_age: ?u64 = null,
-    s_maxage: ?u64 = null,
-    is_public: bool = false,
+    max_age: u64,
     must_revalidate: bool = false,
-    no_cache: bool = false,
-    no_store: bool = false,
     immutable: bool = false,
 
-    pub fn parse(value: []const u8) CacheControl {
-        var cc: CacheControl = .{};
+    pub fn parse(value: []const u8) ?CacheControl {
+        var cc: CacheControl = .{ .max_age = undefined };
+
+        var max_age_set = false;
+        var max_s_age_set = false;
+        var is_public = false;
 
         var iter = std.mem.splitScalar(u8, value, ',');
         while (iter.next()) |part| {
             const directive = std.mem.trim(u8, part, &std.ascii.whitespace);
             if (std.ascii.eqlIgnoreCase(directive, "no-store")) {
-                cc.no_store = true;
+                return null;
             } else if (std.ascii.eqlIgnoreCase(directive, "no-cache")) {
-                cc.no_cache = true;
+                return null;
             } else if (std.ascii.eqlIgnoreCase(directive, "must-revalidate")) {
                 cc.must_revalidate = true;
             } else if (std.ascii.eqlIgnoreCase(directive, "immutable")) {
                 cc.immutable = true;
             } else if (std.ascii.eqlIgnoreCase(directive, "public")) {
-                cc.is_public = true;
+                is_public = true;
             } else if (std.ascii.startsWithIgnoreCase(directive, "max-age=")) {
-                cc.max_age = std.fmt.parseInt(u64, directive[8..], 10) catch null;
+                if (!max_s_age_set) {
+                    if (std.fmt.parseInt(u64, directive[8..], 10) catch null) |max_age| {
+                        cc.max_age = max_age;
+                        max_age_set = true;
+                    }
+                }
             } else if (std.ascii.startsWithIgnoreCase(directive, "s-maxage=")) {
-                cc.s_maxage = std.fmt.parseInt(u64, directive[9..], 10) catch null;
-                // s-maxage takes precedence over max-age
-                cc.max_age = cc.s_maxage orelse cc.max_age;
+                if (std.fmt.parseInt(u64, directive[9..], 10) catch null) |max_age| {
+                    cc.max_age = max_age;
+                    max_age_set = true;
+                    max_s_age_set = true;
+                }
             }
         }
+
+        if (!max_age_set) return null;
+        if (!is_public) return null;
+        if (cc.max_age == 0) return null;
+
         return cc;
     }
 };
@@ -84,13 +96,6 @@ pub const Vary = union(enum) {
     pub fn parse(value: []const u8) Vary {
         if (std.mem.eql(u8, value, "*")) return .wildcard;
         return .{ .value = value };
-    }
-
-    pub fn deinit(self: Vary, allocator: std.mem.Allocator) void {
-        switch (self) {
-            .wildcard => {},
-            .value => |v| allocator.free(v),
-        }
     }
 
     pub fn toString(self: Vary) []const u8 {
@@ -124,54 +129,41 @@ pub const CachedMetadata = struct {
         timestamp: i64,
         headers: []const Http.Header,
     ) !?CachedMetadata {
-        var cc: CacheControl = .{};
+        var cc: ?CacheControl = null;
         var vary: ?Vary = null;
         var etag: ?[]const u8 = null;
         var last_modified: ?[]const u8 = null;
         var age_at_store: u64 = 0;
         var content_type: []const u8 = "application/octet-stream";
-        var has_set_cookie = false;
-        var has_authorization = false;
+
+        // Only cache 200 for now. Technically, we can cache others.
+        switch (status) {
+            200 => {},
+            else => return null,
+        }
 
         for (headers) |hdr| {
             if (std.ascii.eqlIgnoreCase(hdr.name, "cache-control")) {
-                cc = CacheControl.parse(hdr.value);
+                cc = CacheControl.parse(hdr.value) orelse return null;
             } else if (std.ascii.eqlIgnoreCase(hdr.name, "etag")) {
                 etag = hdr.value;
             } else if (std.ascii.eqlIgnoreCase(hdr.name, "last-modified")) {
                 last_modified = hdr.value;
             } else if (std.ascii.eqlIgnoreCase(hdr.name, "vary")) {
                 vary = Vary.parse(hdr.value);
+                // Vary: * means the response cannot be cached
+                if (vary) |v| if (v == .wildcard) return null;
             } else if (std.ascii.eqlIgnoreCase(hdr.name, "age")) {
                 age_at_store = std.fmt.parseInt(u64, hdr.value, 10) catch 0;
             } else if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) {
                 content_type = hdr.value;
             } else if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
-                has_set_cookie = true;
+                // Don't cache if has Set-Cookie.
+                return null;
             } else if (std.ascii.eqlIgnoreCase(hdr.name, "authorization")) {
-                has_authorization = true;
+                // Don't cache if has Authorization.
+                return null;
             }
-        }
-
-        // no-store: must not be stored
-        if (cc.no_store) return null;
-
-        // Vary: * means the response cannot be cached
-        if (vary) |v| if (v == .wildcard) return null;
-
-        // must have an explicit max-age to be cacheable
-        if (cc.max_age == null) return null;
-
-        // Set-Cookie without explicit public
-        if (has_set_cookie and !cc.is_public) return null;
-
-        // Authorization header without explicit public or s-maxage
-        if (has_authorization and !cc.is_public and cc.s_maxage == null) return null;
-
-        // Only cache 200 for now. Technically, we can cache others.
-        switch (status) {
-            200 => {},
-            else => return null,
         }
 
         return .{
@@ -182,7 +174,7 @@ pub const CachedMetadata = struct {
             .age_at_store = age_at_store,
             .etag = etag,
             .last_modified = last_modified,
-            .cache_control = cc,
+            .cache_control = cc orelse return null,
             .vary = vary,
             .headers = headers,
         };
