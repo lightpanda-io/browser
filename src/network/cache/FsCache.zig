@@ -127,7 +127,7 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.C
         return null;
     }
 
-    const now = std.time.timestamp();
+    const now = req.timestamp;
     const age = (now - metadata.stored_at) + @as(i64, @intCast(metadata.age_at_store));
     if (age < 0 or @as(u64, @intCast(age)) >= metadata.cache_control.max_age) {
         self.dir.deleteFile(&meta_p) catch {};
@@ -208,7 +208,7 @@ test "FsCache: basic put and get" {
 
     var fs_cache = try FsCache.init(path);
     defer fs_cache.deinit();
-    var c = Cache{ .kind = .{ .fs = fs_cache } };
+    var cache = Cache{ .kind = .{ .fs = fs_cache } };
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -228,9 +228,9 @@ test "FsCache: basic put and get" {
     };
 
     const body = "hello world";
-    try c.put(meta, body);
+    try cache.put(meta, body);
 
-    const result = c.get(arena.allocator(), .{ .url = "https://example.com" }) orelse return error.CacheMiss;
+    const result = cache.get(arena.allocator(), .{ .url = "https://example.com", .timestamp = now }) orelse return error.CacheMiss;
     defer result.data.file.close();
 
     var buf: [64]u8 = undefined;
@@ -240,4 +240,54 @@ test "FsCache: basic put and get" {
     defer testing.allocator.free(read_buf);
 
     try testing.expectEqualStrings(body, read_buf);
+}
+
+test "FsCache: get expiration" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(path);
+
+    var fs_cache = try FsCache.init(path);
+    defer fs_cache.deinit();
+    var cache = Cache{ .kind = .{ .fs = fs_cache } };
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const now = 5000;
+    const max_age = 1000;
+
+    const meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 900,
+        .etag = null,
+        .last_modified = null,
+        .cache_control = .{ .max_age = max_age },
+        .vary = null,
+        .headers = &.{},
+    };
+
+    const body = "hello world";
+    try cache.put(meta, body);
+
+    const result = cache.get(
+        arena.allocator(),
+        .{ .url = "https://example.com", .timestamp = now + 50 },
+    ) orelse return error.CacheMiss;
+    result.data.file.close();
+
+    try testing.expectEqual(null, cache.get(
+        arena.allocator(),
+        .{ .url = "https://example.com", .timestamp = now + 200 },
+    ));
+
+    try testing.expectEqual(null, cache.get(
+        arena.allocator(),
+        .{ .url = "https://example.com", .timestamp = now },
+    ));
 }

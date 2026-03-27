@@ -126,6 +126,7 @@ pub const CachedMetadata = struct {
 
 pub const CacheRequest = struct {
     url: []const u8,
+    timestamp: i64,
 };
 
 pub const CachedData = union(enum) {
