@@ -17,9 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const builtin = @import("builtin");
-const posix = std.posix;
-const ArenaAllocator = std.heap.ArenaAllocator;
 
 const Config = @import("../Config.zig");
 const libcurl = @import("../sys/libcurl.zig");

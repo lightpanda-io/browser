@@ -26,7 +26,6 @@ const App = @import("../../App.zig");
 const log = @import("../../log.zig");
 
 const bridge = @import("bridge.zig");
-const Origin = @import("Origin.zig");
 const Context = @import("Context.zig");
 const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");

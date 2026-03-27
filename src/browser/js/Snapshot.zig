@@ -25,7 +25,6 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const v8 = js.v8;
 const JsApis = bridge.JsApis;
-const Allocator = std.mem.Allocator;
 
 const Snapshot = @This();
 

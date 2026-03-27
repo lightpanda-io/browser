@@ -24,7 +24,6 @@ const Session = @import("../../Session.zig");
 const js = @import("../../js/js.zig");
 
 const Event = @import("../Event.zig");
-const UIEvent = @import("UIEvent.zig");
 
 const FormData = @import("../net/FormData.zig");
 

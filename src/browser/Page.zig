@@ -27,7 +27,6 @@ const IS_DEBUG = builtin.mode == .Debug;
 
 const log = @import("../log.zig");
 
-const App = @import("../App.zig");
 const String = @import("../string.zig").String;
 
 const Mime = @import("Mime.zig");
