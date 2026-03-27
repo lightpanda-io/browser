@@ -997,11 +997,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 
             log.err(.browser, "http cache", .{ .key = cache_key, .metadata = metadata });
 
-            cache.put(
-                .{ .url = cache_key },
-                metadata,
-                body,
-            ) catch |err| log.warn(.http, "cache put failed", .{ .err = err });
+            cache.put(metadata, body) catch |err| log.warn(.http, "cache put failed", .{ .err = err });
             log.debug(.browser, "http.cache.put", .{ .url = transfer.req.url });
         }
     }
