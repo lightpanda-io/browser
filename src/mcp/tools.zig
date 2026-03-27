@@ -207,23 +207,12 @@ const ToolStreamingText = struct {
                 log.err(.mcp, "markdown dump failed", .{ .err = err });
             },
             .links => {
-                if (Selector.querySelectorAll(self.page.document.asNode(), "a[href]", self.page)) |list| {
-                    defer list.deinit(self.page._session);
-
+                if (lp.links.collectLinks(self.page.call_arena, self.page.document.asNode(), self.page)) |links| {
                     var first = true;
-                    for (list._nodes) |node| {
-                        if (node.is(Element.Html.Anchor)) |anchor| {
-                            const href = anchor.getHref(self.page) catch |err| {
-                                log.err(.mcp, "resolve href failed", .{ .err = err });
-                                continue;
-                            };
-
-                            if (href.len > 0) {
-                                if (!first) try w.writeByte('\n');
-                                try w.writeAll(href);
-                                first = false;
-                            }
-                        }
+                    for (links) |href| {
+                        if (!first) try w.writeByte('\n');
+                        try w.writeAll(href);
+                        first = false;
                     }
                 } else |err| {
                     log.err(.mcp, "query links failed", .{ .err = err });
@@ -385,6 +374,12 @@ fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.
         log.err(.mcp, "elements collection failed", .{ .err = err });
         return server.sendError(id, .InternalError, "Failed to collect interactive elements");
     };
+
+    lp.interactive.registerNodes(elements, &server.node_registry) catch |err| {
+        log.err(.mcp, "node registration failed", .{ .err = err });
+        return server.sendError(id, .InternalError, "Failed to register element nodes");
+    };
+
     var aw: std.Io.Writer.Allocating = .init(arena);
     try std.json.Stringify.value(elements, .{}, &aw.writer);
 

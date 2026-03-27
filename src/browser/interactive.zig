@@ -36,6 +36,7 @@ pub const InteractivityType = enum {
 };
 
 pub const InteractiveElement = struct {
+    backendNodeId: ?u32 = null,
     node: *Node,
     tag_name: []const u8,
     role: ?[]const u8,
@@ -54,6 +55,11 @@ pub const InteractiveElement = struct {
 
     pub fn jsonStringify(self: *const InteractiveElement, jw: anytype) !void {
         try jw.beginObject();
+
+        if (self.backendNodeId) |id| {
+            try jw.objectField("backendNodeId");
+            try jw.write(id);
+        }
 
         try jw.objectField("tagName");
         try jw.write(self.tag_name);
@@ -122,6 +128,15 @@ pub const InteractiveElement = struct {
         try jw.endObject();
     }
 };
+
+/// Populate backendNodeId on each interactive element by registering
+/// their nodes in the given registry. Works with both CDP and MCP registries.
+pub fn registerNodes(elements: []InteractiveElement, registry: anytype) !void {
+    for (elements) |*el| {
+        const registered = try registry.register(el.node);
+        el.backendNodeId = registered.id;
+    }
+}
 
 /// Collect all interactive elements under `root`.
 pub fn collectInteractiveElements(
