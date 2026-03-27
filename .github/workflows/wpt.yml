@@ -14,6 +14,8 @@ on:
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
   wpt-build-release:
@@ -116,7 +118,7 @@ jobs:
         run: |
           ./wpt serve 2> /dev/null & echo $! > WPT.pid
           sleep 20s
-          ./wptrunner -lpd-path ./lightpanda -json -concurrency 5 -pool 5 --mem-limit 400 > wpt.json
+          ./wptrunner -lpd-path ./lightpanda -json -concurrency 10 -pool 10 --mem-limit 400 > wpt.json
           kill `cat WPT.pid`
 
       - name: write commit
