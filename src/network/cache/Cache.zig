@@ -122,63 +122,6 @@ pub const CachedMetadata = struct {
     cache_control: CacheControl,
     vary: ?Vary,
     headers: []const Http.Header,
-
-    pub fn fromHeaders(
-        url: [:0]const u8,
-        status: u16,
-        timestamp: i64,
-        headers: []const Http.Header,
-    ) !?CachedMetadata {
-        var cc: ?CacheControl = null;
-        var vary: ?Vary = null;
-        var etag: ?[]const u8 = null;
-        var last_modified: ?[]const u8 = null;
-        var age_at_store: u64 = 0;
-        var content_type: []const u8 = "application/octet-stream";
-
-        // Only cache 200 for now. Technically, we can cache others.
-        switch (status) {
-            200 => {},
-            else => return null,
-        }
-
-        for (headers) |hdr| {
-            if (std.ascii.eqlIgnoreCase(hdr.name, "cache-control")) {
-                cc = CacheControl.parse(hdr.value) orelse return null;
-            } else if (std.ascii.eqlIgnoreCase(hdr.name, "etag")) {
-                etag = hdr.value;
-            } else if (std.ascii.eqlIgnoreCase(hdr.name, "last-modified")) {
-                last_modified = hdr.value;
-            } else if (std.ascii.eqlIgnoreCase(hdr.name, "vary")) {
-                vary = Vary.parse(hdr.value);
-                // Vary: * means the response cannot be cached
-                if (vary) |v| if (v == .wildcard) return null;
-            } else if (std.ascii.eqlIgnoreCase(hdr.name, "age")) {
-                age_at_store = std.fmt.parseInt(u64, hdr.value, 10) catch 0;
-            } else if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) {
-                content_type = hdr.value;
-            } else if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
-                // Don't cache if has Set-Cookie.
-                return null;
-            } else if (std.ascii.eqlIgnoreCase(hdr.name, "authorization")) {
-                // Don't cache if has Authorization.
-                return null;
-            }
-        }
-
-        return .{
-            .url = url,
-            .content_type = content_type,
-            .status = status,
-            .stored_at = timestamp,
-            .age_at_store = age_at_store,
-            .etag = etag,
-            .last_modified = last_modified,
-            .cache_control = cc orelse return null,
-            .vary = vary,
-            .headers = headers,
-        };
-    }
 };
 
 pub const CacheRequest = struct {
@@ -194,3 +137,36 @@ pub const CachedResponse = struct {
     metadata: CachedMetadata,
     data: CachedData,
 };
+
+pub fn tryCache(
+    arena: std.mem.Allocator,
+    timestamp: i64,
+    url: [:0]const u8,
+    status: u16,
+    content_type: ?[]const u8,
+    cache_control: ?[]const u8,
+    vary: ?[]const u8,
+    etag: ?[]const u8,
+    last_modified: ?[]const u8,
+    age: ?[]const u8,
+    has_set_cookie: bool,
+    has_authorization: bool,
+) !?CachedMetadata {
+    if (status != 200) return null;
+    if (has_set_cookie) return null;
+    if (has_authorization) return null;
+    const cc = CacheControl.parse(cache_control orelse return null) orelse return null;
+
+    return .{
+        .url = url,
+        .content_type = if (content_type) |ct| try arena.dupe(u8, ct) else "application/octet-stream",
+        .status = status,
+        .stored_at = timestamp,
+        .age_at_store = if (age) |a| std.fmt.parseInt(u64, a, 10) catch 0 else 0,
+        .cache_control = cc,
+        .vary = if (vary) |v| Vary.parse(v) else null,
+        .etag = if (etag) |e| try arena.dupe(u8, e) else null,
+        .last_modified = if (last_modified) |lm| try arena.dupe(u8, lm) else null,
+        .headers = &.{},
+    };
+}
