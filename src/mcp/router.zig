@@ -16,6 +16,7 @@ pub fn processRequests(server: *Server, reader: *std.io.Reader) !void {
         const buffered_line = reader.takeDelimiter('\n') catch |err| switch (err) {
             error.StreamTooLong => {
                 log.err(.mcp, "Message too long", .{});
+                try server.sendError(.null, .InvalidRequest, "Message too long");
                 continue;
             },
             else => return err,
@@ -80,6 +81,7 @@ pub fn handleMessage(server: *Server, arena: std.mem.Allocator, msg: []const u8)
 }
 
 fn handleInitialize(server: *Server, req: protocol.Request) !void {
+    const id = req.id orelse return;
     const result = protocol.InitializeResult{
         .protocolVersion = "2025-11-25",
         .capabilities = .{
@@ -92,7 +94,7 @@ fn handleInitialize(server: *Server, req: protocol.Request) !void {
         },
     };
 
-    try server.sendResult(req.id.?, result);
+    try server.sendResult(id, result);
 }
 
 fn handlePing(server: *Server, req: protocol.Request) !void {
