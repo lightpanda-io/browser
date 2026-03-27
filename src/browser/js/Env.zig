@@ -34,7 +34,6 @@ const Snapshot = @import("Snapshot.zig");
 const Inspector = @import("Inspector.zig");
 
 const Page = @import("../Page.zig");
-const Session = @import("../Session.zig");
 const Window = @import("../webapi/Window.zig");
 
 const JsApis = bridge.JsApis;

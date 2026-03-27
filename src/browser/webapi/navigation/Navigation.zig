@@ -27,8 +27,6 @@ const Page = @import("../../Page.zig");
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 // https://developer.mozilla.org/en-US/docs/Web/API/Navigation
 const Navigation = @This();
 

@@ -25,7 +25,6 @@ const json = std.json;
 const Incrementing = @import("id.zig").Incrementing;
 
 const log = @import("../log.zig");
-const App = @import("../App.zig");
 const Notification = @import("../Notification.zig");
 
 const Client = @import("../Server.zig").Client;
@@ -35,7 +34,6 @@ const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
 const Page = @import("../browser/Page.zig");
 const Mime = @import("../browser/Mime.zig");
-const HttpClient = @import("../browser/HttpClient.zig");
 
 const InterceptState = @import("domains/fetch.zig").InterceptState;
 

@@ -19,10 +19,6 @@
 const std = @import("std");
 const json = std.json;
 const posix = std.posix;
-const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
-
-const Testing = @This();
 
 const CDP = @import("CDP.zig");
 const Server = @import("../Server.zig");

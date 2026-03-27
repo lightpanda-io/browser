@@ -21,7 +21,6 @@ const std = @import("std");
 const Page = @import("Page.zig");
 const URL = @import("URL.zig");
 const TreeWalker = @import("webapi/TreeWalker.zig");
-const CData = @import("webapi/CData.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;

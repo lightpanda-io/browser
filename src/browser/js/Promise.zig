@@ -20,8 +20,6 @@ const std = @import("std");
 const js = @import("js.zig");
 const v8 = js.v8;
 
-const Session = @import("../Session.zig");
-
 const Promise = @This();
 
 local: *const js.Local,

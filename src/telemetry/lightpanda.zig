@@ -9,7 +9,6 @@ const App = @import("../App.zig");
 const Config = @import("../Config.zig");
 const telemetry = @import("telemetry.zig");
 const Runtime = @import("../network/Runtime.zig");
-const Connection = @import("../network/http.zig").Connection;
 
 const URL = "https://telemetry.lightpanda.io";
 const BUFFER_SIZE = 1024;

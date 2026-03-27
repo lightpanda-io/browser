@@ -22,7 +22,6 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
 const Event = @import("../Event.zig");
-const Allocator = std.mem.Allocator;
 
 const CompositionEvent = @This();
 

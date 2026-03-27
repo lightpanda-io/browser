@@ -22,7 +22,6 @@ const log = @import("../../log.zig");
 
 const js = @import("js.zig");
 const Env = @import("Env.zig");
-const bridge = @import("bridge.zig");
 const Origin = @import("Origin.zig");
 const Scheduler = @import("Scheduler.zig");
 

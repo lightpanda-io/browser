@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const URL = @import("../URL.zig");
-const EventTarget = @import("../EventTarget.zig");
 const NavigationState = @import("root.zig").NavigationState;
 const Page = @import("../../Page.zig");
 const js = @import("../../js/js.zig");

@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
 const log = @import("../../log.zig");
 const string = @import("../../string.zig");
@@ -33,7 +32,6 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const v8 = js.v8;
 const CallOpts = Caller.CallOpts;
-const Allocator = std.mem.Allocator;
 
 // Where js.Context has a lifetime tied to the page, and holds the
 // v8::Global<v8::Context>, this has a much shorter lifetime and holds a

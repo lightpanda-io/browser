@@ -425,7 +425,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         ls.deinit();
     }
 
-    const activation_state = ActivationState.create(event, target, page);
+    const activation_state = try ActivationState.create(event, target, page);
 
     // Defer runs even on early return - ensures event phase is reset
     // and default actions execute (unless prevented)
@@ -820,7 +820,7 @@ const ActivationState = struct {
 
     const Input = Element.Html.Input;
 
-    fn create(event: *const Event, target: *Node, page: *Page) ?ActivationState {
+    fn create(event: *const Event, target: *Node, page: *Page) !?ActivationState {
         if (event._type_string.eql(comptime .wrap("click")) == false) {
             return null;
         }

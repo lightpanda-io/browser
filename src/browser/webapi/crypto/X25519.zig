@@ -20,7 +20,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const log = @import("../../../log.zig");
 const crypto = @import("../../../sys/libcrypto.zig");
 
 const Page = @import("../../Page.zig");

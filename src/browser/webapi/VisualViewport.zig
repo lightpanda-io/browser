@@ -19,7 +19,6 @@
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const EventTarget = @import("EventTarget.zig");
-const Window = @import("Window.zig");
 
 const VisualViewport = @This();
 

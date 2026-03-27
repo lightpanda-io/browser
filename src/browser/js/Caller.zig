@@ -128,7 +128,7 @@ fn _constructor(self: *Caller, func: anytype, info: FunctionCallbackInfo) !void 
     const new_this_handle = info.getThis();
     var this = js.Object{ .local = local, .handle = new_this_handle };
     if (@typeInfo(ReturnType) == .error_union) {
-        const non_error_res = res catch |err| return err;
+        const non_error_res = try res;
         this = try local.mapZigInstanceToJs(new_this_handle, non_error_res);
     } else {
         this = try local.mapZigInstanceToJs(new_this_handle, res);

@@ -21,7 +21,6 @@ const js = @import("js.zig");
 const v8 = js.v8;
 
 const log = @import("../../log.zig");
-const Session = @import("../Session.zig");
 
 const Function = @This();
 

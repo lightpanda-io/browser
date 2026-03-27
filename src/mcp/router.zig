@@ -1,5 +1,4 @@
 const std = @import("std");
-const lp = @import("lightpanda");
 const protocol = @import("protocol.zig");
 const resources = @import("resources.zig");
 const Server = @import("Server.zig");
