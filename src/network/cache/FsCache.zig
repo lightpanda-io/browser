@@ -93,10 +93,6 @@ pub fn deinit(self: *FsCache) void {
     self.dir.close();
 }
 
-pub fn cache(self: *FsCache) Cache {
-    return Cache.init(self);
-}
-
 pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.CachedResponse {
     const hashed_key = hashKey(req.url);
     const meta_p = metaPath(&hashed_key);
