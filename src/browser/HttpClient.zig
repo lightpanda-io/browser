@@ -362,7 +362,7 @@ fn processRequest(self: *Client, req: Request) !void {
             const arena = try self.network.app.arena_pool.acquire(.{ .debug = "HttpClient.processRequest.cache" });
             defer self.network.app.arena_pool.release(arena);
 
-            if (cache.get(arena, .{ .url = req.url })) |cached| {
+            if (cache.get(arena, .{ .url = req.url, .timestamp = std.time.timestamp() })) |cached| {
                 log.debug(.browser, "http.cache.get", .{
                     .url = req.url,
                     .found = true,
