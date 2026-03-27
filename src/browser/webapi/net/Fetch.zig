@@ -80,7 +80,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     if (request._headers) |h| {
         try h.populateHttpHeader(page.call_arena, &headers);
     }
-    try page.headersForRequest(page.arena, request._url, &headers);
+    try page.headersForRequest(&headers);
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });
@@ -95,6 +95,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         .headers = headers,
         .resource_type = .fetch,
         .cookie_jar = &page._session.cookie_jar,
+        .cookie_origin = page.url,
         .notification = page._session.notification,
         .start_callback = httpStartCallback,
         .header_callback = httpHeaderDoneCallback,

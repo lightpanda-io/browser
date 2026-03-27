@@ -381,12 +381,9 @@ pub fn getTitle(self: *Page) !?[]const u8 {
     return null;
 }
 
-// Add comon headers for a request:
-// * cookies
+// Add common headers for a request:
 // * referer
-pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, headers: *HttpClient.Headers) !void {
-    try self.requestCookie(.{}).headersForRequest(temp, url, headers);
-
+pub fn headersForRequest(self: *Page, headers: *HttpClient.Headers) !void {
     // Build the referer
     const referer = blk: {
         if (self.referer_header == null) {
@@ -541,8 +538,6 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     if (opts.header) |hdr| {
         try headers.add(hdr);
     }
-    try self.requestCookie(.{ .is_navigation = true }).headersForRequest(self.arena, self.url, &headers);
-
     // We dispatch page_navigate event before sending the request.
     // It ensures the event page_navigated is not dispatched before this one.
     session.notification.dispatch(.page_navigate, &.{
@@ -569,6 +564,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         .headers = headers,
         .body = opts.body,
         .cookie_jar = &session.cookie_jar,
+        .cookie_origin = self.url,
         .resource_type = .document,
         .notification = self._session.notification,
         .header_callback = pageHeaderDoneCallback,
@@ -1032,6 +1028,7 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
             });
 
             parser.parse(html);
+            self._parse_state = .complete;
             self.documentIsComplete();
         },
         else => unreachable,
@@ -3548,19 +3545,6 @@ pub fn insertText(self: *Page, v: []const u8) !void {
     if (html_element.is(Element.Html.TextArea)) |textarea| {
         return textarea.innerInsert(v, self);
     }
-}
-
-const RequestCookieOpts = struct {
-    is_http: bool = true,
-    is_navigation: bool = false,
-};
-pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) HttpClient.RequestCookie {
-    return .{
-        .jar = &self._session.cookie_jar,
-        .origin = self.url,
-        .is_http = opts.is_http,
-        .is_navigation = opts.is_navigation,
-    };
 }
 
 fn asUint(comptime string: anytype) std.meta.Int(

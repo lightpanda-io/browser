@@ -136,9 +136,9 @@ fn clearList(list: *std.DoublyLinkedList) void {
     }
 }
 
-fn getHeaders(self: *ScriptManager, arena: Allocator, url: [:0]const u8) !net_http.Headers {
+fn getHeaders(self: *ScriptManager) !net_http.Headers {
     var headers = try self.client.newHeaders();
-    try self.page.headersForRequest(arena, url, &headers);
+    try self.page.headersForRequest(&headers);
     return headers;
 }
 
@@ -278,9 +278,10 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             .ctx = script,
             .method = .GET,
             .frame_id = page._frame_id,
-            .headers = try self.getHeaders(arena, url),
+            .headers = try self.getHeaders(),
             .blocking = is_blocking,
             .cookie_jar = &page._session.cookie_jar,
+            .cookie_origin = page.url,
             .resource_type = .script,
             .notification = page._session.notification,
             .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
@@ -403,8 +404,9 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .ctx = script,
         .method = .GET,
         .frame_id = page._frame_id,
-        .headers = try self.getHeaders(arena, url),
+        .headers = try self.getHeaders(),
         .cookie_jar = &page._session.cookie_jar,
+        .cookie_origin = page.url,
         .resource_type = .script,
         .notification = page._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
@@ -506,10 +508,11 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
         .url = url,
         .method = .GET,
         .frame_id = page._frame_id,
-        .headers = try self.getHeaders(arena, url),
+        .headers = try self.getHeaders(),
         .ctx = script,
         .resource_type = .script,
         .cookie_jar = &page._session.cookie_jar,
+        .cookie_origin = page.url,
         .notification = page._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
@@ -652,7 +655,6 @@ pub const Script = struct {
     debug_transfer_aborted: bool = false,
     debug_transfer_bytes_received: usize = 0,
     debug_transfer_notified_fail: bool = false,
-    debug_transfer_redirecting: bool = false,
     debug_transfer_intercept_state: u8 = 0,
     debug_transfer_auth_challenge: bool = false,
     debug_transfer_easy_id: usize = 0,
@@ -728,7 +730,6 @@ pub const Script = struct {
                 .a3 = self.debug_transfer_aborted,
                 .a4 = self.debug_transfer_bytes_received,
                 .a5 = self.debug_transfer_notified_fail,
-                .a6 = self.debug_transfer_redirecting,
                 .a7 = self.debug_transfer_intercept_state,
                 .a8 = self.debug_transfer_auth_challenge,
                 .a9 = self.debug_transfer_easy_id,
@@ -737,10 +738,9 @@ pub const Script = struct {
                 .b3 = transfer.aborted,
                 .b4 = transfer.bytes_received,
                 .b5 = transfer._notified_fail,
-                .b6 = transfer._redirecting,
                 .b7 = @intFromEnum(transfer._intercept_state),
                 .b8 = transfer._auth_challenge != null,
-                .b9 = if (transfer._conn) |c| @intFromPtr(c.easy) else 0,
+                .b9 = if (transfer._conn) |c| @intFromPtr(c._easy) else 0,
             });
             self.header_callback_called = true;
             self.debug_transfer_id = transfer.id;
@@ -748,10 +748,9 @@ pub const Script = struct {
             self.debug_transfer_aborted = transfer.aborted;
             self.debug_transfer_bytes_received = transfer.bytes_received;
             self.debug_transfer_notified_fail = transfer._notified_fail;
-            self.debug_transfer_redirecting = transfer._redirecting;
             self.debug_transfer_intercept_state = @intFromEnum(transfer._intercept_state);
             self.debug_transfer_auth_challenge = transfer._auth_challenge != null;
-            self.debug_transfer_easy_id = if (transfer._conn) |c| @intFromPtr(c.easy) else 0;
+            self.debug_transfer_easy_id = if (transfer._conn) |c| @intFromPtr(c._easy) else 0;
         }
 
         lp.assert(self.source.remote.capacity == 0, "ScriptManager.Header buffer", .{ .capacity = self.source.remote.capacity });

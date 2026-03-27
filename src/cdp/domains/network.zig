@@ -351,6 +351,10 @@ pub const TransferAsRequestWriter = struct {
                 try jws.objectField(hdr.name);
                 try jws.write(hdr.value);
             }
+            if (try transfer.getCookieString()) |cookies| {
+                try jws.objectField("Cookie");
+                try jws.write(cookies[0 .. cookies.len - 1]);
+            }
             try jws.endObject();
         }
         try jws.endObject();

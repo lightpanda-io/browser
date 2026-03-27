@@ -461,7 +461,7 @@ fn drainQueue(self: *Runtime) void {
             self.releaseConnection(conn);
             continue;
         };
-        libcurl.curl_multi_add_handle(multi, conn.easy) catch |err| {
+        libcurl.curl_multi_add_handle(multi, conn._easy) catch |err| {
             lp.log.err(.app, "curl multi add", .{ .err = err });
             self.releaseConnection(conn);
         };
@@ -565,7 +565,7 @@ pub fn getConnection(self: *Runtime) ?*net_http.Connection {
 }
 
 pub fn releaseConnection(self: *Runtime, conn: *net_http.Connection) void {
-    conn.reset() catch |err| {
+    conn.reset(self.config, self.ca_blob) catch |err| {
         lp.assert(false, "couldn't reset curl easy", .{ .err = err });
     };
 
