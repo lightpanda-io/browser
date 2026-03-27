@@ -27,6 +27,7 @@ const Config = @import("../Config.zig");
 const libcurl = @import("../sys/libcurl.zig");
 
 const net_http = @import("http.zig");
+const IpFilter = @import("IpFilter.zig");
 const RobotStore = @import("Robots.zig").RobotStore;
 const WebBotAuth = @import("WebBotAuth.zig");
 
@@ -72,6 +73,12 @@ submission_queue: std.DoublyLinkedList = .{},
 callbacks: [MAX_TICK_CALLBACKS]TickCallback = undefined,
 callbacks_len: usize = 0,
 callbacks_mutex: std.Thread.Mutex = .{},
+
+/// Optional IP filter for blocking requests to private/internal networks (--block-private-networks).
+ip_filter: ?*IpFilter = null,
+// Custom CIDR slices backing ip_filter; null when --block-cidrs was not set.
+ip_filter_custom_v4: ?[]IpFilter.CidrV4 = null,
+ip_filter_custom_v6: ?[]IpFilter.CidrV6 = null,
 
 const TickCallback = struct {
     ctx: *anyopaque,
@@ -222,16 +229,46 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
     const connections = try allocator.alloc(net_http.Connection, count);
     errdefer allocator.free(connections);
 
-    var available: std.DoublyLinkedList = .{};
-    for (0..count) |i| {
-        connections[i] = try net_http.Connection.init(ca_blob, config);
-        available.append(&connections[i].node);
-    }
-
     const web_bot_auth = if (config.webBotAuth()) |wba_cfg|
         try WebBotAuth.fromConfig(allocator, &wba_cfg)
     else
         null;
+
+    // IP filter for blocking requests to private/internal networks. Heap-allocated
+    // for pointer stability: connections need a stable *const IpFilter to pass to
+    // curl's opensocket callback.
+    const block_private = config.blockPrivateNetworks();
+    const custom_cidrs: ?IpFilter.ParsedCidrs = blk: {
+        const s = config.blockCidrs() orelse break :blk null;
+        break :blk try IpFilter.parseCidrList(allocator, s);
+    };
+    errdefer if (custom_cidrs) |c| {
+        allocator.free(c.v4);
+        allocator.free(c.v6);
+        allocator.free(c.allow_v4);
+        allocator.free(c.allow_v6);
+    };
+
+    const ip_filter: ?*IpFilter = blk: {
+        const has_custom = if (custom_cidrs) |c| c.v4.len > 0 or c.v6.len > 0 or c.allow_v4.len > 0 or c.allow_v6.len > 0 else false;
+        if (!block_private and !has_custom) break :blk null;
+        const f = try allocator.create(IpFilter);
+        f.* = IpFilter.init(
+            block_private,
+            if (custom_cidrs) |c| c.v4 else &.{},
+            if (custom_cidrs) |c| c.v6 else &.{},
+            if (custom_cidrs) |c| c.allow_v4 else &.{},
+            if (custom_cidrs) |c| c.allow_v6 else &.{},
+        );
+        break :blk f;
+    };
+    errdefer if (ip_filter) |f| allocator.destroy(f);
+
+    var available: std.DoublyLinkedList = .{};
+    for (0..count) |i| {
+        connections[i] = try net_http.Connection.init(ca_blob, config, ip_filter);
+        available.append(&connections[i].node);
+    }
 
     return .{
         .allocator = allocator,
@@ -246,6 +283,9 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
 
         .robot_store = RobotStore.init(allocator),
         .web_bot_auth = web_bot_auth,
+        .ip_filter = ip_filter,
+        .ip_filter_custom_v4 = if (custom_cidrs) |c| c.v4 else null,
+        .ip_filter_custom_v6 = if (custom_cidrs) |c| c.v6 else null,
     };
 }
 
@@ -277,6 +317,12 @@ pub fn deinit(self: *Runtime) void {
     if (self.web_bot_auth) |wba| {
         wba.deinit(self.allocator);
     }
+
+    if (self.ip_filter) |f| {
+        self.allocator.destroy(f);
+    }
+    if (self.ip_filter_custom_v4) |v4| self.allocator.free(v4);
+    if (self.ip_filter_custom_v6) |v6| self.allocator.free(v6);
 
     globalDeinit();
 }
@@ -576,7 +622,7 @@ pub fn releaseConnection(self: *Runtime, conn: *net_http.Connection) void {
 }
 
 pub fn newConnection(self: *Runtime) !net_http.Connection {
-    return net_http.Connection.init(self.ca_blob, self.config);
+    return net_http.Connection.init(self.ca_blob, self.config, self.ip_filter);
 }
 
 // Wraps lines @ 64 columns. A PEM is basically a base64 encoded DER (which is

@@ -20,6 +20,7 @@ const std = @import("std");
 
 const Config = @import("../Config.zig");
 const libcurl = @import("../sys/libcurl.zig");
+const IpFilter = @import("IpFilter.zig");
 
 const log = @import("lightpanda").log;
 const assert = @import("lightpanda").assert;
@@ -225,6 +226,35 @@ pub const ResponseHead = struct {
     }
 };
 
+/// Opensocket callback: blocks connections to private/internal IP ranges
+/// before TCP SYN, regardless of request origin (JS, HTML resources, redirects, etc.).
+/// Called by curl after DNS resolution, before the socket is created.
+/// Returns CURL_SOCKET_BAD to block; otherwise creates and returns a real socket fd.
+/// clientp is a *const IpFilter passed via CURLOPT_OPENSOCKETDATA.
+fn opensocketCallback(
+    purpose: libcurl.CurlSockType,
+    address: *libcurl.CurlSockAddr,
+    clientp: ?*anyopaque,
+) libcurl.CurlSocket {
+    const filter: *const IpFilter = @ptrCast(@alignCast(clientp orelse return libcurl.CURL_SOCKET_BAD));
+    if (filter.isBlockedSockaddr(address)) {
+        if (address.family == posix.AF.INET or address.family == posix.AF.INET6) {
+            const ip = std.net.Address.initPosix(@ptrCast(&address.addr));
+            log.warn(.http, "blocked by IP filter", .{ .ip = ip });
+        } else {
+            log.warn(.http, "blocked by IP filter", .{ .family = address.family });
+        }
+        return libcurl.CURL_SOCKET_BAD;
+    }
+    _ = purpose; // purpose is informational; we always open the same socket type
+    const fd = posix.socket(
+        @intCast(address.family),
+        @intCast(address.socktype),
+        @intCast(address.protocol),
+    ) catch return libcurl.CURL_SOCKET_BAD;
+    return fd;
+}
+
 pub const Connection = struct {
     easy: *libcurl.Curl,
     node: std.DoublyLinkedList.Node = .{},
@@ -232,6 +262,7 @@ pub const Connection = struct {
     pub fn init(
         ca_blob_: ?libcurl.CurlBlob,
         config: *const Config,
+        ip_filter: ?*const IpFilter,
     ) !Connection {
         const easy = libcurl.curl_easy_init() orelse return error.FailedToInitializeEasy;
         errdefer libcurl.curl_easy_cleanup(easy);
@@ -284,6 +315,12 @@ pub const Connection = struct {
             // can include useful data).
 
             // try libcurl.curl_easy_setopt(easy, .debug_function, debugCallback);
+        }
+
+        // IP filter: block private/internal network addresses
+        if (ip_filter) |filter| {
+            try libcurl.curl_easy_setopt(easy, .opensocket_function, opensocketCallback);
+            try libcurl.curl_easy_setopt(easy, .opensocket_data, @constCast(filter));
         }
 
         return .{
@@ -533,4 +570,54 @@ fn debugCallback(_: *libcurl.Curl, msg_type: libcurl.CurlInfoType, raw: [*c]u8, 
         else => std.debug.print("libcurl ?? {d}\n", .{msg_type}),
     }
     return 0;
+}
+
+// ── Unit tests for opensocketCallback ────────────────────────────────────────
+
+fn makeSockAddrV4(ip: [4]u8) libcurl.CurlSockAddr {
+    var sa: posix.sockaddr.in = .{
+        .port = 0,
+        .addr = @bitCast(ip),
+    };
+    var curl_sa: libcurl.CurlSockAddr = .{
+        .family = posix.AF.INET,
+        .socktype = posix.SOCK.STREAM,
+        .protocol = 0,
+        .addrlen = @sizeOf(posix.sockaddr.in),
+        .addr = undefined,
+    };
+    @memcpy(std.mem.asBytes(&curl_sa.addr)[0..@sizeOf(posix.sockaddr.in)], std.mem.asBytes(&sa));
+    return curl_sa;
+}
+
+test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {
+    const filter = IpFilter.init(true, &.{}, &.{}, &.{}, &.{});
+    var sa = makeSockAddrV4(.{ 127, 0, 0, 1 });
+    const result = opensocketCallback(.ipcxn, &sa, @ptrCast(@constCast(&filter)));
+    try std.testing.expectEqual(libcurl.CURL_SOCKET_BAD, result);
+}
+
+test "opensocketCallback: public IPv4 opens a real socket" {
+    // 8.8.8.8 — not in any blocked range; callback should create a real socket
+    const filter = IpFilter.init(true, &.{}, &.{}, &.{}, &.{});
+    var sa = makeSockAddrV4(.{ 8, 8, 8, 8 });
+    const fd = opensocketCallback(.ipcxn, &sa, @ptrCast(@constCast(&filter)));
+    // A real fd is always >= 0
+    try std.testing.expect(fd >= 0);
+    posix.close(fd);
+}
+
+test "opensocketCallback: null clientp returns CURL_SOCKET_BAD (fail-closed)" {
+    var sa = makeSockAddrV4(.{ 8, 8, 8, 8 });
+    const result = opensocketCallback(.ipcxn, &sa, null);
+    try std.testing.expectEqual(libcurl.CURL_SOCKET_BAD, result);
+}
+
+test "opensocketCallback: block_private=false allows private IP" {
+    // When block_private is false the filter blocks nothing
+    const filter = IpFilter.init(false, &.{}, &.{}, &.{}, &.{});
+    var sa = makeSockAddrV4(.{ 127, 0, 0, 1 });
+    const fd = opensocketCallback(.ipcxn, &sa, @ptrCast(@constCast(&filter)));
+    try std.testing.expect(fd >= 0);
+    posix.close(fd);
 }
