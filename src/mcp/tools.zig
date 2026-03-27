@@ -172,7 +172,8 @@ pub const tool_list = [_]protocol.Tool{
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     _ = arena;
-    try server.sendResult(req.id.?, .{ .tools = &tool_list });
+    const id = req.id orelse return;
+    try server.sendResult(id, .{ .tools = &tool_list });
 }
 
 const GotoParams = struct {

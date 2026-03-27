@@ -22,7 +22,8 @@ pub const resource_list = [_]protocol.Resource{
 };
 
 pub fn handleList(server: *Server, req: protocol.Request) !void {
-    try server.sendResult(req.id.?, .{ .resources = &resource_list });
+    const id = req.id orelse return;
+    try server.sendResult(id, .{ .resources = &resource_list });
 }
 
 const ReadParams = struct {
