@@ -983,7 +983,6 @@ fn processMessages(self: *Client) !bool {
                     log.err(.browser, "http cache", .{ .key = cache_key, .metadata = metadata });
 
                     cache.put(
-                        .{ .url = cache_key },
                         metadata,
                         transfer.body.items,
                     ) catch |err| log.warn(.http, "cache put failed", .{ .err = err });
