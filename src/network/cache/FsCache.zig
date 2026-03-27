@@ -200,3 +200,48 @@ pub fn put(self: *FsCache, meta: CachedMetadata, body: []const u8) !void {
     errdefer self.dir.deleteFile(&meta_p) catch {};
     try self.dir.rename(&body_tmp_p, &body_p);
 }
+
+const testing = std.testing;
+
+test "FsCache: basic put and get" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(path);
+
+    var fs_cache = try FsCache.init(path);
+    defer fs_cache.deinit();
+    var c = Cache{ .kind = .{ .fs = fs_cache } };
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const now = std.time.timestamp();
+    const meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .etag = null,
+        .last_modified = null,
+        .cache_control = .{ .max_age = 600 },
+        .vary = null,
+        .headers = &.{},
+    };
+
+    const body = "hello world";
+    try c.put(meta, body);
+
+    const result = c.get(arena.allocator(), .{ .url = "https://example.com" }) orelse return error.CacheMiss;
+    defer result.data.file.close();
+
+    var buf: [64]u8 = undefined;
+    var file_reader = result.data.file.reader(&buf);
+
+    const read_buf = try file_reader.interface.allocRemaining(testing.allocator, .unlimited);
+    defer testing.allocator.free(read_buf);
+
+    try testing.expectEqualStrings(body, read_buf);
+}
