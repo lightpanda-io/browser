@@ -1457,6 +1457,9 @@ pub const LiveTransfer = struct {
 
                 transfer.pending_cache_metadata = cm;
                 transfer.pending_cache_metadata.?.headers = header_list.items;
+                if (transfer.getContentLength()) |cl| {
+                    try transfer.pending_cache_body.ensureTotalCapacity(allocator, cl);
+                }
             }
         }
 
