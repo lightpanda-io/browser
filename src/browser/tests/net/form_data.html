@@ -734,3 +734,101 @@
   testing.expectEqual([['field', 'data'], ['x', '0'], ['y', '0']], entries);
 }
 </script>
+
+<script id=formDataEventFires>
+{
+  // formdata event fires on the form when FormData is constructed with a form
+  const form = document.createElement('form');
+
+  const input = document.createElement('input');
+  input.name = 'field';
+  input.value = 'hello';
+  form.appendChild(input);
+
+  let eventFired = false;
+  let receivedFormData = null;
+
+  form.addEventListener('formdata', (e) => {
+    eventFired = true;
+    receivedFormData = e.formData;
+  });
+
+  const fd = new FormData(form);
+  testing.expectEqual(true, eventFired);
+  testing.expectEqual(fd, receivedFormData);
+}
+</script>
+
+<script id=formDataEventNotFiredWithoutForm>
+{
+  // formdata event should NOT fire when FormData is constructed without a form
+  const fd = new FormData();
+  fd.append('a', '1');
+  testing.expectEqual('1', fd.get('a'));
+}
+</script>
+
+<script id=formDataEventBubbles>
+{
+  // formdata event should bubble
+  const container = document.createElement('div');
+  const form = document.createElement('form');
+  container.appendChild(form);
+  document.body.appendChild(container);
+
+  const input = document.createElement('input');
+  input.name = 'x';
+  input.value = '1';
+  form.appendChild(input);
+
+  let bubbled = false;
+  container.addEventListener('formdata', () => {
+    bubbled = true;
+  });
+
+  const fd = new FormData(form);
+  testing.expectEqual(true, bubbled);
+
+  document.body.removeChild(container);
+}
+</script>
+
+<script id=formDataEventNotCancelable>
+{
+  // formdata event should not be cancelable
+  const form = document.createElement('form');
+
+  const input = document.createElement('input');
+  input.name = 'key';
+  input.value = 'val';
+  form.appendChild(input);
+
+  let cancelable = null;
+  form.addEventListener('formdata', (e) => {
+    cancelable = e.cancelable;
+  });
+
+  const fd = new FormData(form);
+  testing.expectEqual(false, cancelable);
+}
+</script>
+
+<script id=formDataEventModifyFormData>
+{
+  // Listeners can modify formData during the event
+  const form = document.createElement('form');
+
+  const input = document.createElement('input');
+  input.name = 'original';
+  input.value = 'data';
+  form.appendChild(input);
+
+  form.addEventListener('formdata', (e) => {
+    e.formData.append('added', 'by-listener');
+  });
+
+  const fd = new FormData(form);
+  testing.expectEqual('data', fd.get('original'));
+  testing.expectEqual('by-listener', fd.get('added'));
+}
+</script>

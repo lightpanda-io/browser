@@ -26,7 +26,7 @@ const Event = @import("../Event.zig");
 const HtmlElement = @import("../element/Html.zig");
 const Allocator = std.mem.Allocator;
 
-// https://developer.mozilla.org/en-US/docs/Web/API/SubmitEvent
+/// https://developer.mozilla.org/en-US/docs/Web/API/SubmitEvent
 const SubmitEvent = @This();
 
 _proto: *Event,
