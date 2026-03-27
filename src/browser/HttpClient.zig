@@ -915,23 +915,6 @@ fn processMessages(self: *Client) !bool {
             }
         }
 
-        const allocator = transfer.arena.allocator();
-        var header_list: std.ArrayList(Net.Header) = .empty;
-
-        var it = transfer.responseHeaderIterator();
-        while (it.next()) |hdr| {
-            header_list.append(
-                allocator,
-                .{
-                    .name = try allocator.dupe(u8, hdr.name),
-                    .value = try allocator.dupe(u8, hdr.value),
-                },
-            ) catch |err| {
-                log.warn(.http, "cache header collect failed", .{ .err = err });
-                break;
-            };
-        }
-
         // release it ASAP so that it's available; some done_callbacks
         // will load more resources.
         self.endTransfer(transfer);
@@ -966,28 +949,17 @@ fn processMessages(self: *Client) !bool {
                 continue;
             };
 
-            cache: {
-                if (self.network.cache) |*cache| {
-                    const headers = &transfer.response_header.?;
+            if (transfer.pending_cache_metadata) |metadata| {
+                const cache = &self.network.cache.?;
 
-                    const metadata = try CacheMetadata.fromHeaders(
-                        transfer.req.url,
-                        headers.status,
-                        std.time.timestamp(),
-                        header_list.items,
-                    ) orelse break :cache;
+                // TODO: Support Vary Keying
+                const cache_key = transfer.req.url;
 
-                    // TODO: Support Vary Keying
-                    const cache_key = transfer.req.url;
-
-                    log.err(.browser, "http cache", .{ .key = cache_key, .metadata = metadata });
-
-                    cache.put(
-                        metadata,
-                        transfer.body.items,
-                    ) catch |err| log.warn(.http, "cache put failed", .{ .err = err });
-                    log.debug(.browser, "http.cache.put", .{ .url = transfer.req.url });
-                }
+                log.debug(.browser, "http cache", .{ .key = cache_key, .metadata = metadata });
+                cache.put(metadata, transfer.pending_cache_body.items) catch |err| {
+                    log.warn(.http, "cache put failed", .{ .err = err });
+                };
+                log.debug(.browser, "http.cache.put", .{ .url = transfer.req.url });
             }
         }
 
@@ -1184,7 +1156,8 @@ pub const Transfer = struct {
     // total bytes received in the response, including the response status line,
     // the headers, and the [encoded] body.
     bytes_received: usize = 0,
-    body: std.ArrayListUnmanaged(u8) = .empty,
+    pending_cache_body: std.ArrayList(u8) = .empty,
+    pending_cache_metadata: ?CacheMetadata = null,
 
     aborted: bool = false,
 
@@ -1236,6 +1209,8 @@ pub const Transfer = struct {
         self._notified_fail = false;
         self.response_header = null;
         self.bytes_received = 0;
+        self.pending_cache_metadata = null;
+        self.pending_cache_body = .empty;
 
         self._tries += 1;
     }
@@ -1451,6 +1426,40 @@ pub const Transfer = struct {
             return err;
         };
 
+        if (transfer.client.network.cache != null and transfer.req.method == .GET) {
+            const rh = &transfer.response_header.?;
+            const allocator = transfer.arena.allocator();
+
+            const maybe_cm = try Cache.tryCache(
+                allocator,
+                std.time.timestamp(),
+                transfer.url,
+                rh.status,
+                rh.contentType(),
+                if (conn.getResponseHeader("cache-control", 0)) |h| h.value else null,
+                if (conn.getResponseHeader("vary", 0)) |h| h.value else null,
+                if (conn.getResponseHeader("etag", 0)) |h| h.value else null,
+                if (conn.getResponseHeader("last-modified", 0)) |h| h.value else null,
+                if (conn.getResponseHeader("age", 0)) |h| h.value else null,
+                conn.getResponseHeader("set-cookie", 0) != null,
+                conn.getResponseHeader("authorization", 0) != null,
+            );
+
+            if (maybe_cm) |cm| {
+                var header_list: std.ArrayList(Net.Header) = .empty;
+                var it = transfer.responseHeaderIterator();
+                while (it.next()) |hdr| {
+                    try header_list.append(allocator, .{
+                        .name = try allocator.dupe(u8, hdr.name),
+                        .value = try allocator.dupe(u8, hdr.value),
+                    });
+                }
+
+                transfer.pending_cache_metadata = cm;
+                transfer.pending_cache_metadata.?.headers = header_list.items;
+            }
+        }
+
         transfer.req.notification.dispatch(.http_response_header_done, &.{
             .transfer = transfer,
         });
@@ -1611,10 +1620,12 @@ pub const Transfer = struct {
         }
 
         const chunk = buffer[0..chunk_len];
-        transfer.body.appendSlice(transfer.arena.allocator(), chunk) catch |err| {
-            log.err(.http, "cache body append", .{ .err = err, .req = transfer });
-            return Net.writefunc_error;
-        };
+        if (transfer.pending_cache_metadata != null) {
+            transfer.pending_cache_body.appendSlice(transfer.arena.allocator(), chunk) catch |err| {
+                log.err(.http, "cache body append", .{ .err = err, .req = transfer });
+                return Net.writefunc_error;
+            };
+        }
 
         transfer.req.data_callback(Response.fromLive(transfer), chunk) catch |err| {
             log.err(.http, "data_callback", .{ .err = err, .req = transfer });
