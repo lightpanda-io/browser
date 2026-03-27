@@ -17,6 +17,8 @@
     };
 
     flake-utils.url = "github:numtide/flake-utils";
+
+    zon2nix.url = "github:nix-community/zon2nix";
   };
 
   outputs =
@@ -26,6 +28,7 @@
       zlsPkg,
       fenix,
       flake-utils,
+      zon2nix,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -48,6 +51,7 @@
         };
 
         rustToolchain = fenix.packages.${system}.stable.toolchain;
+        zon2nixPkg = zon2nix.packages.${system}.default;
 
         # We need crtbeginS.o for building.
         crtFiles = pkgs.runCommand "crt-files" { } ''
@@ -65,6 +69,7 @@
               zigpkgs.${zigVersion}
               zls
               rustToolchain
+              zon2nixPkg
               python3
               pkg-config
               cmake
