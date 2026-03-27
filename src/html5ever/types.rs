@@ -126,21 +126,21 @@ impl CQualName {
             None => CNullable::<StringSlice>::none(),
             Some(prefix) => CNullable::<StringSlice>::some(StringSlice { ptr: prefix.as_ptr(), len: prefix.len()}),
         };
-        return CQualName{
+        CQualName{
             // inner: q as *const _ as *const c_void,
             ns: ns,
             local: local,
             prefix: prefix,
-        };
+        }
     }
 }
 impl Default for CQualName {
     fn default() -> Self {
-        return Self{
+        Self{
             prefix: CNullable::<StringSlice>::none(),
             ns: StringSlice::default(),
             local: StringSlice::default(),
-        };
+        }
     }
 }
 

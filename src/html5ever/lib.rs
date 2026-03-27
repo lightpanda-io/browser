@@ -158,13 +158,13 @@ pub extern "C" fn html5ever_attribute_iterator_next(
 
     let attr = &iter.vec[pos];
     iter.pos += 1;
-    return CNullable::<CAttribute>::some(CAttribute {
+    CNullable::<CAttribute>::some(CAttribute {
         name: CQualName::create(&attr.name),
         value: StringSlice {
             ptr: attr.value.as_ptr(),
             len: attr.value.len(),
         },
-    });
+    })
 }
 
 #[no_mangle]
@@ -186,12 +186,12 @@ pub extern "C" fn html5ever_get_memory_usage() -> Memory {
     use tikv_jemalloc_ctl::{epoch, stats};
 
     // many statistics are cached and only updated when the epoch is advanced.
-    epoch::advance().unwrap();
+    drop(epoch::advance());
 
-    return Memory {
-        resident: stats::resident::read().unwrap(),
-        allocated: stats::allocated::read().unwrap(),
-    };
+    Memory {
+        resident: stats::resident::read().unwrap_or(0),
+        allocated: stats::allocated::read().unwrap_or(0),
+    }
 }
 
 // Streaming parser API
@@ -325,7 +325,7 @@ pub extern "C" fn html5ever_streaming_parser_destroy(parser_ptr: *mut c_void) {
     // Drop the parser box without finishing
     // This is for cases where you want to cancel parsing
     unsafe {
-        let _ = Box::from_raw(parser_ptr as *mut StreamingParser);
+        drop(Box::from_raw(parser_ptr as *mut StreamingParser));
     }
 }
 
