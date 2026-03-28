@@ -41,7 +41,7 @@ pub const init: Selection = .{};
 
 pub fn deinit(self: *Selection, session: *Session) void {
     if (self._range) |r| {
-        r.asAbstractRange().deinit(session);
+        r.asAbstractRange().releaseRef(session);
         self._range = null;
     }
 }
