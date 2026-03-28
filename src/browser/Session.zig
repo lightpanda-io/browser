@@ -71,6 +71,18 @@ origins: std.StringHashMapUnmanaged(*js.Origin) = .empty,
 // ensuring object identity works across same-origin frames.
 identity: js.Identity = .{},
 
+// Shared finalizer callbacks across all Identities. Keyed by Zig instance ptr.
+// This ensures objects are only freed when ALL v8 wrappers are gone.
+finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *FinalizerCallback) = .empty,
+
+// Tracked global v8 objects that need to be released on cleanup.
+// Lives at Session level so objects can outlive individual Identities.
+globals: std.ArrayList(v8.Global) = .empty,
+
+// Temporary v8 globals that can be released early. Key is global.data_ptr.
+// Lives at Session level so objects holding Temps can outlive individual Identities.
+temps: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
+
 // Shared resources for all pages in this session.
 // These live for the duration of the page tree (root + frames).
 arena_pool: *ArenaPool,
@@ -224,6 +236,30 @@ pub fn releaseOrigin(self: *Session, origin: *js.Origin) void {
 /// Reset page_arena and factory for a clean slate.
 /// Called when root page is removed.
 fn resetPageResources(self: *Session) void {
+    // Force cleanup all remaining finalized objects
+    {
+        var it = self.finalizer_callbacks.valueIterator();
+        while (it.next()) |fc| {
+            fc.*.deinit(self);
+        }
+        self.finalizer_callbacks = .empty;
+    }
+
+    {
+        for (self.globals.items) |*global| {
+            v8.v8__Global__Reset(global);
+        }
+        self.globals = .empty;
+    }
+
+    {
+        var it = self.temps.valueIterator();
+        while (it.next()) |global| {
+            v8.v8__Global__Reset(global);
+        }
+        self.temps = .empty;
+    }
+
     self.identity.deinit();
     self.identity = .{};
 
@@ -457,35 +493,25 @@ pub fn nextPageId(self: *Session) u32 {
     return id;
 }
 
-// A type that has a finalizer can have its finalizer called one of two ways.
-// The first is from V8 via the WeakCallback we give to weakRef. But that isn't
-// guaranteed to fire, so we track this in finalizer_callbacks and call them on
-// page reset.
+// Every finalizable instance of Zig gets 1 FinalizerCallback registered in the
+// session. This is to ensure that, if v8 doesn't finalize the value, we can
+// release on page reset.
 pub const FinalizerCallback = struct {
     arena: Allocator,
     session: *Session,
-    ptr: *anyopaque,
-    global: v8.Global,
-    identity: *js.Identity,
-    zig_finalizer: *const fn (ptr: *anyopaque, session: *Session) void,
+    resolved_ptr_id: usize,
+    finalizer_ptr_id: usize,
+    _deinit: *const fn (ptr_id: usize, session: *Session) void,
 
-    pub fn deinit(self: *FinalizerCallback) void {
-        self.zig_finalizer(self.ptr, self.session);
-        self.session.releaseArena(self.arena);
-    }
+    // For every FinalizerCallback we'll have 1+ FinalizerCallback.Identity: one
+    // for every identity that gets the instance. In most cases, that'l be 1.
+    pub const Identity = struct {
+        identity: *js.Identity,
+        fc: *Session.FinalizerCallback,
+    };
 
-    /// Release this item from the identity tracking maps (called after finalizer runs from V8)
-    pub fn releaseIdentity(self: *FinalizerCallback) void {
-        const session = self.session;
-        const id = @intFromPtr(self.ptr);
-
-        if (self.identity.identity_map.fetchRemove(id)) |kv| {
-            var global = kv.value;
-            v8.v8__Global__Reset(&global);
-        }
-
-        _ = self.identity.finalizer_callbacks.remove(id);
-
+    fn deinit(self: *FinalizerCallback, session: *Session) void {
+        self._deinit(self.finalizer_ptr_id, session);
         session.releaseArena(self.arena);
     }
 };

@@ -209,6 +209,37 @@ noinline fn assertionFailure(comptime ctx: []const u8, args: anytype) noreturn {
     @import("crash_handler.zig").crash(ctx, args, @returnAddress());
 }
 
+// Reference counting helper
+pub fn RC(comptime T: type) type {
+    return struct {
+        _refs: T = 0,
+
+        pub fn init(refs: T) @This() {
+            return .{ ._refs = refs };
+        }
+
+        pub fn acquire(self: *@This()) void {
+            self._refs += 1;
+        }
+
+        pub fn release(self: *@This(), value: anytype, session: *Session) void {
+            if (comptime IS_DEBUG) {
+                std.debug.assert(self._refs > 0);
+            }
+
+            const refs = self._refs - 1;
+            self._refs = refs;
+            if (refs > 0) {
+                return;
+            }
+            value.deinit(session);
+            if (session.finalizer_callbacks.fetchRemove(@intFromPtr(value))) |kv| {
+                session.releaseArena(kv.value.arena);
+            }
+        }
+    };
+}
+
 test {
     std.testing.refAllDecls(@This());
 }

@@ -17,9 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Session = @import("../Session.zig");
 const log = @import("../../log.zig");
 const string = @import("../../string.zig");
+
+const Session = @import("../Session.zig");
 
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
@@ -213,7 +214,8 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
         .pointer => |ptr| {
             const resolved = resolveValue(value);
 
-            const gop = try ctx.addIdentity(@intFromPtr(resolved.ptr));
+            const resolved_ptr_id = @intFromPtr(resolved.ptr);
+            const gop = try ctx.addIdentity(resolved_ptr_id);
             if (gop.found_existing) {
                 // we've seen this instance before, return the same object
                 return (js.Object.Global{ .handle = gop.value_ptr.* }).local(self);
@@ -262,31 +264,27 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
             // dont' use js_obj.persist(), because we don't want to track this in
             // context.global_objects, we want to track it in context.identity_map.
             v8.v8__Global__New(isolate.handle, js_obj.handle, gop.value_ptr);
-            if (@hasDecl(JsApi.Meta, "finalizer")) {
-                // It would be great if resolved knew the resolved type, but I
-                // can't figure out how to make that work, since it depends on
-                // the [runtime] `value`.
-                // We need the resolved finalizer, which we have in resolved.
-                //
-                // The above if statement would be more clear as:
-                //    if (resolved.finalizer_from_v8) |finalizer| {
-                // But that's a runtime check.
-                // Instead, we check if the base has finalizer. The assumption
-                // here is that if a resolve type has a finalizer, then the base
-                // should have a finalizer too.
-                const fc = try ctx.createFinalizerCallback(gop.value_ptr.*, resolved.ptr, resolved.finalizer_from_zig.?);
-                {
-                    errdefer fc.deinit();
-                    try ctx.identity.finalizer_callbacks.put(ctx.identity_arena, @intFromPtr(resolved.ptr), fc);
-                }
+            if (resolved.finalizer) |finalizer| {
+                const finalizer_ptr_id = finalizer.ptr_id;
+                finalizer.acquireRef(finalizer_ptr_id);
 
-                conditionallyReference(value);
-                if (@hasDecl(JsApi.Meta, "weak")) {
-                    if (comptime IS_DEBUG) {
-                        std.debug.assert(JsApi.Meta.weak == true);
-                    }
-                    v8.v8__Global__SetWeakFinalizer(gop.value_ptr, fc, resolved.finalizer_from_v8, v8.kParameter);
+                const session = ctx.session;
+                const finalizer_gop = try session.finalizer_callbacks.getOrPut(session.page_arena, finalizer_ptr_id);
+                if (finalizer_gop.found_existing == false) {
+                    // This is the first context (and very likely only one) to
+                    // see this Zig instance. We need to create the FinalizerCallback
+                    // so that we can cleanup on page reset if v8 doesn't finalize.
+                    errdefer _ = session.finalizer_callbacks.remove(finalizer_ptr_id);
+                    finalizer_gop.value_ptr.* = try self.createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.deinit);
                 }
+                const fc = finalizer_gop.value_ptr.*;
+                const identity_finalizer = try fc.arena.create(Session.FinalizerCallback.Identity);
+                identity_finalizer.* = .{
+                    .fc = fc,
+                    .identity = ctx.identity,
+                };
+
+                v8.v8__Global__SetWeakFinalizer(gop.value_ptr, identity_finalizer, finalizer.release, v8.kParameter);
             }
             return js_obj;
         },
@@ -1121,12 +1119,19 @@ fn jsUnsignedIntToZig(comptime T: type, max: comptime_int, maybe: u32) !T {
 // This function recursively walks the _type union field (if there is one) to
 // get the most specific class_id possible.
 const Resolved = struct {
-    weak: bool,
     ptr: *anyopaque,
     class_id: u16,
     prototype_chain: []const @import("TaggedOpaque.zig").PrototypeChainEntry,
-    finalizer_from_v8: ?*const fn (handle: ?*const v8.WeakCallbackInfo) callconv(.c) void = null,
-    finalizer_from_zig: ?*const fn (ptr: *anyopaque, session: *Session) void = null,
+    finalizer: ?Finalizer,
+
+    const Finalizer = struct {
+        // Resolved.ptr is the most specific value in a chain (e.g. IFrame, not EventTarget, Node,  ...)
+        // Finalizer.ptr_id is the most specific value in a chain that defines an acquireRef
+        ptr_id: usize,
+        deinit: *const fn (ptr_id: usize, session: *Session) void,
+        acquireRef: *const fn (ptr_id: usize) void,
+        release: *const fn (handle: ?*const v8.WeakCallbackInfo) callconv(.c) void,
+    };
 };
 pub fn resolveValue(value: anytype) Resolved {
     const T = bridge.Struct(@TypeOf(value));
@@ -1153,27 +1158,85 @@ pub fn resolveValue(value: anytype) Resolved {
     unreachable;
 }
 
-fn resolveT(comptime T: type, value: *anyopaque) Resolved {
+fn resolveT(comptime T: type, value: *T) Resolved {
     const Meta = T.JsApi.Meta;
     return .{
         .ptr = value,
         .class_id = Meta.class_id,
         .prototype_chain = &Meta.prototype_chain,
-        .weak = if (@hasDecl(Meta, "weak")) Meta.weak else false,
-        .finalizer_from_v8 = if (@hasDecl(Meta, "finalizer")) Meta.finalizer.from_v8 else null,
-        .finalizer_from_zig = if (@hasDecl(Meta, "finalizer")) Meta.finalizer.from_zig else null,
+        .finalizer = blk: {
+            const FT = (comptime findFinalizerType(T)) orelse break :blk null;
+            const getFinalizerPtr = comptime finalizerPtrGetter(T, FT);
+            const finalizer_ptr = getFinalizerPtr(value);
+
+            const Wrap = struct {
+                fn deinit(ptr_id: usize, session: *Session) void {
+                    FT.deinit(@ptrFromInt(ptr_id), session);
+                }
+
+                fn acquireRef(ptr_id: usize) void {
+                    FT.acquireRef(@ptrFromInt(ptr_id));
+                }
+
+                fn release(handle: ?*const v8.WeakCallbackInfo) callconv(.c) void {
+                    const ptr = v8.v8__WeakCallbackInfo__GetParameter(handle.?).?;
+                    const identity_finalizer: *Session.FinalizerCallback.Identity = @ptrCast(@alignCast(ptr));
+
+                    const fc = identity_finalizer.fc;
+                    if (identity_finalizer.identity.identity_map.fetchRemove(fc.resolved_ptr_id)) |kv| {
+                        var global = kv.value;
+                        v8.v8__Global__Reset(&global);
+                    }
+
+                    FT.releaseRef(@ptrFromInt(fc.finalizer_ptr_id), fc.session);
+                }
+            };
+            break :blk .{
+                .ptr_id = @intFromPtr(finalizer_ptr),
+                .deinit = Wrap.deinit,
+                .acquireRef = Wrap.acquireRef,
+                .release = Wrap.release,
+            };
+        },
     };
 }
 
-fn conditionallyReference(value: anytype) void {
-    const T = bridge.Struct(@TypeOf(value));
-    if (@hasDecl(T, "acquireRef")) {
-        value.acquireRef();
-        return;
+// Start at the "resolved" type (the most specific) and work our way up the
+// prototype chain looking for the type that defines acquireRef
+fn findFinalizerType(comptime T: type) ?type {
+    const S = bridge.Struct(T);
+    if (@hasDecl(S, "acquireRef")) {
+        return S;
     }
-    if (@hasField(T, "_proto")) {
-        conditionallyReference(value._proto);
+    if (@hasField(S, "_proto")) {
+        const ProtoPtr = std.meta.fieldInfo(S, ._proto).type;
+        const ProtoChild = @typeInfo(ProtoPtr).pointer.child;
+        return findFinalizerType(ProtoChild);
     }
+    return null;
+}
+
+// Generate a function that follows the _proto pointer chain to get to the finalizer type
+fn finalizerPtrGetter(comptime T: type, comptime FT: type) *const fn (*T) *FT {
+    const S = bridge.Struct(T);
+    if (S == FT) {
+        return struct {
+            fn get(v: *T) *FT {
+                return v;
+            }
+        }.get;
+    }
+    if (@hasField(S, "_proto")) {
+        const ProtoPtr = std.meta.fieldInfo(S, ._proto).type;
+        const ProtoChild = @typeInfo(ProtoPtr).pointer.child;
+        const childGetter = comptime finalizerPtrGetter(ProtoChild, FT);
+        return struct {
+            fn get(v: *T) *FT {
+                return childGetter(v._proto);
+            }
+        }.get;
+    }
+    @compileError("Cannot find path from " ++ @typeName(T) ++ " to " ++ @typeName(FT));
 }
 
 pub fn stackTrace(self: *const Local) !?[]const u8 {
@@ -1379,6 +1442,34 @@ pub fn ToLocalReturnType(comptime T: type) type {
 
 pub fn debugContextId(self: *const Local) i32 {
     return v8.v8__Context__DebugContextId(self.handle);
+}
+
+fn createFinalizerCallback(
+    self: *const Local,
+
+    // Key in identity map
+    // The most specific value (KeyboardEvent, not Event)
+    resolved_ptr_id: usize,
+
+    // The most specific value where finalizers are defined
+    // What actually gets acquired / released / deinit
+    finalizer_ptr_id: usize,
+    deinit: *const fn (ptr_id: usize, session: *Session) void,
+) !*Session.FinalizerCallback {
+    const session = self.ctx.session;
+
+    const arena = try session.getArena(.{ .debug = "FinalizerCallback" });
+    errdefer session.releaseArena(arena);
+
+    const fc = try arena.create(Session.FinalizerCallback);
+    fc.* = .{
+        .arena = arena,
+        .session = session,
+        ._deinit = deinit,
+        .resolved_ptr_id = resolved_ptr_id,
+        .finalizer_ptr_id = finalizer_ptr_id,
+    };
+    return fc;
 }
 
 // Encapsulates a Local and a HandleScope. When we're going from V8->Zig

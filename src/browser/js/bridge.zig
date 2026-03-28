@@ -101,34 +101,19 @@ pub fn Builder(comptime T: type) type {
             }
             return entries;
         }
-
-        pub fn finalizer(comptime func: *const fn (self: *T, shutdown: bool, session: *Session) void) Finalizer {
-            return .{
-                .from_zig = struct {
-                    fn wrap(ptr: *anyopaque, session: *Session) void {
-                        func(@ptrCast(@alignCast(ptr)), true, session);
-                    }
-                }.wrap,
-
-                .from_v8 = struct {
-                    fn wrap(handle: ?*const v8.WeakCallbackInfo) callconv(.c) void {
-                        const ptr = v8.v8__WeakCallbackInfo__GetParameter(handle.?).?;
-                        const fc: *Session.FinalizerCallback = @ptrCast(@alignCast(ptr));
-
-                        const value_ptr = fc.ptr;
-                        if (fc.identity.finalizer_callbacks.contains(@intFromPtr(value_ptr))) {
-                            func(@ptrCast(@alignCast(value_ptr)), false, fc.session);
-                            fc.releaseIdentity();
-                        } else {
-                            // A bit weird, but v8 _requires_ that we release it
-                            // If we don't. We'll 100% crash.
-                            v8.v8__Global__Reset(&fc.global);
-                        }
-                    }
-                }.wrap,
-            };
-        }
     };
+}
+
+fn releaseRef(comptime T: type, ptr_id: usize, session: *Session) void {
+    if (@hasDecl(T, "releaseRef")) {
+        T.releaseRef(@ptrFromInt(ptr_id), session);
+        return;
+    }
+    if (@hasField(T, "_proto")) {
+        releaseRef(Struct(std.meta.fieldInfo(T, ._proto).type), ptr_id, session);
+        return;
+    }
+    @compileError(@typeName(T) ++ " marked with finalizer without an acquireRef in its prototype chain");
 }
 
 pub const Constructor = struct {
@@ -409,17 +394,6 @@ pub const Property = struct {
             .readonly = opts.readonly,
         };
     }
-};
-
-const Finalizer = struct {
-    // The finalizer wrapper when called from Zig. This is only called on
-    // Origin.deinit
-    from_zig: *const fn (ctx: *anyopaque, session: *Session) void,
-
-    // The finalizer wrapper when called from V8. This may never be called
-    // (hence why we fallback to calling in Origin.deinit). If it is called,
-    // it is only ever called after we SetWeak on the Global.
-    from_v8: *const fn (?*const v8.WeakCallbackInfo) callconv(.c) void,
 };
 
 pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {

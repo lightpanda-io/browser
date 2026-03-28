@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 
@@ -39,6 +41,7 @@ pub fn registerTypes() []const type {
 
 const IntersectionObserver = @This();
 
+_rc: lp.RC(u8) = .{},
 _arena: Allocator,
 _callback: js.Function.Temp,
 _observing: std.ArrayList(*Element) = .{},
@@ -108,13 +111,20 @@ pub fn init(callback: js.Function.Temp, options: ?ObserverInit, page: *Page) !*I
     return self;
 }
 
-pub fn deinit(self: *IntersectionObserver, shutdown: bool, session: *Session) void {
+pub fn deinit(self: *IntersectionObserver, session: *Session) void {
     self._callback.release();
-    if ((comptime IS_DEBUG) and !shutdown) {
-        std.debug.assert(self._observing.items.len == 0);
+    for (self._pending_entries.items) |entry| {
+        entry.deinitIfUnused(session);
     }
-
     session.releaseArena(self._arena);
+}
+
+pub fn releaseRef(self: *IntersectionObserver, session: *Session) void {
+    self._rc.release(self, session);
+}
+
+pub fn acquireRef(self: *IntersectionObserver) void {
+    self._rc.acquire();
 }
 
 pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void {
@@ -127,7 +137,7 @@ pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void
 
     // Register with page if this is our first observation
     if (self._observing.items.len == 0) {
-        page.js.strongRef(self);
+        self._rc._refs += 1;
         try page.registerIntersectionObserver(self);
     }
 
@@ -144,17 +154,19 @@ pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void
 }
 
 pub fn unobserve(self: *IntersectionObserver, target: *Element, page: *Page) void {
+    const original_length = self._observing.items.len;
     for (self._observing.items, 0..) |elem, i| {
         if (elem == target) {
             _ = self._observing.swapRemove(i);
             _ = self._previous_states.remove(target);
 
-            // Remove any pending entries for this target
+            // Remove any pending entries for this target.
+            // Entries will be cleaned up by V8 GC via the finalizer.
             var j: usize = 0;
             while (j < self._pending_entries.items.len) {
                 if (self._pending_entries.items[j]._target == target) {
                     const entry = self._pending_entries.swapRemove(j);
-                    entry.deinit(false, page._session);
+                    entry.deinitIfUnused(page._session);
                 } else {
                     j += 1;
                 }
@@ -163,21 +175,26 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, page: *Page) voi
         }
     }
 
-    if (self._observing.items.len == 0) {
-        page.js.safeWeakRef(self);
+    if (original_length > 0 and self._observing.items.len == 0) {
+        self._rc._refs -= 1;
     }
 }
 
 pub fn disconnect(self: *IntersectionObserver, page: *Page) void {
-    page.unregisterIntersectionObserver(self);
-    self._observing.clearRetainingCapacity();
-    self._previous_states.clearRetainingCapacity();
-
     for (self._pending_entries.items) |entry| {
-        entry.deinit(false, page._session);
+        entry.deinitIfUnused(page._session);
     }
     self._pending_entries.clearRetainingCapacity();
-    page.js.safeWeakRef(self);
+    self._previous_states.clearRetainingCapacity();
+
+    const observing_count = self._observing.items.len;
+    self._observing.clearRetainingCapacity();
+
+    if (observing_count > 0) {
+        _ = self.releaseRef(page._session);
+    }
+
+    page.unregisterIntersectionObserver(self);
 }
 
 pub fn takeRecords(self: *IntersectionObserver, page: *Page) ![]*IntersectionObserverEntry {
@@ -268,7 +285,6 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, page: *Page)
             ._bounding_client_rect = try page._factory.create(data.bounding_client_rect),
             ._intersection_ratio = data.intersection_ratio,
         };
-
         try self._pending_entries.append(self._arena, entry);
     }
 
@@ -310,6 +326,7 @@ pub fn deliverEntries(self: *IntersectionObserver, page: *Page) !void {
 }
 
 pub const IntersectionObserverEntry = struct {
+    _rc: lp.RC(u8) = .{},
     _arena: Allocator,
     _time: f64,
     _target: *Element,
@@ -319,8 +336,23 @@ pub const IntersectionObserverEntry = struct {
     _intersection_ratio: f64,
     _is_intersecting: bool,
 
-    pub fn deinit(self: *IntersectionObserverEntry, _: bool, session: *Session) void {
+    pub fn deinit(self: *IntersectionObserverEntry, session: *Session) void {
         session.releaseArena(self._arena);
+    }
+
+    fn deinitIfUnused(self: *IntersectionObserverEntry, session: *Session) void {
+        if (self._rc._refs == 0) {
+            // hasn't been handed to JS yet.
+            self.deinit(session);
+        }
+    }
+
+    pub fn releaseRef(self: *IntersectionObserverEntry, session: *Session) void {
+        self._rc.release(self, session);
+    }
+
+    pub fn acquireRef(self: *IntersectionObserverEntry) void {
+        self._rc.acquire();
     }
 
     pub fn getTarget(self: *const IntersectionObserverEntry) *Element {
@@ -358,8 +390,6 @@ pub const IntersectionObserverEntry = struct {
             pub const name = "IntersectionObserverEntry";
             pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
-            pub const weak = true;
-            pub const finalizer = bridge.finalizer(IntersectionObserverEntry.deinit);
         };
 
         pub const target = bridge.accessor(IntersectionObserverEntry.getTarget, null, .{});
@@ -379,8 +409,6 @@ pub const JsApi = struct {
         pub const name = "IntersectionObserver";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(IntersectionObserver.deinit);
     };
 
     pub const constructor = bridge.constructor(init, .{});

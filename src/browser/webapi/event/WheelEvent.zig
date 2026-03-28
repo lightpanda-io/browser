@@ -87,10 +87,6 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*WheelEvent {
     return event;
 }
 
-pub fn deinit(self: *WheelEvent, shutdown: bool, session: *Session) void {
-    self._proto.deinit(shutdown, session);
-}
-
 pub fn asEvent(self: *WheelEvent) *Event {
     return self._proto.asEvent();
 }
@@ -118,8 +114,6 @@ pub const JsApi = struct {
         pub const name = "WheelEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(WheelEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(WheelEvent.init, .{});

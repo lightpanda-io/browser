@@ -80,11 +80,19 @@ fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool
     return event;
 }
 
-pub fn deinit(self: *ErrorEvent, shutdown: bool, session: *Session) void {
+pub fn deinit(self: *ErrorEvent, session: *Session) void {
     if (self._error) |e| {
         e.release();
     }
-    self._proto.deinit(shutdown, session);
+    self._proto.deinit(session);
+}
+
+pub fn acquireRef(self: *ErrorEvent) void {
+    self._proto.acquireRef();
+}
+
+pub fn releaseRef(self: *ErrorEvent, session: *Session) void {
+    self._proto._rc.release(self, session);
 }
 
 pub fn asEvent(self: *ErrorEvent) *Event {

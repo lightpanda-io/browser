@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
@@ -26,7 +27,6 @@ const Blob = @import("Blob.zig");
 
 const File = @This();
 
-/// `File` inherits `Blob`.
 _proto: *Blob,
 
 // TODO: Implement File API.
@@ -36,10 +36,6 @@ pub fn init(page: *Page) !*File {
     return page._factory.blob(arena, File{ ._proto = undefined });
 }
 
-pub fn deinit(self: *File, shutdown: bool, session: *Session) void {
-    self._proto.deinit(shutdown, session);
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(File);
 
@@ -47,8 +43,6 @@ pub const JsApi = struct {
         pub const name = "File";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(File.deinit);
     };
 
     pub const constructor = bridge.constructor(File.init, .{});

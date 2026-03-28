@@ -66,10 +66,6 @@ fn initWithTrusted(arena: Allocator, typ: String, maybe_options: ?Options, trust
     return event;
 }
 
-pub fn deinit(self: *FormDataEvent, shutdown: bool, session: *Session) void {
-    self._proto.deinit(shutdown, session);
-}
-
 pub fn asEvent(self: *FormDataEvent) *Event {
     return self._proto;
 }
@@ -85,8 +81,6 @@ pub const JsApi = struct {
         pub const name = "FormDataEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(FormDataEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(FormDataEvent.init, .{});

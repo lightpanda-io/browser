@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
@@ -31,6 +33,7 @@ const Allocator = std.mem.Allocator;
 /// https://developer.mozilla.org/en-US/docs/Web/API/FileReader
 const FileReader = @This();
 
+_rc: lp.RC(u8) = .{},
 _page: *Page,
 _proto: *EventTarget,
 _arena: Allocator,
@@ -70,7 +73,7 @@ pub fn init(page: *Page) !*FileReader {
     });
 }
 
-pub fn deinit(self: *FileReader, _: bool, session: *Session) void {
+pub fn deinit(self: *FileReader, session: *Session) void {
     if (self._on_abort) |func| func.release();
     if (self._on_error) |func| func.release();
     if (self._on_load) |func| func.release();
@@ -79,6 +82,14 @@ pub fn deinit(self: *FileReader, _: bool, session: *Session) void {
     if (self._on_progress) |func| func.release();
 
     session.releaseArena(self._arena);
+}
+
+pub fn releaseRef(self: *FileReader, session: *Session) void {
+    self._rc.release(self, session);
+}
+
+pub fn acquireRef(self: *FileReader) void {
+    self._rc.acquire();
 }
 
 fn asEventTarget(self: *FileReader) *EventTarget {
@@ -309,8 +320,6 @@ pub const JsApi = struct {
         pub const name = "FileReader";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(FileReader.deinit);
     };
 
     pub const constructor = bridge.constructor(FileReader.init, .{});

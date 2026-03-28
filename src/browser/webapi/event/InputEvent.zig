@@ -83,10 +83,6 @@ fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool
     return event;
 }
 
-pub fn deinit(self: *InputEvent, shutdown: bool, session: *Session) void {
-    self._proto.deinit(shutdown, session);
-}
-
 pub fn asEvent(self: *InputEvent) *Event {
     return self._proto.asEvent();
 }
@@ -110,8 +106,6 @@ pub const JsApi = struct {
         pub const name = "InputEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(InputEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(InputEvent.init, .{});

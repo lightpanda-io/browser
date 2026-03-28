@@ -73,11 +73,19 @@ fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool
     return event;
 }
 
-pub fn deinit(self: *MessageEvent, shutdown: bool, session: *Session) void {
+pub fn deinit(self: *MessageEvent, session: *Session) void {
     if (self._data) |d| {
         d.release();
     }
-    self._proto.deinit(shutdown, session);
+    self._proto.deinit(session);
+}
+
+pub fn acquireRef(self: *MessageEvent) void {
+    self._proto.acquireRef();
+}
+
+pub fn releaseRef(self: *MessageEvent, session: *Session) void {
+    self._proto._rc.release(self, session);
 }
 
 pub fn asEvent(self: *MessageEvent) *Event {
@@ -103,8 +111,6 @@ pub const JsApi = struct {
         pub const name = "MessageEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(MessageEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(MessageEvent.init, .{});
