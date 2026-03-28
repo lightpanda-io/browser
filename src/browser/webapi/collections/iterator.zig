@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
@@ -40,9 +41,15 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
             return page._factory.create(Self{ .inner = inner });
         }
 
-        pub fn deinit(self: *Self, shutdown: bool, session: *Session) void {
-            if (@hasDecl(Inner, "deinit")) {
-                self.inner.deinit(shutdown, session);
+        pub fn deinit(self: *Self, session: *Session) void {
+            _ = self;
+            _ = session;
+        }
+
+        pub fn releaseRef(self: *Self, session: *Session) void {
+            // Release the reference to the inner type that we acquired
+            if (@hasDecl(Inner, "releaseRef")) {
+                self.inner.releaseRef(session);
             }
         }
 
@@ -73,8 +80,6 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
             pub const Meta = struct {
                 pub const prototype_chain = bridge.prototypeChain();
                 pub var class_id: bridge.ClassId = undefined;
-                pub const weak = true;
-                pub const finalizer = bridge.finalizer(Self.deinit);
             };
 
             pub const next = bridge.function(Self.next, .{ .null_as_undefined = true });

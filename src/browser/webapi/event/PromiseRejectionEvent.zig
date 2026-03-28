@@ -56,14 +56,22 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*PromiseRejectionEve
     return event;
 }
 
-pub fn deinit(self: *PromiseRejectionEvent, shutdown: bool, session: *Session) void {
+pub fn deinit(self: *PromiseRejectionEvent, session: *Session) void {
     if (self._reason) |r| {
         r.release();
     }
     if (self._promise) |p| {
         p.release();
     }
-    self._proto.deinit(shutdown, session);
+    self._proto.deinit(session);
+}
+
+pub fn acquireRef(self: *PromiseRejectionEvent) void {
+    self._proto.acquireRef();
+}
+
+pub fn releaseRef(self: *PromiseRejectionEvent, session: *Session) void {
+    self._proto._rc.release(self, session);
 }
 
 pub fn asEvent(self: *PromiseRejectionEvent) *Event {
@@ -85,8 +93,6 @@ pub const JsApi = struct {
         pub const name = "PromiseRejectionEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(PromiseRejectionEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(PromiseRejectionEvent.init, .{});

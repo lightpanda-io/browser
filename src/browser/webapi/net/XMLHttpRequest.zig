@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 
 const log = @import("../../../log.zig");
@@ -38,6 +39,7 @@ const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const XMLHttpRequest = @This();
+_rc: lp.RC(u8) = .{},
 _page: *Page,
 _proto: *XMLHttpRequestEventTarget,
 _arena: Allocator,
@@ -87,21 +89,18 @@ const ResponseType = enum {
 pub fn init(page: *Page) !*XMLHttpRequest {
     const arena = try page.getArena(.{ .debug = "XMLHttpRequest" });
     errdefer page.releaseArena(arena);
-    return page._factory.xhrEventTarget(arena, XMLHttpRequest{
+    const xhr = try page._factory.xhrEventTarget(arena, XMLHttpRequest{
         ._page = page,
         ._arena = arena,
         ._proto = undefined,
         ._request_headers = try Headers.init(null, page),
     });
+    return xhr;
 }
 
-pub fn deinit(self: *XMLHttpRequest, shutdown: bool, session: *Session) void {
+pub fn deinit(self: *XMLHttpRequest, session: *Session) void {
     if (self._transfer) |transfer| {
-        if (shutdown) {
-            transfer.terminate();
-        } else {
-            transfer.abort(error.Abort);
-        }
+        transfer.abort(error.Abort);
         self._transfer = null;
     }
 
@@ -135,6 +134,14 @@ pub fn deinit(self: *XMLHttpRequest, shutdown: bool, session: *Session) void {
     }
 
     session.releaseArena(self._arena);
+}
+
+pub fn releaseRef(self: *XMLHttpRequest, session: *Session) void {
+    self._rc.release(self, session);
+}
+
+pub fn acquireRef(self: *XMLHttpRequest) void {
+    self._rc.acquire();
 }
 
 fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
@@ -244,8 +251,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
     });
-
-    page.js.strongRef(self);
 }
 
 fn handleBlobUrl(self: *XMLHttpRequest, page: *Page) !void {
@@ -387,6 +392,7 @@ fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
         log.debug(.http, "request start", .{ .method = self._method, .url = self._url, .source = "xhr" });
     }
     self._transfer = transfer;
+    self.acquireRef();
 }
 
 fn httpHeaderCallback(transfer: *HttpClient.Transfer, header: net_http.Header) !void {
@@ -485,15 +491,17 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
         .loaded = loaded,
     }, page);
 
-    page.js.weakRef(self);
+    self.releaseRef(page._session);
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
     // http client will close it after an error, it isn't safe to keep around
-    self._transfer = null;
     self.handleError(err);
-    self._page.js.weakRef(self);
+    if (self._transfer != null) {
+        self._transfer = null;
+        self.releaseRef(self._page._session);
+    }
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {
@@ -504,10 +512,10 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
 pub fn abort(self: *XMLHttpRequest) void {
     self.handleError(error.Abort);
     if (self._transfer) |transfer| {
-        transfer.abort(error.Abort);
         self._transfer = null;
+        transfer.abort(error.Abort);
+        self.releaseRef(self._page._session);
     }
-    self._page.js.weakRef(self);
 }
 
 fn handleError(self: *XMLHttpRequest, err: anyerror) void {
@@ -581,8 +589,6 @@ pub const JsApi = struct {
         pub const name = "XMLHttpRequest";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(XMLHttpRequest.deinit);
     };
 
     pub const constructor = bridge.constructor(XMLHttpRequest.init, .{});

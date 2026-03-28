@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../js/js.zig");
 
 const Session = @import("../Session.zig");
@@ -31,7 +33,7 @@ const AbstractRange = @This();
 
 pub const _prototype_root = true;
 
-_rc: u8,
+_rc: lp.RC(u8) = .{},
 _type: Type,
 _page_id: u32,
 _arena: Allocator,
@@ -44,24 +46,18 @@ _start_container: *Node,
 _range_link: std.DoublyLinkedList.Node = .{},
 
 pub fn acquireRef(self: *AbstractRange) void {
-    self._rc += 1;
+    self._rc.acquire();
 }
 
-pub fn deinit(self: *AbstractRange, shutdown: bool, session: *Session) void {
-    _ = shutdown;
-    const rc = self._rc;
-    if (comptime IS_DEBUG) {
-        std.debug.assert(rc != 0);
+pub fn deinit(self: *AbstractRange, session: *Session) void {
+    if (session.findPageById(self._page_id)) |page| {
+        page._live_ranges.remove(&self._range_link);
     }
+    session.releaseArena(self._arena);
+}
 
-    if (rc == 1) {
-        if (session.findPageById(self._page_id)) |page| {
-            page._live_ranges.remove(&self._range_link);
-        }
-        session.releaseArena(self._arena);
-        return;
-    }
-    self._rc = rc - 1;
+pub fn releaseRef(self: *AbstractRange, session: *Session) void {
+    self._rc.release(self, session);
 }
 
 pub const Type = union(enum) {
@@ -338,8 +334,6 @@ pub const JsApi = struct {
         pub const name = "AbstractRange";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(AbstractRange.deinit);
     };
 
     pub const startContainer = bridge.accessor(AbstractRange.getStartContainer, null, .{});

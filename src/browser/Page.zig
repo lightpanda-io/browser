@@ -3395,7 +3395,7 @@ pub fn handleClick(self: *Page, target: *Node) !void {
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
     const event = keyboard_event.asEvent();
     const element = self.window._document._active_element orelse {
-        keyboard_event.deinit(false, self._session);
+        _ = event.releaseRef(self._session);
         return;
     };
 
@@ -3491,7 +3491,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
 
         // so submit_event is still valid when we check _prevent_default
         submit_event.acquireRef();
-        defer submit_event.deinit(false, self._session);
+        defer _ = submit_event.releaseRef(self._session);
 
         try self._event_manager.dispatch(form_element.asEventTarget(), submit_event);
         // If the submit event was prevented, don't submit the form

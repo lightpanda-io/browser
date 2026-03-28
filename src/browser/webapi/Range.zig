@@ -38,10 +38,6 @@ pub fn init(page: *Page) !*Range {
     return page._factory.abstractRange(arena, Range{ ._proto = undefined }, page);
 }
 
-pub fn deinit(self: *Range, shutdown: bool, session: *Session) void {
-    self._proto.deinit(shutdown, session);
-}
-
 pub fn asAbstractRange(self: *Range) *AbstractRange {
     return self._proto;
 }
@@ -697,8 +693,6 @@ pub const JsApi = struct {
         pub const name = "Range";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(Range.deinit);
     };
 
     // Constants for compareBoundaryPoints

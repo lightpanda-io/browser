@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
@@ -50,12 +51,21 @@ pub fn query(_: *const Permissions, qd: QueryDescriptor, page: *Page) !js.Promis
 }
 
 const PermissionStatus = struct {
+    _rc: lp.RC(u8) = .{},
     _arena: Allocator,
     _name: []const u8,
     _state: []const u8,
 
-    pub fn deinit(self: *PermissionStatus, _: bool, session: *Session) void {
+    pub fn deinit(self: *PermissionStatus, session: *Session) void {
         session.releaseArena(self._arena);
+    }
+
+    pub fn releaseRef(self: *PermissionStatus, session: *Session) void {
+        self._rc.release(self, session);
+    }
+
+    pub fn acquireRef(self: *PermissionStatus) void {
+        self._rc.acquire();
     }
 
     fn getName(self: *const PermissionStatus) []const u8 {
@@ -72,8 +82,6 @@ const PermissionStatus = struct {
             pub const name = "PermissionStatus";
             pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
-            pub const weak = true;
-            pub const finalizer = bridge.finalizer(PermissionStatus.deinit);
         };
         pub const name = bridge.accessor(getName, null, .{});
         pub const state = bridge.accessor(getState, null, .{});

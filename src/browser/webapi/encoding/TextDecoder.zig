@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 
 const Page = @import("../../Page.zig");
@@ -25,6 +26,7 @@ const Allocator = std.mem.Allocator;
 
 const TextDecoder = @This();
 
+_rc: lp.RC(u8) = .{},
 _fatal: bool,
 _arena: Allocator,
 _ignore_bom: bool,
@@ -60,8 +62,16 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*TextDecoder {
     return self;
 }
 
-pub fn deinit(self: *TextDecoder, _: bool, session: *Session) void {
+pub fn deinit(self: *TextDecoder, session: *Session) void {
     session.releaseArena(self._arena);
+}
+
+pub fn releaseRef(self: *TextDecoder, session: *Session) void {
+    self._rc.release(self, session);
+}
+
+pub fn acquireRef(self: *TextDecoder) void {
+    self._rc.acquire();
 }
 
 pub fn getIgnoreBOM(self: *const TextDecoder) bool {
@@ -109,8 +119,6 @@ pub const JsApi = struct {
         pub const name = "TextDecoder";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(TextDecoder.deinit);
     };
 
     pub const constructor = bridge.constructor(TextDecoder.init, .{});

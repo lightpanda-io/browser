@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
@@ -25,6 +26,7 @@ const Allocator = std.mem.Allocator;
 
 const FontFace = @This();
 
+_rc: lp.RC(u8) = .{},
 _arena: Allocator,
 _family: []const u8,
 
@@ -42,8 +44,16 @@ pub fn init(family: []const u8, source: []const u8, page: *Page) !*FontFace {
     return self;
 }
 
-pub fn deinit(self: *FontFace, _: bool, session: *Session) void {
+pub fn deinit(self: *FontFace, session: *Session) void {
     session.releaseArena(self._arena);
+}
+
+pub fn releaseRef(self: *FontFace, session: *Session) void {
+    self._rc.release(self, session);
+}
+
+pub fn acquireRef(self: *FontFace) void {
+    self._rc.acquire();
 }
 
 pub fn getFamily(self: *const FontFace) []const u8 {
@@ -67,8 +77,6 @@ pub const JsApi = struct {
         pub const name = "FontFace";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(FontFace.deinit);
     };
 
     pub const constructor = bridge.constructor(FontFace.init, .{});
