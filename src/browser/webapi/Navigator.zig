@@ -40,8 +40,8 @@ pub fn getUserAgent(_: *const Navigator, page: *Page) []const u8 {
     return page._session.browser.app.config.http_headers.user_agent;
 }
 
-pub fn getLanguages(_: *const Navigator) [1][]const u8 {
-    return .{"en-US"};
+pub fn getLanguages(_: *const Navigator) [2][]const u8 {
+    return .{ "en-US", "en" };
 }
 
 pub fn getPlatform(_: *const Navigator) []const u8 {

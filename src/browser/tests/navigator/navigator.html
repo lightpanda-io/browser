@@ -15,8 +15,9 @@
   testing.expectEqual(true, validPlatforms.includes(navigator.platform));
   testing.expectEqual('en-US', navigator.language);
   testing.expectEqual(true, Array.isArray(navigator.languages));
-  testing.expectEqual(1, navigator.languages.length);
+  testing.expectEqual(2, navigator.languages.length);
   testing.expectEqual('en-US', navigator.languages[0]);
+  testing.expectEqual('en', navigator.languages[1]);
   testing.expectEqual(true, navigator.onLine);
   testing.expectEqual(true, navigator.cookieEnabled);
   testing.expectEqual(true, navigator.hardwareConcurrency > 0);
