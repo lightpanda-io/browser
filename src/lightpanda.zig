@@ -215,7 +215,7 @@ pub fn RC(comptime T: type) type {
         _refs: T = 0,
 
         pub fn init(refs: T) @This() {
-            return .{._refs = refs};
+            return .{ ._refs = refs };
         }
 
         pub fn acquire(self: *@This()) void {
