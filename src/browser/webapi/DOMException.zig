@@ -59,6 +59,7 @@ pub fn fromError(err: anyerror) ?DOMException {
         error.TimeoutError => .{ ._code = .timeout_error },
         error.InvalidNodeType => .{ ._code = .invalid_node_type_error },
         error.DataClone => .{ ._code = .data_clone_error },
+        error.InvalidAccessError => .{ ._code = .invalid_access_error },
         else => null,
     };
 }
