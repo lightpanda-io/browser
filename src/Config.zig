@@ -192,7 +192,7 @@ pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
 pub fn mcpVersion(self: *const Config) []const u8 {
     return switch (self.mode) {
         .mcp => |opts| @tagName(opts.version),
-        else => @tagName(mcp.Version.latest),
+        else => @tagName(mcp.Version.default),
     };
 }
 
@@ -230,7 +230,7 @@ pub const Serve = struct {
 
 pub const Mcp = struct {
     common: Common = .{},
-    version: mcp.Version = .latest,
+    version: mcp.Version = .default,
 };
 
 pub const DumpFormat = enum {
@@ -467,7 +467,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Override the reported MCP version.
         \\                Valid: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25.
         \\                Can also be set via LIGHTPANDA_MCP_VERSION env var.
-        \\                Defaults to "2025-11-25".
+        \\                Defaults to "2024-11-05".
         \\
     ++ common_options ++
         \\
