@@ -24,29 +24,85 @@ const ResolveOpts = struct {
     always_dupe: bool = false,
 };
 
-// path is anytype, so that it can be used with both []const u8 and [:0]const u8
-pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime opts: ResolveOpts) ![:0]const u8 {
-    const PT = @TypeOf(path);
-    if (base.len == 0 or isCompleteHTTPUrl(path)) {
-        if (comptime opts.always_dupe or !isNullTerminated(PT)) {
-            const duped = try allocator.dupeZ(u8, path);
-            return processResolved(allocator, duped, opts);
-        }
-        if (comptime opts.encode) {
-            return processResolved(allocator, path, opts);
-        }
-        return path;
+const scheme_full_separator = "://";
+const special_schemes = [_][]const u8{ "https", "http", "ws", "wss", "file", "ftp" };
+
+fn isSpecialScheme(scheme: []const u8) bool {
+    if (scheme.len == 0 or scheme.len > 5) {
+        return false;
     }
 
-    if (path.len == 0) {
-        if (comptime opts.always_dupe) {
-            const duped = try allocator.dupeZ(u8, base);
-            return processResolved(allocator, duped, opts);
+    inline for (special_schemes) |special_scheme| {
+        if (std.ascii.eqlIgnoreCase(scheme, special_scheme)) {
+            return true;
         }
-        if (comptime opts.encode) {
-            return processResolved(allocator, base, opts);
+    }
+    return false;
+}
+
+// path is anytype, so that it can be used with both []const u8 and [:0]const u8
+pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, comptime opts: ResolveOpts) ![:0]const u8 {
+    const PT = @TypeOf(source_path);
+
+    if (source_path.len == 0) {
+        return processResolved(allocator, base, opts);
+    }
+
+    var path: [:0]const u8 = if (comptime isNullTerminated(PT) and !opts.always_dupe) source_path else try allocator.dupeZ(u8, source_path);
+
+    if (base.len == 0) {
+        return processResolved(allocator, path, opts);
+    }
+
+    // Minimum is "x://" and skip relative path
+    if (path.len > 3 and path[0] != '/') {
+        if (std.mem.startsWith(u8, path, "blob:") or std.mem.startsWith(u8, path, "data:")) {
+            return processResolved(allocator, path, opts);
         }
-        return base;
+
+        var scheme_path: []const u8 = "";
+        var scheme_path_end: usize = 0;
+
+        if (std.mem.indexOf(u8, path, ":")) |scheme_end| {
+            scheme_path = path[0..scheme_end];
+            scheme_path_end = scheme_end;
+        }
+
+        if (isSpecialScheme(scheme_path)) {
+            var scheme_base: []const u8 = "";
+
+            if (std.mem.indexOf(u8, base, scheme_full_separator)) |scheme_end| {
+                scheme_base = base[0..scheme_end];
+            }
+
+            const has_double_sleshes: bool = path[scheme_path_end + 1] == '/' and path[scheme_path_end + 2] == '/';
+
+            if (std.mem.eql(u8, scheme_base, scheme_path) and !has_double_sleshes) {
+                //Skip ":" and set relative state
+                path = path[scheme_path_end + 1 ..];
+            } else {
+                //Skip ":"
+                var path_start: usize = scheme_path_end + 1;
+                var host_file_separator: []const u8 = "";
+
+                //file scheme allow empty host
+                if (std.mem.eql(u8, scheme_path, "file") and !has_double_sleshes) {
+                    host_file_separator = "/";
+                }
+
+                //Skip any sleshes after "scheme:"
+                for (path[path_start..]) |char| {
+                    if (char == '/' or char == '\\') {
+                        path_start += 1;
+                    } else {
+                        break;
+                    }
+                }
+                path = try std.mem.joinZ(allocator, "", &.{ scheme_path, scheme_full_separator, host_file_separator, path[path_start..] });
+
+                return processResolved(allocator, path, opts);
+            }
+        }
     }
 
     if (path[0] == '?') {
@@ -63,21 +119,14 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
     if (std.mem.startsWith(u8, path, "//")) {
         // network-path reference
         const index = std.mem.indexOfScalar(u8, base, ':') orelse {
-            if (comptime isNullTerminated(PT)) {
-                if (comptime opts.encode) {
-                    return processResolved(allocator, path, opts);
-                }
-                return path;
-            }
-            const duped = try allocator.dupeZ(u8, path);
-            return processResolved(allocator, duped, opts);
+            return processResolved(allocator, path, opts);
         };
         const protocol = base[0 .. index + 1];
         const result = try std.mem.joinZ(allocator, "", &.{ protocol, path });
         return processResolved(allocator, result, opts);
     }
 
-    const scheme_end = std.mem.indexOf(u8, base, "://");
+    const scheme_end = std.mem.indexOf(u8, base, scheme_full_separator);
     const authority_start = if (scheme_end) |end| end + 3 else 0;
     const path_start = std.mem.indexOfScalarPos(u8, base, authority_start, '/') orelse base.len;
 
@@ -156,7 +205,7 @@ fn processResolved(allocator: Allocator, url: [:0]const u8, comptime opts: Resol
 }
 
 pub fn ensureEncoded(allocator: Allocator, url: [:0]const u8) ![:0]const u8 {
-    const scheme_end = std.mem.indexOf(u8, url, "://");
+    const scheme_end = std.mem.indexOf(u8, url, scheme_full_separator);
     const authority_start = if (scheme_end) |end| end + 3 else 0;
     const path_start = std.mem.indexOfScalarPos(u8, url, authority_start, '/') orelse return url;
 
@@ -325,7 +374,7 @@ pub fn getPassword(raw: [:0]const u8) []const u8 {
 }
 
 pub fn getPathname(raw: [:0]const u8) []const u8 {
-    const protocol_end = std.mem.indexOf(u8, raw, "://");
+    const protocol_end = std.mem.indexOf(u8, raw, scheme_full_separator);
 
     // Handle scheme:path URLs like about:blank (no "://")
     if (protocol_end == null) {
@@ -408,7 +457,7 @@ pub fn getHash(raw: [:0]const u8) []const u8 {
 }
 
 pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
-    const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return null;
+    const scheme_end = std.mem.indexOf(u8, raw, scheme_full_separator) orelse return null;
 
     // Only HTTP and HTTPS schemes have origins
     const protocol = raw[0 .. scheme_end + 1];
@@ -466,7 +515,7 @@ fn getUserInfo(raw: [:0]const u8) ?[]const u8 {
     if (!auth.has_user_info) return null;
 
     // User info is from authority_start to host_start - 1 (excluding the @)
-    const scheme_end = std.mem.indexOf(u8, raw, "://").?;
+    const scheme_end = std.mem.indexOf(u8, raw, scheme_full_separator).?;
     const authority_start = scheme_end + 3;
     return raw[authority_start .. auth.host_start - 1];
 }
@@ -767,7 +816,7 @@ const AuthorityInfo = struct {
 // SECURITY: Only looks for @ within the authority portion (before /?#)
 // to prevent path-based @ injection attacks.
 fn parseAuthority(raw: []const u8) ?AuthorityInfo {
-    const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return null;
+    const scheme_end = std.mem.indexOf(u8, raw, scheme_full_separator) orelse return null;
     const authority_start = scheme_end + 3;
 
     // Find end of authority FIRST (start of path/query/fragment or end of string)
@@ -963,6 +1012,100 @@ test "URL: resolve" {
             .base = "https://www.example.com/hello/world/",
             .path = "../../../../example/about",
             .expected = "https://www.example.com/example/about",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
+        try testing.expectString(case.expected, result);
+    }
+}
+
+test "URL: resolve path scheme" {
+    const Case = struct {
+        base: [:0]const u8,
+        path: [:0]const u8,
+        expected: [:0]const u8,
+    };
+
+    const cases = [_]Case{
+        //same schemes and path as relative path (one slash)
+        .{
+            .base = "https://www.example.com/example",
+            .path = "https:/about",
+            .expected = "https://www.example.com/about",
+        },
+        //same schemes and path as relative path (without slash)
+        .{
+            .base = "https://www.example.com/example",
+            .path = "https:about",
+            .expected = "https://www.example.com/about",
+        },
+        //same schemes and path as absolute path (two slashes)
+        .{
+            .base = "https://www.example.com/example",
+            .path = "https://about",
+            .expected = "https://about",
+        },
+        //different schemes and path as absolute (without slash)
+        .{
+            .base = "https://www.example.com/example",
+            .path = "http:about",
+            .expected = "http://about",
+        },
+        //different schemes and path as absolute (with one slash)
+        .{
+            .base = "https://www.example.com/example",
+            .path = "http:/about",
+            .expected = "http://about",
+        },
+        //different schemes and path as absolute (with two slashes)
+        .{
+            .base = "https://www.example.com/example",
+            .path = "http://about",
+            .expected = "http://about",
+        },
+        //same schemes and path as absolute (with more slashes)
+        .{
+            .base = "https://site/",
+            .path = "https://path",
+            .expected = "https://path",
+        },
+        //path scheme is not special and path as absolute (without additional slashes)
+        .{
+            .base = "http://localhost/",
+            .path = "data:test",
+            .expected = "data:test",
+        },
+        //different schemes and path as absolute (pathscheme=ws)
+        .{
+            .base = "https://www.example.com/example",
+            .path = "ws://about",
+            .expected = "ws://about",
+        },
+        //different schemes and path as absolute (path scheme=wss)
+        .{
+            .base = "https://www.example.com/example",
+            .path = "wss://about",
+            .expected = "wss://about",
+        },
+        //different schemes and path as absolute (path scheme=ftp)
+        .{
+            .base = "https://www.example.com/example",
+            .path = "ftp://about",
+            .expected = "ftp://about",
+        },
+        //different schemes and path as absolute (path scheme=file)
+        .{
+            .base = "https://www.example.com/example",
+            .path = "file://path/to/file",
+            .expected = "file://path/to/file",
+        },
+        //different schemes and path as absolute (path scheme=file, host is empty)
+        .{
+            .base = "https://www.example.com/example",
+            .path = "file:/path/to/file",
+            .expected = "file:///path/to/file",
         },
     };
 
