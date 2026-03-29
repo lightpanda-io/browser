@@ -114,7 +114,7 @@ test "MCP.Server - Integration: synchronous smoke test" {
 
     try router.processRequests(server, &in_reader);
 
-    try testing.expectJson(.{ .jsonrpc = "2.0", .id = 1 }, out_alloc.writer.buffered());
+    try testing.expectJson(.{ .jsonrpc = "2.0", .id = 1, .result = .{ .protocolVersion = "2025-11-25" } }, out_alloc.writer.buffered());
 }
 
 test "MCP.Server - Integration: ping request returns an empty result" {

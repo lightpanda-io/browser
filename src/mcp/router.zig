@@ -81,8 +81,8 @@ pub fn handleMessage(server: *Server, arena: std.mem.Allocator, msg: []const u8)
 
 fn handleInitialize(server: *Server, req: protocol.Request) !void {
     const id = req.id orelse return;
-    const result = protocol.InitializeResult{
-        .protocolVersion = "2025-11-25",
+    const result: protocol.InitializeResult = .{
+        .protocolVersion = server.app.config.mcpVersion(),
         .capabilities = .{
             .resources = .{},
             .tools = .{},
@@ -121,7 +121,7 @@ test "MCP.router - handleMessage - synchronous unit tests" {
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
     );
     try testing.expectJson(
-        \\{ "jsonrpc": "2.0", "id": 1, "result": { "capabilities": { "tools": {} } } }
+        \\{ "jsonrpc": "2.0", "id": 1, "result": { "protocolVersion": "2025-11-25", "capabilities": { "tools": {} } } }
     , out_alloc.writer.buffered());
     out_alloc.writer.end = 0;
 

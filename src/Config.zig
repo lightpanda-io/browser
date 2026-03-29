@@ -24,6 +24,7 @@ const log = @import("log.zig");
 const dump = @import("browser/dump.zig");
 
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
+const mcp = @import("mcp.zig");
 
 pub const RunMode = enum {
     help,
@@ -188,6 +189,13 @@ pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
     };
 }
 
+pub fn mcpVersion(self: *const Config) []const u8 {
+    return switch (self.mode) {
+        .mcp => |opts| @tagName(opts.version),
+        else => @tagName(mcp.Version.latest),
+    };
+}
+
 pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
@@ -222,6 +230,7 @@ pub const Serve = struct {
 
 pub const Mcp = struct {
     common: Common = .{},
+    version: mcp.Version = .latest,
 };
 
 pub const DumpFormat = enum {
@@ -453,6 +462,13 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\Starts an MCP (Model Context Protocol) server over stdio
         \\Example: {s} mcp
         \\
+        \\Options:
+        \\--version
+        \\                Override the reported MCP version.
+        \\                Valid: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25.
+        \\                Can also be set via LIGHTPANDA_MCP_VERSION env var.
+        \\                Defaults to "2025-11-25".
+        \\
     ++ common_options ++
         \\
         \\version command
@@ -640,10 +656,25 @@ fn parseMcpArgs(
     allocator: Allocator,
     args: *std.process.ArgIterator,
 ) !Mcp {
-    var mcp: Mcp = .{};
+    var result: Mcp = .{};
+    var env_ver: ?[]const u8 = null;
+    var arg_ver: ?[]const u8 = null;
+
+    if (std.posix.getenv("LIGHTPANDA_MCP_VERSION")) |ver| {
+        env_ver = ver;
+    }
 
     while (args.next()) |opt| {
-        if (try parseCommonArg(allocator, opt, args, &mcp.common)) {
+        if (std.mem.eql(u8, "--version", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.mcp, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            arg_ver = str;
+            continue;
+        }
+
+        if (try parseCommonArg(allocator, opt, args, &result.common)) {
             continue;
         }
 
@@ -651,7 +682,15 @@ fn parseMcpArgs(
         return error.UnkownOption;
     }
 
-    return mcp;
+    const final_ver = arg_ver orelse env_ver;
+    if (final_ver) |ver| {
+        result.version = std.meta.stringToEnum(mcp.Version, ver) orelse {
+            log.fatal(.mcp, "invalid protocol version", .{ .value = ver });
+            return error.InvalidArgument;
+        };
+    }
+
+    return result;
 }
 
 fn parseFetchArgs(
