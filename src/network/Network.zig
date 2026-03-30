@@ -289,6 +289,8 @@ pub fn deinit(self: *Network) void {
         wba.deinit(self.allocator);
     }
 
+    if (self.cache) |*cache| cache.deinit();
+
     globalDeinit();
 }
 

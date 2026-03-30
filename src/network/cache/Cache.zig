@@ -28,6 +28,12 @@ kind: union(enum) {
     fs: FsCache,
 },
 
+pub fn deinit(self: *Cache) void {
+    return switch (self.kind) {
+        inline else => |*c| c.deinit(),
+    };
+}
+
 pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheRequest) ?CachedResponse {
     return switch (self.kind) {
         inline else => |*c| c.get(arena, req),
