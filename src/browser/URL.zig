@@ -50,7 +50,7 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
     const path_needs_duping = comptime isNullTerminated(PT) or !opts.always_dupe;
     var path: [:0]const u8 = if (path_needs_duping) try allocator.dupeZ(u8, source_path) else source_path;
     errdefer if (path_needs_duping) allocator.free(path);
-    
+
     if (base.len == 0) {
         return processResolved(allocator, path, opts);
     }
@@ -100,8 +100,9 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
                     }
                 }
                 path = try std.mem.joinZ(allocator, "", &.{ scheme_path, scheme_full_separator, host_file_separator, path[path_start..] });
+                errdefer allocator.free(path);
 
-                return processResolved(allocator, path, opts);
+                return try processResolved(allocator, path, opts);
             }
         }
     }
@@ -109,12 +110,16 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
     if (path[0] == '?') {
         const base_path_end = std.mem.indexOfAny(u8, base, "?#") orelse base.len;
         const result = try std.mem.joinZ(allocator, "", &.{ base[0..base_path_end], path });
-        return processResolved(allocator, result, opts);
+        errdefer allocator.free(result);
+
+        return try processResolved(allocator, result, opts);
     }
     if (path[0] == '#') {
         const base_fragment_start = std.mem.indexOfScalar(u8, base, '#') orelse base.len;
         const result = try std.mem.joinZ(allocator, "", &.{ base[0..base_fragment_start], path });
-        return processResolved(allocator, result, opts);
+        errdefer allocator.free(result);
+        
+        return try processResolved(allocator, result, opts);
     }
 
     if (std.mem.startsWith(u8, path, "//")) {
@@ -124,7 +129,9 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
         };
         const protocol = base[0 .. index + 1];
         const result = try std.mem.joinZ(allocator, "", &.{ protocol, path });
-        return processResolved(allocator, result, opts);
+        errdefer allocator.free(result);
+
+        return try processResolved(allocator, result, opts);
     }
 
     const scheme_end = std.mem.indexOf(u8, base, scheme_full_separator);
@@ -133,7 +140,9 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
 
     if (path[0] == '/') {
         const result = try std.mem.joinZ(allocator, "", &.{ base[0..path_start], path });
-        return processResolved(allocator, result, opts);
+        errdefer allocator.free(result);
+
+        return try processResolved(allocator, result, opts);
     }
 
     var normalized_base: []const u8 = base[0..path_start];
@@ -146,6 +155,8 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
     // trailing space so that we always have space to append the null terminator
     // and so that we can compare the next two characters without needing to length check
     var out = try std.mem.join(allocator, "", &.{ normalized_base, "/", path, "  " });
+    errdefer allocator.free(out);
+    
     const end = out.len - 2;
 
     const path_marker = path_start + 1;
@@ -195,7 +206,7 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
 
     // we always have an extra space
     out[out_i] = 0;
-    return processResolved(allocator, out[0..out_i :0], opts);
+    return try processResolved(allocator, out[0..out_i :0], opts);
 }
 
 fn processResolved(allocator: Allocator, url: [:0]const u8, comptime opts: ResolveOpts) ![:0]const u8 {
