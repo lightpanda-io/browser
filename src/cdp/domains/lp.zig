@@ -30,6 +30,7 @@ pub fn processMessage(cmd: anytype) !void {
         getMarkdown,
         getSemanticTree,
         getInteractiveElements,
+        getNodeDetails,
         getStructuredData,
         detectForms,
         clickNode,
@@ -42,6 +43,7 @@ pub fn processMessage(cmd: anytype) !void {
         .getMarkdown => return getMarkdown(cmd),
         .getSemanticTree => return getSemanticTree(cmd),
         .getInteractiveElements => return getInteractiveElements(cmd),
+        .getNodeDetails => return getNodeDetails(cmd),
         .getStructuredData => return getStructuredData(cmd),
         .detectForms => return detectForms(cmd),
         .clickNode => return clickNode(cmd),
@@ -138,6 +140,24 @@ fn getInteractiveElements(cmd: anytype) !void {
 
     return cmd.sendResult(.{
         .elements = elements,
+    }, .{});
+}
+
+fn getNodeDetails(cmd: anytype) !void {
+    const Params = struct {
+        backendNodeId: Node.Id,
+    };
+    const params = (try cmd.params(Params)) orelse return error.InvalidParam;
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const node = (bc.node_registry.lookup_by_id.get(params.backendNodeId) orelse return error.InvalidNodeId).dom;
+
+    const details = SemanticTree.getNodeDetails(node, &bc.node_registry, page, cmd.arena) catch return error.InternalError;
+
+    return cmd.sendResult(.{
+        .nodeDetails = details,
     }, .{});
 }
 
