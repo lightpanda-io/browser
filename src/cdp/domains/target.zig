@@ -158,13 +158,18 @@ fn createTarget(cmd: anytype) !void {
         else => return err,
     };
 
-    if (bc.target_id != null) {
-        return error.TargetAlreadyLoaded;
-    }
     if (params.browserContextId) |param_browser_context_id| {
         if (std.mem.eql(u8, param_browser_context_id, bc.id) == false) {
             return error.UnknownBrowserContextId;
         }
+    }
+
+    // If a target already exists, close it first. Lightpanda only supports
+    // one page at a time, so we replace the existing target rather than
+    // rejecting the request. This unblocks automation frameworks (e.g.
+    // Stagehand) that call createTarget multiple times.
+    if (bc.target_id != null) {
+        try doCloseTarget(cmd, bc);
     }
 
     // if target_id is null, we should never have a page
@@ -280,34 +285,9 @@ fn closeTarget(cmd: anytype) !void {
         return error.UnknownTargetId;
     }
 
-    // can't be null if we have a target_id
-    lp.assert(bc.session.page != null, "CDP.target.closeTarget null page", .{});
-
     try cmd.sendResult(.{ .success = true }, .{ .include_session_id = false });
 
-    // could be null, created but never attached
-    if (bc.session_id) |session_id| {
-        // Inspector.detached event
-        try cmd.sendEvent("Inspector.detached", .{
-            .reason = "Render process gone.",
-        }, .{ .session_id = session_id });
-
-        // detachedFromTarget event
-        try cmd.sendEvent("Target.detachedFromTarget", .{
-            .targetId = target_id,
-            .sessionId = session_id,
-            .reason = "Render process gone.",
-        }, .{});
-
-        bc.session_id = null;
-    }
-
-    bc.session.removePage();
-    for (bc.isolated_worlds.items) |world| {
-        world.deinit();
-    }
-    bc.isolated_worlds.clearRetainingCapacity();
-    bc.target_id = null;
+    try doCloseTarget(cmd, bc);
 }
 
 fn getTargetInfo(cmd: anytype) !void {
@@ -466,6 +446,37 @@ fn setAutoAttach(cmd: anytype) !void {
     }, .{});
 
     try cmd.sendResult(null, .{});
+}
+
+/// Close the current target in a browser context: send detach events,
+/// remove the page, clean up isolated worlds, and clear the target_id.
+/// Shared by closeTarget and createTarget (which auto-closes before
+/// creating a replacement).
+fn doCloseTarget(cmd: anytype, bc: anytype) !void {
+    // can't be null if we have a target_id
+    lp.assert(bc.session.page != null, "CDP.target.doCloseTarget null page", .{});
+
+    // could be null, created but never attached
+    if (bc.session_id) |session_id| {
+        try cmd.sendEvent("Inspector.detached", .{
+            .reason = "Render process gone.",
+        }, .{ .session_id = session_id });
+
+        try cmd.sendEvent("Target.detachedFromTarget", .{
+            .targetId = &bc.target_id.?,
+            .sessionId = session_id,
+            .reason = "Render process gone.",
+        }, .{});
+
+        bc.session_id = null;
+    }
+
+    bc.session.removePage();
+    for (bc.isolated_worlds.items) |world| {
+        world.deinit();
+    }
+    bc.isolated_worlds.clearRetainingCapacity();
+    bc.target_id = null;
 }
 
 fn doAttachtoTarget(cmd: anytype, target_id: []const u8) !void {
@@ -768,6 +779,51 @@ test "cdp.target: detachFromTarget" {
 
         try ctx.processMessage(.{ .id = 13, .method = "Target.attachToTarget", .params = .{ .targetId = bc.target_id.? } });
         try ctx.expectSentResult(.{ .sessionId = bc.session_id.? }, .{ .id = 13 });
+    }
+}
+
+test "cdp.target: createTarget closes existing target (issue #1962)" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
+    {
+        // Create first target
+        try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
+        try testing.expectEqual(true, bc.target_id != null);
+        try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 10 });
+
+        // Create second target — should succeed by auto-closing the first
+        try ctx.processMessage(.{ .id = 11, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
+        try testing.expectEqual(true, bc.target_id != null);
+        try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 11 });
+
+        // Page should exist (new target is active)
+        try testing.expectEqual(true, bc.session.page != null);
+    }
+}
+
+test "cdp.target: createTarget closes existing attached target (issue #1962)" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
+    {
+        // Create and attach first target
+        try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
+        try testing.expectEqual(true, bc.target_id != null);
+        try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 10 });
+
+        try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = bc.target_id.? } });
+        const session_id = bc.session_id.?;
+        try ctx.expectSentResult(.{ .sessionId = session_id }, .{ .id = 11 });
+
+        // Create second target — should close and detach the first
+        try ctx.processMessage(.{ .id = 12, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
+        // Should have sent detach events for the old session
+        try ctx.expectSentEvent("Inspector.detached", .{ .reason = "Render process gone." }, .{ .session_id = session_id });
+        try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = session_id, .reason = "Render process gone." }, .{});
+        // New target should be created
+        try testing.expectEqual(true, bc.target_id != null);
+        try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 12 });
     }
 }
 
