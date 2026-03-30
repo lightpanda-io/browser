@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 const Cache = @import("Cache.zig");
 const Http = @import("../http.zig");
 const CacheRequest = Cache.CacheRequest;
@@ -93,8 +94,25 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.C
     lock.lock();
     defer lock.unlock();
 
-    const file = self.dir.openFile(&cache_p, .{ .mode = .read_only }) catch return null;
-    errdefer file.close();
+    const file = self.dir.openFile(&cache_p, .{ .mode = .read_only }) catch |e| {
+        switch (e) {
+            std.fs.File.OpenError.FileNotFound => {
+                log.debug(.cache, "miss", .{ .url = req.url, .hash = &hashed_key });
+            },
+            else => |err| {
+                log.warn(.cache, "open file err", .{ .url = req.url, .err = err });
+            },
+        }
+        return null;
+    };
+
+    var cleanup = false;
+    defer if (cleanup) {
+        file.close();
+        self.dir.deleteFile(&cache_p) catch |e| {
+            log.err(.cache, "clean fail", .{ .url = req.url, .file = &cache_p, .err = e });
+        };
+    };
 
     var file_buf: [1024]u8 = undefined;
     var len_buf: [BODY_LEN_HEADER_LEN]u8 = undefined;
@@ -102,27 +120,35 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.C
     var file_reader = file.reader(&file_buf);
     const file_reader_iface = &file_reader.interface;
 
-    file_reader_iface.readSliceAll(&len_buf) catch return null;
+    file_reader_iface.readSliceAll(&len_buf) catch |e| {
+        log.warn(.cache, "read header", .{ .url = req.url, .err = e });
+        cleanup = true;
+        return null;
+    };
     const body_len = std.mem.readInt(u64, &len_buf, .little);
 
     // Now we read metadata.
-    file_reader.seekTo(body_len + BODY_LEN_HEADER_LEN) catch return null;
+    file_reader.seekTo(body_len + BODY_LEN_HEADER_LEN) catch |e| {
+        log.warn(.cache, "seek metadata", .{ .url = req.url, .err = e });
+        cleanup = true;
+        return null;
+    };
 
     var json_reader = std.json.Reader.init(arena, file_reader_iface);
     const cache_file: CacheMetadataJson = std.json.parseFromTokenSourceLeaky(
         CacheMetadataJson,
         arena,
         &json_reader,
-        .{
-            .allocate = .alloc_always,
-        },
-    ) catch {
-        self.dir.deleteFile(&cache_p) catch {};
+        .{ .allocate = .alloc_always },
+    ) catch |e| {
+        log.warn(.cache, "metadata parse", .{ .url = req.url, .err = e });
+        cleanup = true;
         return null;
     };
 
     if (cache_file.version != CACHE_VERSION) {
-        self.dir.deleteFile(&cache_p) catch {};
+        log.warn(.cache, "version", .{ .url = req.url, .expected = CACHE_VERSION, .got = cache_file.version });
+        cleanup = true;
         return null;
     }
 
@@ -131,7 +157,8 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.C
     const now = req.timestamp;
     const age = (now - metadata.stored_at) + @as(i64, @intCast(metadata.age_at_store));
     if (age < 0 or @as(u64, @intCast(age)) >= metadata.cache_control.max_age) {
-        self.dir.deleteFile(&cache_p) catch {};
+        log.debug(.cache, "expired", .{ .url = req.url });
+        cleanup = true;
         return null;
     }
 

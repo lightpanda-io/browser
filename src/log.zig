@@ -39,6 +39,7 @@ pub const Scope = enum {
     telemetry,
     unknown_prop,
     mcp,
+    cache,
 };
 
 const Opts = struct {
