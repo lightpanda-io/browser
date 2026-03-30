@@ -154,10 +154,33 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.C
 
     const metadata = cache_file.metadata;
 
+    // Check entry expiration.
     const now = req.timestamp;
     const age = (now - metadata.stored_at) + @as(i64, @intCast(metadata.age_at_store));
     if (age < 0 or @as(u64, @intCast(age)) >= metadata.cache_control.max_age) {
         log.debug(.cache, "expired", .{ .url = req.url });
+        cleanup = true;
+        return null;
+    }
+
+    // If we have Vary headers, ensure they are present & matching.
+    for (metadata.vary_headers) |vary_hdr| {
+        const name = vary_hdr.name;
+        const value = vary_hdr.value;
+
+        const incoming = for (req.request_headers) |h| {
+            if (std.ascii.eqlIgnoreCase(h.name, name)) break h.value;
+        } else "";
+
+        if (!std.ascii.eqlIgnoreCase(value, incoming)) {
+            log.debug(.cache, "vary mismatch", .{ .url = req.url, .header = name });
+            return null;
+        }
+    }
+
+    // On the case of a hash collision.
+    if (!std.ascii.eqlIgnoreCase(metadata.url, req.url)) {
+        log.warn(.cache, "collision", .{ .url = req.url, .expected = metadata.url, .got = req.url });
         cleanup = true;
         return null;
     }
@@ -243,8 +266,8 @@ test "FsCache: basic put and get" {
         .etag = null,
         .last_modified = null,
         .cache_control = .{ .max_age = 600 },
-        .vary = null,
         .headers = &.{},
+        .vary_headers = &.{},
     };
 
     const body = "hello world";
@@ -252,7 +275,11 @@ test "FsCache: basic put and get" {
 
     const result = cache.get(
         arena.allocator(),
-        .{ .url = "https://example.com", .timestamp = now },
+        .{
+            .url = "https://example.com",
+            .timestamp = now,
+            .request_headers = &.{},
+        },
     ) orelse return error.CacheMiss;
     const f = result.data.file;
     const file = f.file;
@@ -291,8 +318,8 @@ test "FsCache: get expiration" {
         .etag = null,
         .last_modified = null,
         .cache_control = .{ .max_age = max_age },
-        .vary = null,
         .headers = &.{},
+        .vary_headers = &.{},
     };
 
     const body = "hello world";
@@ -300,18 +327,30 @@ test "FsCache: get expiration" {
 
     const result = cache.get(
         arena.allocator(),
-        .{ .url = "https://example.com", .timestamp = now + 50 },
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 50,
+            .request_headers = &.{},
+        },
     ) orelse return error.CacheMiss;
     result.data.file.file.close();
 
     try testing.expectEqual(null, cache.get(
         arena.allocator(),
-        .{ .url = "https://example.com", .timestamp = now + 200 },
+        .{
+            .url = "https://example.com",
+            .timestamp = now + 200,
+            .request_headers = &.{},
+        },
     ));
 
     try testing.expectEqual(null, cache.get(
         arena.allocator(),
-        .{ .url = "https://example.com", .timestamp = now },
+        .{
+            .url = "https://example.com",
+            .timestamp = now,
+            .request_headers = &.{},
+        },
     ));
 }
 
@@ -340,8 +379,8 @@ test "FsCache: put override" {
             .etag = null,
             .last_modified = null,
             .cache_control = .{ .max_age = max_age },
-            .vary = null,
             .headers = &.{},
+            .vary_headers = &.{},
         };
 
         const body = "hello world";
@@ -349,7 +388,11 @@ test "FsCache: put override" {
 
         const result = cache.get(
             arena.allocator(),
-            .{ .url = "https://example.com", .timestamp = now },
+            .{
+                .url = "https://example.com",
+                .timestamp = now,
+                .request_headers = &.{},
+            },
         ) orelse return error.CacheMiss;
         const f = result.data.file;
         const file = f.file;
@@ -378,8 +421,8 @@ test "FsCache: put override" {
             .etag = null,
             .last_modified = null,
             .cache_control = .{ .max_age = max_age },
-            .vary = null,
             .headers = &.{},
+            .vary_headers = &.{},
         };
 
         const body = "goodbye world";
@@ -387,7 +430,11 @@ test "FsCache: put override" {
 
         const result = cache.get(
             arena.allocator(),
-            .{ .url = "https://example.com", .timestamp = now },
+            .{
+                .url = "https://example.com",
+                .timestamp = now,
+                .request_headers = &.{},
+            },
         ) orelse return error.CacheMiss;
         const f = result.data.file;
         const file = f.file;
@@ -422,6 +469,124 @@ test "FsCache: garbage file" {
 
     try testing.expectEqual(
         null,
-        setup.cache.get(arena.allocator(), .{ .url = "https://example.com", .timestamp = 5000 }),
+        setup.cache.get(arena.allocator(), .{
+            .url = "https://example.com",
+            .timestamp = 5000,
+            .request_headers = &.{},
+        }),
     );
+}
+
+test "FsCache: vary hit and miss" {
+    var setup = try setupCache();
+    defer {
+        setup.cache.deinit();
+        setup.tmp.cleanup();
+    }
+
+    const cache = &setup.cache;
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const now = std.time.timestamp();
+    const meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .etag = null,
+        .last_modified = null,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{
+            .{ .name = "Accept-Encoding", .value = "gzip" },
+        },
+    };
+
+    try cache.put(meta, "hello world");
+
+    const result = cache.get(arena.allocator(), .{
+        .url = "https://example.com",
+        .timestamp = now,
+        .request_headers = &.{
+            .{ .name = "Accept-Encoding", .value = "gzip" },
+        },
+    }) orelse return error.CacheMiss;
+    result.data.file.file.close();
+
+    try testing.expectEqual(null, cache.get(arena.allocator(), .{
+        .url = "https://example.com",
+        .timestamp = now,
+        .request_headers = &.{
+            .{ .name = "Accept-Encoding", .value = "br" },
+        },
+    }));
+
+    try testing.expectEqual(null, cache.get(arena.allocator(), .{
+        .url = "https://example.com",
+        .timestamp = now,
+        .request_headers = &.{},
+    }));
+
+    const result2 = cache.get(arena.allocator(), .{
+        .url = "https://example.com",
+        .timestamp = now,
+        .request_headers = &.{
+            .{ .name = "Accept-Encoding", .value = "gzip" },
+        },
+    }) orelse return error.CacheMiss;
+    result2.data.file.file.close();
+}
+
+test "FsCache: vary multiple headers" {
+    var setup = try setupCache();
+    defer {
+        setup.cache.deinit();
+        setup.tmp.cleanup();
+    }
+
+    const cache = &setup.cache;
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const now = std.time.timestamp();
+    const meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .etag = null,
+        .last_modified = null,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{
+            .{ .name = "Accept-Encoding", .value = "gzip" },
+            .{ .name = "Accept-Language", .value = "en" },
+        },
+    };
+
+    try cache.put(meta, "hello world");
+
+    const result = cache.get(arena.allocator(), .{
+        .url = "https://example.com",
+        .timestamp = now,
+        .request_headers = &.{
+            .{ .name = "Accept-Encoding", .value = "gzip" },
+            .{ .name = "Accept-Language", .value = "en" },
+        },
+    }) orelse return error.CacheMiss;
+    result.data.file.file.close();
+
+    try testing.expectEqual(null, cache.get(arena.allocator(), .{
+        .url = "https://example.com",
+        .timestamp = now,
+        .request_headers = &.{
+            .{ .name = "Accept-Encoding", .value = "gzip" },
+            .{ .name = "Accept-Language", .value = "fr" },
+        },
+    }));
 }

@@ -95,23 +95,6 @@ pub const CacheControl = struct {
     }
 };
 
-pub const Vary = union(enum) {
-    wildcard: void,
-    value: []const u8,
-
-    pub fn parse(value: []const u8) Vary {
-        if (std.mem.eql(u8, value, "*")) return .wildcard;
-        return .{ .value = value };
-    }
-
-    pub fn toString(self: Vary) []const u8 {
-        return switch (self) {
-            .wildcard => "*",
-            .value => |v| v,
-        };
-    }
-};
-
 pub const CachedMetadata = struct {
     url: [:0]const u8,
     content_type: []const u8,
@@ -126,13 +109,17 @@ pub const CachedMetadata = struct {
     last_modified: ?[]const u8,
 
     cache_control: CacheControl,
-    vary: ?Vary,
+    /// Response Headers
     headers: []const Http.Header,
+
+    /// These are Request Headers used by Vary.
+    vary_headers: []const Http.Header,
 };
 
 pub const CacheRequest = struct {
     url: []const u8,
     timestamp: i64,
+    request_headers: []const Http.Header,
 };
 
 pub const CachedData = union(enum) {
@@ -166,6 +153,7 @@ pub fn tryCache(
     if (status != 200) return null;
     if (has_set_cookie) return null;
     if (has_authorization) return null;
+    if (vary) |v| if (std.mem.eql(u8, v, "*")) return null;
     const cc = CacheControl.parse(cache_control orelse return null) orelse return null;
 
     return .{
@@ -175,9 +163,9 @@ pub fn tryCache(
         .stored_at = timestamp,
         .age_at_store = if (age) |a| std.fmt.parseInt(u64, a, 10) catch 0 else 0,
         .cache_control = cc,
-        .vary = if (vary) |v| Vary.parse(v) else null,
         .etag = if (etag) |e| try arena.dupe(u8, e) else null,
         .last_modified = if (last_modified) |lm| try arena.dupe(u8, lm) else null,
         .headers = &.{},
+        .vary_headers = &.{},
     };
 }

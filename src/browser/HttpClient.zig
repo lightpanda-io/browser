@@ -367,7 +367,14 @@ fn processRequest(self: *Client, req: Request) !void {
             const arena = try self.network.app.arena_pool.acquire(.{ .debug = "HttpClient.processRequest.cache" });
             defer self.network.app.arena_pool.release(arena);
 
-            if (cache.get(arena, .{ .url = req.url, .timestamp = std.time.timestamp() })) |cached| {
+            var iter = req.headers.iterator();
+            const req_header_list = try iter.collect(arena);
+
+            if (cache.get(arena, .{
+                .url = req.url,
+                .timestamp = std.time.timestamp(),
+                .request_headers = req_header_list.items,
+            })) |cached| {
                 log.debug(.browser, "http.cache.get", .{
                     .url = req.url,
                     .found = true,
@@ -963,23 +970,6 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         }
     }
 
-    const allocator = transfer.arena.allocator();
-    var header_list: std.ArrayList(http.Header) = .empty;
-
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
-        header_list.append(
-            allocator,
-            .{
-                .name = try allocator.dupe(u8, hdr.name),
-                .value = try allocator.dupe(u8, hdr.value),
-            },
-        ) catch |err| {
-            log.warn(.http, "cache header collect failed", .{ .err = err });
-            break;
-        };
-    }
-
     // release conn ASAP so that it's available; some done_callbacks
     // will load more resources.
     transfer.releaseConn();
@@ -1566,6 +1556,8 @@ pub const Transfer = struct {
             const rh = &transfer.response_header.?;
             const allocator = transfer.arena.allocator();
 
+            const vary = if (conn.getResponseHeader("vary", 0)) |h| h.value else null;
+
             const maybe_cm = try Cache.tryCache(
                 allocator,
                 std.time.timestamp(),
@@ -1573,7 +1565,7 @@ pub const Transfer = struct {
                 rh.status,
                 rh.contentType(),
                 if (conn.getResponseHeader("cache-control", 0)) |h| h.value else null,
-                if (conn.getResponseHeader("vary", 0)) |h| h.value else null,
+                vary,
                 if (conn.getResponseHeader("etag", 0)) |h| h.value else null,
                 if (conn.getResponseHeader("last-modified", 0)) |h| h.value else null,
                 if (conn.getResponseHeader("age", 0)) |h| h.value else null,
@@ -1582,17 +1574,32 @@ pub const Transfer = struct {
             );
 
             if (maybe_cm) |cm| {
-                var header_list: std.ArrayList(http.Header) = .empty;
-                var it = transfer.responseHeaderIterator();
-                while (it.next()) |hdr| {
-                    try header_list.append(allocator, .{
-                        .name = try allocator.dupe(u8, hdr.name),
-                        .value = try allocator.dupe(u8, hdr.value),
-                    });
-                }
-
                 transfer._pending_cache_metadata = cm;
-                transfer._pending_cache_metadata.?.headers = header_list.items;
+
+                var iter = transfer.responseHeaderIterator();
+                var header_list = try iter.collect(allocator);
+                const end_of_response = header_list.items.len;
+                transfer._pending_cache_metadata.?.headers = header_list.items[0..end_of_response];
+
+                if (vary) |vary_str| {
+                    var req_it = transfer.req.headers.iterator();
+
+                    while (req_it.next()) |hdr| {
+                        var vary_iter = std.mem.splitScalar(u8, vary_str, ',');
+
+                        while (vary_iter.next()) |part| {
+                            const name = std.mem.trim(u8, part, &std.ascii.whitespace);
+                            if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
+                                try header_list.append(allocator, .{
+                                    .name = try allocator.dupe(u8, hdr.name),
+                                    .value = try allocator.dupe(u8, hdr.value),
+                                });
+                            }
+                        }
+                    }
+
+                    transfer._pending_cache_metadata.?.vary_headers = header_list.items[end_of_response..];
+                }
             }
         }
 
