@@ -432,6 +432,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             try notification.register(.page_navigate, self, onPageNavigate);
             try notification.register(.page_navigated, self, onPageNavigated);
             try notification.register(.page_frame_created, self, onPageFrameCreated);
+            try notification.register(.page_dom_content_loaded, self, onPageDOMContentLoaded);
+            try notification.register(.page_loaded, self, onPageLoaded);
         }
 
         pub fn deinit(self: *Self) void {
@@ -605,6 +607,16 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn onPageFrameCreated(ctx: *anyopaque, msg: *const Notification.PageFrameCreated) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
             return @import("domains/page.zig").pageFrameCreated(self, msg);
+        }
+
+        pub fn onPageDOMContentLoaded(ctx: *anyopaque, msg: *const Notification.PageDOMContentLoaded) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            return @import("domains/page.zig").pageDOMContentLoaded(self, msg);
+        }
+
+        pub fn onPageLoaded(ctx: *anyopaque, msg: *const Notification.PageLoaded) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            return @import("domains/page.zig").pageLoaded(self, msg);
         }
 
         pub fn onPageNetworkIdle(ctx: *anyopaque, msg: *const Notification.PageNetworkIdle) !void {

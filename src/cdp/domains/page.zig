@@ -472,9 +472,9 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
     // When we actually recreated the context we should have the inspector send
-    // this event, see: resetContextGroup Sending this event will tell the
-    // client that the context ids they had are invalid and the context shouls
-    // be dropped The client will expect us to send new contextCreated events,
+    // this event, see: resetContextGroup. Sending this event will tell the
+    // client that the context ids they had are invalid and the context should
+    // be dropped. The client will expect us to send new contextCreated events,
     // such that the client has new id's for the active contexts.
     // Only send executionContextsCleared for main frame navigations. For child
     // frames (iframes), clearing all contexts would destroy the main frame's
@@ -483,6 +483,18 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
     if (event.frame_id == page._frame_id) {
         try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
     }
+
+    // frameNavigated event
+    try cdp.sendEvent("Page.frameNavigated", .{
+        .type = "Navigation",
+        .frame = Frame{
+            .id = frame_id,
+            .url = event.url,
+            .loaderId = loader_id,
+            .securityOrigin = bc.security_origin,
+            .secureContextType = bc.secure_context_type,
+        },
+    }, .{ .session_id = session_id });
 
     {
         const aux_data = try std.fmt.allocPrint(arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
@@ -592,6 +604,57 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
     }
 
     // frameStoppedLoading
+    return cdp.sendEvent("Page.frameStoppedLoading", .{
+        .frameId = frame_id,
+    }, .{ .session_id = session_id });
+}
+
+pub fn pageDOMContentLoaded(bc: anytype, event: *const Notification.PageDOMContentLoaded) !void {
+    const session_id = bc.session_id orelse return;
+    const timestamp = event.timestamp;
+    var cdp = bc.cdp;
+
+    try cdp.sendEvent(
+        "Page.domContentEventFired",
+        .{ .timestamp = timestamp },
+        .{ .session_id = session_id },
+    );
+
+    if (bc.page_life_cycle_events) {
+        const frame_id = &id.toFrameId(event.frame_id);
+        const loader_id = &id.toLoaderId(event.req_id);
+        try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
+            .timestamp = timestamp,
+            .name = "DOMContentLoaded",
+            .frameId = frame_id,
+            .loaderId = loader_id,
+        }, .{ .session_id = session_id });
+    }
+}
+
+pub fn pageLoaded(bc: anytype, event: *const Notification.PageLoaded) !void {
+    const session_id = bc.session_id orelse return;
+    const timestamp = event.timestamp;
+    var cdp = bc.cdp;
+
+    const frame_id = &id.toFrameId(event.frame_id);
+
+    try cdp.sendEvent(
+        "Page.loadEventFired",
+        .{ .timestamp = timestamp },
+        .{ .session_id = session_id },
+    );
+
+    if (bc.page_life_cycle_events) {
+        const loader_id = &id.toLoaderId(event.req_id);
+        try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
+            .timestamp = timestamp,
+            .name = "load",
+            .frameId = frame_id,
+            .loaderId = loader_id,
+        }, .{ .session_id = session_id });
+    }
+
     return cdp.sendEvent("Page.frameStoppedLoading", .{
         .frameId = frame_id,
     }, .{ .session_id = session_id });

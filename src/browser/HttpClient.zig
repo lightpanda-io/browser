@@ -1348,14 +1348,14 @@ pub const Transfer = struct {
             }
         }
 
+        transfer.req.notification.dispatch(.http_response_header_done, &.{
+            .transfer = transfer,
+        });
+
         const proceed = transfer.req.header_callback(transfer) catch |err| {
             log.err(.http, "header_callback", .{ .err = err, .req = transfer });
             return err;
         };
-
-        transfer.req.notification.dispatch(.http_response_header_done, &.{
-            .transfer = transfer,
-        });
 
         return proceed and transfer.aborted == false;
     }
