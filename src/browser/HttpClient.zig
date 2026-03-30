@@ -1261,14 +1261,20 @@ pub const Transfer = struct {
 
     fn detectAuthChallenge(transfer: *Transfer, conn: *const http.Connection) void {
         const status = conn.getResponseCode() catch return;
-        if (status != 401 and status != 407) {
+        const connect_status = conn.getConnectCode() catch return;
+
+        if (status != 401 and status != 407 and connect_status != 401 and connect_status != 407) {
             transfer._auth_challenge = null;
             return;
         }
 
         if (conn.getResponseHeader("WWW-Authenticate", 0)) |hdr| {
             transfer._auth_challenge = http.AuthChallenge.parse(status, .server, hdr.value) catch null;
+        } else if (conn.getConnectHeader("WWW-Authenticate", 0)) |hdr| {
+            transfer._auth_challenge = http.AuthChallenge.parse(status, .server, hdr.value) catch null;
         } else if (conn.getResponseHeader("Proxy-Authenticate", 0)) |hdr| {
+            transfer._auth_challenge = http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
+        } else if (conn.getConnectHeader("Proxy-Authenticate", 0)) |hdr| {
             transfer._auth_challenge = http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
         } else {
             transfer._auth_challenge = .{ .status = status, .source = null, .scheme = null, .realm = null };
