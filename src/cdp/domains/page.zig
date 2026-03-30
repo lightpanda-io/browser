@@ -935,7 +935,7 @@ test "cdp.page: addScriptToEvaluateOnNewDocument" {
         try ctx.processMessage(.{ .id = 34, .method = "Page.reload" });
         // wait for this event, which is sent after we've run the registered scripts
         try ctx.expectSentEvent("Page.frameNavigated", .{
-            .frame = .{.loaderId = "LID-0000000002"},
+            .frame = .{ .loaderId = "LID-0000000002" },
         }, .{});
 
         const page = bc.session.currentPage() orelse unreachable;
@@ -947,5 +947,4 @@ test "cdp.page: addScriptToEvaluateOnNewDocument" {
         const test_val = try ls.local.exec("window.__test2", null);
         try testing.expectEqual(2, try test_val.toI32());
     }
-
 }

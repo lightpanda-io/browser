@@ -209,7 +209,7 @@ const TestContext = struct {
                 if (cdp__.browser_context) |*bc| {
                     if (bc.session.page != null) {
                         var runner = try bc.session.runner(.{});
-                        _ = try runner.tick(.{.ms = 1000});
+                        _ = try runner.tick(.{ .ms = 1000 });
                     }
                 }
             }
