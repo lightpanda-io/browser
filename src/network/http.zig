@@ -389,6 +389,15 @@ pub const Connection = struct {
         return url;
     }
 
+    pub fn getConnectCode(self: *const Connection) !u16 {
+        var status: c_long = undefined;
+        try libcurl.curl_easy_getinfo(self._easy, .connect_code, &status);
+        if (status < 0 or status > std.math.maxInt(u16)) {
+            return 0;
+        }
+        return @intCast(status);
+    }
+
     pub fn getResponseCode(self: *const Connection) !u16 {
         var status: c_long = undefined;
         try libcurl.curl_easy_getinfo(self._easy, .response_code, &status);
