@@ -17,8 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const CDP = @import("../CDP.zig");
 
-pub fn processMessage(cmd: anytype) !void {
+pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         dispatchKeyEvent,
         dispatchMouseEvent,
@@ -33,7 +34,7 @@ pub fn processMessage(cmd: anytype) !void {
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchKeyEvent
-fn dispatchKeyEvent(cmd: anytype) !void {
+fn dispatchKeyEvent(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         type: Type,
         key: []const u8 = "",
@@ -74,7 +75,7 @@ fn dispatchKeyEvent(cmd: anytype) !void {
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchMouseEvent
-fn dispatchMouseEvent(cmd: anytype) !void {
+fn dispatchMouseEvent(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         x: f64,
         y: f64,
@@ -104,7 +105,7 @@ fn dispatchMouseEvent(cmd: anytype) !void {
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-insertText
-fn insertText(cmd: anytype) !void {
+fn insertText(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         text: []const u8, // The text to insert
     })) orelse return error.InvalidParams;
