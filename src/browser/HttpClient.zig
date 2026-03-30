@@ -325,7 +325,7 @@ fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
     if (!proceed) {
         switch (cached.data) {
             .buffer => |_| {},
-            .file => |file| file.close(),
+            .file => |f| f.file.close(),
         }
         req.error_callback(req.ctx, error.Abort);
         return;
@@ -337,18 +337,24 @@ fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
                 try req.data_callback(response, data);
             }
         },
-        .file => |file| {
+        .file => |f| {
+            const file = f.file;
             defer file.close();
+
             var buf: [1024]u8 = undefined;
             var file_reader = file.reader(&buf);
-
+            try file_reader.seekTo(f.offset);
             const reader = &file_reader.interface;
-            var read_buf: [1024]u8 = undefined;
 
-            while (true) {
-                const curr = try reader.readSliceShort(&read_buf);
-                if (curr == 0) break;
-                try req.data_callback(response, read_buf[0..curr]);
+            var read_buf: [1024]u8 = undefined;
+            var remaining = f.len;
+
+            while (remaining > 0) {
+                const read_len = @min(read_buf.len, remaining);
+                const n = try reader.readSliceShort(read_buf[0..read_len]);
+                if (n == 0) break;
+                remaining -= n;
+                try req.data_callback(response, read_buf[0..n]);
             }
         },
     }
@@ -1133,7 +1139,7 @@ pub const Response = struct {
             .transfer => |t| t.getContentLength(),
             .cached => |c| switch (c.data) {
                 .buffer => |buf| @intCast(buf.len),
-                .file => |f| @intCast(f.getEndPos() catch 0),
+                .file => |f| @intCast(f.len),
             },
         };
     }

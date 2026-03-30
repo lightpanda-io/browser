@@ -34,7 +34,7 @@ pub const FsCache = @This();
 dir: std.fs.Dir,
 locks: [LOCK_STRIPES]std.Thread.Mutex = .{std.Thread.Mutex{}} ** LOCK_STRIPES,
 
-const CacheMetadataFile = struct {
+const CacheMetadataJson = struct {
     version: usize,
     metadata: CachedMetadata,
 };
@@ -44,8 +44,9 @@ fn getLockPtr(self: *FsCache, key: *const [HASHED_KEY_LEN]u8) *std.Thread.Mutex 
     return &self.locks[lock_idx];
 }
 
+const BODY_LEN_HEADER_LEN = 8;
 const HASHED_KEY_LEN = 64;
-const HASHED_PATH_LEN = HASHED_KEY_LEN + 5;
+const HASHED_PATH_LEN = HASHED_KEY_LEN + 6;
 const HASHED_TMP_PATH_LEN = HASHED_PATH_LEN + 4;
 
 fn hashKey(key: []const u8) [HASHED_KEY_LEN]u8 {
@@ -56,27 +57,15 @@ fn hashKey(key: []const u8) [HASHED_KEY_LEN]u8 {
     return hex;
 }
 
-fn metaPath(hashed_key: *const [HASHED_KEY_LEN]u8) [HASHED_PATH_LEN]u8 {
+fn cachePath(hashed_key: *const [HASHED_KEY_LEN]u8) [HASHED_PATH_LEN]u8 {
     var path: [HASHED_PATH_LEN]u8 = undefined;
-    _ = std.fmt.bufPrint(&path, "{s}.meta", .{hashed_key}) catch unreachable;
+    _ = std.fmt.bufPrint(&path, "{s}.cache", .{hashed_key}) catch unreachable;
     return path;
 }
 
-fn bodyPath(hashed_key: *const [HASHED_KEY_LEN]u8) [HASHED_PATH_LEN]u8 {
-    var path: [HASHED_PATH_LEN]u8 = undefined;
-    _ = std.fmt.bufPrint(&path, "{s}.body", .{hashed_key}) catch unreachable;
-    return path;
-}
-
-fn metaTmpPath(hashed_key: *const [HASHED_KEY_LEN]u8) [HASHED_TMP_PATH_LEN]u8 {
+fn cacheTmpPath(hashed_key: *const [HASHED_KEY_LEN]u8) [HASHED_TMP_PATH_LEN]u8 {
     var path: [HASHED_TMP_PATH_LEN]u8 = undefined;
-    _ = std.fmt.bufPrint(&path, "{s}.meta.tmp", .{hashed_key}) catch unreachable;
-    return path;
-}
-
-fn bodyTmpPath(hashed_key: *const [HASHED_KEY_LEN]u8) [HASHED_TMP_PATH_LEN]u8 {
-    var path: [HASHED_TMP_PATH_LEN]u8 = undefined;
-    _ = std.fmt.bufPrint(&path, "{s}.body.tmp", .{hashed_key}) catch unreachable;
+    _ = std.fmt.bufPrint(&path, "{s}.cache.tmp", .{hashed_key}) catch unreachable;
     return path;
 }
 
@@ -98,106 +87,96 @@ pub fn deinit(self: *FsCache) void {
 
 pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.CachedResponse {
     const hashed_key = hashKey(req.url);
-    const meta_p = metaPath(&hashed_key);
-    const body_p = bodyPath(&hashed_key);
+    const cache_p = cachePath(&hashed_key);
 
     const lock = self.getLockPtr(&hashed_key);
     lock.lock();
     defer lock.unlock();
 
-    const meta_file = self.dir.openFile(&meta_p, .{ .mode = .read_only }) catch return null;
-    defer meta_file.close();
+    const file = self.dir.openFile(&cache_p, .{ .mode = .read_only }) catch return null;
+    errdefer file.close();
 
-    const contents = meta_file.readToEndAlloc(arena, 1 * 1024 * 1024) catch return null;
-    defer arena.free(contents);
+    var file_buf: [1024]u8 = undefined;
+    var len_buf: [BODY_LEN_HEADER_LEN]u8 = undefined;
 
-    const cache_file: CacheMetadataFile = std.json.parseFromSliceLeaky(
-        CacheMetadataFile,
+    var file_reader = file.reader(&file_buf);
+    const file_reader_iface = &file_reader.interface;
+
+    file_reader_iface.readSliceAll(&len_buf) catch return null;
+    const body_len = std.mem.readInt(u64, &len_buf, .little);
+
+    // Now we read metadata.
+    file_reader.seekTo(body_len + BODY_LEN_HEADER_LEN) catch return null;
+
+    var json_reader = std.json.Reader.init(arena, file_reader_iface);
+    const cache_file: CacheMetadataJson = std.json.parseFromTokenSourceLeaky(
+        CacheMetadataJson,
         arena,
-        contents,
-        .{ .allocate = .alloc_always },
+        &json_reader,
+        .{
+            .allocate = .alloc_always,
+        },
     ) catch {
-        self.dir.deleteFile(&meta_p) catch {};
-        self.dir.deleteFile(&body_p) catch {};
+        self.dir.deleteFile(&cache_p) catch {};
         return null;
     };
 
-    const metadata = cache_file.metadata;
-
     if (cache_file.version != CACHE_VERSION) {
-        self.dir.deleteFile(&meta_p) catch {};
-        self.dir.deleteFile(&body_p) catch {};
+        self.dir.deleteFile(&cache_p) catch {};
         return null;
     }
+
+    const metadata = cache_file.metadata;
 
     const now = req.timestamp;
     const age = (now - metadata.stored_at) + @as(i64, @intCast(metadata.age_at_store));
     if (age < 0 or @as(u64, @intCast(age)) >= metadata.cache_control.max_age) {
-        self.dir.deleteFile(&meta_p) catch {};
-        self.dir.deleteFile(&body_p) catch {};
+        self.dir.deleteFile(&cache_p) catch {};
         return null;
     }
 
-    const body_file = self.dir.openFile(
-        &body_p,
-        .{ .mode = .read_only },
-    ) catch return null;
-
     return .{
         .metadata = metadata,
-        .data = .{ .file = body_file },
+        .data = .{
+            .file = .{
+                .file = file,
+                .offset = BODY_LEN_HEADER_LEN,
+                .len = body_len,
+            },
+        },
     };
 }
 
 pub fn put(self: *FsCache, meta: CachedMetadata, body: []const u8) !void {
     const hashed_key = hashKey(meta.url);
-    const meta_p = metaPath(&hashed_key);
-    const meta_tmp_p = metaTmpPath(&hashed_key);
-    const body_p = bodyPath(&hashed_key);
-    const body_tmp_p = bodyTmpPath(&hashed_key);
-    var writer_buf: [512]u8 = undefined;
+    const cache_p = cachePath(&hashed_key);
+    const cache_tmp_p = cacheTmpPath(&hashed_key);
 
     const lock = self.getLockPtr(&hashed_key);
     lock.lock();
     defer lock.unlock();
 
-    {
-        const meta_file = try self.dir.createFile(&meta_tmp_p, .{});
-        errdefer {
-            meta_file.close();
-            self.dir.deleteFile(&meta_tmp_p) catch {};
-        }
+    const file = try self.dir.createFile(&cache_tmp_p, .{});
+    defer file.close();
 
-        var meta_file_writer = meta_file.writer(&writer_buf);
-        const meta_file_writer_iface = &meta_file_writer.interface;
-        try std.json.Stringify.value(
-            CacheMetadataFile{ .version = CACHE_VERSION, .metadata = meta },
-            .{ .whitespace = .minified },
-            meta_file_writer_iface,
-        );
-        try meta_file_writer_iface.flush();
-        meta_file.close();
-    }
-    errdefer self.dir.deleteFile(&meta_tmp_p) catch {};
-    try self.dir.rename(&meta_tmp_p, &meta_p);
+    var writer_buf: [1024]u8 = undefined;
 
-    {
-        const body_file = try self.dir.createFile(&body_tmp_p, .{});
-        errdefer {
-            body_file.close();
-            self.dir.deleteFile(&body_tmp_p) catch {};
-        }
+    var file_writer = file.writer(&writer_buf);
+    var file_writer_iface = &file_writer.interface;
 
-        var body_file_writer = body_file.writer(&writer_buf);
-        const body_file_writer_iface = &body_file_writer.interface;
-        try body_file_writer_iface.writeAll(body);
-        try body_file_writer_iface.flush();
-        body_file.close();
-    }
-    errdefer self.dir.deleteFile(&body_tmp_p) catch {};
+    var len_buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &len_buf, body.len, .little);
+    try file_writer_iface.writeAll(&len_buf);
+    try file_writer_iface.writeAll(body);
 
-    errdefer self.dir.deleteFile(&meta_p) catch {};
-    try self.dir.rename(&body_tmp_p, &body_p);
+    try std.json.Stringify.value(
+        CacheMetadataJson{ .version = CACHE_VERSION, .metadata = meta },
+        .{ .whitespace = .minified },
+        file_writer_iface,
+    );
+
+    try file_writer_iface.flush();
+    try self.dir.rename(&cache_tmp_p, &cache_p);
 }
 
 const testing = std.testing;
@@ -209,9 +188,9 @@ test "FsCache: basic put and get" {
     const path = try tmp.dir.realpathAlloc(testing.allocator, ".");
     defer testing.allocator.free(path);
 
-    var fs_cache = try FsCache.init(path);
-    defer fs_cache.deinit();
+    const fs_cache = try FsCache.init(path);
     var cache = Cache{ .kind = .{ .fs = fs_cache } };
+    defer cache.deinit();
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -233,15 +212,20 @@ test "FsCache: basic put and get" {
     const body = "hello world";
     try cache.put(meta, body);
 
-    const result = cache.get(arena.allocator(), .{ .url = "https://example.com", .timestamp = now }) orelse return error.CacheMiss;
-    defer result.data.file.close();
+    const result = cache.get(
+        arena.allocator(),
+        .{ .url = "https://example.com", .timestamp = now },
+    ) orelse return error.CacheMiss;
+    const f = result.data.file;
+    const file = f.file;
+    defer file.close();
 
     var buf: [64]u8 = undefined;
-    var file_reader = result.data.file.reader(&buf);
+    var file_reader = file.reader(&buf);
+    try file_reader.seekTo(f.offset);
 
-    const read_buf = try file_reader.interface.allocRemaining(testing.allocator, .unlimited);
+    const read_buf = try file_reader.interface.readAlloc(testing.allocator, f.len);
     defer testing.allocator.free(read_buf);
-
     try testing.expectEqualStrings(body, read_buf);
 }
 
@@ -252,9 +236,9 @@ test "FsCache: get expiration" {
     const path = try tmp.dir.realpathAlloc(testing.allocator, ".");
     defer testing.allocator.free(path);
 
-    var fs_cache = try FsCache.init(path);
-    defer fs_cache.deinit();
+    const fs_cache = try FsCache.init(path);
     var cache = Cache{ .kind = .{ .fs = fs_cache } };
+    defer cache.deinit();
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -282,7 +266,7 @@ test "FsCache: get expiration" {
         arena.allocator(),
         .{ .url = "https://example.com", .timestamp = now + 50 },
     ) orelse return error.CacheMiss;
-    result.data.file.close();
+    result.data.file.file.close();
 
     try testing.expectEqual(null, cache.get(
         arena.allocator(),
