@@ -37,6 +37,7 @@ pub fn processMessage(cmd: anytype) !void {
         getFrameTree,
         setLifecycleEventsEnabled,
         addScriptToEvaluateOnNewDocument,
+        removeScriptToEvaluateOnNewDocument,
         createIsolatedWorld,
         navigate,
         reload,
@@ -51,6 +52,7 @@ pub fn processMessage(cmd: anytype) !void {
         .getFrameTree => return getFrameTree(cmd),
         .setLifecycleEventsEnabled => return setLifecycleEventsEnabled(cmd),
         .addScriptToEvaluateOnNewDocument => return addScriptToEvaluateOnNewDocument(cmd),
+        .removeScriptToEvaluateOnNewDocument => return removeScriptToEvaluateOnNewDocument(cmd),
         .createIsolatedWorld => return createIsolatedWorld(cmd),
         .navigate => return navigate(cmd),
         .reload => return doReload(cmd),
@@ -147,20 +149,53 @@ fn setLifecycleEventsEnabled(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-// TODO: hard coded method
-// With the command we receive a script we need to store and run for each new document.
-// Note that the worldName refers to the name given to the isolated world.
 fn addScriptToEvaluateOnNewDocument(cmd: anytype) !void {
-    // const params = (try cmd.params(struct {
-    //     source: []const u8,
-    //     worldName: ?[]const u8 = null,
-    //     includeCommandLineAPI: bool = false,
-    //     runImmediately: bool = false,
-    // })) orelse return error.InvalidParams;
+    const params = (try cmd.params(struct {
+        source: []const u8,
+        worldName: ?[]const u8 = null,
+        includeCommandLineAPI: bool = false,
+        runImmediately: bool = false,
+    })) orelse return error.InvalidParams;
 
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    if (params.runImmediately) {
+        log.warn(.not_implemented, "addScriptOnNewDocument", .{ .param = "runImmediately" });
+    }
+
+    const script_id = bc.next_script_id;
+    bc.next_script_id += 1;
+
+    const source_dupe = try bc.arena.dupe(u8, params.source);
+    try bc.scripts_on_new_document.append(bc.arena, .{
+        .identifier = script_id,
+        .source = source_dupe,
+    });
+
+    var id_buf: [16]u8 = undefined;
+    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{script_id}) catch "1";
     return cmd.sendResult(.{
-        .identifier = "1",
+        .identifier = id_str,
     }, .{});
+}
+
+fn removeScriptToEvaluateOnNewDocument(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        identifier: []const u8,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const target_id = std.fmt.parseInt(u32, params.identifier, 10) catch
+        return cmd.sendResult(null, .{});
+
+    for (bc.scripts_on_new_document.items, 0..) |script, i| {
+        if (script.identifier == target_id) {
+            _ = bc.scripts_on_new_document.orderedRemove(i);
+            break;
+        }
+    }
+    return cmd.sendResult(null, .{});
 }
 
 fn close(cmd: anytype) !void {
@@ -480,6 +515,27 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
             aux_json,
             false,
         );
+    }
+
+    // Evaluate scripts registered via Page.addScriptToEvaluateOnNewDocument.
+    // Must run after the execution context is created but before the client
+    // receives frameNavigated/loadEventFired so polyfills are available for
+    // subsequent CDP commands.
+    if (bc.scripts_on_new_document.items.len > 0) {
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
+        for (bc.scripts_on_new_document.items) |script| {
+            var try_catch: lp.js.TryCatch = undefined;
+            try_catch.init(&ls.local);
+            defer try_catch.deinit();
+
+            ls.local.eval(script.source, null) catch |err| {
+                const caught = try_catch.caughtOrError(arena, err);
+                log.warn(.cdp, "script on new doc", .{ .caught = caught });
+            };
+        }
     }
 
     // frameNavigated event
@@ -838,5 +894,57 @@ test "cdp.page: reload" {
     {
         // reload with ignoreCache param
         try ctx.processMessage(.{ .id = 32, .method = "Page.reload", .params = .{ .ignoreCache = true } });
+    }
+}
+
+test "cdp.page: addScriptToEvaluateOnNewDocument" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    {
+        // Register a script — should return unique identifier "1"
+        try ctx.processMessage(.{ .id = 20, .method = "Page.addScriptToEvaluateOnNewDocument", .params = .{ .source = "window.__test = 1" } });
+        try ctx.expectSentResult(.{
+            .identifier = "1",
+        }, .{ .id = 20 });
+    }
+
+    {
+        // Register another script — should return identifier "2"
+        try ctx.processMessage(.{ .id = 21, .method = "Page.addScriptToEvaluateOnNewDocument", .params = .{ .source = "window.__test2 = 2" } });
+        try ctx.expectSentResult(.{
+            .identifier = "2",
+        }, .{ .id = 21 });
+    }
+
+    {
+        // Remove the first script — should succeed
+        try ctx.processMessage(.{ .id = 22, .method = "Page.removeScriptToEvaluateOnNewDocument", .params = .{ .identifier = "1" } });
+        try ctx.expectSentResult(null, .{ .id = 22 });
+    }
+
+    {
+        // Remove a non-existent identifier — should succeed silently
+        try ctx.processMessage(.{ .id = 23, .method = "Page.removeScriptToEvaluateOnNewDocument", .params = .{ .identifier = "999" } });
+        try ctx.expectSentResult(null, .{ .id = 23 });
+    }
+
+    {
+        try ctx.processMessage(.{ .id = 34, .method = "Page.reload" });
+        // wait for this event, which is sent after we've run the registered scripts
+        try ctx.expectSentEvent("Page.frameNavigated", .{
+            .frame = .{ .loaderId = "LID-0000000002" },
+        }, .{});
+
+        const page = bc.session.currentPage() orelse unreachable;
+
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
+        const test_val = try ls.local.exec("window.__test2", null);
+        try testing.expectEqual(2, try test_val.toI32());
     }
 }

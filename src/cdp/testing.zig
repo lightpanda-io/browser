@@ -168,13 +168,26 @@ const TestContext = struct {
         index: ?usize = null,
     };
     pub fn expectSent(self: *TestContext, expected: anytype, opts: SentOpts) !void {
-        const serialized = try json.Stringify.valueAlloc(base.arena_allocator, expected, .{
-            .whitespace = .indent_2,
-            .emit_null_optional_fields = false,
-        });
+        const expected_json = blk: {
+            // Zig makes this hard. When sendJSON is called, we're sending an anytype.
+            // We can't record that in an ArrayList(???), so we serialize it to JSON.
+            // Now, ideally, we could just take our expected structure, serialize it to
+            // json and check if the two are equal.
+            // Except serializing to JSON isn't deterministic.
+            // So we serialize the JSON then we deserialize to json.Value. And then we can
+            // compare our anytype expectation with the json.Value that we captured
+
+            const serialized = try json.Stringify.valueAlloc(base.arena_allocator, expected, .{
+                .whitespace = .indent_2,
+                .emit_null_optional_fields = false,
+            });
+
+            break :blk try std.json.parseFromSliceLeaky(json.Value, base.arena_allocator, serialized, .{});
+        };
+
         for (0..5) |_| {
             for (self.received.items, 0..) |received, i| {
-                if (try compareExpectedToSent(serialized, received) == false) {
+                if (try base.isEqualJson(expected_json, received) == false) {
                     continue;
                 }
 
@@ -186,6 +199,15 @@ const TestContext = struct {
                     }
                 }
                 return;
+            }
+
+            if (self.cdp_) |*cdp__| {
+                if (cdp__.browser_context) |*bc| {
+                    if (bc.session.page != null) {
+                        var runner = try bc.session.runner(.{});
+                        _ = try runner.tick(.{ .ms = 1000 });
+                    }
+                }
             }
             std.Thread.sleep(5 * std.time.ns_per_ms);
             try self.read();
@@ -298,18 +320,4 @@ pub fn context() !TestContext {
         .client = client,
         .socket = pair[0],
     };
-}
-
-// Zig makes this hard. When sendJSON is called, we're sending an anytype.
-// We can't record that in an ArrayList(???), so we serialize it to JSON.
-// Now, ideally, we could just take our expected structure, serialize it to
-// json and check if the two are equal.
-// Except serializing to JSON isn't deterministic.
-// So we serialize the JSON then we deserialize to json.Value. And then we can
-// compare our anytype expectation with the json.Value that we captured
-
-fn compareExpectedToSent(expected: []const u8, actual: json.Value) !bool {
-    const expected_value = try std.json.parseFromSlice(json.Value, std.testing.allocator, expected, .{});
-    defer expected_value.deinit();
-    return base.isEqualJson(expected_value.value, actual);
 }

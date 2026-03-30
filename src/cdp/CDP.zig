@@ -363,6 +363,11 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         inspector_session: *js.Inspector.Session,
         isolated_worlds: std.ArrayList(*IsolatedWorld),
 
+        // Scripts registered via Page.addScriptToEvaluateOnNewDocument.
+        // Evaluated in each new document after navigation completes.
+        scripts_on_new_document: std.ArrayList(ScriptOnNewDocument) = .empty,
+        next_script_id: u32 = 1,
+
         http_proxy_changed: bool = false,
 
         // Extra headers to add to all requests.
@@ -762,6 +767,11 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 /// Clients create this to be able to create variables and run code without interfering with the
 /// normal namespace and values of the webpage. Similar to the main context we need to pretend to recreate it after
 /// a executionContextsCleared event which happens when navigating to a new page. A client can have a command be executed
+const ScriptOnNewDocument = struct {
+    identifier: u32,
+    source: []const u8,
+};
+
 /// in the isolated world by using its Context ID or the worldName.
 /// grantUniveralAccess Indecated whether the isolated world can reference objects like the DOM or other JS Objects.
 /// An isolated world has it's own instance of globals like Window.
