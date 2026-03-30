@@ -466,7 +466,6 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--version
         \\                Override the reported MCP version.
         \\                Valid: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25.
-        \\                Can also be set via LIGHTPANDA_MCP_VERSION env var.
         \\                Defaults to "2024-11-05".
         \\
     ++ common_options ++
@@ -657,12 +656,6 @@ fn parseMcpArgs(
     args: *std.process.ArgIterator,
 ) !Mcp {
     var result: Mcp = .{};
-    var env_ver: ?[]const u8 = null;
-    var arg_ver: ?[]const u8 = null;
-
-    if (std.posix.getenv("LIGHTPANDA_MCP_VERSION")) |ver| {
-        env_ver = ver;
-    }
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--version", opt)) {
@@ -670,7 +663,10 @@ fn parseMcpArgs(
                 log.fatal(.mcp, "missing argument value", .{ .arg = opt });
                 return error.InvalidArgument;
             };
-            arg_ver = str;
+            result.version = std.meta.stringToEnum(mcp.Version, str) orelse {
+                log.fatal(.mcp, "invalid protocol version", .{ .value = str });
+                return error.InvalidArgument;
+            };
             continue;
         }
 
@@ -680,14 +676,6 @@ fn parseMcpArgs(
 
         log.fatal(.mcp, "unknown argument", .{ .mode = "mcp", .arg = opt });
         return error.UnkownOption;
-    }
-
-    const final_ver = arg_ver orelse env_ver;
-    if (final_ver) |ver| {
-        result.version = std.meta.stringToEnum(mcp.Version, ver) orelse {
-            log.fatal(.mcp, "invalid protocol version", .{ .value = ver });
-            return error.InvalidArgument;
-        };
     }
 
     return result;
