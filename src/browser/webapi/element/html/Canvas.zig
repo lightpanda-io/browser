@@ -29,11 +29,7 @@ const OffscreenCanvas = @import("../../canvas/OffscreenCanvas.zig");
 
 const Canvas = @This();
 _proto: *HtmlElement,
-
-/// Cached context type. Once set, requesting a different type returns null (per spec).
-_context_type: ContextType = .none,
-/// Cached 2D rendering context (same object returned on repeated getContext("2d") calls).
-_ctx_2d: ?*CanvasRenderingContext2D = null,
+_cached: ?DrawingContext = null,
 
 const ContextType = enum { none, @"2d", webgl };
 
@@ -75,28 +71,28 @@ const DrawingContext = union(enum) {
 };
 
 pub fn getContext(self: *Canvas, context_type: []const u8, page: *Page) !?DrawingContext {
-    if (std.mem.eql(u8, context_type, "2d")) {
-        // Return cached context if available.
-        if (self._ctx_2d) |cached| return .{ .@"2d" = cached };
-        // Per spec: return null if a different context type was already requested.
-        if (self._context_type != .none) return null;
-
-        const ctx = try page._factory.create(CanvasRenderingContext2D{ ._canvas = self });
-        self._ctx_2d = ctx;
-        self._context_type = .@"2d";
-        return .{ .@"2d" = ctx };
+    if (self._cached) |cached| {
+        const matches = switch (cached) {
+            .@"2d" => std.mem.eql(u8, context_type, "2d"),
+            .webgl => std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl"),
+        };
+        return if (matches) cached else null;
     }
 
-    if (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")) {
-        // Per spec: return null if a different context type was already requested.
-        if (self._context_type != .none and self._context_type != .webgl) return null;
+    const drawing_context: DrawingContext = blk: {
+        if (std.mem.eql(u8, context_type, "2d")) {
+            const ctx = try page._factory.create(CanvasRenderingContext2D{ ._canvas = self });
+            break :blk .{ .@"2d" = ctx };
+        }
 
-        const ctx = try page._factory.create(WebGLRenderingContext{});
-        self._context_type = .webgl;
-        return .{ .webgl = ctx };
-    }
-
-    return null;
+        if (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")) {
+            const ctx = try page._factory.create(WebGLRenderingContext{});
+            break :blk .{ .webgl = ctx };
+        }
+        return null;
+    };
+    self._cached = drawing_context;
+    return drawing_context;
 }
 
 /// Transfers control of the canvas to an OffscreenCanvas.
