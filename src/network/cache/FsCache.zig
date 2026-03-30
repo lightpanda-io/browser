@@ -25,6 +25,9 @@ const CachedResponse = Cache.CachedResponse;
 
 const CACHE_VERSION: usize = 1;
 const LOCK_STRIPES = 16;
+comptime {
+    std.debug.assert(std.math.isPowerOfTwo(LOCK_STRIPES));
+}
 
 pub const FsCache = @This();
 
@@ -37,7 +40,7 @@ const CacheMetadataFile = struct {
 };
 
 fn getLockPtr(self: *FsCache, key: *const [HASHED_KEY_LEN]u8) *std.Thread.Mutex {
-    const lock_idx: usize = @truncate(std.hash.Wyhash.hash(0, key) % LOCK_STRIPES);
+    const lock_idx = std.hash.Wyhash.hash(0, key[0..]) & (LOCK_STRIPES - 1);
     return &self.locks[lock_idx];
 }
 
