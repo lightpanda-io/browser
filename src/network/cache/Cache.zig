@@ -48,8 +48,6 @@ pub fn put(self: *Cache, metadata: CachedMetadata, body: []const u8) !void {
 
 pub const CacheControl = struct {
     max_age: u64,
-    must_revalidate: bool = false,
-    immutable: bool = false,
 
     pub fn parse(value: []const u8) ?CacheControl {
         var cc: CacheControl = .{ .max_age = undefined };
@@ -65,10 +63,6 @@ pub const CacheControl = struct {
                 return null;
             } else if (std.ascii.eqlIgnoreCase(directive, "no-cache")) {
                 return null;
-            } else if (std.ascii.eqlIgnoreCase(directive, "must-revalidate")) {
-                cc.must_revalidate = true;
-            } else if (std.ascii.eqlIgnoreCase(directive, "immutable")) {
-                cc.immutable = true;
             } else if (std.ascii.eqlIgnoreCase(directive, "public")) {
                 is_public = true;
             } else if (std.ascii.startsWithIgnoreCase(directive, "max-age=")) {
@@ -102,11 +96,6 @@ pub const CachedMetadata = struct {
     status: u16,
     stored_at: i64,
     age_at_store: u64,
-
-    // for If-None-Match
-    etag: ?[]const u8,
-    // for If-Modified-Since
-    last_modified: ?[]const u8,
 
     cache_control: CacheControl,
     /// Response Headers
@@ -144,8 +133,6 @@ pub fn tryCache(
     content_type: ?[]const u8,
     cache_control: ?[]const u8,
     vary: ?[]const u8,
-    etag: ?[]const u8,
-    last_modified: ?[]const u8,
     age: ?[]const u8,
     has_set_cookie: bool,
     has_authorization: bool,
@@ -163,8 +150,6 @@ pub fn tryCache(
         .stored_at = timestamp,
         .age_at_store = if (age) |a| std.fmt.parseInt(u64, a, 10) catch 0 else 0,
         .cache_control = cc,
-        .etag = if (etag) |e| try arena.dupe(u8, e) else null,
-        .last_modified = if (last_modified) |lm| try arena.dupe(u8, lm) else null,
         .headers = &.{},
         .vary_headers = &.{},
     };

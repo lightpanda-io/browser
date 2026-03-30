@@ -1566,8 +1566,6 @@ pub const Transfer = struct {
                 rh.contentType(),
                 if (conn.getResponseHeader("cache-control", 0)) |h| h.value else null,
                 vary,
-                if (conn.getResponseHeader("etag", 0)) |h| h.value else null,
-                if (conn.getResponseHeader("last-modified", 0)) |h| h.value else null,
                 if (conn.getResponseHeader("age", 0)) |h| h.value else null,
                 conn.getResponseHeader("set-cookie", 0) != null,
                 conn.getResponseHeader("authorization", 0) != null,
