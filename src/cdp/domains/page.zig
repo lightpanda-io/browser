@@ -159,6 +159,10 @@ fn addScriptToEvaluateOnNewDocument(cmd: anytype) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
+    if (params.runImmediately) {
+        log.warn(.not_implemented, "addScriptOnNewDocument", .{ .param = "runImmediately" });
+    }
+
     const script_id = bc.next_script_id;
     bc.next_script_id += 1;
 
@@ -191,7 +195,6 @@ fn removeScriptToEvaluateOnNewDocument(cmd: anytype) !void {
             break;
         }
     }
-
     return cmd.sendResult(null, .{});
 }
 
@@ -524,8 +527,13 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
         defer ls.deinit();
 
         for (bc.scripts_on_new_document.items) |script| {
+            var try_catch: lp.js.TryCatch = undefined;
+            try_catch.init(&ls.local);
+            defer try_catch.deinit();
+
             ls.local.eval(script.source, null) catch |err| {
-                log.warn(.cdp, "script on new doc failed", .{ .err = err });
+                const caught = try_catch.caughtOrError(arena, err);
+                log.warn(.cdp, "script on new doc", .{ .caught = caught });
             };
         }
     }
@@ -893,7 +901,7 @@ test "cdp.page: addScriptToEvaluateOnNewDocument" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    _ = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
 
     {
         // Register a script — should return unique identifier "1"
@@ -922,4 +930,22 @@ test "cdp.page: addScriptToEvaluateOnNewDocument" {
         try ctx.processMessage(.{ .id = 23, .method = "Page.removeScriptToEvaluateOnNewDocument", .params = .{ .identifier = "999" } });
         try ctx.expectSentResult(null, .{ .id = 23 });
     }
+
+    {
+        try ctx.processMessage(.{ .id = 34, .method = "Page.reload" });
+        // wait for this event, which is sent after we've run the registered scripts
+        try ctx.expectSentEvent("Page.frameNavigated", .{
+            .frame = .{.loaderId = "LID-0000000002"},
+        }, .{});
+
+        const page = bc.session.currentPage() orelse unreachable;
+
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
+        const test_val = try ls.local.exec("window.__test2", null);
+        try testing.expectEqual(2, try test_val.toI32());
+    }
+
 }
