@@ -148,3 +148,13 @@
 
 }
 </script>
+
+<script id=identity>
+{
+  const element = document.createElement('canvas');
+  const ctx = element.getContext('2d');
+
+  testing.expectTrue(ctx === element.getContext('2d'));
+  testing.expectEqual(null, element.getContext('webgl'));
+}
+</script>

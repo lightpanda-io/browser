@@ -85,3 +85,13 @@
   loseContext.restoreContext();
 }
 </script>
+
+<script id=identity>
+{
+  const element = document.createElement('canvas');
+  const ctx = element.getContext('webgl');
+
+  testing.expectTrue(ctx === element.getContext('webgl'));
+  testing.expectEqual(null, element.getContext('2d'));
+}
+</script>
