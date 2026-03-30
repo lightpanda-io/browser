@@ -81,8 +81,12 @@ pub fn handleMessage(server: *Server, arena: std.mem.Allocator, msg: []const u8)
 
 fn handleInitialize(server: *Server, req: protocol.Request) !void {
     const id = req.id orelse return;
+    const version: protocol.Version = switch (server.app.config.mode) {
+        .mcp => |opts| opts.version,
+        else => .default,
+    };
     const result: protocol.InitializeResult = .{
-        .protocolVersion = server.app.config.mcpVersion(),
+        .protocolVersion = @tagName(version),
         .capabilities = .{
             .resources = .{},
             .tools = .{},

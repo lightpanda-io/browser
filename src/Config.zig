@@ -189,12 +189,6 @@ pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
     };
 }
 
-pub fn mcpVersion(self: *const Config) []const u8 {
-    return switch (self.mode) {
-        .mcp => |opts| @tagName(opts.version),
-        else => @tagName(mcp.Version.default),
-    };
-}
 
 pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
