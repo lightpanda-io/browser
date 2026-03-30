@@ -487,7 +487,6 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
                 return error.InjectBlankFailed;
             };
         }
-        self.documentIsComplete();
 
         session.notification.dispatch(.page_navigate, &.{
             .frame_id = self._frame_id,
@@ -519,6 +518,8 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
 
         // force next request id manually b/c we won't create a real req.
         _ = session.browser.http_client.incrReqId();
+
+        self.documentIsComplete();
         return;
     }
 
@@ -738,6 +739,12 @@ pub fn _documentIsLoaded(self: *Page) !void {
         self.document.asEventTarget(),
         event,
     );
+
+    self._session.notification.dispatch(.page_dom_content_loaded, &.{
+        .frame_id = self._frame_id,
+        .req_id = self._req_id,
+        .timestamp = timestamp(.monotonic),
+    });
 }
 
 pub fn scriptsCompletedLoading(self: *Page) void {
@@ -796,19 +803,6 @@ pub fn documentIsComplete(self: *Page) void {
     self._documentIsComplete() catch |err| {
         log.err(.page, "document is complete", .{ .err = err, .type = self._type, .url = self.url });
     };
-
-    if (self._navigated_options) |no| {
-        // _navigated_options will be null in special short-circuit cases, like
-        // "navigating" to about:blank, in which case this notification has
-        // already been sent
-        self._session.notification.dispatch(.page_navigated, &.{
-            .frame_id = self._frame_id,
-            .req_id = self._req_id,
-            .opts = no,
-            .url = self.url,
-            .timestamp = timestamp(.monotonic),
-        });
-    }
 }
 
 fn _documentIsComplete(self: *Page) !void {
@@ -826,6 +820,12 @@ fn _documentIsComplete(self: *Page) !void {
         event._target = self.document.asEventTarget();
         try self._event_manager.dispatchDirect(window_target, event, self.window._on_load, .{ .inject_target = false, .context = "page load" });
     }
+
+    self._session.notification.dispatch(.page_loaded, &.{
+        .frame_id = self._frame_id,
+        .req_id = self._req_id,
+        .timestamp = timestamp(.monotonic),
+    });
 
     if (self._event_manager.hasDirectListeners(window_target, "pageshow", self.window._on_pageshow)) {
         const pageshow_event = (try PageTransitionEvent.initTrusted(comptime .wrap("pageshow"), .{}, self)).asEvent();
@@ -876,6 +876,19 @@ fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
             .status = header.status,
             .content_type = header.contentType(),
             .type = self._type,
+        });
+    }
+
+    if (self._navigated_options) |no| {
+        // _navigated_options will be null in special short-circuit cases, like
+        // "navigating" to about:blank, in which case this notification has
+        // already been sent
+        self._session.notification.dispatch(.page_navigated, &.{
+            .frame_id = self._frame_id,
+            .req_id = self._req_id,
+            .opts = no,
+            .url = self.url,
+            .timestamp = timestamp(.monotonic),
         });
     }
 
