@@ -471,6 +471,10 @@ fn doCloseTarget(cmd: anytype, bc: anytype) !void {
         bc.session_id = null;
     }
 
+    try cmd.sendEvent("Target.targetDestroyed", .{
+        .targetId = &bc.target_id.?,
+    }, .{});
+
     bc.session.removePage();
     for (bc.isolated_worlds.items) |world| {
         world.deinit();
@@ -657,6 +661,7 @@ test "cdp.target: closeTarget" {
     {
         try ctx.processMessage(.{ .id = 11, .method = "Target.closeTarget", .params = .{ .targetId = "TID-000000000A" } });
         try ctx.expectSentResult(.{ .success = true }, .{ .id = 11 });
+        try ctx.expectSentEvent("Target.targetDestroyed", .{ .targetId = "TID-000000000A" }, .{});
         try testing.expectEqual(null, bc.session.page);
         try testing.expectEqual(null, bc.target_id);
     }
@@ -794,6 +799,7 @@ test "cdp.target: createTarget closes existing target (issue #1962)" {
 
         // Create second target — should succeed by auto-closing the first
         try ctx.processMessage(.{ .id = 11, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
+        try ctx.expectSentEvent("Target.targetDestroyed", .{ .targetId = "FID-0000000001" }, .{});
         try testing.expectEqual(true, bc.target_id != null);
         try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 11 });
 
@@ -821,6 +827,7 @@ test "cdp.target: createTarget closes existing attached target (issue #1962)" {
         // Should have sent detach events for the old session
         try ctx.expectSentEvent("Inspector.detached", .{ .reason = "Render process gone." }, .{ .session_id = session_id });
         try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = session_id, .reason = "Render process gone." }, .{});
+        try ctx.expectSentEvent("Target.targetDestroyed", .{ .targetId = "FID-0000000001" }, .{});
         // New target should be created
         try testing.expectEqual(true, bc.target_id != null);
         try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 12 });
