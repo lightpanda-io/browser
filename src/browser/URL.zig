@@ -47,9 +47,10 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
     if (source_path.len == 0) {
         return processResolved(allocator, base, opts);
     }
-
-    var path: [:0]const u8 = if (comptime isNullTerminated(PT) and !opts.always_dupe) source_path else try allocator.dupeZ(u8, source_path);
-
+    const path_needs_duping = comptime isNullTerminated(PT) or !opts.always_dupe;
+    var path: [:0]const u8 = if (path_needs_duping) try allocator.dupeZ(u8, source_path) else source_path;
+    errdefer if (path_needs_duping) allocator.free(path);
+    
     if (base.len == 0) {
         return processResolved(allocator, path, opts);
     }
