@@ -821,15 +821,15 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
     };
 
-    if (msg.err != null and !is_conn_close_recv) {
-        transfer.requestFailed(transfer._callback_error orelse msg.err.?, true);
-        return true;
-    }
-
     // make sure the transfer can't be immediately aborted from a callback
     // since we still need it here.
     transfer._performing = true;
     defer transfer._performing = false;
+
+    if (msg.err != null and !is_conn_close_recv) {
+        transfer.requestFailed(transfer._callback_error orelse msg.err.?, true);
+        return true;
+    }
 
     if (!transfer._header_done_called) {
         // In case of request w/o data, we need to call the header done
@@ -873,7 +873,6 @@ fn processMessages(self: *Client) !bool {
     var processed = false;
     while (self.handles.readMessage()) |msg| {
         const transfer = try Transfer.fromConnection(&msg.conn);
-
         const done = self.processOneMessage(msg, transfer) catch |err| blk: {
             log.err(.http, "process_messages", .{ .err = err, .req = transfer });
             transfer.requestFailed(err, true);
@@ -1068,6 +1067,24 @@ pub const Transfer = struct {
         if (self.req.shutdown_callback) |cb| {
             cb(self.ctx);
         }
+
+        if (self._performing or self.client.performing) {
+            // We're currently inside of a callback. This client, and libcurl
+            // generally don't expect a transfer to become deinitialized during
+            // a callback. We can flag the transfer as aborted (which is what
+            // we do when transfer.abort() is called in this condition) AND,
+            // since this "kill()"should prevent any future callbacks, the best
+            // we can do is null/noop them.
+            self.aborted = true;
+            self.req.start_callback = null;
+            self.req.shutdown_callback = null;
+            self.req.header_callback = Noop.headerCallback;
+            self.req.data_callback = Noop.dataCallback;
+            self.req.done_callback = Noop.doneCallback;
+            self.req.error_callback = Noop.errorCallback;
+            return;
+        }
+
         self.deinit();
     }
 
@@ -1491,4 +1508,13 @@ pub const Transfer = struct {
 
         return null;
     }
+};
+
+const Noop = struct {
+    fn headerCallback(_: *Transfer) !bool {
+        return true;
+    }
+    fn dataCallback(_: *Transfer, _: []const u8) !void {}
+    fn doneCallback(_: *anyopaque) !void {}
+    fn errorCallback(_: *anyopaque, _: anyerror) void {}
 };
