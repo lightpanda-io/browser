@@ -385,7 +385,6 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
-    const timestamp = event.timestamp;
     const frame_id = &id.toFrameId(event.frame_id);
     const loader_id = &id.toLoaderId(event.req_id);
 
@@ -510,47 +509,6 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
     // chromedp client expects to receive the events is this order.
     // see https://github.com/chromedp/chromedp/issues/1558
     try cdp.sendEvent("DOM.documentUpdated", null, .{ .session_id = session_id });
-
-    // domContentEventFired event
-    // TODO: partially hard coded
-    try cdp.sendEvent(
-        "Page.domContentEventFired",
-        .{ .timestamp = timestamp },
-        .{ .session_id = session_id },
-    );
-
-    // lifecycle DOMContentLoaded event
-    // TODO: partially hard coded
-    if (bc.page_life_cycle_events) {
-        try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
-            .timestamp = timestamp,
-            .name = "DOMContentLoaded",
-            .frameId = frame_id,
-            .loaderId = loader_id,
-        }, .{ .session_id = session_id });
-    }
-
-    // loadEventFired event
-    try cdp.sendEvent(
-        "Page.loadEventFired",
-        .{ .timestamp = timestamp },
-        .{ .session_id = session_id },
-    );
-
-    // lifecycle DOMContentLoaded event
-    if (bc.page_life_cycle_events) {
-        try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
-            .timestamp = timestamp,
-            .name = "load",
-            .frameId = frame_id,
-            .loaderId = loader_id,
-        }, .{ .session_id = session_id });
-    }
-
-    // frameStoppedLoading
-    return cdp.sendEvent("Page.frameStoppedLoading", .{
-        .frameId = frame_id,
-    }, .{ .session_id = session_id });
 }
 
 pub fn pageDOMContentLoaded(bc: anytype, event: *const Notification.PageDOMContentLoaded) !void {
