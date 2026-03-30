@@ -156,6 +156,13 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn userAgent(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.common.user_agent,
+        .help, .version => null,
+    };
+}
+
 pub fn httpCacheDir(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp => |opts| opts.common.http_cache_dir,
@@ -280,6 +287,7 @@ pub const Common = struct {
     log_format: ?log.Format = null,
     log_filter_scopes: ?[]log.Scope = null,
     user_agent_suffix: ?[]const u8 = null,
+    user_agent: ?[]const u8 = null,
     http_cache_dir: ?[]const u8 = null,
 
     web_bot_auth_key_file: ?[]const u8 = null,
@@ -298,11 +306,14 @@ pub const HttpHeaders = struct {
     proxy_bearer_header: ?[:0]const u8,
 
     pub fn init(allocator: Allocator, config: *const Config) !HttpHeaders {
-        const user_agent: [:0]const u8 = if (config.userAgentSuffix()) |suffix|
+        const ua_needs_free = config.userAgent() != null or config.userAgentSuffix() != null;
+        const user_agent: [:0]const u8 = if (config.userAgent()) |ua|
+            try allocator.dupeZ(u8, ua)
+        else if (config.userAgentSuffix()) |suffix|
             try std.fmt.allocPrintSentinel(allocator, "{s} {s}", .{ user_agent_base, suffix }, 0)
         else
             user_agent_base;
-        errdefer if (config.userAgentSuffix() != null) allocator.free(user_agent);
+        errdefer if (ua_needs_free) allocator.free(user_agent);
 
         const user_agent_header = try std.fmt.allocPrintSentinel(allocator, "User-Agent: {s}", .{user_agent}, 0);
         errdefer allocator.free(user_agent_header);
@@ -388,6 +399,8 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--log-filter-scopes
         \\                Filter out too verbose logs per scope:
         \\                http, unknown_prop, event, ...
+        \\
+        \\--user-agent    Override the User-Agent header entirely
         \\
         \\--user-agent-suffix
         \\                Suffix to append to the Lightpanda/X.Y User-Agent
@@ -1034,6 +1047,21 @@ fn parseCommonArg(
             });
         }
         common.log_filter_scopes = arr.items;
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--user-agent", opt) or std.mem.eql(u8, "--user_agent", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
+            return error.InvalidArgument;
+        };
+        for (str) |c| {
+            if (!std.ascii.isPrint(c)) {
+                log.fatal(.app, "not printable character", .{ .arg = opt });
+                return error.InvalidArgument;
+            }
+        }
+        common.user_agent = try allocator.dupe(u8, str);
         return true;
     }
 
