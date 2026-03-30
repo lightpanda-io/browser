@@ -24,6 +24,7 @@ const log = @import("log.zig");
 const dump = @import("browser/dump.zig");
 
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
+const mcp = @import("mcp.zig");
 
 pub const RunMode = enum {
     help,
@@ -222,6 +223,7 @@ pub const Serve = struct {
 
 pub const Mcp = struct {
     common: Common = .{},
+    version: mcp.Version = .default,
 };
 
 pub const DumpFormat = enum {
@@ -453,6 +455,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\Starts an MCP (Model Context Protocol) server over stdio
         \\Example: {s} mcp
         \\
+        \\Options:
+        \\--version
+        \\                Override the reported MCP version.
+        \\                Valid: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25.
+        \\                Defaults to "2024-11-05".
+        \\
     ++ common_options ++
         \\
         \\version command
@@ -640,10 +648,22 @@ fn parseMcpArgs(
     allocator: Allocator,
     args: *std.process.ArgIterator,
 ) !Mcp {
-    var mcp: Mcp = .{};
+    var result: Mcp = .{};
 
     while (args.next()) |opt| {
-        if (try parseCommonArg(allocator, opt, args, &mcp.common)) {
+        if (std.mem.eql(u8, "--version", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.mcp, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            result.version = std.meta.stringToEnum(mcp.Version, str) orelse {
+                log.fatal(.mcp, "invalid protocol version", .{ .value = str });
+                return error.InvalidArgument;
+            };
+            continue;
+        }
+
+        if (try parseCommonArg(allocator, opt, args, &result.common)) {
             continue;
         }
 
@@ -651,7 +671,7 @@ fn parseMcpArgs(
         return error.UnkownOption;
     }
 
-    return mcp;
+    return result;
 }
 
 fn parseFetchArgs(
