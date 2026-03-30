@@ -183,7 +183,7 @@ pub fn put(self: *FsCache, meta: CachedMetadata, body: []const u8) !void {
     lock.lock();
     defer lock.unlock();
 
-    const file = try self.dir.createFile(&cache_tmp_p, .{});
+    const file = try self.dir.createFile(&cache_tmp_p, .{ .truncate = true });
     defer file.close();
 
     var writer_buf: [1024]u8 = undefined;
@@ -208,16 +208,27 @@ pub fn put(self: *FsCache, meta: CachedMetadata, body: []const u8) !void {
 
 const testing = std.testing;
 
-test "FsCache: basic put and get" {
+fn setupCache() !struct { tmp: testing.TmpDir, cache: Cache } {
     var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
+    errdefer tmp.cleanup();
 
     const path = try tmp.dir.realpathAlloc(testing.allocator, ".");
     defer testing.allocator.free(path);
 
-    const fs_cache = try FsCache.init(path);
-    var cache = Cache{ .kind = .{ .fs = fs_cache } };
-    defer cache.deinit();
+    return .{
+        .tmp = tmp,
+        .cache = Cache{ .kind = .{ .fs = try FsCache.init(path) } },
+    };
+}
+
+test "FsCache: basic put and get" {
+    var setup = try setupCache();
+    defer {
+        setup.cache.deinit();
+        setup.tmp.cleanup();
+    }
+
+    const cache = &setup.cache;
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -257,15 +268,13 @@ test "FsCache: basic put and get" {
 }
 
 test "FsCache: get expiration" {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
+    var setup = try setupCache();
+    defer {
+        setup.cache.deinit();
+        setup.tmp.cleanup();
+    }
 
-    const path = try tmp.dir.realpathAlloc(testing.allocator, ".");
-    defer testing.allocator.free(path);
-
-    const fs_cache = try FsCache.init(path);
-    var cache = Cache{ .kind = .{ .fs = fs_cache } };
-    defer cache.deinit();
+    const cache = &setup.cache;
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -304,4 +313,115 @@ test "FsCache: get expiration" {
         arena.allocator(),
         .{ .url = "https://example.com", .timestamp = now },
     ));
+}
+
+test "FsCache: put override" {
+    var setup = try setupCache();
+    defer {
+        setup.cache.deinit();
+        setup.tmp.cleanup();
+    }
+
+    const cache = &setup.cache;
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    {
+        const now = 5000;
+        const max_age = 1000;
+
+        const meta = CachedMetadata{
+            .url = "https://example.com",
+            .content_type = "text/html",
+            .status = 200,
+            .stored_at = now,
+            .age_at_store = 900,
+            .etag = null,
+            .last_modified = null,
+            .cache_control = .{ .max_age = max_age },
+            .vary = null,
+            .headers = &.{},
+        };
+
+        const body = "hello world";
+        try cache.put(meta, body);
+
+        const result = cache.get(
+            arena.allocator(),
+            .{ .url = "https://example.com", .timestamp = now },
+        ) orelse return error.CacheMiss;
+        const f = result.data.file;
+        const file = f.file;
+        defer file.close();
+
+        var buf: [64]u8 = undefined;
+        var file_reader = file.reader(&buf);
+        try file_reader.seekTo(f.offset);
+
+        const read_buf = try file_reader.interface.readAlloc(testing.allocator, f.len);
+        defer testing.allocator.free(read_buf);
+
+        try testing.expectEqualStrings(body, read_buf);
+    }
+
+    {
+        const now = 10000;
+        const max_age = 2000;
+
+        const meta = CachedMetadata{
+            .url = "https://example.com",
+            .content_type = "text/html",
+            .status = 200,
+            .stored_at = now,
+            .age_at_store = 0,
+            .etag = null,
+            .last_modified = null,
+            .cache_control = .{ .max_age = max_age },
+            .vary = null,
+            .headers = &.{},
+        };
+
+        const body = "goodbye world";
+        try cache.put(meta, body);
+
+        const result = cache.get(
+            arena.allocator(),
+            .{ .url = "https://example.com", .timestamp = now },
+        ) orelse return error.CacheMiss;
+        const f = result.data.file;
+        const file = f.file;
+        defer file.close();
+
+        var buf: [64]u8 = undefined;
+        var file_reader = file.reader(&buf);
+        try file_reader.seekTo(f.offset);
+
+        const read_buf = try file_reader.interface.readAlloc(testing.allocator, f.len);
+        defer testing.allocator.free(read_buf);
+
+        try testing.expectEqualStrings(body, read_buf);
+    }
+}
+
+test "FsCache: garbage file" {
+    var setup = try setupCache();
+    defer {
+        setup.cache.deinit();
+        setup.tmp.cleanup();
+    }
+
+    const hashed_key = hashKey("https://example.com");
+    const cache_p = cachePath(&hashed_key);
+    const file = try setup.cache.kind.fs.dir.createFile(&cache_p, .{});
+    try file.writeAll("this is not a valid cache file !@#$%");
+    file.close();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    try testing.expectEqual(
+        null,
+        setup.cache.get(arena.allocator(), .{ .url = "https://example.com", .timestamp = 5000 }),
+    );
 }
