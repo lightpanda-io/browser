@@ -189,7 +189,6 @@ pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
     };
 }
 
-
 pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
