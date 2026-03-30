@@ -1270,7 +1270,11 @@ pub const Transfer = struct {
 
         if (conn.getResponseHeader("WWW-Authenticate", 0)) |hdr| {
             transfer._auth_challenge = http.AuthChallenge.parse(status, .server, hdr.value) catch null;
+        } else if (conn.getConnectHeader("WWW-Authenticate", 0)) |hdr| {
+            transfer._auth_challenge = http.AuthChallenge.parse(status, .server, hdr.value) catch null;
         } else if (conn.getResponseHeader("Proxy-Authenticate", 0)) |hdr| {
+            transfer._auth_challenge = http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
+        } else if (conn.getConnectHeader("Proxy-Authenticate", 0)) |hdr| {
             transfer._auth_challenge = http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
         } else {
             transfer._auth_challenge = .{ .status = status, .source = null, .scheme = null, .realm = null };

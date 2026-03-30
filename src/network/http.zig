@@ -413,6 +413,24 @@ pub const Connection = struct {
         return @intCast(count);
     }
 
+    pub fn getConnectHeader(self: *const Connection, name: [:0]const u8, index: usize) ?HeaderValue {
+        var hdr: ?*libcurl.CurlHeader = null;
+        libcurl.curl_easy_header(self._easy, name, index, .connect, -1, &hdr) catch |err| {
+            // ErrorHeader includes OutOfMemory — rare but real errors from curl internals.
+            // Logged and returned as null since callers don't expect errors.
+            log.err(.http, "get response header", .{
+                .name = name,
+                .err = err,
+            });
+            return null;
+        };
+        const h = hdr orelse return null;
+        return .{
+            .amount = h.amount,
+            .value = std.mem.span(h.value),
+        };
+    }
+
     pub fn getResponseHeader(self: *const Connection, name: [:0]const u8, index: usize) ?HeaderValue {
         var hdr: ?*libcurl.CurlHeader = null;
         libcurl.curl_easy_header(self._easy, name, index, .header, -1, &hdr) catch |err| {
