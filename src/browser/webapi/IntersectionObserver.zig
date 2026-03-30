@@ -190,11 +190,11 @@ pub fn disconnect(self: *IntersectionObserver, page: *Page) void {
     const observing_count = self._observing.items.len;
     self._observing.clearRetainingCapacity();
 
+    page.unregisterIntersectionObserver(self);
+
     if (observing_count > 0) {
         _ = self.releaseRef(page._session);
     }
-
-    page.unregisterIntersectionObserver(self);
 }
 
 pub fn takeRecords(self: *IntersectionObserver, page: *Page) ![]*IntersectionObserverEntry {
