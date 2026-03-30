@@ -62,7 +62,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     }
 
     const response = try Response.init(null, .{ .status = 0 }, page);
-    errdefer response.deinit(true, page._session);
+    errdefer response.deinit(page._session);
 
     const fetch = try response._arena.create(Fetch);
     fetch.* = .{
@@ -226,7 +226,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     return ls.toLocal(self._resolver).resolve("fetch done", js_val);
 }
 
-fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
+fn httpErrorCallback(ctx: *anyopaque, _: anyerror) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
 
     var response = self._response;
@@ -235,7 +235,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // clear this. (defer since `self is in the response's arena).
 
     defer if (self._owns_response) {
-        response.deinit(err == error.Abort, self._page._session);
+        response.deinit(self._page._session);
         self._owns_response = false;
     };
 
@@ -257,7 +257,7 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
     if (self._owns_response) {
         var response = self._response;
         response._transfer = null;
-        response.deinit(true, self._page._session);
+        response.deinit(self._page._session);
         // Do not access `self` after this point: the Fetch struct was
         // allocated from response._arena which has been released.
     }

@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const HttpClient = @import("../../HttpClient.zig");
 
@@ -38,6 +39,7 @@ pub const Type = enum {
     opaqueredirect,
 };
 
+_rc: lp.RC(u8) = .{},
 _status: u16,
 _arena: Allocator,
 _headers: *Headers,
@@ -78,16 +80,20 @@ pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
     return self;
 }
 
-pub fn deinit(self: *Response, shutdown: bool, session: *Session) void {
+pub fn deinit(self: *Response, session: *Session) void {
     if (self._transfer) |transfer| {
-        if (shutdown) {
-            transfer.terminate();
-        } else {
-            transfer.abort(error.Abort);
-        }
+        transfer.abort(error.Abort);
         self._transfer = null;
     }
     session.releaseArena(self._arena);
+}
+
+pub fn releaseRef(self: *Response, session: *Session) void {
+    self._rc.release(self, session);
+}
+
+pub fn acquireRef(self: *Response) void {
+    self._rc.acquire();
 }
 
 pub fn getStatus(self: *const Response) u16 {
@@ -197,8 +203,6 @@ pub const JsApi = struct {
         pub const name = "Response";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(Response.deinit);
     };
 
     pub const constructor = bridge.constructor(Response.init, .{});

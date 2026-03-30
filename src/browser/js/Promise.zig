@@ -67,7 +67,7 @@ fn _persist(self: *const Promise, comptime is_global: bool) !(if (is_global) Glo
         return .{ .handle = global, .temps = {} };
     }
     try ctx.trackTemp(global);
-    return .{ .handle = global, .temps = &ctx.identity.temps };
+    return .{ .handle = global, .temps = &ctx.session.temps };
 }
 
 pub const Temp = G(.temp);

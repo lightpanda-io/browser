@@ -83,10 +83,6 @@ fn initWithTrusted(
     return event;
 }
 
-pub fn deinit(self: *NavigationCurrentEntryChangeEvent, shutdown: bool, session: *Session) void {
-    self._proto.deinit(shutdown, session);
-}
-
 pub fn asEvent(self: *NavigationCurrentEntryChangeEvent) *Event {
     return self._proto;
 }
@@ -106,8 +102,6 @@ pub const JsApi = struct {
         pub const name = "NavigationCurrentEntryChangeEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(NavigationCurrentEntryChangeEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(NavigationCurrentEntryChangeEvent.init, .{});

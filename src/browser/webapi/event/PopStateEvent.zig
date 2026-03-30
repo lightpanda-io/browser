@@ -67,10 +67,6 @@ fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool
     return event;
 }
 
-pub fn deinit(self: *PopStateEvent, shutdown: bool, session: *Session) void {
-    self._proto.deinit(shutdown, session);
-}
-
 pub fn asEvent(self: *PopStateEvent) *Event {
     return self._proto;
 }
@@ -92,8 +88,6 @@ pub const JsApi = struct {
         pub const name = "PopStateEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(PopStateEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(PopStateEvent.init, .{});
