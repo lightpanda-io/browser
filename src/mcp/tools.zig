@@ -76,6 +76,19 @@ pub const tool_list = [_]protocol.Tool{
         ),
     },
     .{
+        .name = "nodeDetails",
+        .description = "Get detailed information about a specific node by its backend node ID. Returns tag, role, name, interactivity, disabled state, value, input type, placeholder, href, checked state, and select options.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to inspect." }
+            \\  },
+            \\  "required": ["backendNodeId"]
+            \\}
+        ),
+    },
+    .{
         .name = "interactiveElements",
         .description = "Extract interactive elements from the opened page. If a url is provided, it navigates to that url first.",
         .inputSchema = protocol.minify(
@@ -256,6 +269,7 @@ const ToolAction = enum {
     navigate,
     markdown,
     links,
+    nodeDetails,
     interactiveElements,
     structuredData,
     detectForms,
@@ -272,6 +286,7 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "navigate", .navigate },
     .{ "markdown", .markdown },
     .{ "links", .links },
+    .{ "nodeDetails", .nodeDetails },
     .{ "interactiveElements", .interactiveElements },
     .{ "structuredData", .structuredData },
     .{ "detectForms", .detectForms },
@@ -305,6 +320,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .goto, .navigate => try handleGoto(server, arena, req.id.?, call_params.arguments),
         .markdown => try handleMarkdown(server, arena, req.id.?, call_params.arguments),
         .links => try handleLinks(server, arena, req.id.?, call_params.arguments),
+        .nodeDetails => try handleNodeDetails(server, arena, req.id.?, call_params.arguments),
         .interactiveElements => try handleInteractiveElements(server, arena, req.id.?, call_params.arguments),
         .structuredData => try handleStructuredData(server, arena, req.id.?, call_params.arguments),
         .detectForms => try handleDetectForms(server, arena, req.id.?, call_params.arguments),
@@ -371,6 +387,32 @@ fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Va
     server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
         return server.sendError(id, .InternalError, "Failed to serialize semantic tree content");
     };
+}
+
+fn handleNodeDetails(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        backendNodeId: CDPNode.Id,
+    };
+    const args = try parseArgs(Params, arena, arguments, server, id, "nodeDetails");
+
+    _ = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
+        return server.sendError(id, .InvalidParams, "Node not found");
+    };
+
+    const page = server.session.currentPage().?;
+    const details = lp.SemanticTree.getNodeDetails(node.dom, &server.node_registry, page, arena) catch {
+        return server.sendError(id, .InternalError, "Failed to get node details");
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try std.json.Stringify.value(&details, .{}, &aw.writer);
+
+    const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {

@@ -97,6 +97,7 @@ const NodeData = struct {
     options: ?[]OptionData = null,
     xpath: []const u8,
     is_interactive: bool,
+    is_disabled: bool,
     node_name: []const u8,
 };
 
@@ -148,6 +149,7 @@ fn walk(
     const role = try axn.getRole();
 
     var is_interactive = false;
+    var is_disabled = false;
     var value: ?[]const u8 = null;
     var options: ?[]OptionData = null;
     var node_name: []const u8 = "text";
@@ -157,7 +159,7 @@ fn walk(
 
         if (el.is(Element.Html.Input)) |input| {
             value = input.getValue();
-            if (el.getAttributeSafe(comptime lp.String.wrap("list"))) |list_id| {
+            if (el.getAttributeSafe(comptime .wrap("list"))) |list_id| {
                 options = try extractDataListOptions(list_id, self.page, self.arena);
             }
         } else if (el.is(Element.Html.TextArea)) |textarea| {
@@ -172,6 +174,8 @@ fn walk(
                 is_interactive = true;
             }
         }
+
+        is_disabled = el.isDisabled();
     } else if (node._type == .document or node._type == .document_fragment) {
         node_name = "root";
     }
@@ -236,6 +240,7 @@ fn walk(
         .options = options,
         .xpath = xpath,
         .is_interactive = is_interactive,
+        .is_disabled = is_disabled,
         .node_name = node_name,
     };
 
@@ -346,6 +351,11 @@ const JsonVisitor = struct {
 
             try self.jw.objectField("isInteractive");
             try self.jw.write(data.is_interactive);
+
+            if (data.is_disabled) {
+                try self.jw.objectField("isDisabled");
+                try self.jw.write(true);
+            }
 
             try self.jw.objectField("role");
             try self.jw.write(data.role);
@@ -459,6 +469,9 @@ const TextVisitor = struct {
         const is_text_only = std.mem.eql(u8, data.role, "StaticText") or std.mem.eql(u8, data.role, "none") or std.mem.eql(u8, data.role, "generic");
 
         try self.writer.print("{d}", .{data.id});
+        if (data.is_interactive) {
+            try self.writer.writeAll(if (data.is_disabled) " [i:disabled]" else " [i]");
+        }
         if (!is_text_only) {
             try self.writer.print(" {s}", .{data.role});
         }
@@ -508,6 +521,177 @@ const TextVisitor = struct {
         }
     }
 };
+
+pub const NodeDetails = struct {
+    backendNodeId: CDPNode.Id,
+    tag_name: []const u8,
+    role: []const u8,
+    name: ?[]const u8,
+    is_interactive: bool,
+    is_disabled: bool,
+    value: ?[]const u8 = null,
+    input_type: ?[]const u8 = null,
+    placeholder: ?[]const u8 = null,
+    href: ?[]const u8 = null,
+    id: ?[]const u8 = null,
+    class: ?[]const u8 = null,
+    checked: ?bool = null,
+    options: ?[]OptionData = null,
+
+    pub fn jsonStringify(self: *const NodeDetails, jw: anytype) !void {
+        try jw.beginObject();
+
+        try jw.objectField("backendNodeId");
+        try jw.write(self.backendNodeId);
+
+        try jw.objectField("tagName");
+        try jw.write(self.tag_name);
+
+        try jw.objectField("role");
+        try jw.write(self.role);
+
+        if (self.name) |n| {
+            try jw.objectField("name");
+            try jw.write(n);
+        }
+
+        try jw.objectField("isInteractive");
+        try jw.write(self.is_interactive);
+
+        if (self.is_disabled) {
+            try jw.objectField("isDisabled");
+            try jw.write(true);
+        }
+
+        if (self.value) |v| {
+            try jw.objectField("value");
+            try jw.write(v);
+        }
+
+        if (self.input_type) |v| {
+            try jw.objectField("inputType");
+            try jw.write(v);
+        }
+
+        if (self.placeholder) |v| {
+            try jw.objectField("placeholder");
+            try jw.write(v);
+        }
+
+        if (self.href) |v| {
+            try jw.objectField("href");
+            try jw.write(v);
+        }
+
+        if (self.id) |v| {
+            try jw.objectField("id");
+            try jw.write(v);
+        }
+
+        if (self.class) |v| {
+            try jw.objectField("class");
+            try jw.write(v);
+        }
+
+        if (self.checked) |c| {
+            try jw.objectField("checked");
+            try jw.write(c);
+        }
+
+        if (self.options) |opts| {
+            try jw.objectField("options");
+            try jw.beginArray();
+            for (opts) |opt| {
+                try jw.beginObject();
+                try jw.objectField("value");
+                try jw.write(opt.value);
+                try jw.objectField("text");
+                try jw.write(opt.text);
+                if (opt.selected) {
+                    try jw.objectField("selected");
+                    try jw.write(true);
+                }
+                try jw.endObject();
+            }
+            try jw.endArray();
+        }
+
+        try jw.endObject();
+    }
+};
+
+pub fn getNodeDetails(node: *Node, registry: *CDPNode.Registry, page: *Page, arena: std.mem.Allocator) !NodeDetails {
+    const cdp_node = try registry.register(node);
+    const axn = AXNode.fromNode(node);
+    const role = try axn.getRole();
+    const name = try axn.getName(page, arena);
+
+    var is_interactive_val = false;
+    var is_disabled = false;
+    var tag_name: []const u8 = "text";
+    var value: ?[]const u8 = null;
+    var input_type: ?[]const u8 = null;
+    var placeholder: ?[]const u8 = null;
+    var href: ?[]const u8 = null;
+    var id_attr: ?[]const u8 = null;
+    var class_attr: ?[]const u8 = null;
+    var checked: ?bool = null;
+    var options: ?[]OptionData = null;
+
+    if (node.is(Element)) |el| {
+        tag_name = el.getTagNameLower();
+        is_disabled = el.isDisabled();
+        id_attr = el.getAttributeSafe(comptime .wrap("id"));
+        class_attr = el.getAttributeSafe(comptime .wrap("class"));
+        placeholder = el.getAttributeSafe(comptime .wrap("placeholder"));
+
+        if (el.getAttributeSafe(comptime .wrap("href"))) |h| {
+            const URL = lp.URL;
+            href = URL.resolve(arena, page.base(), h, .{ .encode = true }) catch h;
+        }
+
+        if (el.is(Element.Html.Input)) |input| {
+            value = input.getValue();
+            input_type = input._input_type.toString();
+            if (input._input_type == .checkbox or input._input_type == .radio) {
+                checked = input.getChecked();
+            }
+            if (el.getAttributeSafe(comptime .wrap("list"))) |list_id| {
+                options = try extractDataListOptions(list_id, page, arena);
+            }
+        } else if (el.is(Element.Html.TextArea)) |textarea| {
+            value = textarea.getValue();
+        } else if (el.is(Element.Html.Select)) |select| {
+            value = select.getValue(page);
+            options = try extractSelectOptions(el.asNode(), page, arena);
+        }
+
+        if (el.is(Element.Html)) |html_el| {
+            const listener_targets = try interactive.buildListenerTargetMap(page, arena);
+            var pointer_events_cache: Element.PointerEventsCache = .empty;
+            if (interactive.classifyInteractivity(page, el, html_el, listener_targets, &pointer_events_cache) != null) {
+                is_interactive_val = true;
+            }
+        }
+    }
+
+    return .{
+        .backendNodeId = cdp_node.id,
+        .tag_name = tag_name,
+        .role = role,
+        .name = name,
+        .is_interactive = is_interactive_val,
+        .is_disabled = is_disabled,
+        .value = value,
+        .input_type = input_type,
+        .placeholder = placeholder,
+        .href = href,
+        .id = id_attr,
+        .class = class_attr,
+        .checked = checked,
+        .options = options,
+    };
+}
 
 const testing = @import("testing.zig");
 
