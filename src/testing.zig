@@ -452,8 +452,10 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     }
 }
 
-// Used by a few CDP tests - wouldn't be sad to see this go.
-pub fn pageTest(comptime test_file: []const u8) !*Page {
+const PageTestOpts = struct {
+    wait_until_done: bool = true,
+};
+pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Page {
     const page = try test_session.createPage();
     errdefer test_session.removePage();
 
@@ -466,7 +468,9 @@ pub fn pageTest(comptime test_file: []const u8) !*Page {
 
     try page.navigate(url, .{});
     var runner = try test_session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    if (opts.wait_until_done) {
+        try runner.wait(.{ .ms = 2000 });
+    }
     return page;
 }
 

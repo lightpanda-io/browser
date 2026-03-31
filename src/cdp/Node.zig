@@ -343,7 +343,7 @@ test "cdp Node: Registry register" {
     try testing.expectEqual(0, registry.lookup_by_id.count());
     try testing.expectEqual(0, registry.lookup_by_node.count());
 
-    var page = try testing.pageTest("cdp/registry1.html");
+    var page = try testing.pageTest("cdp/registry1.html", .{});
     defer page._session.removePage();
     var doc = page.window._document;
 
@@ -400,7 +400,7 @@ test "cdp Node: search list" {
     }
 
     {
-        var page = try testing.pageTest("cdp/registry2.html");
+        var page = try testing.pageTest("cdp/registry2.html", .{});
         defer page._session.removePage();
         var doc = page.window._document;
 
@@ -440,7 +440,7 @@ test "cdp Node: Writer" {
     var registry = Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var page = try testing.pageTest("cdp/registry3.html");
+    var page = try testing.pageTest("cdp/registry3.html", .{});
     defer page._session.removePage();
     var doc = page.window._document;
 

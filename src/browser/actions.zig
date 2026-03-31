@@ -110,28 +110,10 @@ pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, session: *Sessio
     var runner = try session.runner(.{});
     try runner.wait(.{ .ms = timeout_ms, .until = .load });
 
-    while (true) {
-        const page = runner.page;
-        const element = Selector.querySelector(page.document.asNode(), selector, page) catch {
-            return error.InvalidSelector;
-        };
+    const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+    const remaining = timeout_ms -| elapsed;
+    if (remaining == 0) return error.Timeout;
 
-        if (element) |el| {
-            return el.asNode();
-        }
-
-        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
-        if (elapsed >= timeout_ms) {
-            return error.Timeout;
-        }
-        switch (try runner.tick(.{ .ms = timeout_ms - elapsed })) {
-            .done => return error.Timeout,
-            .ok => |recommended_sleep_ms| {
-                if (recommended_sleep_ms > 0) {
-                    // guanrateed to be <= 20ms
-                    std.Thread.sleep(std.time.ns_per_ms * recommended_sleep_ms);
-                }
-            },
-        }
-    }
+    const el = try runner.waitForSelector(selector, remaining);
+    return el.asNode();
 }

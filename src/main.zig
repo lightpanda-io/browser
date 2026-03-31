@@ -123,6 +123,8 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = opts.wait_ms,
                 .wait_until = opts.wait_until,
+                .wait_script = opts.wait_script,
+                .wait_selector = opts.wait_selector,
                 .dump_mode = opts.dump_mode,
                 .dump = .{
                     .strip = opts.strip,

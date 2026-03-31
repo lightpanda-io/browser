@@ -48,7 +48,9 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
-    wait_until: Config.WaitUntil = .load,
+    wait_until: ?Config.WaitUntil = null,
+    wait_script: ?[:0]const u8 = null,
+    wait_selector: ?[:0]const u8 = null,
     dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
     writer: ?*std.Io.Writer = null,
@@ -111,7 +113,31 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
         .kind = .{ .push = null },
     });
     var runner = try session.runner(.{});
-    try runner.wait(.{ .ms = opts.wait_ms, .until = opts.wait_until });
+
+    var timer = try std.time.Timer.start();
+
+    if (opts.wait_until) |wu| {
+        try runner.wait(.{ .ms = opts.wait_ms, .until = wu });
+    } else if (opts.wait_selector == null and opts.wait_script == null) {
+        // We default to .done if both wait_selector and wait_script are null
+        // This allows the caller to ONLY --wait-selector or ONLY --wait-script
+        // or combine --wait-until WITH --wait-selector/script
+        try runner.wait(.{ .ms = opts.wait_ms, .until = .done });
+    }
+
+    if (opts.wait_selector) |selector| {
+        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        const remaining = opts.wait_ms -| elapsed;
+        if (remaining == 0) return error.Timeout;
+        _ = try runner.waitForSelector(selector, remaining);
+    }
+
+    if (opts.wait_script) |script| {
+        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        const remaining = opts.wait_ms -| elapsed;
+        if (remaining == 0) return error.Timeout;
+        try runner.waitForScript(script, remaining);
+    }
 
     const writer = opts.writer orelse return;
     if (opts.dump_mode) |mode| {
