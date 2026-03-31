@@ -368,7 +368,9 @@ pub fn getTaggedOpaque(value: *const v8.Value) ?*TaggedOpaque {
         return null;
     }
 
-    const tao_ptr = v8.v8__Object__GetAlignedPointerFromInternalField(value, 0).?;
+    const tao_ptr = v8.v8__Object__GetAlignedPointerFromInternalField(value, 0) orelse {
+        return null;
+    };
     return @ptrCast(@alignCast(tao_ptr));
 }
 
