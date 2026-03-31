@@ -46,6 +46,10 @@ pub fn init(opts_: ?InitOpts, page: *Page) !*URLSearchParams {
             .query_string => |qs| break :blk try paramsFromString(arena, qs, &page.buf),
             .form_data => |fd| break :blk try KeyValueList.copy(arena, fd._list),
             .value => |js_val| {
+                // Order matters here; Array is also an Object.
+                if (js_val.isArray()) {
+                    break :blk try paramsFromArray(arena, js_val.toArray());
+                }
                 if (js_val.isObject()) {
                     break :blk try KeyValueList.fromJsObject(arena, js_val.toObject(), null, page);
                 }
@@ -132,6 +136,37 @@ pub fn sort(self: *URLSearchParams) void {
             return std.mem.order(u8, a.name.str(), b.name.str()) == .lt;
         }
     }.cmp);
+}
+
+fn paramsFromArray(allocator: Allocator, array: js.Array) !KeyValueList {
+    const array_len = array.len();
+    if (array_len == 0) {
+        return .empty;
+    }
+
+    var params = KeyValueList.init();
+    try params.ensureTotalCapacity(allocator, array_len);
+    // TODO: Release `params` on error.
+
+    var i: u32 = 0;
+    while (i < array_len) : (i += 1) {
+        const item = try array.get(i);
+        if (!item.isArray()) return error.InvalidArgument;
+
+        const as_array = item.toArray();
+        // Need 2 items for KV.
+        if (as_array.len() != 2) return error.InvalidArgument;
+
+        const name_val = try as_array.get(0);
+        const value_val = try as_array.get(1);
+
+        params._entries.appendAssumeCapacity(.{
+            .name = try name_val.toSSOWithAlloc(allocator),
+            .value = try value_val.toSSOWithAlloc(allocator),
+        });
+    }
+
+    return params;
 }
 
 fn paramsFromString(allocator: Allocator, input_: []const u8, buf: []u8) !KeyValueList {
