@@ -64,7 +64,7 @@ const TestContext = struct {
         session_id: ?[]const u8 = null,
         url: ?[:0]const u8 = null,
     };
-    pub fn loadBrowserContext(self: *TestContext, opts: BrowserContextOpts) !*CDP.BrowserContext(CDP) {
+    pub fn loadBrowserContext(self: *TestContext, opts: BrowserContextOpts) !*CDP.BrowserContext {
         var c = self.cdp();
         if (c.browser_context) |bc| {
             _ = c.disposeBrowserContext(bc.id);

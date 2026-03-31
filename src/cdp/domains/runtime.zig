@@ -19,7 +19,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub fn processMessage(cmd: anytype) !void {
+const CDP = @import("../CDP.zig");
+
+pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
         runIfWaitingForDebugger,
@@ -36,7 +38,7 @@ pub fn processMessage(cmd: anytype) !void {
     }
 }
 
-fn sendInspector(cmd: anytype, action: anytype) !void {
+fn sendInspector(cmd: *CDP.Command, action: anytype) !void {
     // save script in file at debug mode
     if (builtin.mode == .Debug) {
         try logInspector(cmd, action);
@@ -48,7 +50,7 @@ fn sendInspector(cmd: anytype, action: anytype) !void {
     bc.callInspector(cmd.input.json);
 }
 
-fn logInspector(cmd: anytype, action: anytype) !void {
+fn logInspector(cmd: *CDP.Command, action: anytype) !void {
     const script = switch (action) {
         .evaluate => blk: {
             const params = (try cmd.params(struct {

@@ -1,4 +1,5 @@
 // Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -22,6 +23,8 @@ const lp = @import("lightpanda");
 const screenshot_png = @embedFile("screenshot.png");
 
 const id = @import("../id.zig");
+const CDP = @import("../CDP.zig");
+
 const log = @import("../../log.zig");
 const js = @import("../../browser/js/js.zig");
 const URL = @import("../../browser/URL.zig");
@@ -31,7 +34,7 @@ const Notification = @import("../../Notification.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub fn processMessage(cmd: anytype) !void {
+pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
         getFrameTree,
@@ -78,7 +81,7 @@ const Frame = struct {
     gatedAPIFeatures: [][]const u8 = &[0][]const u8{},
 };
 
-fn getFrameTree(cmd: anytype) !void {
+fn getFrameTree(cmd: *CDP.Command) !void {
     // Stagehand parses the response and error if we don't return a
     // correct one for this call when browser context or target id are missing.
     const startup = .{
@@ -108,7 +111,7 @@ fn getFrameTree(cmd: anytype) !void {
     }, .{});
 }
 
-fn setLifecycleEventsEnabled(cmd: anytype) !void {
+fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         enabled: bool,
     })) orelse return error.InvalidParams;
@@ -149,7 +152,7 @@ fn setLifecycleEventsEnabled(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn addScriptToEvaluateOnNewDocument(cmd: anytype) !void {
+fn addScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         source: []const u8,
         worldName: ?[]const u8 = null,
@@ -179,7 +182,7 @@ fn addScriptToEvaluateOnNewDocument(cmd: anytype) !void {
     }, .{});
 }
 
-fn removeScriptToEvaluateOnNewDocument(cmd: anytype) !void {
+fn removeScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         identifier: []const u8,
     })) orelse return error.InvalidParams;
@@ -198,7 +201,7 @@ fn removeScriptToEvaluateOnNewDocument(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn close(cmd: anytype) !void {
+fn close(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const target_id = bc.target_id orelse return error.TargetNotLoaded;
@@ -235,7 +238,7 @@ fn close(cmd: anytype) !void {
     bc.target_id = null;
 }
 
-fn createIsolatedWorld(cmd: anytype) !void {
+fn createIsolatedWorld(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         frameId: []const u8,
         worldName: []const u8,
@@ -255,7 +258,7 @@ fn createIsolatedWorld(cmd: anytype) !void {
     return cmd.sendResult(.{ .executionContextId = js_context.id }, .{});
 }
 
-fn navigate(cmd: anytype) !void {
+fn navigate(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         url: [:0]const u8,
         // referrer: ?[]const u8 = null,
@@ -289,7 +292,7 @@ fn navigate(cmd: anytype) !void {
     });
 }
 
-fn doReload(cmd: anytype) !void {
+fn doReload(cmd: *CDP.Command) !void {
     const params = try cmd.params(struct {
         ignoreCache: ?bool = null,
         scriptToEvaluateOnLoad: ?[]const u8 = null,
@@ -319,7 +322,7 @@ fn doReload(cmd: anytype) !void {
     });
 }
 
-pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void {
+pub fn pageNavigate(bc: *CDP.BrowserContext, event: *const Notification.PageNavigate) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
@@ -371,7 +374,7 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
     }, .{ .session_id = session_id });
 }
 
-pub fn pageRemove(bc: anytype) !void {
+pub fn pageRemove(bc: *CDP.BrowserContext) !void {
     // Clear all remote object mappings to prevent stale objectIds from being used
     // after the context is destroy
     bc.inspector_session.inspector.resetContextGroup();
@@ -382,7 +385,7 @@ pub fn pageRemove(bc: anytype) !void {
     }
 }
 
-pub fn pageCreated(bc: anytype, page: *Page) !void {
+pub fn pageCreated(bc: *CDP.BrowserContext, page: *Page) !void {
     _ = bc.cdp.page_arena.reset(.{ .retain_with_limit = 1024 * 512 });
 
     for (bc.isolated_worlds.items) |isolated_world| {
@@ -394,7 +397,7 @@ pub fn pageCreated(bc: anytype, page: *Page) !void {
     bc.captured_responses = .empty;
 }
 
-pub fn pageFrameCreated(bc: anytype, event: *const Notification.PageFrameCreated) !void {
+pub fn pageFrameCreated(bc: *CDP.BrowserContext, event: *const Notification.PageFrameCreated) !void {
     const session_id = bc.session_id orelse return;
 
     const cdp = bc.cdp;
@@ -415,7 +418,7 @@ pub fn pageFrameCreated(bc: anytype, event: *const Notification.PageFrameCreated
     }
 }
 
-pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.PageNavigated) !void {
+pub fn pageNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.PageNavigated) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
@@ -618,15 +621,15 @@ pub fn pageLoaded(bc: anytype, event: *const Notification.PageLoaded) !void {
     }, .{ .session_id = session_id });
 }
 
-pub fn pageNetworkIdle(bc: anytype, event: *const Notification.PageNetworkIdle) !void {
+pub fn pageNetworkIdle(bc: *CDP.BrowserContext, event: *const Notification.PageNetworkIdle) !void {
     return sendPageLifecycle(bc, "networkIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.req_id));
 }
 
-pub fn pageNetworkAlmostIdle(bc: anytype, event: *const Notification.PageNetworkAlmostIdle) !void {
+pub fn pageNetworkAlmostIdle(bc: *CDP.BrowserContext, event: *const Notification.PageNetworkAlmostIdle) !void {
     return sendPageLifecycle(bc, "networkAlmostIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.req_id));
 }
 
-fn sendPageLifecycle(bc: anytype, name: []const u8, timestamp: u64, frame_id: []const u8, loader_id: []const u8) !void {
+fn sendPageLifecycle(bc: *CDP.BrowserContext, name: []const u8, timestamp: u64, frame_id: []const u8, loader_id: []const u8) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
@@ -661,7 +664,7 @@ fn base64Encode(comptime input: []const u8) [std.base64.standard.Encoder.calcSiz
     return buf;
 }
 
-fn captureScreenshot(cmd: anytype) !void {
+fn captureScreenshot(cmd: *CDP.Command) !void {
     const Params = struct {
         format: ?[]const u8 = "png",
         quality: ?u8 = null,
@@ -697,7 +700,7 @@ fn captureScreenshot(cmd: anytype) !void {
     }, .{});
 }
 
-fn getLayoutMetrics(cmd: anytype) !void {
+fn getLayoutMetrics(cmd: *CDP.Command) !void {
     const width = 1920;
     const height = 1080;
 

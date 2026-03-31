@@ -17,17 +17,19 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 
 const id = @import("../id.zig");
+const CDP = @import("../CDP.zig");
 const log = @import("../../log.zig");
-const network = @import("network.zig");
 
 const HttpClient = @import("../../browser/HttpClient.zig");
 const net_http = @import("../../network/http.zig");
 const Notification = @import("../../Notification.zig");
 
-pub fn processMessage(cmd: anytype) !void {
+const network = @import("network.zig");
+const Allocator = std.mem.Allocator;
+
+pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         disable,
         enable,
@@ -135,13 +137,13 @@ const ErrorReason = enum {
     BlockedByResponse,
 };
 
-fn disable(cmd: anytype) !void {
+fn disable(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     bc.fetchDisable();
     return cmd.sendResult(null, .{});
 }
 
-fn enable(cmd: anytype) !void {
+fn enable(cmd: *CDP.Command) !void {
     const params = (try cmd.params(EnableParam)) orelse EnableParam{};
     if (!arePatternsSupported(params.patterns)) {
         log.warn(.not_implemented, "Fetch.enable", .{ .params = "pattern" });
@@ -180,7 +182,7 @@ fn arePatternsSupported(patterns: []RequestPattern) bool {
     return true;
 }
 
-pub fn requestIntercept(bc: anytype, intercept: *const Notification.RequestIntercept) !void {
+pub fn requestIntercept(bc: *CDP.BrowserContext, intercept: *const Notification.RequestIntercept) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
@@ -215,7 +217,7 @@ pub fn requestIntercept(bc: anytype, intercept: *const Notification.RequestInter
     intercept.wait_for_interception.* = true;
 }
 
-fn continueRequest(cmd: anytype) !void {
+fn continueRequest(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
         requestId: []const u8, // INT-{d}"
@@ -275,7 +277,7 @@ const AuthChallengeResponse = enum {
     ProvideCredentials,
 };
 
-fn continueWithAuth(cmd: anytype) !void {
+fn continueWithAuth(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INT-{d}"
@@ -318,7 +320,7 @@ fn continueWithAuth(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn fulfillRequest(cmd: anytype) !void {
+fn fulfillRequest(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const params = (try cmd.params(struct {
@@ -360,7 +362,7 @@ fn fulfillRequest(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn failRequest(cmd: anytype) !void {
+fn failRequest(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INT-{d}"
@@ -382,7 +384,7 @@ fn failRequest(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-pub fn requestAuthRequired(bc: anytype, intercept: *const Notification.RequestAuthRequired) !void {
+pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notification.RequestAuthRequired) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;

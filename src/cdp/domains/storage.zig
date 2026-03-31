@@ -18,13 +18,16 @@
 
 const std = @import("std");
 
+const CDP = @import("../CDP.zig");
+
 const log = @import("../../log.zig");
 const URL = @import("../../browser/URL.zig");
 const Cookie = @import("../../browser/webapi/storage/storage.zig").Cookie;
+
 const CookieJar = Cookie.Jar;
 pub const PreparedUri = Cookie.PreparedUri;
 
-pub fn processMessage(cmd: anytype) !void {
+pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         clearCookies,
         setCookies,
@@ -40,7 +43,7 @@ pub fn processMessage(cmd: anytype) !void {
 
 const BrowserContextParam = struct { browserContextId: ?[]const u8 = null };
 
-fn clearCookies(cmd: anytype) !void {
+fn clearCookies(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(BrowserContextParam)) orelse BrowserContextParam{};
 
@@ -55,7 +58,7 @@ fn clearCookies(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn getCookies(cmd: anytype) !void {
+fn getCookies(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(BrowserContextParam)) orelse BrowserContextParam{};
 
@@ -69,7 +72,7 @@ fn getCookies(cmd: anytype) !void {
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
-fn setCookies(cmd: anytype) !void {
+fn setCookies(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
         cookies: []const CdpCookie,

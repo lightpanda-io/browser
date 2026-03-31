@@ -20,11 +20,13 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const id = @import("../id.zig");
+const CDP = @import("../CDP.zig");
+
 const log = @import("../../log.zig");
 const URL = @import("../../browser/URL.zig");
 const js = @import("../../browser/js/js.zig");
 
-pub fn processMessage(cmd: anytype) !void {
+pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         getTargets,
         attachToTarget,
@@ -60,7 +62,7 @@ pub fn processMessage(cmd: anytype) !void {
     }
 }
 
-fn getTargets(cmd: anytype) !void {
+fn getTargets(cmd: *CDP.Command) !void {
     // If no context available, return an empty array.
     const bc = cmd.browser_context orelse {
         return cmd.sendResult(.{
@@ -86,7 +88,7 @@ fn getTargets(cmd: anytype) !void {
     }, .{ .include_session_id = false });
 }
 
-fn getBrowserContexts(cmd: anytype) !void {
+fn getBrowserContexts(cmd: *CDP.Command) !void {
     var browser_context_ids: []const []const u8 = undefined;
     if (cmd.browser_context) |bc| {
         browser_context_ids = &.{bc.id};
@@ -99,7 +101,7 @@ fn getBrowserContexts(cmd: anytype) !void {
     }, .{ .include_session_id = false });
 }
 
-fn createBrowserContext(cmd: anytype) !void {
+fn createBrowserContext(cmd: *CDP.Command) !void {
     const params = try cmd.params(struct {
         disposeOnDetach: bool = false,
         proxyServer: ?[:0]const u8 = null,
@@ -130,7 +132,7 @@ fn createBrowserContext(cmd: anytype) !void {
     }, .{});
 }
 
-fn disposeBrowserContext(cmd: anytype) !void {
+fn disposeBrowserContext(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         browserContextId: []const u8,
     })) orelse return error.InvalidParams;
@@ -141,7 +143,7 @@ fn disposeBrowserContext(cmd: anytype) !void {
     try cmd.sendResult(null, .{});
 }
 
-fn createTarget(cmd: anytype) !void {
+fn createTarget(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         url: [:0]const u8 = "about:blank",
         // width: ?u64 = null,
@@ -230,7 +232,7 @@ fn createTarget(cmd: anytype) !void {
     }, .{});
 }
 
-fn attachToTarget(cmd: anytype) !void {
+fn attachToTarget(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         targetId: []const u8,
         flatten: bool = true,
@@ -247,7 +249,7 @@ fn attachToTarget(cmd: anytype) !void {
     return cmd.sendResult(.{ .sessionId = bc.session_id }, .{});
 }
 
-fn attachToBrowserTarget(cmd: anytype) !void {
+fn attachToBrowserTarget(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const session_id = bc.session_id orelse cmd.cdp.session_id_gen.next();
@@ -269,7 +271,7 @@ fn attachToBrowserTarget(cmd: anytype) !void {
     return cmd.sendResult(.{ .sessionId = bc.session_id }, .{});
 }
 
-fn closeTarget(cmd: anytype) !void {
+fn closeTarget(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         targetId: []const u8,
     })) orelse return error.InvalidParams;
@@ -310,7 +312,7 @@ fn closeTarget(cmd: anytype) !void {
     bc.target_id = null;
 }
 
-fn getTargetInfo(cmd: anytype) !void {
+fn getTargetInfo(cmd: *CDP.Command) !void {
     const Params = struct {
         targetId: ?[]const u8 = null,
     };
@@ -347,7 +349,7 @@ fn getTargetInfo(cmd: anytype) !void {
     }, .{ .include_session_id = false });
 }
 
-fn sendMessageToTarget(cmd: anytype) !void {
+fn sendMessageToTarget(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         message: []const u8,
         sessionId: []const u8,
@@ -365,32 +367,19 @@ fn sendMessageToTarget(cmd: anytype) !void {
         return error.UnknownSessionId;
     }
 
-    const Capture = struct {
-        aw: std.Io.Writer.Allocating,
-
-        pub fn sendJSON(self: *@This(), message: anytype) !void {
-            return std.json.Stringify.value(message, .{
-                .emit_null_optional_fields = false,
-            }, &self.aw.writer);
-        }
-    };
-
-    var capture = Capture{
-        .aw = .init(cmd.arena),
-    };
-
-    cmd.cdp.dispatch(cmd.arena, &capture, params.message) catch |err| {
+    var aw = std.Io.Writer.Allocating.init(cmd.arena);
+    cmd.cdp.dispatch(cmd.arena, .{ .capture = &aw.writer }, params.message) catch |err| {
         log.err(.cdp, "internal dispatch error", .{ .err = err, .id = cmd.input.id, .message = params.message });
         return err;
     };
 
     try cmd.sendEvent("Target.receivedMessageFromTarget", .{
-        .message = capture.aw.written(),
+        .message = aw.written(),
         .sessionId = params.sessionId,
     }, .{});
 }
 
-fn detachFromTarget(cmd: anytype) !void {
+fn detachFromTarget(cmd: *CDP.Command) !void {
     if (cmd.browser_context) |bc| {
         if (bc.session_id) |session_id| {
             try cmd.sendEvent("Target.detachedFromTarget", .{
@@ -404,11 +393,11 @@ fn detachFromTarget(cmd: anytype) !void {
 }
 
 // TODO: noop method
-fn setDiscoverTargets(cmd: anytype) !void {
+fn setDiscoverTargets(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn setAutoAttach(cmd: anytype) !void {
+fn setAutoAttach(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         autoAttach: bool,
         waitForDebuggerOnStart: bool,
@@ -468,7 +457,7 @@ fn setAutoAttach(cmd: anytype) !void {
     try cmd.sendResult(null, .{});
 }
 
-fn doAttachtoTarget(cmd: anytype, target_id: []const u8) !void {
+fn doAttachtoTarget(cmd: *CDP.Command, target_id: []const u8) !void {
     const bc = cmd.browser_context.?;
     const session_id = bc.session_id orelse cmd.cdp.session_id_gen.next();
 

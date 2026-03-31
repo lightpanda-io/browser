@@ -18,14 +18,18 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
+const CDP = @import("../CDP.zig");
+
+const Node = @import("../Node.zig");
+const DOMNode = @import("../../browser/webapi/Node.zig");
+
 const markdown = lp.markdown;
 const SemanticTree = lp.SemanticTree;
 const interactive = lp.interactive;
 const structured_data = lp.structured_data;
-const Node = @import("../Node.zig");
-const DOMNode = @import("../../browser/webapi/Node.zig");
 
-pub fn processMessage(cmd: anytype) !void {
+pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         getMarkdown,
         getSemanticTree,
