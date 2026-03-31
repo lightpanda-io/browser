@@ -95,10 +95,11 @@ const NodeData = struct {
     name: ?[]const u8,
     value: ?[]const u8,
     options: ?[]OptionData = null,
+    checked: ?bool = null,
     xpath: []const u8,
-    is_interactive: bool,
-    is_disabled: bool,
-    node_name: []const u8,
+    interactive: bool,
+    disabled: bool,
+    tag_name: []const u8,
 };
 
 const WalkContext = struct {
@@ -152,13 +153,17 @@ fn walk(
     var is_disabled = false;
     var value: ?[]const u8 = null;
     var options: ?[]OptionData = null;
-    var node_name: []const u8 = "text";
+    var checked: ?bool = null;
+    var tag_name: []const u8 = "text";
 
     if (node.is(Element)) |el| {
-        node_name = el.getTagNameLower();
+        tag_name = el.getTagNameLower();
 
         if (el.is(Element.Html.Input)) |input| {
             value = input.getValue();
+            if (input._input_type == .checkbox or input._input_type == .radio) {
+                checked = input.getChecked();
+            }
             if (el.getAttributeSafe(comptime .wrap("list"))) |list_id| {
                 options = try extractDataListOptions(list_id, self.page, self.arena);
             }
@@ -177,7 +182,7 @@ fn walk(
 
         is_disabled = el.isDisabled();
     } else if (node._type == .document or node._type == .document_fragment) {
-        node_name = "root";
+        tag_name = "root";
     }
 
     const initial_xpath_len = ctx.xpath_buffer.items.len;
@@ -238,10 +243,11 @@ fn walk(
         .name = name,
         .value = value,
         .options = options,
+        .checked = checked,
         .xpath = xpath,
-        .is_interactive = is_interactive,
-        .is_disabled = is_disabled,
-        .node_name = node_name,
+        .interactive = is_interactive,
+        .disabled = is_disabled,
+        .tag_name = tag_name,
     };
 
     if (should_visit) {
@@ -340,7 +346,7 @@ const JsonVisitor = struct {
         try self.jw.write(data.id);
 
         try self.jw.objectField("nodeName");
-        try self.jw.write(data.node_name);
+        try self.jw.write(data.tag_name);
 
         try self.jw.objectField("xpath");
         try self.jw.write(data.xpath);
@@ -350,9 +356,9 @@ const JsonVisitor = struct {
             try self.jw.write(1);
 
             try self.jw.objectField("isInteractive");
-            try self.jw.write(data.is_interactive);
+            try self.jw.write(data.interactive);
 
-            if (data.is_disabled) {
+            if (data.disabled) {
                 try self.jw.objectField("isDisabled");
                 try self.jw.write(true);
             }
@@ -381,6 +387,11 @@ const JsonVisitor = struct {
                     try self.jw.write(attr._value.str());
                 }
                 try self.jw.endObject();
+            }
+
+            if (data.checked) |checked| {
+                try self.jw.objectField("checked");
+                try self.jw.write(checked);
             }
 
             if (data.options) |options| {
@@ -469,8 +480,8 @@ const TextVisitor = struct {
         const is_text_only = std.mem.eql(u8, data.role, "StaticText") or std.mem.eql(u8, data.role, "none") or std.mem.eql(u8, data.role, "generic");
 
         try self.writer.print("{d}", .{data.id});
-        if (data.is_interactive) {
-            try self.writer.writeAll(if (data.is_disabled) " [i:disabled]" else " [i]");
+        if (data.interactive) {
+            try self.writer.writeAll(if (data.disabled) " [i:disabled]" else " [i]");
         }
         if (!is_text_only) {
             try self.writer.print(" {s}", .{data.role});
@@ -482,6 +493,14 @@ const TextVisitor = struct {
         if (data.value) |v| {
             if (v.len > 0) {
                 try self.writer.print(" value='{s}'", .{v});
+            }
+        }
+
+        if (data.checked) |c| {
+            if (c) {
+                try self.writer.writeAll(" [checked]");
+            } else {
+                try self.writer.writeAll(" [unchecked]");
             }
         }
 
@@ -527,8 +546,8 @@ pub const NodeDetails = struct {
     tag_name: []const u8,
     role: []const u8,
     name: ?[]const u8,
-    is_interactive: bool,
-    is_disabled: bool,
+    interactive: bool,
+    disabled: bool,
     value: ?[]const u8 = null,
     input_type: ?[]const u8 = null,
     placeholder: ?[]const u8 = null,
@@ -556,9 +575,9 @@ pub const NodeDetails = struct {
         }
 
         try jw.objectField("isInteractive");
-        try jw.write(self.is_interactive);
+        try jw.write(self.interactive);
 
-        if (self.is_disabled) {
+        if (self.disabled) {
             try jw.objectField("isDisabled");
             try jw.write(true);
         }
@@ -620,13 +639,18 @@ pub const NodeDetails = struct {
     }
 };
 
-pub fn getNodeDetails(node: *Node, registry: *CDPNode.Registry, page: *Page, arena: std.mem.Allocator) !NodeDetails {
+pub fn getNodeDetails(
+    node: *Node,
+    registry: *CDPNode.Registry,
+    page: *Page,
+    arena: std.mem.Allocator,
+) !NodeDetails {
     const cdp_node = try registry.register(node);
     const axn = AXNode.fromNode(node);
     const role = try axn.getRole();
     const name = try axn.getName(page, arena);
 
-    var is_interactive_val = false;
+    var is_interactive = false;
     var is_disabled = false;
     var tag_name: []const u8 = "text";
     var value: ?[]const u8 = null;
@@ -670,7 +694,7 @@ pub fn getNodeDetails(node: *Node, registry: *CDPNode.Registry, page: *Page, are
             const listener_targets = try interactive.buildListenerTargetMap(page, arena);
             var pointer_events_cache: Element.PointerEventsCache = .empty;
             if (interactive.classifyInteractivity(page, el, html_el, listener_targets, &pointer_events_cache) != null) {
-                is_interactive_val = true;
+                is_interactive = true;
             }
         }
     }
@@ -680,8 +704,8 @@ pub fn getNodeDetails(node: *Node, registry: *CDPNode.Registry, page: *Page, are
         .tag_name = tag_name,
         .role = role,
         .name = name,
-        .is_interactive = is_interactive_val,
-        .is_disabled = is_disabled,
+        .interactive = is_interactive,
+        .disabled = is_disabled,
         .value = value,
         .input_type = input_type,
         .placeholder = placeholder,
