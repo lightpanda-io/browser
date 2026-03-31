@@ -22,9 +22,13 @@ const builtin = @import("builtin");
 
 const log = @import("../log.zig");
 
+const js = @import("js/js.zig");
 const Page = @import("Page.zig");
 const Session = @import("Session.zig");
 const HttpClient = @import("HttpClient.zig");
+
+const Node = @import("webapi/Node.zig");
+const Selector = @import("webapi/selector/Selector.zig");
 
 const IS_DEBUG = builtin.mode == .Debug;
 
@@ -235,4 +239,112 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
         },
         .raw_done => return .done,
     }
+}
+
+pub fn waitForSelector(self: *Runner, selector: [:0]const u8, timeout_ms: u32) !*Node.Element {
+    const arena = try self.session.getArena(.{ .debug = "Runner.waitForSelector" });
+    defer self.session.releaseArena(arena);
+
+    var timer = try std.time.Timer.start();
+    const parsed_selector = try Selector.parseLeaky(arena, selector);
+
+    while (true) {
+        // self.page can change between ticks
+        const page = self.page;
+        if (try parsed_selector.query(page.document.asNode(), page)) |el| {
+            return el;
+        }
+
+        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        if (elapsed >= timeout_ms) {
+            return error.Timeout;
+        }
+        switch (try self.tick(.{ .ms = timeout_ms - elapsed })) {
+            .done => return error.Timeout,
+            .ok => |recommended_sleep_ms| {
+                if (recommended_sleep_ms > 0) {
+                    std.Thread.sleep(std.time.ns_per_ms * recommended_sleep_ms);
+                }
+            },
+        }
+    }
+}
+
+pub fn waitForScript(runner: *Runner, script: [:0]const u8, timeout_ms: u32) !void {
+    var timer = try std.time.Timer.start();
+
+    while (true) {
+        const page = runner.page;
+
+        // Execute the script and check if it returns truthy
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+
+        const value = ls.local.exec(script, "wait_script") catch |err| {
+            const caught = try_catch.caughtOrError(page.call_arena, err);
+            log.err(.app, "wait script error", .{ .err = caught });
+            return error.ScriptError;
+        };
+
+        if (value.toBool()) {
+            return;
+        }
+
+        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        if (elapsed >= timeout_ms) {
+            return error.Timeout;
+        }
+        switch (try runner.tick(.{ .ms = timeout_ms - elapsed })) {
+            .done => return error.Timeout,
+            .ok => |recommended_sleep_ms| {
+                if (recommended_sleep_ms > 0) {
+                    std.Thread.sleep(std.time.ns_per_ms * recommended_sleep_ms);
+                }
+            },
+        }
+    }
+}
+
+const testing = @import("../testing.zig");
+test "Runner: no page" {
+    try testing.expectError(error.NoPage, Runner.init(testing.test_session, .{}));
+}
+
+test "Runner: waitForSelector timeout" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page._session.removePage();
+
+    var runner = try page._session.runner(.{});
+    try testing.expectError(error.Timeout, runner.waitForSelector("#nope", 10));
+}
+
+test "Runner: waitForSelector" {
+    defer testing.reset();
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page._session.removePage();
+
+    var runner = try page._session.runner(.{});
+    const el = try runner.waitForSelector("#sel1", 10);
+    try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
+}
+
+test "Runner: waitForScript timeout" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page._session.removePage();
+
+    var runner = try page._session.runner(.{});
+    try testing.expectError(error.Timeout, runner.waitForScript("document.querySelector('#nope')", 10));
+}
+
+test "Runner: waitForScript" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page._session.removePage();
+
+    var runner = try page._session.runner(.{});
+    try runner.waitForScript("document.querySelector('#sel1')", 10);
 }

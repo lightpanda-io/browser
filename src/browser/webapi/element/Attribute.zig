@@ -26,6 +26,8 @@ const GenericIterator = @import("../collections/iterator.zig").Entry;
 const Page = @import("../../Page.zig");
 const String = @import("../../../string.zig").String;
 
+const Allocator = std.mem.Allocator;
+
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub fn registerTypes() []const type {
@@ -419,7 +421,7 @@ pub fn validateAttributeName(name: String) !void {
     }
 }
 
-pub fn normalizeNameForLookup(name: String, page: *Page) !String {
+fn normalizeNameForLookup(name: String, page: *Page) !String {
     if (!needsLowerCasing(name.str())) {
         return name;
     }
@@ -428,6 +430,14 @@ pub fn normalizeNameForLookup(name: String, page: *Page) !String {
     else
         try std.ascii.allocLowerString(page.call_arena, name.str());
 
+    return .wrap(normalized);
+}
+
+pub fn normalizeNameForLookupAlloc(allocator: Allocator, name: String) !String {
+    if (!needsLowerCasing(name.str())) {
+        return name.dupe(allocator);
+    }
+    const normalized = try std.ascii.allocLowerString(allocator, name.str());
     return .wrap(normalized);
 }
 

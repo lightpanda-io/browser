@@ -515,7 +515,7 @@ test "SemanticTree backendDOMNodeId" {
     var registry: CDPNode.Registry = .init(testing.allocator);
     defer registry.deinit();
 
-    var page = try testing.pageTest("cdp/registry1.html");
+    var page = try testing.pageTest("cdp/registry1.html", .{});
     defer testing.reset();
     defer page._session.removePage();
 
@@ -539,7 +539,7 @@ test "SemanticTree max_depth" {
     var registry: CDPNode.Registry = .init(testing.allocator);
     defer registry.deinit();
 
-    var page = try testing.pageTest("cdp/registry1.html");
+    var page = try testing.pageTest("cdp/registry1.html", .{});
     defer testing.reset();
     defer page._session.removePage();
 

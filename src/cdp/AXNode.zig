@@ -1179,7 +1179,7 @@ test "AXNode: writer" {
     var registry = Node.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var page = try testing.pageTest("cdp/dom3.html");
+    var page = try testing.pageTest("cdp/dom3.html", .{});
     defer page._session.removePage();
     var doc = page.window._document;
 

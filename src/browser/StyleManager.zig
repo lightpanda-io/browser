@@ -114,7 +114,7 @@ fn addRawRule(self: *StyleManager, selector_text: []const u8, block_text: []cons
 
     if (!props.isRelevant()) return;
 
-    const selectors = SelectorParser.parseList(self.arena, selector_text, self.page) catch return;
+    const selectors = SelectorParser.parseList(self.arena, selector_text) catch return;
     for (selectors) |selector| {
         const rightmost = if (selector.segments.len > 0) selector.segments[selector.segments.len - 1].compound else selector.first;
         const bucket_key = getBucketKey(rightmost) orelse continue;
@@ -484,7 +484,7 @@ fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !void {
     }
 
     // Parse the selector list
-    const selectors = SelectorParser.parseList(self.arena, selector_text, self.page) catch return;
+    const selectors = SelectorParser.parseList(self.arena, selector_text) catch return;
     if (selectors.len == 0) {
         return;
     }

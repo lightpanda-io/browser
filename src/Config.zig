@@ -249,7 +249,9 @@ pub const Fetch = struct {
     with_frames: bool = false,
     strip: dump.Opts.Strip = .{},
     wait_ms: u32 = 5000,
-    wait_until: WaitUntil = .done,
+    wait_until: ?WaitUntil = null,
+    wait_script: ?[:0]const u8 = null,
+    wait_selector: ?[:0]const u8 = null,
 };
 
 pub const Common = struct {
@@ -413,12 +415,24 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--with-frames   Includes the contents of iframes. Defaults to false.
         \\
-        \\--wait-ms       Wait time in milliseconds.
+        \\--wait-ms       Wait time in milliseconds. Supersedes all other --wait
+        \\                parameters.
         \\                Defaults to 5000.
         \\
-        \\--wait-until    Wait until the specified event.
-        \\                Supported events: load, domcontentloaded, networkidle, done.
-        \\                Defaults to 'done'.
+        \\--wait-until    Wait until the specified event. Checked before the other
+        \\                --wait- options. Supported events: load, domcontentloaded,
+        \\                networkidle, done.
+        \\                Defaults to 'done'. If --wait-selector, --wait-script or
+        \\                --wait-script-file are specified, defaults to none.
+        \\
+        \\--wait-selector Wait for an element matching the CSS selector to appear.
+        \\                Checked after --wait-until condition is met.
+        \\
+        \\--wait-script   Wait for a JavaScript expression to return truthy.
+        \\                Checked after --wait-until condition is met.
+        \\
+        \\--wait-script-file
+        \\                Like --wait-script, but reads the script from a file.
         \\
     ++ common_options ++
         \\
@@ -685,7 +699,9 @@ fn parseFetchArgs(
     var common: Common = .{};
     var strip: dump.Opts.Strip = .{};
     var wait_ms: u32 = 5000;
-    var wait_until: WaitUntil = .done;
+    var wait_until: ?WaitUntil = null;
+    var wait_script: ?[:0]const u8 = null;
+    var wait_selector: ?[:0]const u8 = null;
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--wait-ms", opt) or std.mem.eql(u8, "--wait_ms", opt)) {
@@ -707,6 +723,36 @@ fn parseFetchArgs(
             };
             wait_until = std.meta.stringToEnum(WaitUntil, str) orelse {
                 log.fatal(.app, "invalid argument value", .{ .arg = opt, .val = str });
+                return error.InvalidArgument;
+            };
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--wait-selector", opt) or std.mem.eql(u8, "--wait_selector", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            wait_selector = try allocator.dupeZ(u8, str);
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--wait-script", opt) or std.mem.eql(u8, "--wait_script", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            wait_script = try allocator.dupeZ(u8, str);
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--wait-script-file", opt) or std.mem.eql(u8, "--wait_script_file", opt)) {
+            const path = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            wait_script = std.fs.cwd().readFileAllocOptions(allocator, path, 1024 * 1024, null, .of(u8), 0) catch |err| {
+                log.fatal(.app, "failed to read file", .{ .arg = opt, .path = path, .err = err });
                 return error.InvalidArgument;
             };
             continue;
@@ -802,6 +848,8 @@ fn parseFetchArgs(
         .with_frames = with_frames,
         .wait_ms = wait_ms,
         .wait_until = wait_until,
+        .wait_selector = wait_selector,
+        .wait_script = wait_script,
     };
 }
 
