@@ -182,6 +182,30 @@ pub fn setLocation(self: *HTMLDocument, url: [:0]const u8, page: *Page) !void {
     return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._proto._page });
 }
 
+pub fn getDir(self: *HTMLDocument) []const u8 {
+    const el = self._proto.getDocumentElement() orelse return "";
+    const html = el.is(Element.Html) orelse return "";
+    return html.getDir();
+}
+
+pub fn setDir(self: *HTMLDocument, value: []const u8, page: *Page) !void {
+    const el = self._proto.getDocumentElement() orelse return;
+    const html = el.is(Element.Html) orelse return;
+    try html.setDir(value, page);
+}
+
+pub fn getLang(self: *HTMLDocument) []const u8 {
+    const el = self._proto.getDocumentElement() orelse return "";
+    const html = el.is(Element.Html) orelse return "";
+    return html.getLang();
+}
+
+pub fn setLang(self: *HTMLDocument, value: []const u8, page: *Page) !void {
+    const el = self._proto.getDocumentElement() orelse return;
+    const html = el.is(Element.Html) orelse return;
+    try html.setLang(value, page);
+}
+
 pub fn getAll(self: *HTMLDocument, page: *Page) !*collections.HTMLAllCollection {
     return page._factory.create(collections.HTMLAllCollection.init(self.asNode(), page));
 }
@@ -250,8 +274,10 @@ pub const JsApi = struct {
         });
     }
 
+    pub const dir = bridge.accessor(HTMLDocument.getDir, HTMLDocument.setDir, .{});
     pub const head = bridge.accessor(HTMLDocument.getHead, null, .{});
     pub const body = bridge.accessor(HTMLDocument.getBody, null, .{});
+    pub const lang = bridge.accessor(HTMLDocument.getLang, HTMLDocument.setLang, .{});
     pub const title = bridge.accessor(HTMLDocument.getTitle, HTMLDocument.setTitle, .{});
     pub const images = bridge.accessor(HTMLDocument.getImages, null, .{});
     pub const scripts = bridge.accessor(HTMLDocument.getScripts, null, .{});

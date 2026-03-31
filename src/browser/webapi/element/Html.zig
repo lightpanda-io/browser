@@ -375,6 +375,22 @@ pub fn setTabIndex(self: *HtmlElement, value: i32, page: *Page) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("tabindex"), .wrap(str), page);
 }
 
+pub fn getDir(self: *HtmlElement) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("dir")) orelse "";
+}
+
+pub fn setDir(self: *HtmlElement, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("dir"), .wrap(value), page);
+}
+
+pub fn getLang(self: *HtmlElement) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("lang")) orelse "";
+}
+
+pub fn setLang(self: *HtmlElement, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("lang"), .wrap(value), page);
+}
+
 pub fn getAttributeFunction(
     self: *HtmlElement,
     listener_type: GlobalEventHandler,
@@ -1211,7 +1227,9 @@ pub const JsApi = struct {
     pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .dom_exception = true });
     pub const click = bridge.function(HtmlElement.click, .{});
 
+    pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{});
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{});
+    pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{});
     pub const tabIndex = bridge.accessor(HtmlElement.getTabIndex, HtmlElement.setTabIndex, .{});
 
     pub const onabort = bridge.accessor(HtmlElement.getOnAbort, HtmlElement.setOnAbort, .{});

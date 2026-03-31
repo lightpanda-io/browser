@@ -1,0 +1,41 @@
+<html lang="en" dir="ltr">
+<head>
+  <script src="../testing.js"></script>
+</head>
+<body>
+  <script id="test-document-dir-lang">
+    // HTMLElement.dir and HTMLElement.lang
+    testing.expectEqual('ltr', document.documentElement.dir);
+    testing.expectEqual('en', document.documentElement.lang);
+
+    // Document.dir and Document.lang delegate to documentElement
+    testing.expectEqual('ltr', document.dir);
+    testing.expectEqual('en', document.lang);
+
+    // Setting via document updates the documentElement attribute
+    document.dir = 'rtl';
+    testing.expectEqual('rtl', document.documentElement.dir);
+    testing.expectEqual('rtl', document.documentElement.getAttribute('dir'));
+
+    document.lang = 'fr';
+    testing.expectEqual('fr', document.documentElement.lang);
+    testing.expectEqual('fr', document.documentElement.getAttribute('lang'));
+
+    // Setting via element is reflected in document
+    document.documentElement.dir = 'ltr';
+    testing.expectEqual('ltr', document.dir);
+
+    document.documentElement.lang = 'de';
+    testing.expectEqual('de', document.lang);
+
+    // div elements also have dir and lang
+    const div = document.createElement('div');
+    testing.expectEqual('', div.dir);
+    testing.expectEqual('', div.lang);
+    div.dir = 'rtl';
+    div.lang = 'ar';
+    testing.expectEqual('rtl', div.dir);
+    testing.expectEqual('ar', div.lang);
+  </script>
+</body>
+</html>
