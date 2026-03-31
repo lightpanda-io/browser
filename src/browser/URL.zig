@@ -28,9 +28,6 @@ const ResolveOpts = struct {
 pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, comptime opts: ResolveOpts) ![:0]const u8 {
     const PT = @TypeOf(source_path);
 
-    if (source_path.len == 0) {
-        return processResolved(allocator, base, opts);
-    }
     var path: [:0]const u8 = if (comptime !isNullTerminated(PT) or opts.always_dupe) try allocator.dupeZ(u8, source_path) else source_path;
 
     if (base.len == 0) {
@@ -41,38 +38,57 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
     if (path.len >= 2 and path[0] != '/') {
         if (std.mem.indexOfScalar(u8, path[0..], ':')) |scheme_path_end| {
             scheme_check: {
+                const scheme_path = path[0..scheme_path_end];
                 //from "ws" to "https"
                 if (scheme_path_end >= 2 and scheme_path_end <= 5) {
-                    const scheme_path = path[0..scheme_path_end];
-                    const has_double_sleshes: bool = path[scheme_path_end + 1] == '/' and path[scheme_path_end + 2] == '/';
+                    const has_double_slashas: bool = scheme_path_end + 3 <= path.len and path[scheme_path_end + 1] == '/' and path[scheme_path_end + 2] == '/';
                     const special_schemes = [_][]const u8{ "https", "http", "ws", "wss", "file", "ftp" };
 
                     for (special_schemes) |special_scheme| {
                         if (std.ascii.eqlIgnoreCase(scheme_path, special_scheme)) {
                             const base_scheme_end = std.mem.indexOf(u8, base, "://") orelse 0;
 
-                            if (base_scheme_end > 0 and std.mem.eql(u8, base[0..base_scheme_end], scheme_path) and !has_double_sleshes) {
+                            if (base_scheme_end > 0 and std.mem.eql(u8, base[0..base_scheme_end], scheme_path) and !has_double_slashas) {
                                 //Skip ":" and exit as relative state
                                 path = path[scheme_path_end + 1 ..];
                                 break :scheme_check;
                             } else {
                                 var rest_start: usize = scheme_path_end + 1;
-                                //File scheme allow empty host
-                                const separator: []const u8 = if (std.ascii.eqlIgnoreCase(scheme_path, "file") and !has_double_sleshes) ":///" else "://";
-                                //Skip any sleshes after "scheme:"
+                                //Skip any slashas after "scheme:"
                                 while (rest_start < path.len and (path[rest_start] == '/' or path[rest_start] == '\\')) {
                                     rest_start += 1;
                                 }
+                                //special scheme need to any symbols after "://"
+                                if (rest_start >= path.len) {
+                                    return error.InvalidURL;
+                                }
+                                //File scheme allow empty host
+                                const separator: []const u8 = if (std.ascii.eqlIgnoreCase(scheme_path, "file") and !has_double_slashas) ":///" else "://";
+
                                 path = try std.mem.joinZ(allocator, "", &.{ scheme_path, separator, path[rest_start..] });
                                 return processResolved(allocator, path, opts);
                             }
                         }
                     }
                 }
+                for (scheme_path[1..]) |c| {
+                    if (!std.ascii.isAlphanumeric(c) and c != '+' and c != '-' and c != '.') {
+                        //Exit as relative state
+                        break :scheme_check;
+                    }
+                }
                 //path is complete http url
                 return processResolved(allocator, path, opts);
             }
         }
+    }
+
+    if (path.len == 0) {
+        if (opts.always_dupe) {
+            const dupe = try allocator.dupeZ(u8, base);
+            return processResolved(allocator, dupe, opts);
+        }
+        return processResolved(allocator, base, opts);
     }
 
     if (path[0] == '?') {
@@ -1596,6 +1612,7 @@ test "URL: resolve path scheme" {
         base: [:0]const u8,
         path: [:0]const u8,
         expected: [:0]const u8,
+        expected_error: bool = false,
     };
 
     const cases = [_]Case{
@@ -1677,65 +1694,91 @@ test "URL: resolve path scheme" {
             .path = "file:/path/to/file",
             .expected = "file:///path/to/file",
         },
+        //different schemes without :// and normalize "file" scheme, absolute path
         .{
             .base = "https://www.example.com/example",
             .path = "file:path/to/file",
             .expected = "file:///path/to/file",
         },
+        //same schemes without :// in path and rest starts with scheme:/, relative path
         .{
             .base = "https://www.example.com/example",
             .path = "https:/file:/relative/path/",
             .expected = "https://www.example.com/file:/relative/path/",
         },
+        //same schemes without :// in path and rest starts with scheme://, relative path
         .{
             .base = "https://www.example.com/example",
             .path = "https:/http://relative/path/",
             .expected = "https://www.example.com/http://relative/path/",
         },
-        .{
-            .base = "http://www.example.com/example",
-            .path = "http:http:/relative/path/",
-            .expected = "http://www.example.com/http:/relative/path/",
-        },
+         //same schemes without :// in path , relative state
         .{
             .base = "http://www.example.com/example",
             .path = "http:relative:path",
             .expected = "http://www.example.com/relative:path",
         },
-        .{
-            .base = "https://www.example.com/example",
-            .path = "https:/http://relative/path/",
-            .expected = "https://www.example.com/http://relative/path/",
-        },
+         //repeat different schemes in path
         .{
             .base = "http://www.example.com/example",
             .path = "http:http:/relative/path/",
             .expected = "http://www.example.com/http:/relative/path/",
         },
+        //repeat different schemes in path
         .{
             .base = "http://www.example.com/example",
             .path = "http:https://relative:path",
             .expected = "http://www.example.com/https://relative:path",
         },
+        //NOT required :// for blob scheme
         .{
             .base = "http://www.example.com/example",
             .path = "blob:other",
             .expected = "blob:other",
         },
+        //NOT required :// for NON-special schemes and can contains "+" or "-" or "." in scheme
         .{
             .base = "http://www.example.com/example",
             .path = "custom+foo:other",
             .expected = "custom+foo:other",
         },
+        //NOT required :// for NON-special schemes
         .{
             .base = "http://www.example.com/example",
             .path = "blob:",
             .expected = "blob:",
         },
+        //NOT required :// for special scheme equal base scheme
+        .{
+            .base = "http://www.example.com/example",
+            .path = "http:",
+            .expected = "http://www.example.com/example",
+        },
+        //required :// for special scheme, so throw error.InvalidURL
+        .{
+            .base = "http://www.example.com/example",
+            .path = "https:",
+            .expected = "",
+            .expected_error = true,
+        },
+        //incorrect symbols in path scheme
+        .{
+            .base = "https://site",
+            .path = "http?://host/some",
+            .expected = "https://site/http?://host/some",
+        },
     };
 
     for (cases) |case| {
-        const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
+        const result = resolve(testing.arena_allocator, case.base, case.path, .{}) catch |err| {
+            if (err == error.InvalidURL) {
+                try testing.expect(case.expected_error);
+                continue;
+            }
+
+            return err;
+        };
+
         try testing.expectString(case.expected, result);
     }
 }
