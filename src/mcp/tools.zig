@@ -404,7 +404,7 @@ fn handleNodeDetails(server: *Server, arena: std.mem.Allocator, id: std.json.Val
     };
 
     const page = server.session.currentPage().?;
-    const details = lp.SemanticTree.getNodeDetails(node.dom, &server.node_registry, page, arena) catch {
+    const details = lp.SemanticTree.getNodeDetails(arena, node.dom, &server.node_registry, page) catch {
         return server.sendError(id, .InternalError, "Failed to get node details");
     };
 
