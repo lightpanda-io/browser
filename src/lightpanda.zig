@@ -129,14 +129,14 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
         const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
         const remaining = opts.wait_ms -| elapsed;
         if (remaining == 0) return error.Timeout;
-        _ = try runner.waitForSelector(selector, opts.wait_ms);
+        _ = try runner.waitForSelector(selector, remaining);
     }
 
     if (opts.wait_script) |script| {
         const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
         const remaining = opts.wait_ms -| elapsed;
         if (remaining == 0) return error.Timeout;
-        try runner.waitForScript(script, opts.wait_ms);
+        try runner.waitForScript(script, remaining);
     }
 
     const writer = opts.writer orelse return;

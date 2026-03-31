@@ -114,6 +114,6 @@ pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, session: *Sessio
     const remaining = timeout_ms -| elapsed;
     if (remaining == 0) return error.Timeout;
 
-    const el = try runner.waitForSelector(selector, timeout_ms);
+    const el = try runner.waitForSelector(selector, remaining);
     return el.asNode();
 }
