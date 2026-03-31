@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=binary_arraybuffer type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+  ws.binaryType = 'arraybuffer';
+
+  ws.addEventListener('open', () => {
+    const buffer = new ArrayBuffer(4);
+    const view = new Uint8Array(buffer);
+    view[0] = 10;
+    view[1] = 20;
+    view[2] = 30;
+    view[3] = 40;
+    ws.send(buffer);
+  });
+
+  ws.addEventListener('message', (e) => {
+    const arr = new Uint8Array(e.data);
+    received.push(arr.length);
+    received.push(arr[1]); // First byte of our data (after 0xEE marker)
+    received.push(arr[4]); // Last byte of our data
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([5, 10, 40], received);
+  });
+}
+</script>
+
+<script id=binary_int32array type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+  ws.binaryType = 'arraybuffer';
+
+  ws.addEventListener('open', () => {
+    const arr = new Int32Array([0x01020304, 0x05060708]);
+    ws.send(arr);
+  });
+
+  ws.addEventListener('message', (e) => {
+    received.push(e.data.byteLength);
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    // 1 marker byte + 8 bytes (2 x 4-byte int32)
+    testing.expectEqual([9], received);
+  });
+}
+</script>
+
+<script id=binary_int32array22 type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  console.warn('last-test');
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+  ws.binaryType = 'arraybuffer';
+
+  ws.addEventListener('open', () => {
+    const arr = new Int32Array([0x01020304, 0x05060708]);
+    ws.send(arr);
+  });
+
+  ws.addEventListener('message', (e) => {
+    received.push(e.data.byteLength);
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    console.warn('aaa');
+    // 1 marker byte + 8 bytes (2 x 4-byte int32)
+    testing.expectEqual([9], received);
+  });
+}
+</script>
+
+<script id=binary_blob type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+  ws.binaryType = 'arraybuffer';
+
+  ws.addEventListener('open', () => {
+    const blob = new Blob(['hello'], { type: 'text/plain' });
+    ws.send(blob);
+  });
+
+  ws.addEventListener('message', (e) => {
+    const arr = new Uint8Array(e.data);
+    received.push(arr.length);
+    received.push(arr[0]); // 0xEE marker
+    // 'h' = 104, 'e' = 101, 'l' = 108
+    received.push(arr[1]); // 'h'
+    received.push(arr[2]); // 'e'
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([6, 0xEE, 104, 101], received);
+  });
+}
+</script>
+
+<script id=server_close type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    ws.send('close:1001:going away');
+  });
+
+  ws.addEventListener('close', (e) => {
+    received.push(e.code);
+    received.push(e.reason);
+    received.push(e.wasClean);
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([1001, 'going away', true], received);
+  });
+}
+</script>
+
+<script id=force_close type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    ws.send('force-close');
+  });
+
+  ws.addEventListener('close', (e) => {
+    received.push('closed');
+    received.push(e.wasClean);
+    state.resolve();
+  });
+
+  ws.addEventListener('error', () => {
+    received.push('error');
+  });
+
+  await state.done(() => {
+    // Connection was not cleanly closed
+    testing.expectEqual(['closed', false], received);
+  });
+}
+</script>
+
+<script id=ready_state type=module>
+{
+  const state = await testing.async();
+  let states = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+  states.push(ws.readyState); // CONNECTING = 0
+
+  ws.addEventListener('open', () => {
+    states.push(ws.readyState); // OPEN = 1
+    ws.close();
+    states.push(ws.readyState); // CLOSING = 2
+  });
+
+  ws.addEventListener('close', () => {
+    states.push(ws.readyState); // CLOSED = 3
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([0, 1, 2, 3], states);
+  });
+}
+</script>
+
+<script id=buffered_amount type=module>
+{
+  const state = await testing.async();
+  let results = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    results.push(ws.bufferedAmount); // Should be 0 initially
+    ws.send('test');
+    // bufferedAmount might be non-zero right after send
+    // but will go to 0 after message is sent
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([0], results);
+  });
+}
+</script>

@@ -791,7 +791,7 @@ const PostMessageCallback = struct {
         const event_target = window.asEventTarget();
         if (page._event_manager.hasDirectListeners(event_target, "message", window._on_message)) {
             const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
-                .data = self.message,
+                .data = .{ .value = self.message },
                 .origin = self.origin,
                 .source = self.source,
                 .bubbles = false,

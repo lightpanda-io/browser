@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=handler_properties type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.onopen = () => {
+    ws.send('handler-test');
+  };
+
+  ws.onmessage = (e) => {
+    received.push(e.data);
+    ws.close();
+  };
+
+  ws.onclose = () => {
+    received.push('closed');
+    state.resolve();
+  };
+
+  await state.done(() => {
+    testing.expectEqual(['echo-handler-test', 'closed'], received);
+  });
+}
+</script>
+
+<script id=binary_type type=module>
+{
+  const state = await testing.async();
+  let results = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    results.push(ws.binaryType); // Default is 'blob'
+    ws.binaryType = 'arraybuffer';
+    results.push(ws.binaryType);
+    ws.binaryType = 'blob';
+    results.push(ws.binaryType);
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual(['blob', 'arraybuffer', 'blob'], results);
+  });
+}
+</script>
+
+<script id=url_property type=module>
+{
+  const state = await testing.async();
+  let result = null;
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/path');
+
+  ws.addEventListener('open', () => {
+    result = ws.url;
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual('ws://127.0.0.1:9584/path', result);
+  });
+}
+</script>

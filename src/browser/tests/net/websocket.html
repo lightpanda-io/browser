@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=basic_echo type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    ws.send('msg1');
+  });
+
+  ws.addEventListener('close', (e) => {
+    received.push(['close', e.code, e.reason]);
+    state.resolve();
+  });
+
+  ws.addEventListener('message', (e) => {
+    received.push(e.data);
+    ws.close(1000, 'bye');
+  });
+
+  await state.done(() => {
+    testing.expectEqual([
+      'echo-msg1',
+      ['close', 1000, 'bye'],
+    ], received);
+  });
+}
+</script>
+
+<script id=multiple_messages type=module>
+{
+  const state = await testing.async();
+  let received = [];
+  let sendCount = 0;
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    ws.send('first');
+    ws.send('second');
+    ws.send('third');
+    sendCount = 3;
+  });
+
+  ws.addEventListener('message', (e) => {
+    received.push(e.data);
+    if (received.length === sendCount) {
+      ws.close();
+    }
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([
+      'echo-first',
+      'echo-second',
+      'echo-third',
+    ], received);
+  });
+}
+</script>
+
+<script id=empty_message type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    ws.send('');
+  });
+
+  ws.addEventListener('message', (e) => {
+    received.push(e.data);
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    // Empty message echoed with "echo-" prefix
+    testing.expectEqual(['echo-'], received);
+  });
+}
+</script>
+
+<script id=boundary_125 type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    // 120 bytes + "echo-" prefix = 125 bytes response (single-byte length)
+    ws.send('A'.repeat(120));
+  });
+
+  ws.addEventListener('message', (e) => {
+    received.push(e.data.length);
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([125], received);
+  });
+}
+</script>
+
+<script id=boundary_16bit type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    // 200 bytes message
+    ws.send('B'.repeat(200));
+  });
+
+  ws.addEventListener('message', (e) => {
+    received.push(e.data.length);
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([205], received); // 200 + "echo-".length
+  });
+}
+</script>
+
+<script id=receive_large type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    // Ask server to send us a 10000 byte message
+    ws.send('send-large:10000');
+  });
+
+  ws.addEventListener('message', (e) => {
+    received.push(e.data.length);
+    // Verify pattern (A-Z repeating)
+    const expected_start = 'ABCDEFGHIJ';
+    received.push(e.data.substring(0, 10) === expected_start);
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([10000, true], received);
+  });
+}
+</script>
+
+<script id=send_large type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    // Send 5000 byte message
+    ws.send('X'.repeat(5000));
+  });
+
+  ws.addEventListener('message', (e) => {
+    received.push(e.data.length);
+    // Check it starts with echo- and then our Xs
+    received.push(e.data.startsWith('echo-XXXXX'));
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([5005, true], received); // 5000 + "echo-".length
+  });
+}
+</script>
+
+<script id=binary_uint8array type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+  ws.binaryType = 'arraybuffer';
+
+  ws.addEventListener('open', () => {
+    const data = new Uint8Array([1, 2, 3, 4, 5]);
+    ws.send(data);
+  });
+
+  ws.addEventListener('message', (e) => {
+    const arr = new Uint8Array(e.data);
+    // Server prepends 0xEE marker to binary responses
+    received.push(arr[0]); // 0xEE marker
+    received.push(arr.length);
+    received.push(arr[1]); // Our first byte
+    ws.close();
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([0xEE, 6, 1], received);
+  });
+}
+</script>

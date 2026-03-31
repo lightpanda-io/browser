@@ -436,19 +436,17 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
         if (js_val.isTrue()) {
             return;
         }
-        switch (try runner.tick(.{ .ms = 20 })) {
-            .done => return error.TestNeverSignaledCompletion,
-            .ok => |next_ms| {
-                const ms_elapsed = timer.lap() / 1_000_000;
-                if (ms_elapsed >= wait_ms) {
-                    return error.TestTimedOut;
-                }
-                wait_ms -= @intCast(ms_elapsed);
-                if (next_ms > 0) {
-                    std.Thread.sleep(std.time.ns_per_ms * next_ms);
-                }
-            },
+        const sleep_ms: usize = switch (try runner.tick(.{ .ms = 20 })) {
+            .done => 20,
+            .ok => |next_ms| @min(next_ms, 20),
+        };
+
+        const ms_elapsed = timer.lap() / 1_000_000;
+        if (ms_elapsed >= wait_ms) {
+            return error.TestTimedOut;
         }
+        wait_ms -= @intCast(ms_elapsed);
+        std.Thread.sleep(std.time.ns_per_ms * sleep_ms);
     }
 }
 
@@ -476,12 +474,15 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Page {
 
 const log = @import("log.zig");
 const TestHTTPServer = @import("TestHTTPServer.zig");
+const TestWSServer = @import("TestWSServer.zig");
 
 const Server = @import("Server.zig");
 var test_cdp_server: ?*Server = null;
 var test_cdp_server_thread: ?std.Thread = null;
 var test_http_server: ?TestHTTPServer = null;
 var test_http_server_thread: ?std.Thread = null;
+var test_ws_server: ?TestWSServer = null;
+var test_ws_server_thread: ?std.Thread = null;
 
 var test_config: Config = undefined;
 
@@ -514,12 +515,15 @@ test "tests:beforeAll" {
     test_session = try test_browser.newSession(test_notification);
 
     var wg: std.Thread.WaitGroup = .{};
-    wg.startMany(2);
+    wg.startMany(3);
 
     test_cdp_server_thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
 
     test_http_server = TestHTTPServer.init(testHTTPHandler);
     test_http_server_thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
+
+    test_ws_server = TestWSServer.init();
+    test_ws_server_thread = try std.Thread.spawn(.{}, TestWSServer.run, .{ &test_ws_server.?, &wg });
 
     // need to wait for the servers to be listening, else tests will fail because
     // they aren't able to connect.
@@ -542,6 +546,16 @@ test "tests:afterAll" {
         thread.join();
     }
     if (test_http_server) |*server| {
+        server.deinit();
+    }
+
+    if (test_ws_server) |*server| {
+        server.stop();
+    }
+    if (test_ws_server_thread) |thread| {
+        thread.join();
+    }
+    if (test_ws_server) |*server| {
         server.deinit();
     }
 
