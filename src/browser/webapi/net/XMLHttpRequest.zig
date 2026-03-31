@@ -44,7 +44,7 @@ _page: *Page,
 _proto: *XMLHttpRequestEventTarget,
 _arena: Allocator,
 _transfer: ?*HttpClient.Transfer = null,
-_has_ref: bool = false,
+_active_request: bool = false,
 
 _url: [:0]const u8 = "",
 _method: net_http.Method = .GET,
@@ -138,11 +138,11 @@ pub fn deinit(self: *XMLHttpRequest, session: *Session) void {
 }
 
 fn releaseSelfRef(self: *XMLHttpRequest) void {
-    if (self._has_ref == false) {
+    if (self._active_request == false) {
         return;
     }
     self.releaseRef(self._page._session);
-    self._has_ref = false;
+    self._active_request = false;
 }
 
 pub fn releaseRef(self: *XMLHttpRequest, session: *Session) void {
@@ -262,7 +262,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         .shutdown_callback = httpShutdownCallback,
     });
     self.acquireRef();
-    self._has_ref = true;
+    self._active_request = true;
 }
 
 fn handleBlobUrl(self: *XMLHttpRequest, page: *Page) !void {
