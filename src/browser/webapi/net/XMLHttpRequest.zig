@@ -44,6 +44,7 @@ _page: *Page,
 _proto: *XMLHttpRequestEventTarget,
 _arena: Allocator,
 _transfer: ?*HttpClient.Transfer = null,
+_has_ref: bool = false,
 
 _url: [:0]const u8 = "",
 _method: net_http.Method = .GET,
@@ -134,6 +135,14 @@ pub fn deinit(self: *XMLHttpRequest, session: *Session) void {
     }
 
     session.releaseArena(self._arena);
+}
+
+fn releaseSelfRef(self: *XMLHttpRequest) void {
+    if (self._has_ref == false) {
+        return;
+    }
+    self.releaseRef(self._page._session);
+    self._has_ref = false;
 }
 
 pub fn releaseRef(self: *XMLHttpRequest, session: *Session) void {
@@ -252,6 +261,8 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
     });
+    self.acquireRef();
+    self._has_ref = true;
 }
 
 fn handleBlobUrl(self: *XMLHttpRequest, page: *Page) !void {
@@ -393,7 +404,6 @@ fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
         log.debug(.http, "request start", .{ .method = self._method, .url = self._url, .source = "xhr" });
     }
     self._transfer = transfer;
-    self.acquireRef();
 }
 
 fn httpHeaderCallback(transfer: *HttpClient.Transfer, header: net_http.Header) !void {
@@ -501,8 +511,8 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self.handleError(err);
     if (self._transfer != null) {
         self._transfer = null;
-        self.releaseRef(self._page._session);
     }
+    self.releaseSelfRef();
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {
@@ -515,8 +525,8 @@ pub fn abort(self: *XMLHttpRequest) void {
     if (self._transfer) |transfer| {
         self._transfer = null;
         transfer.abort(error.Abort);
-        self.releaseRef(self._page._session);
     }
+    self.releaseSelfRef();
 }
 
 fn handleError(self: *XMLHttpRequest, err: anyerror) void {
