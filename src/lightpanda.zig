@@ -237,6 +237,10 @@ pub fn RC(comptime T: type) type {
                 session.releaseArena(kv.value.arena);
             }
         }
+
+        pub fn format(self: @This(), writer: *std.Io.Writer) !void {
+            return writer.print("{d}", .{self._refs});
+        }
     };
 }
 
