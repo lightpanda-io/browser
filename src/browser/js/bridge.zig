@@ -104,18 +104,6 @@ pub fn Builder(comptime T: type) type {
     };
 }
 
-fn releaseRef(comptime T: type, ptr_id: usize, session: *Session) void {
-    if (@hasDecl(T, "releaseRef")) {
-        T.releaseRef(@ptrFromInt(ptr_id), session);
-        return;
-    }
-    if (@hasField(T, "_proto")) {
-        releaseRef(Struct(std.meta.fieldInfo(T, ._proto).type), ptr_id, session);
-        return;
-    }
-    @compileError(@typeName(T) ++ " marked with finalizer without an acquireRef in its prototype chain");
-}
-
 pub const Constructor = struct {
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
