@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
+<body></body>
 
 <script id=window>
   testing.expectEqual(window, globalThis);
@@ -255,6 +256,28 @@
     let threw = false;
     try {
       structuredClone(Symbol('test'));
+    } catch (err) {
+      threw = true;
+    }
+    testing.expectEqual(true, threw);
+  }
+
+  // Host objects (DOM elements) cannot be cloned - should throw, not crash
+  {
+    let threw = false;
+    try {
+      structuredClone(document.body);
+    } catch (err) {
+      threw = true;
+    }
+    testing.expectEqual(true, threw);
+  }
+
+  // Objects containing host objects cannot be cloned - should throw, not crash
+  {
+    let threw = false;
+    try {
+      structuredClone({ element: document.body });
     } catch (err) {
       threw = true;
     }
