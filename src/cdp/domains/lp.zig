@@ -154,7 +154,7 @@ fn getNodeDetails(cmd: anytype) !void {
 
     const node = (bc.node_registry.lookup_by_id.get(params.backendNodeId) orelse return error.InvalidNodeId).dom;
 
-    const details = SemanticTree.getNodeDetails(node, &bc.node_registry, page, cmd.arena) catch return error.InternalError;
+    const details = SemanticTree.getNodeDetails(cmd.arena, node, &bc.node_registry, page) catch return error.InternalError;
 
     return cmd.sendResult(.{
         .nodeDetails = details,

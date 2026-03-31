@@ -640,10 +640,10 @@ pub const NodeDetails = struct {
 };
 
 pub fn getNodeDetails(
+    arena: std.mem.Allocator,
     node: *Node,
     registry: *CDPNode.Registry,
     page: *Page,
-    arena: std.mem.Allocator,
 ) !NodeDetails {
     const cdp_node = try registry.register(node);
     const axn = AXNode.fromNode(node);
