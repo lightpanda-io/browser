@@ -502,7 +502,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
         .loaded = loaded,
     }, page);
 
-    self.releaseRef(page._session);
+    self.releaseSelfRef();
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
