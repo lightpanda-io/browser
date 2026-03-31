@@ -1298,7 +1298,7 @@ pub const Transfer = struct {
         if (execute_callback) {
             self.req.error_callback(self.req.ctx, err);
         } else if (self.req.shutdown_callback) |cb| {
-            cb(self.ctx);
+            cb(self.req.ctx);
         }
     }
 
