@@ -58,12 +58,12 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
                                 while (rest_start < path.len and (path[rest_start] == '/' or path[rest_start] == '\\')) {
                                     rest_start += 1;
                                 }
-                                //special scheme need to any symbols after "://"
-                                if (rest_start >= path.len) {
-                                    return error.InvalidURL;
+                                // A special scheme (exclude "file") must contain at least anu chars after "://"
+                                if (rest_start == path.len and !std.ascii.eqlIgnoreCase(scheme_path, "file")) {
+                                    return error.TypeError;
                                 }
                                 //File scheme allow empty host
-                                const separator: []const u8 = if (std.ascii.eqlIgnoreCase(scheme_path, "file") and !has_double_slashas) ":///" else "://";
+                                const separator: []const u8 = if (!has_double_slashas and std.ascii.eqlIgnoreCase(scheme_path, "file")) ":///" else "://";
 
                                 path = try std.mem.joinZ(allocator, "", &.{ scheme_path, separator, path[rest_start..] });
                                 return processResolved(allocator, path, opts);
@@ -1694,6 +1694,12 @@ test "URL: resolve path scheme" {
             .path = "file:/path/to/file",
             .expected = "file:///path/to/file",
         },
+        //different schemes and path as absolute (path scheme=file, host is empty)
+        .{
+            .base = "https://www.example.com/example",
+            .path = "file:/",
+            .expected = "file:///",
+        },
         //different schemes without :// and normalize "file" scheme, absolute path
         .{
             .base = "https://www.example.com/example",
@@ -1712,13 +1718,13 @@ test "URL: resolve path scheme" {
             .path = "https:/http://relative/path/",
             .expected = "https://www.example.com/http://relative/path/",
         },
-         //same schemes without :// in path , relative state
+        //same schemes without :// in path , relative state
         .{
             .base = "http://www.example.com/example",
             .path = "http:relative:path",
             .expected = "http://www.example.com/relative:path",
         },
-         //repeat different schemes in path
+        //repeat different schemes in path
         .{
             .base = "http://www.example.com/example",
             .path = "http:http:/relative/path/",
@@ -1770,15 +1776,12 @@ test "URL: resolve path scheme" {
     };
 
     for (cases) |case| {
-        const result = resolve(testing.arena_allocator, case.base, case.path, .{}) catch |err| {
-            if (err == error.InvalidURL) {
-                try testing.expect(case.expected_error);
-                continue;
-            }
-
-            return err;
-        };
-
-        try testing.expectString(case.expected, result);
+        if (case.expected_error) {
+            const result = resolve(testing.arena_allocator, case.base, case.path, .{});
+            try testing.expectError(error.TypeError, result);
+        } else {
+            const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
+            try testing.expectString(case.expected, result);
+        }
     }
 }
