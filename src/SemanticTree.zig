@@ -159,7 +159,7 @@ fn walk(
 
         if (el.is(Element.Html.Input)) |input| {
             value = input.getValue();
-            if (el.getAttributeSafe(comptime lp.String.wrap("list"))) |list_id| {
+            if (el.getAttributeSafe(comptime .wrap("list"))) |list_id| {
                 options = try extractDataListOptions(list_id, self.page, self.arena);
             }
         } else if (el.is(Element.Html.TextArea)) |textarea| {
@@ -641,11 +641,11 @@ pub fn getNodeDetails(node: *Node, registry: *CDPNode.Registry, page: *Page, are
     if (node.is(Element)) |el| {
         tag_name = el.getTagNameLower();
         is_disabled = el.isDisabled();
-        id_attr = el.getAttributeSafe(comptime lp.String.wrap("id"));
-        class_attr = el.getAttributeSafe(comptime lp.String.wrap("class"));
-        placeholder = el.getAttributeSafe(comptime lp.String.wrap("placeholder"));
+        id_attr = el.getAttributeSafe(comptime .wrap("id"));
+        class_attr = el.getAttributeSafe(comptime .wrap("class"));
+        placeholder = el.getAttributeSafe(comptime .wrap("placeholder"));
 
-        if (el.getAttributeSafe(comptime lp.String.wrap("href"))) |h| {
+        if (el.getAttributeSafe(comptime .wrap("href"))) |h| {
             const URL = lp.URL;
             href = URL.resolve(arena, page.base(), h, .{ .encode = true }) catch h;
         }
@@ -656,7 +656,7 @@ pub fn getNodeDetails(node: *Node, registry: *CDPNode.Registry, page: *Page, are
             if (input._input_type == .checkbox or input._input_type == .radio) {
                 checked = input.getChecked();
             }
-            if (el.getAttributeSafe(comptime lp.String.wrap("list"))) |list_id| {
+            if (el.getAttributeSafe(comptime .wrap("list"))) |list_id| {
                 options = try extractDataListOptions(list_id, page, arena);
             }
         } else if (el.is(Element.Html.TextArea)) |textarea| {
