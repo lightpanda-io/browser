@@ -970,24 +970,21 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         }
     }
 
-    // release conn ASAP so that it's available; some done_callbacks
-    // will load more resources.
-    transfer.releaseConn();
-
-    try transfer.req.done_callback(transfer.req.ctx);
-
     if (transfer._pending_cache_metadata) |metadata| {
         const cache = &self.network.cache.?;
+        log.debug(.browser, "http cache", .{ .url = transfer.req.url, .metadata = metadata });
 
-        // TODO: Support Vary Keying
-        const cache_key = transfer.req.url;
-
-        log.debug(.browser, "http cache", .{ .key = cache_key, .metadata = metadata });
         cache.put(metadata, body) catch |err| {
             log.warn(.http, "cache put failed", .{ .err = err });
         };
         log.debug(.browser, "http.cache.put", .{ .url = transfer.req.url });
     }
+
+    // release conn ASAP so that it's available; some done_callbacks
+    // will load more resources.
+    transfer.releaseConn();
+
+    try transfer.req.done_callback(transfer.req.ctx);
 
     transfer.req.notification.dispatch(.http_request_done, &.{
         .transfer = transfer,
