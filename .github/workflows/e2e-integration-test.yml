@@ -60,7 +60,20 @@ jobs:
       - run: chmod a+x ./lightpanda
 
       - name: run end to end integration tests
+        continue-on-error: true
         run: |
           ./lightpanda serve --log-level error & echo $! > LPD.pid
-          go run integration/main.go
+          go run integration/main.go |tee result.log
           kill `cat LPD.pid`
+
+      - name: Send result to slack
+        uses: slackapi/slack-github-action@v3.0.1
+        with:
+          errors: true
+          method: files.uploadV2
+          token: ${{ secrets.CI_SLACK_BOT_TOKEN }}
+          payload: |
+            channel_id: ${{ vars.E2E_SLACK_CHANNEL_ID }}
+            initial_comment: "Last e2e integration tests"
+            file: "./result.log"
+            filename: "e2e-integration-${{ github.sha }}.txt"
