@@ -273,23 +273,31 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             // Let the outer errdefer handle releasing the arena if client.request fails
         }
 
-        try self.client.request(.{
-            .url = url,
-            .ctx = script,
-            .method = .GET,
-            .frame_id = page._frame_id,
-            .headers = try self.getHeaders(),
-            .blocking = is_blocking,
-            .cookie_jar = &page._session.cookie_jar,
-            .cookie_origin = page.url,
-            .resource_type = .script,
-            .notification = page._session.notification,
-            .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
-            .header_callback = Script.headerCallback,
-            .data_callback = Script.dataCallback,
-            .done_callback = Script.doneCallback,
-            .error_callback = Script.errorCallback,
-        });
+        // If we return synchronously (like from cache), we would call evaluate() immediately.
+        {
+            const was_evaluating = self.is_evaluating;
+            self.is_evaluating = true;
+            defer self.is_evaluating = was_evaluating;
+
+            try self.client.request(.{
+                .url = url,
+                .ctx = script,
+                .method = .GET,
+                .frame_id = page._frame_id,
+                .headers = try self.getHeaders(),
+                .blocking = is_blocking,
+                .cookie_jar = &page._session.cookie_jar,
+                .cookie_origin = page.url,
+                .resource_type = .script,
+                .notification = page._session.notification,
+                .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
+                .header_callback = Script.headerCallback,
+                .data_callback = Script.dataCallback,
+                .done_callback = Script.doneCallback,
+                .error_callback = Script.errorCallback,
+            });
+        }
+
         handover = true;
 
         if (comptime IS_DEBUG) {
