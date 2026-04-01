@@ -9,6 +9,15 @@ const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
 const CDPNode = @import("../cdp/Node.zig");
 
+const screenshot_png = @embedFile("../cdp/domains/screenshot.png");
+
+fn base64Encode(arena: std.mem.Allocator, input: []const u8) ![]const u8 {
+    const encoder = std.base64.standard.Encoder;
+    const buf = try arena.alloc(u8, encoder.calcSize(input.len));
+    _ = encoder.encode(buf, input);
+    return buf;
+}
+
 pub const tool_list = [_]protocol.Tool{
     .{
         .name = "goto",
@@ -17,7 +26,24 @@ pub const tool_list = [_]protocol.Tool{
             \\{
             \\  "type": "object",
             \\  "properties": {
-            \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." }
+            \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+            \\  },
+            \\  "required": ["url"]
+            \\}
+        ),
+    },
+    .{
+        .name = "navigate",
+        .description = "Alias for goto. Navigate to a specified URL and load the page in memory.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
             \\  },
             \\  "required": ["url"]
             \\}
@@ -30,7 +56,9 @@ pub const tool_list = [_]protocol.Tool{
             \\{
             \\  "type": "object",
             \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching markdown." }
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching markdown." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
             \\  }
             \\}
         ),
@@ -42,7 +70,9 @@ pub const tool_list = [_]protocol.Tool{
             \\{
             \\  "type": "object",
             \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting links." }
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting links." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
             \\  }
             \\}
         ),
@@ -55,7 +85,9 @@ pub const tool_list = [_]protocol.Tool{
             \\  "type": "object",
             \\  "properties": {
             \\    "script": { "type": "string" },
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." }
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
             \\  },
             \\  "required": ["script"]
             \\}
@@ -69,6 +101,8 @@ pub const tool_list = [_]protocol.Tool{
             \\  "type": "object",
             \\  "properties": {
             \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." },
             \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root." },
             \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
             \\  }
@@ -95,7 +129,9 @@ pub const tool_list = [_]protocol.Tool{
             \\{
             \\  "type": "object",
             \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting interactive elements." }
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting interactive elements." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
             \\  }
             \\}
         ),
@@ -107,7 +143,9 @@ pub const tool_list = [_]protocol.Tool{
             \\{
             \\  "type": "object",
             \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting structured data." }
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting structured data." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
             \\  }
             \\}
         ),
@@ -119,7 +157,9 @@ pub const tool_list = [_]protocol.Tool{
             \\{
             \\  "type": "object",
             \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before detecting forms." }
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before detecting forms." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
             \\  }
             \\}
         ),
@@ -179,6 +219,36 @@ pub const tool_list = [_]protocol.Tool{
             \\}
         ),
     },
+    .{
+        .name = "eval",
+        .description = "Alias for evaluate. Evaluate JavaScript in the current page context.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "script": { "type": "string" },
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+            \\  },
+            \\  "required": ["script"]
+            \\}
+        ),
+    },
+    .{
+        .name = "screenshot",
+        .description = "Capture a screenshot of the current page. Returns the screenshot as a base64 encoded PNG.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before taking the screenshot." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+            \\  }
+            \\}
+        ),
+    },
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -189,15 +259,21 @@ pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 
 const GotoParams = struct {
     url: [:0]const u8,
+    timeout: ?u32 = null,
+    waitUntil: ?lp.Config.WaitUntil = null,
 };
 
 const UrlParams = struct {
     url: ?[:0]const u8 = null,
+    timeout: ?u32 = null,
+    waitUntil: ?lp.Config.WaitUntil = null,
 };
 
 const EvaluateParams = struct {
     script: [:0]const u8,
     url: ?[:0]const u8 = null,
+    timeout: ?u32 = null,
+    waitUntil: ?lp.Config.WaitUntil = null,
 };
 
 const ToolStreamingText = struct {
@@ -274,11 +350,13 @@ const ToolAction = enum {
     structuredData,
     detectForms,
     evaluate,
+    eval,
     semantic_tree,
     click,
     fill,
     scroll,
     waitForSelector,
+    screenshot,
 };
 
 const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
@@ -291,11 +369,13 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "structuredData", .structuredData },
     .{ "detectForms", .detectForms },
     .{ "evaluate", .evaluate },
+    .{ "eval", .eval },
     .{ "semantic_tree", .semantic_tree },
     .{ "click", .click },
     .{ "fill", .fill },
     .{ "scroll", .scroll },
     .{ "waitForSelector", .waitForSelector },
+    .{ "screenshot", .screenshot },
 });
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -324,43 +404,44 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .interactiveElements => try handleInteractiveElements(server, arena, req.id.?, call_params.arguments),
         .structuredData => try handleStructuredData(server, arena, req.id.?, call_params.arguments),
         .detectForms => try handleDetectForms(server, arena, req.id.?, call_params.arguments),
-        .evaluate => try handleEvaluate(server, arena, req.id.?, call_params.arguments),
+        .eval, .evaluate => try handleEvaluate(server, arena, req.id.?, call_params.arguments),
         .semantic_tree => try handleSemanticTree(server, arena, req.id.?, call_params.arguments),
         .click => try handleClick(server, arena, req.id.?, call_params.arguments),
         .fill => try handleFill(server, arena, req.id.?, call_params.arguments),
         .scroll => try handleScroll(server, arena, req.id.?, call_params.arguments),
         .waitForSelector => try handleWaitForSelector(server, arena, req.id.?, call_params.arguments),
+        .screenshot => try handleScreenshot(server, arena, req.id.?, call_params.arguments),
     }
 }
 
 fn handleGoto(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgs(GotoParams, arena, arguments, server, id, "goto");
-    try performGoto(server, args.url, id);
+    try performGoto(server, args.url, id, args.timeout, args.waitUntil);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = "Navigated successfully." }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
 }
 
 fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{ .page = page, .action = .markdown },
     }};
-    server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
+    server.sendResult(id, protocol.CallToolResult(protocol.TextContent(ToolStreamingText)){ .content = &content }) catch {
         return server.sendError(id, .InternalError, "Failed to serialize markdown content");
     };
 }
 
 fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{ .page = page, .action = .links },
     }};
-    server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
+    server.sendResult(id, protocol.CallToolResult(protocol.TextContent(ToolStreamingText)){ .content = &content }) catch {
         return server.sendError(id, .InternalError, "Failed to serialize links content");
     };
 }
@@ -370,9 +451,11 @@ fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Va
         url: ?[:0]const u8 = null,
         backendNodeId: ?u32 = null,
         maxDepth: ?u32 = null,
+        timeout: ?u32 = null,
+        waitUntil: ?lp.Config.WaitUntil = null,
     };
     const args = try parseArgsOrDefault(TreeParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{
@@ -384,7 +467,7 @@ fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Va
             .maxDepth = args.maxDepth,
         },
     }};
-    server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
+    server.sendResult(id, protocol.CallToolResult(protocol.TextContent(ToolStreamingText)){ .content = &content }) catch {
         return server.sendError(id, .InternalError, "Failed to serialize semantic tree content");
     };
 }
@@ -412,12 +495,12 @@ fn handleNodeDetails(server: *Server, arena: std.mem.Allocator, id: std.json.Val
     try std.json.Stringify.value(&details, .{}, &aw.writer);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
 }
 
 fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch |err| {
         log.err(.mcp, "elements collection failed", .{ .err = err });
@@ -433,12 +516,12 @@ fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.
     try std.json.Stringify.value(elements, .{}, &aw.writer);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
 }
 
 fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const data = lp.structured_data.collectStructuredData(page.document.asNode(), arena, page) catch |err| {
         log.err(.mcp, "struct data collection failed", .{ .err = err });
@@ -448,12 +531,12 @@ fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.
     try std.json.Stringify.value(data, .{}, &aw.writer);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
 }
 
 fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const forms_data = lp.forms.collectForms(arena, page.document.asNode(), page) catch |err| {
         log.err(.mcp, "form collection failed", .{ .err = err });
@@ -469,12 +552,12 @@ fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Val
     try std.json.Stringify.value(forms_data, .{}, &aw.writer);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
 }
 
 fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgs(EvaluateParams, arena, arguments, server, id, "evaluate");
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     var ls: js.Local.Scope = undefined;
     page.js.localScope(&ls);
@@ -490,13 +573,13 @@ fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
         try caught.format(&aw.writer);
 
         const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-        return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = true });
+        return server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content, .isError = true });
     };
 
     const str_result = js_result.toStringSliceWithAlloc(arena) catch "undefined";
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = str_result }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
 }
 
 fn handleClick(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -527,7 +610,7 @@ fn handleClick(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
 }
 
 fn handleFill(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -560,7 +643,7 @@ fn handleFill(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
 }
 
 fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -598,7 +681,7 @@ fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
 }
 
 fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -627,12 +710,25 @@ fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json
     const msg = std.fmt.allocPrint(arena, "Element found. backendNodeId: {d}", .{registered.id}) catch "Element found.";
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
-    return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    return server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
 }
 
-fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8) !*lp.Page {
+fn handleScreenshot(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
+    _ = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
+
+    const b64 = try base64Encode(arena, screenshot_png);
+
+    const content = [_]protocol.ImageContent([]const u8){.{
+        .data = b64,
+        .mimeType = "image/png",
+    }};
+    try server.sendResult(id, protocol.CallToolResult(protocol.ImageContent([]const u8)){ .content = &content });
+}
+
+fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !*lp.Page {
     if (url) |u| {
-        try performGoto(server, u, id);
+        try performGoto(server, u, id, timeout, waitUntil);
     }
     return server.session.currentPage() orelse {
         try server.sendError(id, .PageNotLoaded, "Page not loaded");
@@ -668,7 +764,7 @@ fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Va
     };
 }
 
-fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
+fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !void {
     const session = server.session;
     if (session.page != null) {
         session.removePage();
@@ -689,7 +785,10 @@ fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
         try server.sendError(id, .InternalError, "Failed to start page runner");
         return error.NavigationFailed;
     };
-    runner.wait(.{ .ms = 2000 }) catch {
+    runner.wait(.{
+        .ms = timeout orelse 10000,
+        .until = waitUntil orelse .done,
+    }) catch {
         try server.sendError(id, .InternalError, "Timeout waiting for page load");
         return error.NavigationFailed;
     };
