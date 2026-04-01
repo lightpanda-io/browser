@@ -103,6 +103,26 @@ pub const CachedMetadata = struct {
 
     /// These are Request Headers used by Vary.
     vary_headers: []const Http.Header,
+
+    pub fn format(self: CachedMetadata, writer: *std.Io.Writer) !void {
+        try writer.print("url={s} | status={d} | content_type={s} | max_age={d} | vary=[", .{
+            self.url,
+            self.status,
+            self.content_type,
+            self.cache_control.max_age,
+        });
+
+        // Logging all headers gets pretty verbose...
+        // so we just log the Vary ones that matter for caching.
+
+        if (self.vary_headers.len > 0) {
+            for (self.vary_headers, 0..) |hdr, i| {
+                if (i > 0) try writer.print(", ", .{});
+                try writer.print("{s}: {s}", .{ hdr.name, hdr.value });
+            }
+        }
+        try writer.print("]", .{});
+    }
 };
 
 pub const CacheRequest = struct {
