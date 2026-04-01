@@ -41,14 +41,14 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
                 const scheme_path = path[0..scheme_path_end];
                 //from "ws" to "https"
                 if (scheme_path_end >= 2 and scheme_path_end <= 5) {
-                    const has_double_slashas: bool = scheme_path_end + 3 <= path.len and path[scheme_path_end + 1] == '/' and path[scheme_path_end + 2] == '/';
+                    const has_double_slashes: bool = scheme_path_end + 3 <= path.len and path[scheme_path_end + 1] == '/' and path[scheme_path_end + 2] == '/';
                     const special_schemes = [_][]const u8{ "https", "http", "ws", "wss", "file", "ftp" };
 
                     for (special_schemes) |special_scheme| {
                         if (std.ascii.eqlIgnoreCase(scheme_path, special_scheme)) {
                             const base_scheme_end = std.mem.indexOf(u8, base, "://") orelse 0;
 
-                            if (base_scheme_end > 0 and std.mem.eql(u8, base[0..base_scheme_end], scheme_path) and !has_double_slashas) {
+                            if (base_scheme_end > 0 and std.mem.eql(u8, base[0..base_scheme_end], scheme_path) and !has_double_slashes) {
                                 //Skip ":" and exit as relative state
                                 path = path[scheme_path_end + 1 ..];
                                 break :scheme_check;
@@ -58,12 +58,12 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
                                 while (rest_start < path.len and (path[rest_start] == '/' or path[rest_start] == '\\')) {
                                     rest_start += 1;
                                 }
-                                // A special scheme (exclude "file") must contain at least anu chars after "://"
+                                // A special scheme (exclude "file") must contain at least any chars after "://"
                                 if (rest_start == path.len and !std.ascii.eqlIgnoreCase(scheme_path, "file")) {
                                     return error.TypeError;
                                 }
                                 //File scheme allow empty host
-                                const separator: []const u8 = if (!has_double_slashas and std.ascii.eqlIgnoreCase(scheme_path, "file")) ":///" else "://";
+                                const separator: []const u8 = if (!has_double_slashes and std.ascii.eqlIgnoreCase(scheme_path, "file")) ":///" else "://";
 
                                 path = try std.mem.joinZ(allocator, "", &.{ scheme_path, separator, path[rest_start..] });
                                 return processResolved(allocator, path, opts);
@@ -71,10 +71,12 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
                         }
                     }
                 }
-                for (scheme_path[1..]) |c| {
-                    if (!std.ascii.isAlphanumeric(c) and c != '+' and c != '-' and c != '.') {
-                        //Exit as relative state
-                        break :scheme_check;
+                if (scheme_path.len > 0) {
+                    for (scheme_path[1..]) |c| {
+                        if (!std.ascii.isAlphanumeric(c) and c != '+' and c != '-' and c != '.') {
+                            //Exit as relative state
+                            break :scheme_check;
+                        }
                     }
                 }
                 //path is complete http url
