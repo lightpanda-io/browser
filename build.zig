@@ -46,8 +46,12 @@ pub fn build(b: *Build) !void {
     var stdout = std.fs.File.stdout().writer(&.{});
     try stdout.interface.print("Lightpanda {f}\n", .{version});
 
+    const version_string = b.fmt("{f}", .{version});
+    const version_encoded = std.mem.replaceOwned(u8, b.allocator, version_string, "+", "%2B") catch @panic("OOM");
+
     var opts = b.addOptions();
-    opts.addOption([]const u8, "version", b.fmt("{f}", .{version}));
+    opts.addOption([]const u8, "version", version_string);
+    opts.addOption([]const u8, "version_encoded", version_encoded);
     opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
 
     const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer") orelse false;
