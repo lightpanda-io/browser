@@ -330,6 +330,11 @@ pub const Client = struct {
                     ms_remaining = self.ws.timeout_ms;
                 },
                 .done => {
+                    if (self.isBusy()) {
+                        last_message = milliTimestamp(.monotonic);
+                        ms_remaining = self.ws.timeout_ms;
+                        continue;
+                    }
                     const now = milliTimestamp(.monotonic);
                     const elapsed = now - last_message;
                     if (elapsed >= ms_remaining) {
@@ -341,6 +346,24 @@ pub const Client = struct {
                 },
             }
         }
+    }
+
+    fn isBusy(self: *const Client) bool {
+        if (self.http.active > 0 or self.http.intercepted > 0) {
+            return true;
+        }
+
+        const cdp = switch (self.mode) {
+            .cdp => |*c| c,
+            .http => return false,
+        };
+
+        const session = cdp.browser.session orelse return false;
+        if (session.browser.hasBackgroundTasks() or session.browser.msToNextMacrotask() != null) {
+            return true;
+        }
+
+        return false;
     }
 
     fn blockingReadStart(ctx: *anyopaque) bool {

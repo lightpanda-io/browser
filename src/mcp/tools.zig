@@ -9,89 +9,72 @@ const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
 const CDPNode = @import("../cdp/Node.zig");
 
-const screenshot_png = @embedFile("../cdp/domains/screenshot.png");
+const goto_schema = protocol.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
+    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+    \\  },
+    \\  "required": ["url"]
+    \\}
+);
 
-fn base64Encode(arena: std.mem.Allocator, input: []const u8) ![]const u8 {
-    const encoder = std.base64.standard.Encoder;
-    const buf = try arena.alloc(u8, encoder.calcSize(input.len));
-    _ = encoder.encode(buf, input);
-    return buf;
-}
+const url_params_schema = protocol.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing." },
+    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+    \\  }
+    \\}
+);
+
+const evaluate_schema = protocol.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "script": { "type": "string" },
+    \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
+    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+    \\  },
+    \\  "required": ["script"]
+    \\}
+);
 
 pub const tool_list = [_]protocol.Tool{
     .{
         .name = "goto",
         .description = "Navigate to a specified URL and load the page in memory so it can be reused later for info extraction.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-            \\  },
-            \\  "required": ["url"]
-            \\}
-        ),
+        .inputSchema = goto_schema,
     },
     .{
         .name = "navigate",
         .description = "Alias for goto. Navigate to a specified URL and load the page in memory.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-            \\  },
-            \\  "required": ["url"]
-            \\}
-        ),
+        .inputSchema = goto_schema,
     },
     .{
         .name = "markdown",
         .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching markdown." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-            \\  }
-            \\}
-        ),
+        .inputSchema = url_params_schema,
     },
     .{
         .name = "links",
         .description = "Extract all links in the opened page. If a url is provided, it navigates to that url first.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting links." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-            \\  }
-            \\}
-        ),
+        .inputSchema = url_params_schema,
     },
     .{
         .name = "evaluate",
         .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "script": { "type": "string" },
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-            \\  },
-            \\  "required": ["script"]
-            \\}
-        ),
+        .inputSchema = evaluate_schema,
+    },
+    .{
+        .name = "eval",
+        .description = "Alias for evaluate. Evaluate JavaScript in the current page context.",
+        .inputSchema = evaluate_schema,
     },
     .{
         .name = "semantic_tree",
@@ -125,44 +108,17 @@ pub const tool_list = [_]protocol.Tool{
     .{
         .name = "interactiveElements",
         .description = "Extract interactive elements from the opened page. If a url is provided, it navigates to that url first.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting interactive elements." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-            \\  }
-            \\}
-        ),
+        .inputSchema = url_params_schema,
     },
     .{
         .name = "structuredData",
         .description = "Extract structured data (like JSON-LD, OpenGraph, etc) from the opened page. If a url is provided, it navigates to that url first.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting structured data." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-            \\  }
-            \\}
-        ),
+        .inputSchema = url_params_schema,
     },
     .{
         .name = "detectForms",
         .description = "Detect all forms on the page and return their structure including fields, types, and required status. If a url is provided, it navigates to that url first.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before detecting forms." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-            \\  }
-            \\}
-        ),
+        .inputSchema = url_params_schema,
     },
     .{
         .name = "click",
@@ -216,36 +172,6 @@ pub const tool_list = [_]protocol.Tool{
             \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
             \\  },
             \\  "required": ["selector"]
-            \\}
-        ),
-    },
-    .{
-        .name = "eval",
-        .description = "Alias for evaluate. Evaluate JavaScript in the current page context.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "script": { "type": "string" },
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-            \\  },
-            \\  "required": ["script"]
-            \\}
-        ),
-    },
-    .{
-        .name = "screenshot",
-        .description = "Capture a screenshot of the current page. Returns the screenshot as a base64 encoded PNG.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before taking the screenshot." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-            \\  }
             \\}
         ),
     },
@@ -356,7 +282,6 @@ const ToolAction = enum {
     fill,
     scroll,
     waitForSelector,
-    screenshot,
 };
 
 const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
@@ -375,7 +300,6 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "fill", .fill },
     .{ "scroll", .scroll },
     .{ "waitForSelector", .waitForSelector },
-    .{ "screenshot", .screenshot },
 });
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -410,7 +334,6 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .fill => try handleFill(server, arena, req.id.?, call_params.arguments),
         .scroll => try handleScroll(server, arena, req.id.?, call_params.arguments),
         .waitForSelector => try handleWaitForSelector(server, arena, req.id.?, call_params.arguments),
-        .screenshot => try handleScreenshot(server, arena, req.id.?, call_params.arguments),
     }
 }
 
@@ -711,19 +634,6 @@ fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
     return server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
-}
-
-fn handleScreenshot(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    _ = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
-
-    const b64 = try base64Encode(arena, screenshot_png);
-
-    const content = [_]protocol.ImageContent([]const u8){.{
-        .data = b64,
-        .mimeType = "image/png",
-    }};
-    try server.sendResult(id, protocol.CallToolResult(protocol.ImageContent([]const u8)){ .content = &content });
 }
 
 fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !*lp.Page {
