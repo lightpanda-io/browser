@@ -144,7 +144,7 @@ pub fn tryCache(
     const cc = CacheControl.parse(cache_control orelse return null) orelse return null;
 
     return .{
-        .url = url,
+        .url = try arena.dupeZ(u8, url),
         .content_type = if (content_type) |ct| try arena.dupe(u8, ct) else "application/octet-stream",
         .status = status,
         .stored_at = timestamp,
