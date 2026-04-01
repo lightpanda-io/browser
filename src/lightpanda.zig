@@ -18,7 +18,7 @@
 
 const std = @import("std");
 pub const App = @import("App.zig");
-pub const Network = @import("network/Runtime.zig");
+pub const Network = @import("network/Network.zig");
 pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
 pub const URL = @import("browser/URL.zig");

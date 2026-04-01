@@ -22,7 +22,7 @@ const js = @import("../../js/js.zig");
 
 const log = @import("../../../log.zig");
 const HttpClient = @import("../../HttpClient.zig");
-const net_http = @import("../../../network/http.zig");
+const http = @import("../../../network/http.zig");
 
 const URL = @import("../../URL.zig");
 const Mime = @import("../../Mime.zig");
@@ -47,7 +47,7 @@ _transfer: ?*HttpClient.Transfer = null,
 _active_request: bool = false,
 
 _url: [:0]const u8 = "",
-_method: net_http.Method = .GET,
+_method: http.Method = .GET,
 _request_headers: *Headers,
 _request_body: ?[]const u8 = null,
 
@@ -406,7 +406,7 @@ fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
     self._transfer = transfer;
 }
 
-fn httpHeaderCallback(transfer: *HttpClient.Transfer, header: net_http.Header) !void {
+fn httpHeaderCallback(transfer: *HttpClient.Transfer, header: http.Header) !void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
     const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ header.name, header.value });
     try self._response_headers.append(self._arena, joined);
@@ -574,7 +574,7 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, page: *Page) !void {
     }
 }
 
-fn parseMethod(method: []const u8) !net_http.Method {
+fn parseMethod(method: []const u8) !http.Method {
     if (std.ascii.eqlIgnoreCase(method, "get")) {
         return .GET;
     }

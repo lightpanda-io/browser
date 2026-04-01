@@ -86,8 +86,8 @@ pub fn forEach(self: *Headers, cb_: js.Function, js_this_: ?js.Object) !void {
 }
 
 // TODO: do we really need 2 different header structs??
-const net_http = @import("../../../network/http.zig");
-pub fn populateHttpHeader(self: *Headers, allocator: Allocator, http_headers: *net_http.Headers) !void {
+const http = @import("../../../network/http.zig");
+pub fn populateHttpHeader(self: *Headers, allocator: Allocator, http_headers: *http.Headers) !void {
     for (self._list._entries.items) |entry| {
         const merged = try std.mem.concatWithSentinel(allocator, u8, &.{ entry.name.str(), ": ", entry.value.str() }, 0);
         try http_headers.add(merged);

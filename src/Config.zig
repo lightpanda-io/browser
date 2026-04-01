@@ -34,7 +34,6 @@ pub const RunMode = enum {
     mcp,
 };
 
-pub const MAX_LISTENERS = 16;
 pub const CDP_MAX_HTTP_REQUEST_SIZE = 4096;
 
 // max message size

@@ -23,7 +23,7 @@ const CDP = @import("../CDP.zig");
 const log = @import("../../log.zig");
 
 const HttpClient = @import("../../browser/HttpClient.zig");
-const net_http = @import("../../network/http.zig");
+const http = @import("../../network/http.zig");
 const Notification = @import("../../Notification.zig");
 
 const network = @import("network.zig");
@@ -224,7 +224,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
         url: ?[]const u8 = null,
         method: ?[]const u8 = null,
         postData: ?[]const u8 = null,
-        headers: ?[]const net_http.Header = null,
+        headers: ?[]const http.Header = null,
         interceptResponse: bool = false,
     })) orelse return error.InvalidParams;
 
@@ -249,7 +249,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
         try transfer.updateURL(try arena.dupeZ(u8, url));
     }
     if (params.method) |method| {
-        transfer.req.method = std.meta.stringToEnum(net_http.Method, method) orelse return error.InvalidParams;
+        transfer.req.method = std.meta.stringToEnum(http.Method, method) orelse return error.InvalidParams;
     }
 
     if (params.headers) |headers| {
@@ -326,7 +326,7 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INT-{d}"
         responseCode: u16,
-        responseHeaders: ?[]const net_http.Header = null,
+        responseHeaders: ?[]const http.Header = null,
         binaryResponseHeaders: ?[]const u8 = null,
         body: ?[]const u8 = null,
         responsePhrase: ?[]const u8 = null,

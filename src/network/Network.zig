@@ -26,11 +26,11 @@ const lp = @import("lightpanda");
 const Config = @import("../Config.zig");
 const libcurl = @import("../sys/libcurl.zig");
 
-const net_http = @import("http.zig");
+const http = @import("http.zig");
 const RobotStore = @import("Robots.zig").RobotStore;
 const WebBotAuth = @import("WebBotAuth.zig");
 
-const Runtime = @This();
+const Network = @This();
 
 const Listener = struct {
     socket: posix.socket_t,
@@ -46,11 +46,11 @@ const MAX_TICK_CALLBACKS = 16;
 allocator: Allocator,
 
 config: *const Config,
-ca_blob: ?net_http.Blob,
+ca_blob: ?http.Blob,
 robot_store: RobotStore,
 web_bot_auth: ?WebBotAuth,
 
-connections: []net_http.Connection,
+connections: []http.Connection,
 available: std.DoublyLinkedList = .{},
 conn_mutex: std.Thread.Mutex = .{},
 
@@ -63,8 +63,8 @@ wakeup_pipe: [2]posix.fd_t = .{ -1, -1 },
 shutdown: std.atomic.Value(bool) = .init(false),
 
 // Multi is a heavy structure that can consume up to 2MB of RAM.
-// Currently, Runtime is used sparingly, and we only create it on demand.
-// When Runtime becomes truly shared, it should become a regular field.
+// Currently, Network is used sparingly, and we only create it on demand.
+// When Network becomes truly shared, it should become a regular field.
 multi: ?*libcurl.CurlM = null,
 submission_mutex: std.Thread.Mutex = .{},
 submission_queue: std.DoublyLinkedList = .{},
@@ -200,7 +200,7 @@ fn globalDeinit() void {
     libcurl.curl_global_cleanup();
 }
 
-pub fn init(allocator: Allocator, config: *const Config) !Runtime {
+pub fn init(allocator: Allocator, config: *const Config) !Network {
     globalInit(allocator);
     errdefer globalDeinit();
 
@@ -213,18 +213,18 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
     @memset(pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
     pollfds[0] = .{ .fd = pipe[0], .events = posix.POLL.IN, .revents = 0 };
 
-    var ca_blob: ?net_http.Blob = null;
+    var ca_blob: ?http.Blob = null;
     if (config.tlsVerifyHost()) {
         ca_blob = try loadCerts(allocator);
     }
 
     const count: usize = config.httpMaxConcurrent();
-    const connections = try allocator.alloc(net_http.Connection, count);
+    const connections = try allocator.alloc(http.Connection, count);
     errdefer allocator.free(connections);
 
     var available: std.DoublyLinkedList = .{};
     for (0..count) |i| {
-        connections[i] = try net_http.Connection.init(ca_blob, config);
+        connections[i] = try http.Connection.init(ca_blob, config);
         available.append(&connections[i].node);
     }
 
@@ -249,7 +249,7 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
     };
 }
 
-pub fn deinit(self: *Runtime) void {
+pub fn deinit(self: *Network) void {
     if (self.multi) |multi| {
         libcurl.curl_multi_cleanup(multi) catch {};
     }
@@ -282,7 +282,7 @@ pub fn deinit(self: *Runtime) void {
 }
 
 pub fn bind(
-    self: *Runtime,
+    self: *Network,
     address: net.Address,
     ctx: *anyopaque,
     on_accept: *const fn (ctx: *anyopaque, socket: posix.socket_t) void,
@@ -313,7 +313,7 @@ pub fn bind(
     };
 }
 
-pub fn onTick(self: *Runtime, ctx: *anyopaque, callback: *const fn (*anyopaque) void) void {
+pub fn onTick(self: *Network, ctx: *anyopaque, callback: *const fn (*anyopaque) void) void {
     self.callbacks_mutex.lock();
     defer self.callbacks_mutex.unlock();
 
@@ -328,7 +328,7 @@ pub fn onTick(self: *Runtime, ctx: *anyopaque, callback: *const fn (*anyopaque) 
     self.wakeupPoll();
 }
 
-pub fn fireTicks(self: *Runtime) void {
+pub fn fireTicks(self: *Network) void {
     self.callbacks_mutex.lock();
     defer self.callbacks_mutex.unlock();
 
@@ -337,7 +337,7 @@ pub fn fireTicks(self: *Runtime) void {
     }
 }
 
-pub fn run(self: *Runtime) void {
+pub fn run(self: *Network) void {
     var drain_buf: [64]u8 = undefined;
     var running_handles: c_int = 0;
 
@@ -428,18 +428,18 @@ pub fn run(self: *Runtime) void {
     }
 }
 
-pub fn submitRequest(self: *Runtime, conn: *net_http.Connection) void {
+pub fn submitRequest(self: *Network, conn: *http.Connection) void {
     self.submission_mutex.lock();
     self.submission_queue.append(&conn.node);
     self.submission_mutex.unlock();
     self.wakeupPoll();
 }
 
-fn wakeupPoll(self: *Runtime) void {
+fn wakeupPoll(self: *Network) void {
     _ = posix.write(self.wakeup_pipe[1], &.{1}) catch {};
 }
 
-fn drainQueue(self: *Runtime) void {
+fn drainQueue(self: *Network) void {
     self.submission_mutex.lock();
     defer self.submission_mutex.unlock();
 
@@ -455,7 +455,7 @@ fn drainQueue(self: *Runtime) void {
     };
 
     while (self.submission_queue.popFirst()) |node| {
-        const conn: *net_http.Connection = @fieldParentPtr("node", node);
+        const conn: *http.Connection = @fieldParentPtr("node", node);
         conn.setPrivate(conn) catch |err| {
             lp.log.err(.app, "curl set private", .{ .err = err });
             self.releaseConnection(conn);
@@ -468,12 +468,12 @@ fn drainQueue(self: *Runtime) void {
     }
 }
 
-pub fn stop(self: *Runtime) void {
+pub fn stop(self: *Network) void {
     self.shutdown.store(true, .release);
     self.wakeupPoll();
 }
 
-fn acceptConnections(self: *Runtime) void {
+fn acceptConnections(self: *Network) void {
     if (self.shutdown.load(.acquire)) {
         return;
     }
@@ -503,7 +503,7 @@ fn acceptConnections(self: *Runtime) void {
     }
 }
 
-fn preparePollFds(self: *Runtime, multi: *libcurl.CurlM) void {
+fn preparePollFds(self: *Network, multi: *libcurl.CurlM) void {
     const curl_fds = self.pollfds[PSEUDO_POLLFDS..];
     @memset(curl_fds, .{ .fd = -1, .events = 0, .revents = 0 });
 
@@ -514,14 +514,14 @@ fn preparePollFds(self: *Runtime, multi: *libcurl.CurlM) void {
     };
 }
 
-fn getCurlTimeout(self: *Runtime) i32 {
+fn getCurlTimeout(self: *Network) i32 {
     const multi = self.multi orelse return -1;
     var timeout_ms: c_long = -1;
     libcurl.curl_multi_timeout(multi, &timeout_ms) catch return -1;
     return @intCast(@min(timeout_ms, std.math.maxInt(i32)));
 }
 
-fn processCompletions(self: *Runtime, multi: *libcurl.CurlM) void {
+fn processCompletions(self: *Network, multi: *libcurl.CurlM) void {
     var msgs_in_queue: c_int = 0;
     while (libcurl.curl_multi_info_read(multi, &msgs_in_queue)) |msg| {
         switch (msg.data) {
@@ -537,7 +537,7 @@ fn processCompletions(self: *Runtime, multi: *libcurl.CurlM) void {
         var ptr: *anyopaque = undefined;
         libcurl.curl_easy_getinfo(easy, .private, &ptr) catch
             lp.assert(false, "curl getinfo private", .{});
-        const conn: *net_http.Connection = @ptrCast(@alignCast(ptr));
+        const conn: *http.Connection = @ptrCast(@alignCast(ptr));
 
         libcurl.curl_multi_remove_handle(multi, easy) catch {};
         self.releaseConnection(conn);
@@ -556,7 +556,7 @@ comptime {
     }
 }
 
-pub fn getConnection(self: *Runtime) ?*net_http.Connection {
+pub fn getConnection(self: *Network) ?*http.Connection {
     self.conn_mutex.lock();
     defer self.conn_mutex.unlock();
 
@@ -564,7 +564,7 @@ pub fn getConnection(self: *Runtime) ?*net_http.Connection {
     return @fieldParentPtr("node", node);
 }
 
-pub fn releaseConnection(self: *Runtime, conn: *net_http.Connection) void {
+pub fn releaseConnection(self: *Network, conn: *http.Connection) void {
     conn.reset(self.config, self.ca_blob) catch |err| {
         lp.assert(false, "couldn't reset curl easy", .{ .err = err });
     };
@@ -575,8 +575,8 @@ pub fn releaseConnection(self: *Runtime, conn: *net_http.Connection) void {
     self.available.append(&conn.node);
 }
 
-pub fn newConnection(self: *Runtime) !net_http.Connection {
-    return net_http.Connection.init(self.ca_blob, self.config);
+pub fn newConnection(self: *Network) !http.Connection {
+    return http.Connection.init(self.ca_blob, self.config);
 }
 
 // Wraps lines @ 64 columns. A PEM is basically a base64 encoded DER (which is
