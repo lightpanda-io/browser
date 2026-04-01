@@ -168,17 +168,9 @@ pub fn TextContent(comptime T: type) type {
     };
 }
 
-pub fn ImageContent(comptime T: type) type {
-    return struct {
-        type: []const u8 = "image",
-        data: T,
-        mimeType: []const u8,
-    };
-}
-
 pub fn CallToolResult(comptime T: type) type {
     return struct {
-        content: []const T,
+        content: []const TextContent(T),
         isError: bool = false,
     };
 }

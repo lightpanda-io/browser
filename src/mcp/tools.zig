@@ -342,7 +342,7 @@ fn handleGoto(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
     try performGoto(server, args.url, id, args.timeout, args.waitUntil);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = "Navigated successfully." }};
-    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -352,7 +352,7 @@ fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{ .page = page, .action = .markdown },
     }};
-    server.sendResult(id, protocol.CallToolResult(protocol.TextContent(ToolStreamingText)){ .content = &content }) catch {
+    server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
         return server.sendError(id, .InternalError, "Failed to serialize markdown content");
     };
 }
@@ -364,7 +364,7 @@ fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{ .page = page, .action = .links },
     }};
-    server.sendResult(id, protocol.CallToolResult(protocol.TextContent(ToolStreamingText)){ .content = &content }) catch {
+    server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
         return server.sendError(id, .InternalError, "Failed to serialize links content");
     };
 }
@@ -390,7 +390,7 @@ fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Va
             .maxDepth = args.maxDepth,
         },
     }};
-    server.sendResult(id, protocol.CallToolResult(protocol.TextContent(ToolStreamingText)){ .content = &content }) catch {
+    server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
         return server.sendError(id, .InternalError, "Failed to serialize semantic tree content");
     };
 }
@@ -418,7 +418,7 @@ fn handleNodeDetails(server: *Server, arena: std.mem.Allocator, id: std.json.Val
     try std.json.Stringify.value(&details, .{}, &aw.writer);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -439,7 +439,7 @@ fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.
     try std.json.Stringify.value(elements, .{}, &aw.writer);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -454,7 +454,7 @@ fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.
     try std.json.Stringify.value(data, .{}, &aw.writer);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -475,7 +475,7 @@ fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Val
     try std.json.Stringify.value(forms_data, .{}, &aw.writer);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -496,13 +496,13 @@ fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
         try caught.format(&aw.writer);
 
         const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-        return server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content, .isError = true });
+        return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = true });
     };
 
     const str_result = js_result.toStringSliceWithAlloc(arena) catch "undefined";
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = str_result }};
-    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleClick(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -533,7 +533,7 @@ fn handleClick(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
-    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleFill(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -566,7 +566,7 @@ fn handleFill(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
-    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -604,7 +604,7 @@ fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
-    try server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -633,7 +633,7 @@ fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json
     const msg = std.fmt.allocPrint(arena, "Element found. backendNodeId: {d}", .{registered.id}) catch "Element found.";
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
-    return server.sendResult(id, protocol.CallToolResult(protocol.TextContent([]const u8)){ .content = &content });
+    return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !*lp.Page {
