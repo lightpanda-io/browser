@@ -174,6 +174,14 @@ pub fn setType(self: *Anchor, value: []const u8, page: *Page) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), page);
 }
 
+pub fn getRel(self: *Anchor) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("rel")) orelse "";
+}
+
+pub fn setRel(self: *Anchor, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("rel"), .wrap(value), page);
+}
+
 pub fn getName(self: *const Anchor) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
@@ -218,6 +226,7 @@ pub const JsApi = struct {
     pub const pathname = bridge.accessor(Anchor.getPathname, Anchor.setPathname, .{});
     pub const search = bridge.accessor(Anchor.getSearch, Anchor.setSearch, .{});
     pub const hash = bridge.accessor(Anchor.getHash, Anchor.setHash, .{});
+    pub const rel = bridge.accessor(Anchor.getRel, Anchor.setRel, .{});
     pub const @"type" = bridge.accessor(Anchor.getType, Anchor.setType, .{});
     pub const text = bridge.accessor(Anchor.getText, Anchor.setText, .{});
     pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
