@@ -30,7 +30,7 @@ const Notification = @import("../Notification.zig");
 const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
 
 const http = @import("../network/http.zig");
-const Runtime = @import("../network/Runtime.zig");
+const Network = @import("../network/Network.zig");
 const Robots = @import("../network/Robots.zig");
 
 const IS_DEBUG = builtin.mode == .Debug;
@@ -86,7 +86,7 @@ queue: std.DoublyLinkedList = .{},
 // The main app allocator
 allocator: Allocator,
 
-network: *Runtime,
+network: *Network,
 
 // Queue of requests that depend on a robots.txt.
 // Allows us to fetch the robots.txt just once.
@@ -131,7 +131,7 @@ pub const CDPClient = struct {
     blocking_read_end: *const fn (*anyopaque) bool,
 };
 
-pub fn init(allocator: Allocator, network: *Runtime) !*Client {
+pub fn init(allocator: Allocator, network: *Network) !*Client {
     var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
     errdefer transfer_pool.deinit();
 
@@ -695,7 +695,7 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
         break :blk try self.handles.perform();
     };
 
-    // Process dirty connections — return them to Runtime pool.
+    // Process dirty connections — return them to Network pool.
     while (self.dirty.popFirst()) |node| {
         const conn: *http.Connection = @fieldParentPtr("node", node);
         self.handles.remove(conn) catch |err| {

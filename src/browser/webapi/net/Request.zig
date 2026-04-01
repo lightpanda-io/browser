@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const js = @import("../../js/js.zig");
-const net_http = @import("../../../network/http.zig");
+const http = @import("../../../network/http.zig");
 
 const URL = @import("../URL.zig");
 const Page = @import("../../Page.zig");
@@ -31,7 +31,7 @@ const Allocator = std.mem.Allocator;
 const Request = @This();
 
 _url: [:0]const u8,
-_method: net_http.Method,
+_method: http.Method,
 _headers: ?*Headers,
 _body: ?[]const u8,
 _arena: Allocator,
@@ -119,14 +119,14 @@ pub fn init(input: Input, opts_: ?InitOpts, page: *Page) !*Request {
     });
 }
 
-fn parseMethod(method: []const u8, page: *Page) !net_http.Method {
+fn parseMethod(method: []const u8, page: *Page) !http.Method {
     if (method.len > "propfind".len) {
         return error.InvalidMethod;
     }
 
     const lower = std.ascii.lowerString(&page.buf, method);
 
-    const method_lookup = std.StaticStringMap(net_http.Method).initComptime(.{
+    const method_lookup = std.StaticStringMap(http.Method).initComptime(.{
         .{ "get", .GET },
         .{ "post", .POST },
         .{ "delete", .DELETE },
