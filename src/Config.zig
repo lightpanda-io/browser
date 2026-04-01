@@ -400,6 +400,11 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--web-bot-auth-domain
         \\                Your domain e.g. yourdomain.com
+        \\
+        \\--cache-dir
+        \\                Path to a directory to use as a Filesystem Cache for network resources.
+        \\                Omitting this will result is no caching.
+        \\                Defaults to no caching.
     ;
 
     //                                                                     MAX_HELP_LEN|
@@ -1074,9 +1079,9 @@ fn parseCommonArg(
         return true;
     }
 
-    if (std.mem.eql(u8, "--cache_dir", opt)) {
+    if (std.mem.eql(u8, "--cache-dir", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--cache_dir" });
+            log.fatal(.app, "missing argument value", .{ .arg = "--cache-dir" });
             return error.InvalidArgument;
         };
         common.cache_dir = try allocator.dupe(u8, str);
