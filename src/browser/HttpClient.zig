@@ -1569,12 +1569,9 @@ pub const Transfer = struct {
             );
 
             if (maybe_cm) |cm| {
-                transfer._pending_cache_metadata = cm;
-
                 var iter = transfer.responseHeaderIterator();
                 var header_list = try iter.collect(allocator);
                 const end_of_response = header_list.items.len;
-                transfer._pending_cache_metadata.?.headers = header_list.items[0..end_of_response];
 
                 if (vary) |vary_str| {
                     var req_it = transfer.req.headers.iterator();
@@ -1592,9 +1589,11 @@ pub const Transfer = struct {
                             }
                         }
                     }
-
-                    transfer._pending_cache_metadata.?.vary_headers = header_list.items[end_of_response..];
                 }
+
+                transfer._pending_cache_metadata = cm;
+                transfer._pending_cache_metadata.?.headers = header_list.items[0..end_of_response];
+                transfer._pending_cache_metadata.?.vary_headers = header_list.items[end_of_response..];
             }
         }
 
