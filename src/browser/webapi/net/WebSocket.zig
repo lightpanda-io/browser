@@ -107,10 +107,7 @@ pub fn init(url: []const u8, protocols_: ?[]const u8, page: *Page) !*WebSocket {
     const resolved_url = try URL.resolve(arena, page.base(), url, .{ .always_dupe = true, .encode = true });
 
     const http_client = page._session.browser.http_client;
-    const conn = http_client.network.getConnection() orelse {
-        // TODO: figure out how/where we actually want to get WebSocket connections
-        // from. I feel like sharing this with the HTTP Connection Pool is a
-        // mistake.
+    const conn = http_client.network.newConnection() orelse {
         return error.NoFreeConnection;
     };
 
@@ -135,7 +132,7 @@ pub fn init(url: []const u8, protocols_: ?[]const u8, page: *Page) !*WebSocket {
     try http_client.trackConn(conn);
 
     if (comptime IS_DEBUG) {
-        log.info(.http, "WS connecting", .{ .url = url });
+        log.info(.websocket, "connecting", .{ .url = url });
     }
 
     // Unlike an XHR object where we only selectively reference the instance
@@ -179,9 +176,9 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
     self._ready_state = .closed;
 
     if (err_) |err| {
-        log.warn(.http, "WS disconnected", .{ .err = err, .url = self._url });
+        log.warn(.websocket, "disconnected", .{ .err = err, .url = self._url });
     } else {
-        log.info(.http, "WS disconnected", .{ .url = self._url, .reason = "closed" });
+        log.info(.websocket, "disconnected", .{ .url = self._url, .reason = "closed" });
     }
 
     self.cleanup();
@@ -191,7 +188,7 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
     const reason = if (was_clean) self._close_reason else "";
 
     self.dispatchCloseEvent(code, reason, was_clean) catch |err| {
-        log.err(.http, "WS close event dispatch failed", .{ .err = err });
+        log.err(.websocket, "close event dispatch failed", .{ .err = err });
     };
 }
 
@@ -413,6 +410,7 @@ fn dispatchOpenEvent(self: *WebSocket) !void {
 }
 
 fn dispatchMessageEvent(self: *WebSocket, data: []const u8, frame_type: http.WsFrameType) !void {
+    std.debug.print("{any} {s}\n", .{ frame_type, data });
     const page = self._page;
     const target = self.asEventTarget();
 
@@ -450,7 +448,7 @@ fn sendDataCallback(buffer: [*]u8, buf_count: usize, buf_len: usize, data: *anyo
     }
     const conn: *http.Connection = @ptrCast(@alignCast(data));
     return _sendDataCallback(conn, buffer[0..buf_len]) catch |err| {
-        log.warn(.http, "WS send callback", .{ .err = err });
+        log.warn(.websocket, "send callback", .{ .err = err });
         return http.readfunc_pause;
     };
 }
@@ -499,6 +497,9 @@ fn _sendDataCallback(conn: *http.Connection, buf: []u8) !usize {
 fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: Message.Content, frame_type: http.WsFrameType) !usize {
     if (self._send_offset == 0) {
         // start of the message
+        if (comptime IS_DEBUG) {
+            log.debug(.websocket, "send start", .{ .url = self._url, .len = byte_msg.data.len });
+        }
         try conn.wsStartFrame(frame_type, byte_msg.data.len);
     }
 
@@ -511,6 +512,9 @@ fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: M
     if (self._send_offset >= byte_msg.data.len) {
         const removed = self._send_queue.orderedRemove(0);
         removed.deinit(self._page._session);
+        if (comptime IS_DEBUG) {
+            log.debug(.websocket, "send complete", .{ .url = self._url, .len = byte_msg.data.len, .queue = self._send_queue.items.len });
+        }
         self._send_offset = 0;
     }
 
@@ -523,7 +527,7 @@ fn receivedDataCallback(buffer: [*]const u8, buf_count: usize, buf_len: usize, d
     }
     const conn: *http.Connection = @ptrCast(@alignCast(data));
     _receivedDataCallback(conn, buffer[0..buf_len]) catch |err| {
-        log.warn(.http, "WS receive callback", .{ .err = err });
+        log.warn(.websocket, "receive callback", .{ .err = err });
         // TODO: are there errors, like an invalid frame, that we shouldn't treat
         // as an error?
         return http.writefunc_error;
@@ -535,11 +539,14 @@ fn receivedDataCallback(buffer: [*]const u8, buf_count: usize, buf_len: usize, d
 fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
     const self = conn.transport.websocket;
     const meta = conn.wsMeta() orelse {
-        log.err(.http, "WS missing meta", .{ .url = self._url });
+        log.err(.websocket, "missing meta", .{ .url = self._url });
         return error.NoFrameMeta;
     };
 
     if (meta.offset == 0) {
+        if (comptime IS_DEBUG) {
+            log.debug(.websocket, "incoming message", .{ .url = self._url, .len = meta.len, .bytes_left = meta.bytes_left, .type = meta.frame_type });
+        }
         // Start of new frame. Pre-allocate buffer
         self._recv_buffer.clearRetainingCapacity();
         if (meta.len > self._http_client.max_response_size) {
@@ -598,10 +605,10 @@ fn receivedHeaderCalllback(buffer: [*]const u8, header_count: usize, buf_len: us
         }
 
         self._ready_state = .open;
-        log.info(.http, "WS connected", .{ .url = self._url });
+        log.info(.websocket, "connected", .{ .url = self._url });
 
         self.dispatchOpenEvent() catch |err| {
-            log.err(.http, "WS open event fail", .{ .err = err });
+            log.err(.websocket, "open event fail", .{ .err = err });
         };
         return buf_len;
     }

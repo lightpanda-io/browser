@@ -61,6 +61,11 @@ connections: []http.Connection,
 available: std.DoublyLinkedList = .{},
 conn_mutex: std.Thread.Mutex = .{},
 
+ws_pool: std.heap.MemoryPool(http.Connection),
+ws_count: usize = 0,
+ws_max: u8,
+ws_mutex: std.Thread.Mutex = .{},
+
 pollfds: []posix.pollfd,
 listener: ?Listener = null,
 
@@ -268,9 +273,13 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
         .connections = connections,
 
         .app = app,
+
         .robot_store = RobotStore.init(allocator),
         .web_bot_auth = web_bot_auth,
         .cache = cache,
+
+        .ws_pool = .init(allocator),
+        .ws_max = config.wsMaxConcurrent(),
     };
 }
 
@@ -297,6 +306,8 @@ pub fn deinit(self: *Network) void {
         conn.deinit();
     }
     self.allocator.free(self.connections);
+
+    self.ws_pool.deinit();
 
     self.robot_store.deinit();
     if (self.web_bot_auth) |wba| {
@@ -592,18 +603,50 @@ pub fn getConnection(self: *Network) ?*http.Connection {
 }
 
 pub fn releaseConnection(self: *Network, conn: *http.Connection) void {
-    conn.reset(self.config, self.ca_blob) catch |err| {
-        lp.assert(false, "couldn't reset curl easy", .{ .err = err });
-    };
-
-    self.conn_mutex.lock();
-    defer self.conn_mutex.unlock();
-
-    self.available.append(&conn.node);
+    switch (conn.transport) {
+        .websocket => {
+            conn.deinit();
+            self.ws_mutex.lock();
+            defer self.ws_mutex.unlock();
+            self.ws_pool.destroy(conn);
+            self.ws_count -= 1;
+        },
+        else => {
+            conn.reset(self.config, self.ca_blob) catch |err| {
+                lp.assert(false, "couldn't reset curl easy", .{ .err = err });
+            };
+            self.conn_mutex.lock();
+            defer self.conn_mutex.unlock();
+            self.available.append(&conn.node);
+        },
+    }
 }
 
-pub fn newConnection(self: *Network) !http.Connection {
-    return http.Connection.init(self.ca_blob, self.config);
+pub fn newConnection(self: *Network) ?*http.Connection {
+    const conn = blk: {
+        self.ws_mutex.lock();
+        defer self.ws_mutex.unlock();
+
+        if (self.ws_count >= self.ws_max) {
+            return null;
+        }
+
+        const c = self.ws_pool.create() catch return null;
+        self.ws_count += 1;
+        break :blk c;
+    };
+
+    // don't do this under lock
+    conn.* = http.Connection.init(self.ca_blob, self.config) catch {
+        self.ws_mutex.lock();
+        defer self.ws_mutex.unlock();
+        self.ws_pool.destroy(conn);
+        self.ws_count -= 1;
+
+        return null;
+    };
+
+    return conn;
 }
 
 // Wraps lines @ 64 columns. A PEM is basically a base64 encoded DER (which is

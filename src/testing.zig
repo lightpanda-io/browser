@@ -496,6 +496,7 @@ test "tests:beforeAll" {
         .common = .{
             .tls_verify_host = false,
             .user_agent_suffix = "internal-tester",
+            .ws_max_concurrent = 50,
         },
     } });
 

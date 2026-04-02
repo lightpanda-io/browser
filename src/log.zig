@@ -40,6 +40,7 @@ pub const Scope = enum {
     unknown_prop,
     mcp,
     cache,
+    websocket,
 };
 
 const Opts = struct {
