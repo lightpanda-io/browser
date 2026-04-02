@@ -73,38 +73,58 @@
           cp -r ${pkgs.gcc.cc}/lib/gcc $out/lib/gcc
         '';
 
+        fhsPkgs =
+          pkgs: with pkgs; [
+            # Build tools
+            zigpkgs.${zigVersion}
+            rustToolchain
+            python3
+            pkg-config
+            cmake
+            gperf
+
+            # GCC
+            gcc
+            gcc.cc.lib
+            crtFiles
+
+            # Libraries
+            expat.dev
+            glib.dev
+            glibc.dev
+            zlib
+          ];
+
         # This build pipeline is very unhappy without an FHS-compliant env.
         fhs = pkgs.buildFHSEnv {
           name = "fhs-shell";
           multiArch = true;
+          targetPkgs = fhsPkgs;
+        };
+
+        fhsDev = pkgs.buildFHSEnv {
+          name = "fhs-shell-dev";
+          multiArch = true;
           targetPkgs =
-            pkgs: with pkgs; [
-              # Build tools
-              zigpkgs.${zigVersion}
-              zls
-              rustToolchain
-              python3
-              pkg-config
-              cmake
-              gperf
+            pkgs:
+            (fhsPkgs pkgs)
+            ++ [
+              pkgs.zls
               zon2nixScript
-
-              # GCC
-              gcc
-              gcc.cc.lib
-              crtFiles
-
-              # Libraries
-              expat.dev
-              glib.dev
-              glibc.dev
-              zlib
             ];
         };
 
         # regenerate with `nix run .#zon2nix`
         zigDeps = import ./build.zig.zon.nix {
-          inherit (pkgs) linkFarm fetchgit fetchzip;
+          inherit (pkgs) linkFarm fetchgit;
+          fetchzip =
+            args:
+            pkgs.fetchzip (
+              args
+              // pkgs.lib.optionalAttrs (pkgs.lib.hasInfix "/+archive/" args.url) {
+                stripRoot = false;
+              }
+            );
         };
 
         cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
@@ -193,7 +213,7 @@
           };
         };
 
-        devShells.default = fhs.env;
+        devShells.default = fhsDev.env;
       }
     );
 }
