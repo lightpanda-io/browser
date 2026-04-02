@@ -138,11 +138,25 @@ pub const CachedData = union(enum) {
         offset: usize,
         len: usize,
     },
+
+    pub fn format(self: CachedData, writer: *std.Io.Writer) !void {
+        switch (self) {
+            .buffer => |buf| try writer.print("buffer({d} bytes)", .{buf.len}),
+            .file => |f| try writer.print("file(offset={d}, len={d} bytes)", .{ f.offset, f.len }),
+        }
+    }
 };
 
 pub const CachedResponse = struct {
     metadata: CachedMetadata,
     data: CachedData,
+
+    pub fn format(self: *const CachedResponse, writer: *std.Io.Writer) !void {
+        try writer.print("metadata=(", .{});
+        try self.metadata.format(writer);
+        try writer.print("), data=", .{});
+        try self.data.format(writer);
+    }
 };
 
 pub fn tryCache(

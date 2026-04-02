@@ -375,16 +375,8 @@ fn processRequest(self: *Client, req: Request) !void {
                 .timestamp = std.time.timestamp(),
                 .request_headers = req_header_list.items,
             })) |cached| {
-                log.debug(.browser, "http.cache.get", .{
-                    .url = req.url,
-                    .found = true,
-                    .metadata = cached.metadata,
-                });
-
                 defer req.headers.deinit();
                 return serveFromCache(req, &cached);
-            } else {
-                log.debug(.browser, "http.cache.get", .{ .url = req.url, .found = false });
             }
         }
     }
@@ -972,12 +964,9 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 
     if (transfer._pending_cache_metadata) |metadata| {
         const cache = &self.network.cache.?;
-        log.debug(.browser, "http cache", .{ .url = transfer.req.url, .metadata = metadata });
-
         cache.put(metadata, body) catch |err| {
-            log.warn(.http, "cache put failed", .{ .err = err });
+            log.warn(.cache, "cache put failed", .{ .err = err });
         };
-        log.debug(.browser, "http.cache.put", .{ .url = transfer.req.url });
     }
 
     // release conn ASAP so that it's available; some done_callbacks
@@ -1156,6 +1145,13 @@ pub const Response = struct {
             .transfer => |t| t.abort(err),
             .cached => {},
         }
+    }
+
+    pub fn format(self: Response, writer: *std.Io.Writer) !void {
+        return switch (self.inner) {
+            .transfer => |t| try t.format(writer),
+            .cached => |c| try c.format(writer),
+        };
     }
 };
 

@@ -97,7 +97,7 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.C
     const file = self.dir.openFile(&cache_p, .{ .mode = .read_only }) catch |e| {
         switch (e) {
             std.fs.File.OpenError.FileNotFound => {
-                log.debug(.cache, "miss", .{ .url = req.url, .hash = &hashed_key });
+                log.debug(.cache, "miss", .{ .url = req.url, .hash = &hashed_key, .reason = "missing" });
             },
             else => |err| {
                 log.warn(.cache, "open file err", .{ .url = req.url, .err = err });
@@ -141,13 +141,19 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.C
         &json_reader,
         .{ .allocate = .alloc_always },
     ) catch |e| {
-        log.warn(.cache, "metadata parse", .{ .url = req.url, .err = e });
+        // Warn because malformed metadata can be a deeper symptom.
+        log.warn(.cache, "miss", .{ .url = req.url, .err = e, .reason = "malformed metadata" });
         cleanup = true;
         return null;
     };
 
     if (cache_file.version != CACHE_VERSION) {
-        log.warn(.cache, "version", .{ .url = req.url, .expected = CACHE_VERSION, .got = cache_file.version });
+        log.debug(.cache, "miss", .{
+            .url = req.url,
+            .reason = "version mismatch",
+            .expected = CACHE_VERSION,
+            .got = cache_file.version,
+        });
         cleanup = true;
         return null;
     }
@@ -158,7 +164,7 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.C
     const now = req.timestamp;
     const age = (now - metadata.stored_at) + @as(i64, @intCast(metadata.age_at_store));
     if (age < 0 or @as(u64, @intCast(age)) >= metadata.cache_control.max_age) {
-        log.debug(.cache, "expired", .{ .url = req.url });
+        log.debug(.cache, "miss", .{ .url = req.url, .reason = "expired" });
         cleanup = true;
         return null;
     }
@@ -173,7 +179,13 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.C
         } else "";
 
         if (!std.ascii.eqlIgnoreCase(value, incoming)) {
-            log.debug(.cache, "vary mismatch", .{ .url = req.url, .header = name });
+            log.debug(.cache, "miss", .{
+                .url = req.url,
+                .reason = "vary mismatch",
+                .header = name,
+                .expected = value,
+                .got = incoming,
+            });
             return null;
         }
     }
@@ -184,6 +196,8 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.C
         cleanup = true;
         return null;
     }
+
+    log.debug(.cache, "hit", .{ .url = req.url, .hash = &hashed_key });
 
     return .{
         .metadata = metadata,
@@ -206,27 +220,45 @@ pub fn put(self: *FsCache, meta: CachedMetadata, body: []const u8) !void {
     lock.lock();
     defer lock.unlock();
 
-    const file = try self.dir.createFile(&cache_tmp_p, .{ .truncate = true });
+    const file = self.dir.createFile(&cache_tmp_p, .{ .truncate = true }) catch |e| {
+        log.err(.cache, "create file", .{ .url = meta.url, .file = &cache_tmp_p, .err = e });
+        return e;
+    };
     defer file.close();
 
     var writer_buf: [1024]u8 = undefined;
-
     var file_writer = file.writer(&writer_buf);
     var file_writer_iface = &file_writer.interface;
 
     var len_buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &len_buf, body.len, .little);
-    try file_writer_iface.writeAll(&len_buf);
-    try file_writer_iface.writeAll(body);
 
-    try std.json.Stringify.value(
+    file_writer_iface.writeAll(&len_buf) catch |e| {
+        log.err(.cache, "write body len", .{ .url = meta.url, .err = e });
+        return e;
+    };
+    file_writer_iface.writeAll(body) catch |e| {
+        log.err(.cache, "write body", .{ .url = meta.url, .err = e });
+        return e;
+    };
+    std.json.Stringify.value(
         CacheMetadataJson{ .version = CACHE_VERSION, .metadata = meta },
         .{ .whitespace = .minified },
         file_writer_iface,
-    );
+    ) catch |e| {
+        log.err(.cache, "write metadata", .{ .url = meta.url, .err = e });
+        return e;
+    };
+    file_writer_iface.flush() catch |e| {
+        log.err(.cache, "flush", .{ .url = meta.url, .err = e });
+        return e;
+    };
+    self.dir.rename(&cache_tmp_p, &cache_p) catch |e| {
+        log.err(.cache, "rename", .{ .url = meta.url, .from = &cache_tmp_p, .to = &cache_p, .err = e });
+        return e;
+    };
 
-    try file_writer_iface.flush();
-    try self.dir.rename(&cache_tmp_p, &cache_p);
+    log.debug(.cache, "put", .{ .url = meta.url, .hash = &hashed_key, .body_len = body.len });
 }
 
 const testing = std.testing;
