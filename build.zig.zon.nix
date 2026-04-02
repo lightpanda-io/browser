@@ -7,6 +7,7 @@ linkFarm "zig-packages" [
     name = "N-V-__8AABDOXwDW4TLrTiydikRCN2ym9hJI1GKGR09ZLBvY";
     path = fetchzip {
       url = "https://chromium.googlesource.com/chromium/tools/depot_tools.git/+archive/4ce8ba39a3488397a2d1494f167020f21de502f3.tar.gz";
+      stripRoot = false;
       hash = "sha256-WTzjmLFjh1yDDEvYE7Qfx8aBxMLdATx14+Jprwh8ZgQ=";
     };
   }
