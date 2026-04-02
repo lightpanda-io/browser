@@ -73,6 +73,7 @@
           cp -r ${pkgs.gcc.cc}/lib/gcc $out/lib/gcc
         '';
 
+        # This build pipeline is very unhappy without an FHS-compliant env.
         fhs = pkgs.buildFHSEnv {
           name = "fhs-shell";
           multiArch = true;
