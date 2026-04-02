@@ -509,7 +509,7 @@ fn getUserInfo(raw: [:0]const u8) ?[]const u8 {
     return raw[authority_start .. auth.host_start - 1];
 }
 
-pub fn getHost(raw: [:0]const u8) []const u8 {
+pub fn getHost(raw: []const u8) []const u8 {
     const auth = parseAuthority(raw) orelse return "";
     return auth.getHost(raw);
 }

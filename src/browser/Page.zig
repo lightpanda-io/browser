@@ -438,7 +438,15 @@ pub fn releaseArena(self: *Page, allocator: Allocator) void {
 
 pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
     const current_origin = self.origin orelse return false;
-    return std.mem.startsWith(u8, url, current_origin);
+
+    // fastpath
+    if (!std.mem.startsWith(u8, url, current_origin)) {
+        return false;
+    }
+
+    // Starting here, at least protocols are equals.
+    // Compare hosts (domain:port) strictly
+    return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
 }
 
 /// Look up a blob URL in this page's registry.
@@ -3615,4 +3623,42 @@ test "WebApi: Frames" {
 
 test "WebApi: Integration" {
     try testing.htmlRunner("integration", .{});
+}
+
+test "Page: isSameOrigin" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var page: Page = undefined;
+
+    page.origin = null;
+    try testing.expectEqual(false, page.isSameOrigin("https://origin.com/"));
+
+    page.origin = try URL.getOrigin(allocator, "https://origin.com/foo/bar") orelse unreachable;
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/foo/bar")); // exact same
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/bar/bar")); // path differ
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/")); // path differ
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com")); // no path
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/foo?q=1"));
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/foo#hash"));
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/foo?q=1#hash"));
+    // FIXME try testing.expectEqual(true, page.isSameOrigin("https://foo:bar@origin.com"));
+    // FIXME try testing.expectEqual(true, page.isSameOrigin("https://origin.com:443/foo"));
+
+    try testing.expectEqual(false, page.isSameOrigin("http://origin.com/")); // another proto
+    try testing.expectEqual(false, page.isSameOrigin("https://origin.com:123/")); // another port
+    try testing.expectEqual(false, page.isSameOrigin("https://sub.origin.com/")); // another subdomain
+    try testing.expectEqual(false, page.isSameOrigin("https://target.com/")); // different domain
+    try testing.expectEqual(false, page.isSameOrigin("https://origin.com.target.com/")); // different domain
+    try testing.expectEqual(false, page.isSameOrigin("https://target.com/@origin.com"));
+
+    page.origin = try URL.getOrigin(allocator, "https://origin.com:8443/foo") orelse unreachable;
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com:8443/bar"));
+    try testing.expectEqual(false, page.isSameOrigin("https://origin.com/bar")); // missing port
+    try testing.expectEqual(false, page.isSameOrigin("https://origin.com:9999/bar")); // wrong port
+
+    try testing.expectEqual(false, page.isSameOrigin(""));
+    try testing.expectEqual(false, page.isSameOrigin("not-a-url"));
+    try testing.expectEqual(false, page.isSameOrigin("//origin.com/foo"));
 }
