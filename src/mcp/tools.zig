@@ -477,17 +477,9 @@ fn handleNodeDetails(server: *Server, arena: std.mem.Allocator, id: std.json.Val
         backendNodeId: CDPNode.Id,
     };
     const args = try parseArgs(Params, arena, arguments, server, id, "nodeDetails");
+    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    _ = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
-
-    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
-        return server.sendError(id, .InvalidParams, "Node not found");
-    };
-
-    const page = server.session.currentPage().?;
-    const details = lp.SemanticTree.getNodeDetails(arena, node.dom, &server.node_registry, page) catch {
+    const details = lp.SemanticTree.getNodeDetails(arena, resolved.node, &server.node_registry, resolved.page) catch {
         return server.sendError(id, .InternalError, "Failed to get node details");
     };
 
@@ -587,26 +579,19 @@ fn handleClick(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
         backendNodeId: CDPNode.Id,
     };
     const args = try parseArgs(ClickParams, arena, arguments, server, id, "click");
+    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
-
-    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
-        return server.sendError(id, .InvalidParams, "Node not found");
-    };
-
-    lp.actions.click(node.dom, page) catch |err| {
+    lp.actions.click(resolved.node, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an HTML element");
         }
         return server.sendError(id, .InternalError, "Failed to click element");
     };
 
-    const page_title = page.getTitle() catch null;
+    const page_title = resolved.page.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Clicked element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
         args.backendNodeId,
-        page.url,
+        resolved.page.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -619,27 +604,20 @@ fn handleFill(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         text: []const u8,
     };
     const args = try parseArgs(FillParams, arena, arguments, server, id, "fill");
+    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
-
-    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
-        return server.sendError(id, .InvalidParams, "Node not found");
-    };
-
-    lp.actions.fill(node.dom, args.text, page) catch |err| {
+    lp.actions.fill(resolved.node, args.text, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an input, textarea or select");
         }
         return server.sendError(id, .InternalError, "Failed to fill element");
     };
 
-    const page_title = page.getTitle() catch null;
+    const page_title = resolved.page.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Filled element (backendNodeId: {d}) with \"{s}\". Page url: {s}, title: {s}", .{
         args.backendNodeId,
         args.text,
-        page.url,
+        resolved.page.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -718,26 +696,19 @@ fn handleHover(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
         backendNodeId: CDPNode.Id,
     };
     const args = try parseArgs(Params, arena, arguments, server, id, "hover");
+    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
-
-    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
-        return server.sendError(id, .InvalidParams, "Node not found");
-    };
-
-    lp.actions.hover(node.dom, page) catch |err| {
+    lp.actions.hover(resolved.node, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an HTML element");
         }
         return server.sendError(id, .InternalError, "Failed to hover element");
     };
 
-    const page_title = page.getTitle() catch null;
+    const page_title = resolved.page.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Hovered element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
         args.backendNodeId,
-        page.url,
+        resolved.page.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -786,27 +757,20 @@ fn handleSelectOption(server: *Server, arena: std.mem.Allocator, id: std.json.Va
         value: []const u8,
     };
     const args = try parseArgs(Params, arena, arguments, server, id, "selectOption");
+    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
-
-    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
-        return server.sendError(id, .InvalidParams, "Node not found");
-    };
-
-    lp.actions.selectOption(node.dom, args.value, page) catch |err| {
+    lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not a <select> element");
         }
         return server.sendError(id, .InternalError, "Failed to select option");
     };
 
-    const page_title = page.getTitle() catch null;
+    const page_title = resolved.page.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Selected option '{s}' (backendNodeId: {d}). Page url: {s}, title: {s}", .{
         args.value,
         args.backendNodeId,
-        page.url,
+        resolved.page.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -819,16 +783,9 @@ fn handleSetChecked(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         checked: bool,
     };
     const args = try parseArgs(Params, arena, arguments, server, id, "setChecked");
+    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
-
-    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
-        return server.sendError(id, .InvalidParams, "Node not found");
-    };
-
-    lp.actions.setChecked(node.dom, args.checked, page) catch |err| {
+    lp.actions.setChecked(resolved.node, args.checked, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not a checkbox or radio input");
         }
@@ -836,11 +793,11 @@ fn handleSetChecked(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     };
 
     const state_str = if (args.checked) "checked" else "unchecked";
-    const page_title = page.getTitle() catch null;
+    const page_title = resolved.page.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Set element (backendNodeId: {d}) to {s}. Page url: {s}, title: {s}", .{
         args.backendNodeId,
         state_str,
-        page.url,
+        resolved.page.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -901,6 +858,20 @@ fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(haystack[i..][0..needle.len], needle)) return true;
     }
     return false;
+}
+
+const NodeAndPage = struct { node: *DOMNode, page: *lp.Page };
+
+fn resolveNodeAndPage(server: *Server, id: std.json.Value, node_id: CDPNode.Id) !NodeAndPage {
+    const page = server.session.currentPage() orelse {
+        try server.sendError(id, .PageNotLoaded, "Page not loaded");
+        return error.PageNotLoaded;
+    };
+    const node = server.node_registry.lookup_by_id.get(node_id) orelse {
+        try server.sendError(id, .InvalidParams, "Node not found");
+        return error.InvalidParams;
+    };
+    return .{ .node = node.dom, .page = page };
 }
 
 fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8) !*lp.Page {

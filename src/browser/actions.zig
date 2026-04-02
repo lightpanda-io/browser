@@ -27,6 +27,18 @@ const Page = @import("Page.zig");
 const Session = @import("Session.zig");
 const Selector = @import("webapi/selector/Selector.zig");
 
+fn dispatchInputAndChangeEvents(el: *Element, page: *Page) !void {
+    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, page);
+    page._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
+        lp.log.err(.app, "dispatch input event failed", .{ .err = err });
+    };
+
+    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, page);
+    page._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
+        lp.log.err(.app, "dispatch change event failed", .{ .err = err });
+    };
+}
+
 pub fn click(node: *DOMNode, page: *Page) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
 
@@ -108,15 +120,7 @@ pub fn selectOption(node: *DOMNode, value: []const u8, page: *Page) !void {
         return error.ActionFailed;
     };
 
-    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, page);
-    page._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
-        lp.log.err(.app, "dispatch input event failed", .{ .err = err });
-    };
-
-    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, page);
-    page._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
-        lp.log.err(.app, "dispatch change event failed", .{ .err = err });
-    };
+    try dispatchInputAndChangeEvents(el, page);
 }
 
 pub fn setChecked(node: *DOMNode, checked: bool, page: *Page) !void {
@@ -143,15 +147,7 @@ pub fn setChecked(node: *DOMNode, checked: bool, page: *Page) !void {
         lp.log.err(.app, "dispatch click event failed", .{ .err = err });
     };
 
-    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, page);
-    page._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
-        lp.log.err(.app, "dispatch input event failed", .{ .err = err });
-    };
-
-    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, page);
-    page._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
-        lp.log.err(.app, "dispatch change event failed", .{ .err = err });
-    };
+    try dispatchInputAndChangeEvents(el, page);
 }
 
 pub fn fill(node: *DOMNode, text: []const u8, page: *Page) !void {
@@ -180,15 +176,7 @@ pub fn fill(node: *DOMNode, text: []const u8, page: *Page) !void {
         return error.InvalidNodeType;
     }
 
-    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, page);
-    page._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
-        lp.log.err(.app, "dispatch input event failed", .{ .err = err });
-    };
-
-    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, page);
-    page._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
-        lp.log.err(.app, "dispatch change event failed", .{ .err = err });
-    };
+    try dispatchInputAndChangeEvents(el, page);
 }
 
 pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, page: *Page) !void {
