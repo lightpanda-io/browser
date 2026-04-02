@@ -94,7 +94,18 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
 
         const ms_elapsed = timer.lap() / 1_000_000;
         if (ms_elapsed >= ms_remaining) {
-            return .done;
+            // Don't timeout if there's still active work (HTTP requests,
+            // intercepted requests, background JS tasks, or pending macrotasks).
+            if (self.http_client.active > 0 or self.http_client.intercepted > 0) {
+                ms_remaining = opts.ms;
+                continue;
+            }
+            const browser = self.session.browser;
+            if (browser.hasBackgroundTasks() or browser.msToNextMacrotask() != null) {
+                ms_remaining = opts.ms;
+                continue;
+            }
+            return error.Timeout;
         }
         ms_remaining -= @intCast(ms_elapsed);
         if (next_ms > 0) {
@@ -237,7 +248,16 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
             page._parse_state = .{ .raw_done = @errorName(err) };
             return err;
         },
-        .raw_done => return .done,
+        .raw_done => {
+            if (comptime is_cdp) {
+                const http_result = try http_client.tick(@intCast(opts.ms));
+                if (http_result == .cdp_socket) {
+                    return .cdp_socket;
+                }
+                return .{ .ok = 0 };
+            }
+            return .done;
+        },
     }
 }
 

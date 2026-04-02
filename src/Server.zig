@@ -297,13 +297,12 @@ pub const Client = struct {
         }
 
         var cdp = &self.mode.cdp;
-        var last_message = milliTimestamp(.monotonic);
-        var ms_remaining = self.ws.timeout_ms;
+        const timeout_ms = self.ws.timeout_ms;
 
         while (true) {
-            const result = cdp.pageWait(ms_remaining) catch |wait_err| switch (wait_err) {
+            const result = cdp.pageWait(timeout_ms) catch |wait_err| switch (wait_err) {
                 error.NoPage => {
-                    const status = http.tick(ms_remaining) catch |err| {
+                    const status = http.tick(timeout_ms) catch |err| {
                         log.err(.app, "http tick", .{ .err = err });
                         return;
                     };
@@ -314,9 +313,11 @@ pub const Client = struct {
                     if (self.readSocket() == false) {
                         return;
                     }
-                    last_message = milliTimestamp(.monotonic);
-                    ms_remaining = self.ws.timeout_ms;
                     continue;
+                },
+                error.Timeout => {
+                    log.info(.app, "CDP timeout", .{});
+                    return;
                 },
                 else => return wait_err,
             };
@@ -326,44 +327,10 @@ pub const Client = struct {
                     if (self.readSocket() == false) {
                         return;
                     }
-                    last_message = milliTimestamp(.monotonic);
-                    ms_remaining = self.ws.timeout_ms;
                 },
-                .done => {
-                    if (self.isBusy()) {
-                        last_message = milliTimestamp(.monotonic);
-                        ms_remaining = self.ws.timeout_ms;
-                        continue;
-                    }
-                    const now = milliTimestamp(.monotonic);
-                    const elapsed = now - last_message;
-                    if (elapsed >= ms_remaining) {
-                        log.info(.app, "CDP timeout", .{});
-                        return;
-                    }
-                    ms_remaining -= @intCast(elapsed);
-                    last_message = now;
-                },
+                .done => unreachable,
             }
         }
-    }
-
-    fn isBusy(self: *const Client) bool {
-        if (self.http.active > 0 or self.http.intercepted > 0) {
-            return true;
-        }
-
-        const cdp = switch (self.mode) {
-            .cdp => |*c| c,
-            .http => return false,
-        };
-
-        const session = cdp.browser.session orelse return false;
-        if (session.browser.hasBackgroundTasks() or session.browser.msToNextMacrotask() != null) {
-            return true;
-        }
-
-        return false;
     }
 
     fn blockingReadStart(ctx: *anyopaque) bool {
