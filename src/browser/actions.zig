@@ -157,6 +157,10 @@ pub fn setChecked(node: *DOMNode, checked: bool, page: *Page) !void {
 pub fn fill(node: *DOMNode, text: []const u8, page: *Page) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
 
+    el.focus(page) catch |err| {
+        lp.log.err(.app, "fill focus failed", .{ .err = err });
+    };
+
     if (el.is(Element.Html.Input)) |input| {
         input.setValue(text, page) catch |err| {
             lp.log.err(.app, "fill input failed", .{ .err = err });

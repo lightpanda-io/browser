@@ -234,6 +234,19 @@ pub const tool_list = [_]protocol.Tool{
             \\}
         ),
     },
+    .{
+        .name = "findElement",
+        .description = "Find interactive elements by role and/or accessible name. Returns matching elements with their backend node IDs. Useful for locating specific elements without parsing the full semantic tree.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "role": { "type": "string", "description": "Optional ARIA role to match (e.g. 'button', 'link', 'textbox', 'checkbox')." },
+            \\    "name": { "type": "string", "description": "Optional accessible name substring to match (case-insensitive)." }
+            \\  }
+            \\}
+        ),
+    },
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -338,6 +351,7 @@ const ToolAction = enum {
     press,
     selectOption,
     setChecked,
+    findElement,
 };
 
 const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
@@ -359,6 +373,7 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "press", .press },
     .{ "selectOption", .selectOption },
     .{ "setChecked", .setChecked },
+    .{ "findElement", .findElement },
 });
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -397,6 +412,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .press => try handlePress(server, arena, req.id.?, call_params.arguments),
         .selectOption => try handleSelectOption(server, arena, req.id.?, call_params.arguments),
         .setChecked => try handleSetChecked(server, arena, req.id.?, call_params.arguments),
+        .findElement => try handleFindElement(server, arena, req.id.?, call_params.arguments),
     }
 }
 
@@ -831,6 +847,62 @@ fn handleSetChecked(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
+fn handleFindElement(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        role: ?[]const u8 = null,
+        name: ?[]const u8 = null,
+    };
+    const args = try parseArgsOrDefault(Params, arena, arguments, server, id);
+
+    if (args.role == null and args.name == null) {
+        return server.sendError(id, .InvalidParams, "At least one of 'role' or 'name' must be provided");
+    }
+
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch |err| {
+        log.err(.mcp, "elements collection failed", .{ .err = err });
+        return server.sendError(id, .InternalError, "Failed to collect interactive elements");
+    };
+
+    var matches: std.ArrayList(lp.interactive.InteractiveElement) = .empty;
+    for (elements) |el| {
+        if (args.role) |role| {
+            const el_role = el.role orelse continue;
+            if (!std.ascii.eqlIgnoreCase(el_role, role)) continue;
+        }
+        if (args.name) |name| {
+            const el_name = el.name orelse continue;
+            if (!containsIgnoreCase(el_name, name)) continue;
+        }
+        try matches.append(arena, el);
+    }
+
+    const matched = try matches.toOwnedSlice(arena);
+    lp.interactive.registerNodes(matched, &server.node_registry) catch |err| {
+        log.err(.mcp, "node registration failed", .{ .err = err });
+        return server.sendError(id, .InternalError, "Failed to register element nodes");
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try std.json.Stringify.value(matched, .{}, &aw.writer);
+
+    const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len > haystack.len) return false;
+    if (needle.len == 0) return true;
+    const end = haystack.len - needle.len + 1;
+    for (0..end) |i| {
+        if (std.ascii.eqlIgnoreCase(haystack[i..][0..needle.len], needle)) return true;
+    }
+    return false;
+}
+
 fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8) !*lp.Page {
     if (url) |u| {
         try performGoto(server, u, id);
@@ -1070,6 +1142,55 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     , null);
 
     try testing.expect(result.isTrue());
+}
+
+test "MCP - findElement" {
+    defer testing.reset();
+    const aa = testing.arena_allocator;
+
+    var out: std.io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    {
+        // Find by role
+        const msg =
+            \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"button"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Find by name (case-insensitive substring)
+        const msg =
+            \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"click"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Find with no matches
+        const msg =
+            \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"slider"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "[]") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Error: no params provided
+        const msg =
+            \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"findElement","arguments":{}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "error") != null);
+        out.clearRetainingCapacity();
+    }
 }
 
 test "MCP - waitForSelector: existing element" {
