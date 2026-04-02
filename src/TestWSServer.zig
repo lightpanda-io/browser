@@ -31,18 +31,13 @@ pub fn init() TestWSServer {
     };
 }
 
-pub fn deinit(self: *TestWSServer) void {
-    if (self.listener) |socket| {
-        posix.close(socket);
-        self.listener = null;
-    }
-}
-
 pub fn stop(self: *TestWSServer) void {
     self.shutdown.store(true, .release);
     if (self.listener) |socket| {
-        posix.close(socket);
-        self.listener = null;
+        switch (@import("builtin").target.os.tag) {
+            .linux => std.posix.shutdown(socket, .recv) catch {},
+            else => std.posix.close(socket),
+        }
     }
 }
 

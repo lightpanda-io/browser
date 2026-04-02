@@ -556,9 +556,6 @@ test "tests:afterAll" {
     if (test_ws_server_thread) |thread| {
         thread.join();
     }
-    if (test_ws_server) |*server| {
-        server.deinit();
-    }
 
     @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
 

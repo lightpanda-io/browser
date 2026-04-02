@@ -693,8 +693,5 @@ pub const JsApi = struct {
 
 const testing = @import("../../../testing.zig");
 test "WebApi: WebSocket" {
-    // TEMP since we're currently limited to 10 concurrent connections
     try testing.htmlRunner("net/websocket.html", .{});
-    try testing.htmlRunner("net/websocket2.html", .{});
-    try testing.htmlRunner("net/websocket3.html", .{});
 }

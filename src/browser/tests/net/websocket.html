@@ -309,7 +309,6 @@
   const state = await testing.async();
   let received = [];
 
-  console.warn('last-test');
   let ws = new WebSocket('ws://127.0.0.1:9584/');
   ws.binaryType = 'arraybuffer';
 
@@ -328,7 +327,6 @@
   });
 
   await state.done(() => {
-    console.warn('aaa');
     // 1 marker byte + 8 bytes (2 x 4-byte int32)
     testing.expectEqual([9], received);
   });
