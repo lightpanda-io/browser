@@ -40,7 +40,7 @@
         cargoRoot = "src/html5ever";
 
         overlays = [
-          (final: prev: {
+          (_final: prev: {
             zigpkgs = zigPkgs.packages.${prev.system};
             zls = zlsPkg.packages.${prev.system}.default;
           })
@@ -51,7 +51,21 @@
         };
 
         rustToolchain = fenix.packages.${system}.stable.toolchain;
-        zon2nixPkg = zon2nix.packages.${system}.default;
+
+        zon2nixScript = pkgs.writeShellApplication {
+          name = "zon2nix";
+          runtimeInputs =
+            with pkgs;
+            [
+              gawk
+              ripgrep
+            ]
+            ++ [ zon2nix.packages.${system}.default ];
+          text = # bash
+            ''
+              exec bash "$PWD/zon2nix.sh"
+            '';
+        };
 
         # We need crtbeginS.o for building.
         crtFiles = pkgs.runCommand "crt-files" { } ''
@@ -69,11 +83,11 @@
               zigpkgs.${zigVersion}
               zls
               rustToolchain
-              zon2nixPkg
               python3
               pkg-config
               cmake
               gperf
+              zon2nixScript
 
               # GCC
               gcc
@@ -88,16 +102,9 @@
             ];
         };
 
-        zigDeps = import ./deps.nix {
-          inherit (pkgs) linkFarm fetchgit;
-          fetchzip =
-            args:
-            pkgs.fetchzip (
-              args
-              // pkgs.lib.optionalAttrs (pkgs.lib.hasPrefix "https://codeload.github.com/" args.url) {
-                extension = "tar.gz";
-              }
-            );
+        # regenerate with `nix run .#zon2nix`
+        zigDeps = import ./build.zig.zon.nix {
+          inherit (pkgs) linkFarm fetchgit fetchzip;
         };
 
         cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
@@ -176,6 +183,13 @@
             '';
 
             meta.mainProgram = "lightpanda";
+          };
+        };
+
+        apps = {
+          zon2nix = {
+            type = "app";
+            program = pkgs.lib.getExe zon2nixScript;
           };
         };
 
