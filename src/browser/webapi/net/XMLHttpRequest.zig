@@ -90,13 +90,13 @@ const ResponseType = enum {
 pub fn init(page: *Page) !*XMLHttpRequest {
     const arena = try page.getArena(.{ .debug = "XMLHttpRequest" });
     errdefer page.releaseArena(arena);
-    const xhr = try page._factory.xhrEventTarget(arena, XMLHttpRequest{
+    const self = try page._factory.xhrEventTarget(arena, XMLHttpRequest{
         ._page = page,
         ._arena = arena,
         ._proto = undefined,
         ._request_headers = try Headers.init(null, page),
     });
-    return xhr;
+    return self;
 }
 
 pub fn deinit(self: *XMLHttpRequest, session: *Session) void {
@@ -243,7 +243,10 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         try page.headersForRequest(&headers);
     }
 
-    try http_client.request(.{
+    self.acquireRef();
+    self._active_request = true;
+
+    http_client.request(.{
         .ctx = self,
         .url = self._url,
         .method = self._method,
@@ -260,9 +263,10 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
-    });
-    self.acquireRef();
-    self._active_request = true;
+    }) catch |err| {
+        self.releaseSelfRef();
+        return err;
+    };
 }
 
 fn handleBlobUrl(self: *XMLHttpRequest, page: *Page) !void {
@@ -518,6 +522,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
 fn httpShutdownCallback(ctx: *anyopaque) void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
     self._transfer = null;
+    self.releaseSelfRef();
 }
 
 pub fn abort(self: *XMLHttpRequest) void {

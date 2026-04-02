@@ -266,7 +266,6 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
             v8.v8__Global__New(isolate.handle, js_obj.handle, gop.value_ptr);
             if (resolved.finalizer) |finalizer| {
                 const finalizer_ptr_id = finalizer.ptr_id;
-                finalizer.acquireRef(finalizer_ptr_id);
 
                 const session = ctx.session;
                 const finalizer_gop = try session.finalizer_callbacks.getOrPut(session.page_arena, finalizer_ptr_id);
@@ -275,7 +274,8 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                     // see this Zig instance. We need to create the FinalizerCallback
                     // so that we can cleanup on page reset if v8 doesn't finalize.
                     errdefer _ = session.finalizer_callbacks.remove(finalizer_ptr_id);
-                    finalizer_gop.value_ptr.* = try self.createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.deinit);
+                    finalizer.acquire_ref(finalizer_ptr_id);
+                    finalizer_gop.value_ptr.* = try self.createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.release_ref_from_zig);
                 }
                 const fc = finalizer_gop.value_ptr.*;
                 const identity_finalizer = try fc.arena.create(Session.FinalizerCallback.Identity);
@@ -283,8 +283,9 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                     .fc = fc,
                     .identity = ctx.identity,
                 };
+                fc.identity_count += 1;
 
-                v8.v8__Global__SetWeakFinalizer(gop.value_ptr, identity_finalizer, finalizer.release, v8.kParameter);
+                v8.v8__Global__SetWeakFinalizer(gop.value_ptr, identity_finalizer, finalizer.release_ref, v8.kParameter);
             }
             return js_obj;
         },
@@ -1128,9 +1129,9 @@ const Resolved = struct {
         // Resolved.ptr is the most specific value in a chain (e.g. IFrame, not EventTarget, Node,  ...)
         // Finalizer.ptr_id is the most specific value in a chain that defines an acquireRef
         ptr_id: usize,
-        deinit: *const fn (ptr_id: usize, session: *Session) void,
-        acquireRef: *const fn (ptr_id: usize) void,
-        release: *const fn (handle: ?*const v8.WeakCallbackInfo) callconv(.c) void,
+        acquire_ref: *const fn (ptr_id: usize) void,
+        release_ref: *const fn (handle: ?*const v8.WeakCallbackInfo) callconv(.c) void,
+        release_ref_from_zig: *const fn (ptr_id: usize, session: *Session) void,
     };
 };
 pub fn resolveValue(value: anytype) Resolved {
@@ -1170,32 +1171,49 @@ fn resolveT(comptime T: type, value: *T) Resolved {
             const finalizer_ptr = getFinalizerPtr(value);
 
             const Wrap = struct {
-                fn deinit(ptr_id: usize, session: *Session) void {
-                    FT.deinit(@ptrFromInt(ptr_id), session);
-                }
-
                 fn acquireRef(ptr_id: usize) void {
                     FT.acquireRef(@ptrFromInt(ptr_id));
                 }
 
-                fn release(handle: ?*const v8.WeakCallbackInfo) callconv(.c) void {
+                fn releaseRef(handle: ?*const v8.WeakCallbackInfo) callconv(.c) void {
                     const ptr = v8.v8__WeakCallbackInfo__GetParameter(handle.?).?;
                     const identity_finalizer: *Session.FinalizerCallback.Identity = @ptrCast(@alignCast(ptr));
 
                     const fc = identity_finalizer.fc;
+                    const session = fc.session;
+                    const finalizer_ptr_id = fc.finalizer_ptr_id;
+
+                    // Remove from this identity's map
                     if (identity_finalizer.identity.identity_map.fetchRemove(fc.resolved_ptr_id)) |kv| {
                         var global = kv.value;
                         v8.v8__Global__Reset(&global);
                     }
 
-                    FT.releaseRef(@ptrFromInt(fc.finalizer_ptr_id), fc.session);
+                    const identity_count = fc.identity_count;
+                    if (identity_count == 1) {
+                        // All IsolatedWorlds that reference this object have
+                        // released it. Release the instance ref, remove the
+                        // FinalizerCallback and free it.
+                        FT.releaseRef(@ptrFromInt(finalizer_ptr_id), session);
+                        const removed = session.finalizer_callbacks.remove(finalizer_ptr_id);
+                        if (comptime IS_DEBUG) {
+                            std.debug.assert(removed);
+                        }
+                        session.releaseArena(fc.arena);
+                    } else {
+                        fc.identity_count = identity_count - 1;
+                    }
+                }
+
+                fn releaseRefFromZig(ptr_id: usize, session: *Session) void {
+                    FT.releaseRef(@ptrFromInt(ptr_id), session);
                 }
             };
             break :blk .{
                 .ptr_id = @intFromPtr(finalizer_ptr),
-                .deinit = Wrap.deinit,
-                .acquireRef = Wrap.acquireRef,
-                .release = Wrap.release,
+                .acquire_ref = Wrap.acquireRef,
+                .release_ref = Wrap.releaseRef,
+                .release_ref_from_zig = Wrap.releaseRefFromZig,
             };
         },
     };
@@ -1454,7 +1472,7 @@ fn createFinalizerCallback(
     // The most specific value where finalizers are defined
     // What actually gets acquired / released / deinit
     finalizer_ptr_id: usize,
-    deinit: *const fn (ptr_id: usize, session: *Session) void,
+    release_ref: *const fn (ptr_id: usize, session: *Session) void,
 ) !*Session.FinalizerCallback {
     const session = self.ctx.session;
 
@@ -1465,7 +1483,7 @@ fn createFinalizerCallback(
     fc.* = .{
         .arena = arena,
         .session = session,
-        ._deinit = deinit,
+        .release_ref = release_ref,
         .resolved_ptr_id = resolved_ptr_id,
         .finalizer_ptr_id = finalizer_ptr_id,
     };

@@ -87,8 +87,12 @@ pub fn init(callback: js.Function.Temp, page: *Page) !*MutationObserver {
     return self;
 }
 
-/// Force cleanup on Session shutdown.
 pub fn deinit(self: *MutationObserver, session: *Session) void {
+    for (self._pending_records.items) |record| {
+        // These were never handed to v8, they do not have a corresponding
+        // FinalizerCallback. We 100% own them.
+        record.deinit(session);
+    }
     self._callback.release();
     session.releaseArena(self._arena);
 }
@@ -163,16 +167,14 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
         }
     }
 
-    // Register with page if this is our first observation
-    if (self._observing.items.len == 0) {
-        self._rc._refs += 1;
-        try page.registerMutationObserver(self);
-    }
-
     try self._observing.append(arena, .{
         .target = target,
         .options = store_options,
     });
+
+    if (self._observing.items.len == 1) {
+        try page.registerMutationObserver(self);
+    }
 }
 
 pub fn disconnect(self: *MutationObserver, page: *Page) void {
@@ -180,13 +182,11 @@ pub fn disconnect(self: *MutationObserver, page: *Page) void {
         _ = record.releaseRef(page._session);
     }
     self._pending_records.clearRetainingCapacity();
-    const observing_count = self._observing.items.len;
-    self._observing.clearRetainingCapacity();
 
-    if (observing_count > 0) {
-        _ = self.releaseRef(page._session);
+    if (self._observing.items.len > 0) {
+        page.unregisterMutationObserver(self);
     }
-    page.unregisterMutationObserver(self);
+    self._observing.clearRetainingCapacity();
 }
 
 pub fn takeRecords(self: *MutationObserver, page: *Page) ![]*MutationRecord {
