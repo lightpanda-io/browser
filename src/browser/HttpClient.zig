@@ -235,10 +235,6 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
         }
     }
 
-    if (comptime IS_DEBUG and abort_all) {
-        std.debug.assert(self.active == 0);
-    }
-
     {
         var q = &self.queue;
         var n = q.first;
@@ -259,12 +255,16 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
     }
 
     if (comptime IS_DEBUG and abort_all) {
-        std.debug.assert(self.in_use.first == null);
-
-        const running = self.handles.perform() catch |err| {
-            lp.assert(false, "multi perform in abort", .{ .err = err });
-        };
-        std.debug.assert(running == 0);
+        // Even after an abort_all, we could still have transfers, but, at the
+        // very least, they should all be flagged as aborted.
+        var it = self.in_use.first;
+        var leftover: usize = 0;
+        while (it) |node| : (it = node.next) {
+            const conn: *http.Connection = @fieldParentPtr("node", node);
+            std.debug.assert((Transfer.fromConnection(conn) catch unreachable).aborted);
+            leftover += 1;
+        }
+        std.debug.assert(self.active == leftover);
     }
 }
 
