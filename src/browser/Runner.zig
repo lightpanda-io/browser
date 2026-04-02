@@ -68,7 +68,6 @@ pub fn waitCDP(self: *Runner, opts: WaitOpts) !CDPWaitResult {
 
 fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
     var timer = try std.time.Timer.start();
-    var ms_remaining = opts.ms;
 
     const tick_opts = TickOpts{
         .ms = 200,
@@ -92,22 +91,10 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
             .cdp_socket => if (comptime is_cdp) return .cdp_socket else unreachable,
         };
 
-        const ms_elapsed = timer.lap() / 1_000_000;
-        if (ms_elapsed >= ms_remaining) {
-            // Don't timeout if there's still active work (HTTP requests,
-            // intercepted requests, background JS tasks, or pending macrotasks).
-            if (self.http_client.active > 0 or self.http_client.intercepted > 0) {
-                ms_remaining = opts.ms;
-                continue;
-            }
-            const browser = self.session.browser;
-            if (browser.hasBackgroundTasks() or browser.msToNextMacrotask() != null) {
-                ms_remaining = opts.ms;
-                continue;
-            }
+        const ms_elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        if (ms_elapsed >= opts.ms) {
             return error.Timeout;
         }
-        ms_remaining -= @intCast(ms_elapsed);
         if (next_ms > 0) {
             std.Thread.sleep(std.time.ns_per_ms * next_ms);
         }
