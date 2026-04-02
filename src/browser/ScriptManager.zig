@@ -273,7 +273,19 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             // Let the outer errdefer handle releasing the arena if client.request fails
         }
 
-        // If we return synchronously (like from cache), we would call evaluate() immediately.
+        if (comptime IS_DEBUG) {
+            var ls: js.Local.Scope = undefined;
+            page.js.localScope(&ls);
+            defer ls.deinit();
+
+            log.debug(.http, "script queue", .{
+                .ctx = ctx,
+                .url = remote_url.?,
+                .element = element,
+                .stack = ls.local.stackTrace() catch "???",
+            });
+        }
+
         {
             const was_evaluating = self.is_evaluating;
             self.is_evaluating = true;
@@ -299,19 +311,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         }
 
         handover = true;
-
-        if (comptime IS_DEBUG) {
-            var ls: js.Local.Scope = undefined;
-            page.js.localScope(&ls);
-            defer ls.deinit();
-
-            log.debug(.http, "script queue", .{
-                .ctx = ctx,
-                .url = remote_url.?,
-                .element = element,
-                .stack = ls.local.stackTrace() catch "???",
-            });
-        }
     }
 
     if (is_blocking == false) {
