@@ -699,7 +699,7 @@ fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value, timeout: 
         .ms = timeout orelse 10000,
         .until = waitUntil orelse .done,
     }) catch {
-        try server.sendError(id, .InternalError, "Timeout waiting for page load");
+        try server.sendError(id, .InternalError, "Error waiting for page load");
         return error.NavigationFailed;
     };
 }

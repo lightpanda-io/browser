@@ -93,7 +93,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
 
         const ms_elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
         if (ms_elapsed >= opts.ms) {
-            return error.Timeout;
+            return .done;
         }
         if (next_ms > 0) {
             std.Thread.sleep(std.time.ns_per_ms * next_ms);
