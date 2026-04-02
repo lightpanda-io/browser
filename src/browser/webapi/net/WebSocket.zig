@@ -410,13 +410,19 @@ fn dispatchOpenEvent(self: *WebSocket) !void {
 }
 
 fn dispatchMessageEvent(self: *WebSocket, data: []const u8, frame_type: http.WsFrameType) !void {
-    std.debug.print("{any} {s}\n", .{ frame_type, data });
     const page = self._page;
     const target = self.asEventTarget();
 
     if (page._event_manager.hasDirectListeners(target, "message", self._on_message)) {
-        const msg_data: MessageEvent.Data = if (frame_type == .binary and self._binary_type == .arraybuffer)
-            .{ .arraybuffer = .{ .values = data } }
+        const msg_data: MessageEvent.Data = if (frame_type == .binary)
+            switch (self._binary_type) {
+                .arraybuffer => .{ .arraybuffer = .{ .values = data } },
+                .blob => blk: {
+                    const blob = try Blob.init(&.{data}, .{}, page);
+                    blob.acquireRef();
+                    break :blk .{ .blob = blob };
+                },
+            }
         else
             .{ .string = data };
 

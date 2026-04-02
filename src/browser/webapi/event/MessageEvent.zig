@@ -44,6 +44,7 @@ pub const Data = union(enum) {
     value: js.Value.Temp,
     string: []const u8,
     arraybuffer: js.ArrayBuffer,
+    blob: *@import("../Blob.zig"),
 };
 
 const Options = Event.inheritOptions(MessageEvent, MessageEventOptions);
@@ -83,6 +84,7 @@ pub fn deinit(self: *MessageEvent, session: *Session) void {
     if (self._data) |d| {
         switch (d) {
             .value => |js_val| js_val.release(),
+            .blob => |blob| blob.releaseRef(session),
             .string, .arraybuffer => {},
         }
     }

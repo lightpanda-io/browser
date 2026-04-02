@@ -544,3 +544,43 @@
   });
 }
 </script>
+
+<script id=receive_binary_as_blob type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+  // binaryType defaults to 'blob'
+
+  ws.addEventListener('open', () => {
+    // Send binary data - server will echo with 0xEE marker
+    const data = new Uint8Array([1, 2, 3, 4, 5]);
+    ws.send(data);
+  });
+
+  ws.addEventListener('message', async (e) => {
+    // e.data should be a Blob
+    received.push(e.data instanceof Blob);
+    received.push(e.data.size);
+
+    // Read the Blob using FileReader
+    const reader = new FileReader();
+    reader.onload = () => {
+      const arr = new Uint8Array(reader.result);
+      received.push(arr[0]); // 0xEE marker
+      received.push(arr[1]); // Our first byte
+      ws.close();
+    };
+    reader.readAsArrayBuffer(e.data);
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([true, 6, 0xEE, 1], received);
+  });
+}
+</script>
