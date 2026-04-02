@@ -928,7 +928,7 @@ test "MCP - evaluate error reporting" {
     } }, out.written());
 }
 
-test "MCP - Actions: click, fill, scroll" {
+test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked" {
     defer testing.reset();
     const aa = testing.arena_allocator;
 
@@ -989,7 +989,67 @@ test "MCP - Actions: click, fill, scroll" {
         out.clearRetainingCapacity();
     }
 
-    // Evaluate assertions
+    {
+        // Test Hover
+        const el = page.document.getElementById("hoverTarget", page).?.asNode();
+        const el_id = (try server.node_registry.register(el)).id;
+        var id_buf: [12]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"hover\",\"arguments\":{\"backendNodeId\":", id_str, "}}}" });
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Hovered element") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Test Press
+        const el = page.document.getElementById("keyTarget", page).?.asNode();
+        const el_id = (try server.node_registry.register(el)).id;
+        var id_buf: [12]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"press\",\"arguments\":{\"key\":\"Enter\",\"backendNodeId\":", id_str, "}}}" });
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Pressed key") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Test SelectOption
+        const el = page.document.getElementById("sel2", page).?.asNode();
+        const el_id = (try server.node_registry.register(el)).id;
+        var id_buf: [12]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"selectOption\",\"arguments\":{\"backendNodeId\":", id_str, ",\"value\":\"b\"}}}" });
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Selected option") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Test SetChecked (checkbox)
+        const el = page.document.getElementById("chk", page).?.asNode();
+        const el_id = (try server.node_registry.register(el)).id;
+        var id_buf: [12]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Test SetChecked (radio)
+        const el = page.document.getElementById("rad", page).?.asNode();
+        const el_id = (try server.node_registry.register(el)).id;
+        var id_buf: [12]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
+        out.clearRetainingCapacity();
+    }
+
+    // Evaluate JS assertions for all actions
     var ls: js.Local.Scope = undefined;
     page.js.localScope(&ls);
     defer ls.deinit();
@@ -1001,7 +1061,12 @@ test "MCP - Actions: click, fill, scroll" {
     const result = try ls.local.exec(
         \\ window.clicked === true && window.inputVal === 'hello' &&
         \\ window.changed === true && window.selChanged === 'opt2' &&
-        \\ window.scrolled === true
+        \\ window.scrolled === true &&
+        \\ window.hovered === true &&
+        \\ window.keyPressed === 'Enter' && window.keyReleased === 'Enter' &&
+        \\ window.sel2Changed === 'b' &&
+        \\ window.chkClicked === true && window.chkChanged === true &&
+        \\ window.radClicked === true && window.radChanged === true
     , null);
 
     try testing.expect(result.isTrue());

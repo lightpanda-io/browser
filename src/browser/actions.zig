@@ -132,16 +132,7 @@ pub fn setChecked(node: *DOMNode, checked: bool, page: *Page) !void {
         return error.ActionFailed;
     };
 
-    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, page);
-    page._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
-        lp.log.err(.app, "dispatch input event failed", .{ .err = err });
-    };
-
-    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, page);
-    page._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
-        lp.log.err(.app, "dispatch change event failed", .{ .err = err });
-    };
-
+    // Match browser event order: click fires first, then input and change.
     const click_event: *MouseEvent = try .initTrusted(comptime .wrap("click"), .{
         .bubbles = true,
         .cancelable = true,
@@ -150,6 +141,16 @@ pub fn setChecked(node: *DOMNode, checked: bool, page: *Page) !void {
 
     page._event_manager.dispatch(el.asEventTarget(), click_event.asEvent()) catch |err| {
         lp.log.err(.app, "dispatch click event failed", .{ .err = err });
+    };
+
+    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, page);
+    page._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
+        lp.log.err(.app, "dispatch input event failed", .{ .err = err });
+    };
+
+    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, page);
+    page._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
+        lp.log.err(.app, "dispatch change event failed", .{ .err = err });
     };
 }
 

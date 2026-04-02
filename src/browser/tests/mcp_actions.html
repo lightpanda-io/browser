@@ -10,5 +10,20 @@
     <div id="scrollbox" style="width: 100px; height: 100px; overflow: scroll;" onscroll="window.scrolled = true;">
         <div style="height: 500px;">Long content</div>
     </div>
+    <div id="hoverTarget" onmouseover="window.hovered = true;">Hover Me</div>
+    <input id="keyTarget" onkeydown="window.keyPressed = event.key;" onkeyup="window.keyReleased = event.key;">
+    <select id="sel2" onchange="window.sel2Changed = this.value">
+        <option value="a">Alpha</option>
+        <option value="b">Beta</option>
+        <option value="c">Gamma</option>
+    </select>
+    <input id="chk" type="checkbox">
+    <input id="rad" type="radio" name="group1">
+    <script>
+        document.getElementById('chk').addEventListener('click', function() { window.chkClicked = true; });
+        document.getElementById('chk').addEventListener('change', function() { window.chkChanged = true; });
+        document.getElementById('rad').addEventListener('click', function() { window.radClicked = true; });
+        document.getElementById('rad').addEventListener('change', function() { window.radChanged = true; });
+    </script>
 </body>
 </html>
