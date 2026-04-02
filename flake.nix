@@ -73,59 +73,39 @@
           cp -r ${pkgs.gcc.cc}/lib/gcc $out/lib/gcc
         '';
 
-        fhsPkgs =
-          pkgs: with pkgs; [
-            # Build tools
-            zigpkgs.${zigVersion}
-            rustToolchain
-            python3
-            pkg-config
-            cmake
-            gperf
-
-            # GCC
-            gcc
-            gcc.cc.lib
-            crtFiles
-
-            # Libraries
-            expat.dev
-            glib.dev
-            glibc.dev
-            zlib
-          ];
-
-        # This build pipeline is very unhappy without an FHS-compliant env.
         fhs = pkgs.buildFHSEnv {
           name = "fhs-shell";
           multiArch = true;
-          targetPkgs = fhsPkgs;
-        };
-
-        fhsDev = pkgs.buildFHSEnv {
-          name = "fhs-shell-dev";
-          multiArch = true;
           targetPkgs =
             pkgs:
-            (fhsPkgs pkgs)
-            ++ [
-              pkgs.zls
-              zon2nixScript
-            ];
+            with pkgs;
+            [
+              # Build tools
+              zigpkgs.${zigVersion}
+              zls
+              rustToolchain
+              python3
+              pkg-config
+              cmake
+              gperf
+
+              # Toolchain/runtime pieces Zig expects during builds
+              gcc
+              gcc.cc.lib
+              crtFiles
+
+              # Libraries
+              expat.dev
+              glib.dev
+              glibc.dev
+              zlib
+            ]
+            ++ [ zon2nixScript ];
         };
 
         # regenerate with `nix run .#zon2nix`
-        zigDeps = import ./build.zig.zon.nix {
-          inherit (pkgs) linkFarm fetchgit;
-          fetchzip =
-            args:
-            pkgs.fetchzip (
-              args
-              // pkgs.lib.optionalAttrs (pkgs.lib.hasInfix "/+archive/" args.url) {
-                stripRoot = false;
-              }
-            );
-        };
+        zigDeps = import ./build.zig.zon.nix { inherit (pkgs) linkFarm fetchgit fetchzip; };
+        zigTarget = if pkgs.stdenv.hostPlatform.isAarch64 then "aarch64-linux-gnu" else "x86_64-linux-gnu";
 
         cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
           src = ./.;
@@ -154,21 +134,35 @@
       {
         packages = rec {
           default = lightpanda;
-          lightpanda = pkgs.stdenvNoCC.mkDerivation {
+          lightpanda = pkgs.stdenv.mkDerivation {
             pname = "lightpanda";
             version = "unstable";
             src = ./.;
 
-            nativeBuildInputs = [ pkgs.rustPlatform.cargoSetupHook ];
+            nativeBuildInputs = [
+              pkgs.rustPlatform.cargoSetupHook
+              pkgs.zigpkgs.${zigVersion}
+              rustToolchain
+              pkgs.python3
+              pkgs.pkg-config
+              pkgs.cmake
+              pkgs.gperf
+              pkgs.gcc
+              pkgs.patchelf
+            ];
+
+            buildInputs = [
+              pkgs.expat
+              pkgs.glib
+              pkgs.glibc.dev
+              pkgs.zlib
+              pkgs.gcc.cc.lib
+              crtFiles
+            ];
+
             inherit cargoDeps cargoRoot;
 
             dontConfigure = true;
-
-            # The binary is built fully inside the FHS env and copied into $out
-            # as-is. That means we intentionally skip the usual post-processing
-            # here and rely on the build output already being self-contained
-            # enough.
-            dontFixup = true;
 
             buildPhase = ''
               runHook preBuild
@@ -178,17 +172,23 @@
               export CARGO_HOME="$TMPDIR/cargo"
               export RUSTUP_HOME="$TMPDIR/rustup"
               export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+              export ZIG_LIBC="$TMPDIR/zig-libc.conf"
+              export PATH=${pkgs.stdenv.cc}/bin:$PATH
+              export CC=cc
+              export CXX=c++
+
               mkdir -p "$HOME" "$XDG_CACHE_HOME" "$CARGO_HOME" "$RUSTUP_HOME" "$ZIG_GLOBAL_CACHE_DIR"
+              zig libc > "$ZIG_LIBC"
               ln -s ${zigDeps} "$ZIG_GLOBAL_CACHE_DIR/p"
 
               cp -r "$src" source
               chmod -R u+w source
               cd source
 
-              ${fhs}/bin/fhs-shell -c 'set -euo pipefail
-                zig build -Doptimize=ReleaseFast ${prebuiltV8Arg} snapshot_creator -- src/snapshot.bin
-                zig build -Doptimize=ReleaseFast -Dgit_commit=dev -Dsnapshot_path=../../snapshot.bin ${prebuiltV8Arg}
-              '
+              zig build install -Dtarget=${zigTarget} -Doptimize=ReleaseFast ${prebuiltV8Arg}
+              patchelf --set-interpreter ${pkgs.stdenv.cc.bintools.dynamicLinker} zig-out/bin/lightpanda-snapshot-creator
+              ./zig-out/bin/lightpanda-snapshot-creator src/snapshot.bin
+              zig build install -Dtarget=${zigTarget} -Doptimize=ReleaseFast -Dgit_commit=dev -Dsnapshot_path=../../snapshot.bin ${prebuiltV8Arg}
 
               runHook postBuild
             '';
@@ -198,6 +198,7 @@
 
               mkdir -p "$out/bin"
               cp -v zig-out/bin/lightpanda "$out/bin/"
+              patchelf --set-interpreter ${pkgs.stdenv.cc.bintools.dynamicLinker} "$out/bin/lightpanda"
 
               runHook postInstall
             '';
@@ -213,7 +214,7 @@
           };
         };
 
-        devShells.default = fhsDev.env;
+        devShells.default = fhs.env;
       }
     );
 }
