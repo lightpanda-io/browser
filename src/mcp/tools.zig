@@ -179,6 +179,61 @@ pub const tool_list = [_]protocol.Tool{
             \\}
         ),
     },
+    .{
+        .name = "hover",
+        .description = "Hover over an element, triggering mouseover and mouseenter events. Useful for menus, tooltips, and hover states.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to hover over." }
+            \\  },
+            \\  "required": ["backendNodeId"]
+            \\}
+        ),
+    },
+    .{
+        .name = "press",
+        .description = "Press a keyboard key, dispatching keydown and keyup events. Use key names like 'Enter', 'Tab', 'Escape', 'ArrowDown', 'Backspace', or single characters like 'a', '1'.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "key": { "type": "string", "description": "The key to press (e.g. 'Enter', 'Tab', 'a')." },
+            \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the document." }
+            \\  },
+            \\  "required": ["key"]
+            \\}
+        ),
+    },
+    .{
+        .name = "selectOption",
+        .description = "Select an option in a <select> dropdown element by its value. Dispatches input and change events.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the <select> element." },
+            \\    "value": { "type": "string", "description": "The value of the option to select." }
+            \\  },
+            \\  "required": ["backendNodeId", "value"]
+            \\}
+        ),
+    },
+    .{
+        .name = "setChecked",
+        .description = "Check or uncheck a checkbox or radio button. Dispatches input, change, and click events.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the checkbox or radio input element." },
+            \\    "checked": { "type": "boolean", "description": "Whether to check (true) or uncheck (false) the element." }
+            \\  },
+            \\  "required": ["backendNodeId", "checked"]
+            \\}
+        ),
+    },
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -279,6 +334,10 @@ const ToolAction = enum {
     fill,
     scroll,
     waitForSelector,
+    hover,
+    press,
+    selectOption,
+    setChecked,
 };
 
 const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
@@ -296,6 +355,10 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "fill", .fill },
     .{ "scroll", .scroll },
     .{ "waitForSelector", .waitForSelector },
+    .{ "hover", .hover },
+    .{ "press", .press },
+    .{ "selectOption", .selectOption },
+    .{ "setChecked", .setChecked },
 });
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -330,6 +393,10 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .fill => try handleFill(server, arena, req.id.?, call_params.arguments),
         .scroll => try handleScroll(server, arena, req.id.?, call_params.arguments),
         .waitForSelector => try handleWaitForSelector(server, arena, req.id.?, call_params.arguments),
+        .hover => try handleHover(server, arena, req.id.?, call_params.arguments),
+        .press => try handlePress(server, arena, req.id.?, call_params.arguments),
+        .selectOption => try handleSelectOption(server, arena, req.id.?, call_params.arguments),
+        .setChecked => try handleSetChecked(server, arena, req.id.?, call_params.arguments),
     }
 }
 
@@ -628,6 +695,140 @@ fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
     return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleHover(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        backendNodeId: CDPNode.Id,
+    };
+    const args = try parseArgs(Params, arena, arguments, server, id, "hover");
+
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
+        return server.sendError(id, .InvalidParams, "Node not found");
+    };
+
+    lp.actions.hover(node.dom, page) catch |err| {
+        if (err == error.InvalidNodeType) {
+            return server.sendError(id, .InvalidParams, "Node is not an HTML element");
+        }
+        return server.sendError(id, .InternalError, "Failed to hover element");
+    };
+
+    const page_title = page.getTitle() catch null;
+    const result_text = try std.fmt.allocPrint(arena, "Hovered element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
+        args.backendNodeId,
+        page.url,
+        page_title orelse "(none)",
+    });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handlePress(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        key: []const u8,
+        backendNodeId: ?CDPNode.Id = null,
+    };
+    const args = try parseArgs(Params, arena, arguments, server, id, "press");
+
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    var target_node: ?*DOMNode = null;
+    if (args.backendNodeId) |node_id| {
+        const node = server.node_registry.lookup_by_id.get(node_id) orelse {
+            return server.sendError(id, .InvalidParams, "Node not found");
+        };
+        target_node = node.dom;
+    }
+
+    lp.actions.press(target_node, args.key, page) catch |err| {
+        if (err == error.InvalidNodeType) {
+            return server.sendError(id, .InvalidParams, "Node is not an HTML element");
+        }
+        return server.sendError(id, .InternalError, "Failed to press key");
+    };
+
+    const page_title = page.getTitle() catch null;
+    const result_text = try std.fmt.allocPrint(arena, "Pressed key '{s}'. Page url: {s}, title: {s}", .{
+        args.key,
+        page.url,
+        page_title orelse "(none)",
+    });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleSelectOption(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        backendNodeId: CDPNode.Id,
+        value: []const u8,
+    };
+    const args = try parseArgs(Params, arena, arguments, server, id, "selectOption");
+
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
+        return server.sendError(id, .InvalidParams, "Node not found");
+    };
+
+    lp.actions.selectOption(node.dom, args.value, page) catch |err| {
+        if (err == error.InvalidNodeType) {
+            return server.sendError(id, .InvalidParams, "Node is not a <select> element");
+        }
+        return server.sendError(id, .InternalError, "Failed to select option");
+    };
+
+    const page_title = page.getTitle() catch null;
+    const result_text = try std.fmt.allocPrint(arena, "Selected option '{s}' (backendNodeId: {d}). Page url: {s}, title: {s}", .{
+        args.value,
+        args.backendNodeId,
+        page.url,
+        page_title orelse "(none)",
+    });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleSetChecked(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        backendNodeId: CDPNode.Id,
+        checked: bool,
+    };
+    const args = try parseArgs(Params, arena, arguments, server, id, "setChecked");
+
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
+        return server.sendError(id, .InvalidParams, "Node not found");
+    };
+
+    lp.actions.setChecked(node.dom, args.checked, page) catch |err| {
+        if (err == error.InvalidNodeType) {
+            return server.sendError(id, .InvalidParams, "Node is not a checkbox or radio input");
+        }
+        return server.sendError(id, .InternalError, "Failed to set checked state");
+    };
+
+    const state_str = if (args.checked) "checked" else "unchecked";
+    const page_title = page.getTitle() catch null;
+    const result_text = try std.fmt.allocPrint(arena, "Set element (backendNodeId: {d}) to {s}. Page url: {s}, title: {s}", .{
+        args.backendNodeId,
+        state_str,
+        page.url,
+        page_title orelse "(none)",
+    });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8) !*lp.Page {
