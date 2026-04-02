@@ -259,9 +259,6 @@ pub fn RC(comptime T: type) type {
                 return;
             }
             value.deinit(session);
-            if (session.finalizer_callbacks.fetchRemove(@intFromPtr(value))) |kv| {
-                session.releaseArena(kv.value.arena);
-            }
         }
 
         pub fn format(self: @This(), writer: *std.Io.Writer) !void {

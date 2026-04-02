@@ -42,8 +42,8 @@ _rc: lp.RC(u32) = .{},
 
 pub fn deinit(self: *NodeList, session: *Session) void {
     switch (self._data) {
-        .selector_list => |list| list.deinit(session),
         .child_nodes => |cn| cn.deinit(session),
+        .selector_list => |list| list.deinit(session),
         else => {},
     }
 }
@@ -92,7 +92,12 @@ pub fn entries(self: *NodeList, page: *Page) !*EntryIterator {
 
 pub fn forEach(self: *NodeList, cb: js.Function, page: *Page) !void {
     var i: i32 = 0;
+
     var it = try self.values(page);
+
+    // the iterator takes a reference against our list
+    defer self.releaseRef(page._session);
+
     while (true) : (i += 1) {
         const next = try it.next(page);
         if (next.done) {

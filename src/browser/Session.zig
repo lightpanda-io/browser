@@ -501,7 +501,11 @@ pub const FinalizerCallback = struct {
     session: *Session,
     resolved_ptr_id: usize,
     finalizer_ptr_id: usize,
-    _deinit: *const fn (ptr_id: usize, session: *Session) void,
+    release_ref: *const fn (ptr_id: usize, session: *Session) void,
+
+    // Track how many identities (JS worlds) reference this FC.
+    // Only cleanup when all identities have finalized.
+    identity_count: u8 = 0,
 
     // For every FinalizerCallback we'll have 1+ FinalizerCallback.Identity: one
     // for every identity that gets the instance. In most cases, that'l be 1.
@@ -510,8 +514,9 @@ pub const FinalizerCallback = struct {
         fc: *Session.FinalizerCallback,
     };
 
+    // Called during page reset to force cleanup regardless of identity_count.
     fn deinit(self: *FinalizerCallback, session: *Session) void {
-        self._deinit(self.finalizer_ptr_id, session);
+        self.release_ref(self.finalizer_ptr_id, session);
         session.releaseArena(self.arena);
     }
 };

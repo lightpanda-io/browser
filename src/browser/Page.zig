@@ -351,6 +351,30 @@ pub fn deinit(self: *Page, abort_http: bool) void {
         session.releaseArena(qn.arena);
     }
 
+    {
+        // Release all objects we're referencing
+        {
+            var it = self._blob_urls.valueIterator();
+            while (it.next()) |blob| {
+                blob.*.releaseRef(session);
+            }
+        }
+
+        {
+            var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
+            while (it) |node| : (it = node.next) {
+                const observer: *MutationObserver = @fieldParentPtr("node", node);
+                observer.releaseRef(session);
+            }
+        }
+
+        for (self._intersection_observers.items) |observer| {
+            observer.releaseRef(session);
+        }
+
+        self.window._document._selection.releaseRef(session);
+    }
+
     session.browser.env.destroyContext(self.js);
 
     self._script_manager.shutdown = true;
@@ -1338,20 +1362,24 @@ pub fn schedulePerformanceObserverDelivery(self: *Page) !void {
 }
 
 pub fn registerMutationObserver(self: *Page, observer: *MutationObserver) !void {
+    observer.acquireRef();
     self._mutation_observers.append(&observer.node);
 }
 
 pub fn unregisterMutationObserver(self: *Page, observer: *MutationObserver) void {
+    observer.releaseRef(self._session);
     self._mutation_observers.remove(&observer.node);
 }
 
 pub fn registerIntersectionObserver(self: *Page, observer: *IntersectionObserver) !void {
+    observer.acquireRef();
     try self._intersection_observers.append(self.arena, observer);
 }
 
 pub fn unregisterIntersectionObserver(self: *Page, observer: *IntersectionObserver) void {
     for (self._intersection_observers.items, 0..) |obs, i| {
         if (obs == observer) {
+            observer.releaseRef(self._session);
             _ = self._intersection_observers.swapRemove(i);
             return;
         }
