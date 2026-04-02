@@ -315,10 +315,6 @@ pub const Client = struct {
                     }
                     continue;
                 },
-                error.Timeout => {
-                    log.info(.app, "CDP timeout", .{});
-                    return;
-                },
                 else => return wait_err,
             };
 
@@ -328,7 +324,10 @@ pub const Client = struct {
                         return;
                     }
                 },
-                .done => unreachable,
+                .done => {
+                    log.info(.app, "CDP timeout", .{});
+                    return;
+                },
             }
         }
     }
