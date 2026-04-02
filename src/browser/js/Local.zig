@@ -244,7 +244,10 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 // The TAO contains the pointer to our Zig instance as
                 // well as any meta data we'll need to use it later.
                 // See the TaggedOpaque struct for more details.
-                const tao = try context_arena.create(TaggedOpaque);
+                // Use identity_arena so TAOs survive context destruction. V8 objects
+                // are stored in identity_map (session-level) and may be referenced
+                // after their creating context is destroyed (e.g., via microtasks).
+                const tao = try ctx.identity_arena.create(TaggedOpaque);
                 tao.* = .{
                     .value = resolved.ptr,
                     .prototype_chain = resolved.prototype_chain.ptr,
