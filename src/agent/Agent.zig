@@ -117,6 +117,7 @@ pub fn deinit(self: *Self) void {
 
 pub fn run(self: *Self) void {
     self.terminal.printInfo("Lightpanda Agent (type 'quit' to exit)");
+    log.debug(.app, "tools loaded", .{ .count = self.tools.len });
     const info = std.fmt.allocPrint(self.allocator, "Provider: {s}, Model: {s}", .{
         @tagName(std.meta.activeTag(self.ai_client)),
         self.model,
@@ -179,9 +180,15 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
         };
         defer result.deinit();
 
-        // Handle tool calls
-        if (result.finish_reason == .tool_call) {
-            if (result.tool_calls) |tool_calls| {
+        log.debug(.app, "LLM response", .{
+            .finish_reason = @tagName(result.finish_reason),
+            .has_text = result.text != null,
+            .has_tool_calls = result.tool_calls != null,
+        });
+
+        // Handle tool calls (check for tool_calls presence, not just finish_reason,
+        // because some providers like Gemini return finish_reason=STOP for tool calls)
+        if (result.tool_calls) |tool_calls| {
                 // Add the assistant message with tool calls
                 try self.messages.append(self.allocator, .{
                     .role = .assistant,
@@ -215,7 +222,6 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
                 });
 
                 continue;
-            }
         }
 
         // Text response
@@ -228,6 +234,8 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
                 .role = .assistant,
                 .content = try ma.dupe(u8, text),
             });
+        } else {
+            self.terminal.printInfo("(no response from model)");
         }
 
         break;
