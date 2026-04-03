@@ -566,7 +566,7 @@ fn PrototypeType(comptime T: type) ?type {
     return Struct(std.meta.fieldInfo(T, ._proto).type);
 }
 
-fn flattenTypes(comptime Types: []const type) [countFlattenedTypes(Types)]type {
+pub fn flattenTypes(comptime Types: []const type) [countFlattenedTypes(Types)]type {
     var index: usize = 0;
     var flat: [countFlattenedTypes(Types)]type = undefined;
     for (Types) |T| {
@@ -689,7 +689,8 @@ pub const SubType = enum {
     webassemblymemory,
 };
 
-pub const JsApis = flattenTypes(&.{
+/// APIs for Page/Window contexts. Used by Snapshot.zig for Page snapshot creation.
+pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/AbortController.zig"),
     @import("../webapi/AbortSignal.zig"),
     @import("../webapi/CData.zig"),
@@ -885,3 +886,14 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/Selection.zig"),
     @import("../webapi/ImageData.zig"),
 });
+
+/// APIs that exist only in Worker contexts (not in Page/Window).
+const WorkerOnlyApis = flattenTypes(&.{
+    @import("../webapi/WorkerGlobalScope.zig"),
+});
+
+/// Master list of ALL JS APIs across all contexts.
+/// Used by Env (class IDs, templates), JsApiLookup, and anywhere that needs
+/// to know about all possible types. Individual snapshots use their own
+/// subsets (PageJsApis, WorkerSnapshot.JsApis).
+pub const JsApis = PageJsApis ++ WorkerOnlyApis;
