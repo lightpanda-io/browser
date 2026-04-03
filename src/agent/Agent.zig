@@ -25,6 +25,7 @@ ai_client: AiClient,
 tool_executor: *ToolExecutor,
 terminal: Terminal,
 messages: std.ArrayListUnmanaged(zenai.provider.Message),
+message_arena: std.heap.ArenaAllocator,
 tools: []const zenai.provider.Tool,
 model: []const u8,
 system_prompt: []const u8,
@@ -86,6 +87,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .tool_executor = tool_executor,
         .terminal = Terminal.init(null),
         .messages = .empty,
+        .message_arena = std.heap.ArenaAllocator.init(allocator),
         .tools = tools,
         .model = opts.model orelse defaultModel(opts.provider),
         .system_prompt = opts.system_prompt orelse default_system_prompt,
@@ -95,6 +97,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
 }
 
 pub fn deinit(self: *Self) void {
+    self.message_arena.deinit();
     self.messages.deinit(self.allocator);
     self.tool_executor.deinit();
     switch (self.ai_client) {
@@ -108,10 +111,12 @@ pub fn deinit(self: *Self) void {
 
 pub fn run(self: *Self) void {
     self.terminal.printInfo("Lightpanda Agent (type 'quit' to exit)");
-    self.terminal.printInfo(std.fmt.allocPrint(self.allocator, "Provider: {s}, Model: {s}", .{
+    const info = std.fmt.allocPrint(self.allocator, "Provider: {s}, Model: {s}", .{
         @tagName(std.meta.activeTag(self.ai_client)),
         self.model,
-    }) catch "Ready.");
+    }) catch null;
+    self.terminal.printInfo(info orelse "Ready.");
+    if (info) |i| self.allocator.free(i);
 
     while (true) {
         const line = self.terminal.readLine("> ") orelse break;
@@ -130,6 +135,8 @@ pub fn run(self: *Self) void {
 }
 
 fn processUserMessage(self: *Self, user_input: []const u8) !void {
+    const ma = self.message_arena.allocator();
+
     // Add system prompt as first message if this is the first user message
     if (self.messages.items.len == 0) {
         try self.messages.append(self.allocator, .{
@@ -141,7 +148,7 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
     // Add user message
     try self.messages.append(self.allocator, .{
         .role = .user,
-        .content = try self.allocator.dupe(u8, user_input),
+        .content = try ma.dupe(u8, user_input),
     });
 
     // Loop: send to LLM, execute tool calls, repeat until we get text
@@ -163,13 +170,12 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
                 // Add the assistant message with tool calls
                 try self.messages.append(self.allocator, .{
                     .role = .assistant,
-                    .content = if (result.text) |t| try self.allocator.dupe(u8, t) else null,
+                    .content = if (result.text) |t| try ma.dupe(u8, t) else null,
                     .tool_calls = try self.dupeToolCalls(tool_calls),
                 });
 
                 // Execute each tool call and collect results
                 var tool_results: std.ArrayListUnmanaged(zenai.provider.ToolResult) = .empty;
-                defer tool_results.deinit(self.allocator);
 
                 for (tool_calls) |tc| {
                     self.terminal.printToolCall(tc.name, tc.arguments);
@@ -180,17 +186,17 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
                     const tool_result = self.tool_executor.call(tool_arena.allocator(), tc.name, tc.arguments) catch "Error: tool execution failed";
                     self.terminal.printToolResult(tc.name, tool_result);
 
-                    try tool_results.append(self.allocator, .{
-                        .id = try self.allocator.dupe(u8, tc.id),
-                        .name = try self.allocator.dupe(u8, tc.name),
-                        .content = try self.allocator.dupe(u8, tool_result),
+                    try tool_results.append(ma, .{
+                        .id = try ma.dupe(u8, tc.id),
+                        .name = try ma.dupe(u8, tc.name),
+                        .content = try ma.dupe(u8, tool_result),
                     });
                 }
 
                 // Add tool results as a message
                 try self.messages.append(self.allocator, .{
                     .role = .tool,
-                    .tool_results = try tool_results.toOwnedSlice(self.allocator),
+                    .tool_results = try tool_results.toOwnedSlice(ma),
                 });
 
                 continue;
@@ -205,7 +211,7 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
 
             try self.messages.append(self.allocator, .{
                 .role = .assistant,
-                .content = try self.allocator.dupe(u8, text),
+                .content = try ma.dupe(u8, text),
             });
         }
 
@@ -214,12 +220,13 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
 }
 
 fn dupeToolCalls(self: *Self, calls: []const zenai.provider.ToolCall) ![]const zenai.provider.ToolCall {
-    const duped = try self.allocator.alloc(zenai.provider.ToolCall, calls.len);
+    const ma = self.message_arena.allocator();
+    const duped = try ma.alloc(zenai.provider.ToolCall, calls.len);
     for (calls, 0..) |tc, i| {
         duped[i] = .{
-            .id = try self.allocator.dupe(u8, tc.id),
-            .name = try self.allocator.dupe(u8, tc.name),
-            .arguments = try self.allocator.dupe(u8, tc.arguments),
+            .id = try ma.dupe(u8, tc.id),
+            .name = try ma.dupe(u8, tc.name),
+            .arguments = try ma.dupe(u8, tc.arguments),
         };
     }
     return duped;

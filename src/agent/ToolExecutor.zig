@@ -17,6 +17,7 @@ notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
 node_registry: CDPNode.Registry,
+tool_schema_arena: std.heap.ArenaAllocator,
 
 pub fn init(allocator: std.mem.Allocator, app: *App) !*Self {
     const http_client = try HttpClient.init(allocator, &app.network);
@@ -39,6 +40,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App) !*Self {
         .browser = browser,
         .session = undefined,
         .node_registry = CDPNode.Registry.init(allocator),
+        .tool_schema_arena = std.heap.ArenaAllocator.init(allocator),
     };
 
     self.session = try self.browser.newSession(self.notification);
@@ -46,6 +48,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App) !*Self {
 }
 
 pub fn deinit(self: *Self) void {
+    self.tool_schema_arena.deinit();
     self.node_registry.deinit();
     self.browser.deinit();
     self.notification.deinit();
@@ -55,18 +58,19 @@ pub fn deinit(self: *Self) void {
 
 /// Returns the list of tools in zenai provider.Tool format.
 pub fn getTools(self: *Self) ![]const zenai.provider.Tool {
-    const tools = try self.allocator.alloc(zenai.provider.Tool, mcp_tools.tool_list.len);
+    const arena = self.tool_schema_arena.allocator();
+    const tools = try arena.alloc(zenai.provider.Tool, mcp_tools.tool_list.len);
     for (mcp_tools.tool_list, 0..) |t, i| {
-        const parsed = try std.json.parseFromSlice(
+        const parsed = try std.json.parseFromSliceLeaky(
             std.json.Value,
-            self.allocator,
+            arena,
             t.inputSchema,
             .{},
         );
         tools[i] = .{
             .name = t.name,
             .description = t.description orelse "",
-            .parameters = parsed.value,
+            .parameters = parsed,
         };
     }
     return tools;
