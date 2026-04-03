@@ -429,27 +429,11 @@ pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]cons
 }
 
 pub fn btoa(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
-    const encoded_len = std.base64.standard.Encoder.calcSize(input.len);
-    const encoded = try page.call_arena.alloc(u8, encoded_len);
-    return std.base64.standard.Encoder.encode(encoded, input);
+    return @import("encoding/base64.zig").encode(page.call_arena, input);
 }
 
 pub fn atob(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
-    const trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
-    // Forgiving base64 decode per WHATWG spec:
-    // https://infra.spec.whatwg.org/#forgiving-base64-decode
-    // Remove trailing padding to use standard_no_pad decoder
-    const unpadded = std.mem.trimRight(u8, trimmed, "=");
-
-    // Length % 4 == 1 is invalid (can't represent valid base64)
-    if (unpadded.len % 4 == 1) {
-        return error.InvalidCharacterError;
-    }
-
-    const decoded_len = std.base64.standard_no_pad.Decoder.calcSizeForSlice(unpadded) catch return error.InvalidCharacterError;
-    const decoded = try page.call_arena.alloc(u8, decoded_len);
-    std.base64.standard_no_pad.Decoder.decode(decoded, unpadded) catch return error.InvalidCharacterError;
-    return decoded;
+    return @import("encoding/base64.zig").decode(page.call_arena, input);
 }
 
 pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {
