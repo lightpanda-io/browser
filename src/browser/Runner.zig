@@ -135,7 +135,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
         .pre, .raw, .text, .image => {
             // The main page hasn't started/finished navigating.
             // There's no JS to run, and no reason to run the scheduler.
-            if (http_client.active == 0 and (comptime is_cdp) == false) {
+            if (http_client.active() == 0 and (comptime is_cdp) == false) {
                 // haven't started navigating, I guess.
                 return .done;
             }
@@ -169,8 +169,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
             // Each call to this runs scheduled load events.
             try page.dispatchLoad();
 
-            const http_active = http_client.active;
-            const total_network_activity = http_active + http_client.intercepted;
+            const http_active = http_client.active();
+            const total_network_activity = http_active + http_client.intercepted();
             if (page._notified_network_almost_idle.check(total_network_activity <= 2)) {
                 page.notifyNetworkAlmostIdle();
             }
@@ -183,7 +183,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
                 // because is_cdp is true, and that can only be
                 // the case when interception isn't possible.
                 if (comptime IS_DEBUG) {
-                    std.debug.assert(http_client.intercepted == 0);
+                    std.debug.assert(http_client.intercepted() == 0);
                 }
 
                 if (browser.hasBackgroundTasks()) {
