@@ -7,6 +7,8 @@ const Config = lp.Config;
 const App = @import("../App.zig");
 const ToolExecutor = @import("ToolExecutor.zig");
 const Terminal = @import("Terminal.zig");
+const Command = @import("Command.zig");
+const CommandExecutor = @import("CommandExecutor.zig");
 
 const Self = @This();
 
@@ -24,6 +26,7 @@ allocator: std.mem.Allocator,
 ai_client: AiClient,
 tool_executor: *ToolExecutor,
 terminal: Terminal,
+cmd_executor: CommandExecutor,
 messages: std.ArrayListUnmanaged(zenai.provider.Message),
 message_arena: std.heap.ArenaAllocator,
 tools: []const zenai.provider.Tool,
@@ -86,12 +89,15 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .ai_client = ai_client,
         .tool_executor = tool_executor,
         .terminal = Terminal.init(null),
+        .cmd_executor = undefined,
         .messages = .empty,
         .message_arena = std.heap.ArenaAllocator.init(allocator),
         .tools = tools,
         .model = opts.model orelse defaultModel(opts.provider),
         .system_prompt = opts.system_prompt orelse default_system_prompt,
     };
+
+    self.cmd_executor = CommandExecutor.init(allocator, tool_executor, &self.terminal);
 
     return self;
 }
@@ -123,12 +129,21 @@ pub fn run(self: *Self) void {
         defer self.terminal.freeLine(line);
 
         if (line.len == 0) continue;
-        if (std.mem.eql(u8, line, "quit") or std.mem.eql(u8, line, "exit")) break;
 
-        self.processUserMessage(line) catch |err| {
-            const msg = std.fmt.allocPrint(self.allocator, "Request failed: {s}", .{@errorName(err)}) catch "Request failed";
-            self.terminal.printError(msg);
-        };
+        const cmd = Command.parse(line);
+        switch (cmd) {
+            .exit => break,
+            .natural_language => {
+                // "quit" as a convenience alias
+                if (std.mem.eql(u8, line, "quit")) break;
+
+                self.processUserMessage(line) catch |err| {
+                    const msg = std.fmt.allocPrint(self.allocator, "Request failed: {s}", .{@errorName(err)}) catch "Request failed";
+                    self.terminal.printError(msg);
+                };
+            },
+            else => self.cmd_executor.execute(cmd),
+        }
     }
 
     self.terminal.printInfo("Goodbye!");

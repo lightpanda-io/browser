@@ -252,6 +252,7 @@ pub const Agent = struct {
     model: ?[:0]const u8 = null,
     api_key: ?[:0]const u8 = null,
     system_prompt: ?[:0]const u8 = null,
+    repl: bool = true,
 };
 
 pub const DumpFormat = enum {
@@ -954,6 +955,11 @@ fn parseAgentArgs(
                 return error.InvalidArgument;
             };
             result.api_key = try allocator.dupeZ(u8, str);
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--repl", opt)) {
+            result.repl = true;
             continue;
         }
 
