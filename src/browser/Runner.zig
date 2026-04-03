@@ -68,7 +68,6 @@ pub fn waitCDP(self: *Runner, opts: WaitOpts) !CDPWaitResult {
 
 fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
     var timer = try std.time.Timer.start();
-    var ms_remaining = opts.ms;
 
     const tick_opts = TickOpts{
         .ms = 200,
@@ -92,11 +91,10 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
             .cdp_socket => if (comptime is_cdp) return .cdp_socket else unreachable,
         };
 
-        const ms_elapsed = timer.lap() / 1_000_000;
-        if (ms_elapsed >= ms_remaining) {
+        const ms_elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        if (ms_elapsed >= opts.ms) {
             return .done;
         }
-        ms_remaining -= @intCast(ms_elapsed);
         if (next_ms > 0) {
             std.Thread.sleep(std.time.ns_per_ms * next_ms);
         }
@@ -237,7 +235,16 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
             page._parse_state = .{ .raw_done = @errorName(err) };
             return err;
         },
-        .raw_done => return .done,
+        .raw_done => {
+            if (comptime is_cdp) {
+                const http_result = try http_client.tick(@intCast(opts.ms));
+                if (http_result == .cdp_socket) {
+                    return .cdp_socket;
+                }
+                return .{ .ok = 0 };
+            }
+            return .done;
+        },
     }
 }
 

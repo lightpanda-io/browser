@@ -34,7 +34,6 @@ pub const RunMode = enum {
     mcp,
 };
 
-pub const MAX_LISTENERS = 16;
 pub const CDP_MAX_HTTP_REQUEST_SIZE = 4096;
 
 // max message size
@@ -160,6 +159,7 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
 pub fn cdpTimeout(self: *const Config) usize {
     return switch (self.mode) {
         .serve => |opts| if (opts.timeout > 604_800) 604_800_000 else @as(usize, opts.timeout) * 1000,
+        .mcp => 10000, // Default timeout for MCP-CDP
         else => unreachable,
     };
 }
@@ -167,6 +167,7 @@ pub fn cdpTimeout(self: *const Config) usize {
 pub fn port(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.port,
+        .mcp => |opts| opts.cdp_port orelse 0,
         else => unreachable,
     };
 }
@@ -174,6 +175,7 @@ pub fn port(self: *const Config) u16 {
 pub fn advertiseHost(self: *const Config) []const u8 {
     return switch (self.mode) {
         .serve => |opts| opts.advertise_host orelse opts.host,
+        .mcp => "127.0.0.1",
         else => unreachable,
     };
 }
@@ -192,6 +194,7 @@ pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
 pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
+        .mcp => 16,
         else => unreachable,
     };
 }
@@ -199,6 +202,7 @@ pub fn maxConnections(self: *const Config) u16 {
 pub fn maxPendingConnections(self: *const Config) u31 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_pending_connections,
+        .mcp => 128,
         else => unreachable,
     };
 }
@@ -224,6 +228,7 @@ pub const Serve = struct {
 pub const Mcp = struct {
     common: Common = .{},
     version: mcp.Version = .default,
+    cdp_port: ?u16 = null,
 };
 
 pub const DumpFormat = enum {
@@ -672,6 +677,19 @@ fn parseMcpArgs(
             };
             result.version = std.meta.stringToEnum(mcp.Version, str) orelse {
                 log.fatal(.mcp, "invalid protocol version", .{ .value = str });
+                return error.InvalidArgument;
+            };
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--cdp-port", opt) or std.mem.eql(u8, "--cdp_port", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.mcp, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+
+            result.cdp_port = std.fmt.parseInt(u16, str, 10) catch |err| {
+                log.fatal(.mcp, "invalid argument value", .{ .arg = opt, .err = err });
                 return error.InvalidArgument;
             };
             continue;

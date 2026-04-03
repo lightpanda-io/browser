@@ -391,6 +391,14 @@ pub fn setLang(self: *HtmlElement, value: []const u8, page: *Page) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("lang"), .wrap(value), page);
 }
 
+pub fn getTitle(self: *HtmlElement) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("title")) orelse "";
+}
+
+pub fn setTitle(self: *HtmlElement, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("title"), .wrap(value), page);
+}
+
 pub fn getAttributeFunction(
     self: *HtmlElement,
     listener_type: GlobalEventHandler,
@@ -1231,6 +1239,7 @@ pub const JsApi = struct {
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{});
     pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{});
     pub const tabIndex = bridge.accessor(HtmlElement.getTabIndex, HtmlElement.setTabIndex, .{});
+    pub const title = bridge.accessor(HtmlElement.getTitle, HtmlElement.setTitle, .{});
 
     pub const onabort = bridge.accessor(HtmlElement.getOnAbort, HtmlElement.setOnAbort, .{});
     pub const onanimationcancel = bridge.accessor(HtmlElement.getOnAnimationCancel, HtmlElement.setOnAnimationCancel, .{});

@@ -22,7 +22,7 @@ const builtin = @import("builtin");
 
 const log = @import("../log.zig");
 const HttpClient = @import("HttpClient.zig");
-const net_http = @import("../network/http.zig");
+const http = @import("../network/http.zig");
 const String = @import("../string.zig").String;
 
 const js = @import("js/js.zig");
@@ -136,7 +136,7 @@ fn clearList(list: *std.DoublyLinkedList) void {
     }
 }
 
-fn getHeaders(self: *ScriptManager) !net_http.Headers {
+fn getHeaders(self: *ScriptManager) !http.Headers {
     var headers = try self.client.newHeaders();
     try self.page.headersForRequest(&headers);
     return headers;

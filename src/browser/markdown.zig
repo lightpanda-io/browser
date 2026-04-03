@@ -25,9 +25,7 @@ const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 
-pub const Opts = struct {
-    // Options for future customization (e.g., dialect)
-};
+pub const Opts = struct {};
 
 const State = struct {
     const ListType = enum { ordered, unordered };
@@ -39,7 +37,6 @@ const State = struct {
     list_depth: usize = 0,
     list_stack: [32]ListState = undefined,
     pre_node: ?*Node = null,
-    in_code: bool = false,
     in_table: bool = false,
     table_row_index: usize = 0,
     table_col_count: usize = 0,
@@ -100,27 +97,35 @@ fn getAnchorLabel(el: *Element) ?[]const u8 {
     return el.getAttributeSafe(comptime .wrap("aria-label")) orelse el.getAttributeSafe(comptime .wrap("title"));
 }
 
-fn hasBlockDescendant(root: *Node) bool {
-    var tw = TreeWalker.FullExcludeSelf.Elements.init(root, .{});
-    while (tw.next()) |el| {
-        if (el.getTag().isBlock()) return true;
-    }
-    return false;
-}
+const ContentInfo = struct {
+    has_visible: bool,
+    has_block: bool,
+};
 
-fn hasVisibleContent(root: *Node) bool {
+fn analyzeContent(root: *Node) ContentInfo {
+    var result: ContentInfo = .{ .has_visible = false, .has_block = false };
     var tw = TreeWalker.FullExcludeSelf.init(root, .{});
     while (tw.next()) |node| {
-        if (isSignificantText(node)) return true;
-        if (node.is(Element)) |el| {
+        if (isSignificantText(node)) {
+            result.has_visible = true;
+            if (result.has_block) return result;
+        } else if (node.is(Element)) |el| {
             if (!isVisibleElement(el)) {
                 tw.skipChildren();
-            } else if (el.getTag() == .img) {
-                return true;
+            } else {
+                const tag = el.getTag();
+                if (tag == .img) {
+                    result.has_visible = true;
+                    if (result.has_block) return result;
+                }
+                if (tag.isBlock()) {
+                    result.has_block = true;
+                    if (result.has_visible) return result;
+                }
             }
         }
     }
-    return false;
+    return result;
 }
 
 const Context = struct {
@@ -170,9 +175,7 @@ const Context = struct {
 
         if (!isVisibleElement(el)) return;
 
-        // --- Opening Tag Logic ---
-
-        // Ensure block elements start on a new line (double newline for paragraphs etc)
+        // Ensure block elements start on a new line
         if (tag.isBlock() and !self.state.in_table) {
             try self.ensureNewline();
             if (shouldAddSpacing(tag)) {
@@ -182,7 +185,6 @@ const Context = struct {
             try self.ensureNewline();
         }
 
-        // Prefixes
         switch (tag) {
             .h1 => try self.writer.writeAll("# "),
             .h2 => try self.writer.writeAll("## "),
@@ -225,7 +227,6 @@ const Context = struct {
                 try self.writer.writeByte('|');
             },
             .td, .th => {
-                // Note: leading pipe handled by previous cell closing or tr opening
                 self.state.last_char_was_newline = false;
                 try self.writer.writeByte(' ');
             },
@@ -241,7 +242,6 @@ const Context = struct {
             .code => {
                 if (self.state.pre_node == null) {
                     try self.writer.writeByte('`');
-                    self.state.in_code = true;
                     self.state.last_char_was_newline = false;
                 }
             },
@@ -286,16 +286,15 @@ const Context = struct {
                 return;
             },
             .anchor => {
-                const has_content = hasVisibleContent(el.asNode());
+                const info = analyzeContent(el.asNode());
                 const label = getAnchorLabel(el);
                 const href_raw = el.getAttributeSafe(comptime .wrap("href"));
 
-                if (!has_content and label == null and href_raw == null) return;
+                if (!info.has_visible and label == null and href_raw == null) return;
 
-                const has_block = hasBlockDescendant(el.asNode());
                 const href = if (href_raw) |h| URL.resolve(self.page.call_arena, self.page.base(), h, .{ .encode = true }) catch h else null;
 
-                if (has_block) {
+                if (info.has_block) {
                     try self.renderChildren(el.asNode());
                     if (href) |h| {
                         if (!self.state.last_char_was_newline) try self.writer.writeByte('\n');
@@ -307,25 +306,12 @@ const Context = struct {
                     return;
                 }
 
-                if (isStandaloneAnchor(el)) {
+                const standalone = isStandaloneAnchor(el);
+                if (standalone) {
                     if (!self.state.last_char_was_newline) try self.writer.writeByte('\n');
-                    try self.writer.writeByte('[');
-                    if (has_content) {
-                        try self.renderChildren(el.asNode());
-                    } else {
-                        try self.writer.writeAll(label orelse "");
-                    }
-                    try self.writer.writeAll("](");
-                    if (href) |h| {
-                        try self.writer.writeAll(h);
-                    }
-                    try self.writer.writeAll(")\n");
-                    self.state.last_char_was_newline = true;
-                    return;
                 }
-
                 try self.writer.writeByte('[');
-                if (has_content) {
+                if (info.has_visible) {
                     try self.renderChildren(el.asNode());
                 } else {
                     try self.writer.writeAll(label orelse "");
@@ -335,7 +321,12 @@ const Context = struct {
                     try self.writer.writeAll(h);
                 }
                 try self.writer.writeByte(')');
-                self.state.last_char_was_newline = false;
+                if (standalone) {
+                    try self.writer.writeByte('\n');
+                    self.state.last_char_was_newline = true;
+                } else {
+                    self.state.last_char_was_newline = false;
+                }
                 return;
             },
             .input => {
@@ -350,12 +341,8 @@ const Context = struct {
             else => {},
         }
 
-        // --- Render Children ---
         try self.renderChildren(el.asNode());
 
-        // --- Closing Tag Logic ---
-
-        // Suffixes
         switch (tag) {
             .pre => {
                 if (!self.state.last_char_was_newline) {
@@ -368,7 +355,6 @@ const Context = struct {
             .code => {
                 if (self.state.pre_node == null) {
                     try self.writer.writeByte('`');
-                    self.state.in_code = false;
                     self.state.last_char_was_newline = false;
                 }
             },
@@ -411,7 +397,6 @@ const Context = struct {
             else => {},
         }
 
-        // Post-block newlines
         if (tag.isBlock() and !self.state.in_table) {
             try self.ensureNewline();
         }
@@ -454,15 +439,19 @@ const Context = struct {
     }
 
     fn escape(self: *Context, text: []const u8) !void {
-        for (text) |c| {
+        var start: usize = 0;
+        for (text, 0..) |c, i| {
             switch (c) {
                 '\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '!', '|' => {
+                    if (i > start) try self.writer.writeAll(text[start..i]);
                     try self.writer.writeByte('\\');
                     try self.writer.writeByte(c);
+                    start = i + 1;
                 },
-                else => try self.writer.writeByte(c),
+                else => {},
             }
         }
+        if (start < text.len) try self.writer.writeAll(text[start..]);
     }
 };
 

@@ -26,7 +26,8 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
     const R = reflect(Inner, field);
 
     return struct {
-        inner: Inner,
+        _inner: Inner,
+        _rc: lp.RC(u8) = .{},
 
         const Self = @This();
 
@@ -38,29 +39,31 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
         };
 
         pub fn init(inner: Inner, page: *Page) !*Self {
-            return page._factory.create(Self{ .inner = inner });
+            const self = try page._factory.create(Self{ ._inner = inner });
+
+            if (@hasDecl(Inner, "acquireRef")) {
+                self._inner.acquireRef();
+            }
+            return self;
         }
 
         pub fn deinit(self: *Self, session: *Session) void {
-            _ = self;
-            _ = session;
+            if (@hasDecl(Inner, "releaseRef")) {
+                self._inner.releaseRef(session);
+            }
+            session.factory.destroy(self);
         }
 
         pub fn releaseRef(self: *Self, session: *Session) void {
-            // Release the reference to the inner type that we acquired
-            if (@hasDecl(Inner, "releaseRef")) {
-                self.inner.releaseRef(session);
-            }
+            self._rc.release(self, session);
         }
 
         pub fn acquireRef(self: *Self) void {
-            if (@hasDecl(Inner, "acquireRef")) {
-                self.inner.acquireRef();
-            }
+            self._rc.acquire();
         }
 
         pub fn next(self: *Self, page: *Page) if (R.has_error_return) anyerror!Result else Result {
-            const entry = (if (comptime R.has_error_return) try self.inner.next(page) else self.inner.next(page)) orelse {
+            const entry = (if (comptime R.has_error_return) try self._inner.next(page) else self._inner.next(page)) orelse {
                 return .{ .done = true, .value = null };
             };
 

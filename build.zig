@@ -46,8 +46,12 @@ pub fn build(b: *Build) !void {
     var stdout = std.fs.File.stdout().writer(&.{});
     try stdout.interface.print("Lightpanda {f}\n", .{version});
 
+    const version_string = b.fmt("{f}", .{version});
+    const version_encoded = std.mem.replaceOwned(u8, b.allocator, version_string, "+", "%2B") catch @panic("OOM");
+
     var opts = b.addOptions();
-    opts.addOption([]const u8, "version", b.fmt("{f}", .{version}));
+    opts.addOption([]const u8, "version", version_string);
+    opts.addOption([]const u8, "version_encoded", version_encoded);
     opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
 
     const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer") orelse false;
@@ -85,6 +89,15 @@ pub fn build(b: *Build) !void {
         break :blk mod;
     };
 
+    // Check compilation
+    const check = b.step("check", "Check if lightpanda compiles");
+
+    const check_lib = b.addLibrary(.{
+        .name = "lightpanda_check",
+        .root_module = lightpanda_module,
+    });
+    check.dependOn(&check_lib.step);
+
     {
         // browser
         const exe = b.addExecutable(.{
@@ -102,6 +115,12 @@ pub fn build(b: *Build) !void {
             }),
         });
         b.installArtifact(exe);
+
+        const exe_check = b.addLibrary(.{
+            .name = "lightpanda_exe_check",
+            .root_module = exe.root_module,
+        });
+        check.dependOn(&exe_check.step);
 
         const run_cmd = b.addRunArtifact(exe);
         if (b.args) |args| {
@@ -131,6 +150,12 @@ pub fn build(b: *Build) !void {
             }),
         });
         b.installArtifact(exe);
+
+        const exe_check = b.addLibrary(.{
+            .name = "snapshot_creator_check",
+            .root_module = exe.root_module,
+        });
+        check.dependOn(&exe_check.step);
 
         const run_cmd = b.addRunArtifact(exe);
         if (b.args) |args| {
@@ -169,6 +194,12 @@ pub fn build(b: *Build) !void {
             }),
         });
         b.installArtifact(exe);
+
+        const exe_check = b.addLibrary(.{
+            .name = "legacy_test_check",
+            .root_module = exe.root_module,
+        });
+        check.dependOn(&exe_check.step);
 
         const run_cmd = b.addRunArtifact(exe);
         if (b.args) |args| {

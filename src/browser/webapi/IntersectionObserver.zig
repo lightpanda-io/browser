@@ -114,7 +114,9 @@ pub fn init(callback: js.Function.Temp, options: ?ObserverInit, page: *Page) !*I
 pub fn deinit(self: *IntersectionObserver, session: *Session) void {
     self._callback.release();
     for (self._pending_entries.items) |entry| {
-        entry.deinitIfUnused(session);
+        // These were never handed to v8, they do not have a corresponding
+        // FinalizerCallback. We 100% own them.
+        entry.deinit(session);
     }
     session.releaseArena(self._arena);
 }
@@ -135,13 +137,10 @@ pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void
         }
     }
 
-    // Register with page if this is our first observation
-    if (self._observing.items.len == 0) {
-        self._rc._refs += 1;
+    try self._observing.append(self._arena, target);
+    if (self._observing.items.len == 1) {
         try page.registerIntersectionObserver(self);
     }
-
-    try self._observing.append(self._arena, target);
 
     // Don't initialize previous state yet - let checkIntersection do it
     // This ensures we get an entry on first observation
@@ -166,7 +165,7 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, page: *Page) voi
             while (j < self._pending_entries.items.len) {
                 if (self._pending_entries.items[j]._target == target) {
                     const entry = self._pending_entries.swapRemove(j);
-                    entry.deinitIfUnused(page._session);
+                    entry.deinit(page._session);
                 } else {
                     j += 1;
                 }
@@ -176,25 +175,21 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, page: *Page) voi
     }
 
     if (original_length > 0 and self._observing.items.len == 0) {
-        self._rc._refs -= 1;
+        page.unregisterIntersectionObserver(self);
     }
 }
 
 pub fn disconnect(self: *IntersectionObserver, page: *Page) void {
     for (self._pending_entries.items) |entry| {
-        entry.deinitIfUnused(page._session);
+        entry.deinit(page._session);
     }
     self._pending_entries.clearRetainingCapacity();
     self._previous_states.clearRetainingCapacity();
 
-    const observing_count = self._observing.items.len;
-    self._observing.clearRetainingCapacity();
-
-    page.unregisterIntersectionObserver(self);
-
-    if (observing_count > 0) {
-        _ = self.releaseRef(page._session);
+    if (self._observing.items.len > 0) {
+        page.unregisterIntersectionObserver(self);
     }
+    self._observing.clearRetainingCapacity();
 }
 
 pub fn takeRecords(self: *IntersectionObserver, page: *Page) ![]*IntersectionObserverEntry {
@@ -338,13 +333,6 @@ pub const IntersectionObserverEntry = struct {
 
     pub fn deinit(self: *IntersectionObserverEntry, session: *Session) void {
         session.releaseArena(self._arena);
-    }
-
-    fn deinitIfUnused(self: *IntersectionObserverEntry, session: *Session) void {
-        if (self._rc._refs == 0) {
-            // hasn't been handed to JS yet.
-            self.deinit(session);
-        }
     }
 
     pub fn releaseRef(self: *IntersectionObserverEntry, session: *Session) void {
