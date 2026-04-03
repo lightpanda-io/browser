@@ -296,7 +296,7 @@ pub fn createContext(self: *Env, page: *Page, params: ContextParams) !*Context {
         // it gets setup automatically as objects are created, but the Window
         // object already exists in v8 (it's the global) so we manually create
         // the mapping here.
-        const tao = try context_arena.create(@import("TaggedOpaque.zig"));
+        const tao = try params.identity_arena.create(@import("TaggedOpaque.zig"));
         tao.* = .{
             .value = @ptrCast(page.window),
             .prototype_chain = (&Window.JsApi.Meta.prototype_chain).ptr,
