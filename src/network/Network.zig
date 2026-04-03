@@ -240,7 +240,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     else
         null;
 
-    const cache = if (config.cacheDir()) |cache_dir_path|
+    const cache = if (config.httpCacheDir()) |cache_dir_path|
         Cache{
             .kind = .{
                 .fs = FsCache.init(cache_dir_path) catch |e| {

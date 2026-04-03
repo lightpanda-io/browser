@@ -156,9 +156,9 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     };
 }
 
-pub fn cacheDir(self: *const Config) ?[]const u8 {
+pub fn httpCacheDir(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.cache_dir,
+        inline .serve, .fetch, .mcp => |opts| opts.common.http_cache_dir,
         else => null,
     };
 }
@@ -280,7 +280,7 @@ pub const Common = struct {
     log_format: ?log.Format = null,
     log_filter_scopes: ?[]log.Scope = null,
     user_agent_suffix: ?[]const u8 = null,
-    cache_dir: ?[]const u8 = null,
+    http_cache_dir: ?[]const u8 = null,
 
     web_bot_auth_key_file: ?[]const u8 = null,
     web_bot_auth_keyid: ?[]const u8 = null,
@@ -401,7 +401,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--web-bot-auth-domain
         \\                Your domain e.g. yourdomain.com
         \\
-        \\--cache-dir
+        \\--http-cache-dir
         \\                Path to a directory to use as a Filesystem Cache for network resources.
         \\                Omitting this will result is no caching.
         \\                Defaults to no caching.
@@ -1079,12 +1079,12 @@ fn parseCommonArg(
         return true;
     }
 
-    if (std.mem.eql(u8, "--cache-dir", opt)) {
+    if (std.mem.eql(u8, "--http-cache-dir", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--cache-dir" });
+            log.fatal(.app, "missing argument value", .{ .arg = "--http-cache-dir" });
             return error.InvalidArgument;
         };
-        common.cache_dir = try allocator.dupe(u8, str);
+        common.http_cache_dir = try allocator.dupe(u8, str);
         return true;
     }
 
