@@ -316,7 +316,7 @@ pub fn createContext(self: *Env, page: *Page, params: ContextParams) !*Context {
     const context = try context_arena.create(Context);
     context.* = .{
         .env = self,
-        .page = page,
+        .global = .{ .page = page },
         .origin = origin,
         .id = context_id,
         .session = session,
@@ -332,8 +332,16 @@ pub fn createContext(self: *Env, page: *Page, params: ContextParams) !*Context {
         .identity_arena = params.identity_arena,
         .execution = undefined,
     };
-    // Initialize execution after context is created since it contains self-references
-    context.execution = js.Execution.fromContext(context);
+
+    context.execution = .{
+        .buf = &page.buf,
+        .context = context,
+        .arena = page.arena,
+        .call_arena = params.call_arena,
+        ._factory = page._factory,
+        ._scheduler = &context.scheduler,
+        .url = &page.url,
+    };
 
     {
         // Multiple contexts can be created for the same Window (via CDP). We only
@@ -531,13 +539,19 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
         .call_arena = ctx.call_arena,
     };
 
-    const page = ctx.page;
-    page.window.unhandledPromiseRejection(promise_event == v8.kPromiseRejectWithNoHandler, .{
-        .local = &local,
-        .handle = &message_handle,
-    }, page) catch |err| {
-        log.warn(.browser, "unhandled rejection handler", .{ .err = err });
-    };
+    switch (ctx.global) {
+        .page => |page| {
+            page.window.unhandledPromiseRejection(promise_event == v8.kPromiseRejectWithNoHandler, .{
+                .local = &local,
+                .handle = &message_handle,
+            }, page) catch |err| {
+                log.warn(.browser, "unhandled rejection handler", .{ .err = err });
+            };
+        },
+        .worker => {
+            // TODO: Worker promise rejection handling
+        },
+    }
 }
 
 fn fatalCallback(c_location: [*c]const u8, c_message: [*c]const u8) callconv(.c) void {

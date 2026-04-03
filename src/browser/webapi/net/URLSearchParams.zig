@@ -53,7 +53,7 @@ pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
                 }
                 if (js_val.isObject()) {
                     // normalizer is null, so page won't be used
-                    break :blk try KeyValueList.fromJsObject(arena, js_val.toObject(), null, exec.context.page);
+                    break :blk try KeyValueList.fromJsObject(arena, js_val.toObject(), null, exec.buf);
                 }
                 if (js_val.isString()) |js_str| {
                     break :blk try paramsFromString(arena, try js_str.toSliceWithAlloc(arena), exec.buf);

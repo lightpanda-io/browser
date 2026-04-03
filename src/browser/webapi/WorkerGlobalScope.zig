@@ -16,23 +16,41 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const js = @import("../js/js.zig");
+const std = @import("std");
+const JS = @import("../js/js.zig");
 
 const base64 = @import("encoding/base64.zig");
 const Console = @import("Console.zig");
 const Crypto = @import("Crypto.zig");
 const EventTarget = @import("EventTarget.zig");
+const Factory = @import("../Factory.zig");
 const Performance = @import("Performance.zig");
+const Session = @import("../Session.zig");
+
+const Allocator = std.mem.Allocator;
 
 const WorkerGlobalScope = @This();
 
+// Infrastructure fields (similar to Page)
+_session: *Session,
+_factory: *Factory,
+arena: Allocator,
+url: [:0]const u8,
+buf: [1024]u8 = undefined, // same size as page.buf
+js: *JS.Context = undefined,
+
+// WebAPI fields
 _proto: *EventTarget,
 _console: Console = .init,
 _crypto: Crypto = .init,
 _performance: Performance,
-_on_error: ?js.Function.Global = null,
-_on_rejection_handled: ?js.Function.Global = null,
-_on_unhandled_rejection: ?js.Function.Global = null,
+_on_error: ?JS.Function.Global = null,
+_on_rejection_handled: ?JS.Function.Global = null,
+_on_unhandled_rejection: ?JS.Function.Global = null,
+
+pub fn base(self: *const WorkerGlobalScope) [:0]const u8 {
+    return self.url;
+}
 
 pub fn asEventTarget(self: *WorkerGlobalScope) *EventTarget {
     return self._proto;
@@ -54,7 +72,7 @@ pub fn getPerformance(self: *WorkerGlobalScope) *Performance {
     return &self._performance;
 }
 
-pub fn getOnError(self: *const WorkerGlobalScope) ?js.Function.Global {
+pub fn getOnError(self: *const WorkerGlobalScope) ?JS.Function.Global {
     return self._on_error;
 }
 
@@ -62,7 +80,7 @@ pub fn setOnError(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
     self._on_error = getFunctionFromSetter(setter);
 }
 
-pub fn getOnRejectionHandled(self: *const WorkerGlobalScope) ?js.Function.Global {
+pub fn getOnRejectionHandled(self: *const WorkerGlobalScope) ?JS.Function.Global {
     return self._on_rejection_handled;
 }
 
@@ -70,7 +88,7 @@ pub fn setOnRejectionHandled(self: *WorkerGlobalScope, setter: ?FunctionSetter) 
     self._on_rejection_handled = getFunctionFromSetter(setter);
 }
 
-pub fn getOnUnhandledRejection(self: *const WorkerGlobalScope) ?js.Function.Global {
+pub fn getOnUnhandledRejection(self: *const WorkerGlobalScope) ?JS.Function.Global {
     return self._on_unhandled_rejection;
 }
 
@@ -78,15 +96,15 @@ pub fn setOnUnhandledRejection(self: *WorkerGlobalScope, setter: ?FunctionSetter
     self._on_unhandled_rejection = getFunctionFromSetter(setter);
 }
 
-pub fn btoa(_: *const WorkerGlobalScope, input: []const u8, exec: *js.Execution) ![]const u8 {
+pub fn btoa(_: *const WorkerGlobalScope, input: []const u8, exec: *JS.Execution) ![]const u8 {
     return base64.encode(exec.call_arena, input);
 }
 
-pub fn atob(_: *const WorkerGlobalScope, input: []const u8, exec: *js.Execution) ![]const u8 {
+pub fn atob(_: *const WorkerGlobalScope, input: []const u8, exec: *JS.Execution) ![]const u8 {
     return base64.decode(exec.call_arena, input);
 }
 
-pub fn structuredClone(_: *const WorkerGlobalScope, value: js.Value) !js.Value {
+pub fn structuredClone(_: *const WorkerGlobalScope, value: JS.Value) !JS.Value {
     return value.structuredClone();
 }
 
@@ -96,11 +114,11 @@ pub fn structuredClone(_: *const WorkerGlobalScope, value: js.Value) !js.Value {
 // TODO: Timer functions - need scheduler integration
 
 const FunctionSetter = union(enum) {
-    func: js.Function.Global,
-    anything: js.Value,
+    func: JS.Function.Global,
+    anything: JS.Value,
 };
 
-fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
+fn getFunctionFromSetter(setter_: ?FunctionSetter) ?JS.Function.Global {
     const setter = setter_ orelse return null;
     return switch (setter) {
         .func => |func| func,
@@ -109,7 +127,7 @@ fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
 }
 
 pub const JsApi = struct {
-    pub const bridge = js.Bridge(WorkerGlobalScope);
+    pub const bridge = JS.Bridge(WorkerGlobalScope);
 
     pub const Meta = struct {
         pub const name = "WorkerGlobalScope";

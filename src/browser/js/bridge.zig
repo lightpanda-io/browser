@@ -414,14 +414,18 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
         return 0;
     };
 
-    const page = local.ctx.page;
-    const document = page.document;
-
-    if (document.getElementById(property, page)) |el| {
-        const js_val = local.zigValueToJs(el, .{}) catch return 0;
-        var pc = Caller.PropertyCallbackInfo{ .handle = handle.? };
-        pc.getReturnValue().set(js_val);
-        return 1;
+    // Only Page contexts have document.getElementById lookup
+    switch (local.ctx.global) {
+        .page => |page| {
+            const document = page.document;
+            if (document.getElementById(property, page)) |el| {
+                const js_val = local.zigValueToJs(el, .{}) catch return 0;
+                var pc = Caller.PropertyCallbackInfo{ .handle = handle.? };
+                pc.getReturnValue().set(js_val);
+                return 1;
+            }
+        },
+        .worker => {}, // no global lookup in a worker
     }
 
     if (comptime IS_DEBUG) {
@@ -459,7 +463,8 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
             .{ "ApplePaySession", {} },
         });
         if (!ignored.has(property)) {
-            const key = std.fmt.bufPrint(&local.ctx.page.buf, "Window:{s}", .{property}) catch return 0;
+            var buf: [2048]u8 = undefined;
+            const key = std.fmt.bufPrint(&buf, "Window:{s}", .{property}) catch return 0;
             logUnknownProperty(local, key) catch return 0;
         }
     }
@@ -524,7 +529,8 @@ pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8
 
             const ignored = std.StaticStringMap(void).initComptime(.{});
             if (!ignored.has(property)) {
-                const key = std.fmt.bufPrint(&local.ctx.page.buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return 0;
+                var buf: [2048]u8 = undefined;
+                const key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return 0;
                 logUnknownProperty(local, key) catch return 0;
             }
             // not intercepted
