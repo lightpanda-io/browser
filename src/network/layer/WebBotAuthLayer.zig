@@ -28,7 +28,6 @@ const Layer = @import("../../browser/HttpClient.zig").Layer;
 const WebBotAuthLayer = @This();
 
 next: Layer = undefined,
-auth: ?*WebBotAuth,
 
 pub fn layer(self: *WebBotAuthLayer) Layer {
     return .{
@@ -37,23 +36,19 @@ pub fn layer(self: *WebBotAuthLayer) Layer {
     };
 }
 
-pub fn deinit(self: *WebBotAuthLayer, allocator: std.mem.Allocator) void {
-    if (self.auth) |wba| wba.deinit(allocator);
-}
+pub fn deinit(_: *WebBotAuthLayer, _: std.mem.Allocator) void {}
 
 fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
     const self: *WebBotAuthLayer = @ptrCast(@alignCast(ptr));
-
-    if (self.auth == null) {
-        return self.next.request(ctx, req);
-    }
-
-    const arena = try ctx.network.app.arena_pool.acquire(.small, "WebBotAuthLayer");
-    defer ctx.network.app.arena_pool.release(arena);
-
     var our_req = req;
-    const authority = URL.getHost(req.url);
-    try self.auth.?.signRequest(arena, &our_req.headers, authority);
+
+    if (ctx.network.web_bot_auth) |*wba| {
+        const arena = try ctx.network.app.arena_pool.acquire(.small, "WebBotAuthLayer");
+        defer ctx.network.app.arena_pool.release(arena);
+
+        const authority = URL.getHost(req.url);
+        try wba.signRequest(arena, &our_req.headers, authority);
+    }
 
     return self.next.request(ctx, our_req);
 }
