@@ -45,6 +45,7 @@ pub const ResponseHead = http.ResponseHead;
 pub const HeaderIterator = http.HeaderIterator;
 
 pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
+pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
 
 pub const PerformStatus = enum { cdp_socket, normal };
 
@@ -217,8 +218,7 @@ pub const Transport = struct {
         return self.perform(@intCast(timeout_ms));
     }
 
-    /// Core entry point: interception gating then queues/starts the transfer.
-    /// Robots and cache checks are done by layers above.
+    /// Core entry point.
     pub fn _request(ptr: *anyopaque, _: Context, req: Request) !void {
         const self: *Transport = @ptrCast(@alignCast(ptr));
         const transfer = try self.makeTransfer(req);
@@ -659,216 +659,6 @@ pub const Layer = struct {
     }
 };
 
-// pub const RobotsLayer = struct {
-//     next: Layer = undefined,
-//     obey_robots: bool,
-//     allocator: Allocator,
-//     pending: std.StringHashMapUnmanaged(std.ArrayList(Request)) = .empty,
-
-//     pub fn layer(self: *RobotsLayer) Layer {
-//         return .{
-//             .ptr = self,
-//             .vtable = &.{ .request = _request },
-//         };
-//     }
-
-//     pub fn deinit(self: *RobotsLayer) void {
-//         var it = self.pending.iterator();
-//         while (it.next()) |entry| {
-//             entry.value_ptr.deinit(self.allocator);
-//         }
-//         self.pending.deinit(self.allocator);
-//     }
-
-//     fn _request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
-//         const self: *RobotsLayer = @ptrCast(@alignCast(ptr));
-
-//         if (!self.obey_robots) {
-//             return self.next.request(ctx, req);
-//         }
-
-//         const robots_url = try URL.getRobotsUrl(self.allocator, req.url);
-//         errdefer self.allocator.free(robots_url);
-
-//         if (ctx.network.robot_store.get(robots_url)) |robot_entry| {
-//             defer self.allocator.free(robots_url);
-//             switch (robot_entry) {
-//                 .present => |robots| {
-//                     const path = URL.getPathname(req.url);
-//                     if (!robots.isAllowed(path)) {
-//                         req.error_callback(req.ctx, error.RobotsBlocked);
-//                         return;
-//                     }
-//                 },
-//                 .absent => {},
-//             }
-//             return self.next.request(ctx, req);
-//         }
-
-//         return self.fetchRobotsThenRequest(ctx, robots_url, req);
-//     }
-
-//     fn fetchRobotsThenRequest(self: *RobotsLayer, ctx: Context, robots_url: [:0]const u8, req: Request) !void {
-//         const entry = try self.pending.getOrPut(self.allocator, robots_url);
-
-//         if (!entry.found_existing) {
-//             errdefer self.allocator.free(robots_url);
-//             entry.value_ptr.* = .empty;
-
-//             const robots_ctx = try self.allocator.create(RobotsContext);
-//             errdefer self.allocator.destroy(robots_ctx);
-//             robots_ctx.* = .{
-//                 .layer = self,
-//                 .ctx = ctx,
-//                 .req = req,
-//                 .robots_url = robots_url,
-//                 .buffer = .empty,
-//             };
-
-//             const headers = try ctx.newHeaders();
-//             log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
-//             try self.next.request(ctx, .{
-//                 .ctx = robots_ctx,
-//                 .url = robots_url,
-//                 .method = .GET,
-//                 .headers = headers,
-//                 .blocking = false,
-//                 .frame_id = req.frame_id,
-//                 .cookie_jar = req.cookie_jar,
-//                 .cookie_origin = req.cookie_origin,
-//                 .notification = req.notification,
-//                 .resource_type = .fetch,
-//                 .header_callback = RobotsContext.headerCallback,
-//                 .data_callback = RobotsContext.dataCallback,
-//                 .done_callback = RobotsContext.doneCallback,
-//                 .error_callback = RobotsContext.errorCallback,
-//                 .shutdown_callback = RobotsContext.shutdownCallback,
-//             });
-//         } else {
-//             self.allocator.free(robots_url);
-//         }
-
-//         try entry.value_ptr.append(self.allocator, req);
-//     }
-
-//     fn flushPending(self: *RobotsLayer, ctx: Context, robots_url: [:0]const u8, allowed: bool) void {
-//         var queued = self.pending.fetchRemove(robots_url) orelse
-//             @panic("RobotsLayer.flushPending: missing queue");
-//         defer queued.value.deinit(self.allocator);
-
-//         for (queued.value.items) |queued_req| {
-//             if (!allowed) {
-//                 log.warn(.http, "blocked by robots", .{ .url = queued_req.url });
-//                 queued_req.error_callback(queued_req.ctx, error.RobotsBlocked);
-//             } else {
-//                 self.next.request(ctx, queued_req) catch |e| {
-//                     queued_req.error_callback(queued_req.ctx, e);
-//                 };
-//             }
-//         }
-//     }
-
-//     fn flushPendingShutdown(self: *RobotsLayer, robots_url: [:0]const u8) void {
-//         var queued = self.pending.fetchRemove(robots_url) orelse
-//             @panic("RobotsLayer.flushPendingShutdown: missing queue");
-//         defer queued.value.deinit(self.allocator);
-
-//         for (queued.value.items) |queued_req| {
-//             if (queued_req.shutdown_callback) |cb| cb(queued_req.ctx);
-//         }
-//     }
-// };
-
-// const RobotsContext = struct {
-//     layer: *RobotsLayer,
-//     ctx: Context,
-//     req: Request,
-//     robots_url: [:0]const u8,
-//     buffer: std.ArrayList(u8),
-//     status: u16 = 0,
-
-//     fn deinit(self: *RobotsContext) void {
-//         self.layer.allocator.free(self.robots_url);
-//         self.buffer.deinit(self.layer.allocator);
-//         self.layer.allocator.destroy(self);
-//     }
-
-//     fn headerCallback(response: Response) !bool {
-//         const self: *RobotsContext = @ptrCast(@alignCast(response.ctx));
-//         // Robots callbacks only happen on real live requests.
-//         const transfer = response.inner.transfer;
-//         if (transfer.response_header) |hdr| {
-//             log.debug(.browser, "robots status", .{ .status = hdr.status, .robots_url = self.robots_url });
-//             self.status = hdr.status;
-//         }
-//         if (transfer.getContentLength()) |cl| {
-//             try self.buffer.ensureTotalCapacity(self.layer.allocator, cl);
-//         }
-//         return true;
-//     }
-
-//     fn dataCallback(response: Response, data: []const u8) !void {
-//         const self: *RobotsContext = @ptrCast(@alignCast(response.ctx));
-//         try self.buffer.appendSlice(self.layer.allocator, data);
-//     }
-
-//     fn doneCallback(ctx_ptr: *anyopaque) !void {
-//         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
-//         defer self.deinit();
-
-//         var allowed = true;
-//         const network = self.ctx.network;
-
-//         switch (self.status) {
-//             200 => {
-//                 if (self.buffer.items.len > 0) {
-//                     const robots: ?Robots = network.robot_store.robotsFromBytes(
-//                         network.config.http_headers.user_agent,
-//                         self.buffer.items,
-//                     ) catch blk: {
-//                         log.warn(.browser, "failed to parse robots", .{ .robots_url = self.robots_url });
-//                         try network.robot_store.putAbsent(self.robots_url);
-//                         break :blk null;
-//                     };
-//                     if (robots) |r| {
-//                         try network.robot_store.put(self.robots_url, r);
-//                         const path = URL.getPathname(self.req.url);
-//                         allowed = r.isAllowed(path);
-//                     }
-//                 }
-//             },
-//             404 => {
-//                 log.debug(.http, "robots not found", .{ .url = self.robots_url });
-//                 try network.robot_store.putAbsent(self.robots_url);
-//             },
-//             else => {
-//                 log.debug(.http, "unexpected status on robots", .{
-//                     .url = self.robots_url,
-//                     .status = self.status,
-//                 });
-//                 try network.robot_store.putAbsent(self.robots_url);
-//             },
-//         }
-
-//         self.layer.flushPending(self.ctx, self.robots_url, allowed);
-//     }
-
-//     fn errorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
-//         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
-//         defer self.deinit();
-//         log.warn(.http, "robots fetch failed", .{ .err = err });
-//         // On error, allow all queued requests to proceed.
-//         self.layer.flushPending(self.ctx, self.robots_url, true);
-//     }
-
-//     fn shutdownCallback(ctx_ptr: *anyopaque) void {
-//         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
-//         defer self.deinit();
-//         log.debug(.http, "robots fetch shutdown", .{});
-//         self.layer.flushPendingShutdown(self.robots_url);
-//     }
-// };
-
 // pub const WebBotAuthLayer = struct {
 //     next: Layer = undefined,
 //     allocator: std.mem.Allocator,
@@ -934,7 +724,7 @@ pub fn LayerStack(comptime layer_types: anytype) type {
         pub fn deinit(self: *Self, allocator: Allocator) void {
             inline for (layer_types, 0..) |T, i| {
                 const ptr: *T = @ptrCast(@alignCast(self.ptrs[i]));
-                if (@hasDecl(T, "deinit")) ptr.deinit();
+                if (@hasDecl(T, "deinit")) ptr.deinit(allocator);
                 allocator.destroy(ptr);
             }
         }
@@ -946,7 +736,7 @@ pub fn LayerStack(comptime layer_types: anytype) type {
 }
 
 // pub const Layers = LayerStack(.{ RobotsLayer, WebBotAuthLayer, CacheLayer });
-pub const Layers = LayerStack(.{CacheLayer});
+pub const Layers = LayerStack(.{ RobotsLayer, CacheLayer });
 
 const Client = @This();
 
@@ -958,15 +748,14 @@ pub fn init(allocator: Allocator, net: *Network) !*Client {
     errdefer transport.deinit();
 
     var layers = try Layers.init(allocator, transport, .{
-        // RobotsLayer{
-        //     .obey_robots = network.config.obeyRobots(),
-        //     .allocator = allocator,
-        //     .pending = .empty,
-        // },
-        // WebBotAuthLayer{
-        //     .auth = if (network.web_bot_auth) |*wba| wba else null,
-        //     .allocator = allocator,
-        // },
+        RobotsLayer{
+            .obey_robots = net.config.obeyRobots(),
+            .allocator = allocator,
+            .pending = .empty,
+        },
+        WebBotAuthLayer{
+            .auth = if (network.web_bot_auth) |*wba| wba else null,
+        },
         CacheLayer{},
     });
     errdefer layers.deinit(allocator);
