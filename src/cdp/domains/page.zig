@@ -48,6 +48,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         close,
         captureScreenshot,
         getLayoutMetrics,
+        handleJavaScriptDialog,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -63,6 +64,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .close => return close(cmd),
         .captureScreenshot => return captureScreenshot(cmd),
         .getLayoutMetrics => return getLayoutMetrics(cmd),
+        .handleJavaScriptDialog => return handleJavaScriptDialog(cmd),
     }
 }
 
@@ -639,6 +641,32 @@ fn sendPageLifecycle(bc: *CDP.BrowserContext, name: []const u8, timestamp: u64, 
         .frameId = frame_id,
         .loaderId = loader_id,
         .timestamp = timestamp,
+    }, .{ .session_id = session_id });
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-handleJavaScriptDialog
+fn handleJavaScriptDialog(cmd: *CDP.Command) !void {
+    // Dialogs auto-dismiss in headless mode, so this is an acknowledgement.
+    // accept and promptText params are parsed but not used since the dialog
+    // already returned by the time the CDP client sends this.
+    _ = try cmd.params(struct {
+        accept: bool,
+        promptText: ?[]const u8 = null,
+    });
+    try cmd.sendResult(null, .{});
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Page/#event-javascriptDialogOpening
+pub fn javascriptDialogOpening(bc: anytype, event: *const Notification.JavascriptDialogOpening) !void {
+    const session_id = bc.session_id orelse return;
+    var cdp = bc.cdp;
+
+    try cdp.sendEvent("Page.javascriptDialogOpening", .{
+        .url = event.url,
+        .message = event.message,
+        .type = event.dialog_type,
+        .hasBrowserHandler = false,
+        .defaultPrompt = "",
     }, .{ .session_id = session_id });
 }
 

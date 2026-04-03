@@ -431,6 +431,7 @@ pub const BrowserContext = struct {
         try notification.register(.page_frame_created, self, onPageFrameCreated);
         try notification.register(.page_dom_content_loaded, self, onPageDOMContentLoaded);
         try notification.register(.page_loaded, self, onPageLoaded);
+        try notification.register(.javascript_dialog_opening, self, onJavascriptDialogOpening);
     }
 
     pub fn deinit(self: *BrowserContext) void {
@@ -639,6 +640,11 @@ pub const BrowserContext = struct {
     pub fn onPageLoaded(ctx: *anyopaque, msg: *const Notification.PageLoaded) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").pageLoaded(self, msg);
+    }
+
+    pub fn onJavascriptDialogOpening(ctx: *anyopaque, msg: *const Notification.JavascriptDialogOpening) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/page.zig").javascriptDialogOpening(self, msg);
     }
 
     pub fn onHttpResponseHeadersDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
