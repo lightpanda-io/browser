@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../log.zig");
 const builtin = @import("builtin");
 const net = std.net;
 const posix = std.posix;
@@ -30,6 +31,10 @@ const http = @import("http.zig");
 const RobotStore = @import("Robots.zig").RobotStore;
 const WebBotAuth = @import("WebBotAuth.zig");
 
+const Cache = @import("cache/Cache.zig");
+const FsCache = @import("cache/FsCache.zig");
+
+const App = @import("../App.zig");
 const Network = @This();
 
 const Listener = struct {
@@ -45,10 +50,12 @@ const MAX_TICK_CALLBACKS = 16;
 
 allocator: Allocator,
 
+app: *App,
 config: *const Config,
 ca_blob: ?http.Blob,
 robot_store: RobotStore,
 web_bot_auth: ?WebBotAuth,
+cache: ?Cache,
 
 connections: []http.Connection,
 available: std.DoublyLinkedList = .{},
@@ -200,7 +207,7 @@ fn globalDeinit() void {
     libcurl.curl_global_cleanup();
 }
 
-pub fn init(allocator: Allocator, config: *const Config) !Network {
+pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     globalInit(allocator);
     errdefer globalDeinit();
 
@@ -233,6 +240,22 @@ pub fn init(allocator: Allocator, config: *const Config) !Network {
     else
         null;
 
+    const cache = if (config.httpCacheDir()) |cache_dir_path|
+        Cache{
+            .kind = .{
+                .fs = FsCache.init(cache_dir_path) catch |e| {
+                    log.err(.cache, "failed to init", .{
+                        .kind = "FsCache",
+                        .path = cache_dir_path,
+                        .err = e,
+                    });
+                    return e;
+                },
+            },
+        }
+    else
+        null;
+
     return .{
         .allocator = allocator,
         .config = config,
@@ -244,8 +267,10 @@ pub fn init(allocator: Allocator, config: *const Config) !Network {
         .available = available,
         .connections = connections,
 
+        .app = app,
         .robot_store = RobotStore.init(allocator),
         .web_bot_auth = web_bot_auth,
+        .cache = cache,
     };
 }
 
@@ -277,6 +302,8 @@ pub fn deinit(self: *Network) void {
     if (self.web_bot_auth) |wba| {
         wba.deinit(self.allocator);
     }
+
+    if (self.cache) |*cache| cache.deinit();
 
     globalDeinit();
 }

@@ -79,7 +79,7 @@ pub const Headers = struct {
         self.headers = updated_headers;
     }
 
-    fn parseHeader(header_str: []const u8) ?Header {
+    pub fn parseHeader(header_str: []const u8) ?Header {
         const colon_pos = std.mem.indexOfScalar(u8, header_str, ':') orelse return null;
 
         const name = std.mem.trim(u8, header_str[0..colon_pos], " \t");
@@ -88,22 +88,9 @@ pub const Headers = struct {
         return .{ .name = name, .value = value };
     }
 
-    pub fn iterator(self: *Headers) Iterator {
-        return .{
-            .header = self.headers,
-        };
+    pub fn iterator(self: Headers) HeaderIterator {
+        return .{ .curl_slist = .{ .header = self.headers } };
     }
-
-    const Iterator = struct {
-        header: [*c]libcurl.CurlSList,
-
-        pub fn next(self: *Iterator) ?Header {
-            const h = self.header orelse return null;
-
-            self.header = h.*.next;
-            return parseHeader(std.mem.span(@as([*:0]const u8, @ptrCast(h.*.data))));
-        }
-    };
 };
 
 // In normal cases, the header iterator comes from the curl linked list.
@@ -112,12 +99,26 @@ pub const Headers = struct {
 // This union, is an iterator that exposes the same API for either case.
 pub const HeaderIterator = union(enum) {
     curl: CurlHeaderIterator,
+    curl_slist: CurlSListIterator,
     list: ListHeaderIterator,
 
     pub fn next(self: *HeaderIterator) ?Header {
         switch (self.*) {
             inline else => |*it| return it.next(),
         }
+    }
+
+    pub fn collect(self: *HeaderIterator, allocator: std.mem.Allocator) !std.ArrayList(Header) {
+        var list: std.ArrayList(Header) = .empty;
+
+        while (self.next()) |hdr| {
+            try list.append(allocator, .{
+                .name = try allocator.dupe(u8, hdr.name),
+                .value = try allocator.dupe(u8, hdr.value),
+            });
+        }
+
+        return list;
     }
 
     const CurlHeaderIterator = struct {
@@ -133,6 +134,16 @@ pub const HeaderIterator = union(enum) {
                 .name = std.mem.span(header.name),
                 .value = std.mem.span(header.value),
             };
+        }
+    };
+
+    const CurlSListIterator = struct {
+        header: [*c]libcurl.CurlSList,
+
+        pub fn next(self: *CurlSListIterator) ?Header {
+            const h = self.header orelse return null;
+            self.header = h.*.next;
+            return Headers.parseHeader(std.mem.span(@as([*:0]const u8, @ptrCast(h.*.data))));
         }
     };
 

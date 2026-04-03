@@ -32,6 +32,9 @@ const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
 const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");
 const Robots = @import("../network/Robots.zig");
+const Cache = @import("../network/cache/Cache.zig");
+const CacheMetadata = Cache.CachedMetadata;
+const CachedResponse = Cache.CachedResponse;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
@@ -311,7 +314,73 @@ pub fn request(self: *Client, req: Request) !void {
     return self.fetchRobotsThenProcessRequest(robots_url, req);
 }
 
+fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
+    const response = Response.fromCached(req.ctx, cached);
+    defer switch (cached.data) {
+        .buffer => |_| {},
+        .file => |f| f.file.close(),
+    };
+
+    if (req.start_callback) |cb| {
+        try cb(response);
+    }
+
+    const proceed = try req.header_callback(response);
+    if (!proceed) {
+        req.error_callback(req.ctx, error.Abort);
+        return;
+    }
+
+    switch (cached.data) {
+        .buffer => |data| {
+            if (data.len > 0) {
+                try req.data_callback(response, data);
+            }
+        },
+        .file => |f| {
+            const file = f.file;
+
+            var buf: [1024]u8 = undefined;
+            var file_reader = file.reader(&buf);
+            try file_reader.seekTo(f.offset);
+            const reader = &file_reader.interface;
+
+            var read_buf: [1024]u8 = undefined;
+            var remaining = f.len;
+
+            while (remaining > 0) {
+                const read_len = @min(read_buf.len, remaining);
+                const n = try reader.readSliceShort(read_buf[0..read_len]);
+                if (n == 0) break;
+                remaining -= n;
+                try req.data_callback(response, read_buf[0..n]);
+            }
+        },
+    }
+
+    try req.done_callback(req.ctx);
+}
+
 fn processRequest(self: *Client, req: Request) !void {
+    if (self.network.cache) |*cache| {
+        if (req.method == .GET) {
+            const arena = try self.network.app.arena_pool.acquire(.{ .debug = "HttpClient.processRequest.cache" });
+            defer self.network.app.arena_pool.release(arena);
+
+            var iter = req.headers.iterator();
+            const req_header_list = try iter.collect(arena);
+
+            if (cache.get(arena, .{
+                .url = req.url,
+                .timestamp = std.time.timestamp(),
+                .request_headers = req_header_list.items,
+            })) |cached| {
+                defer req.headers.deinit();
+                return serveFromCache(req, &cached);
+            }
+        }
+    }
+
     const transfer = try self.makeTransfer(req);
 
     transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
@@ -399,8 +468,10 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
     try entry.value_ptr.append(self.allocator, req);
 }
 
-fn robotsHeaderCallback(transfer: *Transfer) !bool {
-    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(transfer.ctx));
+fn robotsHeaderCallback(response: Response) !bool {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(response.ctx));
+    // Robots callbacks only happen on real live requests.
+    const transfer = response.inner.transfer;
 
     if (transfer.response_header) |hdr| {
         log.debug(.browser, "robots status", .{ .status = hdr.status, .robots_url = ctx.robots_url });
@@ -414,8 +485,8 @@ fn robotsHeaderCallback(transfer: *Transfer) !bool {
     return true;
 }
 
-fn robotsDataCallback(transfer: *Transfer, data: []const u8) !void {
-    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(transfer.ctx));
+fn robotsDataCallback(response: Response, data: []const u8) !void {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(response.ctx));
     try ctx.buffer.appendSlice(ctx.client.allocator, data);
 }
 
@@ -634,11 +705,41 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
         .id = id,
         .url = req.url,
         .req = req,
-        .ctx = req.ctx,
         .client = self,
         .max_response_size = self.network.config.httpMaxResponseSize(),
     };
     return transfer;
+}
+
+fn requestFailed(transfer: *Transfer, err: anyerror, comptime execute_callback: bool) void {
+    if (transfer._notified_fail) {
+        // we can force a failed request within a callback, which will eventually
+        // result in this being called again in the more general loop. We do this
+        // because we can raise a more specific error inside a callback in some cases
+        return;
+    }
+
+    transfer._notified_fail = true;
+
+    transfer.req.notification.dispatch(.http_request_fail, &.{
+        .transfer = transfer,
+        .err = err,
+    });
+
+    if (execute_callback) {
+        transfer.req.error_callback(transfer.req.ctx, err);
+    } else if (transfer.req.shutdown_callback) |cb| {
+        cb(transfer.req.ctx);
+    }
+}
+
+// Same restriction as changeProxy. Should be ok since this is only called on
+// BrowserContext deinit.
+pub fn restoreOriginalProxy(self: *Client) !void {
+    try self.ensureNoActiveConnection();
+
+    self.http_proxy = self.network.config.httpProxy();
+    self.use_proxy = self.http_proxy != null;
 }
 
 fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyerror!void {
@@ -674,7 +775,7 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
     self.active += 1;
 
     if (transfer.req.start_callback) |cb| {
-        cb(transfer) catch |err| {
+        cb(Response.fromTransfer(transfer)) catch |err| {
             transfer.deinit();
             return err;
         };
@@ -742,7 +843,10 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // TODO give a way to configure the number of auth retries.
     if (transfer._auth_challenge != null and transfer._tries < 10) {
         var wait_for_interception = false;
-        transfer.req.notification.dispatch(.http_request_auth_required, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
+        transfer.req.notification.dispatch(
+            .http_request_auth_required,
+            &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception },
+        );
         if (wait_for_interception) {
             self.intercepted += 1;
             if (comptime IS_DEBUG) {
@@ -841,10 +945,11 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         }
     }
 
+    const body = transfer._stream_buffer.items;
+
     // Replay buffered body through user's data_callback.
     if (transfer._stream_buffer.items.len > 0) {
-        const body = transfer._stream_buffer.items;
-        try transfer.req.data_callback(transfer, body);
+        try transfer.req.data_callback(Response.fromTransfer(transfer), body);
 
         transfer.req.notification.dispatch(.http_response_data, &.{
             .data = body,
@@ -857,11 +962,19 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         }
     }
 
+    if (transfer._pending_cache_metadata) |metadata| {
+        const cache = &self.network.cache.?;
+        cache.put(metadata.*, body) catch |err| {
+            log.warn(.cache, "cache put failed", .{ .err = err });
+        };
+    }
+
     // release conn ASAP so that it's available; some done_callbacks
     // will load more resources.
     transfer.releaseConn();
 
-    try transfer.req.done_callback(transfer.ctx);
+    try transfer.req.done_callback(transfer.req.ctx);
+
     transfer.req.notification.dispatch(.http_request_done, &.{
         .transfer = transfer,
     });
@@ -939,9 +1052,9 @@ pub const Request = struct {
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
 
-    start_callback: ?*const fn (transfer: *Transfer) anyerror!void = null,
-    header_callback: *const fn (transfer: *Transfer) anyerror!bool,
-    data_callback: *const fn (transfer: *Transfer, data: []const u8) anyerror!void,
+    start_callback: ?*const fn (response: Response) anyerror!void = null,
+    header_callback: *const fn (response: Response) anyerror!bool,
+    data_callback: *const fn (response: Response, data: []const u8) anyerror!void,
     done_callback: *const fn (ctx: *anyopaque) anyerror!void,
     error_callback: *const fn (ctx: *anyopaque, err: anyerror) void,
     shutdown_callback: ?*const fn (ctx: *anyopaque) void = null,
@@ -967,16 +1080,91 @@ pub const Request = struct {
     };
 };
 
+pub const Response = struct {
+    ctx: *anyopaque,
+    inner: union(enum) {
+        transfer: *Transfer,
+        cached: *const CachedResponse,
+    },
+
+    pub fn fromTransfer(transfer: *Transfer) Response {
+        return .{ .ctx = transfer.req.ctx, .inner = .{ .transfer = transfer } };
+    }
+
+    pub fn fromCached(ctx: *anyopaque, resp: *const CachedResponse) Response {
+        return .{ .ctx = ctx, .inner = .{ .cached = resp } };
+    }
+
+    pub fn status(self: Response) ?u16 {
+        return switch (self.inner) {
+            .transfer => |t| if (t.response_header) |rh| rh.status else null,
+            .cached => |c| c.metadata.status,
+        };
+    }
+
+    pub fn contentType(self: Response) ?[]const u8 {
+        return switch (self.inner) {
+            .transfer => |t| if (t.response_header) |*rh| rh.contentType() else null,
+            .cached => |c| c.metadata.content_type,
+        };
+    }
+
+    pub fn contentLength(self: Response) ?u32 {
+        return switch (self.inner) {
+            .transfer => |t| t.getContentLength(),
+            .cached => |c| switch (c.data) {
+                .buffer => |buf| @intCast(buf.len),
+                .file => |f| @intCast(f.len),
+            },
+        };
+    }
+
+    pub fn redirectCount(self: Response) ?u32 {
+        return switch (self.inner) {
+            .transfer => |t| if (t.response_header) |rh| rh.redirect_count else null,
+            .cached => 0,
+        };
+    }
+
+    pub fn url(self: Response) [:0]const u8 {
+        return switch (self.inner) {
+            .transfer => |t| t.url,
+            .cached => |c| c.metadata.url,
+        };
+    }
+
+    pub fn headerIterator(self: Response) HeaderIterator {
+        return switch (self.inner) {
+            .transfer => |t| t.responseHeaderIterator(),
+            .cached => |c| HeaderIterator{ .list = .{ .list = c.metadata.headers } },
+        };
+    }
+
+    pub fn abort(self: Response, err: anyerror) void {
+        switch (self.inner) {
+            .transfer => |t| t.abort(err),
+            .cached => {},
+        }
+    }
+
+    pub fn format(self: Response, writer: *std.Io.Writer) !void {
+        return switch (self.inner) {
+            .transfer => |t| try t.format(writer),
+            .cached => |c| try c.format(writer),
+        };
+    }
+};
+
 pub const Transfer = struct {
     arena: ArenaAllocator,
     id: u32 = 0,
     req: Request,
     url: [:0]const u8,
-    ctx: *anyopaque, // copied from req.ctx to make it easier for callback handlers
     client: *Client,
     // total bytes received in the response, including the response status line,
     // the headers, and the [encoded] body.
     bytes_received: usize = 0,
+    _pending_cache_metadata: ?*CacheMetadata = null,
 
     aborted: bool = false,
 
@@ -1065,7 +1253,7 @@ pub const Transfer = struct {
     // as abort (doesn't send a notification, doesn't invoke an error callback)
     fn kill(self: *Transfer) void {
         if (self.req.shutdown_callback) |cb| {
-            cb(self.ctx);
+            cb(self.req.ctx);
         }
 
         if (self._performing or self.client.performing) {
@@ -1101,9 +1289,9 @@ pub const Transfer = struct {
         });
 
         if (execute_callback) {
-            self.req.error_callback(self.ctx, err);
+            self.req.error_callback(self.req.ctx, err);
         } else if (self.req.shutdown_callback) |cb| {
-            cb(self.ctx);
+            cb(self.req.ctx);
         }
     }
 
@@ -1352,10 +1540,60 @@ pub const Transfer = struct {
             .transfer = transfer,
         });
 
-        const proceed = transfer.req.header_callback(transfer) catch |err| {
+        const proceed = transfer.req.header_callback(Response.fromTransfer(transfer)) catch |err| {
             log.err(.http, "header_callback", .{ .err = err, .req = transfer });
             return err;
         };
+
+        if (transfer.client.network.cache != null and transfer.req.method == .GET) {
+            const rh = &transfer.response_header.?;
+            const allocator = transfer.arena.allocator();
+
+            const vary = if (conn.getResponseHeader("vary", 0)) |h| h.value else null;
+
+            const maybe_cm = try Cache.tryCache(
+                allocator,
+                std.time.timestamp(),
+                transfer.url,
+                rh.status,
+                rh.contentType(),
+                if (conn.getResponseHeader("cache-control", 0)) |h| h.value else null,
+                vary,
+                if (conn.getResponseHeader("age", 0)) |h| h.value else null,
+                conn.getResponseHeader("set-cookie", 0) != null,
+                conn.getResponseHeader("authorization", 0) != null,
+            );
+
+            if (maybe_cm) |cm| {
+                var iter = transfer.responseHeaderIterator();
+                var header_list = try iter.collect(allocator);
+                const end_of_response = header_list.items.len;
+
+                if (vary) |vary_str| {
+                    var req_it = transfer.req.headers.iterator();
+
+                    while (req_it.next()) |hdr| {
+                        var vary_iter = std.mem.splitScalar(u8, vary_str, ',');
+
+                        while (vary_iter.next()) |part| {
+                            const name = std.mem.trim(u8, part, &std.ascii.whitespace);
+                            if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
+                                try header_list.append(allocator, .{
+                                    .name = try allocator.dupe(u8, hdr.name),
+                                    .value = try allocator.dupe(u8, hdr.value),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                const metadata = try transfer.arena.allocator().create(CacheMetadata);
+                metadata.* = cm;
+                metadata.headers = header_list.items[0..end_of_response];
+                metadata.vary_headers = header_list.items[end_of_response..];
+                transfer._pending_cache_metadata = metadata;
+            }
+        }
 
         return proceed and transfer.aborted == false;
     }
@@ -1455,7 +1693,7 @@ pub const Transfer = struct {
     fn _fulfill(transfer: *Transfer, status: u16, headers: []const http.Header, body: ?[]const u8) !void {
         const req = &transfer.req;
         if (req.start_callback) |cb| {
-            try cb(transfer);
+            try cb(Response.fromTransfer(transfer));
         }
 
         transfer.response_header = .{
@@ -1474,13 +1712,13 @@ pub const Transfer = struct {
         }
 
         lp.assert(transfer._header_done_called == false, "Transfer.fulfill header_done_called", .{});
-        if (try req.header_callback(transfer) == false) {
+        if (try req.header_callback(Response.fromTransfer(transfer)) == false) {
             transfer.abort(error.Abort);
             return;
         }
 
         if (body) |b| {
-            try req.data_callback(transfer, b);
+            try req.data_callback(Response.fromTransfer(transfer), b);
         }
 
         try req.done_callback(req.ctx);
@@ -1517,10 +1755,10 @@ pub const Transfer = struct {
 };
 
 const Noop = struct {
-    fn headerCallback(_: *Transfer) !bool {
+    fn headerCallback(_: Response) !bool {
         return true;
     }
-    fn dataCallback(_: *Transfer, _: []const u8) !void {}
+    fn dataCallback(_: Response, _: []const u8) !void {}
     fn doneCallback(_: *anyopaque) !void {}
     fn errorCallback(_: *anyopaque, _: anyerror) void {}
 };
