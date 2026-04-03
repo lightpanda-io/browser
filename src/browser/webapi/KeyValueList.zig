@@ -22,6 +22,7 @@ const String = @import("../../string.zig").String;
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const Execution = js.Execution;
 
 const Allocator = std.mem.Allocator;
 
@@ -111,12 +112,11 @@ pub fn get(self: *const KeyValueList, name: []const u8) ?[]const u8 {
     return null;
 }
 
-pub fn getAll(self: *const KeyValueList, name: []const u8, page: *Page) ![]const []const u8 {
-    const arena = page.call_arena;
+pub fn getAll(self: *const KeyValueList, allocator: Allocator, name: []const u8) ![]const []const u8 {
     var arr: std.ArrayList([]const u8) = .empty;
     for (self._entries.items) |*entry| {
         if (entry.name.eqlSlice(name)) {
-            try arr.append(arena, entry.value.str());
+            try arr.append(allocator, entry.value.str());
         }
     }
     return arr.items;
@@ -260,7 +260,7 @@ pub const Iterator = struct {
 
     pub const Entry = struct { []const u8, []const u8 };
 
-    pub fn next(self: *Iterator, _: *const Page) ?Iterator.Entry {
+    pub fn next(self: *Iterator, _: *const Execution) ?Iterator.Entry {
         const index = self.index;
         const entries = self.kv._entries.items;
         if (index >= entries.len) {

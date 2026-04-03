@@ -23,6 +23,7 @@ const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
 const NodeLive = @import("node_live.zig").NodeLive;
+const Execution = js.Execution;
 
 const Mode = enum {
     tag,
@@ -77,7 +78,7 @@ pub fn getByName(self: *HTMLCollection, name: []const u8, page: *Page) ?*Element
     };
 }
 
-pub fn iterator(self: *HTMLCollection, page: *Page) !*Iterator {
+pub fn iterator(self: *HTMLCollection, exec: *const Execution) !*Iterator {
     return Iterator.init(.{
         .list = self,
         .tw = switch (self._data) {
@@ -94,7 +95,7 @@ pub fn iterator(self: *HTMLCollection, page: *Page) !*Iterator {
             .form => |*impl| .{ .form = impl._tw.clone() },
             .empty => .empty,
         },
-    }, page);
+    }, exec);
 }
 
 const GenericIterator = @import("iterator.zig").Entry;
@@ -115,7 +116,7 @@ pub const Iterator = GenericIterator(struct {
         empty: void,
     },
 
-    pub fn next(self: *@This(), _: *Page) ?*Element {
+    pub fn next(self: *@This(), _: *const Execution) ?*Element {
         return switch (self.list._data) {
             .tag => |*impl| impl.nextTw(&self.tw.tag),
             .tag_name => |*impl| impl.nextTw(&self.tw.tag_name),

@@ -18,10 +18,12 @@
 
 const std = @import("std");
 
+const js = @import("../../js/js.zig");
 const Node = @import("../Node.zig");
 const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
 const GenericIterator = @import("iterator.zig").Entry;
+const Execution = js.Execution;
 
 // Optimized for node.childNodes, which has to be a live list.
 // No need to go through a TreeWalker or add any filtering.
@@ -140,9 +142,9 @@ const Iterator = struct {
 
     const Entry = struct { u32, *Node };
 
-    pub fn next(self: *Iterator, page: *Page) !?Entry {
+    pub fn next(self: *Iterator, exec: *const Execution) !?Entry {
         const index = self.index;
-        const node = try self.list.getAtIndex(index, page) orelse return null;
+        const node = try self.list.getAtIndex(index, exec.context.page) orelse return null;
         self.index = index + 1;
         return .{ index, node };
     }

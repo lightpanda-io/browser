@@ -41,7 +41,7 @@ pub fn delete(self: *Headers, name: []const u8, page: *Page) void {
 
 pub fn get(self: *const Headers, name: []const u8, page: *Page) !?[]const u8 {
     const normalized_name = normalizeHeaderName(name, page);
-    const all_values = try self._list.getAll(normalized_name, page);
+    const all_values = try self._list.getAll(page.call_arena, normalized_name);
 
     if (all_values.len == 0) {
         return null;
@@ -62,16 +62,16 @@ pub fn set(self: *Headers, name: []const u8, value: []const u8, page: *Page) !vo
     try self._list.set(page.arena, normalized_name, value);
 }
 
-pub fn keys(self: *Headers, page: *Page) !*KeyValueList.KeyIterator {
-    return KeyValueList.KeyIterator.init(.{ .list = self, .kv = &self._list }, page);
+pub fn keys(self: *Headers, exec: *const js.Execution) !*KeyValueList.KeyIterator {
+    return KeyValueList.KeyIterator.init(.{ .list = self, .kv = &self._list }, exec);
 }
 
-pub fn values(self: *Headers, page: *Page) !*KeyValueList.ValueIterator {
-    return KeyValueList.ValueIterator.init(.{ .list = self, .kv = &self._list }, page);
+pub fn values(self: *Headers, exec: *const js.Execution) !*KeyValueList.ValueIterator {
+    return KeyValueList.ValueIterator.init(.{ .list = self, .kv = &self._list }, exec);
 }
 
-pub fn entries(self: *Headers, page: *Page) !*KeyValueList.EntryIterator {
-    return KeyValueList.EntryIterator.init(.{ .list = self, .kv = &self._list }, page);
+pub fn entries(self: *Headers, exec: *const js.Execution) !*KeyValueList.EntryIterator {
+    return KeyValueList.EntryIterator.init(.{ .list = self, .kv = &self._list }, exec);
 }
 
 pub fn forEach(self: *Headers, cb_: js.Function, js_this_: ?js.Object) !void {

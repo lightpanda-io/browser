@@ -330,7 +330,10 @@ pub fn createContext(self: *Env, page: *Page, params: ContextParams) !*Context {
         .scheduler = .init(context_arena),
         .identity = params.identity,
         .identity_arena = params.identity_arena,
+        .execution = undefined,
     };
+    // Initialize execution after context is created since it contains self-references
+    context.execution = js.Execution.fromContext(context);
 
     {
         // Multiple contexts can be created for the same Window (via CDP). We only

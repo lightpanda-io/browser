@@ -26,6 +26,7 @@ const Allocator = std.mem.Allocator;
 const Page = @import("../../Page.zig");
 const FormData = @import("FormData.zig");
 const KeyValueList = @import("../KeyValueList.zig");
+const Execution = js.Execution;
 
 const URLSearchParams = @This();
 
@@ -38,12 +39,12 @@ const InitOpts = union(enum) {
     query_string: []const u8,
 };
 
-pub fn init(opts_: ?InitOpts, page: *Page) !*URLSearchParams {
-    const arena = page.arena;
+pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
+    const arena = exec.arena;
     const params: KeyValueList = blk: {
         const opts = opts_ orelse break :blk .empty;
         switch (opts) {
-            .query_string => |qs| break :blk try paramsFromString(arena, qs, &page.buf),
+            .query_string => |qs| break :blk try paramsFromString(arena, qs, exec.buf),
             .form_data => |fd| break :blk try KeyValueList.copy(arena, fd._list),
             .value => |js_val| {
                 // Order matters here; Array is also an Object.
@@ -51,24 +52,25 @@ pub fn init(opts_: ?InitOpts, page: *Page) !*URLSearchParams {
                     break :blk try paramsFromArray(arena, js_val.toArray());
                 }
                 if (js_val.isObject()) {
-                    break :blk try KeyValueList.fromJsObject(arena, js_val.toObject(), null, page);
+                    // normalizer is null, so page won't be used
+                    break :blk try KeyValueList.fromJsObject(arena, js_val.toObject(), null, exec.context.page);
                 }
                 if (js_val.isString()) |js_str| {
-                    break :blk try paramsFromString(arena, try js_str.toSliceWithAlloc(arena), &page.buf);
+                    break :blk try paramsFromString(arena, try js_str.toSliceWithAlloc(arena), exec.buf);
                 }
                 return error.InvalidArgument;
             },
         }
     };
 
-    return page._factory.create(URLSearchParams{
+    return exec._factory.create(URLSearchParams{
         ._arena = arena,
         ._params = params,
     });
 }
 
-pub fn updateFromString(self: *URLSearchParams, query_string: []const u8, page: *Page) !void {
-    self._params = try paramsFromString(self._arena, query_string, &page.buf);
+pub fn updateFromString(self: *URLSearchParams, query_string: []const u8, exec: *const Execution) !void {
+    self._params = try paramsFromString(self._arena, query_string, exec.buf);
 }
 
 pub fn getSize(self: *const URLSearchParams) usize {
@@ -79,8 +81,8 @@ pub fn get(self: *const URLSearchParams, name: []const u8) ?[]const u8 {
     return self._params.get(name);
 }
 
-pub fn getAll(self: *const URLSearchParams, name: []const u8, page: *Page) ![]const []const u8 {
-    return self._params.getAll(name, page);
+pub fn getAll(self: *const URLSearchParams, name: []const u8, exec: *const Execution) ![]const []const u8 {
+    return self._params.getAll(exec.call_arena, name);
 }
 
 pub fn has(self: *const URLSearchParams, name: []const u8) bool {
@@ -99,16 +101,16 @@ pub fn delete(self: *URLSearchParams, name: []const u8, value: ?[]const u8) void
     self._params.delete(name, value);
 }
 
-pub fn keys(self: *URLSearchParams, page: *Page) !*KeyValueList.KeyIterator {
-    return KeyValueList.KeyIterator.init(.{ .list = self, .kv = &self._params }, page);
+pub fn keys(self: *URLSearchParams, exec: *const Execution) !*KeyValueList.KeyIterator {
+    return KeyValueList.KeyIterator.init(.{ .list = self, .kv = &self._params }, exec);
 }
 
-pub fn values(self: *URLSearchParams, page: *Page) !*KeyValueList.ValueIterator {
-    return KeyValueList.ValueIterator.init(.{ .list = self, .kv = &self._params }, page);
+pub fn values(self: *URLSearchParams, exec: *const Execution) !*KeyValueList.ValueIterator {
+    return KeyValueList.ValueIterator.init(.{ .list = self, .kv = &self._params }, exec);
 }
 
-pub fn entries(self: *URLSearchParams, page: *Page) !*KeyValueList.EntryIterator {
-    return KeyValueList.EntryIterator.init(.{ .list = self, .kv = &self._params }, page);
+pub fn entries(self: *URLSearchParams, exec: *const Execution) !*KeyValueList.EntryIterator {
+    return KeyValueList.EntryIterator.init(.{ .list = self, .kv = &self._params }, exec);
 }
 
 pub fn toString(self: *const URLSearchParams, writer: *std.Io.Writer) !void {
@@ -314,7 +316,7 @@ pub const Iterator = struct {
 
     const Entry = struct { []const u8, []const u8 };
 
-    pub fn next(self: *Iterator, _: *Page) !?Iterator.Entry {
+    pub fn next(self: *Iterator, _: *const Execution) !?Iterator.Entry {
         const index = self.index;
         const items = self.list._params.items;
         if (index >= items.len) {
@@ -352,8 +354,8 @@ pub const JsApi = struct {
     pub const sort = bridge.function(URLSearchParams.sort, .{});
 
     pub const toString = bridge.function(_toString, .{});
-    fn _toString(self: *const URLSearchParams, page: *Page) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(page.call_arena);
+    fn _toString(self: *const URLSearchParams, exec: *const Execution) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(exec.call_arena);
         try self.toString(&buf.writer);
         return buf.written();
     }

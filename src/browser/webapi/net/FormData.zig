@@ -57,7 +57,7 @@ pub fn get(self: *const FormData, name: []const u8) ?[]const u8 {
 }
 
 pub fn getAll(self: *const FormData, name: []const u8, page: *Page) ![]const []const u8 {
-    return self._list.getAll(name, page);
+    return self._list.getAll(page.call_arena, name);
 }
 
 pub fn has(self: *const FormData, name: []const u8) bool {
@@ -76,16 +76,16 @@ pub fn delete(self: *FormData, name: []const u8) void {
     self._list.delete(name, null);
 }
 
-pub fn keys(self: *FormData, page: *Page) !*KeyValueList.KeyIterator {
-    return KeyValueList.KeyIterator.init(.{ .list = self, .kv = &self._list }, page);
+pub fn keys(self: *FormData, exec: *const js.Execution) !*KeyValueList.KeyIterator {
+    return KeyValueList.KeyIterator.init(.{ .list = self, .kv = &self._list }, exec);
 }
 
-pub fn values(self: *FormData, page: *Page) !*KeyValueList.ValueIterator {
-    return KeyValueList.ValueIterator.init(.{ .list = self, .kv = &self._list }, page);
+pub fn values(self: *FormData, exec: *const js.Execution) !*KeyValueList.ValueIterator {
+    return KeyValueList.ValueIterator.init(.{ .list = self, .kv = &self._list }, exec);
 }
 
-pub fn entries(self: *FormData, page: *Page) !*KeyValueList.EntryIterator {
-    return KeyValueList.EntryIterator.init(.{ .list = self, .kv = &self._list }, page);
+pub fn entries(self: *FormData, exec: *const js.Execution) !*KeyValueList.EntryIterator {
+    return KeyValueList.EntryIterator.init(.{ .list = self, .kv = &self._list }, exec);
 }
 
 pub fn forEach(self: *FormData, cb_: js.Function, js_this_: ?js.Object) !void {

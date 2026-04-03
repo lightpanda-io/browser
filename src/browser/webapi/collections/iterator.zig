@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
+const Execution = js.Execution;
 
 pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
     const R = reflect(Inner, field);
@@ -38,8 +39,8 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
             pub const js_as_object = true;
         };
 
-        pub fn init(inner: Inner, page: *Page) !*Self {
-            const self = try page._factory.create(Self{ ._inner = inner });
+        pub fn init(inner: Inner, executor: R.Executor) !*Self {
+            const self = try executor._factory.create(Self{ ._inner = inner });
 
             if (@hasDecl(Inner, "acquireRef")) {
                 self._inner.acquireRef();
@@ -62,8 +63,8 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
             self._rc.acquire();
         }
 
-        pub fn next(self: *Self, page: *Page) if (R.has_error_return) anyerror!Result else Result {
-            const entry = (if (comptime R.has_error_return) try self._inner.next(page) else self._inner.next(page)) orelse {
+        pub fn next(self: *Self, executor: R.Executor) if (R.has_error_return) anyerror!Result else Result {
+            const entry = (if (comptime R.has_error_return) try self._inner.next(executor) else self._inner.next(executor)) orelse {
                 return .{ .done = true, .value = null };
             };
 
@@ -92,17 +93,22 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
 }
 
 fn reflect(comptime Inner: type, comptime field: ?[]const u8) Reflect {
-    const R = @typeInfo(@TypeOf(Inner.next)).@"fn".return_type.?;
+    const fn_info = @typeInfo(@TypeOf(Inner.next)).@"fn";
+    const R = fn_info.return_type.?;
     const has_error_return = @typeInfo(R) == .error_union;
+    // The executor type is the last parameter of inner.next (after self)
+    const Executor = fn_info.params[1].type.?;
     return .{
         .has_error_return = has_error_return,
         .ValueType = ValueType(unwrapOptional(unwrapError(R)), field),
+        .Executor = Executor,
     };
 }
 
 const Reflect = struct {
     has_error_return: bool,
     ValueType: type,
+    Executor: type,
 };
 
 fn unwrapError(comptime T: type) type {
