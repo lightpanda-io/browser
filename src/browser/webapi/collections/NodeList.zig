@@ -24,6 +24,7 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
 const Node = @import("../Node.zig");
+const Execution = js.Execution;
 
 const ChildNodes = @import("ChildNodes.zig");
 const RadioNodeList = @import("RadioNodeList.zig");
@@ -79,15 +80,15 @@ pub fn getAtIndex(self: *NodeList, index: usize, page: *Page) !?*Node {
 }
 
 pub fn keys(self: *NodeList, page: *Page) !*KeyIterator {
-    return .init(.{ .list = self }, page);
+    return .init(.{ .list = self }, page.js.execution);
 }
 
 pub fn values(self: *NodeList, page: *Page) !*ValueIterator {
-    return .init(.{ .list = self }, page);
+    return .init(.{ .list = self }, page.js.execution);
 }
 
 pub fn entries(self: *NodeList, page: *Page) !*EntryIterator {
-    return .init(.{ .list = self }, page);
+    return .init(.{ .list = self }, page.js.execution);
 }
 
 pub fn forEach(self: *NodeList, cb: js.Function, page: *Page) !void {
@@ -126,9 +127,9 @@ const Iterator = struct {
         self.list.acquireRef();
     }
 
-    pub fn next(self: *Iterator, page: *Page) !?Entry {
+    pub fn next(self: *Iterator, exec: *const Execution) !?Entry {
         const index = self.index;
-        const node = try self.list.getAtIndex(index, page) orelse return null;
+        const node = try self.list.getAtIndex(index, exec.context.page) orelse return null;
         self.index = index + 1;
         return .{ index, node };
     }

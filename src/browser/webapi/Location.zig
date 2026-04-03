@@ -27,7 +27,7 @@ const Location = @This();
 _url: *URL,
 
 pub fn init(raw_url: [:0]const u8, page: *Page) !*Location {
-    const url = try URL.init(raw_url, null, page);
+    const url = try URL.init(raw_url, null, &page.js.execution);
     return page._factory.create(Location{
         ._url = url,
     });
@@ -54,11 +54,11 @@ pub fn getPort(self: *const Location) []const u8 {
 }
 
 pub fn getOrigin(self: *const Location, page: *const Page) ![]const u8 {
-    return self._url.getOrigin(page);
+    return self._url.getOrigin(&page.js.execution);
 }
 
 pub fn getSearch(self: *const Location, page: *const Page) ![]const u8 {
-    return self._url.getSearch(page);
+    return self._url.getSearch(&page.js.execution);
 }
 
 pub fn getHash(self: *const Location) []const u8 {
@@ -99,7 +99,7 @@ pub fn reload(_: *const Location, page: *Page) !void {
 }
 
 pub fn toString(self: *const Location, page: *const Page) ![:0]const u8 {
-    return self._url.toString(page);
+    return self._url.toString(&page.js.execution);
 }
 
 pub const JsApi = struct {

@@ -448,6 +448,10 @@ fn isPage(comptime T: type) bool {
     return T == *Page or T == *const Page;
 }
 
+fn isExecution(comptime T: type) bool {
+    return T == *js.Execution or T == *const js.Execution;
+}
+
 // These wrap the raw v8 C API to provide a cleaner interface.
 pub const FunctionCallbackInfo = struct {
     handle: *const v8.FunctionCallbackInfo,
@@ -727,7 +731,13 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             break :blk params[0 .. params.len - 1];
         }
 
-        // we have neither a Page nor a JsObject. All params must be
+        // If the last parameter is Execution, set it from the context
+        if (comptime isExecution(params[params.len - 1].type.?)) {
+            @field(args, tupleFieldName(params.len - 1 + offset)) = &local.ctx.execution;
+            break :blk params[0 .. params.len - 1];
+        }
+
+        // we have neither a Page, Execution, nor a JsObject. All params must be
         // bound to a JavaScript value.
         break :blk params;
     };
@@ -776,7 +786,9 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
         }
 
         if (comptime isPage(param.type.?)) {
-            @compileError("Page must be the last parameter (or 2nd last if there's a JsThis): " ++ @typeName(F));
+            @compileError("Page must be the last parameter: " ++ @typeName(F));
+        } else if (comptime isExecution(param.type.?)) {
+            @compileError("Execution must be the last parameter: " ++ @typeName(F));
         } else if (i >= js_parameter_count) {
             if (@typeInfo(param.type.?) != .optional) {
                 return error.InvalidArgument;

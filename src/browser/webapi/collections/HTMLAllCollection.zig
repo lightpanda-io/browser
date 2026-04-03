@@ -24,6 +24,7 @@ const Page = @import("../../Page.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
+const Execution = js.Execution;
 
 const HTMLAllCollection = @This();
 
@@ -133,11 +134,11 @@ pub fn callable(self: *HTMLAllCollection, arg: CAllAsFunctionArg, page: *Page) ?
     };
 }
 
-pub fn iterator(self: *HTMLAllCollection, page: *Page) !*Iterator {
+pub fn iterator(self: *HTMLAllCollection, exec: *const Execution) !*Iterator {
     return Iterator.init(.{
         .list = self,
         .tw = self._tw.clone(),
-    }, page);
+    }, exec);
 }
 
 const GenericIterator = @import("iterator.zig").Entry;
@@ -145,7 +146,7 @@ pub const Iterator = GenericIterator(struct {
     list: *HTMLAllCollection,
     tw: TreeWalker.FullExcludeSelf,
 
-    pub fn next(self: *@This(), _: *Page) ?*Element {
+    pub fn next(self: *@This(), _: *const Execution) ?*Element {
         while (self.tw.next()) |node| {
             if (node.is(Element)) |el| {
                 return el;

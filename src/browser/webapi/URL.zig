@@ -23,6 +23,7 @@ const U = @import("../URL.zig");
 const Page = @import("../Page.zig");
 const URLSearchParams = @import("net/URLSearchParams.zig");
 const Blob = @import("Blob.zig");
+const Execution = js.Execution;
 
 const Allocator = std.mem.Allocator;
 
@@ -36,11 +37,12 @@ _search_params: ?*URLSearchParams = null,
 pub const resolve = @import("../URL.zig").resolve;
 pub const eqlDocument = @import("../URL.zig").eqlDocument;
 
-pub fn init(url: [:0]const u8, base_: ?[:0]const u8, page: *Page) !*URL {
-    const arena = page.arena;
+pub fn init(url: [:0]const u8, base_: ?[:0]const u8, exec: *const Execution) !*URL {
+    const arena = exec.arena;
+    const page = exec.context.page;
 
     if (std.mem.eql(u8, url, "about:blank")) {
-        return page._factory.create(URL{
+        return exec._factory.create(URL{
             ._raw = "about:blank",
             ._arena = arena,
         });
@@ -63,7 +65,7 @@ pub fn init(url: [:0]const u8, base_: ?[:0]const u8, page: *Page) !*URL {
 
     const raw = try resolve(arena, base, url, .{ .always_dupe = true });
 
-    return page._factory.create(URL{
+    return exec._factory.create(URL{
         ._raw = raw,
         ._arena = arena,
     });
@@ -107,20 +109,20 @@ pub fn getPort(self: *const URL) []const u8 {
     return U.getPort(self._raw);
 }
 
-pub fn getOrigin(self: *const URL, page: *const Page) ![]const u8 {
-    return (try U.getOrigin(page.call_arena, self._raw)) orelse {
+pub fn getOrigin(self: *const URL, exec: *const Execution) ![]const u8 {
+    return (try U.getOrigin(exec.call_arena, self._raw)) orelse {
         // yes, a null string, that's what the spec wants
         return "null";
     };
 }
 
-pub fn getSearch(self: *const URL, page: *const Page) ![]const u8 {
+pub fn getSearch(self: *const URL, exec: *const Execution) ![]const u8 {
     // If searchParams has been accessed, generate search from it
     if (self._search_params) |sp| {
         if (sp.getSize() == 0) {
             return "";
         }
-        var buf = std.Io.Writer.Allocating.init(page.call_arena);
+        var buf = std.Io.Writer.Allocating.init(exec.call_arena);
         try buf.writer.writeByte('?');
         try sp.toString(&buf.writer);
         return buf.written();
@@ -132,30 +134,31 @@ pub fn getHash(self: *const URL) []const u8 {
     return U.getHash(self._raw);
 }
 
-pub fn getSearchParams(self: *URL, page: *Page) !*URLSearchParams {
+pub fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
     if (self._search_params) |sp| {
         return sp;
     }
 
     // Get current search string (without the '?')
-    const search = try self.getSearch(page);
+    const search = try self.getSearch(exec);
     const search_value = if (search.len > 0) search[1..] else "";
 
-    const params = try URLSearchParams.init(.{ .query_string = search_value }, page);
+    const params = try URLSearchParams.init(.{ .query_string = search_value }, exec);
     self._search_params = params;
     return params;
 }
 
-pub fn setHref(self: *URL, value: []const u8, page: *Page) !void {
+pub fn setHref(self: *URL, value: []const u8, exec: *const Execution) !void {
+    const page = exec.context.page;
     const base = if (U.isCompleteHTTPUrl(value)) page.url else self._raw;
-    const raw = try U.resolve(self._arena orelse page.arena, base, value, .{ .always_dupe = true });
+    const raw = try U.resolve(self._arena orelse exec.arena, base, value, .{ .always_dupe = true });
     self._raw = raw;
 
     // Update existing searchParams if it exists
     if (self._search_params) |sp| {
         const search = U.getSearch(raw);
         const search_value = if (search.len > 0) search[1..] else "";
-        try sp.updateFromString(search_value, page);
+        try sp.updateFromString(search_value, exec);
     }
 }
 
@@ -184,7 +187,7 @@ pub fn setPathname(self: *URL, value: []const u8) !void {
     self._raw = try U.setPathname(self._raw, value, allocator);
 }
 
-pub fn setSearch(self: *URL, value: []const u8, page: *Page) !void {
+pub fn setSearch(self: *URL, value: []const u8, exec: *const Execution) !void {
     const allocator = self._arena orelse return error.NoAllocator;
     self._raw = try U.setSearch(self._raw, value, allocator);
 
@@ -192,7 +195,7 @@ pub fn setSearch(self: *URL, value: []const u8, page: *Page) !void {
     if (self._search_params) |sp| {
         const search = U.getSearch(self._raw);
         const search_value = if (search.len > 0) search[1..] else "";
-        try sp.updateFromString(search_value, page);
+        try sp.updateFromString(search_value, exec);
     }
 }
 
@@ -201,7 +204,7 @@ pub fn setHash(self: *URL, value: []const u8) !void {
     self._raw = try U.setHash(self._raw, value, allocator);
 }
 
-pub fn toString(self: *const URL, page: *const Page) ![:0]const u8 {
+pub fn toString(self: *const URL, exec: *const Execution) ![:0]const u8 {
     const sp = self._search_params orelse {
         return self._raw;
     };
@@ -217,7 +220,7 @@ pub fn toString(self: *const URL, page: *const Page) ![:0]const u8 {
     const hash = self.getHash();
 
     // Build the new URL string
-    var buf = std.Io.Writer.Allocating.init(page.call_arena);
+    var buf = std.Io.Writer.Allocating.init(exec.call_arena);
     try buf.writer.writeAll(base);
 
     // Add / if missing (e.g., "https://example.com" -> "https://example.com/")

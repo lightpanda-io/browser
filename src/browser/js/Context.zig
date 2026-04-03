@@ -25,6 +25,7 @@ const bridge = @import("bridge.zig");
 const Env = @import("Env.zig");
 const Origin = @import("Origin.zig");
 const Scheduler = @import("Scheduler.zig");
+const Execution = @import("Execution.zig");
 
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
@@ -110,6 +111,10 @@ script_manager: ?*ScriptManager,
 
 // Our macrotasks
 scheduler: Scheduler,
+
+// Execution context for worker-compatible APIs. This provides a common
+// interface that works in both Page and Worker contexts.
+execution: Execution,
 
 unknown_properties: (if (IS_DEBUG) std.StringHashMapUnmanaged(UnknownPropertyStat) else void) = if (IS_DEBUG) .{} else {},
 

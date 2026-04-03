@@ -24,6 +24,7 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 const GenericIterator = @import("iterator.zig").Entry;
+const Execution = js.Execution;
 
 pub const DOMTokenList = @This();
 
@@ -43,7 +44,7 @@ const Lookup = std.StringArrayHashMapUnmanaged(void);
 const WHITESPACE = " \t\n\r\x0C";
 
 pub fn length(self: *const DOMTokenList, page: *Page) !u32 {
-    const tokens = try self.getTokens(page);
+    const tokens = try self.getTokens(page.call_arena);
     return @intCast(tokens.count());
 }
 
@@ -82,8 +83,8 @@ pub fn add(self: *DOMTokenList, tokens: []const []const u8, page: *Page) !void {
         try validateToken(token);
     }
 
-    var lookup = try self.getTokens(page);
     const allocator = page.call_arena;
+    var lookup = try self.getTokens(allocator);
     try lookup.ensureUnusedCapacity(allocator, tokens.len);
 
     for (tokens) |token| {
@@ -98,7 +99,7 @@ pub fn remove(self: *DOMTokenList, tokens: []const []const u8, page: *Page) !voi
         try validateToken(token);
     }
 
-    var lookup = try self.getTokens(page);
+    var lookup = try self.getTokens(page.call_arena);
     for (tokens) |token| {
         _ = lookup.orderedRemove(token);
     }
@@ -149,7 +150,8 @@ pub fn replace(self: *DOMTokenList, old_token: []const u8, new_token: []const u8
         return error.InvalidCharacterError;
     }
 
-    var lookup = try self.getTokens(page);
+    const allocator = page.call_arena;
+    var lookup = try self.getTokens(page.call_arena);
 
     // Check if old_token exists
     if (!lookup.contains(old_token)) {
@@ -162,7 +164,6 @@ pub fn replace(self: *DOMTokenList, old_token: []const u8, new_token: []const u8
         return true;
     }
 
-    const allocator = page.call_arena;
     // Build new token list preserving order but replacing old with new
     var new_tokens = try std.ArrayList([]const u8).initCapacity(allocator, lookup.count());
     var replaced_old = false;
@@ -202,16 +203,16 @@ pub fn setValue(self: *DOMTokenList, value: String, page: *Page) !void {
     try self._element.setAttribute(self._attribute_name, value, page);
 }
 
-pub fn keys(self: *DOMTokenList, page: *Page) !*KeyIterator {
-    return .init(.{ .list = self }, page);
+pub fn keys(self: *DOMTokenList, exec: *const Execution) !*KeyIterator {
+    return .init(.{ .list = self }, exec);
 }
 
-pub fn values(self: *DOMTokenList, page: *Page) !*ValueIterator {
-    return .init(.{ .list = self }, page);
+pub fn values(self: *DOMTokenList, exec: *const Execution) !*ValueIterator {
+    return .init(.{ .list = self }, exec);
 }
 
-pub fn entries(self: *DOMTokenList, page: *Page) !*EntryIterator {
-    return .init(.{ .list = self }, page);
+pub fn entries(self: *DOMTokenList, exec: *const Execution) !*EntryIterator {
+    return .init(.{ .list = self }, exec);
 }
 
 pub fn forEach(self: *DOMTokenList, cb_: js.Function, js_this_: ?js.Object, page: *Page) !void {
@@ -237,14 +238,13 @@ pub fn forEach(self: *DOMTokenList, cb_: js.Function, js_this_: ?js.Object, page
     }
 }
 
-fn getTokens(self: *const DOMTokenList, page: *Page) !Lookup {
+fn getTokens(self: *const DOMTokenList, allocator: std.mem.Allocator) !Lookup {
     const value = self.getValue();
     if (value.len == 0) {
         return .empty;
     }
 
     var list: Lookup = .empty;
-    const allocator = page.call_arena;
     try list.ensureTotalCapacity(allocator, 4);
 
     var it = std.mem.tokenizeAny(u8, value, WHITESPACE);
@@ -282,9 +282,9 @@ const Iterator = struct {
 
     const Entry = struct { u32, []const u8 };
 
-    pub fn next(self: *Iterator, page: *Page) !?Entry {
+    pub fn next(self: *Iterator, exec: *const Execution) !?Entry {
         const index = self.index;
-        const node = try self.list.item(index, page) orelse return null;
+        const node = try self.list.item(index, exec.context.page) orelse return null;
         self.index = index + 1;
         return .{ index, node };
     }
