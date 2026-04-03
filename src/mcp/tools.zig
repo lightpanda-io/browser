@@ -9,57 +9,72 @@ const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
 const CDPNode = @import("../cdp/Node.zig");
 
+const goto_schema = protocol.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
+    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+    \\  },
+    \\  "required": ["url"]
+    \\}
+);
+
+const url_params_schema = protocol.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing." },
+    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+    \\  }
+    \\}
+);
+
+const evaluate_schema = protocol.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "script": { "type": "string" },
+    \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
+    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+    \\  },
+    \\  "required": ["script"]
+    \\}
+);
+
 pub const tool_list = [_]protocol.Tool{
     .{
         .name = "goto",
         .description = "Navigate to a specified URL and load the page in memory so it can be reused later for info extraction.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." }
-            \\  },
-            \\  "required": ["url"]
-            \\}
-        ),
+        .inputSchema = goto_schema,
+    },
+    .{
+        .name = "navigate",
+        .description = "Alias for goto. Navigate to a specified URL and load the page in memory.",
+        .inputSchema = goto_schema,
     },
     .{
         .name = "markdown",
         .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching markdown." }
-            \\  }
-            \\}
-        ),
+        .inputSchema = url_params_schema,
     },
     .{
         .name = "links",
         .description = "Extract all links in the opened page. If a url is provided, it navigates to that url first.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting links." }
-            \\  }
-            \\}
-        ),
+        .inputSchema = url_params_schema,
     },
     .{
         .name = "evaluate",
         .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "script": { "type": "string" },
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." }
-            \\  },
-            \\  "required": ["script"]
-            \\}
-        ),
+        .inputSchema = evaluate_schema,
+    },
+    .{
+        .name = "eval",
+        .description = "Alias for evaluate. Evaluate JavaScript in the current page context.",
+        .inputSchema = evaluate_schema,
     },
     .{
         .name = "semantic_tree",
@@ -69,6 +84,8 @@ pub const tool_list = [_]protocol.Tool{
             \\  "type": "object",
             \\  "properties": {
             \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." },
             \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root." },
             \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
             \\  }
@@ -91,38 +108,17 @@ pub const tool_list = [_]protocol.Tool{
     .{
         .name = "interactiveElements",
         .description = "Extract interactive elements from the opened page. If a url is provided, it navigates to that url first.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting interactive elements." }
-            \\  }
-            \\}
-        ),
+        .inputSchema = url_params_schema,
     },
     .{
         .name = "structuredData",
         .description = "Extract structured data (like JSON-LD, OpenGraph, etc) from the opened page. If a url is provided, it navigates to that url first.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting structured data." }
-            \\  }
-            \\}
-        ),
+        .inputSchema = url_params_schema,
     },
     .{
         .name = "detectForms",
         .description = "Detect all forms on the page and return their structure including fields, types, and required status. If a url is provided, it navigates to that url first.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before detecting forms." }
-            \\  }
-            \\}
-        ),
+        .inputSchema = url_params_schema,
     },
     .{
         .name = "click",
@@ -189,15 +185,21 @@ pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 
 const GotoParams = struct {
     url: [:0]const u8,
+    timeout: ?u32 = null,
+    waitUntil: ?lp.Config.WaitUntil = null,
 };
 
 const UrlParams = struct {
     url: ?[:0]const u8 = null,
+    timeout: ?u32 = null,
+    waitUntil: ?lp.Config.WaitUntil = null,
 };
 
 const EvaluateParams = struct {
     script: [:0]const u8,
     url: ?[:0]const u8 = null,
+    timeout: ?u32 = null,
+    waitUntil: ?lp.Config.WaitUntil = null,
 };
 
 const ToolStreamingText = struct {
@@ -274,6 +276,7 @@ const ToolAction = enum {
     structuredData,
     detectForms,
     evaluate,
+    eval,
     semantic_tree,
     click,
     fill,
@@ -291,6 +294,7 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "structuredData", .structuredData },
     .{ "detectForms", .detectForms },
     .{ "evaluate", .evaluate },
+    .{ "eval", .eval },
     .{ "semantic_tree", .semantic_tree },
     .{ "click", .click },
     .{ "fill", .fill },
@@ -324,7 +328,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .interactiveElements => try handleInteractiveElements(server, arena, req.id.?, call_params.arguments),
         .structuredData => try handleStructuredData(server, arena, req.id.?, call_params.arguments),
         .detectForms => try handleDetectForms(server, arena, req.id.?, call_params.arguments),
-        .evaluate => try handleEvaluate(server, arena, req.id.?, call_params.arguments),
+        .eval, .evaluate => try handleEvaluate(server, arena, req.id.?, call_params.arguments),
         .semantic_tree => try handleSemanticTree(server, arena, req.id.?, call_params.arguments),
         .click => try handleClick(server, arena, req.id.?, call_params.arguments),
         .fill => try handleFill(server, arena, req.id.?, call_params.arguments),
@@ -335,7 +339,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 
 fn handleGoto(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgs(GotoParams, arena, arguments, server, id, "goto");
-    try performGoto(server, args.url, id);
+    try performGoto(server, args.url, id, args.timeout, args.waitUntil);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = "Navigated successfully." }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
@@ -343,7 +347,7 @@ fn handleGoto(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
 
 fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{ .page = page, .action = .markdown },
@@ -355,7 +359,7 @@ fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
 
 fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{ .page = page, .action = .links },
@@ -370,9 +374,11 @@ fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Va
         url: ?[:0]const u8 = null,
         backendNodeId: ?u32 = null,
         maxDepth: ?u32 = null,
+        timeout: ?u32 = null,
+        waitUntil: ?lp.Config.WaitUntil = null,
     };
     const args = try parseArgsOrDefault(TreeParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{
@@ -417,7 +423,7 @@ fn handleNodeDetails(server: *Server, arena: std.mem.Allocator, id: std.json.Val
 
 fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch |err| {
         log.err(.mcp, "elements collection failed", .{ .err = err });
@@ -438,7 +444,7 @@ fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.
 
 fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const data = lp.structured_data.collectStructuredData(page.document.asNode(), arena, page) catch |err| {
         log.err(.mcp, "struct data collection failed", .{ .err = err });
@@ -453,7 +459,7 @@ fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.
 
 fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const forms_data = lp.forms.collectForms(arena, page.document.asNode(), page) catch |err| {
         log.err(.mcp, "form collection failed", .{ .err = err });
@@ -474,7 +480,7 @@ fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Val
 
 fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgs(EvaluateParams, arena, arguments, server, id, "evaluate");
-    const page = try ensurePage(server, id, args.url);
+    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     var ls: js.Local.Scope = undefined;
     page.js.localScope(&ls);
@@ -630,9 +636,9 @@ fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json
     return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
-fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8) !*lp.Page {
+fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !*lp.Page {
     if (url) |u| {
-        try performGoto(server, u, id);
+        try performGoto(server, u, id, timeout, waitUntil);
     }
     return server.session.currentPage() orelse {
         try server.sendError(id, .PageNotLoaded, "Page not loaded");
@@ -668,7 +674,7 @@ fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Va
     };
 }
 
-fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
+fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !void {
     const session = server.session;
     if (session.page != null) {
         session.removePage();
@@ -689,8 +695,11 @@ fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
         try server.sendError(id, .InternalError, "Failed to start page runner");
         return error.NavigationFailed;
     };
-    runner.wait(.{ .ms = 2000 }) catch {
-        try server.sendError(id, .InternalError, "Timeout waiting for page load");
+    runner.wait(.{
+        .ms = timeout orelse 10000,
+        .until = waitUntil orelse .done,
+    }) catch {
+        try server.sendError(id, .InternalError, "Error waiting for page load");
         return error.NavigationFailed;
     };
 }
