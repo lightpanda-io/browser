@@ -44,6 +44,7 @@ pub const HeaderIterator = http.HeaderIterator;
 
 pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
 pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
+pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
 
 pub const PerformStatus = enum { cdp_socket, normal };
 
@@ -593,34 +594,6 @@ pub const Layer = struct {
     }
 };
 
-// pub const WebBotAuthLayer = struct {
-//     next: Layer = undefined,
-//     allocator: std.mem.Allocator,
-//     // null when web_bot_auth is not configured
-//     auth: ?*WebBotAuth,
-
-//     pub fn deinit(self: *WebBotAuthLayer) void {
-//         if (self.auth) |wba| wba.deinit(self.allocator);
-//     }
-
-//     pub fn layer(self: *WebBotAuthLayer) Layer {
-//         return .{
-//             .ptr = self,
-//             .vtable = &.{ .request = _request },
-//         };
-//     }
-
-//     fn _request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
-//         const self: *WebBotAuthLayer = @ptrCast(@alignCast(ptr));
-//         var our_req = req;
-//         if (self.auth) |auth| {
-//             const authority = URL.getHost(req.url);
-//             try auth.signRequest(ctx.arena, &our_req.headers, authority);
-//         }
-//         return self.next.request(ctx, our_req);
-//     }
-// };
-
 pub fn LayerStack(comptime layer_types: anytype) type {
     return struct {
         ptrs: [layer_types.len]*anyopaque,
@@ -669,8 +642,7 @@ pub fn LayerStack(comptime layer_types: anytype) type {
     };
 }
 
-// pub const Layers = LayerStack(.{ RobotsLayer, WebBotAuthLayer, CacheLayer });
-pub const Layers = LayerStack(.{ RobotsLayer, CacheLayer });
+pub const Layers = LayerStack(.{ RobotsLayer, WebBotAuthLayer, CacheLayer });
 
 const Client = @This();
 
