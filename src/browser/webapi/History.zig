@@ -20,6 +20,7 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
+const Location = @import("Location.zig");
 const PopStateEvent = @import("event/PopStateEvent.zig");
 
 const History = @This();
@@ -55,6 +56,10 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
 
     const json = state.toJson(arena) catch return error.DataClone;
     _ = try page._session.navigation.pushEntry(url, .{ .source = .history, .value = json }, page, true);
+
+    // Update page URL and location so that location.pathname reflects the pushed state
+    page.url = url;
+    page.window._location = try Location.init(url, page);
 }
 
 pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
@@ -63,6 +68,10 @@ pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
 
     const json = state.toJson(arena) catch return error.DataClone;
     _ = try page._session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, page, true);
+
+    // Update page URL and location so that location.pathname reflects the replaced state
+    page.url = url;
+    page.window._location = try Location.init(url, page);
 }
 
 fn goInner(delta: i32, page: *Page) !void {
