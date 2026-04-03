@@ -24,7 +24,6 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 const GenericIterator = @import("iterator.zig").Entry;
-const Execution = js.Execution;
 
 pub const DOMTokenList = @This();
 
@@ -203,16 +202,16 @@ pub fn setValue(self: *DOMTokenList, value: String, page: *Page) !void {
     try self._element.setAttribute(self._attribute_name, value, page);
 }
 
-pub fn keys(self: *DOMTokenList, exec: *const Execution) !*KeyIterator {
-    return .init(.{ .list = self }, exec);
+pub fn keys(self: *DOMTokenList, page: *Page) !*KeyIterator {
+    return .init(.{ .list = self }, page);
 }
 
-pub fn values(self: *DOMTokenList, exec: *const Execution) !*ValueIterator {
-    return .init(.{ .list = self }, exec);
+pub fn values(self: *DOMTokenList, page: *Page) !*ValueIterator {
+    return .init(.{ .list = self }, page);
 }
 
-pub fn entries(self: *DOMTokenList, exec: *const Execution) !*EntryIterator {
-    return .init(.{ .list = self }, exec);
+pub fn entries(self: *DOMTokenList, page: *Page) !*EntryIterator {
+    return .init(.{ .list = self }, page);
 }
 
 pub fn forEach(self: *DOMTokenList, cb_: js.Function, js_this_: ?js.Object, page: *Page) !void {
@@ -282,9 +281,9 @@ const Iterator = struct {
 
     const Entry = struct { u32, []const u8 };
 
-    pub fn next(self: *Iterator, exec: *const Execution) !?Entry {
+    pub fn next(self: *Iterator, page: *Page) !?Entry {
         const index = self.index;
-        const node = try self.list.item(index, exec.context.page) orelse return null;
+        const node = try self.list.item(index, page) orelse return null;
         self.index = index + 1;
         return .{ index, node };
     }

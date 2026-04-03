@@ -34,7 +34,7 @@ pub fn registerTypes() []const type {
     };
 }
 
-const Normalizer = *const fn ([]const u8, *Page) []const u8;
+const Normalizer = *const fn ([]const u8, []u8) []const u8;
 
 pub const Entry = struct {
     name: String,
@@ -62,14 +62,14 @@ pub fn copy(arena: Allocator, original: KeyValueList) !KeyValueList {
     return list;
 }
 
-pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?Normalizer, page: *Page) !KeyValueList {
+pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?Normalizer, buf: []u8) !KeyValueList {
     var it = try js_obj.nameIterator();
     var list = KeyValueList.init();
     try list.ensureTotalCapacity(arena, it.count);
 
     while (try it.next()) |name| {
         const js_value = try js_obj.get(name);
-        const normalized = if (comptime normalizer) |n| n(name, page) else name;
+        const normalized = if (comptime normalizer) |n| n(name, buf) else name;
 
         list._entries.appendAssumeCapacity(.{
             .name = try String.init(arena, normalized, .{}),
@@ -80,12 +80,12 @@ pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?N
     return list;
 }
 
-pub fn fromArray(arena: Allocator, kvs: []const [2][]const u8, comptime normalizer: ?Normalizer, page: *Page) !KeyValueList {
+pub fn fromArray(arena: Allocator, kvs: []const [2][]const u8, comptime normalizer: ?Normalizer, buf: []u8) !KeyValueList {
     var list = KeyValueList.init();
     try list.ensureTotalCapacity(arena, kvs.len);
 
     for (kvs) |pair| {
-        const normalized = if (comptime normalizer) |n| n(pair[0], page) else pair[0];
+        const normalized = if (comptime normalizer) |n| n(pair[0], buf) else pair[0];
 
         list._entries.appendAssumeCapacity(.{
             .name = try String.init(arena, normalized, .{}),

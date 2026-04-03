@@ -20,8 +20,8 @@ pub const InitOpts = union(enum) {
 pub fn init(opts_: ?InitOpts, page: *Page) !*Headers {
     const list = if (opts_) |opts| switch (opts) {
         .obj => |obj| try KeyValueList.copy(page.arena, obj._list),
-        .js_obj => |js_obj| try KeyValueList.fromJsObject(page.arena, js_obj, normalizeHeaderName, page),
-        .strings => |kvs| try KeyValueList.fromArray(page.arena, kvs, normalizeHeaderName, page),
+        .js_obj => |js_obj| try KeyValueList.fromJsObject(page.arena, js_obj, normalizeHeaderName, &page.buf),
+        .strings => |kvs| try KeyValueList.fromArray(page.arena, kvs, normalizeHeaderName, &page.buf),
     } else KeyValueList.init();
 
     return page._factory.create(Headers{
@@ -30,17 +30,17 @@ pub fn init(opts_: ?InitOpts, page: *Page) !*Headers {
 }
 
 pub fn append(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
-    const normalized_name = normalizeHeaderName(name, page);
+    const normalized_name = normalizeHeaderName(name, &page.buf);
     try self._list.append(page.arena, normalized_name, value);
 }
 
 pub fn delete(self: *Headers, name: []const u8, page: *Page) void {
-    const normalized_name = normalizeHeaderName(name, page);
+    const normalized_name = normalizeHeaderName(name, &page.buf);
     self._list.delete(normalized_name, null);
 }
 
 pub fn get(self: *const Headers, name: []const u8, page: *Page) !?[]const u8 {
-    const normalized_name = normalizeHeaderName(name, page);
+    const normalized_name = normalizeHeaderName(name, &page.buf);
     const all_values = try self._list.getAll(page.call_arena, normalized_name);
 
     if (all_values.len == 0) {
@@ -53,12 +53,12 @@ pub fn get(self: *const Headers, name: []const u8, page: *Page) !?[]const u8 {
 }
 
 pub fn has(self: *const Headers, name: []const u8, page: *Page) bool {
-    const normalized_name = normalizeHeaderName(name, page);
+    const normalized_name = normalizeHeaderName(name, &page.buf);
     return self._list.has(normalized_name);
 }
 
 pub fn set(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
-    const normalized_name = normalizeHeaderName(name, page);
+    const normalized_name = normalizeHeaderName(name, &page.buf);
     try self._list.set(page.arena, normalized_name, value);
 }
 
@@ -94,11 +94,11 @@ pub fn populateHttpHeader(self: *Headers, allocator: Allocator, http_headers: *h
     }
 }
 
-fn normalizeHeaderName(name: []const u8, page: *Page) []const u8 {
-    if (name.len > page.buf.len) {
+fn normalizeHeaderName(name: []const u8, buf: []u8) []const u8 {
+    if (name.len > buf.len) {
         return name;
     }
-    return std.ascii.lowerString(&page.buf, name);
+    return std.ascii.lowerString(buf, name);
 }
 
 pub const JsApi = struct {

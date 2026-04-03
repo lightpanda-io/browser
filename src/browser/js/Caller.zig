@@ -21,6 +21,7 @@ const log = @import("../../log.zig");
 const string = @import("../../string.zig");
 
 const Page = @import("../Page.zig");
+const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 
 const js = @import("js.zig");
 const Local = @import("Local.zig");
@@ -67,9 +68,15 @@ fn initWithContext(self: *Caller, ctx: *Context, v8_context: *const v8.Context) 
             .isolate = ctx.isolate,
         },
         .prev_local = ctx.local,
-        .prev_context = ctx.page.js,
+        .prev_context = switch (ctx.global) {
+            .page => |page| page.js,
+            .worker => |worker| worker.js,
+        },
     };
-    ctx.page.js = ctx;
+    switch (ctx.global) {
+        .page => |page| page.js = ctx,
+        .worker => |worker| worker.js = ctx,
+    }
     ctx.local = &self.local;
 }
 
@@ -100,7 +107,10 @@ pub fn deinit(self: *Caller) void {
 
     ctx.call_depth = call_depth;
     ctx.local = self.prev_local;
-    ctx.page.js = self.prev_context;
+    switch (ctx.global) {
+        .page => |page| page.js = self.prev_context,
+        .worker => |worker| worker.js = self.prev_context,
+    }
 }
 
 pub const CallOpts = struct {
@@ -182,7 +192,7 @@ fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, inf
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = idx;
     if (@typeInfo(F).@"fn".params.len == 3) {
-        @field(args, "2") = local.ctx.page;
+        @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
@@ -209,7 +219,7 @@ fn _getNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
     if (@typeInfo(F).@"fn".params.len == 3) {
-        @field(args, "2") = local.ctx.page;
+        @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
@@ -237,7 +247,7 @@ fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
     @field(args, "2") = try local.jsValueToZig(@TypeOf(@field(args, "2")), js_value);
     if (@typeInfo(F).@"fn".params.len == 4) {
-        @field(args, "3") = local.ctx.page;
+        @field(args, "3") = getGlobalArg(@TypeOf(args.@"3"), local.ctx);
     }
     const ret = @call(.auto, func, args);
     return handleIndexedReturn(T, F, false, local, ret, info, opts);
@@ -263,7 +273,7 @@ fn _deleteNamedIndex(comptime T: type, local: *const Local, func: anytype, name:
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
     if (@typeInfo(F).@"fn".params.len == 3) {
-        @field(args, "2") = local.ctx.page;
+        @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
     return handleIndexedReturn(T, F, false, local, ret, info, opts);
@@ -289,7 +299,7 @@ fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: Pr
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     if (@typeInfo(F).@"fn".params.len == 2) {
-        @field(args, "1") = local.ctx.page;
+        @field(args, "1") = getGlobalArg(@TypeOf(args.@"1"), local.ctx);
     }
     const ret = @call(.auto, func, args);
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
@@ -447,8 +457,36 @@ fn isPage(comptime T: type) bool {
     return T == *Page or T == *const Page;
 }
 
+fn isWorker(comptime T: type) bool {
+    return T == *WorkerGlobalScope or T == *const WorkerGlobalScope;
+}
+
 fn isExecution(comptime T: type) bool {
     return T == *js.Execution or T == *const js.Execution;
+}
+
+fn getGlobalArg(comptime T: type, ctx: *Context) T {
+    if (comptime isPage(T)) {
+        return switch (ctx.global) {
+            .page => |page| page,
+            .worker => {
+                if (comptime IS_DEBUG) std.debug.assert(false);
+                unreachable;
+            },
+        };
+    }
+
+    if (comptime isWorker(T)) {
+        return switch (ctx.global) {
+            .page => {
+                if (comptime IS_DEBUG) std.debug.assert(false);
+                unreachable;
+            },
+            .worker => |worker| worker,
+        };
+    }
+
+    @compileError("Unsupported global arg type: " ++ @typeName(T));
 }
 
 // These wrap the raw v8 C API to provide a cleaner interface.
@@ -722,16 +760,17 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             return args;
         }
 
-        // If the last parameter is the Page, set it, and exclude it
+        // If the last parameter is the Page or Worker, set it, and exclude it
         // from our params slice, because we don't want to bind it to
         // a JS argument
-        if (comptime isPage(params[params.len - 1].type.?)) {
-            @field(args, tupleFieldName(params.len - 1 + offset)) = local.ctx.page;
+        const LastParamType = params[params.len - 1].type.?;
+        if (comptime isPage(LastParamType) or isWorker(LastParamType)) {
+            @field(args, tupleFieldName(params.len - 1 + offset)) = getGlobalArg(LastParamType, local.ctx);
             break :blk params[0 .. params.len - 1];
         }
 
         // If the last parameter is Execution, set it from the context
-        if (comptime isExecution(params[params.len - 1].type.?)) {
+        if (comptime isExecution(LastParamType)) {
             @field(args, tupleFieldName(params.len - 1 + offset)) = &local.ctx.execution;
             break :blk params[0 .. params.len - 1];
         }

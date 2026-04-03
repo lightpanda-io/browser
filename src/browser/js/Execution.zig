@@ -43,14 +43,5 @@ call_arena: Allocator,
 _scheduler: *Scheduler,
 buf: []u8,
 
-pub fn fromContext(ctx: *Context) Execution {
-    const page = ctx.page;
-    return .{
-        .context = ctx,
-        ._factory = page._factory,
-        .arena = page.arena,
-        .call_arena = ctx.call_arena,
-        ._scheduler = &ctx.scheduler,
-        .buf = &page.buf,
-    };
-}
+// Pointer to the url field (Page or WorkerGlobalScope) - allows access to current url even after navigation
+url: *[:0]const u8,

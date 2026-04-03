@@ -39,7 +39,7 @@ pub const eqlDocument = @import("../URL.zig").eqlDocument;
 
 pub fn init(url: [:0]const u8, base_: ?[:0]const u8, exec: *const Execution) !*URL {
     const arena = exec.arena;
-    const page = exec.context.page;
+    const context_url = exec.url.*;
 
     if (std.mem.eql(u8, url, "about:blank")) {
         return exec._factory.create(URL{
@@ -50,9 +50,9 @@ pub fn init(url: [:0]const u8, base_: ?[:0]const u8, exec: *const Execution) !*U
     const url_is_absolute = @import("../URL.zig").isCompleteHTTPUrl(url);
 
     const base = if (base_) |b| blk: {
-        // If URL is absolute, base is ignored (but we still use page.url internally)
+        // If URL is absolute, base is ignored (but we still use context url internally)
         if (url_is_absolute) {
-            break :blk page.url;
+            break :blk context_url;
         }
         // For relative URLs, base must be a valid absolute URL
         if (!@import("../URL.zig").isCompleteHTTPUrl(b)) {
@@ -61,7 +61,7 @@ pub fn init(url: [:0]const u8, base_: ?[:0]const u8, exec: *const Execution) !*U
         break :blk b;
     } else if (!url_is_absolute) {
         return error.TypeError;
-    } else page.url;
+    } else context_url;
 
     const raw = try resolve(arena, base, url, .{ .always_dupe = true });
 
@@ -149,8 +149,7 @@ pub fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
 }
 
 pub fn setHref(self: *URL, value: []const u8, exec: *const Execution) !void {
-    const page = exec.context.page;
-    const base = if (U.isCompleteHTTPUrl(value)) page.url else self._raw;
+    const base = if (U.isCompleteHTTPUrl(value)) exec.url.* else self._raw;
     const raw = try U.resolve(self._arena orelse exec.arena, base, value, .{ .always_dupe = true });
     self._raw = raw;
 

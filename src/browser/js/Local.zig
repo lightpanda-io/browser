@@ -332,7 +332,18 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                 }
 
                 if (@typeInfo(ptr.child) == .@"struct" and @hasDecl(ptr.child, "runtimeGenericWrap")) {
-                    const wrap = try value.runtimeGenericWrap(self.ctx.page);
+                    const page = switch (self.ctx.global) {
+                        .page => |p| p,
+                        .worker => {
+                            // No Worker-related API currently uses this, so haven't
+                            // added support for it
+                            if (comptime IS_DEBUG) {
+                                std.debug.assert(false);
+                            }
+                            unreachable;
+                        },
+                    };
+                    const wrap = try value.runtimeGenericWrap(page);
                     return self.zigValueToJs(wrap, opts);
                 }
 
@@ -409,7 +420,18 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
             // zig fmt: on
 
             if (@hasDecl(T, "runtimeGenericWrap")) {
-                const wrap = try value.runtimeGenericWrap(self.ctx.page);
+                const page = switch (self.ctx.global) {
+                    .page => |p| p,
+                    .worker => {
+                        // No Worker-related API currently uses this, so haven't
+                        // added support for it
+                        if (comptime IS_DEBUG) {
+                            std.debug.assert(false);
+                        }
+                        unreachable;
+                    },
+                };
+                const wrap = try value.runtimeGenericWrap(page);
                 return self.zigValueToJs(wrap, opts);
             }
 
