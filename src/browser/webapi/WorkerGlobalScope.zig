@@ -19,7 +19,6 @@
 const std = @import("std");
 const JS = @import("../js/js.zig");
 
-const base64 = @import("encoding/base64.zig");
 const Console = @import("Console.zig");
 const Crypto = @import("Crypto.zig");
 const EventTarget = @import("EventTarget.zig");
@@ -97,10 +96,12 @@ pub fn setOnUnhandledRejection(self: *WorkerGlobalScope, setter: ?FunctionSetter
 }
 
 pub fn btoa(_: *const WorkerGlobalScope, input: []const u8, exec: *JS.Execution) ![]const u8 {
+    const base64 = @import("encoding/base64.zig");
     return base64.encode(exec.call_arena, input);
 }
 
 pub fn atob(_: *const WorkerGlobalScope, input: []const u8, exec: *JS.Execution) ![]const u8 {
+    const base64 = @import("encoding/base64.zig");
     return base64.decode(exec.call_arena, input);
 }
 

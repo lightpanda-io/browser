@@ -337,9 +337,6 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                         .worker => {
                             // No Worker-related API currently uses this, so haven't
                             // added support for it
-                            if (comptime IS_DEBUG) {
-                                std.debug.assert(false);
-                            }
                             unreachable;
                         },
                     };
@@ -425,9 +422,6 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                     .worker => {
                         // No Worker-related API currently uses this, so haven't
                         // added support for it
-                        if (comptime IS_DEBUG) {
-                            std.debug.assert(false);
-                        }
                         unreachable;
                     },
                 };

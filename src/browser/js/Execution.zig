@@ -37,11 +37,11 @@ const Execution = @This();
 context: *Context,
 
 // Fields named to match Page for generic code (executor._factory works for both)
-_factory: *Factory,
+buf: []u8,
 arena: Allocator,
 call_arena: Allocator,
+_factory: *Factory,
 _scheduler: *Scheduler,
-buf: []u8,
 
 // Pointer to the url field (Page or WorkerGlobalScope) - allows access to current url even after navigation
 url: *[:0]const u8,

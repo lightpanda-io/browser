@@ -68,15 +68,9 @@ fn initWithContext(self: *Caller, ctx: *Context, v8_context: *const v8.Context) 
             .isolate = ctx.isolate,
         },
         .prev_local = ctx.local,
-        .prev_context = switch (ctx.global) {
-            .page => |page| page.js,
-            .worker => |worker| worker.js,
-        },
+        .prev_context = ctx.global.getJs(),
     };
-    switch (ctx.global) {
-        .page => |page| page.js = ctx,
-        .worker => |worker| worker.js = ctx,
-    }
+    ctx.global.setJs(ctx);
     ctx.local = &self.local;
 }
 
@@ -107,10 +101,7 @@ pub fn deinit(self: *Caller) void {
 
     ctx.call_depth = call_depth;
     ctx.local = self.prev_local;
-    switch (ctx.global) {
-        .page => |page| page.js = self.prev_context,
-        .worker => |worker| worker.js = self.prev_context,
-    }
+    ctx.global.setJs(self.prev_context);
 }
 
 pub const CallOpts = struct {
@@ -458,10 +449,6 @@ fn isPage(comptime T: type) bool {
     return T == *Page or T == *const Page;
 }
 
-fn isWorker(comptime T: type) bool {
-    return T == *WorkerGlobalScope or T == *const WorkerGlobalScope;
-}
-
 fn isExecution(comptime T: type) bool {
     return T == *js.Execution or T == *const js.Execution;
 }
@@ -470,21 +457,12 @@ fn getGlobalArg(comptime T: type, ctx: *Context) T {
     if (comptime isPage(T)) {
         return switch (ctx.global) {
             .page => |page| page,
-            .worker => {
-                if (comptime IS_DEBUG) std.debug.assert(false);
-                unreachable;
-            },
+            .worker => unreachable,
         };
     }
 
-    if (comptime isWorker(T)) {
-        return switch (ctx.global) {
-            .page => {
-                if (comptime IS_DEBUG) std.debug.assert(false);
-                unreachable;
-            },
-            .worker => |worker| worker,
-        };
+    if (comptime isExecution(T)) {
+        return &ctx.execution;
     }
 
     @compileError("Unsupported global arg type: " ++ @typeName(T));
@@ -765,14 +743,8 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
         // from our params slice, because we don't want to bind it to
         // a JS argument
         const LastParamType = params[params.len - 1].type.?;
-        if (comptime isPage(LastParamType) or isWorker(LastParamType)) {
+        if (comptime isPage(LastParamType) or isExecution(LastParamType)) {
             @field(args, tupleFieldName(params.len - 1 + offset)) = getGlobalArg(LastParamType, local.ctx);
-            break :blk params[0 .. params.len - 1];
-        }
-
-        // If the last parameter is Execution, set it from the context
-        if (comptime isExecution(LastParamType)) {
-            @field(args, tupleFieldName(params.len - 1 + offset)) = &local.ctx.execution;
             break :blk params[0 .. params.len - 1];
         }
 
