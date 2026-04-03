@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const log = @import("../../../log.zig");
 const js = @import("../../js/js.zig");
@@ -37,24 +38,22 @@ _data: union(enum) {
     radio_node_list: *RadioNodeList,
     name: NodeLive(.name),
 },
-_rc: usize = 0,
+_rc: lp.RC(u32) = .{},
 
-pub fn deinit(self: *NodeList, _: bool, session: *Session) void {
-    const rc = self._rc;
-    if (rc > 1) {
-        self._rc = rc - 1;
-        return;
-    }
-
+pub fn deinit(self: *NodeList, session: *Session) void {
     switch (self._data) {
-        .selector_list => |list| list.deinit(session),
         .child_nodes => |cn| cn.deinit(session),
+        .selector_list => |list| list.deinit(session),
         else => {},
     }
 }
 
+pub fn releaseRef(self: *NodeList, session: *Session) void {
+    self._rc.release(self, session);
+}
+
 pub fn acquireRef(self: *NodeList) void {
-    self._rc += 1;
+    self._rc.acquire();
 }
 
 pub fn length(self: *NodeList, page: *Page) !u32 {
@@ -93,7 +92,12 @@ pub fn entries(self: *NodeList, page: *Page) !*EntryIterator {
 
 pub fn forEach(self: *NodeList, cb: js.Function, page: *Page) !void {
     var i: i32 = 0;
+
     var it = try self.values(page);
+
+    // the iterator takes a reference against our list
+    defer self.releaseRef(page._session);
+
     while (true) : (i += 1) {
         const next = try it.next(page);
         if (next.done) {
@@ -119,8 +123,12 @@ const Iterator = struct {
 
     const Entry = struct { u32, *Node };
 
-    pub fn deinit(self: *Iterator, shutdown: bool, session: *Session) void {
-        self.list.deinit(shutdown, session);
+    pub fn deinit(self: *Iterator, session: *Session) void {
+        self.list.deinit(session);
+    }
+
+    pub fn releaseRef(self: *Iterator, session: *Session) void {
+        self.list.releaseRef(session);
     }
 
     pub fn acquireRef(self: *Iterator) void {
@@ -143,8 +151,6 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
         pub const enumerable = false;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(NodeList.deinit);
     };
 
     pub const length = bridge.accessor(NodeList.length, null, .{});

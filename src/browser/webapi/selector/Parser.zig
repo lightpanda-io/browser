@@ -74,7 +74,7 @@ fn preprocessInput(arena: Allocator, input: []const u8) ![]const u8 {
     return result.items;
 }
 
-pub fn parseList(arena: Allocator, input: []const u8, page: *Page) ParseError![]const Selector.Selector {
+pub fn parseList(arena: Allocator, input: []const u8) ParseError![]const Selector.Selector {
     // Preprocess input to normalize line endings
     const preprocessed = try preprocessInput(arena, input);
 
@@ -140,7 +140,7 @@ pub fn parseList(arena: Allocator, input: []const u8, page: *Page) ParseError![]
         const selector_input = std.mem.trimRight(u8, trimmed[0..comma_pos], &std.ascii.whitespace);
 
         if (selector_input.len > 0) {
-            const selector = try parse(arena, selector_input, page);
+            const selector = try parse(arena, selector_input);
             try selectors.append(arena, selector);
         }
 
@@ -155,7 +155,7 @@ pub fn parseList(arena: Allocator, input: []const u8, page: *Page) ParseError![]
     return selectors.items;
 }
 
-pub fn parse(arena: Allocator, input: []const u8, page: *Page) ParseError!Selector.Selector {
+pub fn parse(arena: Allocator, input: []const u8) ParseError!Selector.Selector {
     var parser = Parser{ .input = input };
     var segments: std.ArrayList(Segment) = .empty;
     var current_compound: std.ArrayList(Part) = .empty;
@@ -164,7 +164,7 @@ pub fn parse(arena: Allocator, input: []const u8, page: *Page) ParseError!Select
     while (parser.skipSpaces()) {
         if (parser.peek() == 0) break;
 
-        const part = try parser.parsePart(arena, page);
+        const part = try parser.parsePart(arena);
         try current_compound.append(arena, part);
 
         // Check what comes after this part
@@ -238,7 +238,7 @@ pub fn parse(arena: Allocator, input: []const u8, page: *Page) ParseError!Select
         while (parser.skipSpaces()) {
             if (parser.peek() == 0) break;
 
-            const part = try parser.parsePart(arena, page);
+            const part = try parser.parsePart(arena);
             try current_compound.append(arena, part);
 
             // Check what comes after this part
@@ -289,7 +289,7 @@ pub fn parse(arena: Allocator, input: []const u8, page: *Page) ParseError!Select
     };
 }
 
-fn parsePart(self: *Parser, arena: Allocator, page: *Page) !Part {
+fn parsePart(self: *Parser, arena: Allocator) !Part {
     return switch (self.peek()) {
         '#' => .{ .id = try self.id(arena) },
         '.' => .{ .class = try self.class(arena) },
@@ -297,16 +297,17 @@ fn parsePart(self: *Parser, arena: Allocator, page: *Page) !Part {
             self.input = self.input[1..];
             break :blk .universal;
         },
-        '[' => .{ .attribute = try self.attribute(arena, page) },
-        ':' => .{ .pseudo_class = try self.pseudoClass(arena, page) },
+        '[' => .{ .attribute = try self.attribute(arena) },
+        ':' => .{ .pseudo_class = try self.pseudoClass(arena) },
         'a'...'z', 'A'...'Z', '_', '\\', 0x80...0xFF => blk: {
             // Use parseIdentifier for full escape support
             const tag_name = try self.parseIdentifier(arena, error.InvalidTagSelector);
             if (tag_name.len > 256) {
                 return error.InvalidTagSelector;
             }
+            var buf: [256]u8 = undefined;
             // Try to match as a known tag enum for optimization
-            const lower = std.ascii.lowerString(&page.buf, tag_name);
+            const lower = std.ascii.lowerString(&buf, tag_name);
             if (Node.Element.Tag.parseForMatch(lower)) |known_tag| {
                 break :blk .{ .tag = known_tag };
             }
@@ -373,7 +374,7 @@ fn consumeUntilCommaOrParen(self: *Parser) []const u8 {
     return result;
 }
 
-fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoClass {
+fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
     if (comptime IS_DEBUG) {
         // Should have been verified by caller
         std.debug.assert(self.peek() == ':');
@@ -445,7 +446,7 @@ fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoCla
                 if (self.peek() == 0) return error.InvalidPseudoClass;
 
                 // Parse a full selector (with potential combinators and compounds)
-                const selector = try parse(arena, self.consumeUntilCommaOrParen(), page);
+                const selector = try parse(arena, self.consumeUntilCommaOrParen());
                 try selectors.append(arena, selector);
 
                 _ = self.skipSpaces();
@@ -472,7 +473,7 @@ fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoCla
                 if (self.peek() == ')') break;
                 if (self.peek() == 0) return error.InvalidPseudoClass;
 
-                const selector = try parse(arena, self.consumeUntilCommaOrParen(), page);
+                const selector = try parse(arena, self.consumeUntilCommaOrParen());
                 try selectors.append(arena, selector);
 
                 _ = self.skipSpaces();
@@ -499,7 +500,7 @@ fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoCla
                 if (self.peek() == ')') break;
                 if (self.peek() == 0) return error.InvalidPseudoClass;
 
-                const selector = try parse(arena, self.consumeUntilCommaOrParen(), page);
+                const selector = try parse(arena, self.consumeUntilCommaOrParen());
                 try selectors.append(arena, selector);
 
                 _ = self.skipSpaces();
@@ -526,7 +527,7 @@ fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoCla
                 if (self.peek() == ')') break;
                 if (self.peek() == 0) return error.InvalidPseudoClass;
 
-                const selector = try parse(arena, self.consumeUntilCommaOrParen(), page);
+                const selector = try parse(arena, self.consumeUntilCommaOrParen());
                 try selectors.append(arena, selector);
 
                 _ = self.skipSpaces();
@@ -898,7 +899,7 @@ fn tag(self: *Parser) ![]const u8 {
     return input[0..i];
 }
 
-fn attribute(self: *Parser, arena: Allocator, page: *Page) !Selector.Attribute {
+fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
     if (comptime IS_DEBUG) {
         // should have been verified by caller
         std.debug.assert(self.peek() == '[');
@@ -910,8 +911,7 @@ fn attribute(self: *Parser, arena: Allocator, page: *Page) !Selector.Attribute {
     const attr_name = try self.attributeName();
 
     // Normalize the name to lowercase for fast matching (consistent with Attribute.normalizeNameForLookup)
-    const normalized = try Attribute.normalizeNameForLookup(.wrap(attr_name), page);
-    const name = try normalized.dupe(arena);
+    const name = try Attribute.normalizeNameForLookupAlloc(arena, .wrap(attr_name));
     var case_insensitive = false;
     _ = self.skipSpaces();
 

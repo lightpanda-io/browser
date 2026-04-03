@@ -25,7 +25,6 @@ const v8 = js.v8;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Allocator = std.mem.Allocator;
-const Session = @import("../Session.zig");
 
 const Value = @This();
 
@@ -246,15 +245,37 @@ pub fn toJson(self: Value, allocator: Allocator) ![]u8 {
     return js.String.toSliceWithAlloc(.{ .local = local, .handle = str_handle }, allocator);
 }
 
-// Currently does not support host objects (Blob, File, etc.) or transferables
-// which require delegate callbacks to be implemented.
+// Throws a DataCloneError for host objects (Blob, File, etc.) that cannot be serialized.
+// Does not support transferables which require additional delegate callbacks.
 pub fn structuredClone(self: Value) !Value {
     const local = self.local;
     const v8_context = local.handle;
     const v8_isolate = local.isolate.handle;
 
+    const SerializerDelegate = struct {
+        // Called when V8 encounters a host object it doesn't know how to serialize.
+        // Returns false to indicate the object cannot be cloned, and throws a DataCloneError.
+        // V8 asserts has_exception() after this returns false, so we must throw here.
+        fn writeHostObject(_: ?*anyopaque, isolate: ?*v8.Isolate, _: ?*const v8.Object) callconv(.c) v8.MaybeBool {
+            const iso = isolate orelse return .{ .has_value = true, .value = false };
+            const message = v8.v8__String__NewFromUtf8(iso, "The object cannot be cloned.", v8.kNormal, -1);
+            const error_value = v8.v8__Exception__Error(message) orelse return .{ .has_value = true, .value = false };
+            _ = v8.v8__Isolate__ThrowException(iso, error_value);
+            return .{ .has_value = true, .value = false };
+        }
+
+        // Called by V8 to report serialization errors. The exception should already be thrown.
+        fn throwDataCloneError(_: ?*anyopaque, _: ?*const v8.String) callconv(.c) void {}
+    };
+
     const size, const data = blk: {
-        const serializer = v8.v8__ValueSerializer__New(v8_isolate, null) orelse return error.JsException;
+        const serializer = v8.v8__ValueSerializer__New(v8_isolate, &.{
+            .data = null,
+            .get_shared_array_buffer_id = null,
+            .write_host_object = SerializerDelegate.writeHostObject,
+            .throw_data_clone_error = SerializerDelegate.throwDataCloneError,
+        }) orelse return error.JsException;
+
         defer v8.v8__ValueSerializer__DELETE(serializer);
 
         var write_result: v8.MaybeBool = undefined;
@@ -304,7 +325,7 @@ fn _persist(self: *const Value, comptime is_global: bool) !(if (is_global) Globa
         return .{ .handle = global, .temps = {} };
     }
     try ctx.trackTemp(global);
-    return .{ .handle = global, .temps = &ctx.identity.temps };
+    return .{ .handle = global, .temps = &ctx.session.temps };
 }
 
 pub fn toZig(self: Value, comptime T: type) !T {

@@ -58,13 +58,13 @@ build-v8-snapshot:
 ## Build in release-fast mode
 build: build-v8-snapshot
 	@printf "\033[36mBuilding (release fast)...\033[0m\n"
-	@$(ZIG) build -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@$(ZIG) build -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
 
 ## Build in debug mode
 build-dev:
 	@printf "\033[36mBuilding (debug)...\033[0m\n"
-	@$(ZIG) build -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@$(ZIG) build || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
 
 ## Run the server in release mode

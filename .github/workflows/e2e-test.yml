@@ -52,7 +52,7 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: zig build release
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64
 
       - name: upload artifact
         uses: actions/upload-artifact@v7
@@ -100,14 +100,14 @@ jobs:
           ./proxy/proxy & echo $! > PROXY.id
           ./lightpanda serve --http-proxy 'http://127.0.0.1:3000' & echo $! > LPD.pid
           go run runner/main.go
+          URL=https://demo-browser.lightpanda.io/campfire-commerce/ node puppeteer/proxy_auth.js
           kill `cat LPD.pid` `cat PROXY.id`
 
-      - name: run request interception through proxy
+      - name: run request interception through proxy and playwright
         run: |
           export PROXY_USERNAME=username PROXY_PASSWORD=password
           ./proxy/proxy & echo $! > PROXY.id
           ./lightpanda serve & echo $! > LPD.pid
-          URL=https://demo-browser.lightpanda.io/campfire-commerce/ node puppeteer/proxy_auth.js
           BASE_URL=https://demo-browser.lightpanda.io/ node playwright/proxy_auth.js
           kill `cat LPD.pid` `cat PROXY.id`
 
@@ -161,14 +161,18 @@ jobs:
             --http-proxy 'http://127.0.0.1:3000' \
             & echo $! > LPD.pid
           go run runner/main.go
+          URL=https://demo-browser.lightpanda.io/campfire-commerce/ node puppeteer/proxy_auth.js
           kill `cat LPD.pid` `cat PROXY.id`
 
-      - name: run request interception through proxy
+      - name: run request interception through proxy and playwright
         run: |
           export PROXY_USERNAME=username PROXY_PASSWORD=password
           ./proxy/proxy & echo $! > PROXY.id
-          ./lightpanda serve & echo $! > LPD.pid
-          URL=https://demo-browser.lightpanda.io/campfire-commerce/ node puppeteer/proxy_auth.js
+          ./lightpanda serve \
+            --web-bot-auth-key-file private_key.pem \
+            --web-bot-auth-keyid ${{ vars.WBA_KEY_ID }} \
+            --web-bot-auth-domain ${{ vars.WBA_DOMAIN }} \
+            & echo $! > LPD.pid
           BASE_URL=https://demo-browser.lightpanda.io/ node playwright/proxy_auth.js
           kill `cat LPD.pid` `cat PROXY.id`
 
@@ -178,6 +182,9 @@ jobs:
 
     runs-on: ubuntu-latest
     timeout-minutes: 5
+
+    # Don't execute on PR
+    if: github.event_name != 'pull_request'
 
     steps:
       - uses: actions/checkout@v6

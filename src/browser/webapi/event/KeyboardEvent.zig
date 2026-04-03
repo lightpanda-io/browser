@@ -229,10 +229,6 @@ fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool
     return event;
 }
 
-pub fn deinit(self: *KeyboardEvent, shutdown: bool, session: *Session) void {
-    self._proto.deinit(shutdown, session);
-}
-
 pub fn asEvent(self: *KeyboardEvent) *Event {
     return self._proto.asEvent();
 }
@@ -296,8 +292,6 @@ pub const JsApi = struct {
         pub const name = "KeyboardEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(KeyboardEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(KeyboardEvent.init, .{});

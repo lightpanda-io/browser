@@ -36,10 +36,10 @@ pub struct ElementData {
 }
 impl ElementData {
     fn new(qname: QualName, flags: ElementFlags) -> Self {
-        return Self {
+        Self {
             qname: qname,
             mathml_annotation_xml_integration_point: flags.mathml_annotation_xml_integration_point,
-        };
+        }
     }
 }
 
@@ -130,12 +130,12 @@ impl<'arena> TreeSink for Sink<'arena> {
         unsafe {
             let mut attribute_iterator = CAttributeIterator { vec: attrs, pos: 0 };
 
-            return (self.create_element_callback)(
+            (self.create_element_callback)(
                 self.ctx,
                 data as *mut _ as *mut c_void,
                 CQualName::create(&name),
                 &mut attribute_iterator as *mut _ as *mut c_void,
-            );
+            )
         }
     }
 

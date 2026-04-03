@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const CDP = @import("../CDP.zig");
 
 // TODO: hard coded data
 const PROTOCOL_VERSION = "1.3";
@@ -35,7 +36,7 @@ const PRODUCT = "Chrome/124.0.6367.29";
 const JS_VERSION = "12.4.254.8";
 const DEV_TOOLS_WINDOW_ID = 1923710101;
 
-pub fn processMessage(cmd: anytype) !void {
+pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         getVersion,
         setPermission,
@@ -57,7 +58,7 @@ pub fn processMessage(cmd: anytype) !void {
     }
 }
 
-fn getVersion(cmd: anytype) !void {
+fn getVersion(cmd: *CDP.Command) !void {
     // TODO: pre-serialize?
     return cmd.sendResult(.{
         .protocolVersion = PROTOCOL_VERSION,
@@ -69,7 +70,7 @@ fn getVersion(cmd: anytype) !void {
 }
 
 // TODO: noop method
-fn setDownloadBehavior(cmd: anytype) !void {
+fn setDownloadBehavior(cmd: *CDP.Command) !void {
     // const params = (try cmd.params(struct {
     //     behavior: []const u8,
     //     browserContextId: ?[]const u8 = null,
@@ -80,7 +81,7 @@ fn setDownloadBehavior(cmd: anytype) !void {
     return cmd.sendResult(null, .{ .include_session_id = false });
 }
 
-fn getWindowForTarget(cmd: anytype) !void {
+fn getWindowForTarget(cmd: *CDP.Command) !void {
     // const params = (try cmd.params(struct {
     //     targetId: ?[]const u8 = null,
     // })) orelse return error.InvalidParams;
@@ -91,28 +92,28 @@ fn getWindowForTarget(cmd: anytype) !void {
 }
 
 // TODO: noop method
-fn setWindowBounds(cmd: anytype) !void {
+fn setWindowBounds(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
 // TODO: noop method
-fn grantPermissions(cmd: anytype) !void {
+fn grantPermissions(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
 // TODO: noop method
-fn setPermission(cmd: anytype) !void {
+fn setPermission(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
 // TODO: noop method
-fn resetPermissions(cmd: anytype) !void {
+fn resetPermissions(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
 const testing = @import("../testing.zig");
 test "cdp.browser: getVersion" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     try ctx.processMessage(.{
@@ -131,7 +132,7 @@ test "cdp.browser: getVersion" {
 }
 
 test "cdp.browser: getWindowForTarget" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     try ctx.processMessage(.{

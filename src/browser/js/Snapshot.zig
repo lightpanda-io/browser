@@ -25,7 +25,6 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const v8 = js.v8;
 const JsApis = bridge.JsApis;
-const Allocator = std.mem.Allocator;
 
 const Snapshot = @This();
 
@@ -137,7 +136,7 @@ pub fn create() !Snapshot {
         defer v8.v8__HandleScope__DESTRUCT(&handle_scope);
 
         // Create templates (constructors only) FIRST
-        var templates: [JsApis.len]*v8.FunctionTemplate = undefined;
+        var templates: [JsApis.len]*const v8.FunctionTemplate = undefined;
         inline for (JsApis, 0..) |JsApi, i| {
             @setEvalBranchQuota(10_000);
             templates[i] = generateConstructor(JsApi, isolate);
@@ -419,7 +418,7 @@ fn collectExternalReferences() [countExternalReferences()]isize {
 // via `new ClassName()` - but they could, for example, be created in
 // Zig and returned from a function call, which is why we need the
 // FunctionTemplate.
-fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *v8.FunctionTemplate {
+fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8.FunctionTemplate {
     const callback = blk: {
         if (@hasDecl(JsApi, "constructor")) {
             break :blk JsApi.constructor.func;
@@ -429,7 +428,7 @@ fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *v8.FunctionT
         break :blk illegalConstructorCallback;
     };
 
-    const template = @constCast(v8.v8__FunctionTemplate__New__DEFAULT2(isolate, callback).?);
+    const template = v8.v8__FunctionTemplate__New__DEFAULT2(isolate, callback).?;
     {
         const internal_field_count = comptime countInternalFields(JsApi);
         if (internal_field_count > 0) {
@@ -482,9 +481,14 @@ pub fn countInternalFields(comptime JsApi: type) u8 {
 }
 
 // Attaches JsApi members to the prototype template (normal case)
-fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.FunctionTemplate) void {
+fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.FunctionTemplate) void {
     const instance = v8.v8__FunctionTemplate__InstanceTemplate(template);
     const prototype = v8.v8__FunctionTemplate__PrototypeTemplate(template);
+
+    // Create a signature that validates the receiver is an instance of this template.
+    // This prevents crashes when JavaScript extracts a getter/method and calls it
+    // with the wrong `this` (e.g., documentGetter.call(null)).
+    const signature = v8.v8__Signature__New(isolate, template);
 
     const declarations = @typeInfo(JsApi).@"struct".decls;
     var has_named_index_getter = false;
@@ -497,23 +501,47 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
         switch (definition) {
             bridge.Accessor => {
                 const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
-                const getter_callback = @constCast(v8.v8__FunctionTemplate__New__Config(isolate, &.{ .callback = value.getter }).?);
+                const getter_signature = if (value.static) null else signature;
+                const getter_callback = v8.v8__FunctionTemplate__New__Config(isolate, &.{
+                    .callback = value.getter,
+                    .signature = getter_signature,
+                }).?;
+                const setter_callback = if (value.setter) |setter|
+                    v8.v8__FunctionTemplate__New__Config(isolate, &.{
+                        .callback = setter,
+                        .signature = getter_signature,
+                    }).?
+                else
+                    null;
+
+                var attribute: v8.PropertyAttribute = 0;
                 if (value.setter == null) {
-                    if (value.static) {
-                        v8.v8__Template__SetAccessorProperty__DEFAULT(@ptrCast(template), js_name, getter_callback);
-                    } else {
-                        v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT(prototype, js_name, getter_callback);
-                    }
+                    attribute |= v8.ReadOnly;
+                }
+                if (value.deletable == false) {
+                    attribute |= v8.DontDelete;
+                }
+
+                if (value.static) {
+                    // Static accessors: use Template's SetAccessorProperty
+                    v8.v8__Template__SetAccessorProperty(@ptrCast(template), js_name, getter_callback, setter_callback, attribute);
                 } else {
-                    if (comptime IS_DEBUG) {
-                        std.debug.assert(value.static == false);
-                    }
-                    const setter_callback = @constCast(v8.v8__FunctionTemplate__New__Config(isolate, &.{ .callback = value.setter.? }).?);
-                    v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT2(prototype, js_name, getter_callback, setter_callback);
+                    v8.v8__ObjectTemplate__SetAccessorProperty__Config(prototype, &.{
+                        .key = js_name,
+                        .getter = getter_callback,
+                        .setter = setter_callback,
+                        .attribute = attribute,
+                    });
                 }
             },
             bridge.Function => {
-                const function_template = @constCast(v8.v8__FunctionTemplate__New__Config(isolate, &.{ .callback = value.func, .length = value.arity }).?);
+                // For non-static functions, use the signature to validate the receiver
+                const func_signature = if (value.static) null else signature;
+                const function_template = v8.v8__FunctionTemplate__New__Config(isolate, &.{
+                    .callback = value.func,
+                    .length = value.arity,
+                    .signature = func_signature,
+                }).?;
                 const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                 if (value.static) {
                     v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
@@ -551,7 +579,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                 has_named_index_getter = true;
             },
             bridge.Iterator => {
-                const function_template = @constCast(v8.v8__FunctionTemplate__New__Config(isolate, &.{ .callback = value.func }).?);
+                const function_template = v8.v8__FunctionTemplate__New__Config(isolate, &.{ .callback = value.func }).?;
                 const js_name = if (value.async)
                     v8.v8__Symbol__GetAsyncIterator(isolate)
                 else

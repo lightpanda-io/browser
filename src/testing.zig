@@ -410,25 +410,52 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     page.js.localScope(&ls);
     defer ls.deinit();
 
-    var try_catch: js.TryCatch = undefined;
-    try_catch.init(&ls.local);
-    defer try_catch.deinit();
+    {
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
 
-    try page.navigate(url, .{});
+        try page.navigate(url, .{});
+    }
+
     var runner = try test_session.runner(.{});
     try runner.wait(.{ .ms = 2000 });
 
-    test_browser.runMicrotasks();
+    var wait_ms: u32 = 2000;
+    var timer = try std.time.Timer.start();
+    while (true) {
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
 
-    ls.local.eval("testing.assertOk()", "testing.assertOk()") catch |err| {
-        const caught = try_catch.caughtOrError(arena_allocator, err);
-        std.debug.print("{s}: test failure\nError: {f}\n", .{ test_file, caught });
-        return err;
-    };
+        const js_val = ls.local.exec("testing.assertOk()", "testing.assertOk()") catch |err| {
+            const caught = try_catch.caughtOrError(arena_allocator, err);
+            std.debug.print("{s}: test failure\nError: {f}\n", .{ test_file, caught });
+            return err;
+        };
+        if (js_val.isTrue()) {
+            return;
+        }
+        switch (try runner.tick(.{ .ms = 20 })) {
+            .done => return error.TestNeverSignaledCompletion,
+            .ok => |next_ms| {
+                const ms_elapsed = timer.lap() / 1_000_000;
+                if (ms_elapsed >= wait_ms) {
+                    return error.TestTimedOut;
+                }
+                wait_ms -= @intCast(ms_elapsed);
+                if (next_ms > 0) {
+                    std.Thread.sleep(std.time.ns_per_ms * next_ms);
+                }
+            },
+        }
+    }
 }
 
-// Used by a few CDP tests - wouldn't be sad to see this go.
-pub fn pageTest(comptime test_file: []const u8) !*Page {
+const PageTestOpts = struct {
+    wait_until_done: bool = true,
+};
+pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Page {
     const page = try test_session.createPage();
     errdefer test_session.removePage();
 
@@ -441,12 +468,10 @@ pub fn pageTest(comptime test_file: []const u8) !*Page {
 
     try page.navigate(url, .{});
     var runner = try test_session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    if (opts.wait_until_done) {
+        try runner.wait(.{ .ms = 2000 });
+    }
     return page;
-}
-
-test {
-    std.testing.refAllDecls(@This());
 }
 
 const log = @import("log.zig");

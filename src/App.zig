@@ -26,7 +26,7 @@ const Snapshot = @import("browser/js/Snapshot.zig");
 const Platform = @import("browser/js/Platform.zig");
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 
-const Network = @import("network/Runtime.zig");
+const Network = @import("network/Network.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
 
 const App = @This();
@@ -55,7 +55,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
         .arena_pool = undefined,
     };
 
-    app.network = try Network.init(allocator, config);
+    app.network = try Network.init(allocator, app, config);
     errdefer app.network.deinit();
 
     app.platform = try Platform.init();

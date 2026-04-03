@@ -22,7 +22,6 @@ const reflect = @import("../../reflect.zig");
 const log = @import("../../../log.zig");
 
 const global_event_handlers = @import("../global_event_handlers.zig");
-const GlobalEventHandlersLookup = global_event_handlers.Lookup;
 const GlobalEventHandler = global_event_handlers.Handler;
 
 const Page = @import("../../Page.zig");
@@ -374,6 +373,30 @@ pub fn setTabIndex(self: *HtmlElement, value: i32, page: *Page) !void {
     var buf: [12]u8 = undefined;
     const str = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
     try self.asElement().setAttributeSafe(comptime .wrap("tabindex"), .wrap(str), page);
+}
+
+pub fn getDir(self: *HtmlElement) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("dir")) orelse "";
+}
+
+pub fn setDir(self: *HtmlElement, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("dir"), .wrap(value), page);
+}
+
+pub fn getLang(self: *HtmlElement) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("lang")) orelse "";
+}
+
+pub fn setLang(self: *HtmlElement, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("lang"), .wrap(value), page);
+}
+
+pub fn getTitle(self: *HtmlElement) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("title")) orelse "";
+}
+
+pub fn setTitle(self: *HtmlElement, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("title"), .wrap(value), page);
 }
 
 pub fn getAttributeFunction(
@@ -1212,8 +1235,11 @@ pub const JsApi = struct {
     pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .dom_exception = true });
     pub const click = bridge.function(HtmlElement.click, .{});
 
+    pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{});
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{});
+    pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{});
     pub const tabIndex = bridge.accessor(HtmlElement.getTabIndex, HtmlElement.setTabIndex, .{});
+    pub const title = bridge.accessor(HtmlElement.getTitle, HtmlElement.setTitle, .{});
 
     pub const onabort = bridge.accessor(HtmlElement.getOnAbort, HtmlElement.setOnAbort, .{});
     pub const onanimationcancel = bridge.accessor(HtmlElement.getOnAnimationCancel, HtmlElement.setOnAnimationCancel, .{});

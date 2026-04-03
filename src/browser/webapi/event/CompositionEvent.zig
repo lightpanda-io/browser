@@ -22,7 +22,6 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
 const Event = @import("../Event.zig");
-const Allocator = std.mem.Allocator;
 
 const CompositionEvent = @This();
 
@@ -54,10 +53,6 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CompositionEvent {
     return event;
 }
 
-pub fn deinit(self: *CompositionEvent, shutdown: bool, session: *Session) void {
-    self._proto.deinit(shutdown, session);
-}
-
 pub fn asEvent(self: *CompositionEvent) *Event {
     return self._proto;
 }
@@ -73,8 +68,6 @@ pub const JsApi = struct {
         pub const name = "CompositionEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(CompositionEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(CompositionEvent.init, .{});

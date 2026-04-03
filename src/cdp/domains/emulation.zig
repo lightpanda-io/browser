@@ -17,9 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const CDP = @import("../CDP.zig");
 const log = @import("../../log.zig");
 
-pub fn processMessage(cmd: anytype) !void {
+pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         setEmulatedMedia,
         setFocusEmulationEnabled,
@@ -38,7 +39,7 @@ pub fn processMessage(cmd: anytype) !void {
 }
 
 // TODO: noop method
-fn setEmulatedMedia(cmd: anytype) !void {
+fn setEmulatedMedia(cmd: *CDP.Command) !void {
     // const input = (try const incoming.params(struct {
     //     media: ?[]const u8 = null,
     //     features: ?[]struct{
@@ -51,7 +52,7 @@ fn setEmulatedMedia(cmd: anytype) !void {
 }
 
 // TODO: noop method
-fn setFocusEmulationEnabled(cmd: anytype) !void {
+fn setFocusEmulationEnabled(cmd: *CDP.Command) !void {
     // const input = (try const incoming.params(struct {
     //     enabled: bool,
     // })) orelse return error.InvalidParams;
@@ -59,16 +60,16 @@ fn setFocusEmulationEnabled(cmd: anytype) !void {
 }
 
 // TODO: noop method
-fn setDeviceMetricsOverride(cmd: anytype) !void {
+fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
 // TODO: noop method
-fn setTouchEmulationEnabled(cmd: anytype) !void {
+fn setTouchEmulationEnabled(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn setUserAgentOverride(cmd: anytype) !void {
+fn setUserAgentOverride(cmd: *CDP.Command) !void {
     log.info(.app, "setUserAgentOverride ignored", .{});
     return cmd.sendResult(null, .{});
 }

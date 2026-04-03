@@ -28,8 +28,6 @@ const DocumentFragment = @import("DocumentFragment.zig");
 const AbstractRange = @import("AbstractRange.zig");
 const DOMRect = @import("DOMRect.zig");
 
-const Allocator = std.mem.Allocator;
-
 const Range = @This();
 
 _proto: *AbstractRange,
@@ -38,10 +36,6 @@ pub fn init(page: *Page) !*Range {
     const arena = try page.getArena(.{ .debug = "Range" });
     errdefer page.releaseArena(arena);
     return page._factory.abstractRange(arena, Range{ ._proto = undefined }, page);
-}
-
-pub fn deinit(self: *Range, shutdown: bool, session: *Session) void {
-    self._proto.deinit(shutdown, session);
 }
 
 pub fn asAbstractRange(self: *Range) *AbstractRange {
@@ -699,8 +693,6 @@ pub const JsApi = struct {
         pub const name = "Range";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(Range.deinit);
     };
 
     // Constants for compareBoundaryPoints

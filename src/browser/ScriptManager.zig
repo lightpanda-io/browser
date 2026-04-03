@@ -22,18 +22,16 @@ const builtin = @import("builtin");
 
 const log = @import("../log.zig");
 const HttpClient = @import("HttpClient.zig");
-const net_http = @import("../network/http.zig");
+const http = @import("../network/http.zig");
 const String = @import("../string.zig").String;
 
 const js = @import("js/js.zig");
 const URL = @import("URL.zig");
 const Page = @import("Page.zig");
-const Browser = @import("Browser.zig");
 
 const Element = @import("webapi/Element.zig");
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
@@ -138,9 +136,9 @@ fn clearList(list: *std.DoublyLinkedList) void {
     }
 }
 
-fn getHeaders(self: *ScriptManager, arena: Allocator, url: [:0]const u8) !net_http.Headers {
+fn getHeaders(self: *ScriptManager) !http.Headers {
     var headers = try self.client.newHeaders();
-    try self.page.headersForRequest(arena, url, &headers);
+    try self.page.headersForRequest(&headers);
     return headers;
 }
 
@@ -275,24 +273,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             // Let the outer errdefer handle releasing the arena if client.request fails
         }
 
-        try self.client.request(.{
-            .url = url,
-            .ctx = script,
-            .method = .GET,
-            .frame_id = page._frame_id,
-            .headers = try self.getHeaders(arena, url),
-            .blocking = is_blocking,
-            .cookie_jar = &page._session.cookie_jar,
-            .resource_type = .script,
-            .notification = page._session.notification,
-            .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
-            .header_callback = Script.headerCallback,
-            .data_callback = Script.dataCallback,
-            .done_callback = Script.doneCallback,
-            .error_callback = Script.errorCallback,
-        });
-        handover = true;
-
         if (comptime IS_DEBUG) {
             var ls: js.Local.Scope = undefined;
             page.js.localScope(&ls);
@@ -305,6 +285,32 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 .stack = ls.local.stackTrace() catch "???",
             });
         }
+
+        {
+            const was_evaluating = self.is_evaluating;
+            self.is_evaluating = true;
+            defer self.is_evaluating = was_evaluating;
+
+            try self.client.request(.{
+                .url = url,
+                .ctx = script,
+                .method = .GET,
+                .frame_id = page._frame_id,
+                .headers = try self.getHeaders(),
+                .blocking = is_blocking,
+                .cookie_jar = &page._session.cookie_jar,
+                .cookie_origin = page.url,
+                .resource_type = .script,
+                .notification = page._session.notification,
+                .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
+                .header_callback = Script.headerCallback,
+                .data_callback = Script.dataCallback,
+                .done_callback = Script.doneCallback,
+                .error_callback = Script.errorCallback,
+            });
+        }
+
+        handover = true;
     }
 
     if (is_blocking == false) {
@@ -405,8 +411,9 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .ctx = script,
         .method = .GET,
         .frame_id = page._frame_id,
-        .headers = try self.getHeaders(arena, url),
+        .headers = try self.getHeaders(),
         .cookie_jar = &page._session.cookie_jar,
+        .cookie_origin = page.url,
         .resource_type = .script,
         .notification = page._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
@@ -508,10 +515,11 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
         .url = url,
         .method = .GET,
         .frame_id = page._frame_id,
-        .headers = try self.getHeaders(arena, url),
+        .headers = try self.getHeaders(),
         .ctx = script,
         .resource_type = .script,
         .cookie_jar = &page._session.cookie_jar,
+        .cookie_origin = page.url,
         .notification = page._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
@@ -654,7 +662,6 @@ pub const Script = struct {
     debug_transfer_aborted: bool = false,
     debug_transfer_bytes_received: usize = 0,
     debug_transfer_notified_fail: bool = false,
-    debug_transfer_redirecting: bool = false,
     debug_transfer_intercept_state: u8 = 0,
     debug_transfer_auth_challenge: bool = false,
     debug_transfer_easy_id: usize = 0,
@@ -694,85 +701,86 @@ pub const Script = struct {
         self.manager.page.releaseArena(self.arena);
     }
 
-    fn startCallback(transfer: *HttpClient.Transfer) !void {
-        log.debug(.http, "script fetch start", .{ .req = transfer });
+    fn startCallback(response: HttpClient.Response) !void {
+        log.debug(.http, "script fetch start", .{ .req = response });
     }
 
-    fn headerCallback(transfer: *HttpClient.Transfer) !bool {
-        const self: *Script = @ptrCast(@alignCast(transfer.ctx));
-        const header = &transfer.response_header.?;
-        self.status = header.status;
-        if (header.status != 200) {
+    fn headerCallback(response: HttpClient.Response) !bool {
+        const self: *Script = @ptrCast(@alignCast(response.ctx));
+
+        self.status = response.status().?;
+        if (response.status() != 200) {
             log.info(.http, "script header", .{
-                .req = transfer,
-                .status = header.status,
-                .content_type = header.contentType(),
+                .req = response,
+                .status = response.status(),
+                .content_type = response.contentType(),
             });
             return false;
         }
 
         if (comptime IS_DEBUG) {
             log.debug(.http, "script header", .{
-                .req = transfer,
-                .status = header.status,
-                .content_type = header.contentType(),
+                .req = response,
+                .status = response.status(),
+                .content_type = response.contentType(),
             });
         }
 
-        {
-            // temp debug, trying to figure out why the next assert sometimes
-            // fails. Is the buffer just corrupt or is headerCallback really
-            // being called twice?
-            lp.assert(self.header_callback_called == false, "ScriptManager.Header recall", .{
-                .m = @tagName(std.meta.activeTag(self.mode)),
-                .a1 = self.debug_transfer_id,
-                .a2 = self.debug_transfer_tries,
-                .a3 = self.debug_transfer_aborted,
-                .a4 = self.debug_transfer_bytes_received,
-                .a5 = self.debug_transfer_notified_fail,
-                .a6 = self.debug_transfer_redirecting,
-                .a7 = self.debug_transfer_intercept_state,
-                .a8 = self.debug_transfer_auth_challenge,
-                .a9 = self.debug_transfer_easy_id,
-                .b1 = transfer.id,
-                .b2 = transfer._tries,
-                .b3 = transfer.aborted,
-                .b4 = transfer.bytes_received,
-                .b5 = transfer._notified_fail,
-                .b6 = transfer._redirecting,
-                .b7 = @intFromEnum(transfer._intercept_state),
-                .b8 = transfer._auth_challenge != null,
-                .b9 = if (transfer._conn) |c| @intFromPtr(c.easy) else 0,
-            });
-            self.header_callback_called = true;
-            self.debug_transfer_id = transfer.id;
-            self.debug_transfer_tries = transfer._tries;
-            self.debug_transfer_aborted = transfer.aborted;
-            self.debug_transfer_bytes_received = transfer.bytes_received;
-            self.debug_transfer_notified_fail = transfer._notified_fail;
-            self.debug_transfer_redirecting = transfer._redirecting;
-            self.debug_transfer_intercept_state = @intFromEnum(transfer._intercept_state);
-            self.debug_transfer_auth_challenge = transfer._auth_challenge != null;
-            self.debug_transfer_easy_id = if (transfer._conn) |c| @intFromPtr(c.easy) else 0;
+        switch (response.inner) {
+            .transfer => |transfer| {
+                // temp debug, trying to figure out why the next assert sometimes
+                // fails. Is the buffer just corrupt or is headerCallback really
+                // being called twice?
+                lp.assert(self.header_callback_called == false, "ScriptManager.Header recall", .{
+                    .m = @tagName(std.meta.activeTag(self.mode)),
+                    .a1 = self.debug_transfer_id,
+                    .a2 = self.debug_transfer_tries,
+                    .a3 = self.debug_transfer_aborted,
+                    .a4 = self.debug_transfer_bytes_received,
+                    .a5 = self.debug_transfer_notified_fail,
+                    .a7 = self.debug_transfer_intercept_state,
+                    .a8 = self.debug_transfer_auth_challenge,
+                    .a9 = self.debug_transfer_easy_id,
+                    .b1 = transfer.id,
+                    .b2 = transfer._tries,
+                    .b3 = transfer.aborted,
+                    .b4 = transfer.bytes_received,
+                    .b5 = transfer._notified_fail,
+                    .b7 = @intFromEnum(transfer._intercept_state),
+                    .b8 = transfer._auth_challenge != null,
+                    .b9 = if (transfer._conn) |c| @intFromPtr(c._easy) else 0,
+                });
+                self.header_callback_called = true;
+                self.debug_transfer_id = transfer.id;
+                self.debug_transfer_tries = transfer._tries;
+                self.debug_transfer_aborted = transfer.aborted;
+                self.debug_transfer_bytes_received = transfer.bytes_received;
+                self.debug_transfer_notified_fail = transfer._notified_fail;
+                self.debug_transfer_intercept_state = @intFromEnum(transfer._intercept_state);
+                self.debug_transfer_auth_challenge = transfer._auth_challenge != null;
+                self.debug_transfer_easy_id = if (transfer._conn) |c| @intFromPtr(c._easy) else 0;
+            },
+            else => {},
         }
 
         lp.assert(self.source.remote.capacity == 0, "ScriptManager.Header buffer", .{ .capacity = self.source.remote.capacity });
         var buffer: std.ArrayList(u8) = .empty;
-        if (transfer.getContentLength()) |cl| {
+        if (response.contentLength()) |cl| {
             try buffer.ensureTotalCapacity(self.arena, cl);
         }
         self.source = .{ .remote = buffer };
         return true;
     }
 
-    fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
-        const self: *Script = @ptrCast(@alignCast(transfer.ctx));
-        self._dataCallback(transfer, data) catch |err| {
-            log.err(.http, "SM.dataCallback", .{ .err = err, .transfer = transfer, .len = data.len });
+    fn dataCallback(response: HttpClient.Response, data: []const u8) !void {
+        const self: *Script = @ptrCast(@alignCast(response.ctx));
+        self._dataCallback(response, data) catch |err| {
+            log.err(.http, "SM.dataCallback", .{ .err = err, .transfer = response, .len = data.len });
             return err;
         };
     }
-    fn _dataCallback(self: *Script, _: *HttpClient.Transfer, data: []const u8) !void {
+
+    fn _dataCallback(self: *Script, _: HttpClient.Response, data: []const u8) !void {
         try self.source.remote.appendSlice(self.arena, data);
     }
 

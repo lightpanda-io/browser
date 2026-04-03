@@ -17,8 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const CDP = @import("../CDP.zig");
 
-pub fn processMessage(cmd: anytype) !void {
+pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
         disable,
@@ -32,7 +33,7 @@ pub fn processMessage(cmd: anytype) !void {
     }
 }
 
-fn setIgnoreCertificateErrors(cmd: anytype) !void {
+fn setIgnoreCertificateErrors(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         ignore: bool,
     })) orelse return error.InvalidParams;
@@ -44,7 +45,7 @@ fn setIgnoreCertificateErrors(cmd: anytype) !void {
 const testing = @import("../testing.zig");
 
 test "cdp.Security: setIgnoreCertificateErrors" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-9" });

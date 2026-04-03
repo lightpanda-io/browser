@@ -3,7 +3,7 @@ FROM debian:stable-slim
 ARG MINISIG=0.12
 ARG ZIG_MINISIG=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 ARG V8=14.0.365.4
-ARG ZIG_V8=v0.3.4
+ARG ZIG_V8=v0.3.7
 ARG TARGETPLATFORM
 
 RUN apt-get update -yq && \
@@ -53,8 +53,7 @@ RUN zig build -Doptimize=ReleaseFast \
 # build release
 RUN zig build -Doptimize=ReleaseFast \
     -Dsnapshot_path=../../snapshot.bin \
-    -Dprebuilt_v8_path=v8/libc_v8.a \
-    -Dgit_commit=$(git rev-parse --short HEAD)
+    -Dprebuilt_v8_path=v8/libc_v8.a
 
 FROM debian:stable-slim
 

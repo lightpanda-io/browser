@@ -27,7 +27,6 @@ const IS_DEBUG = builtin.mode == .Debug;
 
 const log = @import("../log.zig");
 
-const App = @import("../App.zig");
 const String = @import("../string.zig").String;
 
 const Mime = @import("Mime.zig");
@@ -43,7 +42,6 @@ const URL = @import("URL.zig");
 const Blob = @import("webapi/Blob.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
-const EventTarget = @import("webapi/EventTarget.zig");
 const CData = @import("webapi/CData.zig");
 const Element = @import("webapi/Element.zig");
 const HtmlElement = @import("webapi/element/Html.zig");
@@ -59,14 +57,13 @@ const AbstractRange = @import("webapi/AbstractRange.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
-const storage = @import("webapi/storage/storage.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
+const SubmitEvent = @import("webapi/event/SubmitEvent.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const MouseEvent = @import("webapi/event/MouseEvent.zig");
 
 const HttpClient = @import("HttpClient.zig");
-const ArenaPool = App.ArenaPool;
 
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
@@ -299,7 +296,9 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         ._performance = Performance.init(),
         ._screen = screen,
         ._visual_viewport = visual_viewport,
+        ._cross_origin_wrapper = undefined,
     });
+    self.window._cross_origin_wrapper = .{ .window = self.window };
 
     self._style_manager = try StyleManager.init(self);
     errdefer self._style_manager.deinit();
@@ -352,6 +351,30 @@ pub fn deinit(self: *Page, abort_http: bool) void {
         session.releaseArena(qn.arena);
     }
 
+    {
+        // Release all objects we're referencing
+        {
+            var it = self._blob_urls.valueIterator();
+            while (it.next()) |blob| {
+                blob.*.releaseRef(session);
+            }
+        }
+
+        {
+            var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
+            while (it) |node| : (it = node.next) {
+                const observer: *MutationObserver = @fieldParentPtr("node", node);
+                observer.releaseRef(session);
+            }
+        }
+
+        for (self._intersection_observers.items) |observer| {
+            observer.releaseRef(session);
+        }
+
+        self.window._document._selection.releaseRef(session);
+    }
+
     session.browser.env.destroyContext(self.js);
 
     self._script_manager.shutdown = true;
@@ -382,12 +405,9 @@ pub fn getTitle(self: *Page) !?[]const u8 {
     return null;
 }
 
-// Add comon headers for a request:
-// * cookies
+// Add common headers for a request:
 // * referer
-pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, headers: *HttpClient.Headers) !void {
-    try self.requestCookie(.{}).headersForRequest(temp, url, headers);
-
+pub fn headersForRequest(self: *Page, headers: *HttpClient.Headers) !void {
     // Build the referer
     const referer = blk: {
         if (self.referer_header == null) {
@@ -418,7 +438,15 @@ pub fn releaseArena(self: *Page, allocator: Allocator) void {
 
 pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
     const current_origin = self.origin orelse return false;
-    return std.mem.startsWith(u8, url, current_origin);
+
+    // fastpath
+    if (!std.mem.startsWith(u8, url, current_origin)) {
+        return false;
+    }
+
+    // Starting here, at least protocols are equals.
+    // Compare hosts (domain:port) strictly
+    return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
 }
 
 /// Look up a blob URL in this page's registry.
@@ -491,7 +519,6 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
                 return error.InjectBlankFailed;
             };
         }
-        self.documentIsComplete();
 
         session.notification.dispatch(.page_navigate, &.{
             .frame_id = self._frame_id,
@@ -523,6 +550,8 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
 
         // force next request id manually b/c we won't create a real req.
         _ = session.browser.http_client.incrReqId();
+
+        self.documentIsComplete();
         return;
     }
 
@@ -542,8 +571,6 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     if (opts.header) |hdr| {
         try headers.add(hdr);
     }
-    try self.requestCookie(.{ .is_navigation = true }).headersForRequest(self.arena, self.url, &headers);
-
     // We dispatch page_navigate event before sending the request.
     // It ensures the event page_navigated is not dispatched before this one.
     session.notification.dispatch(.page_navigate, &.{
@@ -570,6 +597,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         .headers = headers,
         .body = opts.body,
         .cookie_jar = &session.cookie_jar,
+        .cookie_origin = self.url,
         .resource_type = .document,
         .notification = self._session.notification,
         .header_callback = pageHeaderDoneCallback,
@@ -743,6 +771,12 @@ pub fn _documentIsLoaded(self: *Page) !void {
         self.document.asEventTarget(),
         event,
     );
+
+    self._session.notification.dispatch(.page_dom_content_loaded, &.{
+        .frame_id = self._frame_id,
+        .req_id = self._req_id,
+        .timestamp = timestamp(.monotonic),
+    });
 }
 
 pub fn scriptsCompletedLoading(self: *Page) void {
@@ -801,19 +835,6 @@ pub fn documentIsComplete(self: *Page) void {
     self._documentIsComplete() catch |err| {
         log.err(.page, "document is complete", .{ .err = err, .type = self._type, .url = self.url });
     };
-
-    if (self._navigated_options) |no| {
-        // _navigated_options will be null in special short-circuit cases, like
-        // "navigating" to about:blank, in which case this notification has
-        // already been sent
-        self._session.notification.dispatch(.page_navigated, &.{
-            .frame_id = self._frame_id,
-            .req_id = self._req_id,
-            .opts = no,
-            .url = self.url,
-            .timestamp = timestamp(.monotonic),
-        });
-    }
 }
 
 fn _documentIsComplete(self: *Page) !void {
@@ -831,6 +852,12 @@ fn _documentIsComplete(self: *Page) !void {
         event._target = self.document.asEventTarget();
         try self._event_manager.dispatchDirect(window_target, event, self.window._on_load, .{ .inject_target = false, .context = "page load" });
     }
+
+    self._session.notification.dispatch(.page_loaded, &.{
+        .frame_id = self._frame_id,
+        .req_id = self._req_id,
+        .timestamp = timestamp(.monotonic),
+    });
 
     if (self._event_manager.hasDirectListeners(window_target, "pageshow", self.window._on_pageshow)) {
         const pageshow_event = (try PageTransitionEvent.initTrusted(comptime .wrap("pageshow"), .{}, self)).asEvent();
@@ -859,12 +886,10 @@ fn notifyParentLoadComplete(self: *Page) void {
     parent.iframeCompletedLoading(self.iframe.?);
 }
 
-fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
-    var self: *Page = @ptrCast(@alignCast(transfer.ctx));
+fn pageHeaderDoneCallback(response: HttpClient.Response) !bool {
+    var self: *Page = @ptrCast(@alignCast(response.ctx));
 
-    const header = &transfer.response_header.?;
-
-    const response_url = std.mem.span(header.url);
+    const response_url = response.url();
     if (std.mem.eql(u8, response_url, self.url) == false) {
         // would be different than self.url in the case of a redirect
         self.url = try self.arena.dupeZ(u8, response_url);
@@ -878,23 +903,36 @@ fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     if (comptime IS_DEBUG) {
         log.debug(.page, "navigate header", .{
             .url = self.url,
-            .status = header.status,
-            .content_type = header.contentType(),
+            .status = response.status(),
+            .content_type = response.contentType(),
             .type = self._type,
+        });
+    }
+
+    if (self._navigated_options) |no| {
+        // _navigated_options will be null in special short-circuit cases, like
+        // "navigating" to about:blank, in which case this notification has
+        // already been sent
+        self._session.notification.dispatch(.page_navigated, &.{
+            .frame_id = self._frame_id,
+            .req_id = self._req_id,
+            .opts = no,
+            .url = self.url,
+            .timestamp = timestamp(.monotonic),
         });
     }
 
     return true;
 }
 
-fn pageDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
-    var self: *Page = @ptrCast(@alignCast(transfer.ctx));
+fn pageDataCallback(response: HttpClient.Response, data: []const u8) !void {
+    var self: *Page = @ptrCast(@alignCast(response.ctx));
 
     if (self._parse_state == .pre) {
         // we lazily do this, because we might need the first chunk of data
         // to sniff the content type
         var mime: Mime = blk: {
-            if (transfer.response_header.?.contentType()) |ct| {
+            if (response.contentType()) |ct| {
                 break :blk try Mime.parse(ct);
             }
             break :blk Mime.sniff(data);
@@ -1033,6 +1071,7 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
             });
 
             parser.parse(html);
+            self._parse_state = .complete;
             self.documentIsComplete();
         },
         else => unreachable,
@@ -1329,20 +1368,24 @@ pub fn schedulePerformanceObserverDelivery(self: *Page) !void {
 }
 
 pub fn registerMutationObserver(self: *Page, observer: *MutationObserver) !void {
+    observer.acquireRef();
     self._mutation_observers.append(&observer.node);
 }
 
 pub fn unregisterMutationObserver(self: *Page, observer: *MutationObserver) void {
+    observer.releaseRef(self._session);
     self._mutation_observers.remove(&observer.node);
 }
 
 pub fn registerIntersectionObserver(self: *Page, observer: *IntersectionObserver) !void {
+    observer.acquireRef();
     try self._intersection_observers.append(self.arena, observer);
 }
 
 pub fn unregisterIntersectionObserver(self: *Page, observer: *IntersectionObserver) void {
     for (self._intersection_observers.items, 0..) |obs, i| {
         if (obs == observer) {
+            observer.releaseRef(self._session);
             _ = self._intersection_observers.swapRemove(i);
             return;
         }
@@ -3396,7 +3439,7 @@ pub fn handleClick(self: *Page, target: *Node) !void {
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
     const event = keyboard_event.asEvent();
     const element = self.window._document._active_element orelse {
-        keyboard_event.deinit(false, self._session);
+        _ = event.releaseRef(self._session);
         return;
     };
 
@@ -3487,11 +3530,12 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     };
 
     if (submit_opts.fire_event) {
-        const submit_event = try Event.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true }, self);
+        const submitter_html: ?*HtmlElement = if (submitter_) |s| s.is(HtmlElement) else null;
+        const submit_event = (try SubmitEvent.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true, .submitter = submitter_html }, self)).asEvent();
 
         // so submit_event is still valid when we check _prevent_default
         submit_event.acquireRef();
-        defer submit_event.deinit(false, self._session);
+        defer _ = submit_event.releaseRef(self._session);
 
         try self._event_manager.dispatch(form_element.asEventTarget(), submit_event);
         // If the submit event was prevented, don't submit the form
@@ -3550,19 +3594,6 @@ pub fn insertText(self: *Page, v: []const u8) !void {
     }
 }
 
-const RequestCookieOpts = struct {
-    is_http: bool = true,
-    is_navigation: bool = false,
-};
-pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) HttpClient.RequestCookie {
-    return .{
-        .jar = &self._session.cookie_jar,
-        .origin = self.url,
-        .is_http = opts.is_http,
-        .is_navigation = opts.is_navigation,
-    };
-}
-
 fn asUint(comptime string: anytype) std.meta.Int(
     .unsigned,
     @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
@@ -3585,14 +3616,47 @@ test "WebApi: Page" {
 }
 
 test "WebApi: Frames" {
-    // TOO FLAKY, disabled for now
-
-    // const filter: testing.LogFilter = .init(&.{.js});
-    // defer filter.deinit();
-
-    // try testing.htmlRunner("frames", .{});
+    try testing.htmlRunner("frames", .{});
 }
 
 test "WebApi: Integration" {
     try testing.htmlRunner("integration", .{});
+}
+
+test "Page: isSameOrigin" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var page: Page = undefined;
+
+    page.origin = null;
+    try testing.expectEqual(false, page.isSameOrigin("https://origin.com/"));
+
+    page.origin = try URL.getOrigin(allocator, "https://origin.com/foo/bar") orelse unreachable;
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/foo/bar")); // exact same
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/bar/bar")); // path differ
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/")); // path differ
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com")); // no path
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/foo?q=1"));
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/foo#hash"));
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/foo?q=1#hash"));
+    // FIXME try testing.expectEqual(true, page.isSameOrigin("https://foo:bar@origin.com"));
+    // FIXME try testing.expectEqual(true, page.isSameOrigin("https://origin.com:443/foo"));
+
+    try testing.expectEqual(false, page.isSameOrigin("http://origin.com/")); // another proto
+    try testing.expectEqual(false, page.isSameOrigin("https://origin.com:123/")); // another port
+    try testing.expectEqual(false, page.isSameOrigin("https://sub.origin.com/")); // another subdomain
+    try testing.expectEqual(false, page.isSameOrigin("https://target.com/")); // different domain
+    try testing.expectEqual(false, page.isSameOrigin("https://origin.com.target.com/")); // different domain
+    try testing.expectEqual(false, page.isSameOrigin("https://target.com/@origin.com"));
+
+    page.origin = try URL.getOrigin(allocator, "https://origin.com:8443/foo") orelse unreachable;
+    try testing.expectEqual(true, page.isSameOrigin("https://origin.com:8443/bar"));
+    try testing.expectEqual(false, page.isSameOrigin("https://origin.com/bar")); // missing port
+    try testing.expectEqual(false, page.isSameOrigin("https://origin.com:9999/bar")); // wrong port
+
+    try testing.expectEqual(false, page.isSameOrigin(""));
+    try testing.expectEqual(false, page.isSameOrigin("not-a-url"));
+    try testing.expectEqual(false, page.isSameOrigin("//origin.com/foo"));
 }

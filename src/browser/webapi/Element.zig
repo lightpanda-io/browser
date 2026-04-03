@@ -523,6 +523,31 @@ pub fn setDir(self: *Element, value: []const u8, page: *Page) !void {
     return self.setAttributeSafe(comptime .wrap("dir"), .wrap(value), page);
 }
 
+// ARIAMixin - ARIA attribute reflection
+pub fn getAriaAtomic(self: *const Element) ?[]const u8 {
+    return self.getAttributeSafe(comptime .wrap("aria-atomic"));
+}
+
+pub fn setAriaAtomic(self: *Element, value: ?[]const u8, page: *Page) !void {
+    if (value) |v| {
+        try self.setAttributeSafe(comptime .wrap("aria-atomic"), .wrap(v), page);
+    } else {
+        try self.removeAttribute(comptime .wrap("aria-atomic"), page);
+    }
+}
+
+pub fn getAriaLive(self: *const Element) ?[]const u8 {
+    return self.getAttributeSafe(comptime .wrap("aria-live"));
+}
+
+pub fn setAriaLive(self: *Element, value: ?[]const u8, page: *Page) !void {
+    if (value) |v| {
+        try self.setAttributeSafe(comptime .wrap("aria-live"), .wrap(v), page);
+    } else {
+        try self.removeAttribute(comptime .wrap("aria-live"), page);
+    }
+}
+
 pub fn getClassName(self: *const Element) []const u8 {
     return self.getAttributeSafe(comptime .wrap("class")) orelse "";
 }
@@ -571,6 +596,32 @@ pub fn hasAttribute(self: *const Element, name: String, page: *Page) !bool {
 pub fn hasAttributeSafe(self: *const Element, name: String) bool {
     const attributes = self._attributes orelse return false;
     return attributes.hasSafe(name);
+}
+
+pub fn isDisabled(self: *Element) bool {
+    if (self.getAttributeSafe(comptime .wrap("disabled")) != null) {
+        return true;
+    }
+
+    const element_node = self.asNode();
+    var current: ?*Node = element_node._parent;
+    while (current) |node| {
+        current = node._parent;
+        const ancestor = node.is(Element) orelse continue;
+
+        if (ancestor.getTag() == .fieldset and ancestor.getAttributeSafe(comptime .wrap("disabled")) != null) {
+            var child = ancestor.firstElementChild();
+            while (child) |c| {
+                if (c.getTag() == .legend) {
+                    if (c.asNode().contains(element_node)) return false;
+                    break;
+                }
+                child = c.nextElementSibling();
+            }
+            return true;
+        }
+    }
+    return false;
 }
 
 pub fn hasAttributes(self: *const Element) bool {
@@ -1660,6 +1711,8 @@ pub const JsApi = struct {
     pub const localName = bridge.accessor(Element.getLocalName, null, .{});
     pub const id = bridge.accessor(Element.getId, Element.setId, .{});
     pub const slot = bridge.accessor(Element.getSlot, Element.setSlot, .{});
+    pub const ariaAtomic = bridge.accessor(Element.getAriaAtomic, Element.setAriaAtomic, .{});
+    pub const ariaLive = bridge.accessor(Element.getAriaLive, Element.setAriaLive, .{});
     pub const dir = bridge.accessor(Element.getDir, Element.setDir, .{});
     pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{});
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{});

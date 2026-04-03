@@ -17,11 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 
 const log = @import("../../../log.zig");
 const HttpClient = @import("../../HttpClient.zig");
-const net_http = @import("../../../network/http.zig");
+const http = @import("../../../network/http.zig");
 
 const URL = @import("../../URL.zig");
 const Mime = @import("../../Mime.zig");
@@ -29,7 +30,6 @@ const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
 
 const Node = @import("../Node.zig");
-const Blob = @import("../Blob.zig");
 const Event = @import("../Event.zig");
 const Headers = @import("Headers.zig");
 const EventTarget = @import("../EventTarget.zig");
@@ -39,13 +39,15 @@ const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const XMLHttpRequest = @This();
+_rc: lp.RC(u8) = .{},
 _page: *Page,
 _proto: *XMLHttpRequestEventTarget,
 _arena: Allocator,
-_transfer: ?*HttpClient.Transfer = null,
+_http_response: ?HttpClient.Response = null,
+_active_request: bool = false,
 
 _url: [:0]const u8 = "",
-_method: net_http.Method = .GET,
+_method: http.Method = .GET,
 _request_headers: *Headers,
 _request_body: ?[]const u8 = null,
 
@@ -88,22 +90,19 @@ const ResponseType = enum {
 pub fn init(page: *Page) !*XMLHttpRequest {
     const arena = try page.getArena(.{ .debug = "XMLHttpRequest" });
     errdefer page.releaseArena(arena);
-    return page._factory.xhrEventTarget(arena, XMLHttpRequest{
+    const self = try page._factory.xhrEventTarget(arena, XMLHttpRequest{
         ._page = page,
         ._arena = arena,
         ._proto = undefined,
         ._request_headers = try Headers.init(null, page),
     });
+    return self;
 }
 
-pub fn deinit(self: *XMLHttpRequest, shutdown: bool, session: *Session) void {
-    if (self._transfer) |transfer| {
-        if (shutdown) {
-            transfer.terminate();
-        } else {
-            transfer.abort(error.Abort);
-        }
-        self._transfer = null;
+pub fn deinit(self: *XMLHttpRequest, session: *Session) void {
+    if (self._http_response) |resp| {
+        resp.abort(error.Abort);
+        self._http_response = null;
     }
 
     if (self._on_ready_state_change) |func| {
@@ -138,6 +137,22 @@ pub fn deinit(self: *XMLHttpRequest, shutdown: bool, session: *Session) void {
     session.releaseArena(self._arena);
 }
 
+fn releaseSelfRef(self: *XMLHttpRequest) void {
+    if (self._active_request == false) {
+        return;
+    }
+    self.releaseRef(self._page._session);
+    self._active_request = false;
+}
+
+pub fn releaseRef(self: *XMLHttpRequest, session: *Session) void {
+    self._rc.release(self, session);
+}
+
+pub fn acquireRef(self: *XMLHttpRequest) void {
+    self._rc.acquire();
+}
+
 fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
     return self._proto._proto;
 }
@@ -169,9 +184,9 @@ pub fn setWithCredentials(self: *XMLHttpRequest, value: bool) !void {
 // TODO: url should be a union, as it can be multiple things
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void {
     // Abort any in-progress request
-    if (self._transfer) |transfer| {
+    if (self._http_response) |transfer| {
         transfer.abort(error.Abort);
-        self._transfer = null;
+        self._http_response = null;
     }
 
     // Reset internal state
@@ -225,10 +240,13 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
 
     try self._request_headers.populateHttpHeader(page.call_arena, &headers);
     if (cookie_support) {
-        try page.headersForRequest(self._arena, self._url, &headers);
+        try page.headersForRequest(&headers);
     }
 
-    try http_client.request(.{
+    self.acquireRef();
+    self._active_request = true;
+
+    http_client.request(.{
         .ctx = self,
         .url = self._url,
         .method = self._method,
@@ -236,6 +254,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         .frame_id = page._frame_id,
         .body = self._request_body,
         .cookie_jar = if (cookie_support) &page._session.cookie_jar else null,
+        .cookie_origin = page.url,
         .resource_type = .xhr,
         .notification = page._session.notification,
         .start_callback = httpStartCallback,
@@ -244,9 +263,10 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
-    });
-
-    page.js.strongRef(self);
+    }) catch |err| {
+        self.releaseSelfRef();
+        return err;
+    };
 }
 
 fn handleBlobUrl(self: *XMLHttpRequest, page: *Page) !void {
@@ -382,34 +402,32 @@ pub fn getResponseXML(self: *XMLHttpRequest, page: *Page) !?*Node.Document {
     };
 }
 
-fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
+fn httpStartCallback(response: HttpClient.Response) !void {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
     if (comptime IS_DEBUG) {
         log.debug(.http, "request start", .{ .method = self._method, .url = self._url, .source = "xhr" });
     }
-    self._transfer = transfer;
+    self._http_response = response;
 }
 
-fn httpHeaderCallback(transfer: *HttpClient.Transfer, header: net_http.Header) !void {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
+fn httpHeaderCallback(response: HttpClient.Response, header: http.Header) !void {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
     const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ header.name, header.value });
     try self._response_headers.append(self._arena, joined);
 }
 
-fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
-
-    const header = &transfer.response_header.?;
+fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "request header", .{
             .source = "xhr",
             .url = self._url,
-            .status = header.status,
+            .status = response.status(),
         });
     }
 
-    if (header.contentType()) |ct| {
+    if (response.contentType()) |ct| {
         self._response_mime = Mime.parse(ct) catch |e| {
             log.info(.http, "invalid content type", .{
                 .content_Type = ct,
@@ -420,18 +438,18 @@ fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
         };
     }
 
-    var it = transfer.responseHeaderIterator();
+    var it = response.headerIterator();
     while (it.next()) |hdr| {
         const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ hdr.name, hdr.value });
         try self._response_headers.append(self._arena, joined);
     }
 
-    self._response_status = header.status;
-    if (transfer.getContentLength()) |cl| {
+    self._response_status = response.status().?;
+    if (response.contentLength()) |cl| {
         self._response_len = cl;
         try self._response_data.ensureTotalCapacity(self._arena, cl);
     }
-    self._response_url = try self._arena.dupeZ(u8, std.mem.span(header.url));
+    self._response_url = try self._arena.dupeZ(u8, response.url());
 
     const page = self._page;
 
@@ -446,8 +464,8 @@ fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     return true;
 }
 
-fn httpDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
+fn httpDataCallback(response: HttpClient.Response, data: []const u8) !void {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
     try self._response_data.appendSlice(self._arena, data);
 
     const page = self._page;
@@ -470,7 +488,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 
     // Not that the request is done, the http/client will free the transfer
     // object. It isn't safe to keep it around.
-    self._transfer = null;
+    self._http_response = null;
 
     const page = self._page;
 
@@ -486,29 +504,32 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
         .loaded = loaded,
     }, page);
 
-    page.js.weakRef(self);
+    self.releaseSelfRef();
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
     // http client will close it after an error, it isn't safe to keep around
-    self._transfer = null;
     self.handleError(err);
-    self._page.js.weakRef(self);
+    if (self._http_response != null) {
+        self._http_response = null;
+    }
+    self.releaseSelfRef();
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
-    self._transfer = null;
+    self._http_response = null;
+    self.releaseSelfRef();
 }
 
 pub fn abort(self: *XMLHttpRequest) void {
     self.handleError(error.Abort);
-    if (self._transfer) |transfer| {
-        transfer.abort(error.Abort);
-        self._transfer = null;
+    if (self._http_response) |resp| {
+        self._http_response = null;
+        resp.abort(error.Abort);
     }
-    self._page.js.weakRef(self);
+    self.releaseSelfRef();
 }
 
 fn handleError(self: *XMLHttpRequest, err: anyerror) void {
@@ -556,7 +577,7 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, page: *Page) !void {
     }
 }
 
-fn parseMethod(method: []const u8) !net_http.Method {
+fn parseMethod(method: []const u8) !http.Method {
     if (std.ascii.eqlIgnoreCase(method, "get")) {
         return .GET;
     }
@@ -582,8 +603,6 @@ pub const JsApi = struct {
         pub const name = "XMLHttpRequest";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(XMLHttpRequest.deinit);
     };
 
     pub const constructor = bridge.constructor(XMLHttpRequest.init, .{});

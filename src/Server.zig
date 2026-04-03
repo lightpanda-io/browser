@@ -22,12 +22,11 @@ const net = std.net;
 const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
 
 const log = @import("log.zig");
 const App = @import("App.zig");
 const Config = @import("Config.zig");
-const CDP = @import("cdp/cdp.zig").CDP;
+const CDP = @import("cdp/CDP.zig");
 const Net = @import("network/websocket.zig");
 const HttpClient = @import("browser/HttpClient.zig");
 
@@ -212,7 +211,7 @@ pub const Client = struct {
     http: *HttpClient,
     ws: Net.WsConnection,
 
-    fn init(
+    pub fn init(
         socket: posix.socket_t,
         allocator: Allocator,
         app: *App,
@@ -250,7 +249,7 @@ pub const Client = struct {
         self.ws.shutdown();
     }
 
-    fn deinit(self: *Client) void {
+    pub fn deinit(self: *Client) void {
         switch (self.mode) {
             .cdp => |*cdp| cdp.deinit(),
             .http => {},
@@ -298,13 +297,12 @@ pub const Client = struct {
         }
 
         var cdp = &self.mode.cdp;
-        var last_message = milliTimestamp(.monotonic);
-        var ms_remaining = self.ws.timeout_ms;
+        const timeout_ms = self.ws.timeout_ms;
 
         while (true) {
-            const result = cdp.pageWait(ms_remaining) catch |wait_err| switch (wait_err) {
+            const result = cdp.pageWait(timeout_ms) catch |wait_err| switch (wait_err) {
                 error.NoPage => {
-                    const status = http.tick(ms_remaining) catch |err| {
+                    const status = http.tick(timeout_ms) catch |err| {
                         log.err(.app, "http tick", .{ .err = err });
                         return;
                     };
@@ -315,8 +313,6 @@ pub const Client = struct {
                     if (self.readSocket() == false) {
                         return;
                     }
-                    last_message = milliTimestamp(.monotonic);
-                    ms_remaining = self.ws.timeout_ms;
                     continue;
                 },
                 else => return wait_err,
@@ -327,18 +323,10 @@ pub const Client = struct {
                     if (self.readSocket() == false) {
                         return;
                     }
-                    last_message = milliTimestamp(.monotonic);
-                    ms_remaining = self.ws.timeout_ms;
                 },
                 .done => {
-                    const now = milliTimestamp(.monotonic);
-                    const elapsed = now - last_message;
-                    if (elapsed >= ms_remaining) {
-                        log.info(.app, "CDP timeout", .{});
-                        return;
-                    }
-                    ms_remaining -= @intCast(elapsed);
-                    last_message = now;
+                    log.info(.app, "CDP timeout", .{});
+                    return;
                 },
             }
         }
@@ -461,7 +449,7 @@ pub const Client = struct {
 
     fn upgradeConnection(self: *Client, request: []u8) !void {
         try self.ws.upgrade(request);
-        self.mode = .{ .cdp = try CDP.init(self.app, self.http, self) };
+        self.mode = .{ .cdp = try CDP.init(self) };
     }
 
     fn writeHTTPErrorResponse(self: *Client, comptime status: u16, comptime body: []const u8) void {

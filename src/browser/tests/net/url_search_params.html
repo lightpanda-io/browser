@@ -20,8 +20,8 @@
 
 <script id=urlSearchParams>
   const inputs = [
-   // @ZIGDOM [["over", "9000!!"], ["abc", 123], ["key1", ""], ["key2", ""]],
-   {over: "9000!!", abc: 123, key1: "", key2: ""},
+    [["over", "9000!!"], ["abc", "123"], ["key1", ""], ["key2", ""]],
+    {over: "9000!!", abc: 123, key1: "", key2: ""},
     "over=9000!!&abc=123&key1&key2=",
     "?over=9000!!&abc=123&key1&key2=",
   ]
@@ -366,4 +366,50 @@
     testing.expectEqual(['1', '2'], ups.getAll('a'));
     testing.expectEqual(['3'], ups.getAll('b'));
   }
+</script>
+
+<script id=arrayOfArrays>
+{
+  const usp = new URLSearchParams([["a", "1"], ["b", "2"], ["a", "3"]]);
+  testing.expectEqual(3, usp.size);
+  testing.expectEqual('1', usp.get('a'));
+  testing.expectEqual(['1', '3'], usp.getAll('a'));
+  testing.expectEqual('2', usp.get('b'));
+  testing.expectEqual('a=1&b=2&a=3', usp.toString());
+}
+</script>
+
+<script id=arrayOfArraysEmpty>
+{
+  const usp = new URLSearchParams([]);
+  testing.expectEqual(0, usp.size);
+  testing.expectEqual('', usp.toString());
+}
+</script>
+
+<script id=arrayOfArraysDuplicateKeys>
+{
+  const usp = new URLSearchParams([["key", "first"], ["key", "second"], ["key", "third"]]);
+  testing.expectEqual(3, usp.size);
+  testing.expectEqual('first', usp.get('key'));
+  testing.expectEqual(['first', 'second', 'third'], usp.getAll('key'));
+}
+</script>
+
+<script id=arrayOfArraysSpecialChars>
+{
+  const usp = new URLSearchParams([["q", "hello world"], ["url", "https://example.com/?a=1&b=2"]]);
+  testing.expectEqual(2, usp.size);
+  testing.expectEqual('hello world', usp.get('q'));
+  testing.expectEqual('https://example.com/?a=1&b=2', usp.get('url'));
+}
+</script>
+
+<script id=arrayOfArraysNumericValues>
+{
+  const usp = new URLSearchParams([["count", 42], ["pi", 3.14]]);
+  testing.expectEqual(2, usp.size);
+  testing.expectEqual('42', usp.get('count'));
+  testing.expectEqual('3.14', usp.get('pi'));
+}
 </script>

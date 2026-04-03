@@ -49,6 +49,10 @@ const IS_DEBUG = builtin.mode == .Debug;
 
 const Allocator = std.mem.Allocator;
 
+pub fn registerTypes() []const type {
+    return &.{ Window, CrossOriginWindow };
+}
+
 const Window = @This();
 
 _proto: *EventTarget,
@@ -87,6 +91,8 @@ _scroll_pos: struct {
     .y = 0,
     .state = .done,
 },
+// A cross origin wrapper for this window
+_cross_origin_wrapper: CrossOriginWindow,
 
 pub fn asEventTarget(self: *Window) *EventTarget {
     return self._proto;
@@ -104,19 +110,19 @@ pub fn getWindow(self: *Window) *Window {
     return self;
 }
 
-pub fn getTop(self: *Window) *Window {
+pub fn getTop(self: *Window, page: *Page) Access {
     var p = self._page;
     while (p.parent) |parent| {
         p = parent;
     }
-    return p.window;
+    return Access.init(page.window, p.window);
 }
 
-pub fn getParent(self: *Window) *Window {
+pub fn getParent(self: *Window, page: *Page) Access {
     if (self._page.parent) |p| {
-        return p.window;
+        return Access.init(page.window, p.window);
     }
-    return self;
+    return .{ .window = self };
 }
 
 pub fn getDocument(self: *Window) *Document {
@@ -606,6 +612,25 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.
     }
 }
 
+pub const Access = union(enum) {
+    window: *Window,
+    cross_origin: *CrossOriginWindow,
+
+    pub fn init(callee: *Window, accessing: *Window) Access {
+        if (callee == accessing) {
+            // common enough that it's worth the check
+            return .{ .window = accessing };
+        }
+
+        if (callee._page.js.origin == accessing._page.js.origin) {
+            // two different windows, but same origin, return the full window
+            return .{ .window = accessing };
+        }
+
+        return .{ .cross_origin = &accessing._cross_origin_wrapper };
+    }
+};
+
 const ScheduleOpts = struct {
     repeat: bool,
     params: []js.Value.Temp,
@@ -804,7 +829,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = .{ .internal = 1 } });
+    pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = .{ .internal = 1 }, .deletable = false });
     pub const console = bridge.accessor(Window.getConsole, null, .{ .cache = .{ .internal = 2 } });
 
     pub const top = bridge.accessor(Window.getTop, null, .{});
@@ -817,7 +842,7 @@ pub const JsApi = struct {
     pub const performance = bridge.accessor(Window.getPerformance, null, .{});
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{});
-    pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{});
+    pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{ .deletable = false });
     pub const history = bridge.accessor(Window.getHistory, null, .{});
     pub const navigation = bridge.accessor(Window.getNavigation, null, .{});
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{});
@@ -890,6 +915,41 @@ pub const JsApi = struct {
             return null;
         }
     }.prompt, .{});
+};
+
+const CrossOriginWindow = struct {
+    window: *Window,
+
+    pub fn postMessage(self: *CrossOriginWindow, message: js.Value.Temp, target_origin: ?[]const u8, page: *Page) !void {
+        return self.window.postMessage(message, target_origin, page);
+    }
+
+    pub fn getTop(self: *CrossOriginWindow, page: *Page) Access {
+        return self.window.getParent(page);
+    }
+
+    pub fn getParent(self: *CrossOriginWindow, page: *Page) Access {
+        return self.window.getParent(page);
+    }
+
+    pub fn getFramesLength(self: *const CrossOriginWindow) u32 {
+        return self.window.getFramesLength();
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(CrossOriginWindow);
+
+        pub const Meta = struct {
+            pub const name = "CrossOriginWindow";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+        };
+
+        pub const postMessage = bridge.function(CrossOriginWindow.postMessage, .{});
+        pub const top = bridge.accessor(CrossOriginWindow.getTop, null, .{});
+        pub const parent = bridge.accessor(CrossOriginWindow.getParent, null, .{});
+        pub const length = bridge.accessor(CrossOriginWindow.getFramesLength, null, .{});
+    };
 };
 
 const testing = @import("../../testing.zig");

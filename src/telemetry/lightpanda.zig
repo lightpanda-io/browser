@@ -8,8 +8,7 @@ const log = @import("../log.zig");
 const App = @import("../App.zig");
 const Config = @import("../Config.zig");
 const telemetry = @import("telemetry.zig");
-const Runtime = @import("../network/Runtime.zig");
-const Connection = @import("../network/http.zig").Connection;
+const Network = @import("../network/Network.zig");
 
 const URL = "https://telemetry.lightpanda.io";
 const BUFFER_SIZE = 1024;
@@ -18,7 +17,7 @@ const MAX_BODY_SIZE = 500 * 1024; // 500KB server limit
 const LightPanda = @This();
 
 allocator: Allocator,
-runtime: *Runtime,
+network: *Network,
 writer: std.Io.Writer.Allocating,
 
 /// Protects concurrent producers in send().
@@ -37,11 +36,11 @@ pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode
         .iid = iid,
         .run_mode = run_mode,
         .allocator = app.allocator,
-        .runtime = &app.network,
+        .network = &app.network,
         .writer = std.Io.Writer.Allocating.init(app.allocator),
     };
 
-    self.runtime.onTick(@ptrCast(self), flushCallback);
+    self.network.onTick(@ptrCast(self), flushCallback);
 }
 
 pub fn deinit(self: *LightPanda) void {
@@ -71,17 +70,17 @@ fn flushCallback(ctx: *anyopaque) void {
 }
 
 fn postEvent(self: *LightPanda) !void {
-    const conn = self.runtime.getConnection() orelse {
+    const conn = self.network.getConnection() orelse {
         return;
     };
-    errdefer self.runtime.releaseConnection(conn);
+    errdefer self.network.releaseConnection(conn);
 
     const h = self.head.load(.monotonic);
     const t = self.tail.load(.acquire);
     const dropped = self.dropped.swap(0, .monotonic);
 
     if (h == t and dropped == 0) {
-        self.runtime.releaseConnection(conn);
+        self.network.releaseConnection(conn);
         return;
     }
     errdefer _ = self.dropped.fetchAdd(dropped, .monotonic);
@@ -105,7 +104,7 @@ fn postEvent(self: *LightPanda) !void {
     try conn.setBody(self.writer.written());
 
     self.head.store(h + sent, .release);
-    self.runtime.submitRequest(conn);
+    self.network.submitRequest(conn);
 }
 
 fn writeEvent(self: *LightPanda, event: telemetry.Event) !bool {
@@ -145,7 +144,7 @@ const LightPandaEvent = struct {
         try writer.write(builtin.cpu.arch);
 
         try writer.objectField("version");
-        try writer.write(build_config.git_version orelse build_config.git_commit);
+        try writer.write(build_config.version);
 
         try writer.objectField("event");
         try writer.write(@tagName(std.meta.activeTag(self.event)));

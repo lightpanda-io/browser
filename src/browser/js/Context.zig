@@ -21,8 +21,8 @@ const lp = @import("lightpanda");
 const log = @import("../../log.zig");
 
 const js = @import("js.zig");
-const Env = @import("Env.zig");
 const bridge = @import("bridge.zig");
+const Env = @import("Env.zig");
 const Origin = @import("Origin.zig");
 const Scheduler = @import("Scheduler.zig");
 
@@ -214,48 +214,11 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
 }
 
 pub fn trackGlobal(self: *Context, global: v8.Global) !void {
-    return self.identity.globals.append(self.identity_arena, global);
+    return self.session.globals.append(self.session.page_arena, global);
 }
 
 pub fn trackTemp(self: *Context, global: v8.Global) !void {
-    return self.identity.temps.put(self.identity_arena, global.data_ptr, global);
-}
-
-pub fn weakRef(self: *Context, obj: anytype) void {
-    const resolved = js.Local.resolveValue(obj);
-    const fc = self.identity.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
-        if (comptime IS_DEBUG) {
-            // should not be possible
-            std.debug.assert(false);
-        }
-        return;
-    };
-    v8.v8__Global__SetWeakFinalizer(&fc.global, fc, resolved.finalizer_from_v8, v8.kParameter);
-}
-
-pub fn safeWeakRef(self: *Context, obj: anytype) void {
-    const resolved = js.Local.resolveValue(obj);
-    const fc = self.identity.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
-        if (comptime IS_DEBUG) {
-            // should not be possible
-            std.debug.assert(false);
-        }
-        return;
-    };
-    v8.v8__Global__ClearWeak(&fc.global);
-    v8.v8__Global__SetWeakFinalizer(&fc.global, fc, resolved.finalizer_from_v8, v8.kParameter);
-}
-
-pub fn strongRef(self: *Context, obj: anytype) void {
-    const resolved = js.Local.resolveValue(obj);
-    const fc = self.identity.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
-        if (comptime IS_DEBUG) {
-            // should not be possible
-            std.debug.assert(false);
-        }
-        return;
-    };
-    v8.v8__Global__ClearWeak(&fc.global);
+    return self.session.temps.put(self.session.page_arena, global.data_ptr, global);
 }
 
 pub const IdentityResult = struct {
@@ -269,35 +232,6 @@ pub fn addIdentity(self: *Context, ptr: usize) !IdentityResult {
         .value_ptr = gop.value_ptr,
         .found_existing = gop.found_existing,
     };
-}
-
-pub fn releaseTemp(self: *Context, global: v8.Global) void {
-    if (self.identity.temps.fetchRemove(global.data_ptr)) |kv| {
-        var g = kv.value;
-        v8.v8__Global__Reset(&g);
-    }
-}
-
-pub fn createFinalizerCallback(
-    self: *Context,
-    global: v8.Global,
-    ptr: *anyopaque,
-    zig_finalizer: *const fn (ptr: *anyopaque, session: *Session) void,
-) !*Session.FinalizerCallback {
-    const session = self.session;
-    const arena = try session.getArena(.{ .debug = "FinalizerCallback" });
-    errdefer session.releaseArena(arena);
-    const fc = try arena.create(Session.FinalizerCallback);
-    fc.* = .{
-        .arena = arena,
-        .session = session,
-        .ptr = ptr,
-        .global = global,
-        .zig_finalizer = zig_finalizer,
-        // Store identity pointer for cleanup when V8 GCs the object
-        .identity = self.identity,
-    };
-    return fc;
 }
 
 // Any operation on the context have to be made from a local.

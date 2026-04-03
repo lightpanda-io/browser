@@ -4,6 +4,7 @@
   let eventuallies = [];
   let async_capture = null;
   let current_script_id = null;
+  let async_pending = 0;
 
   function expectTrue(actual) {
      expectEqual(true, actual);
@@ -64,6 +65,25 @@
   }
 
   async function async(cb) {
+    if (cb == undefined) {
+      let resolve = null
+      const promise = new Promise((r) => { resolve = r});
+      async_pending += 1;
+
+      return {
+        promise: promise,
+        resolve: resolve,
+        capture: {script_id: document.currentScript.id, stack: new Error().stack},
+        done: async function(cb) {
+          await this.promise;
+          async_pending -= 1;
+          async_capture = this.capture;
+          cb();
+          async_capture = false;
+        }
+      };
+    }
+
     let capture = {script_id: document.currentScript.id, stack: new Error().stack};
     await cb(() => { async_capture = capture; });
     async_capture = null;
@@ -72,6 +92,10 @@
   function assertOk() {
     if (failed) {
       throw new Error('Failed');
+    }
+
+    if (async_pending > 0) {
+      return false;
     }
 
     for (let e of eventuallies) {
@@ -97,6 +121,8 @@
          throw new Error(`script id: '${script_id}' failed: ${status || 'no assertions'}`);
       }
     }
+
+    return true;
   }
 
   const IS_TEST_RUNNER = window.navigator.userAgent.startsWith("Lightpanda/");

@@ -24,6 +24,7 @@ const log = @import("log.zig");
 const dump = @import("browser/dump.zig");
 
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
+const mcp = @import("mcp.zig");
 
 pub const RunMode = enum {
     help,
@@ -33,7 +34,6 @@ pub const RunMode = enum {
     mcp,
 };
 
-pub const MAX_LISTENERS = 16;
 pub const CDP_MAX_HTTP_REQUEST_SIZE = 4096;
 
 // max message size
@@ -156,9 +156,17 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn httpCacheDir(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.common.http_cache_dir,
+        else => null,
+    };
+}
+
 pub fn cdpTimeout(self: *const Config) usize {
     return switch (self.mode) {
         .serve => |opts| if (opts.timeout > 604_800) 604_800_000 else @as(usize, opts.timeout) * 1000,
+        .mcp => 10000, // Default timeout for MCP-CDP
         else => unreachable,
     };
 }
@@ -166,6 +174,7 @@ pub fn cdpTimeout(self: *const Config) usize {
 pub fn port(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.port,
+        .mcp => |opts| opts.cdp_port orelse 0,
         else => unreachable,
     };
 }
@@ -173,6 +182,7 @@ pub fn port(self: *const Config) u16 {
 pub fn advertiseHost(self: *const Config) []const u8 {
     return switch (self.mode) {
         .serve => |opts| opts.advertise_host orelse opts.host,
+        .mcp => "127.0.0.1",
         else => unreachable,
     };
 }
@@ -205,6 +215,7 @@ pub fn blockCidrs(self: *const Config) ?[]const u8 {
 pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
+        .mcp => 16,
         else => unreachable,
     };
 }
@@ -212,6 +223,7 @@ pub fn maxConnections(self: *const Config) u16 {
 pub fn maxPendingConnections(self: *const Config) u31 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_pending_connections,
+        .mcp => 128,
         else => unreachable,
     };
 }
@@ -236,6 +248,8 @@ pub const Serve = struct {
 
 pub const Mcp = struct {
     common: Common = .{},
+    version: mcp.Version = .default,
+    cdp_port: ?u16 = null,
 };
 
 pub const DumpFormat = enum {
@@ -261,7 +275,9 @@ pub const Fetch = struct {
     with_frames: bool = false,
     strip: dump.Opts.Strip = .{},
     wait_ms: u32 = 5000,
-    wait_until: WaitUntil = .load,
+    wait_until: ?WaitUntil = null,
+    wait_script: ?[:0]const u8 = null,
+    wait_selector: ?[:0]const u8 = null,
 };
 
 pub const Common = struct {
@@ -278,6 +294,7 @@ pub const Common = struct {
     log_format: ?log.Format = null,
     log_filter_scopes: ?[]log.Scope = null,
     user_agent_suffix: ?[]const u8 = null,
+    http_cache_dir: ?[]const u8 = null,
 
     web_bot_auth_key_file: ?[]const u8 = null,
     web_bot_auth_keyid: ?[]const u8 = null,
@@ -415,6 +432,11 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--web-bot-auth-domain
         \\                Your domain e.g. yourdomain.com
+        \\
+        \\--http-cache-dir
+        \\                Path to a directory to use as a Filesystem Cache for network resources.
+        \\                Omitting this will result is no caching.
+        \\                Defaults to no caching.
     ;
 
     //                                                                     MAX_HELP_LEN|
@@ -443,12 +465,24 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--with-frames   Includes the contents of iframes. Defaults to false.
         \\
-        \\--wait-ms       Wait time in milliseconds.
+        \\--wait-ms       Wait time in milliseconds. Supersedes all other --wait
+        \\                parameters.
         \\                Defaults to 5000.
         \\
-        \\--wait-until    Wait until the specified event.
-        \\                Supported events: load, domcontentloaded, networkidle, done.
-        \\                Defaults to 'done'.
+        \\--wait-until    Wait until the specified event. Checked before the other
+        \\                --wait- options. Supported events: load, domcontentloaded,
+        \\                networkidle, done.
+        \\                Defaults to 'done'. If --wait-selector, --wait-script or
+        \\                --wait-script-file are specified, defaults to none.
+        \\
+        \\--wait-selector Wait for an element matching the CSS selector to appear.
+        \\                Checked after --wait-until condition is met.
+        \\
+        \\--wait-script   Wait for a JavaScript expression to return truthy.
+        \\                Checked after --wait-until condition is met.
+        \\
+        \\--wait-script-file
+        \\                Like --wait-script, but reads the script from a file.
         \\
     ++ common_options ++
         \\
@@ -484,6 +518,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\mcp command
         \\Starts an MCP (Model Context Protocol) server over stdio
         \\Example: {s} mcp
+        \\
+        \\Options:
+        \\--version
+        \\                Override the reported MCP version.
+        \\                Valid: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25.
+        \\                Defaults to "2024-11-05".
         \\
     ++ common_options ++
         \\
@@ -672,10 +712,35 @@ fn parseMcpArgs(
     allocator: Allocator,
     args: *std.process.ArgIterator,
 ) !Mcp {
-    var mcp: Mcp = .{};
+    var result: Mcp = .{};
 
     while (args.next()) |opt| {
-        if (try parseCommonArg(allocator, opt, args, &mcp.common)) {
+        if (std.mem.eql(u8, "--version", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.mcp, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            result.version = std.meta.stringToEnum(mcp.Version, str) orelse {
+                log.fatal(.mcp, "invalid protocol version", .{ .value = str });
+                return error.InvalidArgument;
+            };
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--cdp-port", opt) or std.mem.eql(u8, "--cdp_port", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.mcp, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+
+            result.cdp_port = std.fmt.parseInt(u16, str, 10) catch |err| {
+                log.fatal(.mcp, "invalid argument value", .{ .arg = opt, .err = err });
+                return error.InvalidArgument;
+            };
+            continue;
+        }
+
+        if (try parseCommonArg(allocator, opt, args, &result.common)) {
             continue;
         }
 
@@ -683,7 +748,7 @@ fn parseMcpArgs(
         return error.UnkownOption;
     }
 
-    return mcp;
+    return result;
 }
 
 fn parseFetchArgs(
@@ -697,7 +762,9 @@ fn parseFetchArgs(
     var common: Common = .{};
     var strip: dump.Opts.Strip = .{};
     var wait_ms: u32 = 5000;
-    var wait_until: WaitUntil = .load;
+    var wait_until: ?WaitUntil = null;
+    var wait_script: ?[:0]const u8 = null;
+    var wait_selector: ?[:0]const u8 = null;
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--wait-ms", opt) or std.mem.eql(u8, "--wait_ms", opt)) {
@@ -719,6 +786,36 @@ fn parseFetchArgs(
             };
             wait_until = std.meta.stringToEnum(WaitUntil, str) orelse {
                 log.fatal(.app, "invalid argument value", .{ .arg = opt, .val = str });
+                return error.InvalidArgument;
+            };
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--wait-selector", opt) or std.mem.eql(u8, "--wait_selector", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            wait_selector = try allocator.dupeZ(u8, str);
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--wait-script", opt) or std.mem.eql(u8, "--wait_script", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            wait_script = try allocator.dupeZ(u8, str);
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--wait-script-file", opt) or std.mem.eql(u8, "--wait_script_file", opt)) {
+            const path = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            wait_script = std.fs.cwd().readFileAllocOptions(allocator, path, 1024 * 1024, null, .of(u8), 0) catch |err| {
+                log.fatal(.app, "failed to read file", .{ .arg = opt, .path = path, .err = err });
                 return error.InvalidArgument;
             };
             continue;
@@ -814,6 +911,8 @@ fn parseFetchArgs(
         .with_frames = with_frames,
         .wait_ms = wait_ms,
         .wait_until = wait_until,
+        .wait_selector = wait_selector,
+        .wait_script = wait_script,
     };
 }
 
@@ -1023,6 +1122,15 @@ fn parseCommonArg(
             return error.InvalidArgument;
         };
         common.block_cidrs = try allocator.dupe(u8, str);
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--http-cache-dir", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--http-cache-dir" });
+            return error.InvalidArgument;
+        };
+        common.http_cache_dir = try allocator.dupe(u8, str);
         return true;
     }
 

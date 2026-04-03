@@ -23,15 +23,23 @@ const js = @import("../../js/js.zig");
 const color = @import("../../color.zig");
 const Page = @import("../../Page.zig");
 
+const Canvas = @import("../element/html/Canvas.zig");
 const ImageData = @import("../ImageData.zig");
 
 /// This class doesn't implement a `constructor`.
 /// It can be obtained with a call to `HTMLCanvasElement#getContext`.
 /// https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D
 const CanvasRenderingContext2D = @This();
+/// Reference to the parent canvas element.
+/// https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/canvas
+_canvas: *Canvas,
 /// Fill color.
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
 _fill_style: color.RGBA = color.RGBA.Named.black,
+
+pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
+    return self._canvas;
+}
 
 pub fn getFillStyle(self: *const CanvasRenderingContext2D, page: *Page) ![]const u8 {
     var w = std.Io.Writer.Allocating.init(page.call_arena);
@@ -125,6 +133,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const canvas = bridge.accessor(CanvasRenderingContext2D.getCanvas, null, .{});
     pub const font = bridge.property("10px sans-serif", .{ .template = false, .readonly = false });
     pub const globalAlpha = bridge.property(1.0, .{ .template = false, .readonly = false });
     pub const globalCompositeOperation = bridge.property("source-over", .{ .template = false, .readonly = false });

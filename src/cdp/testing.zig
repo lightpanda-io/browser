@@ -18,12 +18,10 @@
 
 const std = @import("std");
 const json = std.json;
-const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
+const posix = std.posix;
 
-const Testing = @This();
-
-const main = @import("cdp.zig");
+const CDP = @import("CDP.zig");
+const Server = @import("../Server.zig");
 
 const base = @import("../testing.zig");
 pub const allocator = base.allocator;
@@ -35,61 +33,27 @@ pub const expectEqualSlices = base.expectEqualSlices;
 pub const pageTest = base.pageTest;
 pub const newString = base.newString;
 
-const Client = struct {
-    allocator: Allocator,
-    send_arena: ArenaAllocator,
-    sent: std.ArrayList(json.Value) = .{},
-    serialized: std.ArrayList([]const u8) = .{},
-
-    fn init(alloc: Allocator) Client {
-        return .{
-            .allocator = alloc,
-            .send_arena = ArenaAllocator.init(alloc),
-        };
-    }
-
-    pub fn sendAllocator(self: *Client) Allocator {
-        return self.send_arena.allocator();
-    }
-
-    pub fn sendJSON(self: *Client, message: anytype, opts: json.Stringify.Options) !void {
-        var opts_copy = opts;
-        opts_copy.whitespace = .indent_2;
-        const serialized = try json.Stringify.valueAlloc(self.allocator, message, opts_copy);
-        try self.serialized.append(self.allocator, serialized);
-
-        const value = try json.parseFromSliceLeaky(json.Value, self.allocator, serialized, .{});
-        try self.sent.append(self.allocator, value);
-    }
-
-    pub fn sendJSONRaw(self: *Client, buf: std.ArrayList(u8)) !void {
-        const value = try json.parseFromSliceLeaky(json.Value, self.allocator, buf.items, .{});
-        try self.sent.append(self.allocator, value);
-    }
-};
-
-const TestCDP = main.CDPT(struct {
-    pub const Client = *Testing.Client;
-});
-
 const TestContext = struct {
-    client: ?Client = null,
-    cdp_: ?TestCDP = null,
-    arena: ArenaAllocator,
+    read_at: usize = 0,
+    read_buf: [1024 * 32]u8 = undefined,
+    cdp_: ?CDP = null,
+    client: Server.Client,
+    socket: posix.socket_t,
+    received: std.ArrayList(json.Value) = .empty,
+    received_raw: std.ArrayList([]const u8) = .empty,
 
     pub fn deinit(self: *TestContext) void {
         if (self.cdp_) |*c| {
             c.deinit();
         }
-        self.arena.deinit();
+        self.client.deinit();
+        posix.close(self.socket);
+        base.reset();
     }
 
-    pub fn cdp(self: *TestContext) *TestCDP {
+    pub fn cdp(self: *TestContext) *CDP {
         if (self.cdp_ == null) {
-            self.client = Client.init(self.arena.allocator());
-            // Don't use the arena here. We want to detect leaks in CDP.
-            // The arena is only for test-specific stuff
-            self.cdp_ = TestCDP.init(base.test_app, base.test_http, &self.client.?) catch unreachable;
+            self.cdp_ = CDP.init(&self.client) catch |err| @panic(@errorName(err));
         }
         return &self.cdp_.?;
     }
@@ -100,7 +64,7 @@ const TestContext = struct {
         session_id: ?[]const u8 = null,
         url: ?[:0]const u8 = null,
     };
-    pub fn loadBrowserContext(self: *TestContext, opts: BrowserContextOpts) !*main.BrowserContext(TestCDP) {
+    pub fn loadBrowserContext(self: *TestContext, opts: BrowserContextOpts) !*CDP.BrowserContext {
         var c = self.cdp();
         if (c.browser_context) |bc| {
             _ = c.disposeBrowserContext(bc.id);
@@ -130,7 +94,7 @@ const TestContext = struct {
             }
             const page = try bc.session.createPage();
             const full_url = try std.fmt.allocPrintSentinel(
-                self.arena.allocator(),
+                base.arena_allocator,
                 "http://127.0.0.1:9582/src/browser/tests/{s}",
                 .{url},
                 0,
@@ -143,19 +107,20 @@ const TestContext = struct {
     }
 
     pub fn processMessage(self: *TestContext, msg: anytype) !void {
-        var json_message: []const u8 = undefined;
-        if (@typeInfo(@TypeOf(msg)) != .pointer) {
-            json_message = try std.json.Stringify.valueAlloc(self.arena.allocator(), msg, .{});
-        } else {
+        const json_message: []const u8 = blk: {
+            if (@typeInfo(@TypeOf(msg)) != .pointer) {
+                break :blk try std.json.Stringify.valueAlloc(base.arena_allocator, msg, .{});
+            }
             // assume this is a string we want to send as-is, if it isn't, we'll
             // get a compile error, so no big deal.
-            json_message = msg;
-        }
+            break :blk msg;
+        };
         return self.cdp().processMessage(json_message);
     }
 
     pub fn expectSentCount(self: *TestContext, expected: usize) !void {
-        try expectEqual(expected, self.client.?.sent.items.len);
+        try self.read();
+        try expectEqual(expected, self.received.items.len);
     }
 
     const ExpectResultOpts = struct {
@@ -203,50 +168,156 @@ const TestContext = struct {
         index: ?usize = null,
     };
     pub fn expectSent(self: *TestContext, expected: anytype, opts: SentOpts) !void {
-        const serialized = try json.Stringify.valueAlloc(self.arena.allocator(), expected, .{
-            .whitespace = .indent_2,
-            .emit_null_optional_fields = false,
-        });
+        const expected_json = blk: {
+            // Zig makes this hard. When sendJSON is called, we're sending an anytype.
+            // We can't record that in an ArrayList(???), so we serialize it to JSON.
+            // Now, ideally, we could just take our expected structure, serialize it to
+            // json and check if the two are equal.
+            // Except serializing to JSON isn't deterministic.
+            // So we serialize the JSON then we deserialize to json.Value. And then we can
+            // compare our anytype expectation with the json.Value that we captured
 
-        for (self.client.?.sent.items, 0..) |sent, i| {
-            if (try compareExpectedToSent(serialized, sent) == false) {
-                continue;
+            const serialized = try json.Stringify.valueAlloc(base.arena_allocator, expected, .{
+                .whitespace = .indent_2,
+                .emit_null_optional_fields = false,
+            });
+
+            break :blk try std.json.parseFromSliceLeaky(json.Value, base.arena_allocator, serialized, .{});
+        };
+
+        for (0..5) |_| {
+            for (self.received.items, 0..) |received, i| {
+                if (try base.isEqualJson(expected_json, received) == false) {
+                    continue;
+                }
+
+                if (opts.index) |expected_index| {
+                    if (expected_index != i) {
+                        std.debug.print("Expected message at index: {d}, was at index: {d}\n", .{ expected_index, i });
+                        self.dumpReceived();
+                        return error.ErrorAtWrongIndex;
+                    }
+                }
+                return;
             }
 
-            if (opts.index) |expected_index| {
-                if (expected_index != i) {
-                    return error.ErrorAtWrongIndex;
+            if (self.cdp_) |*cdp__| {
+                if (cdp__.browser_context) |*bc| {
+                    if (bc.session.page != null) {
+                        var runner = try bc.session.runner(.{});
+                        _ = try runner.tick(.{ .ms = 1000 });
+                    }
                 }
             }
-            _ = self.client.?.sent.orderedRemove(i);
-            _ = self.client.?.serialized.orderedRemove(i);
-            return;
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+            try self.read();
         }
-
-        std.debug.print("Error not found. Expecting:\n{s}\n\nGot:\n", .{serialized});
-        for (self.client.?.serialized.items, 0..) |sent, i| {
-            std.debug.print("#{d}\n{s}\n\n", .{ i, sent });
-        }
+        self.dumpReceived();
         return error.ErrorNotFound;
+    }
+
+    fn dumpReceived(self: *const TestContext) void {
+        std.debug.print("CDP Message Received ({d})\n", .{self.received_raw.items.len});
+        for (self.received_raw.items, 0..) |received, i| {
+            std.debug.print("===Message: {d}===\n{s}\n\n", .{ i, received });
+        }
+    }
+
+    pub fn getSentMessage(self: *TestContext, index: usize) !?json.Value {
+        for (0..5) |_| {
+            if (index < self.received.items.len) {
+                return self.received.items[index];
+            }
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+            try self.read();
+        }
+        return null;
+    }
+
+    fn read(self: *TestContext) !void {
+        while (true) {
+            const n = posix.read(self.socket, self.read_buf[self.read_at..]) catch |err| switch (err) {
+                error.WouldBlock => return,
+                else => return err,
+            };
+
+            if (n == 0) {
+                return;
+            }
+
+            self.read_at += n;
+
+            // Try to parse complete WebSocket frames
+            var pos: usize = 0;
+            while (pos < self.read_at) {
+                // Need at least 2 bytes for header
+                if (self.read_at - pos < 2) break;
+
+                const opcode = self.read_buf[pos] & 0x0F;
+                const payload_len_byte = self.read_buf[pos + 1] & 0x7F;
+
+                var header_size: usize = 2;
+                var payload_len: usize = payload_len_byte;
+
+                if (payload_len_byte == 126) {
+                    if (self.read_at - pos < 4) break;
+                    payload_len = std.mem.readInt(u16, self.read_buf[pos + 2 ..][0..2], .big);
+                    header_size = 4;
+                }
+                // Skip 8-byte length case (127) - not needed
+
+                const frame_size = header_size + payload_len;
+                if (self.read_at - pos < frame_size) break;
+
+                // We have a complete frame - process text (1) or binary (2), skip others
+                if (opcode == 1 or opcode == 2) {
+                    const payload = self.read_buf[pos + header_size ..][0..payload_len];
+                    const parsed = try std.json.parseFromSliceLeaky(json.Value, base.arena_allocator, payload, .{});
+                    try self.received.append(base.arena_allocator, parsed);
+                    try self.received_raw.append(base.arena_allocator, try base.arena_allocator.dupe(u8, payload));
+                }
+
+                pos += frame_size;
+            }
+
+            // Move remaining partial data to beginning of buffer
+            if (pos > 0 and pos < self.read_at) {
+                std.mem.copyForwards(u8, &self.read_buf, self.read_buf[pos..self.read_at]);
+                self.read_at -= pos;
+            } else if (pos == self.read_at) {
+                self.read_at = 0;
+            }
+        }
     }
 };
 
-pub fn context() TestContext {
+pub fn context() !TestContext {
+    var pair: [2]posix.socket_t = undefined;
+    const rc = std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair);
+    if (rc != 0) {
+        return error.SocketPairFailed;
+    }
+
+    errdefer {
+        posix.close(pair[0]);
+        posix.close(pair[1]);
+    }
+
+    const timeout = std.mem.toBytes(posix.timeval{ .sec = 0, .usec = 5_000 });
+    try posix.setsockopt(pair[0], posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
+    try posix.setsockopt(pair[0], posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
+    try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
+    try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
+
+    try posix.setsockopt(pair[0], posix.SOL.SOCKET, posix.SO.RCVBUF, &std.mem.toBytes(@as(c_int, 32_768)));
+    try posix.setsockopt(pair[0], posix.SOL.SOCKET, posix.SO.SNDBUF, &std.mem.toBytes(@as(c_int, 32_768)));
+    try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.RCVBUF, &std.mem.toBytes(@as(c_int, 32_768)));
+    try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.SNDBUF, &std.mem.toBytes(@as(c_int, 32_768)));
+
+    const client = try Server.Client.init(pair[1], base.arena_allocator, base.test_app, "json-version", 2000);
+
     return .{
-        .arena = ArenaAllocator.init(std.testing.allocator),
+        .client = client,
+        .socket = pair[0],
     };
-}
-
-// Zig makes this hard. When sendJSON is called, we're sending an anytype.
-// We can't record that in an ArrayList(???), so we serialize it to JSON.
-// Now, ideally, we could just take our expected structure, serialize it to
-// json and check if the two are equal.
-// Except serializing to JSON isn't deterministic.
-// So we serialize the JSON then we deserialize to json.Value. And then we can
-// compare our anytype expectation with the json.Value that we captured
-
-fn compareExpectedToSent(expected: []const u8, actual: json.Value) !bool {
-    const expected_value = try std.json.parseFromSlice(json.Value, std.testing.allocator, expected, .{});
-    defer expected_value.deinit();
-    return base.isEqualJson(expected_value.value, actual);
 }

@@ -121,10 +121,6 @@ fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool
     return event;
 }
 
-pub fn deinit(self: *MouseEvent, shutdown: bool, session: *Session) void {
-    self._proto.deinit(shutdown, session);
-}
-
 pub fn asEvent(self: *MouseEvent) *Event {
     return self._proto.asEvent();
 }
@@ -203,8 +199,6 @@ pub const JsApi = struct {
         pub const name = "MouseEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(MouseEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(MouseEvent.init, .{});

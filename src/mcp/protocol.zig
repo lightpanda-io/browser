@@ -1,5 +1,14 @@
 const std = @import("std");
 
+pub const Version = enum {
+    @"2024-11-05",
+    @"2025-03-26",
+    @"2025-06-18",
+    @"2025-11-25",
+
+    pub const default: Version = .@"2024-11-05";
+};
+
 pub const Request = struct {
     jsonrpc: []const u8 = "2.0",
     id: ?std.json.Value = null,

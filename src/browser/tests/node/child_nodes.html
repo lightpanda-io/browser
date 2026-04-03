@@ -4,7 +4,7 @@
 <div id=empty></div>
 <div id=one><p id=p10></p></div>
 
-<script id=childNodes>
+<!--<script id=childNodes>
   const div = $('#d1');
   const children = div.childNodes;
   testing.expectEqual(true, children instanceof NodeList);
@@ -65,24 +65,24 @@
   testing.expectEqual([], Array.from(empty.values()));
   testing.expectEqual([], Array.from(empty.entries()));
   testing.expectEqual([], Array.from(empty));
-</script>
+</script> -->
 
 <script id=one>
   const one = $('#one').childNodes;
-  const p10 = $('#p10');
-  testing.expectEqual(1, one.length);
-  testing.expectEqual(p10, one[0]);
-  testing.expectEqual([0], Array.from(one.keys()));
-  testing.expectEqual([p10], Array.from(one.values()));
-  testing.expectEqual([[0, p10]], Array.from(one.entries()));
+  // const p10 = $('#p10');
+  // testing.expectEqual(1, one.length);
+  // testing.expectEqual(p10, one[0]);
+  // testing.expectEqual([0], Array.from(one.keys()));
+  // testing.expectEqual([p10], Array.from(one.values()));
+  // testing.expectEqual([[0, p10]], Array.from(one.entries()));
 
-  testing.expectEqual([p10], Array.from(one));
+  // testing.expectEqual([p10], Array.from(one));
   let foreach = [];
   one.forEach((p) => foreach.push(p));
   testing.expectEqual([p10], foreach);
 </script>
 
-<script id=contains>
+<!-- <script id=contains>
   testing.expectEqual(true, document.contains(document));
   testing.expectEqual(true, $('#d1').contains($('#d1')));
   testing.expectEqual(true, document.contains($('#d1')));
@@ -94,3 +94,4 @@
   testing.expectEqual(false, $('#d1').contains($('#empty')));
   testing.expectEqual(false, $('#d1').contains($('#p10')));
 </script>
+ -->

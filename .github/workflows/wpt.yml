@@ -40,7 +40,7 @@ jobs:
         run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
 
       - name: zig build release
-        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=generic -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=generic
 
       - name: upload artifact
         uses: actions/upload-artifact@v7
@@ -153,3 +153,34 @@ jobs:
 
       - name: format and send json result
         run: /perf-fmt wpt ${{ github.sha }} wpt.json
+
+  wptdiff:
+    name: perf-fmt
+    needs: perf-fmt
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: 'lightpanda-io/demo'
+          fetch-depth: 0
+
+      - run: |
+          cd ./wptdiff
+          CGO_ENABLED=0 go build
+
+      - run: |
+         ./wptdiff/wptdiff |tee diff.log
+
+      - name: Send regression to slack
+        uses: slackapi/slack-github-action@v3.0.1
+        with:
+          errors: true
+          method: files.uploadV2
+          token: ${{ secrets.CI_SLACK_BOT_TOKEN }}
+          payload: |
+            channel_id: ${{ vars.WPT_SLACK_CHANNEL_ID }}
+            initial_comment: "Last WPT regressions"
+            file: "./diff.log"
+            filename: "wpt-regression-${{ github.sha }}.txt"

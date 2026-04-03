@@ -18,8 +18,9 @@
 
 const std = @import("std");
 const id = @import("../id.zig");
+const CDP = @import("../CDP.zig");
 
-pub fn processMessage(cmd: anytype) !void {
+pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
         disable,
@@ -32,15 +33,15 @@ pub fn processMessage(cmd: anytype) !void {
         .getFullAXTree => return getFullAXTree(cmd),
     }
 }
-fn enable(cmd: anytype) !void {
+fn enable(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn disable(cmd: anytype) !void {
+fn disable(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn getFullAXTree(cmd: anytype) !void {
+fn getFullAXTree(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         depth: ?i32 = null,
         frameId: ?[]const u8 = null,

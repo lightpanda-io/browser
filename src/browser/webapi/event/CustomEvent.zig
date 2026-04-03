@@ -73,11 +73,19 @@ pub fn initCustomEvent(
     self._detail = detail_;
 }
 
-pub fn deinit(self: *CustomEvent, shutdown: bool, session: *Session) void {
+pub fn deinit(self: *CustomEvent, session: *Session) void {
     if (self._detail) |d| {
         d.release();
     }
-    self._proto.deinit(shutdown, session);
+    self._proto.deinit(session);
+}
+
+pub fn acquireRef(self: *CustomEvent) void {
+    self._proto.acquireRef();
+}
+
+pub fn releaseRef(self: *CustomEvent, session: *Session) void {
+    self._proto._rc.release(self, session);
 }
 
 pub fn asEvent(self: *CustomEvent) *Event {
@@ -95,8 +103,6 @@ pub const JsApi = struct {
         pub const name = "CustomEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(CustomEvent.deinit);
         pub const enumerable = false;
     };
 

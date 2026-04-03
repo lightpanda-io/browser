@@ -32,45 +32,15 @@ const js = @import("js.zig");
 const Session = @import("../Session.zig");
 
 const v8 = js.v8;
-const Allocator = std.mem.Allocator;
 
 const Identity = @This();
 
 // Maps Zig instance pointers to their v8::Global(Object) wrappers.
 identity_map: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
 
-// Tracked global v8 objects that need to be released on cleanup.
-globals: std.ArrayList(v8.Global) = .empty,
-
-// Temporary v8 globals that can be released early. Key is global.data_ptr.
-temps: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
-
-// Finalizer callbacks for weak references. Key is @intFromPtr of the Zig instance.
-finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *Session.FinalizerCallback) = .empty,
-
 pub fn deinit(self: *Identity) void {
-    {
-        var it = self.finalizer_callbacks.valueIterator();
-        while (it.next()) |finalizer| {
-            finalizer.*.deinit();
-        }
-    }
-
-    {
-        var it = self.identity_map.valueIterator();
-        while (it.next()) |global| {
-            v8.v8__Global__Reset(global);
-        }
-    }
-
-    for (self.globals.items) |*global| {
+    var it = self.identity_map.valueIterator();
+    while (it.next()) |global| {
         v8.v8__Global__Reset(global);
-    }
-
-    {
-        var it = self.temps.valueIterator();
-        while (it.next()) |global| {
-            v8.v8__Global__Reset(global);
-        }
     }
 }

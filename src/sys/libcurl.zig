@@ -221,6 +221,7 @@ pub const CurlInfo = enum(c.CURLINFO) {
     private = c.CURLINFO_PRIVATE,
     redirect_count = c.CURLINFO_REDIRECT_COUNT,
     response_code = c.CURLINFO_RESPONSE_CODE,
+    connect_code = c.CURLINFO_HTTP_CONNECTCODE,
 };
 
 pub const Error = error{
@@ -559,6 +560,10 @@ pub fn curl_easy_cleanup(easy: *Curl) void {
     c.curl_easy_cleanup(easy);
 }
 
+pub fn curl_easy_reset(easy: *Curl) void {
+    c.curl_easy_reset(easy);
+}
+
 pub fn curl_easy_perform(easy: *Curl) Error!void {
     try errorCheck(c.curl_easy_perform(easy));
 }
@@ -716,6 +721,7 @@ pub fn curl_easy_getinfo(easy: *Curl, comptime info: CurlInfo, out: anytype) Err
             break :blk c.curl_easy_getinfo(easy, inf, p);
         },
         .response_code,
+        .connect_code,
         .redirect_count,
         => blk: {
             const p: *c_long = out;

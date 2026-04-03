@@ -59,10 +59,6 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*TextEvent {
     return event;
 }
 
-pub fn deinit(self: *TextEvent, shutdown: bool, session: *Session) void {
-    self._proto.deinit(shutdown, session);
-}
-
 pub fn asEvent(self: *TextEvent) *Event {
     return self._proto.asEvent();
 }
@@ -101,8 +97,6 @@ pub const JsApi = struct {
         pub const name = "TextEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(TextEvent.deinit);
     };
 
     // No constructor - TextEvent is created via document.createEvent('TextEvent')

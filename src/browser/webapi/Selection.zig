@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const log = @import("../../log.zig");
+const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
@@ -27,23 +27,31 @@ const Range = @import("Range.zig");
 const AbstractRange = @import("AbstractRange.zig");
 const Node = @import("Node.zig");
 const Event = @import("Event.zig");
-const Document = @import("Document.zig");
 
 /// https://w3c.github.io/selection-api/
 const Selection = @This();
 
 pub const SelectionDirection = enum { backward, forward, none };
 
+_rc: lp.RC(u8) = .{},
 _range: ?*Range = null,
 _direction: SelectionDirection = .none,
 
 pub const init: Selection = .{};
 
-pub fn deinit(self: *Selection, shutdown: bool, session: *Session) void {
+pub fn deinit(self: *Selection, session: *Session) void {
     if (self._range) |r| {
-        r.deinit(shutdown, session);
+        r.asAbstractRange().releaseRef(session);
         self._range = null;
     }
+}
+
+pub fn releaseRef(self: *Selection, session: *Session) void {
+    self._rc.release(self, session);
+}
+
+pub fn acquireRef(self: *Selection) void {
+    self._rc.acquire();
 }
 
 fn dispatchSelectionChangeEvent(page: *Page) !void {
@@ -695,7 +703,7 @@ pub fn toString(self: *const Selection, page: *Page) ![]const u8 {
 
 fn setRange(self: *Selection, new_range: ?*Range, page: *Page) void {
     if (self._range) |existing| {
-        existing.deinit(false, page._session);
+        _ = existing.asAbstractRange().releaseRef(page._session);
     }
     if (new_range) |nr| {
         nr.asAbstractRange().acquireRef();
@@ -710,7 +718,6 @@ pub const JsApi = struct {
         pub const name = "Selection";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const finalizer = bridge.finalizer(Selection.deinit);
     };
 
     pub const anchorNode = bridge.accessor(Selection.getAnchorNode, null, .{});

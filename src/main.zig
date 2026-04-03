@@ -59,11 +59,8 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             return std.process.cleanExit();
         },
         .version => {
-            if (lp.build_config.git_version) |version| {
-                std.debug.print("{s} ({s})\n", .{ version, lp.build_config.git_commit });
-            } else {
-                std.debug.print("{s}\n", .{lp.build_config.git_commit});
-            }
+            var stdout = std.fs.File.stdout().writer(&.{});
+            try stdout.interface.print("{s}\n", .{lp.build_config.version});
             return std.process.cleanExit();
         },
         else => {},
@@ -126,6 +123,8 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = opts.wait_ms,
                 .wait_until = opts.wait_until,
+                .wait_script = opts.wait_script,
+                .wait_selector = opts.wait_selector,
                 .dump_mode = opts.dump_mode,
                 .dump = .{
                     .strip = opts.strip,
@@ -145,10 +144,21 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
             app.network.run();
         },
-        .mcp => {
+        .mcp => |opts| {
             log.info(.mcp, "starting server", .{});
 
             log.opts.format = .logfmt;
+
+            var cdp_server: ?*lp.Server = null;
+            if (opts.cdp_port) |port| {
+                const address = std.net.Address.parseIp("127.0.0.1", port) catch |err| {
+                    log.fatal(.mcp, "invalid cdp address", .{ .err = err, .port = port });
+                    return;
+                };
+                cdp_server = try lp.Server.init(app, address);
+                try sighandler.on(lp.Server.shutdown, .{cdp_server.?});
+            }
+            defer if (cdp_server) |s| s.deinit();
 
             var worker_thread = try std.Thread.spawn(.{}, mcpThread, .{ allocator, app });
             defer worker_thread.join();

@@ -16,7 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const log = @import("../../../../log.zig");
 const js = @import("../../../js/js.zig");
 const Page = @import("../../../Page.zig");
 const Window = @import("../../Window.zig");
@@ -39,8 +38,9 @@ pub fn asNode(self: *IFrame) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getContentWindow(self: *const IFrame) ?*Window {
-    return self._window;
+pub fn getContentWindow(self: *const IFrame, page: *Page) ?Window.Access {
+    const frame_window = self._window orelse return null;
+    return Window.Access.init(page.window, frame_window);
 }
 
 pub fn getContentDocument(self: *const IFrame) ?*Document {

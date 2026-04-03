@@ -18,20 +18,25 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const log = @import("../../log.zig");
+
+const CDP = @import("../CDP.zig");
+
+const Node = @import("../Node.zig");
+const DOMNode = @import("../../browser/webapi/Node.zig");
+
 const markdown = lp.markdown;
 const SemanticTree = lp.SemanticTree;
 const interactive = lp.interactive;
 const structured_data = lp.structured_data;
-const Node = @import("../Node.zig");
-const DOMNode = @import("../../browser/webapi/Node.zig");
 
-pub fn processMessage(cmd: anytype) !void {
+pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         getMarkdown,
         getSemanticTree,
         getInteractiveElements,
+        getNodeDetails,
         getStructuredData,
+        detectForms,
         clickNode,
         fillNode,
         scrollNode,
@@ -42,7 +47,9 @@ pub fn processMessage(cmd: anytype) !void {
         .getMarkdown => return getMarkdown(cmd),
         .getSemanticTree => return getSemanticTree(cmd),
         .getInteractiveElements => return getInteractiveElements(cmd),
+        .getNodeDetails => return getNodeDetails(cmd),
         .getStructuredData => return getStructuredData(cmd),
+        .detectForms => return detectForms(cmd),
         .clickNode => return clickNode(cmd),
         .fillNode => return fillNode(cmd),
         .scrollNode => return scrollNode(cmd),
@@ -133,17 +140,28 @@ fn getInteractiveElements(cmd: anytype) !void {
         page.document.asNode();
 
     const elements = try interactive.collectInteractiveElements(root, cmd.arena, page);
-
-    // Register nodes so nodeIds are valid for subsequent CDP calls.
-    var node_ids: std.ArrayList(Node.Id) = try .initCapacity(cmd.arena, elements.len);
-    for (elements) |el| {
-        const registered = try bc.node_registry.register(el.node);
-        node_ids.appendAssumeCapacity(registered.id);
-    }
+    try interactive.registerNodes(elements, &bc.node_registry);
 
     return cmd.sendResult(.{
         .elements = elements,
-        .nodeIds = node_ids.items,
+    }, .{});
+}
+
+fn getNodeDetails(cmd: anytype) !void {
+    const Params = struct {
+        backendNodeId: Node.Id,
+    };
+    const params = (try cmd.params(Params)) orelse return error.InvalidParam;
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const node = (bc.node_registry.lookup_by_id.get(params.backendNodeId) orelse return error.InvalidNodeId).dom;
+
+    const details = SemanticTree.getNodeDetails(cmd.arena, node, &bc.node_registry, page) catch return error.InternalError;
+
+    return cmd.sendResult(.{
+        .nodeDetails = details,
     }, .{});
 }
 
@@ -159,6 +177,23 @@ fn getStructuredData(cmd: anytype) !void {
 
     return cmd.sendResult(.{
         .structuredData = data,
+    }, .{});
+}
+
+fn detectForms(cmd: anytype) !void {
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const forms_data = try lp.forms.collectForms(
+        cmd.arena,
+        page.document.asNode(),
+        page,
+    );
+
+    try lp.forms.registerNodes(forms_data, &bc.node_registry);
+
+    return cmd.sendResult(.{
+        .forms = forms_data,
     }, .{});
 }
 
@@ -260,7 +295,7 @@ fn waitForSelector(cmd: anytype) !void {
 
 const testing = @import("../testing.zig");
 test "cdp.lp: getMarkdown" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
@@ -271,12 +306,12 @@ test "cdp.lp: getMarkdown" {
         .method = "LP.getMarkdown",
     });
 
-    const result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expect(result.get("markdown") != null);
 }
 
 test "cdp.lp: getInteractiveElements" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
@@ -287,13 +322,12 @@ test "cdp.lp: getInteractiveElements" {
         .method = "LP.getInteractiveElements",
     });
 
-    const result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expect(result.get("elements") != null);
-    try testing.expect(result.get("nodeIds") != null);
 }
 
 test "cdp.lp: getStructuredData" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
@@ -304,12 +338,12 @@ test "cdp.lp: getStructuredData" {
         .method = "LP.getStructuredData",
     });
 
-    const result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expect(result.get("structuredData") != null);
 }
 
 test "cdp.lp: action tools" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
@@ -370,7 +404,7 @@ test "cdp.lp: action tools" {
 }
 
 test "cdp.lp: waitForSelector" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
@@ -386,9 +420,8 @@ test "cdp.lp: waitForSelector" {
         .method = "LP.waitForSelector",
         .params = .{ .selector = "#existing", .timeout = 2000 },
     });
-    var result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    var result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expect(result.get("backendNodeId") != null);
-    ctx.client.?.sent.clearRetainingCapacity();
 
     // 2. Delayed element
     try ctx.processMessage(.{
@@ -396,9 +429,8 @@ test "cdp.lp: waitForSelector" {
         .method = "LP.waitForSelector",
         .params = .{ .selector = "#delayed", .timeout = 5000 },
     });
-    result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    result = (try ctx.getSentMessage(1)).?.object.get("result").?.object;
     try testing.expect(result.get("backendNodeId") != null);
-    ctx.client.?.sent.clearRetainingCapacity();
 
     // 3. Timeout error
     try ctx.processMessage(.{
@@ -406,6 +438,6 @@ test "cdp.lp: waitForSelector" {
         .method = "LP.waitForSelector",
         .params = .{ .selector = "#nonexistent", .timeout = 100 },
     });
-    const err_obj = ctx.client.?.sent.items[0].object.get("error").?.object;
+    const err_obj = (try ctx.getSentMessage(2)).?.object.get("error").?.object;
     try testing.expect(err_obj.get("code") != null);
 }

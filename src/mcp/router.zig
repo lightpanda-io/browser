@@ -1,5 +1,4 @@
 const std = @import("std");
-const lp = @import("lightpanda");
 const protocol = @import("protocol.zig");
 const resources = @import("resources.zig");
 const Server = @import("Server.zig");
@@ -16,6 +15,7 @@ pub fn processRequests(server: *Server, reader: *std.io.Reader) !void {
         const buffered_line = reader.takeDelimiter('\n') catch |err| switch (err) {
             error.StreamTooLong => {
                 log.err(.mcp, "Message too long", .{});
+                try server.sendError(.null, .InvalidRequest, "Message too long");
                 continue;
             },
             else => return err,
@@ -80,8 +80,13 @@ pub fn handleMessage(server: *Server, arena: std.mem.Allocator, msg: []const u8)
 }
 
 fn handleInitialize(server: *Server, req: protocol.Request) !void {
-    const result = protocol.InitializeResult{
-        .protocolVersion = "2025-11-25",
+    const id = req.id orelse return;
+    const version: protocol.Version = switch (server.app.config.mode) {
+        .mcp => |opts| opts.version,
+        else => .default,
+    };
+    const result: protocol.InitializeResult = .{
+        .protocolVersion = @tagName(version),
         .capabilities = .{
             .resources = .{},
             .tools = .{},
@@ -92,7 +97,7 @@ fn handleInitialize(server: *Server, req: protocol.Request) !void {
         },
     };
 
-    try server.sendResult(req.id.?, result);
+    try server.sendResult(id, result);
 }
 
 fn handlePing(server: *Server, req: protocol.Request) !void {
@@ -120,7 +125,7 @@ test "MCP.router - handleMessage - synchronous unit tests" {
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
     );
     try testing.expectJson(
-        \\{ "jsonrpc": "2.0", "id": 1, "result": { "capabilities": { "tools": {} } } }
+        \\{ "jsonrpc": "2.0", "id": 1, "result": { "protocolVersion": "2024-11-05", "capabilities": { "tools": {} } } }
     , out_alloc.writer.buffered());
     out_alloc.writer.end = 0;
 

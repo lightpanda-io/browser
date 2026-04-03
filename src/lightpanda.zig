@@ -18,7 +18,7 @@
 
 const std = @import("std");
 pub const App = @import("App.zig");
-pub const Network = @import("network/Runtime.zig");
+pub const Network = @import("network/Network.zig");
 pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
 pub const URL = @import("browser/URL.zig");
@@ -35,6 +35,8 @@ pub const markdown = @import("browser/markdown.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
 pub const CDPNode = @import("cdp/Node.zig");
 pub const interactive = @import("browser/interactive.zig");
+pub const links = @import("browser/links.zig");
+pub const forms = @import("browser/forms.zig");
 pub const actions = @import("browser/actions.zig");
 pub const structured_data = @import("browser/structured_data.zig");
 pub const mcp = @import("mcp.zig");
@@ -46,7 +48,9 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
-    wait_until: Config.WaitUntil = .load,
+    wait_until: ?Config.WaitUntil = null,
+    wait_script: ?[:0]const u8 = null,
+    wait_selector: ?[:0]const u8 = null,
     dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
     writer: ?*std.Io.Writer = null,
@@ -109,7 +113,31 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
         .kind = .{ .push = null },
     });
     var runner = try session.runner(.{});
-    try runner.wait(.{ .ms = opts.wait_ms, .until = opts.wait_until });
+
+    var timer = try std.time.Timer.start();
+
+    if (opts.wait_until) |wu| {
+        try runner.wait(.{ .ms = opts.wait_ms, .until = wu });
+    } else if (opts.wait_selector == null and opts.wait_script == null) {
+        // We default to .done if both wait_selector and wait_script are null
+        // This allows the caller to ONLY --wait-selector or ONLY --wait-script
+        // or combine --wait-until WITH --wait-selector/script
+        try runner.wait(.{ .ms = opts.wait_ms, .until = .done });
+    }
+
+    if (opts.wait_selector) |selector| {
+        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        const remaining = opts.wait_ms -| elapsed;
+        if (remaining == 0) return error.Timeout;
+        _ = try runner.waitForSelector(selector, remaining);
+    }
+
+    if (opts.wait_script) |script| {
+        const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+        const remaining = opts.wait_ms -| elapsed;
+        if (remaining == 0) return error.Timeout;
+        try runner.waitForScript(script, remaining);
+    }
 
     const writer = opts.writer orelse return;
     if (opts.dump_mode) |mode| {
@@ -205,6 +233,38 @@ noinline fn assertionFailure(comptime ctx: []const u8, args: anytype) noreturn {
         @compileError(std.fmt.comptimePrint("assertion failure: " ++ ctx, args));
     }
     @import("crash_handler.zig").crash(ctx, args, @returnAddress());
+}
+
+// Reference counting helper
+pub fn RC(comptime T: type) type {
+    return struct {
+        _refs: T = 0,
+
+        pub fn init(refs: T) @This() {
+            return .{ ._refs = refs };
+        }
+
+        pub fn acquire(self: *@This()) void {
+            self._refs += 1;
+        }
+
+        pub fn release(self: *@This(), value: anytype, session: *Session) void {
+            if (comptime IS_DEBUG) {
+                std.debug.assert(self._refs > 0);
+            }
+
+            const refs = self._refs - 1;
+            self._refs = refs;
+            if (refs > 0) {
+                return;
+            }
+            value.deinit(session);
+        }
+
+        pub fn format(self: @This(), writer: *std.Io.Writer) !void {
+            return writer.print("{d}", .{self._refs});
+        }
+    };
 }
 
 test {

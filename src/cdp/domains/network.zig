@@ -18,18 +18,21 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const Allocator = std.mem.Allocator;
+
 const log = @import("../../log.zig");
 
-const CdpStorage = @import("storage.zig");
-
 const id = @import("../id.zig");
+const CDP = @import("../CDP.zig");
+
 const URL = @import("../../browser/URL.zig");
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Notification = @import("../../Notification.zig");
 const Mime = @import("../../browser/Mime.zig");
 
-pub fn processMessage(cmd: anytype) !void {
+const CdpStorage = @import("storage.zig");
+const Allocator = std.mem.Allocator;
+
+pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
         disable,
@@ -59,19 +62,19 @@ pub fn processMessage(cmd: anytype) !void {
     }
 }
 
-fn enable(cmd: anytype) !void {
+fn enable(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     try bc.networkEnable();
     return cmd.sendResult(null, .{});
 }
 
-fn disable(cmd: anytype) !void {
+fn disable(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     bc.networkDisable();
     return cmd.sendResult(null, .{});
 }
 
-fn setExtraHTTPHeaders(cmd: anytype) !void {
+fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         headers: std.json.ArrayHashMap([]const u8),
     })) orelse return error.InvalidParams;
@@ -110,7 +113,7 @@ fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, p
     return true;
 }
 
-fn deleteCookies(cmd: anytype) !void {
+fn deleteCookies(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         name: []const u8,
         url: ?[:0]const u8 = null,
@@ -144,14 +147,14 @@ fn deleteCookies(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn clearBrowserCookies(cmd: anytype) !void {
+fn clearBrowserCookies(cmd: *CDP.Command) !void {
     if (try cmd.params(struct {}) != null) return error.InvalidParams;
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     bc.session.cookie_jar.clearRetainingCapacity();
     return cmd.sendResult(null, .{});
 }
 
-fn setCookie(cmd: anytype) !void {
+fn setCookie(cmd: *CDP.Command) !void {
     const params = (try cmd.params(
         CdpStorage.CdpCookie,
     )) orelse return error.InvalidParams;
@@ -162,7 +165,7 @@ fn setCookie(cmd: anytype) !void {
     try cmd.sendResult(.{ .success = true }, .{});
 }
 
-fn setCookies(cmd: anytype) !void {
+fn setCookies(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         cookies: []const CdpStorage.CdpCookie,
     })) orelse return error.InvalidParams;
@@ -178,7 +181,7 @@ fn setCookies(cmd: anytype) !void {
 const GetCookiesParam = struct {
     urls: ?[]const [:0]const u8 = null,
 };
-fn getCookies(cmd: anytype) !void {
+fn getCookies(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(GetCookiesParam)) orelse GetCookiesParam{};
 
@@ -201,7 +204,7 @@ fn getCookies(cmd: anytype) !void {
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
-fn getResponseBody(cmd: anytype) !void {
+fn getResponseBody(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         requestId: []const u8, // "REQ-{d}"
     })) orelse return error.InvalidParams;
@@ -227,7 +230,7 @@ fn getResponseBody(cmd: anytype) !void {
     }, .{});
 }
 
-pub fn httpRequestFail(bc: anytype, msg: *const Notification.RequestFail) !void {
+pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.RequestFail) !void {
     // It's possible that the request failed because we aborted when the client
     // sent Target.closeTarget. In that case, bc.session_id will be cleared
     // already, and we can skip sending these messages to the client.
@@ -247,7 +250,7 @@ pub fn httpRequestFail(bc: anytype, msg: *const Notification.RequestFail) !void 
     }, .{ .session_id = session_id });
 }
 
-pub fn httpRequestStart(bc: anytype, msg: *const Notification.RequestStart) !void {
+pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.RequestStart) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
@@ -276,7 +279,7 @@ pub fn httpRequestStart(bc: anytype, msg: *const Notification.RequestStart) !voi
     }, .{ .session_id = session_id });
 }
 
-pub fn httpResponseHeaderDone(arena: Allocator, bc: anytype, msg: *const Notification.ResponseHeaderDone) !void {
+pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *const Notification.ResponseHeaderDone) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
@@ -293,7 +296,7 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: anytype, msg: *const Notific
     }, .{ .session_id = session_id });
 }
 
-pub fn httpRequestDone(bc: anytype, msg: *const Notification.RequestDone) !void {
+pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.RequestDone) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
@@ -350,6 +353,10 @@ pub const TransferAsRequestWriter = struct {
             while (it.next()) |hdr| {
                 try jws.objectField(hdr.name);
                 try jws.write(hdr.value);
+            }
+            if (try transfer.getCookieString()) |cookies| {
+                try jws.objectField("Cookie");
+                try jws.write(cookies[0 .. cookies.len - 1]);
             }
             try jws.endObject();
         }
@@ -439,7 +446,7 @@ fn idFromRequestId(request_id: []const u8) !u64 {
 
 const testing = @import("../testing.zig");
 test "cdp.network setExtraHTTPHeaders" {
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
 
     _ = try ctx.loadBrowserContext(.{ .id = "NID-A", .session_id = "NESI-A" });
@@ -465,7 +472,7 @@ test "cdp.Network: cookies" {
     const ResCookie = CdpStorage.ResCookie;
     const CdpCookie = CdpStorage.CdpCookie;
 
-    var ctx = testing.context();
+    var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-S" });
 

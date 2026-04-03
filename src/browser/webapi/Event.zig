@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
@@ -55,7 +57,7 @@ _is_trusted: bool = false,
 // - 0: no reference, always a transient state going to either 1 or about to be deinit'd
 // - 1: either zig or v8 have a reference
 // - 2: both zig and v8 have a reference
-_rc: u8 = 0,
+_rc: lp.RC(u8) = .{},
 
 pub const EventPhase = enum(u8) {
     none = 0,
@@ -76,6 +78,8 @@ pub const Type = union(enum) {
     pop_state_event: *@import("event/PopStateEvent.zig"),
     ui_event: *@import("event/UIEvent.zig"),
     promise_rejection_event: *@import("event/PromiseRejectionEvent.zig"),
+    submit_event: *@import("event/SubmitEvent.zig"),
+    form_data_event: *@import("event/FormDataEvent.zig"),
 };
 
 pub const Options = struct {
@@ -137,25 +141,16 @@ pub fn initEvent(
 }
 
 pub fn acquireRef(self: *Event) void {
-    self._rc += 1;
+    self._rc.acquire();
 }
 
-pub fn deinit(self: *Event, shutdown: bool, session: *Session) void {
-    if (shutdown) {
-        session.releaseArena(self._arena);
-        return;
-    }
+/// Force cleanup on Session shutdown.
+pub fn deinit(self: *Event, session: *Session) void {
+    session.releaseArena(self._arena);
+}
 
-    const rc = self._rc;
-    if (comptime IS_DEBUG) {
-        std.debug.assert(rc != 0);
-    }
-
-    if (rc == 1) {
-        session.releaseArena(self._arena);
-    } else {
-        self._rc = rc - 1;
-    }
+pub fn releaseRef(self: *Event, session: *Session) void {
+    self._rc.release(self, session);
 }
 
 pub fn as(self: *Event, comptime T: type) *T {
@@ -174,6 +169,8 @@ pub fn is(self: *Event, comptime T: type) ?*T {
         .page_transition_event => |e| return if (T == @import("event/PageTransitionEvent.zig")) e else null,
         .pop_state_event => |e| return if (T == @import("event/PopStateEvent.zig")) e else null,
         .promise_rejection_event => |e| return if (T == @import("event/PromiseRejectionEvent.zig")) e else null,
+        .submit_event => |e| return if (T == @import("event/SubmitEvent.zig")) e else null,
+        .form_data_event => |e| return if (T == @import("event/FormDataEvent.zig")) e else null,
         .ui_event => |e| {
             if (T == @import("event/UIEvent.zig")) {
                 return e;
@@ -436,8 +433,6 @@ pub const JsApi = struct {
 
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(Event.deinit);
         pub const enumerable = false;
     };
 

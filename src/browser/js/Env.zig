@@ -26,7 +26,6 @@ const App = @import("../../App.zig");
 const log = @import("../../log.zig");
 
 const bridge = @import("bridge.zig");
-const Origin = @import("Origin.zig");
 const Context = @import("Context.zig");
 const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");
@@ -34,7 +33,6 @@ const Snapshot = @import("Snapshot.zig");
 const Inspector = @import("Inspector.zig");
 
 const Page = @import("../Page.zig");
-const Session = @import("../Session.zig");
 const Window = @import("../webapi/Window.zig");
 
 const JsApis = bridge.JsApis;
@@ -298,7 +296,7 @@ pub fn createContext(self: *Env, page: *Page, params: ContextParams) !*Context {
         // it gets setup automatically as objects are created, but the Window
         // object already exists in v8 (it's the global) so we manually create
         // the mapping here.
-        const tao = try context_arena.create(@import("TaggedOpaque.zig"));
+        const tao = try params.identity_arena.create(@import("TaggedOpaque.zig"));
         tao.* = .{
             .value = @ptrCast(page.window),
             .prototype_chain = (&Window.JsApi.Meta.prototype_chain).ptr,

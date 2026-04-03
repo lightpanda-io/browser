@@ -205,7 +205,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
 
 pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, comptime opts: DispatchOpts) DispatchError!void {
     event.acquireRef();
-    defer event.deinit(false, self.page._session);
+    defer _ = event.releaseRef(self.page._session);
 
     if (comptime IS_DEBUG) {
         log.debug(.event, "eventManager.dispatch", .{ .type = event._type_string.str(), .bubbles = event._bubbles });
@@ -240,7 +240,7 @@ pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, 
     defer window._current_event = prev_event;
 
     event.acquireRef();
-    defer event.deinit(false, page._session);
+    defer _ = event.releaseRef(page._session);
 
     if (comptime IS_DEBUG) {
         log.debug(.event, "dispatchDirect", .{ .type = event._type_string, .context = opts.context });
@@ -425,7 +425,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         ls.deinit();
     }
 
-    const activation_state = ActivationState.create(event, target, page);
+    const activation_state = try ActivationState.create(event, target, page);
 
     // Defer runs even on early return - ensures event phase is reset
     // and default actions execute (unless prevented)
@@ -820,7 +820,7 @@ const ActivationState = struct {
 
     const Input = Element.Html.Input;
 
-    fn create(event: *const Event, target: *Node, page: *Page) ?ActivationState {
+    fn create(event: *const Event, target: *Node, page: *Page) !?ActivationState {
         if (event._type_string.eql(comptime .wrap("click")) == false) {
             return null;
         }

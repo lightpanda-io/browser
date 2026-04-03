@@ -36,8 +36,8 @@ Lightpanda is the open-source browser made for headless usage:
 
 Fast web automation for AI agents, LLM training, scraping and testing:
 
-- Ultra-low memory footprint (9x less than Chrome)
-- Exceptionally fast execution (11x faster than Chrome)
+- Ultra-low memory footprint (16x less than Chrome)
+- Exceptionally fast execution (9x faster than Chrome)
 - Instant startup
 
 [^1]: **Playwright support disclaimer:**
@@ -170,6 +170,7 @@ You may still encounter errors or crashes. Please open an issue with specifics i
 
 Here are the key features we have implemented:
 
+- [ ] CORS [#2015](https://github.com/lightpanda-io/browser/issues/2015)
 - [x] HTTP loader ([Libcurl](https://curl.se/libcurl/))
 - [x] HTML parser ([html5ever](https://github.com/servo/html5ever))
 - [x] DOM tree

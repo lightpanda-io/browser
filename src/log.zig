@@ -39,6 +39,7 @@ pub const Scope = enum {
     telemetry,
     unknown_prop,
     mcp,
+    cache,
 };
 
 const Opts = struct {
@@ -48,9 +49,6 @@ const Opts = struct {
 };
 
 pub var opts = Opts{};
-
-// synchronizes writes to the output
-var out_lock: Thread.Mutex = .{};
 
 // synchronizes access to last_log
 var last_log_lock: Thread.Mutex = .{};

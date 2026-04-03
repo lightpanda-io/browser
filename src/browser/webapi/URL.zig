@@ -256,8 +256,7 @@ pub fn createObjectURL(blob: *Blob, page: *Page) ![]const u8 {
         .{ page.origin orelse "null", uuid_buf },
     );
     try page._blob_urls.put(page.arena, blob_url, blob);
-    // prevent GC from cleaning up the blob while it's in the registry
-    page.js.strongRef(blob);
+    blob.acquireRef();
     return blob_url;
 }
 
@@ -267,9 +266,8 @@ pub fn revokeObjectURL(url: []const u8, page: *Page) void {
         return;
     }
 
-    // Remove from registry and release strong ref (no-op if not found)
     if (page._blob_urls.fetchRemove(url)) |entry| {
-        page.js.weakRef(entry.value);
+        entry.value.releaseRef(page._session);
     }
 }
 

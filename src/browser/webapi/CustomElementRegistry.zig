@@ -24,7 +24,6 @@ const Page = @import("../Page.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
-const DOMException = @import("DOMException.zig");
 const Custom = @import("element/html/Custom.zig");
 const CustomElementDefinition = @import("CustomElementDefinition.zig");
 

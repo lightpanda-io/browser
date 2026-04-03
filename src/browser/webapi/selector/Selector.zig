@@ -20,41 +20,24 @@ const std = @import("std");
 
 const String = @import("../../../string.zig").String;
 
-const Parser = @import("Parser.zig");
 const Node = @import("../Node.zig");
 const Page = @import("../../Page.zig");
+
+const Parser = @import("Parser.zig");
 pub const List = @import("List.zig");
 
-pub fn querySelector(root: *Node, input: []const u8, page: *Page) !?*Node.Element {
+const Allocator = std.mem.Allocator;
+
+pub fn parseLeaky(arena: Allocator, input: []const u8) !Parsed {
     if (input.len == 0) {
         return error.SyntaxError;
     }
+    return .{ .selectors = try Parser.parseList(arena, input) };
+}
 
-    const arena = page.call_arena;
-    const selectors = try Parser.parseList(arena, input, page);
-
-    for (selectors) |selector| {
-        // Fast path: single compound with only an ID selector
-        if (selector.segments.len == 0 and selector.first.parts.len == 1) {
-            const first = selector.first.parts[0];
-            if (first == .id) {
-                const el = page.getElementByIdFromNode(root, first.id) orelse continue;
-                // Check if the element is within the root subtree
-                const node = el.asNode();
-                if (node != root and root.contains(node)) {
-                    return el;
-                }
-                continue;
-            }
-        }
-
-        if (List.initOne(root, selector, page)) |node| {
-            if (node.is(Node.Element)) |el| {
-                return el;
-            }
-        }
-    }
-    return null;
+pub fn querySelector(root: *Node, input: []const u8, page: *Page) !?*Node.Element {
+    const parsed = try parseLeaky(page.call_arena, input);
+    return parsed.query(root, page);
 }
 
 pub fn querySelectorAll(root: *Node, input: []const u8, page: *Page) !*List {
@@ -67,7 +50,7 @@ pub fn querySelectorAll(root: *Node, input: []const u8, page: *Page) !*List {
 
     var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
 
-    const selectors = try Parser.parseList(arena, input, page);
+    const selectors = try Parser.parseList(arena, input);
     for (selectors) |selector| {
         try List.collect(arena, root, selector, &nodes, page);
     }
@@ -86,7 +69,7 @@ pub fn matches(el: *Node.Element, input: []const u8, page: *Page) !bool {
     }
 
     const arena = page.call_arena;
-    const selectors = try Parser.parseList(arena, input, page);
+    const selectors = try Parser.parseList(arena, input);
 
     for (selectors) |selector| {
         if (List.matches(el.asNode(), selector, el.asNode(), page)) {
@@ -104,7 +87,7 @@ pub fn matchesWithScope(el: *Node.Element, input: []const u8, scope: *Node.Eleme
     }
 
     const arena = page.call_arena;
-    const selectors = try Parser.parseList(arena, input, page);
+    const selectors = try Parser.parseList(arena, input);
 
     for (selectors) |selector| {
         if (List.matches(el.asNode(), selector, scope.asNode(), page)) {
@@ -290,5 +273,34 @@ pub const Selector = struct {
         for (self.segments) |segment| {
             try segment.format(writer);
         }
+    }
+};
+
+pub const Parsed = struct {
+    selectors: []const Selector,
+
+    pub fn query(self: Parsed, root: *Node, page: *Page) !?*Node.Element {
+        for (self.selectors) |selector| {
+            // Fast path: single compound with only an ID selector
+            if (selector.segments.len == 0 and selector.first.parts.len == 1) {
+                const first = selector.first.parts[0];
+                if (first == .id) {
+                    const el = page.getElementByIdFromNode(root, first.id) orelse continue;
+                    // Check if the element is within the root subtree
+                    const node = el.asNode();
+                    if (node != root and root.contains(node)) {
+                        return el;
+                    }
+                    continue;
+                }
+            }
+
+            if (List.initOne(root, selector, page)) |node| {
+                if (node.is(Node.Element)) |el| {
+                    return el;
+                }
+            }
+        }
+        return null;
     }
 };
