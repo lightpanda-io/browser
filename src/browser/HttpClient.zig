@@ -964,7 +964,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 
     if (transfer._pending_cache_metadata) |metadata| {
         const cache = &self.network.cache.?;
-        cache.put(metadata, body) catch |err| {
+        cache.put(metadata.*, body) catch |err| {
             log.warn(.cache, "cache put failed", .{ .err = err });
         };
     }
@@ -1164,7 +1164,7 @@ pub const Transfer = struct {
     // total bytes received in the response, including the response status line,
     // the headers, and the [encoded] body.
     bytes_received: usize = 0,
-    _pending_cache_metadata: ?CacheMetadata = null,
+    _pending_cache_metadata: ?*CacheMetadata = null,
 
     aborted: bool = false,
 
@@ -1587,9 +1587,11 @@ pub const Transfer = struct {
                     }
                 }
 
-                transfer._pending_cache_metadata = cm;
-                transfer._pending_cache_metadata.?.headers = header_list.items[0..end_of_response];
-                transfer._pending_cache_metadata.?.vary_headers = header_list.items[end_of_response..];
+                const metadata = try transfer.arena.allocator().create(CacheMetadata);
+                metadata.* = cm;
+                metadata.headers = header_list.items[0..end_of_response];
+                metadata.vary_headers = header_list.items[end_of_response..];
+                transfer._pending_cache_metadata = metadata;
             }
         }
 
