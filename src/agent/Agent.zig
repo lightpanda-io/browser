@@ -114,7 +114,7 @@ pub fn run(self: *Self) void {
     }) catch "Ready.");
 
     while (true) {
-        const line = self.terminal.readLine("\x1b[1m> \x1b[0m") orelse break;
+        const line = self.terminal.readLine("> ") orelse break;
         defer self.terminal.freeLine(line);
 
         if (line.len == 0) continue;
