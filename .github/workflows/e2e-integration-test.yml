@@ -62,7 +62,7 @@ jobs:
       - name: run end to end integration tests
         continue-on-error: true
         run: |
-          ./lightpanda serve --log-level error & echo $! > LPD.pid
+          ./lightpanda serve --http-proxy ${{ secrets.MASSIVE_PROXY_RESIDENTIAL_US }} --log-level error & echo $! > LPD.pid
           go run integration/main.go |tee result.log
           kill `cat LPD.pid`
 
