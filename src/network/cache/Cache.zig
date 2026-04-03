@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 const Http = @import("../http.zig");
 const FsCache = @import("FsCache.zig");
 
@@ -171,11 +172,33 @@ pub fn tryCache(
     has_set_cookie: bool,
     has_authorization: bool,
 ) !?CachedMetadata {
-    if (status != 200) return null;
-    if (has_set_cookie) return null;
-    if (has_authorization) return null;
-    if (vary) |v| if (std.mem.eql(u8, v, "*")) return null;
-    const cc = CacheControl.parse(cache_control orelse return null) orelse return null;
+    if (status != 200) {
+        log.debug(.cache, "no store", .{ .url = url, .code = status, .reason = "status" });
+        return null;
+    }
+    if (has_set_cookie) {
+        log.debug(.cache, "no store", .{ .url = url, .reason = "has_cookies" });
+        return null;
+    }
+    if (has_authorization) {
+        log.debug(.cache, "no store", .{ .url = url, .reason = "has_authorization" });
+        return null;
+    }
+    if (vary) |v| if (std.mem.eql(u8, v, "*")) {
+        log.debug(.cache, "no store", .{ .url = url, .vary = v, .reason = "vary" });
+        return null;
+    };
+    const cc = blk: {
+        if (cache_control == null) {
+            log.debug(.cache, "no store", .{ .url = url, .reason = "no cache control" });
+            return null;
+        }
+        if (CacheControl.parse(cache_control.?)) |cc| {
+            break :blk cc;
+        }
+        log.debug(.cache, "no store", .{ .url = url, .cache_control = cache_control.?, .reason = "cache control" });
+        return null;
+    };
 
     return .{
         .url = try arena.dupeZ(u8, url),
