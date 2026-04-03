@@ -99,6 +99,10 @@ pub fn init(url: []const u8, protocols_: ?[]const u8, page: *Page) !*WebSocket {
         if (!std.mem.startsWith(u8, normalized_start, "ws://") and !std.mem.startsWith(u8, normalized_start, "wss://")) {
             return error.SyntaxError;
         }
+        // Fragments are not allowed in WebSocket URLs
+        if (std.mem.indexOfScalar(u8, url, '#') != null) {
+            return error.SyntaxError;
+        }
     }
 
     const arena = try page.getArena(.{ .debug = "WebSocket" });
@@ -118,7 +122,7 @@ pub fn init(url: []const u8, protocols_: ?[]const u8, page: *Page) !*WebSocket {
 
     try conn.setReadCallback(sendDataCallback, true);
     try conn.setWriteCallback(receivedDataCallback);
-    try conn.setHeaderCallback(receivedHeaderCalllback);
+    try conn.setHeaderCallback(receivedHeaderCallback);
 
     const self = try page._factory.eventTargetWithAllocator(arena, WebSocket{
         ._page = page,
@@ -187,6 +191,13 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
     const code = if (was_clean) self._close_code else 1006;
     const reason = if (was_clean) self._close_reason else "";
 
+    // Spec requires error event before close on abnormal closure
+    if (!was_clean) {
+        self.dispatchErrorEvent() catch |err| {
+            log.err(.websocket, "error event dispatch failed", .{ .err = err });
+        };
+    }
+
     self.dispatchCloseEvent(code, reason, was_clean) catch |err| {
         log.err(.websocket, "close event dispatch failed", .{ .err = err });
     };
@@ -197,6 +208,7 @@ fn cleanup(self: *WebSocket) void {
         self._http_client.removeConn(conn);
         self._conn = null;
         self.releaseRef(self._page._session);
+        self._send_queue.clearRetainingCapacity();
     }
 }
 
@@ -293,6 +305,13 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
         return;
     }
 
+    // Validate close code per spec: must be 1000 or in range 3000-4999
+    if (code_) |code| {
+        if (code != 1000 and (code < 3000 or code > 4999)) {
+            return error.InvalidAccessError;
+        }
+    }
+
     const code = code_ orelse 1000;
     const reason = reason_ orelse "";
 
@@ -327,14 +346,6 @@ pub fn getBufferedAmount(self: *const WebSocket) u32 {
         }
     }
     return buffered;
-}
-
-pub fn getProtocol(self: *const WebSocket) []const u8 {
-    return self._protocol;
-}
-
-pub fn getExtensions(self: *const WebSocket) []const u8 {
-    return self._extensions;
 }
 
 pub fn getBinaryType(self: *const WebSocket) []const u8 {
@@ -404,7 +415,7 @@ fn dispatchOpenEvent(self: *WebSocket) !void {
     const target = self.asEventTarget();
 
     if (page._event_manager.hasDirectListeners(target, "open", self._on_open)) {
-        const event = try Event.initTrusted(.wrap("open"), .{}, page);
+        const event = try Event.initTrusted(comptime .wrap("open"), .{}, page);
         try page._event_manager.dispatchDirect(target, event, self._on_open, .{ .context = "WebSocket open" });
     }
 }
@@ -426,11 +437,21 @@ fn dispatchMessageEvent(self: *WebSocket, data: []const u8, frame_type: http.WsF
         else
             .{ .string = data };
 
-        const event = try MessageEvent.initTrusted(.wrap("message"), .{
+        const event = try MessageEvent.initTrusted(comptime .wrap("message"), .{
             .data = msg_data,
             .origin = "",
         }, page);
         try page._event_manager.dispatchDirect(target, event.asEvent(), self._on_message, .{ .context = "WebSocket message" });
+    }
+}
+
+fn dispatchErrorEvent(self: *WebSocket) !void {
+    const page = self._page;
+    const target = self.asEventTarget();
+
+    if (page._event_manager.hasDirectListeners(target, "error", self._on_error)) {
+        const event = try Event.initTrusted(comptime .wrap("error"), .{}, page);
+        try page._event_manager.dispatchDirect(target, event, self._on_error, .{ .context = "WebSocket error" });
     }
 }
 
@@ -439,7 +460,7 @@ fn dispatchCloseEvent(self: *WebSocket, code: u16, reason: []const u8, was_clean
     const target = self.asEventTarget();
 
     if (page._event_manager.hasDirectListeners(target, "close", self._on_close)) {
-        const event = try CloseEvent.initTrusted(.wrap("close"), .{
+        const event = try CloseEvent.initTrusted(comptime .wrap("close"), .{
             .code = code,
             .reason = reason,
             .wasClean = was_clean,
@@ -573,15 +594,24 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
         .text, .binary => try self.dispatchMessageEvent(message, meta.frame_type),
         .close => {
             // Parse close frame: 2-byte code (big-endian) + optional reason
-            self._close_code = if (message.len >= 2)
+            const received_code = if (message.len >= 2)
                 @as(u16, message[0]) << 8 | message[1]
             else
                 1005; // No status code received
-            if (message.len > 2) {
-                self._close_reason = try self._arena.dupe(u8, message[2..]);
+
+            if (self._ready_state == .closing) {
+                // Client-initiated close: this is the server's response.
+                // Close handshake complete - disconnect.
+                self.disconnected(null);
+            } else {
+                // Server-initiated close: send reciprocal close frame per RFC 6455 §5.5.1
+                self._close_code = received_code;
+                if (message.len > 2) {
+                    self._close_reason = try self._arena.dupe(u8, message[2..]);
+                }
+                self._ready_state = .closing;
+                try self.queueMessage(.close);
             }
-            self._ready_state = .closing;
-            self.disconnected(null);
         },
         .ping, .pong, .cont => {},
     }
@@ -589,7 +619,7 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
 
 // libcurl has no mechanism to signal that the connection is established. The
 // best option I could come up with was looking for an upgrade header response.
-fn receivedHeaderCalllback(buffer: [*]const u8, header_count: usize, buf_len: usize, data: *anyopaque) usize {
+fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usize, data: *anyopaque) usize {
     if (comptime IS_DEBUG) {
         std.debug.assert(header_count == 1);
     }

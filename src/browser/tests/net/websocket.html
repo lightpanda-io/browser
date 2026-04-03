@@ -304,35 +304,6 @@
 }
 </script>
 
-<script id=binary_int32array22 type=module>
-{
-  const state = await testing.async();
-  let received = [];
-
-  let ws = new WebSocket('ws://127.0.0.1:9584/');
-  ws.binaryType = 'arraybuffer';
-
-  ws.addEventListener('open', () => {
-    const arr = new Int32Array([0x01020304, 0x05060708]);
-    ws.send(arr);
-  });
-
-  ws.addEventListener('message', (e) => {
-    received.push(e.data.byteLength);
-    ws.close();
-  });
-
-  ws.addEventListener('close', () => {
-    state.resolve();
-  });
-
-  await state.done(() => {
-    // 1 marker byte + 8 bytes (2 x 4-byte int32)
-    testing.expectEqual([9], received);
-  });
-}
-</script>
-
 <script id=binary_blob type=module>
 {
   const state = await testing.async();
@@ -412,8 +383,8 @@
   });
 
   await state.done(() => {
-    // Connection was not cleanly closed
-    testing.expectEqual(['closed', false], received);
+    // Connection was not cleanly closed - error fires before close
+    testing.expectEqual(['error', 'closed', false], received);
   });
 }
 </script>
@@ -579,6 +550,14 @@
 
   await state.done(() => {
     testing.expectEqual([true, 6, 0xEE, 1], received);
+  });
+}
+</script>
+
+<script id=url_with_fragment_rejected>
+{
+  testing.expectError('SyntaxError', () => {
+    new WebSocket('ws://127.0.0.1:9584/#fragment');
   });
 }
 </script>

@@ -349,15 +349,6 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(self._easy, .header_function, data_cb);
     }
 
-    pub const PauseFlags = packed struct {
-        red: bool = false,
-        green: bool = false,
-        blue: bool = false,
-        alpha: bool = false,
-        // Optional padding to match a specific size, e.g., a u32
-        _padding: u28 = 0,
-    };
-
     pub fn pause(
         self: *Connection,
         flags: libcurl.CurlPauseFlags,

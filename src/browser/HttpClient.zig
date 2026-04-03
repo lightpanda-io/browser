@@ -270,7 +270,11 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
         var leftover: usize = 0;
         while (it) |node| : (it = node.next) {
             const conn: *http.Connection = @fieldParentPtr("node", node);
-            std.debug.assert((Transfer.fromConnection(conn) catch unreachable).aborted);
+            switch (conn.transport) {
+                .http => |transfer| std.debug.assert(transfer.aborted),
+                .websocket => {},
+                .none => {},
+            }
             leftover += 1;
         }
         std.debug.assert(self.active == leftover);
@@ -1015,7 +1019,7 @@ fn processMessages(self: *Client) !bool {
                     ws.disconnected(null);
                 }
 
-                return true;
+                processed = true;
             },
             .none => unreachable,
         }
