@@ -32,6 +32,7 @@ pub const RunMode = enum {
     serve,
     version,
     mcp,
+    agent,
 };
 
 pub const CDP_MAX_HTTP_REQUEST_SIZE = 4096;
@@ -63,56 +64,56 @@ pub fn deinit(self: *const Config, allocator: Allocator) void {
 
 pub fn tlsVerifyHost(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.tls_verify_host,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.tls_verify_host,
         else => unreachable,
     };
 }
 
 pub fn obeyRobots(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.obey_robots,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.obey_robots,
         else => unreachable,
     };
 }
 
 pub fn httpProxy(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.http_proxy,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.http_proxy,
         else => unreachable,
     };
 }
 
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.proxy_bearer_token,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.proxy_bearer_token,
         .help, .version => null,
     };
 }
 
 pub fn httpMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.http_max_concurrent orelse 10,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.http_max_concurrent orelse 10,
         else => unreachable,
     };
 }
 
 pub fn httpMaxHostOpen(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.http_max_host_open orelse 4,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.http_max_host_open orelse 4,
         else => unreachable,
     };
 }
 
 pub fn httpConnectTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.http_connect_timeout orelse 0,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.http_connect_timeout orelse 0,
         else => unreachable,
     };
 }
 
 pub fn httpTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.http_timeout orelse 5000,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.http_timeout orelse 5000,
         else => unreachable,
     };
 }
@@ -123,35 +124,35 @@ pub fn httpMaxRedirects(_: *const Config) u8 {
 
 pub fn httpMaxResponseSize(self: *const Config) ?usize {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.http_max_response_size,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.http_max_response_size,
         else => unreachable,
     };
 }
 
 pub fn logLevel(self: *const Config) ?log.Level {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.log_level,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.log_level,
         else => unreachable,
     };
 }
 
 pub fn logFormat(self: *const Config) ?log.Format {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.log_format,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.log_format,
         else => unreachable,
     };
 }
 
 pub fn logFilterScopes(self: *const Config) ?[]const log.Scope {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.log_filter_scopes,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.log_filter_scopes,
         else => unreachable,
     };
 }
 
 pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.user_agent_suffix,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.user_agent_suffix,
         .help, .version => null,
     };
 }
@@ -189,7 +190,7 @@ pub fn advertiseHost(self: *const Config) []const u8 {
 
 pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| WebBotAuthConfig{
+        inline .serve, .fetch, .mcp, .agent => |opts| WebBotAuthConfig{
             .key_file = opts.common.web_bot_auth_key_file orelse return null,
             .keyid = opts.common.web_bot_auth_keyid orelse return null,
             .domain = opts.common.web_bot_auth_domain orelse return null,
@@ -220,6 +221,7 @@ pub const Mode = union(RunMode) {
     serve: Serve,
     version: void,
     mcp: Mcp,
+    agent: Agent,
 };
 
 pub const Serve = struct {
@@ -236,6 +238,20 @@ pub const Mcp = struct {
     common: Common = .{},
     version: mcp.Version = .default,
     cdp_port: ?u16 = null,
+};
+
+pub const AiProvider = enum {
+    anthropic,
+    openai,
+    gemini,
+};
+
+pub const Agent = struct {
+    common: Common = .{},
+    provider: AiProvider = .anthropic,
+    model: ?[:0]const u8 = null,
+    api_key: ?[:0]const u8 = null,
+    system_prompt: ?[:0]const u8 = null,
 };
 
 pub const DumpFormat = enum {
@@ -411,7 +427,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
     const usage =
         \\usage: {s} command [options] [URL]
         \\
-        \\Command can be either 'fetch', 'serve', 'mcp' or 'help'
+        \\Command can be either 'fetch', 'serve', 'mcp', 'agent' or 'help'
         \\
         \\fetch command
         \\Fetches the specified URL
@@ -495,6 +511,24 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
     ++ common_options ++
         \\
+        \\agent command
+        \\Starts an interactive AI agent that can browse the web
+        \\Example: {s} agent --provider anthropic --model claude-sonnet-4-20250514
+        \\
+        \\Options:
+        \\--provider      The AI provider: anthropic, openai, or gemini.
+        \\                Defaults to "anthropic".
+        \\
+        \\--model         The model name to use.
+        \\                Defaults to a sensible default per provider.
+        \\
+        \\--api-key       The API key. Can also be set via environment variable:
+        \\                ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
+        \\
+        \\--system-prompt Override the default system prompt.
+        \\
+    ++ common_options ++
+        \\
         \\version command
         \\Displays the version of {s}
         \\
@@ -502,7 +536,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\Displays this message
         \\
     ;
-    std.debug.print(usage, .{ self.exec_name, self.exec_name, self.exec_name, self.exec_name, self.exec_name });
+    std.debug.print(usage, .{ self.exec_name, self.exec_name, self.exec_name, self.exec_name, self.exec_name, self.exec_name });
     if (success) {
         return std.process.cleanExit();
     }
@@ -538,6 +572,8 @@ pub fn parseArgs(allocator: Allocator) !Config {
         .fetch => .{ .fetch = parseFetchArgs(allocator, &args) catch
             return init(allocator, exec_name, .{ .help = false }) },
         .mcp => .{ .mcp = parseMcpArgs(allocator, &args) catch
+            return init(allocator, exec_name, .{ .help = false }) },
+        .agent => .{ .agent = parseAgentArgs(allocator, &args) catch
             return init(allocator, exec_name, .{ .help = false }) },
         .version => .{ .version = {} },
     };
@@ -882,6 +918,63 @@ fn parseFetchArgs(
         .wait_selector = wait_selector,
         .wait_script = wait_script,
     };
+}
+
+fn parseAgentArgs(
+    allocator: Allocator,
+    args: *std.process.ArgIterator,
+) !Agent {
+    var result: Agent = .{};
+
+    while (args.next()) |opt| {
+        if (std.mem.eql(u8, "--provider", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            result.provider = std.meta.stringToEnum(AiProvider, str) orelse {
+                log.fatal(.app, "invalid provider", .{ .arg = opt, .val = str });
+                return error.InvalidArgument;
+            };
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--model", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            result.model = try allocator.dupeZ(u8, str);
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--api-key", opt) or std.mem.eql(u8, "--api_key", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            result.api_key = try allocator.dupeZ(u8, str);
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--system-prompt", opt) or std.mem.eql(u8, "--system_prompt", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            result.system_prompt = try allocator.dupeZ(u8, str);
+            continue;
+        }
+
+        if (try parseCommonArg(allocator, opt, args, &result.common)) {
+            continue;
+        }
+
+        log.fatal(.app, "unknown argument", .{ .mode = "agent", .arg = opt });
+        return error.UnkownOption;
+    }
+
+    return result;
 }
 
 fn parseCommonArg(

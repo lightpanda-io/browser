@@ -30,6 +30,13 @@
             .url = "https://github.com/curl/curl/releases/download/curl-8_18_0/curl-8.18.0.tar.gz",
             .hash = "N-V-__8AALp9QAGn6CCHZ6fK_FfMyGtG824LSHYHHasM3w-y",
         },
+        .zenai = .{
+            .path = "../zenai",
+        },
+        .linenoise = .{
+            .url = "https://github.com/antirez/linenoise/archive/refs/tags/2.0.tar.gz",
+            .hash = "N-V-__8AAJ4HAgCX79UDBfNwhqAqUVoGC44ib6UYa18q6oa_",
+        },
     },
     .paths = .{""},
 }
