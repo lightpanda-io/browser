@@ -53,12 +53,12 @@ pub fn getPort(self: *const Location) []const u8 {
     return self._url.getPort();
 }
 
-pub fn getOrigin(self: *const Location, page: *const Page) ![]const u8 {
-    return self._url.getOrigin(&page.js.execution);
+pub fn getOrigin(self: *const Location, exec: *const js.Execution) ![]const u8 {
+    return self._url.getOrigin(exec);
 }
 
-pub fn getSearch(self: *const Location, page: *const Page) ![]const u8 {
-    return self._url.getSearch(&page.js.execution);
+pub fn getSearch(self: *const Location, exec: *const js.Execution) ![]const u8 {
+    return self._url.getSearch(exec);
 }
 
 pub fn getHash(self: *const Location) []const u8 {
@@ -98,8 +98,8 @@ pub fn reload(_: *const Location, page: *Page) !void {
     return page.scheduleNavigation(page.url, .{ .reason = .script, .kind = .reload }, .{ .script = page });
 }
 
-pub fn toString(self: *const Location, page: *const Page) ![:0]const u8 {
-    return self._url.toString(&page.js.execution);
+pub fn toString(self: *const Location, exec: *const js.Execution) ![:0]const u8 {
+    return self._url.toString(exec);
 }
 
 pub const JsApi = struct {

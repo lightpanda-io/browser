@@ -24,6 +24,7 @@ const Session = @import("../Session.zig");
 const v8 = js.v8;
 
 const Caller = @import("Caller.zig");
+const Context = @import("Context.zig");
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -398,6 +399,11 @@ pub const Property = struct {
 
 pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
     const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+
+    // During snapshot creation, there's no Context in embedder data yet
+    const v8_context = v8.v8__Isolate__GetCurrentContext(v8_isolate) orelse return 0;
+    if (v8.v8__Context__GetAlignedPointerFromEmbedderData(v8_context, 1) == null) return 0;
+
     var caller: Caller = undefined;
     if (!caller.init(v8_isolate)) {
         return 0;
@@ -695,7 +701,7 @@ pub const SubType = enum {
     webassemblymemory,
 };
 
-/// APIs for Page/Window contexts. Used by Snapshot.zig for Page snapshot creation.
+// APIs for Page/Window contexts. Used by Snapshot.zig for Page snapshot creation.
 pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/AbortController.zig"),
     @import("../webapi/AbortSignal.zig"),
@@ -892,13 +898,32 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/ImageData.zig"),
 });
 
-/// APIs that exist only in Worker contexts (not in Page/Window).
-const WorkerOnlyApis = flattenTypes(&.{
+// APIs available on Worker context globals (constructors like URL, Headers, etc.)
+// This is a subset of PageJsApis plus WorkerGlobalScope.
+// TODO: Expand this list to include all worker-appropriate APIs.
+pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/WorkerGlobalScope.zig"),
+    @import("../webapi/EventTarget.zig"),
+    @import("../webapi/DOMException.zig"),
+    @import("../webapi/AbortController.zig"),
+    @import("../webapi/AbortSignal.zig"),
+    @import("../webapi/URL.zig"),
+    @import("../webapi/net/URLSearchParams.zig"),
+    @import("../webapi/net/Headers.zig"),
+    @import("../webapi/net/Request.zig"),
+    @import("../webapi/net/Response.zig"),
+    @import("../webapi/encoding/TextEncoder.zig"),
+    @import("../webapi/encoding/TextDecoder.zig"),
+    @import("../webapi/Blob.zig"),
+    @import("../webapi/File.zig"),
+    @import("../webapi/net/FormData.zig"),
+    @import("../webapi/Console.zig"),
+    @import("../webapi/Crypto.zig"),
+    @import("../webapi/Performance.zig"),
 });
 
-/// Master list of ALL JS APIs across all contexts.
-/// Used by Env (class IDs, templates), JsApiLookup, and anywhere that needs
-/// to know about all possible types. Individual snapshots use their own
-/// subsets (PageJsApis, WorkerSnapshot.JsApis).
-pub const JsApis = PageJsApis ++ WorkerOnlyApis;
+// Master list of ALL JS APIs across all contexts.
+// Used by Env (class IDs, templates), JsApiLookup, and anywhere that needs
+// to know about all possible types. Individual snapshots use their own
+// subsets (PageJsApis, WorkerSnapshot.JsApis).
+pub const JsApis = PageJsApis ++ [_]type{@import("../webapi/WorkerGlobalScope.zig").JsApi};

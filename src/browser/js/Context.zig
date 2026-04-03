@@ -45,6 +45,27 @@ const Context = @This();
 pub const GlobalScope = union(enum) {
     page: *Page,
     worker: *WorkerGlobalScope,
+
+    pub fn base(self: GlobalScope) [:0]const u8 {
+        return switch (self) {
+            .page => |page| page.base(),
+            .worker => |worker| worker.base(),
+        };
+    }
+
+    pub fn getJs(self: GlobalScope) *Context {
+        return switch (self) {
+            .page => |page| page.js,
+            .worker => |worker| worker.js,
+        };
+    }
+
+    pub fn setJs(self: GlobalScope, ctx: *Context) void {
+        switch (self) {
+            .page => |page| page.js = ctx,
+            .worker => |worker| worker.js = ctx,
+        }
+    }
 };
 
 id: usize,
@@ -549,10 +570,7 @@ pub fn dynamicModuleCallback(
         if (resource_value.isNullOrUndefined()) {
             // will only be null / undefined in extreme cases (e.g. WPT tests)
             // where you're
-            break :blk switch (self.global) {
-                .page => |page| page.base(),
-                .worker => |worker| worker.base(),
-            };
+            break :blk self.global.base();
         }
 
         break :blk js.String.toSliceZ(.{ .local = &local, .handle = resource_name.? }) catch |err| {
@@ -894,18 +912,8 @@ pub fn enter(self: *Context, hs: *js.HandleScope) Entered {
     const isolate = self.isolate;
     js.HandleScope.init(hs, isolate);
 
-    const original = switch (self.global) {
-        .page => |page| blk: {
-            const orig = page.js;
-            page.js = self;
-            break :blk orig;
-        },
-        .worker => |worker| blk: {
-            const orig = worker.js;
-            worker.js = self;
-            break :blk orig;
-        },
-    };
+    const original = self.global.getJs();
+    self.global.setJs(self);
 
     const handle: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.handle, isolate.handle));
     v8.v8__Context__Enter(handle);
@@ -924,10 +932,7 @@ const Entered = struct {
     global: GlobalScope,
 
     pub fn exit(self: Entered) void {
-        switch (self.global) {
-            .page => |page| page.js = self.original,
-            .worker => |worker| worker.js = self.original,
-        }
+        self.global.setJs(self.original);
         v8.v8__Context__Exit(self.handle);
         self.handle_scope.deinit();
     }
@@ -938,12 +943,7 @@ pub fn queueMutationDelivery(self: *Context) !void {
         fn run(ctx: *Context) void {
             switch (ctx.global) {
                 .page => |page| page.deliverMutations(),
-                .worker => {
-                    if (comptime IS_DEBUG) {
-                        std.debug.assert(false);
-                    }
-                    unreachable;
-                },
+                .worker => unreachable,
             }
         }
     }.run);
@@ -954,12 +954,7 @@ pub fn queueIntersectionChecks(self: *Context) !void {
         fn run(ctx: *Context) void {
             switch (ctx.global) {
                 .page => |page| page.performScheduledIntersectionChecks(),
-                .worker => {
-                    if (comptime IS_DEBUG) {
-                        std.debug.assert(false);
-                    }
-                    unreachable;
-                },
+                .worker => unreachable,
             }
         }
     }.run);
@@ -970,12 +965,7 @@ pub fn queueIntersectionDelivery(self: *Context) !void {
         fn run(ctx: *Context) void {
             switch (ctx.global) {
                 .page => |page| page.deliverIntersections(),
-                .worker => {
-                    if (comptime IS_DEBUG) {
-                        std.debug.assert(false);
-                    }
-                    unreachable;
-                },
+                .worker => unreachable,
             }
         }
     }.run);
@@ -986,12 +976,7 @@ pub fn queueSlotchangeDelivery(self: *Context) !void {
         fn run(ctx: *Context) void {
             switch (ctx.global) {
                 .page => |page| page.deliverSlotchangeEvents(),
-                .worker => {
-                    if (comptime IS_DEBUG) {
-                        std.debug.assert(false);
-                    }
-                    unreachable;
-                },
+                .worker => unreachable,
             }
         }
     }.run);
