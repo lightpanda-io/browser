@@ -659,9 +659,7 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
             .allocator = allocator,
             .pending = .empty,
         },
-        WebBotAuthLayer{
-            .auth = if (network.web_bot_auth) |*wba| wba else null,
-        },
+        WebBotAuthLayer{},
         CacheLayer{},
     });
     errdefer layers.deinit(allocator);
