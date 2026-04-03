@@ -16,6 +16,7 @@ pub const Command = union(enum) {
     type_cmd: TypeArgs,
     wait: []const u8,
     tree: void,
+    markdown: void,
     extract: ExtractArgs,
     eval_js: []const u8,
     exit: void,
@@ -59,6 +60,10 @@ pub fn parse(line: []const u8) Command {
 
     if (eqlIgnoreCase(cmd_word, "TREE")) {
         return .{ .tree = {} };
+    }
+
+    if (eqlIgnoreCase(cmd_word, "MARKDOWN") or eqlIgnoreCase(cmd_word, "MD")) {
+        return .{ .markdown = {} };
     }
 
     if (eqlIgnoreCase(cmd_word, "EXTRACT")) {

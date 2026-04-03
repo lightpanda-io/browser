@@ -28,6 +28,7 @@ pub fn execute(self: *Self, cmd: Command.Command) void {
         .type_cmd => |args| self.execType(a, args),
         .wait => |selector| self.tool_executor.call(a, "waitForSelector", buildJson(a, .{ .selector = selector })) catch "Error: wait failed",
         .tree => self.tool_executor.call(a, "semantic_tree", "") catch "Error: tree failed",
+        .markdown => self.tool_executor.call(a, "markdown", "") catch "Error: markdown failed",
         .extract => |args| self.execExtract(a, args),
         .eval_js => |script| self.tool_executor.call(a, "evaluate", buildJson(a, .{ .script = script })) catch "Error: eval failed",
         .exit, .natural_language => unreachable,
