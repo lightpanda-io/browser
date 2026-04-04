@@ -253,6 +253,7 @@ pub const Agent = struct {
     api_key: ?[:0]const u8 = null,
     system_prompt: ?[:0]const u8 = null,
     repl: bool = true,
+    script_file: ?[]const u8 = null,
 };
 
 pub const DumpFormat = enum {
@@ -960,6 +961,15 @@ fn parseAgentArgs(
 
         if (std.mem.eql(u8, "--repl", opt)) {
             result.repl = true;
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--run", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            result.script_file = str;
             continue;
         }
 

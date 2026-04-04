@@ -20,6 +20,7 @@ pub const Command = union(enum) {
     extract: ExtractArgs,
     eval_js: []const u8,
     exit: void,
+    comment: void,
     natural_language: []const u8,
 };
 
@@ -28,6 +29,9 @@ pub const Command = union(enum) {
 pub fn parse(line: []const u8) Command {
     const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
     if (trimmed.len == 0) return .{ .natural_language = trimmed };
+
+    // Skip comment lines
+    if (trimmed[0] == '#') return .{ .comment = {} };
 
     // Find the command word (first whitespace-delimited token)
     const cmd_end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;

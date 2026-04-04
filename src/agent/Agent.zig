@@ -23,7 +23,7 @@ const default_system_prompt =
 ;
 
 allocator: std.mem.Allocator,
-ai_client: AiClient,
+ai_client: ?AiClient,
 tool_executor: *ToolExecutor,
 terminal: Terminal,
 cmd_executor: CommandExecutor,
@@ -32,6 +32,7 @@ message_arena: std.heap.ArenaAllocator,
 tools: []const zenai.provider.Tool,
 model: []const u8,
 system_prompt: []const u8,
+script_file: ?[]const u8,
 
 const AiClient = union(Config.AiProvider) {
     anthropic: *zenai.anthropic.Client,
@@ -48,12 +49,15 @@ const AiClient = union(Config.AiProvider) {
 };
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
-    const api_key = opts.api_key orelse getEnvApiKey(opts.provider) orelse {
+    const is_script_mode = opts.script_file != null;
+
+    // API key is only required for REPL mode (LLM interaction)
+    const api_key: ?[:0]const u8 = opts.api_key orelse getEnvApiKey(opts.provider) orelse if (!is_script_mode) {
         log.fatal(.app, "missing API key", .{
             .hint = "Set the API key via --api-key or environment variable",
         });
         return error.MissingApiKey;
-    };
+    } else null;
 
     const tool_executor = try ToolExecutor.init(allocator, app);
     errdefer tool_executor.deinit();
@@ -61,23 +65,23 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
-    const ai_client: AiClient = switch (opts.provider) {
+    const ai_client: ?AiClient = if (api_key) |key| switch (opts.provider) {
         .anthropic => blk: {
             const client = try allocator.create(zenai.anthropic.Client);
-            client.* = zenai.anthropic.Client.init(allocator, api_key, .{});
+            client.* = zenai.anthropic.Client.init(allocator, key, .{});
             break :blk .{ .anthropic = client };
         },
         .openai => blk: {
             const client = try allocator.create(zenai.openai.Client);
-            client.* = zenai.openai.Client.init(allocator, api_key, .{});
+            client.* = zenai.openai.Client.init(allocator, key, .{});
             break :blk .{ .openai = client };
         },
         .gemini => blk: {
             const client = try allocator.create(zenai.gemini.Client);
-            client.* = zenai.gemini.Client.init(allocator, api_key, .{});
+            client.* = zenai.gemini.Client.init(allocator, key, .{});
             break :blk .{ .gemini = client };
         },
-    };
+    } else null;
 
     const tools = tool_executor.getTools() catch {
         log.fatal(.app, "failed to initialize tools", .{});
@@ -95,6 +99,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .tools = tools,
         .model = opts.model orelse defaultModel(opts.provider),
         .system_prompt = opts.system_prompt orelse default_system_prompt,
+        .script_file = opts.script_file,
     };
 
     self.cmd_executor = CommandExecutor.init(allocator, tool_executor, &self.terminal);
@@ -106,22 +111,35 @@ pub fn deinit(self: *Self) void {
     self.message_arena.deinit();
     self.messages.deinit(self.allocator);
     self.tool_executor.deinit();
-    switch (self.ai_client) {
-        inline else => |c| {
-            c.deinit();
-            self.allocator.destroy(c);
-        },
+    if (self.ai_client) |ai_client| {
+        switch (ai_client) {
+            inline else => |c| {
+                c.deinit();
+                self.allocator.destroy(c);
+            },
+        }
     }
     self.allocator.destroy(self);
 }
 
 pub fn run(self: *Self) void {
+    if (self.script_file) |script_file| {
+        self.runScript(script_file);
+    } else {
+        self.runRepl();
+    }
+}
+
+fn runRepl(self: *Self) void {
     self.terminal.printInfo("Lightpanda Agent (type 'quit' to exit)");
     log.debug(.app, "tools loaded", .{ .count = self.tools.len });
-    const info = std.fmt.allocPrint(self.allocator, "Provider: {s}, Model: {s}", .{
-        @tagName(std.meta.activeTag(self.ai_client)),
-        self.model,
-    }) catch null;
+    const info = if (self.ai_client) |ai_client|
+        std.fmt.allocPrint(self.allocator, "Provider: {s}, Model: {s}", .{
+            @tagName(std.meta.activeTag(ai_client)),
+            self.model,
+        }) catch null
+    else
+        null;
     self.terminal.printInfo(info orelse "Ready.");
     if (info) |i| self.allocator.free(i);
 
@@ -134,6 +152,7 @@ pub fn run(self: *Self) void {
         const cmd = Command.parse(line);
         switch (cmd) {
             .exit => break,
+            .comment => continue,
             .natural_language => {
                 // "quit" as a convenience alias
                 if (std.mem.eql(u8, line, "quit")) break;
@@ -148,6 +167,57 @@ pub fn run(self: *Self) void {
     }
 
     self.terminal.printInfo("Goodbye!");
+}
+
+fn runScript(self: *Self, path: []const u8) void {
+    const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+        const msg = std.fmt.allocPrint(self.allocator, "Failed to open script '{s}': {s}", .{ path, @errorName(err) }) catch "Failed to open script";
+        self.terminal.printError(msg);
+        return;
+    };
+    defer file.close();
+
+    const content = file.readToEndAlloc(self.allocator, 10 * 1024 * 1024) catch |err| {
+        const msg = std.fmt.allocPrint(self.allocator, "Failed to read script: {s}", .{@errorName(err)}) catch "Failed to read script";
+        self.terminal.printError(msg);
+        return;
+    };
+    defer self.allocator.free(content);
+
+    const info = std.fmt.allocPrint(self.allocator, "Running script: {s}", .{path}) catch null;
+    self.terminal.printInfo(info orelse "Running script...");
+    if (info) |i| self.allocator.free(i);
+
+    var line_num: u32 = 0;
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        line_num += 1;
+        const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
+        if (trimmed.len == 0) continue;
+
+        const cmd = Command.parse(trimmed);
+        switch (cmd) {
+            .exit => {
+                self.terminal.printInfo("EXIT — stopping script.");
+                return;
+            },
+            .comment => continue,
+            .natural_language => {
+                const msg = std.fmt.allocPrint(self.allocator, "line {d}: unrecognized command: {s}", .{ line_num, trimmed }) catch "unrecognized command";
+                self.terminal.printError(msg);
+                return;
+            },
+            else => {
+                const line_info = std.fmt.allocPrint(self.allocator, "[{d}] {s}", .{ line_num, trimmed }) catch null;
+                self.terminal.printInfo(line_info orelse trimmed);
+                if (line_info) |li| self.allocator.free(li);
+
+                self.cmd_executor.execute(cmd);
+            },
+        }
+    }
+
+    self.terminal.printInfo("Script completed.");
 }
 
 fn processUserMessage(self: *Self, user_input: []const u8) !void {
@@ -170,7 +240,7 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
     // Loop: send to LLM, execute tool calls, repeat until we get text
     var max_iterations: u32 = 20;
     while (max_iterations > 0) : (max_iterations -= 1) {
-        const provider_client = self.ai_client.toProvider();
+        const provider_client = (self.ai_client orelse return error.NoAiClient).toProvider();
         var result = provider_client.generateContent(self.model, self.messages.items, .{
             .tools = self.tools,
             .max_tokens = 4096,
@@ -189,39 +259,39 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
         // Handle tool calls (check for tool_calls presence, not just finish_reason,
         // because some providers like Gemini return finish_reason=STOP for tool calls)
         if (result.tool_calls) |tool_calls| {
-                // Add the assistant message with tool calls
-                try self.messages.append(self.allocator, .{
-                    .role = .assistant,
-                    .content = if (result.text) |t| try ma.dupe(u8, t) else null,
-                    .tool_calls = try self.dupeToolCalls(tool_calls),
+            // Add the assistant message with tool calls
+            try self.messages.append(self.allocator, .{
+                .role = .assistant,
+                .content = if (result.text) |t| try ma.dupe(u8, t) else null,
+                .tool_calls = try self.dupeToolCalls(tool_calls),
+            });
+
+            // Execute each tool call and collect results
+            var tool_results: std.ArrayListUnmanaged(zenai.provider.ToolResult) = .empty;
+
+            for (tool_calls) |tc| {
+                self.terminal.printToolCall(tc.name, tc.arguments);
+
+                var tool_arena = std.heap.ArenaAllocator.init(self.allocator);
+                defer tool_arena.deinit();
+
+                const tool_result = self.tool_executor.call(tool_arena.allocator(), tc.name, tc.arguments) catch "Error: tool execution failed";
+                self.terminal.printToolResult(tc.name, tool_result);
+
+                try tool_results.append(ma, .{
+                    .id = try ma.dupe(u8, tc.id),
+                    .name = try ma.dupe(u8, tc.name),
+                    .content = try ma.dupe(u8, tool_result),
                 });
+            }
 
-                // Execute each tool call and collect results
-                var tool_results: std.ArrayListUnmanaged(zenai.provider.ToolResult) = .empty;
+            // Add tool results as a message
+            try self.messages.append(self.allocator, .{
+                .role = .tool,
+                .tool_results = try tool_results.toOwnedSlice(ma),
+            });
 
-                for (tool_calls) |tc| {
-                    self.terminal.printToolCall(tc.name, tc.arguments);
-
-                    var tool_arena = std.heap.ArenaAllocator.init(self.allocator);
-                    defer tool_arena.deinit();
-
-                    const tool_result = self.tool_executor.call(tool_arena.allocator(), tc.name, tc.arguments) catch "Error: tool execution failed";
-                    self.terminal.printToolResult(tc.name, tool_result);
-
-                    try tool_results.append(ma, .{
-                        .id = try ma.dupe(u8, tc.id),
-                        .name = try ma.dupe(u8, tc.name),
-                        .content = try ma.dupe(u8, tool_result),
-                    });
-                }
-
-                // Add tool results as a message
-                try self.messages.append(self.allocator, .{
-                    .role = .tool,
-                    .tool_results = try tool_results.toOwnedSlice(ma),
-                });
-
-                continue;
+            continue;
         }
 
         // Text response

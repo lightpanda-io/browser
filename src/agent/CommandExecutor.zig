@@ -31,7 +31,7 @@ pub fn execute(self: *Self, cmd: Command.Command) void {
         .markdown => self.tool_executor.call(a, "markdown", "") catch "Error: markdown failed",
         .extract => |args| self.execExtract(a, args),
         .eval_js => |script| self.tool_executor.call(a, "evaluate", buildJson(a, .{ .script = script })) catch "Error: eval failed",
-        .exit, .natural_language => unreachable,
+        .exit, .natural_language, .comment => unreachable,
     };
 
     self.terminal.printAssistant(result);
