@@ -254,6 +254,8 @@ pub const Agent = struct {
     system_prompt: ?[:0]const u8 = null,
     repl: bool = true,
     script_file: ?[]const u8 = null,
+    record_file: ?[]const u8 = null,
+    no_record: bool = false,
 };
 
 pub const DumpFormat = enum {
@@ -982,12 +984,28 @@ fn parseAgentArgs(
             continue;
         }
 
+        if (std.mem.eql(u8, "--no-record", opt) or std.mem.eql(u8, "--no_record", opt)) {
+            result.no_record = true;
+            continue;
+        }
+
         if (try parseCommonArg(allocator, opt, args, &result.common)) {
+            continue;
+        }
+
+        // Positional argument: recording file for REPL mode (e.g. `agent --repl my_workflow.panda`)
+        if (!std.mem.startsWith(u8, opt, "-")) {
+            result.record_file = opt;
             continue;
         }
 
         log.fatal(.app, "unknown argument", .{ .mode = "agent", .arg = opt });
         return error.UnkownOption;
+    }
+
+    // If --no-record is set, clear the record file
+    if (result.no_record) {
+        result.record_file = null;
     }
 
     return result;

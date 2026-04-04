@@ -19,6 +19,8 @@ pub const Command = union(enum) {
     markdown: void,
     extract: ExtractArgs,
     eval_js: []const u8,
+    login: void,
+    accept_cookies: void,
     exit: void,
     comment: void,
     natural_language: []const u8,
@@ -26,6 +28,7 @@ pub const Command = union(enum) {
 
 /// Parse a line of REPL input into a Pandascript command.
 /// Unrecognized input is returned as `.natural_language`.
+/// For multi-line EVAL blocks in scripts, use `ScriptParser`.
 pub fn parse(line: []const u8) Command {
     const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
     if (trimmed.len == 0) return .{ .natural_language = trimmed };
@@ -91,12 +94,103 @@ pub fn parse(line: []const u8) Command {
         return .{ .eval_js = arg };
     }
 
+    if (eqlIgnoreCase(cmd_word, "LOGIN")) {
+        return .{ .login = {} };
+    }
+
+    if (eqlIgnoreCase(cmd_word, "ACCEPT_COOKIES") or eqlIgnoreCase(cmd_word, "ACCEPT-COOKIES")) {
+        return .{ .accept_cookies = {} };
+    }
+
     if (eqlIgnoreCase(cmd_word, "EXIT")) {
         return .{ .exit = {} };
     }
 
     return .{ .natural_language = trimmed };
 }
+
+/// Iterator for parsing a script file, handling multi-line EVAL """ ... """ blocks.
+pub const ScriptIterator = struct {
+    lines: std.mem.SplitIterator(u8, .scalar),
+    line_num: u32,
+    allocator: std.mem.Allocator,
+
+    pub fn init(content: []const u8, allocator: std.mem.Allocator) ScriptIterator {
+        return .{
+            .lines = std.mem.splitScalar(u8, content, '\n'),
+            .line_num = 0,
+            .allocator = allocator,
+        };
+    }
+
+    pub const Entry = struct {
+        line_num: u32,
+        raw_line: []const u8,
+        command: Command,
+    };
+
+    /// Returns the next command from the script, or null at EOF.
+    /// Multi-line EVAL blocks are assembled into a single eval_js command.
+    pub fn next(self: *ScriptIterator) ?Entry {
+        while (self.lines.next()) |line| {
+            self.line_num += 1;
+            const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
+            if (trimmed.len == 0) continue;
+
+            // Check for EVAL """ multi-line block
+            if (isEvalTripleQuote(trimmed)) {
+                const start_line = self.line_num;
+                if (self.collectEvalBlock()) |js| {
+                    return .{
+                        .line_num = start_line,
+                        .raw_line = trimmed,
+                        .command = .{ .eval_js = js },
+                    };
+                } else {
+                    return .{
+                        .line_num = start_line,
+                        .raw_line = trimmed,
+                        .command = .{ .natural_language = "unterminated EVAL block" },
+                    };
+                }
+            }
+
+            return .{
+                .line_num = self.line_num,
+                .raw_line = trimmed,
+                .command = parse(trimmed),
+            };
+        }
+        return null;
+    }
+
+    fn isEvalTripleQuote(line: []const u8) bool {
+        const cmd_end = std.mem.indexOfAny(u8, line, &std.ascii.whitespace) orelse line.len;
+        const cmd_word = line[0..cmd_end];
+        if (!eqlIgnoreCase(cmd_word, "EVAL")) return false;
+        const rest = std.mem.trim(u8, line[cmd_end..], &std.ascii.whitespace);
+        return std.mem.startsWith(u8, rest, "\"\"\"");
+    }
+
+    /// Collect lines until closing """, return the JS content.
+    fn collectEvalBlock(self: *ScriptIterator) ?[]const u8 {
+        var parts: std.ArrayListUnmanaged(u8) = .empty;
+        while (self.lines.next()) |line| {
+            self.line_num += 1;
+            const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
+            if (std.mem.eql(u8, trimmed, "\"\"\"")) {
+                return parts.toOwnedSlice(self.allocator) catch null;
+            }
+            if (parts.items.len > 0) {
+                parts.append(self.allocator, '\n') catch return null;
+            }
+            parts.appendSlice(self.allocator, line) catch return null;
+        }
+        // Unterminated
+        parts.deinit(self.allocator);
+        return null;
+    }
+};
 
 const QuotedResult = struct {
     value: []const u8,

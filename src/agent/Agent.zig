@@ -9,6 +9,7 @@ const ToolExecutor = @import("ToolExecutor.zig");
 const Terminal = @import("Terminal.zig");
 const Command = @import("Command.zig");
 const CommandExecutor = @import("CommandExecutor.zig");
+const Recorder = @import("Recorder.zig");
 
 const Self = @This();
 
@@ -22,17 +23,48 @@ const default_system_prompt =
     \\before clicking or filling forms. Be concise in your responses.
 ;
 
+const self_heal_prompt_prefix =
+    \\A Pandascript command failed during replay. The original intent was:
+    \\
+;
+
+const self_heal_prompt_suffix =
+    \\
+    \\The command that failed was:
+    \\
+;
+
+const self_heal_prompt_page_state =
+    \\
+    \\Please analyze the current page state and execute the equivalent action.
+    \\Use the available tools to accomplish the original intent.
+;
+
+const login_prompt =
+    \\Find the login form on the current page. Fill in the credentials using
+    \\environment variables (look for $LP_EMAIL or $LP_USERNAME for the username
+    \\field, and $LP_PASSWORD for the password field). Handle any cookie banners
+    \\or popups first, then submit the login form.
+;
+
+const accept_cookies_prompt =
+    \\Find and dismiss the cookie consent banner on the current page.
+    \\Look for "Accept", "Accept All", "I agree", or similar buttons and click them.
+;
+
 allocator: std.mem.Allocator,
 ai_client: ?AiClient,
 tool_executor: *ToolExecutor,
 terminal: Terminal,
 cmd_executor: CommandExecutor,
+recorder: Recorder,
 messages: std.ArrayListUnmanaged(zenai.provider.Message),
 message_arena: std.heap.ArenaAllocator,
 tools: []const zenai.provider.Tool,
 model: []const u8,
 system_prompt: []const u8,
 script_file: ?[]const u8,
+record_file: ?[]const u8,
 
 const AiClient = union(Config.AiProvider) {
     anthropic: *zenai.anthropic.Client,
@@ -51,7 +83,7 @@ const AiClient = union(Config.AiProvider) {
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
     const is_script_mode = opts.script_file != null;
 
-    // API key is only required for REPL mode (LLM interaction)
+    // API key is only required for REPL mode and self-healing
     const api_key: ?[:0]const u8 = opts.api_key orelse getEnvApiKey(opts.provider) orelse if (!is_script_mode) {
         log.fatal(.app, "missing API key", .{
             .hint = "Set the API key via --api-key or environment variable",
@@ -94,12 +126,14 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .tool_executor = tool_executor,
         .terminal = Terminal.init(null),
         .cmd_executor = undefined,
+        .recorder = Recorder.init(opts.record_file),
         .messages = .empty,
         .message_arena = std.heap.ArenaAllocator.init(allocator),
         .tools = tools,
         .model = opts.model orelse defaultModel(opts.provider),
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
+        .record_file = opts.record_file,
     };
 
     self.cmd_executor = CommandExecutor.init(allocator, tool_executor, &self.terminal);
@@ -108,6 +142,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
 }
 
 pub fn deinit(self: *Self) void {
+    self.recorder.deinit();
     self.message_arena.deinit();
     self.messages.deinit(self.allocator);
     self.tool_executor.deinit();
@@ -153,6 +188,20 @@ fn runRepl(self: *Self) void {
         switch (cmd) {
             .exit => break,
             .comment => continue,
+            .login => {
+                self.recorder.recordComment("# INTENT: LOGIN");
+                self.processUserMessage(login_prompt) catch |err| {
+                    const msg = std.fmt.allocPrint(self.allocator, "LOGIN failed: {s}", .{@errorName(err)}) catch "LOGIN failed";
+                    self.terminal.printError(msg);
+                };
+            },
+            .accept_cookies => {
+                self.recorder.recordComment("# INTENT: ACCEPT_COOKIES");
+                self.processUserMessage(accept_cookies_prompt) catch |err| {
+                    const msg = std.fmt.allocPrint(self.allocator, "ACCEPT_COOKIES failed: {s}", .{@errorName(err)}) catch "ACCEPT_COOKIES failed";
+                    self.terminal.printError(msg);
+                };
+            },
             .natural_language => {
                 // "quit" as a convenience alias
                 if (std.mem.eql(u8, line, "quit")) break;
@@ -162,7 +211,10 @@ fn runRepl(self: *Self) void {
                     self.terminal.printError(msg);
                 };
             },
-            else => self.cmd_executor.execute(cmd),
+            else => {
+                self.cmd_executor.execute(cmd);
+                self.recorder.record(line);
+            },
         }
     }
 
@@ -184,40 +236,107 @@ fn runScript(self: *Self, path: []const u8) void {
     };
     defer self.allocator.free(content);
 
-    const info = std.fmt.allocPrint(self.allocator, "Running script: {s}", .{path}) catch null;
-    self.terminal.printInfo(info orelse "Running script...");
-    if (info) |i| self.allocator.free(i);
+    const script_info = std.fmt.allocPrint(self.allocator, "Running script: {s}", .{path}) catch null;
+    self.terminal.printInfo(script_info orelse "Running script...");
+    if (script_info) |i| self.allocator.free(i);
 
-    var line_num: u32 = 0;
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |line| {
-        line_num += 1;
-        const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-        if (trimmed.len == 0) continue;
+    var script_arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer script_arena.deinit();
 
-        const cmd = Command.parse(trimmed);
-        switch (cmd) {
+    var iter = Command.ScriptIterator.init(content, script_arena.allocator());
+    var last_intent: ?[]const u8 = null;
+
+    while (iter.next()) |entry| {
+        switch (entry.command) {
             .exit => {
                 self.terminal.printInfo("EXIT — stopping script.");
                 return;
             },
-            .comment => continue,
+            .comment => {
+                // Track # INTENT: comments for self-healing
+                if (std.mem.startsWith(u8, entry.raw_line, "# INTENT:")) {
+                    last_intent = std.mem.trim(u8, entry.raw_line["# INTENT:".len..], &std.ascii.whitespace);
+                }
+                continue;
+            },
             .natural_language => {
-                const msg = std.fmt.allocPrint(self.allocator, "line {d}: unrecognized command: {s}", .{ line_num, trimmed }) catch "unrecognized command";
+                const msg = std.fmt.allocPrint(self.allocator, "line {d}: unrecognized command: {s}", .{ entry.line_num, entry.raw_line }) catch "unrecognized command";
                 self.terminal.printError(msg);
                 return;
             },
+            .login, .accept_cookies => {
+                // High-level commands require LLM
+                if (self.ai_client == null) {
+                    const msg = std.fmt.allocPrint(self.allocator, "line {d}: {s} requires an API key for LLM resolution", .{
+                        entry.line_num,
+                        entry.raw_line,
+                    }) catch "LLM required";
+                    self.terminal.printError(msg);
+                    return;
+                }
+                const prompt = if (entry.command == .login) login_prompt else accept_cookies_prompt;
+                self.processUserMessage(prompt) catch |err| {
+                    const msg = std.fmt.allocPrint(self.allocator, "line {d}: {s} failed: {s}", .{
+                        entry.line_num,
+                        entry.raw_line,
+                        @errorName(err),
+                    }) catch "command failed";
+                    self.terminal.printError(msg);
+                    return;
+                };
+            },
             else => {
-                const line_info = std.fmt.allocPrint(self.allocator, "[{d}] {s}", .{ line_num, trimmed }) catch null;
-                self.terminal.printInfo(line_info orelse trimmed);
+                const line_info = std.fmt.allocPrint(self.allocator, "[{d}] {s}", .{ entry.line_num, entry.raw_line }) catch null;
+                self.terminal.printInfo(line_info orelse entry.raw_line);
                 if (line_info) |li| self.allocator.free(li);
 
-                self.cmd_executor.execute(cmd);
+                // Execute with result checking for self-healing
+                var cmd_arena = std.heap.ArenaAllocator.init(self.allocator);
+                defer cmd_arena.deinit();
+
+                const result = self.cmd_executor.executeWithResult(cmd_arena.allocator(), entry.command);
+                self.terminal.printAssistant(result.output);
+                std.debug.print("\n", .{});
+
+                if (result.failed) {
+                    // Attempt self-healing via LLM
+                    if (self.ai_client != null) {
+                        self.terminal.printInfo("Command failed, attempting self-healing...");
+                        if (self.attemptSelfHeal(last_intent, entry.raw_line)) {
+                            continue;
+                        }
+                    }
+                    const msg = std.fmt.allocPrint(self.allocator, "line {d}: command failed: {s}", .{
+                        entry.line_num,
+                        entry.raw_line,
+                    }) catch "command failed";
+                    self.terminal.printError(msg);
+                    return;
+                }
             },
         }
     }
 
     self.terminal.printInfo("Script completed.");
+}
+
+/// Attempt to self-heal a failed command by asking the LLM to resolve it.
+fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8) bool {
+    var heal_arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer heal_arena.deinit();
+    const ha = heal_arena.allocator();
+
+    // Build the self-healing prompt
+    const prompt = std.fmt.allocPrint(ha, "{s}{s}{s}{s}{s}", .{
+        self_heal_prompt_prefix,
+        intent orelse "(no recorded intent)",
+        self_heal_prompt_suffix,
+        failed_command,
+        self_heal_prompt_page_state,
+    }) catch return false;
+
+    self.processUserMessage(prompt) catch return false;
+    return true;
 }
 
 fn processUserMessage(self: *Self, user_input: []const u8) !void {
@@ -278,6 +397,11 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
                 const tool_result = self.tool_executor.call(tool_arena.allocator(), tc.name, tc.arguments) catch "Error: tool execution failed";
                 self.terminal.printToolResult(tc.name, tool_result);
 
+                // Record resolved tool call as Pandascript command
+                if (!std.mem.startsWith(u8, tool_result, "Error:")) {
+                    self.recordToolCall(tool_arena.allocator(), tc.name, tc.arguments);
+                }
+
                 try tool_results.append(ma, .{
                     .id = try ma.dupe(u8, tc.id),
                     .name = try ma.dupe(u8, tc.name),
@@ -309,6 +433,63 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
         }
 
         break;
+    }
+}
+
+/// Convert a tool call (name + JSON arguments) into a Pandascript command and record it.
+fn recordToolCall(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) void {
+    const parsed = std.json.parseFromSlice(std.json.Value, arena, arguments, .{}) catch return;
+    const obj = switch (parsed.value) {
+        .object => |o| o,
+        else => return,
+    };
+
+    const panda_cmd: ?[]const u8 = if (std.mem.eql(u8, tool_name, "goto") or std.mem.eql(u8, tool_name, "navigate")) blk: {
+        const url = switch (obj.get("url") orelse break :blk null) {
+            .string => |s| s,
+            else => break :blk null,
+        };
+        break :blk std.fmt.allocPrint(arena, "GOTO {s}", .{url}) catch null;
+    } else if (std.mem.eql(u8, tool_name, "click")) blk: {
+        if (obj.get("selector")) |sel_val| {
+            const sel = switch (sel_val) {
+                .string => |s| s,
+                else => break :blk null,
+            };
+            break :blk std.fmt.allocPrint(arena, "CLICK \"{s}\"", .{sel}) catch null;
+        }
+        if (obj.get("backendNodeId")) |_| {
+            // Can't meaningfully record a node ID as Pandascript
+            break :blk null;
+        }
+        break :blk null;
+    } else if (std.mem.eql(u8, tool_name, "fill")) blk: {
+        const sel = switch (obj.get("selector") orelse break :blk null) {
+            .string => |s| s,
+            else => break :blk null,
+        };
+        const val = switch (obj.get("value") orelse break :blk null) {
+            .string => |s| s,
+            else => break :blk null,
+        };
+        break :blk std.fmt.allocPrint(arena, "TYPE \"{s}\" \"{s}\"", .{ sel, val }) catch null;
+    } else if (std.mem.eql(u8, tool_name, "waitForSelector")) blk: {
+        // WAIT is read-only, not recorded — Recorder will skip it anyway
+        break :blk null;
+    } else if (std.mem.eql(u8, tool_name, "evaluate") or std.mem.eql(u8, tool_name, "eval")) blk: {
+        const script = switch (obj.get("script") orelse break :blk null) {
+            .string => |s| s,
+            else => break :blk null,
+        };
+        // Use multi-line format if the script contains newlines
+        if (std.mem.indexOfScalar(u8, script, '\n') != null) {
+            break :blk std.fmt.allocPrint(arena, "EVAL \"\"\"\n{s}\n\"\"\"", .{script}) catch null;
+        }
+        break :blk std.fmt.allocPrint(arena, "EVAL \"{s}\"", .{script}) catch null;
+    } else null;
+
+    if (panda_cmd) |cmd| {
+        self.recorder.record(cmd);
     }
 }
 
