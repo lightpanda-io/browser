@@ -4,3 +4,9 @@ pub const Terminal = @import("agent/Terminal.zig");
 pub const Command = @import("agent/Command.zig");
 pub const CommandExecutor = @import("agent/CommandExecutor.zig");
 pub const Recorder = @import("agent/Recorder.zig");
+
+test {
+    _ = Command;
+    _ = CommandExecutor;
+    _ = Recorder;
+}

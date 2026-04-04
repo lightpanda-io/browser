@@ -224,3 +224,75 @@ fn buildJson(arena: std.mem.Allocator, value: anytype) []const u8 {
     std.json.Stringify.value(value, .{}, &aw.writer) catch return "{}";
     return aw.written();
 }
+
+// --- Tests ---
+
+test "escapeJs no escaping needed" {
+    const result = escapeJs(std.testing.allocator, "hello world");
+    try std.testing.expectEqualStrings("hello world", result);
+}
+
+test "escapeJs quotes and backslashes" {
+    const result = escapeJs(std.testing.allocator, "say \"hello\\world\"");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("say \\\"hello\\\\world\\\"", result);
+}
+
+test "escapeJs newlines and tabs" {
+    const result = escapeJs(std.testing.allocator, "line1\nline2\ttab");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("line1\\nline2\\ttab", result);
+}
+
+test "escapeJs injection attempt" {
+    const result = escapeJs(std.testing.allocator, "\"; alert(1); //");
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("\\\"; alert(1); //", result);
+}
+
+test "sanitizePath allows relative" {
+    try std.testing.expectEqualStrings("output.json", sanitizePath("output.json").?);
+    try std.testing.expectEqualStrings("dir/file.json", sanitizePath("dir/file.json").?);
+}
+
+test "sanitizePath rejects absolute" {
+    try std.testing.expect(sanitizePath("/etc/passwd") == null);
+}
+
+test "sanitizePath rejects traversal" {
+    try std.testing.expect(sanitizePath("../../../etc/passwd") == null);
+    try std.testing.expect(sanitizePath("foo/../../bar") == null);
+}
+
+test "substituteEnvVars no vars" {
+    const result = substituteEnvVars(std.testing.allocator, "hello world");
+    try std.testing.expectEqualStrings("hello world", result);
+}
+
+test "substituteEnvVars with HOME" {
+    // Use arena since substituteEnvVars makes intermediate allocations (dupeZ)
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const result = substituteEnvVars(a, "dir=$HOME/test");
+    // Result should not contain $HOME literally (it got substituted)
+    try std.testing.expect(std.mem.indexOf(u8, result, "$HOME") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "/test") != null);
+}
+
+test "substituteEnvVars missing var kept literal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const result = substituteEnvVars(arena.allocator(), "$UNLIKELY_VAR_12345");
+    try std.testing.expectEqualStrings("$UNLIKELY_VAR_12345", result);
+}
+
+test "substituteEnvVars bare dollar" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const result = substituteEnvVars(arena.allocator(), "price is $ 5");
+    try std.testing.expectEqualStrings("price is $ 5", result);
+}

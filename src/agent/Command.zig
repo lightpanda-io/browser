@@ -218,3 +218,192 @@ fn eqlIgnoreCase(a: []const u8, comptime upper: []const u8) bool {
     }
     return true;
 }
+
+// --- Tests ---
+
+test "parse GOTO" {
+    const cmd = parse("GOTO https://example.com");
+    try std.testing.expectEqualStrings("https://example.com", cmd.goto);
+}
+
+test "parse GOTO case insensitive" {
+    const cmd = parse("goto https://example.com");
+    try std.testing.expectEqualStrings("https://example.com", cmd.goto);
+}
+
+test "parse GOTO missing url" {
+    const cmd = parse("GOTO");
+    try std.testing.expect(cmd == .natural_language);
+}
+
+test "parse CLICK quoted" {
+    const cmd = parse("CLICK \"Login\"");
+    try std.testing.expectEqualStrings("Login", cmd.click);
+}
+
+test "parse CLICK unquoted" {
+    const cmd = parse("CLICK .submit-btn");
+    try std.testing.expectEqualStrings(".submit-btn", cmd.click);
+}
+
+test "parse TYPE two quoted args" {
+    const cmd = parse("TYPE \"#email\" \"user@test.com\"");
+    try std.testing.expectEqualStrings("#email", cmd.type_cmd.selector);
+    try std.testing.expectEqualStrings("user@test.com", cmd.type_cmd.value);
+}
+
+test "parse TYPE missing second arg" {
+    const cmd = parse("TYPE \"#email\"");
+    try std.testing.expect(cmd == .natural_language);
+}
+
+test "parse WAIT" {
+    const cmd = parse("WAIT \".dashboard\"");
+    try std.testing.expectEqualStrings(".dashboard", cmd.wait);
+}
+
+test "parse TREE" {
+    const cmd = parse("TREE");
+    try std.testing.expect(cmd == .tree);
+}
+
+test "parse MARKDOWN alias MD" {
+    try std.testing.expect(parse("MARKDOWN") == .markdown);
+    try std.testing.expect(parse("md") == .markdown);
+}
+
+test "parse EXTRACT with file" {
+    const cmd = parse("EXTRACT \".title\" > titles.json");
+    try std.testing.expectEqualStrings(".title", cmd.extract.selector);
+    try std.testing.expectEqualStrings("titles.json", cmd.extract.file.?);
+}
+
+test "parse EXTRACT without file" {
+    const cmd = parse("EXTRACT \".title\"");
+    try std.testing.expectEqualStrings(".title", cmd.extract.selector);
+    try std.testing.expect(cmd.extract.file == null);
+}
+
+test "parse EVAL single line" {
+    const cmd = parse("EVAL \"document.title\"");
+    try std.testing.expectEqualStrings("document.title", cmd.eval_js);
+}
+
+test "parse LOGIN" {
+    try std.testing.expect(parse("LOGIN") == .login);
+    try std.testing.expect(parse("login") == .login);
+}
+
+test "parse ACCEPT_COOKIES" {
+    try std.testing.expect(parse("ACCEPT_COOKIES") == .accept_cookies);
+    try std.testing.expect(parse("ACCEPT-COOKIES") == .accept_cookies);
+}
+
+test "parse EXIT" {
+    try std.testing.expect(parse("EXIT") == .exit);
+}
+
+test "parse comment" {
+    try std.testing.expect(parse("# this is a comment") == .comment);
+    try std.testing.expect(parse("# INTENT: LOGIN") == .comment);
+}
+
+test "parse natural language fallback" {
+    const cmd = parse("what is on this page?");
+    try std.testing.expectEqualStrings("what is on this page?", cmd.natural_language);
+}
+
+test "parse whitespace trimming" {
+    const cmd = parse("  GOTO  https://example.com  ");
+    try std.testing.expectEqualStrings("https://example.com", cmd.goto);
+}
+
+test "parse empty input" {
+    const cmd = parse("");
+    try std.testing.expect(cmd == .natural_language);
+}
+
+test "ScriptIterator basic commands" {
+    const script =
+        \\GOTO https://example.com
+        \\TREE
+        \\CLICK "Login"
+    ;
+    var iter = ScriptIterator.init(script, std.testing.allocator);
+
+    const e1 = iter.next().?;
+    try std.testing.expectEqualStrings("https://example.com", e1.command.goto);
+    try std.testing.expectEqual(@as(u32, 1), e1.line_num);
+
+    const e2 = iter.next().?;
+    try std.testing.expect(e2.command == .tree);
+
+    const e3 = iter.next().?;
+    try std.testing.expectEqualStrings("Login", e3.command.click);
+
+    try std.testing.expect(iter.next() == null);
+}
+
+test "ScriptIterator skips blank lines and comments" {
+    const script =
+        \\# Navigate
+        \\GOTO https://example.com
+        \\
+        \\# Extract
+        \\TREE
+    ;
+    var iter = ScriptIterator.init(script, std.testing.allocator);
+
+    const e1 = iter.next().?;
+    try std.testing.expect(e1.command == .comment);
+
+    const e2 = iter.next().?;
+    try std.testing.expect(e2.command == .goto);
+
+    const e3 = iter.next().?;
+    try std.testing.expect(e3.command == .comment);
+
+    const e4 = iter.next().?;
+    try std.testing.expect(e4.command == .tree);
+
+    try std.testing.expect(iter.next() == null);
+}
+
+test "ScriptIterator multi-line EVAL" {
+    const script =
+        \\GOTO https://example.com
+        \\EVAL """
+        \\  const x = 1;
+        \\  const y = 2;
+        \\  return x + y;
+        \\"""
+        \\TREE
+    ;
+    var iter = ScriptIterator.init(script, std.testing.allocator);
+
+    const e1 = iter.next().?;
+    try std.testing.expect(e1.command == .goto);
+
+    const e2 = iter.next().?;
+    try std.testing.expect(e2.command == .eval_js);
+    try std.testing.expect(std.mem.indexOf(u8, e2.command.eval_js, "const x = 1;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, e2.command.eval_js, "return x + y;") != null);
+    defer std.testing.allocator.free(e2.command.eval_js);
+
+    const e3 = iter.next().?;
+    try std.testing.expect(e3.command == .tree);
+
+    try std.testing.expect(iter.next() == null);
+}
+
+test "ScriptIterator unterminated EVAL" {
+    const script =
+        \\EVAL """
+        \\  const x = 1;
+    ;
+    var iter = ScriptIterator.init(script, std.testing.allocator);
+
+    const e1 = iter.next().?;
+    try std.testing.expect(e1.command == .natural_language);
+    try std.testing.expectEqualStrings("unterminated EVAL block", e1.command.natural_language);
+}

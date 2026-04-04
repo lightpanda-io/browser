@@ -68,3 +68,79 @@ fn eqlIgnoreCase(a: []const u8, comptime upper: []const u8) bool {
     }
     return true;
 }
+
+// --- Tests ---
+
+test "isNonRecordedCommand" {
+    try std.testing.expect(isNonRecordedCommand("WAIT"));
+    try std.testing.expect(isNonRecordedCommand("wait"));
+    try std.testing.expect(isNonRecordedCommand("TREE"));
+    try std.testing.expect(isNonRecordedCommand("MARKDOWN"));
+    try std.testing.expect(isNonRecordedCommand("MD"));
+    try std.testing.expect(isNonRecordedCommand("md"));
+    try std.testing.expect(!isNonRecordedCommand("GOTO"));
+    try std.testing.expect(!isNonRecordedCommand("CLICK"));
+    try std.testing.expect(!isNonRecordedCommand("EXTRACT"));
+}
+
+test "record writes state-mutating commands" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = tmp.dir.createFile("test.panda", .{ .read = true }) catch unreachable;
+
+    var recorder = Self{ .file = file };
+    defer recorder.deinit();
+
+    recorder.record("GOTO https://example.com");
+    recorder.record("CLICK \"Login\"");
+    recorder.record("TREE"); // should be skipped
+    recorder.record("WAIT \".dashboard\""); // should be skipped
+    recorder.record("MARKDOWN"); // should be skipped
+    recorder.record("EXTRACT \".title\"");
+    recorder.recordComment("# INTENT: LOGIN");
+
+    // Read back and verify
+    file.seekTo(0) catch unreachable;
+    var buf: [512]u8 = undefined;
+    const n = file.readAll(&buf) catch unreachable;
+    const content = buf[0..n];
+
+    try std.testing.expect(std.mem.indexOf(u8, content, "GOTO https://example.com\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "CLICK \"Login\"\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "EXTRACT \".title\"\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "# INTENT: LOGIN\n") != null);
+    // Verify skipped commands are NOT present
+    try std.testing.expect(std.mem.indexOf(u8, content, "TREE") == null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "WAIT") == null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "MARKDOWN") == null);
+}
+
+test "record skips empty and comment lines" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = tmp.dir.createFile("test2.panda", .{ .read = true }) catch unreachable;
+
+    var recorder = Self{ .file = file };
+    defer recorder.deinit();
+
+    recorder.record("");
+    recorder.record("   ");
+    recorder.record("# this is a comment");
+    recorder.record("GOTO https://example.com");
+
+    file.seekTo(0) catch unreachable;
+    var buf: [256]u8 = undefined;
+    const n = file.readAll(&buf) catch unreachable;
+    const content = buf[0..n];
+
+    try std.testing.expectEqualStrings("GOTO https://example.com\n", content);
+}
+
+test "recorder with null file is no-op" {
+    var recorder = Self{ .file = null };
+    recorder.record("GOTO https://example.com");
+    recorder.recordComment("# test");
+    recorder.deinit();
+}
