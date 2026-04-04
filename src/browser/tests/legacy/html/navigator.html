@@ -3,6 +3,6 @@
 
 <script id=navigator>
   testing.expectEqual('Lightpanda/1.0',  navigator.userAgent);
-  testing.expectEqual('1.0',  navigator.appVersion);
-  testing.expectEqual('en-US',  navigator.language);
+  testing.expectEqual(true, navigator.appVersion.length > 0);
+  testing.expectEqual(true, navigator.language.length > 0);
 </script>

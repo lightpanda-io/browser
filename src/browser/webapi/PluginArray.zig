@@ -17,39 +17,106 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../js/js.zig");
+const std = @import("std");
 
 pub fn registerTypes() []const type {
     return &.{ PluginArray, Plugin };
 }
 
-const PluginArray = @This();
+pub const Plugin = struct {
+    _name: []const u8 = "",
+    _filename: []const u8 = "",
+    _description: []const u8 = "",
 
-_pad: bool = false,
+    pub fn getName(self: *const Plugin) []const u8 {
+        return self._name;
+    }
 
-pub fn refresh(_: *const PluginArray) void {}
-pub fn getAtIndex(_: *const PluginArray, index: usize) ?*Plugin {
-    _ = index;
-    return null;
-}
+    pub fn getFilename(self: *const Plugin) []const u8 {
+        return self._filename;
+    }
 
-pub fn getByName(_: *const PluginArray, name: []const u8) ?*Plugin {
-    _ = name;
-    return null;
-}
+    pub fn getDescription(self: *const Plugin) []const u8 {
+        return self._description;
+    }
 
-// Cannot be constructed, and we currently never return any, so no reason to
-// implement anything on it (for now)
-const Plugin = struct {
+    pub fn getLength(_: *const Plugin) usize {
+        return 2;
+    }
+
     pub const JsApi = struct {
         pub const bridge = js.Bridge(Plugin);
         pub const Meta = struct {
             pub const name = "Plugin";
             pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
-            pub const empty_with_no_proto = true;
         };
+
+        pub const name = bridge.accessor(Plugin.getName, null, .{});
+        pub const filename = bridge.accessor(Plugin.getFilename, null, .{});
+        pub const description = bridge.accessor(Plugin.getDescription, null, .{});
+        pub const length = bridge.accessor(Plugin.getLength, null, .{});
     };
 };
+
+const builtin_plugins = [_]Plugin{
+    .{
+        ._name = "PDF Viewer",
+        ._filename = "internal-pdf-viewer",
+        ._description = "Portable Document Format",
+    },
+    .{
+        ._name = "Chrome PDF Viewer",
+        ._filename = "internal-pdf-viewer",
+        ._description = "Portable Document Format",
+    },
+    .{
+        ._name = "Chromium PDF Viewer",
+        ._filename = "internal-pdf-viewer",
+        ._description = "Portable Document Format",
+    },
+    .{
+        ._name = "Microsoft Edge PDF Viewer",
+        ._filename = "internal-pdf-viewer",
+        ._description = "Portable Document Format",
+    },
+    .{
+        ._name = "WebKit built-in PDF",
+        ._filename = "internal-pdf-viewer",
+        ._description = "Portable Document Format",
+    },
+};
+
+const PluginArray = @This();
+
+_pad: bool = false,
+_items: [builtin_plugins.len]Plugin = builtin_plugins,
+
+pub fn getBuiltinPlugin(index: usize) *Plugin {
+    return @constCast(&builtin_plugins[index]);
+}
+
+pub fn refresh(_: *const PluginArray) void {}
+
+pub fn getLength(_: *const PluginArray) usize {
+    return builtin_plugins.len;
+}
+
+pub fn getAtIndex(self: *const PluginArray, index: usize) ?*Plugin {
+    if (index >= self._items.len) {
+        return null;
+    }
+    return @constCast(&self._items[index]);
+}
+
+pub fn getByName(self: *const PluginArray, name: []const u8) ?*Plugin {
+    for (&self._items) |*plugin| {
+        if (std.mem.eql(u8, plugin._name, name)) {
+            return @constCast(plugin);
+        }
+    }
+    return null;
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(PluginArray);
@@ -61,7 +128,7 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
 
-    pub const length = bridge.property(0, .{ .template = false });
+    pub const length = bridge.accessor(PluginArray.getLength, null, .{});
     pub const refresh = bridge.function(PluginArray.refresh, .{});
     pub const @"[int]" = bridge.indexed(PluginArray.getAtIndex, null, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(PluginArray.getByName, null, null, .{ .null_as_undefined = true });

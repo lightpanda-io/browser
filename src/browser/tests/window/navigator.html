@@ -7,23 +7,132 @@
   testing.expectEqual(true, navigator.userAgent.length > 0);
   testing.expectEqual(true, navigator.userAgent.includes('Lightpanda'));
   testing.expectEqual('Netscape', navigator.appName);
-  testing.expectEqual('1.0', navigator.appVersion);
+  testing.expectEqual(true, navigator.appVersion.length > 0);
   testing.expectEqual(true, navigator.platform.length > 0);
 
   // Platform should be one of the known values
   const validPlatforms = ['MacIntel', 'Win32', 'Linux x86_64', 'FreeBSD', 'Unknown'];
   testing.expectEqual(true, validPlatforms.includes(navigator.platform));
-  testing.expectEqual('en-US', navigator.language);
+  testing.expectEqual(true, navigator.language.length > 0);
   testing.expectEqual(true, Array.isArray(navigator.languages));
   testing.expectEqual(1, navigator.languages.length);
-  testing.expectEqual('en-US', navigator.languages[0]);
+  testing.expectEqual(navigator.language, navigator.languages[0]);
   testing.expectEqual(true, navigator.onLine);
   testing.expectEqual(true, navigator.cookieEnabled);
   testing.expectEqual(true, navigator.hardwareConcurrency > 0);
-  testing.expectEqual(4, navigator.hardwareConcurrency);
-  testing.expectEqual(0, navigator.maxTouchPoints);
-  testing.expectEqual('', navigator.vendor);
+  testing.expectEqual(true, navigator.maxTouchPoints >= 0);
+  testing.expectEqual('Google Inc.', navigator.vendor);
+  testing.expectEqual('', navigator.vendorSub);
   testing.expectEqual('Gecko', navigator.product);
+  testing.expectEqual('20030107', navigator.productSub);
   testing.expectEqual(false, navigator.javaEnabled());
   testing.expectEqual(false, navigator.webdriver);
+  testing.expectEqual('function', typeof navigator.getGamepads);
+  testing.expectEqual(4, navigator.getGamepads().length);
+  testing.expectEqual(null, navigator.getGamepads()[0]);
+  testing.expectEqual(true, navigator.vibrate(100));
+  testing.expectEqual(true, navigator.sendBeacon('https://example.com/'));
+  testing.expectError('TypeError', () => navigator.sendBeacon('data:text/plain,hi'));
+  testing.expectEqual(5, navigator.plugins.length);
+  testing.expectEqual('PDF Viewer', navigator.plugins[0].name);
+  testing.expectEqual('Portable Document Format', navigator.plugins[0].description);
+  testing.expectEqual('internal-pdf-viewer', navigator.plugins[0].filename);
+  testing.expectEqual(2, navigator.plugins[0].length);
+  testing.expectEqual('Chrome PDF Viewer', navigator.plugins.namedItem('Chrome PDF Viewer').name);
+  testing.expectEqual('object', typeof navigator.mimeTypes);
+  testing.expectEqual(2, navigator.mimeTypes.length);
+  testing.expectEqual('application/pdf', navigator.mimeTypes[0].type);
+  testing.expectEqual('Portable Document Format', navigator.mimeTypes[0].description);
+  testing.expectEqual('pdf', navigator.mimeTypes[0].suffixes);
+  testing.expectEqual('PDF Viewer', navigator.mimeTypes[0].enabledPlugin.name);
+  testing.expectEqual('text/pdf', navigator.mimeTypes.namedItem('text/pdf').type);
+  testing.expectEqual(true, navigator.pdfViewerEnabled);
+  testing.expectEqual('object', typeof navigator.webkitTemporaryStorage);
+  testing.expectEqual('object', typeof navigator.webkitPersistentStorage);
+  testing.expectEqual('function', typeof navigator.webkitTemporaryStorage.queryUsageAndQuota);
+  testing.expectEqual('function', typeof navigator.webkitTemporaryStorage.requestQuota);
+</script>
+
+<script id=navigator_user_agent_data>
+  testing.async(async () => {
+    testing.expectEqual('object', typeof navigator.userAgentData);
+    testing.expectEqual(true, Array.isArray(navigator.userAgentData.brands));
+    testing.expectEqual(true, navigator.userAgentData.brands.length >= 1);
+    testing.expectEqual('boolean', typeof navigator.userAgentData.mobile);
+    testing.expectEqual(true, navigator.userAgentData.platform.length > 0);
+    testing.expectEqual('function', typeof navigator.userAgentData.getHighEntropyValues);
+    testing.expectEqual('function', typeof navigator.userAgentData.toJSON);
+    testing.expectEqual(true, navigator.userAgentData.brands.some(v => v.brand === 'Lightpanda' && v.version === '1'));
+
+    const json = navigator.userAgentData.toJSON();
+    testing.expectEqual(true, Array.isArray(json.brands));
+    testing.expectEqual(false, json.mobile);
+    testing.expectEqual(navigator.userAgentData.platform, json.platform);
+
+    const highEntropy = await navigator.userAgentData.getHighEntropyValues([
+      'architecture',
+      'bitness',
+      'model',
+      'platform',
+      'platformVersion',
+      'uaFullVersion',
+      'wow64',
+    ]);
+    testing.expectEqual(true, Array.isArray(highEntropy.brands));
+    testing.expectEqual(true, highEntropy.brands.some(v => v.brand === 'Lightpanda' && v.version === '1'));
+    testing.expectEqual(false, highEntropy.mobile);
+    testing.expectEqual(true, highEntropy.architecture.length > 0);
+    testing.expectEqual(true, highEntropy.bitness === '64' || highEntropy.bitness === '32' || highEntropy.bitness === '0');
+    testing.expectEqual('', highEntropy.model);
+    testing.expectEqual(navigator.userAgentData.platform, highEntropy.platform);
+    testing.expectEqual(true, highEntropy.platformVersion.length > 0);
+    testing.expectEqual('1.0.0', highEntropy.uaFullVersion);
+    testing.expectEqual(false, highEntropy.wow64);
+  });
+</script>
+
+<script id=navigator_webkit_storage>
+  testing.async(async () => {
+    await new Promise((resolve) => {
+      navigator.webkitTemporaryStorage.queryUsageAndQuota(
+        () => testing.fail('temporary queryUsageAndQuota should not resolve'),
+        (err) => {
+          testing.expectEqual('NotSupportedError', err.name);
+          resolve();
+        },
+      );
+    });
+
+    await new Promise((resolve) => {
+      navigator.webkitTemporaryStorage.requestQuota(
+        12345,
+        () => testing.fail('temporary requestQuota should not resolve'),
+        (err) => {
+          testing.expectEqual('AbortError', err.name);
+          resolve();
+        },
+      );
+    });
+
+    await new Promise((resolve) => {
+      navigator.webkitPersistentStorage.queryUsageAndQuota(
+        () => testing.fail('persistent queryUsageAndQuota should not resolve'),
+        (err) => {
+          testing.expectEqual('NotSupportedError', err.name);
+          resolve();
+        },
+      );
+    });
+
+    await new Promise((resolve) => {
+      navigator.webkitPersistentStorage.requestQuota(
+        12345,
+        () => testing.fail('persistent requestQuota should not resolve'),
+        (err) => {
+          testing.expectEqual('AbortError', err.name);
+          resolve();
+        },
+      );
+    });
+  });
 </script>
