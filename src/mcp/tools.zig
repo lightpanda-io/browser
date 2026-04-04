@@ -175,6 +175,74 @@ pub const tool_list = [_]protocol.Tool{
             \\}
         ),
     },
+    .{
+        .name = "hover",
+        .description = "Hover over an element, triggering mouseover and mouseenter events. Useful for menus, tooltips, and hover states.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to hover over." }
+            \\  },
+            \\  "required": ["backendNodeId"]
+            \\}
+        ),
+    },
+    .{
+        .name = "press",
+        .description = "Press a keyboard key, dispatching keydown and keyup events. Use key names like 'Enter', 'Tab', 'Escape', 'ArrowDown', 'Backspace', or single characters like 'a', '1'.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "key": { "type": "string", "description": "The key to press (e.g. 'Enter', 'Tab', 'a')." },
+            \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the document." }
+            \\  },
+            \\  "required": ["key"]
+            \\}
+        ),
+    },
+    .{
+        .name = "selectOption",
+        .description = "Select an option in a <select> dropdown element by its value. Dispatches input and change events.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the <select> element." },
+            \\    "value": { "type": "string", "description": "The value of the option to select." }
+            \\  },
+            \\  "required": ["backendNodeId", "value"]
+            \\}
+        ),
+    },
+    .{
+        .name = "setChecked",
+        .description = "Check or uncheck a checkbox or radio button. Dispatches input, change, and click events.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the checkbox or radio input element." },
+            \\    "checked": { "type": "boolean", "description": "Whether to check (true) or uncheck (false) the element." }
+            \\  },
+            \\  "required": ["backendNodeId", "checked"]
+            \\}
+        ),
+    },
+    .{
+        .name = "findElement",
+        .description = "Find interactive elements by role and/or accessible name. Returns matching elements with their backend node IDs. Useful for locating specific elements without parsing the full semantic tree.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "role": { "type": "string", "description": "Optional ARIA role to match (e.g. 'button', 'link', 'textbox', 'checkbox')." },
+            \\    "name": { "type": "string", "description": "Optional accessible name substring to match (case-insensitive)." }
+            \\  }
+            \\}
+        ),
+    },
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -282,6 +350,11 @@ const ToolAction = enum {
     fill,
     scroll,
     waitForSelector,
+    hover,
+    press,
+    selectOption,
+    setChecked,
+    findElement,
 };
 
 const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
@@ -300,6 +373,11 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "fill", .fill },
     .{ "scroll", .scroll },
     .{ "waitForSelector", .waitForSelector },
+    .{ "hover", .hover },
+    .{ "press", .press },
+    .{ "selectOption", .selectOption },
+    .{ "setChecked", .setChecked },
+    .{ "findElement", .findElement },
 });
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -334,6 +412,11 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .fill => try handleFill(server, arena, req.id.?, call_params.arguments),
         .scroll => try handleScroll(server, arena, req.id.?, call_params.arguments),
         .waitForSelector => try handleWaitForSelector(server, arena, req.id.?, call_params.arguments),
+        .hover => try handleHover(server, arena, req.id.?, call_params.arguments),
+        .press => try handlePress(server, arena, req.id.?, call_params.arguments),
+        .selectOption => try handleSelectOption(server, arena, req.id.?, call_params.arguments),
+        .setChecked => try handleSetChecked(server, arena, req.id.?, call_params.arguments),
+        .findElement => try handleFindElement(server, arena, req.id.?, call_params.arguments),
     }
 }
 
@@ -400,17 +483,9 @@ fn handleNodeDetails(server: *Server, arena: std.mem.Allocator, id: std.json.Val
         backendNodeId: CDPNode.Id,
     };
     const args = try parseArgs(Params, arena, arguments, server, id, "nodeDetails");
+    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    _ = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
-
-    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
-        return server.sendError(id, .InvalidParams, "Node not found");
-    };
-
-    const page = server.session.currentPage().?;
-    const details = lp.SemanticTree.getNodeDetails(arena, node.dom, &server.node_registry, page) catch {
+    const details = lp.SemanticTree.getNodeDetails(arena, resolved.node, &server.node_registry, resolved.page) catch {
         return server.sendError(id, .InternalError, "Failed to get node details");
     };
 
@@ -510,26 +585,19 @@ fn handleClick(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
         backendNodeId: CDPNode.Id,
     };
     const args = try parseArgs(ClickParams, arena, arguments, server, id, "click");
+    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
-
-    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
-        return server.sendError(id, .InvalidParams, "Node not found");
-    };
-
-    lp.actions.click(node.dom, page) catch |err| {
+    lp.actions.click(resolved.node, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an HTML element");
         }
         return server.sendError(id, .InternalError, "Failed to click element");
     };
 
-    const page_title = page.getTitle() catch null;
+    const page_title = resolved.page.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Clicked element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
         args.backendNodeId,
-        page.url,
+        resolved.page.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -542,27 +610,20 @@ fn handleFill(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         text: []const u8,
     };
     const args = try parseArgs(FillParams, arena, arguments, server, id, "fill");
+    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
-    };
-
-    const node = server.node_registry.lookup_by_id.get(args.backendNodeId) orelse {
-        return server.sendError(id, .InvalidParams, "Node not found");
-    };
-
-    lp.actions.fill(node.dom, args.text, page) catch |err| {
+    lp.actions.fill(resolved.node, args.text, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an input, textarea or select");
         }
         return server.sendError(id, .InternalError, "Failed to fill element");
     };
 
-    const page_title = page.getTitle() catch null;
+    const page_title = resolved.page.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Filled element (backendNodeId: {d}) with \"{s}\". Page url: {s}, title: {s}", .{
         args.backendNodeId,
         args.text,
-        page.url,
+        resolved.page.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -634,6 +695,189 @@ fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
     return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleHover(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        backendNodeId: CDPNode.Id,
+    };
+    const args = try parseArgs(Params, arena, arguments, server, id, "hover");
+    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
+
+    lp.actions.hover(resolved.node, resolved.page) catch |err| {
+        if (err == error.InvalidNodeType) {
+            return server.sendError(id, .InvalidParams, "Node is not an HTML element");
+        }
+        return server.sendError(id, .InternalError, "Failed to hover element");
+    };
+
+    const page_title = resolved.page.getTitle() catch null;
+    const result_text = try std.fmt.allocPrint(arena, "Hovered element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
+        args.backendNodeId,
+        resolved.page.url,
+        page_title orelse "(none)",
+    });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handlePress(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        key: []const u8,
+        backendNodeId: ?CDPNode.Id = null,
+    };
+    const args = try parseArgs(Params, arena, arguments, server, id, "press");
+
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    var target_node: ?*DOMNode = null;
+    if (args.backendNodeId) |node_id| {
+        const node = server.node_registry.lookup_by_id.get(node_id) orelse {
+            return server.sendError(id, .InvalidParams, "Node not found");
+        };
+        target_node = node.dom;
+    }
+
+    lp.actions.press(target_node, args.key, page) catch |err| {
+        if (err == error.InvalidNodeType) {
+            return server.sendError(id, .InvalidParams, "Node is not an HTML element");
+        }
+        return server.sendError(id, .InternalError, "Failed to press key");
+    };
+
+    const page_title = page.getTitle() catch null;
+    const result_text = try std.fmt.allocPrint(arena, "Pressed key '{s}'. Page url: {s}, title: {s}", .{
+        args.key,
+        page.url,
+        page_title orelse "(none)",
+    });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleSelectOption(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        backendNodeId: CDPNode.Id,
+        value: []const u8,
+    };
+    const args = try parseArgs(Params, arena, arguments, server, id, "selectOption");
+    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
+
+    lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| {
+        if (err == error.InvalidNodeType) {
+            return server.sendError(id, .InvalidParams, "Node is not a <select> element");
+        }
+        return server.sendError(id, .InternalError, "Failed to select option");
+    };
+
+    const page_title = resolved.page.getTitle() catch null;
+    const result_text = try std.fmt.allocPrint(arena, "Selected option '{s}' (backendNodeId: {d}). Page url: {s}, title: {s}", .{
+        args.value,
+        args.backendNodeId,
+        resolved.page.url,
+        page_title orelse "(none)",
+    });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleSetChecked(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        backendNodeId: CDPNode.Id,
+        checked: bool,
+    };
+    const args = try parseArgs(Params, arena, arguments, server, id, "setChecked");
+    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
+
+    lp.actions.setChecked(resolved.node, args.checked, resolved.page) catch |err| {
+        if (err == error.InvalidNodeType) {
+            return server.sendError(id, .InvalidParams, "Node is not a checkbox or radio input");
+        }
+        return server.sendError(id, .InternalError, "Failed to set checked state");
+    };
+
+    const state_str = if (args.checked) "checked" else "unchecked";
+    const page_title = resolved.page.getTitle() catch null;
+    const result_text = try std.fmt.allocPrint(arena, "Set element (backendNodeId: {d}) to {s}. Page url: {s}, title: {s}", .{
+        args.backendNodeId,
+        state_str,
+        resolved.page.url,
+        page_title orelse "(none)",
+    });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleFindElement(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        role: ?[]const u8 = null,
+        name: ?[]const u8 = null,
+    };
+    const args = try parseArgsOrDefault(Params, arena, arguments, server, id);
+
+    if (args.role == null and args.name == null) {
+        return server.sendError(id, .InvalidParams, "At least one of 'role' or 'name' must be provided");
+    }
+
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch |err| {
+        log.err(.mcp, "elements collection failed", .{ .err = err });
+        return server.sendError(id, .InternalError, "Failed to collect interactive elements");
+    };
+
+    var matches: std.ArrayList(lp.interactive.InteractiveElement) = .empty;
+    for (elements) |el| {
+        if (args.role) |role| {
+            const el_role = el.role orelse continue;
+            if (!std.ascii.eqlIgnoreCase(el_role, role)) continue;
+        }
+        if (args.name) |name| {
+            const el_name = el.name orelse continue;
+            if (!containsIgnoreCase(el_name, name)) continue;
+        }
+        try matches.append(arena, el);
+    }
+
+    const matched = try matches.toOwnedSlice(arena);
+    lp.interactive.registerNodes(matched, &server.node_registry) catch |err| {
+        log.err(.mcp, "node registration failed", .{ .err = err });
+        return server.sendError(id, .InternalError, "Failed to register element nodes");
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try std.json.Stringify.value(matched, .{}, &aw.writer);
+
+    const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len > haystack.len) return false;
+    if (needle.len == 0) return true;
+    const end = haystack.len - needle.len + 1;
+    for (0..end) |i| {
+        if (std.ascii.eqlIgnoreCase(haystack[i..][0..needle.len], needle)) return true;
+    }
+    return false;
+}
+
+const NodeAndPage = struct { node: *DOMNode, page: *lp.Page };
+
+fn resolveNodeAndPage(server: *Server, id: std.json.Value, node_id: CDPNode.Id) !NodeAndPage {
+    const page = server.session.currentPage() orelse {
+        try server.sendError(id, .PageNotLoaded, "Page not loaded");
+        return error.PageNotLoaded;
+    };
+    const node = server.node_registry.lookup_by_id.get(node_id) orelse {
+        try server.sendError(id, .InvalidParams, "Node not found");
+        return error.InvalidParams;
+    };
+    return .{ .node = node.dom, .page = page };
 }
 
 fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !*lp.Page {
@@ -736,7 +980,7 @@ test "MCP - evaluate error reporting" {
     } }, out.written());
 }
 
-test "MCP - Actions: click, fill, scroll" {
+test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked" {
     defer testing.reset();
     const aa = testing.arena_allocator;
 
@@ -797,7 +1041,67 @@ test "MCP - Actions: click, fill, scroll" {
         out.clearRetainingCapacity();
     }
 
-    // Evaluate assertions
+    {
+        // Test Hover
+        const el = page.document.getElementById("hoverTarget", page).?.asNode();
+        const el_id = (try server.node_registry.register(el)).id;
+        var id_buf: [12]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"hover\",\"arguments\":{\"backendNodeId\":", id_str, "}}}" });
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Hovered element") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Test Press
+        const el = page.document.getElementById("keyTarget", page).?.asNode();
+        const el_id = (try server.node_registry.register(el)).id;
+        var id_buf: [12]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"press\",\"arguments\":{\"key\":\"Enter\",\"backendNodeId\":", id_str, "}}}" });
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Pressed key") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Test SelectOption
+        const el = page.document.getElementById("sel2", page).?.asNode();
+        const el_id = (try server.node_registry.register(el)).id;
+        var id_buf: [12]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"selectOption\",\"arguments\":{\"backendNodeId\":", id_str, ",\"value\":\"b\"}}}" });
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Selected option") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Test SetChecked (checkbox)
+        const el = page.document.getElementById("chk", page).?.asNode();
+        const el_id = (try server.node_registry.register(el)).id;
+        var id_buf: [12]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Test SetChecked (radio)
+        const el = page.document.getElementById("rad", page).?.asNode();
+        const el_id = (try server.node_registry.register(el)).id;
+        var id_buf: [12]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
+        out.clearRetainingCapacity();
+    }
+
+    // Evaluate JS assertions for all actions
     var ls: js.Local.Scope = undefined;
     page.js.localScope(&ls);
     defer ls.deinit();
@@ -809,10 +1113,64 @@ test "MCP - Actions: click, fill, scroll" {
     const result = try ls.local.exec(
         \\ window.clicked === true && window.inputVal === 'hello' &&
         \\ window.changed === true && window.selChanged === 'opt2' &&
-        \\ window.scrolled === true
+        \\ window.scrolled === true &&
+        \\ window.hovered === true &&
+        \\ window.keyPressed === 'Enter' && window.keyReleased === 'Enter' &&
+        \\ window.sel2Changed === 'b' &&
+        \\ window.chkClicked === true && window.chkChanged === true &&
+        \\ window.radClicked === true && window.radChanged === true
     , null);
 
     try testing.expect(result.isTrue());
+}
+
+test "MCP - findElement" {
+    defer testing.reset();
+    const aa = testing.arena_allocator;
+
+    var out: std.io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    {
+        // Find by role
+        const msg =
+            \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"button"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Find by name (case-insensitive substring)
+        const msg =
+            \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"click"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Find with no matches
+        const msg =
+            \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"slider"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "[]") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Error: no params provided
+        const msg =
+            \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"findElement","arguments":{}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "error") != null);
+        out.clearRetainingCapacity();
+    }
 }
 
 test "MCP - waitForSelector: existing element" {

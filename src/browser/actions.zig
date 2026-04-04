@@ -22,9 +22,22 @@ const DOMNode = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const Event = @import("webapi/Event.zig");
 const MouseEvent = @import("webapi/event/MouseEvent.zig");
+const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const Page = @import("Page.zig");
 const Session = @import("Session.zig");
 const Selector = @import("webapi/selector/Selector.zig");
+
+fn dispatchInputAndChangeEvents(el: *Element, page: *Page) !void {
+    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, page);
+    page._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
+        lp.log.err(.app, "dispatch input event failed", .{ .err = err });
+    };
+
+    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, page);
+    page._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
+        lp.log.err(.app, "dispatch change event failed", .{ .err = err });
+    };
+}
 
 pub fn click(node: *DOMNode, page: *Page) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
@@ -43,8 +56,106 @@ pub fn click(node: *DOMNode, page: *Page) !void {
     };
 }
 
+pub fn hover(node: *DOMNode, page: *Page) !void {
+    const el = node.is(Element) orelse return error.InvalidNodeType;
+
+    const mouseover_event: *MouseEvent = try .initTrusted(comptime .wrap("mouseover"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+    }, page);
+
+    page._event_manager.dispatch(el.asEventTarget(), mouseover_event.asEvent()) catch |err| {
+        lp.log.err(.app, "hover mouseover failed", .{ .err = err });
+        return error.ActionFailed;
+    };
+
+    const mouseenter_event: *MouseEvent = try .initTrusted(comptime .wrap("mouseenter"), .{
+        .composed = true,
+    }, page);
+
+    page._event_manager.dispatch(el.asEventTarget(), mouseenter_event.asEvent()) catch |err| {
+        lp.log.err(.app, "hover mouseenter failed", .{ .err = err });
+        return error.ActionFailed;
+    };
+}
+
+pub fn press(node: ?*DOMNode, key: []const u8, page: *Page) !void {
+    const target = if (node) |n|
+        (n.is(Element) orelse return error.InvalidNodeType).asEventTarget()
+    else
+        page.document.asNode().asEventTarget();
+
+    const keydown_event: *KeyboardEvent = try .initTrusted(comptime .wrap("keydown"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .key = key,
+    }, page);
+
+    page._event_manager.dispatch(target, keydown_event.asEvent()) catch |err| {
+        lp.log.err(.app, "press keydown failed", .{ .err = err });
+        return error.ActionFailed;
+    };
+
+    const keyup_event: *KeyboardEvent = try .initTrusted(comptime .wrap("keyup"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .key = key,
+    }, page);
+
+    page._event_manager.dispatch(target, keyup_event.asEvent()) catch |err| {
+        lp.log.err(.app, "press keyup failed", .{ .err = err });
+        return error.ActionFailed;
+    };
+}
+
+pub fn selectOption(node: *DOMNode, value: []const u8, page: *Page) !void {
+    const el = node.is(Element) orelse return error.InvalidNodeType;
+    const select = el.is(Element.Html.Select) orelse return error.InvalidNodeType;
+
+    select.setValue(value, page) catch |err| {
+        lp.log.err(.app, "select setValue failed", .{ .err = err });
+        return error.ActionFailed;
+    };
+
+    try dispatchInputAndChangeEvents(el, page);
+}
+
+pub fn setChecked(node: *DOMNode, checked: bool, page: *Page) !void {
+    const el = node.is(Element) orelse return error.InvalidNodeType;
+    const input = el.is(Element.Html.Input) orelse return error.InvalidNodeType;
+
+    if (input._input_type != .checkbox and input._input_type != .radio) {
+        return error.InvalidNodeType;
+    }
+
+    input.setChecked(checked, page) catch |err| {
+        lp.log.err(.app, "setChecked failed", .{ .err = err });
+        return error.ActionFailed;
+    };
+
+    // Match browser event order: click fires first, then input and change.
+    const click_event: *MouseEvent = try .initTrusted(comptime .wrap("click"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+    }, page);
+
+    page._event_manager.dispatch(el.asEventTarget(), click_event.asEvent()) catch |err| {
+        lp.log.err(.app, "dispatch click event failed", .{ .err = err });
+    };
+
+    try dispatchInputAndChangeEvents(el, page);
+}
+
 pub fn fill(node: *DOMNode, text: []const u8, page: *Page) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
+
+    el.focus(page) catch |err| {
+        lp.log.err(.app, "fill focus failed", .{ .err = err });
+    };
 
     if (el.is(Element.Html.Input)) |input| {
         input.setValue(text, page) catch |err| {
@@ -65,15 +176,7 @@ pub fn fill(node: *DOMNode, text: []const u8, page: *Page) !void {
         return error.InvalidNodeType;
     }
 
-    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, page);
-    page._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
-        lp.log.err(.app, "dispatch input event failed", .{ .err = err });
-    };
-
-    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, page);
-    page._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
-        lp.log.err(.app, "dispatch change event failed", .{ .err = err });
-    };
+    try dispatchInputAndChangeEvents(el, page);
 }
 
 pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, page: *Page) !void {
