@@ -550,30 +550,15 @@ const PrivateSymbols = struct {
 };
 
 const testing = @import("../../testing.zig");
-const EventTarget = @import("../webapi/EventTarget.zig");
-
 test "Env: Worker context " {
     const session = testing.test_session;
+    const page = try session.createPage();
+    defer session.removePage();
 
-    // Create a dummy WorkerGlobalScope using page's resources (hackish until session.createWorker exists)
-    const worker = try session.factory.eventTarget(WorkerGlobalScope{
-        ._session = session,
-        ._factory = &session.factory,
-        .arena = session.arena,
-        .url = "about:blank",
-        ._proto = undefined,
-        ._performance = .init(),
-    });
-
-    const ctx = try testing.test_browser.env.createWorkerContext(worker, .{
-        .identity = &session.identity,
-        .identity_arena = session.arena,
-        .call_arena = session.arena,
-    });
-    defer testing.test_browser.env.destroyContext(ctx);
+    const worker = try @import("../webapi/Worker.zig").init("about:blank", &page.js.execution);
 
     var ls: js.Local.Scope = undefined;
-    ctx.localScope(&ls);
+    worker._worker_scope.js.localScope(&ls);
     defer ls.deinit();
 
     try testing.expectEqual(true, (try ls.local.exec("typeof Node === 'undefined'", null)).isTrue());

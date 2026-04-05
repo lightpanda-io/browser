@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<body></body>
+<script src="../testing.js"></script>
+
+<script id="worker_creation">
+  {
+    // Just test that Worker constructor works - don't terminate immediately
+    // as that would destroy the context before the script loads
+    const worker = new Worker('./echo-worker.js');
+    testing.expectTrue(worker instanceof Worker);
+    // Note: worker will be cleaned up when page is removed
+  }
+</script>
+
+<script id="worker_message">
+  testing.async(async (capture) => {
+    const worker = new Worker('./echo-worker.js');
+
+    const response = await new Promise((resolve) => {
+      worker.onmessage = function(event) {
+        resolve(event.data);
+      };
+      // Give the script time to load before posting
+      setTimeout(() => {
+        worker.postMessage({ greeting: 'hello' });
+      }, 100);
+    });
+
+    capture();
+    testing.expectEqual('hello', response.echo.greeting);
+    testing.expectEqual('worker', response.from);
+  });
+</script>

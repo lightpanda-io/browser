@@ -19,26 +19,36 @@
 const std = @import("std");
 const JS = @import("../js/js.zig");
 
+const log = @import("../../log.zig");
+
 const Console = @import("Console.zig");
 const Crypto = @import("Crypto.zig");
 const EventTarget = @import("EventTarget.zig");
 const Factory = @import("../Factory.zig");
 const Performance = @import("Performance.zig");
 const Session = @import("../Session.zig");
+const Worker = @import("Worker.zig");
 
 const Allocator = std.mem.Allocator;
 
 const WorkerGlobalScope = @This();
 
-// Infrastructure fields (similar to Page)
+// Meant to follow the same field naming as Page so that an anytype of generic
+// can access these the same for a Page of a WGS.
+// These fields represent the "Page"-like component of the WGS
 _session: *Session,
 _factory: *Factory,
+_identity: JS.Identity = .{},
 arena: Allocator,
+call_arena: Allocator,
 url: [:0]const u8,
 buf: [1024]u8 = undefined, // same size as page.buf
-js: *JS.Context = undefined,
+js: *JS.Context,
 
-// WebAPI fields
+// Reference back to the Worker object (for postMessage to page)
+_worker: *Worker,
+
+// These fields represent the "Window"-like component of the WGS
 _proto: *EventTarget,
 _console: Console = .init,
 _crypto: Crypto = .init,
@@ -46,6 +56,45 @@ _performance: Performance,
 _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
+_on_message: ?JS.Function.Global = null,
+
+pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
+    const arena = worker._arena;
+    const session = worker._page._session;
+    const factory = &session.factory;
+
+    const call_arena = try session.getArena(.{ .debug = "WorkerGlobalScope.call_arena" });
+    errdefer session.releaseArena(call_arena);
+
+    const self = try factory.eventTargetWithAllocator(arena, WorkerGlobalScope{
+        .url = url,
+        .arena = arena,
+        .js = undefined,
+        .call_arena = call_arena,
+        ._session = session,
+        ._identity = .{},
+        ._proto = undefined,
+        ._factory = factory,
+        ._worker = worker,
+        ._performance = .init(),
+    });
+    errdefer factory.destroy(self);
+
+    self.js = try session.browser.env.createWorkerContext(self, .{
+        .call_arena = call_arena,
+        .identity_arena = arena,
+        .identity = &self._identity,
+    });
+
+    return self;
+}
+
+pub fn deinit(self: *WorkerGlobalScope) void {
+    self._identity.deinit();
+    const session = self._session;
+    session.browser.env.destroyContext(self.js);
+    session.releaseArena(self.call_arena);
+}
 
 pub fn base(self: *const WorkerGlobalScope) [:0]const u8 {
     return self.url;
@@ -94,6 +143,77 @@ pub fn getOnUnhandledRejection(self: *const WorkerGlobalScope) ?JS.Function.Glob
 pub fn setOnUnhandledRejection(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
     self._on_unhandled_rejection = getFunctionFromSetter(setter);
 }
+
+pub fn getOnMessage(self: *const WorkerGlobalScope) ?JS.Function.Global {
+    return self._on_message;
+}
+
+pub fn setOnMessage(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
+    self._on_message = getFunctionFromSetter(setter);
+}
+
+/// Posts a message from the worker back to the page.
+/// The message is serialized via JSON and dispatched on the Worker object.
+pub fn postMessage(self: *WorkerGlobalScope, message: JS.Value, exec: *JS.Execution) !void {
+    const worker = self._worker;
+    const page = worker._page;
+
+    // Serialize message to JSON
+    const json = try message.toJson(self.arena);
+
+    // Create callback to deliver message to Worker
+    const callback = try self.arena.create(PostMessageToPageCallback);
+    callback.* = .{
+        .worker = worker,
+        .json = json,
+    };
+
+    try page.js.scheduler.add(callback, PostMessageToPageCallback.run, 0, .{
+        .name = "WorkerGlobalScope.postMessage",
+        .low_priority = false,
+    });
+
+    _ = exec;
+}
+
+const PostMessageToPageCallback = struct {
+    worker: *Worker,
+    json: []const u8,
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *PostMessageToPageCallback = @ptrCast(@alignCast(ctx));
+        const worker = self.worker;
+
+        const on_message = worker._on_message orelse return null;
+
+        const page = worker._page;
+
+        var ls: JS.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
+        // Deserialize the message in page context
+        const data = ls.local.parseJSON(self.json) catch |err| {
+            log.err(.browser, "page msg parse fail", .{ .err = err });
+            return null;
+        };
+
+        // Call the onmessage handler with a simple object {data: value}
+        // TODO: Create proper MessageEvent
+        const message_obj = ls.local.newObject();
+        _ = message_obj.set("data", data, .{}) catch |err| {
+            log.err(.browser, "message data set fail", .{ .err = err });
+            return null;
+        };
+
+        const func = on_message.local(&ls.local);
+        _ = func.call(void, .{message_obj.toValue()}) catch |err| {
+            log.err(.browser, "page onmessage fail", .{ .err = err });
+        };
+
+        return null;
+    }
+};
 
 pub fn btoa(_: *const WorkerGlobalScope, input: []const u8, exec: *JS.Execution) ![]const u8 {
     const base64 = @import("encoding/base64.zig");
@@ -148,6 +268,9 @@ pub const JsApi = struct {
     pub const btoa = bridge.function(WorkerGlobalScope.btoa, .{});
     pub const atob = bridge.function(WorkerGlobalScope.atob, .{ .dom_exception = true });
     pub const structuredClone = bridge.function(WorkerGlobalScope.structuredClone, .{});
+    pub const postMessage = bridge.function(WorkerGlobalScope.postMessage, .{});
+
+    pub const onmessage = bridge.accessor(WorkerGlobalScope.getOnMessage, WorkerGlobalScope.setOnMessage, .{});
 
     // Return false since workers don't have secure-context-only APIs
     pub const isSecureContext = bridge.property(false, .{ .template = false });
