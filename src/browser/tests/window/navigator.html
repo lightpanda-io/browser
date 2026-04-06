@@ -3,9 +3,9 @@
 
 <script id=navigator>
   // Navigator should be accessible from window
-  testing.expectEqual(navigator, window.navigator);
+  testing.expectEqual(true, navigator === window.navigator);
   testing.expectEqual(true, navigator.userAgent.length > 0);
-  testing.expectEqual(true, navigator.userAgent.includes('Lightpanda'));
+  testing.expectEqual(true, navigator.userAgent.includes('Chrome/'));
   testing.expectEqual('Netscape', navigator.appName);
   testing.expectEqual(true, navigator.appVersion.length > 0);
   testing.expectEqual(true, navigator.platform.length > 0);
@@ -51,6 +51,127 @@
   testing.expectEqual('object', typeof navigator.webkitPersistentStorage);
   testing.expectEqual('function', typeof navigator.webkitTemporaryStorage.queryUsageAndQuota);
   testing.expectEqual('function', typeof navigator.webkitTemporaryStorage.requestQuota);
+  testing.expectEqual('object', typeof navigator.permissions);
+  testing.expectEqual('function', typeof navigator.permissions.query);
+  testing.expectEqual('object', typeof navigator.connection);
+  testing.expectEqual('4g', navigator.connection.effectiveType);
+  testing.expectEqual(100, navigator.connection.rtt);
+  testing.expectEqual(false, navigator.connection.saveData);
+  testing.expectEqual('wifi', navigator.connection.type);
+  testing.expectEqual('object', typeof navigator.credentials);
+  testing.expectEqual('function', typeof navigator.credentials.get);
+  testing.expectEqual('function', typeof navigator.credentials.create);
+  testing.expectEqual('function', typeof navigator.credentials.store);
+  testing.expectEqual('function', typeof navigator.credentials.preventSilentAccess);
+  testing.expectEqual('object', typeof navigator.storage);
+  testing.expectEqual('function', typeof navigator.storage.estimate);
+  testing.expectEqual('function', typeof navigator.storage.persist);
+  testing.expectEqual('function', typeof navigator.storage.persisted);
+  testing.expectEqual('object', typeof navigator.mediaCapabilities);
+  testing.expectEqual('function', typeof navigator.mediaCapabilities.decodingInfo);
+  testing.expectEqual('function', typeof navigator.mediaCapabilities.encodingInfo);
+  testing.expectEqual('object', typeof navigator.userActivation);
+  testing.expectEqual(false, navigator.userActivation.isActive);
+  testing.expectEqual(false, navigator.userActivation.hasBeenActive);
+  testing.expectEqual('function', typeof navigator.canShare);
+  testing.expectEqual(false, navigator.canShare());
+  testing.expectEqual('function', typeof navigator.share);
+  testing.expectEqual('function', typeof navigator.getBattery);
+  testing.expectEqual('function', typeof navigator.requestMIDIAccess);
+  testing.expectEqual('function', typeof navigator.requestMediaKeySystemAccess);
+  testing.expectEqual('function', typeof navigator.getUserMedia);
+  testing.expectEqual('function', typeof navigator.webkitGetUserMedia);
+  testing.expectEqual('object', typeof navigator.serviceWorker);
+  testing.expectEqual('function', typeof navigator.serviceWorker.register);
+  testing.expectEqual('function', typeof navigator.serviceWorker.getRegistration);
+  testing.expectEqual('function', typeof navigator.serviceWorker.getRegistrations);
+  testing.expectEqual('function', typeof navigator.serviceWorker.startMessages);
+  testing.expectEqual('object', typeof navigator.mediaSession);
+  testing.expectEqual('none', navigator.mediaSession.playbackState);
+  testing.expectEqual('function', typeof navigator.mediaSession.setActionHandler);
+  testing.expectEqual('function', typeof navigator.mediaSession.setPositionState);
+  testing.expectEqual('object', typeof navigator.virtualKeyboard);
+  testing.expectEqual(false, navigator.virtualKeyboard.overlaysContent);
+  testing.expectEqual('function', typeof navigator.virtualKeyboard.show);
+  testing.expectEqual('function', typeof navigator.virtualKeyboard.hide);
+  testing.expectEqual('object', typeof navigator.wakeLock);
+  testing.expectEqual('function', typeof navigator.wakeLock.request);
+  testing.expectEqual('object', typeof navigator.gpu);
+  testing.expectEqual('function', typeof navigator.gpu.requestAdapter);
+  testing.expectEqual('function', typeof navigator.gpu.getPreferredCanvasFormat);
+  testing.expectEqual('object', typeof navigator.xr);
+  testing.expectEqual('function', typeof navigator.xr.isSessionSupported);
+  testing.expectEqual('function', typeof navigator.xr.requestSession);
+  testing.expectEqual('object', typeof navigator.keyboard);
+  testing.expectEqual('function', typeof navigator.keyboard.getLayoutMap);
+  testing.expectEqual('function', typeof navigator.keyboard.lock);
+  testing.expectEqual('function', typeof navigator.keyboard.unlock);
+  testing.expectEqual('object', typeof navigator.clipboard);
+  testing.expectEqual('function', typeof navigator.clipboard.read);
+  testing.expectEqual('function', typeof navigator.clipboard.readText);
+  testing.expectEqual('function', typeof navigator.clipboard.write);
+  testing.expectEqual('function', typeof navigator.clipboard.writeText);
+  testing.expectEqual('object', typeof navigator.presentation);
+  testing.expectEqual('object', typeof navigator.storageBuckets);
+  testing.expectEqual('function', typeof navigator.storageBuckets.keys);
+  testing.expectEqual('function', typeof navigator.storageBuckets.open);
+  testing.expectEqual('function', typeof navigator.storageBuckets.delete);
+  testing.expectEqual('object', typeof navigator.geolocation);
+  testing.expectEqual('function', typeof navigator.geolocation.getCurrentPosition);
+  testing.expectEqual('function', typeof navigator.geolocation.watchPosition);
+  testing.expectEqual('function', typeof navigator.geolocation.clearWatch);
+  testing.expectEqual('object', typeof navigator.bluetooth);
+  testing.expectEqual('function', typeof navigator.bluetooth.getAvailability);
+  testing.expectEqual('function', typeof navigator.bluetooth.requestDevice);
+  testing.expectEqual('object', typeof navigator.hid);
+  testing.expectEqual('function', typeof navigator.hid.getDevices);
+  testing.expectEqual('function', typeof navigator.hid.requestDevice);
+  testing.expectEqual('object', typeof navigator.usb);
+  testing.expectEqual('function', typeof navigator.usb.getDevices);
+  testing.expectEqual('function', typeof navigator.usb.requestDevice);
+  testing.expectEqual('object', typeof navigator.serial);
+  testing.expectEqual('function', typeof navigator.serial.getPorts);
+  testing.expectEqual('function', typeof navigator.serial.requestPort);
+  testing.expectEqual('object', typeof navigator.locks);
+  testing.expectEqual('function', typeof navigator.locks.query);
+  testing.expectEqual('function', typeof navigator.locks.request);
+  testing.expectEqual('object', typeof navigator.windowControlsOverlay);
+  testing.expectEqual('function', typeof navigator.windowControlsOverlay.getTitlebarAreaRect);
+  testing.expectEqual('object', typeof navigator.scheduling);
+  testing.expectEqual('function', typeof navigator.scheduling.isInputPending);
+  testing.expectEqual('function', typeof navigator.scheduling.postTask);
+  testing.expectEqual('function', typeof navigator.scheduling.yield);
+  testing.expectEqual('object', typeof navigator.managed);
+  testing.expectEqual('function', typeof navigator.managed.getDirectoryId);
+  testing.expectEqual('function', typeof navigator.managed.getHostname);
+  testing.expectEqual('function', typeof navigator.managed.getManagedConfiguration);
+  testing.expectEqual('object', typeof navigator.login);
+  testing.expectEqual('function', typeof navigator.login.setStatus);
+  testing.expectEqual('object', typeof navigator.ink);
+  testing.expectEqual('function', typeof navigator.ink.requestPresenter);
+  testing.expectEqual('object', typeof navigator.devicePosture);
+  testing.expectEqual('continuous', navigator.devicePosture.type);
+  testing.expectEqual(false, navigator.adAuctionComponents);
+  testing.expectEqual('object', typeof navigator.protectedAudience);
+  testing.expectEqual('function', typeof navigator.protectedAudience.runAdAuction);
+  testing.expectEqual('function', typeof navigator.protectedAudience.joinAdInterestGroup);
+  testing.expectEqual('function', typeof navigator.protectedAudience.leaveAdInterestGroup);
+  testing.expectEqual('function', typeof navigator.protectedAudience.clearOriginJoinedAdInterestGroups);
+  testing.expectEqual('function', typeof navigator.protectedAudience.updateAdInterestGroups);
+  testing.expectEqual('function', typeof navigator.setAppBadge);
+  testing.expectEqual('function', typeof navigator.clearAppBadge);
+  testing.expectEqual('function', typeof navigator.getInstalledRelatedApps);
+  testing.expectEqual('function', typeof navigator.getInterestGroupAdAuctionData);
+  testing.expectEqual('function', typeof navigator.joinAdInterestGroup);
+  testing.expectEqual('function', typeof navigator.leaveAdInterestGroup);
+  testing.expectEqual('function', typeof navigator.clearOriginJoinedAdInterestGroups);
+  testing.expectEqual('function', typeof navigator.updateAdInterestGroups);
+  testing.expectEqual('function', typeof navigator.runAdAuction);
+  testing.expectEqual('function', typeof navigator.canLoadAdAuctionFencedFrame);
+  testing.expectEqual('function', typeof navigator.createAuctionNonce);
+  testing.expectEqual('function', typeof navigator.deprecatedReplaceInURN);
+  testing.expectEqual('function', typeof navigator.deprecatedRunAdAuctionEnforcesKAnonymity);
+  testing.expectEqual('function', typeof navigator.deprecatedURNToURL);
 </script>
 
 <script id=navigator_user_agent_data>
@@ -62,7 +183,8 @@
     testing.expectEqual(true, navigator.userAgentData.platform.length > 0);
     testing.expectEqual('function', typeof navigator.userAgentData.getHighEntropyValues);
     testing.expectEqual('function', typeof navigator.userAgentData.toJSON);
-    testing.expectEqual(true, navigator.userAgentData.brands.some(v => v.brand === 'Lightpanda' && v.version === '1'));
+    testing.expectEqual(true, navigator.userAgentData.brands.some(v => v.brand === 'Chromium'));
+    testing.expectEqual(true, navigator.userAgentData.brands.some(v => v.brand === 'Google Chrome'));
 
     const json = navigator.userAgentData.toJSON();
     testing.expectEqual(true, Array.isArray(json.brands));
@@ -79,15 +201,128 @@
       'wow64',
     ]);
     testing.expectEqual(true, Array.isArray(highEntropy.brands));
-    testing.expectEqual(true, highEntropy.brands.some(v => v.brand === 'Lightpanda' && v.version === '1'));
+    testing.expectEqual(true, highEntropy.brands.some(v => v.brand === 'Chromium'));
+    testing.expectEqual(true, highEntropy.brands.some(v => v.brand === 'Google Chrome'));
     testing.expectEqual(false, highEntropy.mobile);
     testing.expectEqual(true, highEntropy.architecture.length > 0);
     testing.expectEqual(true, highEntropy.bitness === '64' || highEntropy.bitness === '32' || highEntropy.bitness === '0');
     testing.expectEqual('', highEntropy.model);
     testing.expectEqual(navigator.userAgentData.platform, highEntropy.platform);
     testing.expectEqual(true, highEntropy.platformVersion.length > 0);
-    testing.expectEqual('1.0.0', highEntropy.uaFullVersion);
+    testing.expectEqual('146.0.7680.178', highEntropy.uaFullVersion);
     testing.expectEqual(false, highEntropy.wow64);
+
+    const permission = await navigator.permissions.query({ name: 'geolocation' });
+    testing.expectEqual('prompt', permission.state);
+
+    testing.expectEqual(null, await navigator.credentials.get({ password: true }));
+    testing.expectEqual(null, await navigator.credentials.create({ password: true }));
+    testing.expectEqual(null, await navigator.credentials.store({}));
+    await navigator.credentials.preventSilentAccess();
+
+    const estimate = await navigator.storage.estimate();
+    testing.expectEqual(true, estimate.quota > 0);
+    testing.expectEqual(0, estimate.usage);
+    testing.expectEqual(false, await navigator.storage.persist());
+    testing.expectEqual(false, await navigator.storage.persisted());
+
+    const decoding = await navigator.mediaCapabilities.decodingInfo({ type: 'file' });
+    testing.expectEqual(false, decoding.supported);
+    testing.expectEqual(false, decoding.smooth);
+    testing.expectEqual(false, decoding.powerEfficient);
+
+    const encoding = await navigator.mediaCapabilities.encodingInfo({ type: 'record' });
+    testing.expectEqual(false, encoding.supported);
+    testing.expectEqual(false, encoding.smooth);
+    testing.expectEqual(false, encoding.powerEfficient);
+
+    const battery = await navigator.getBattery();
+    testing.expectEqual(true, battery.charging);
+    testing.expectEqual(1, battery.level);
+
+    testing.expectEqual(null, await navigator.serviceWorker.getRegistration());
+    testing.expectEqual(0, (await navigator.serviceWorker.getRegistrations()).length);
+    testing.expectEqual(null, await navigator.gpu.requestAdapter());
+    testing.expectEqual('rgba8unorm', navigator.gpu.getPreferredCanvasFormat());
+    testing.expectEqual(false, await navigator.xr.isSessionSupported('inline'));
+
+    const layoutMap = await navigator.keyboard.getLayoutMap();
+    testing.expectEqual('function', typeof layoutMap.get);
+    testing.expectEqual('KeyA', layoutMap.get('KeyA'));
+    testing.expectEqual(false, layoutMap.has('KeyA'));
+    await navigator.keyboard.lock(['Escape']);
+    navigator.keyboard.unlock();
+
+    testing.expectErrorAsync('NotAllowedError', () => navigator.clipboard.read());
+    testing.expectErrorAsync('NotAllowedError', () => navigator.clipboard.readText());
+    testing.expectErrorAsync('NotAllowedError', () => navigator.clipboard.write([]));
+    testing.expectErrorAsync('NotAllowedError', () => navigator.clipboard.writeText('x'));
+
+    testing.expectEqual(null, navigator.presentation.defaultRequest);
+    testing.expectEqual(null, navigator.presentation.receiver);
+
+    testing.expectEqual(0, (await navigator.storageBuckets.keys()).length);
+    const bucket = await navigator.storageBuckets.open('default');
+    testing.expectEqual('function', typeof bucket.estimate);
+    testing.expectEqual(false, await bucket.persist());
+    testing.expectEqual(false, await bucket.persisted());
+    const bucketEstimate = await bucket.estimate();
+    testing.expectEqual(true, bucketEstimate.quota > 0);
+    testing.expectEqual(0, bucketEstimate.usage);
+    testing.expectEqual(false, await navigator.storageBuckets.delete('default'));
+
+    navigator.geolocation.getCurrentPosition(() => testing.fail('geolocation success should not run'), (err) => testing.expectEqual('NotAllowedError', err.name));
+    testing.expectEqual(0, navigator.geolocation.watchPosition(() => testing.fail('watchPosition success should not run'), (err) => testing.expectEqual('NotAllowedError', err.name)));
+    navigator.geolocation.clearWatch(0);
+
+    testing.expectEqual(false, await navigator.bluetooth.getAvailability());
+    testing.expectErrorAsync('NotFoundError', () => navigator.bluetooth.requestDevice({ acceptAllDevices: true }));
+    testing.expectEqual(0, (await navigator.hid.getDevices()).length);
+    testing.expectEqual(0, (await navigator.hid.requestDevice({ filters: [] })).length);
+    testing.expectEqual(0, (await navigator.usb.getDevices()).length);
+    testing.expectErrorAsync('NotFoundError', () => navigator.usb.requestDevice({ filters: [] }));
+    testing.expectEqual(0, (await navigator.serial.getPorts()).length);
+    testing.expectErrorAsync('NotFoundError', () => navigator.serial.requestPort());
+
+    const locks = await navigator.locks.query();
+    testing.expectEqual(0, locks.held.length);
+    testing.expectEqual(0, locks.pending.length);
+    testing.expectErrorAsync('NotSupportedError', () => navigator.locks.request('x', () => {}));
+
+    testing.expectEqual(false, navigator.windowControlsOverlay.visible);
+    const titlebarRect = navigator.windowControlsOverlay.getTitlebarAreaRect();
+    testing.expectEqual(0, titlebarRect.x);
+    testing.expectEqual(0, titlebarRect.y);
+    testing.expectEqual(0, titlebarRect.width);
+    testing.expectEqual(0, titlebarRect.height);
+
+    testing.expectEqual(null, await navigator.setAppBadge());
+    testing.expectEqual(null, await navigator.clearAppBadge());
+    testing.expectEqual(0, (await navigator.getInstalledRelatedApps()).length);
+    testing.expectEqual(null, await navigator.getInterestGroupAdAuctionData());
+    testing.expectEqual(null, await navigator.joinAdInterestGroup());
+    testing.expectEqual(null, await navigator.leaveAdInterestGroup());
+    testing.expectEqual(null, await navigator.clearOriginJoinedAdInterestGroups());
+    testing.expectEqual(null, await navigator.updateAdInterestGroups());
+    testing.expectEqual(null, await navigator.runAdAuction());
+    testing.expectEqual(false, navigator.canLoadAdAuctionFencedFrame());
+    testing.expectEqual(true, navigator.createAuctionNonce().length > 0);
+    testing.expectEqual(null, navigator.deprecatedReplaceInURN());
+    testing.expectEqual(false, navigator.deprecatedRunAdAuctionEnforcesKAnonymity());
+    testing.expectEqual(null, navigator.deprecatedURNToURL());
+    testing.expectEqual(null, await navigator.protectedAudience.runAdAuction());
+    testing.expectEqual(null, await navigator.protectedAudience.joinAdInterestGroup());
+    testing.expectEqual(null, await navigator.protectedAudience.leaveAdInterestGroup());
+    testing.expectEqual(null, await navigator.protectedAudience.clearOriginJoinedAdInterestGroups());
+    testing.expectEqual(null, await navigator.protectedAudience.updateAdInterestGroups());
+
+    testing.expectErrorAsync('NotSupportedError', () => navigator.serviceWorker.ready);
+    testing.expectErrorAsync('NotSupportedError', () => navigator.serviceWorker.register('/sw.js'));
+    testing.expectErrorAsync('NotAllowedError', () => navigator.share({ title: 'x' }));
+    testing.expectErrorAsync('NotSupportedError', () => navigator.requestMIDIAccess());
+    testing.expectErrorAsync('NotSupportedError', () => navigator.requestMediaKeySystemAccess('org.w3.clearkey', [{}]));
+    testing.expectErrorAsync('NotAllowedError', () => navigator.wakeLock.request('screen'));
+    testing.expectErrorAsync('NotSupportedError', () => navigator.xr.requestSession('immersive-vr'));
   });
 </script>
 

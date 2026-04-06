@@ -44,6 +44,10 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Document = @This();
 
+pub fn registerTypes() []const type {
+    return &.{ Document, FeaturePolicy };
+}
+
 _type: Type,
 _proto: *Node,
 _page: ?*Page = null,
@@ -61,6 +65,7 @@ _fonts: ?*FontFaceSet = null,
 _write_insertion_point: ?*Node = null,
 _script_created_parser: ?Parser.Streaming = null,
 _adopted_style_sheets: ?js.Object.Global = null,
+_feature_policy: FeaturePolicy = .{},
 _selection: Selection = .init,
 
 _on_selectionchange: ?js.Function.Global = null,
@@ -76,6 +81,35 @@ pub fn setOnSelectionChange(self: *Document, listener: ?js.Function) !void {
         self._on_selectionchange = null;
     }
 }
+
+const FeaturePolicy = struct {
+    pub fn allowedFeatures(_: *const FeaturePolicy) [0][]const u8 {
+        return .{};
+    }
+
+    pub fn features(self: *const FeaturePolicy) [0][]const u8 {
+        return self.allowedFeatures();
+    }
+
+    pub fn allowsFeature(_: *const FeaturePolicy, _: []const u8) bool {
+        return false;
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(FeaturePolicy);
+
+        pub const Meta = struct {
+            pub const name = "FeaturePolicy";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+            pub const empty_with_no_proto = true;
+        };
+
+        pub const allowedFeatures = bridge.function(FeaturePolicy.allowedFeatures, .{});
+        pub const features = bridge.function(FeaturePolicy.features, .{});
+        pub const allowsFeature = bridge.function(FeaturePolicy.allowsFeature, .{});
+    };
+};
 
 pub const Type = union(enum) {
     generic,
@@ -122,6 +156,10 @@ pub fn getContentType(self: *const Document) []const u8 {
         .xml => "application/xml",
         .generic => "application/xml",
     };
+}
+
+pub fn getFeaturePolicy(self: *Document) *FeaturePolicy {
+    return &self._feature_policy;
 }
 
 pub fn getDomain(_: *const Document, page: *const Page) []const u8 {
@@ -414,8 +452,18 @@ pub fn getReadyState(self: *const Document) []const u8 {
     return @tagName(self._ready_state);
 }
 
-pub fn getActiveElement(self: *Document) ?*Element {
+pub fn getFocusedElement(self: *Document) ?*Element {
     if (self._active_element) |el| {
+        if (el.asNode().isConnected()) {
+            return el;
+        }
+        self._active_element = null;
+    }
+    return null;
+}
+
+pub fn getActiveElement(self: *Document) ?*Element {
+    if (self.getFocusedElement()) |el| {
         return el;
     }
 
@@ -902,6 +950,14 @@ pub fn hasFocus(_: *Document) bool {
     return true;
 }
 
+pub fn hasStorageAccess(_: *Document, page: *Page) !js.Promise {
+    return page.js.local.?.resolvePromise(true);
+}
+
+pub fn requestStorageAccess(_: *Document, page: *Page) !js.Promise {
+    return page.js.local.?.resolvePromise(@as(void, {}));
+}
+
 pub fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
     self._adopted_style_sheets = try sheets.persist();
 }
@@ -1136,6 +1192,9 @@ pub const JsApi = struct {
         }
     }.defaultView, null, .{});
     pub const hasFocus = bridge.function(Document.hasFocus, .{});
+    pub const hasStorageAccess = bridge.function(Document.hasStorageAccess, .{});
+    pub const requestStorageAccess = bridge.function(Document.requestStorageAccess, .{});
+    pub const featurePolicy = bridge.accessor(Document.getFeaturePolicy, null, .{});
 
     pub const prerendering = bridge.property(false, .{ .template = false });
     pub const characterSet = bridge.property("UTF-8", .{ .template = false });

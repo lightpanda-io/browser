@@ -114,8 +114,13 @@ pub fn CDPT(comptime TypeProvider: type) type {
         }
 
         pub fn handleMessage(self: *Self, msg: []const u8) bool {
-            // if there's an error, it's already been logged
-            self.processMessage(msg) catch return false;
+            self.processMessage(msg) catch |err| {
+                log.warn(.cdp, "process message", .{
+                    .err = err,
+                    .msg = msg,
+                });
+                return true;
+            };
             return true;
         }
 
@@ -131,7 +136,11 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // timeouts (or http events) which are ready to be processed.
         pub fn pageWait(self: *Self, ms: u32) Session.WaitResult {
             const session = &(self.browser.session orelse return .no_page);
-            return session.wait(ms);
+            const result = session.wait(ms);
+            self.presentHeadedPage() catch |err| {
+                log.warn(.cdp, "present headed page", .{ .err = err });
+            };
+            return result;
         }
 
         // Called from above, in processMessage which handles client messages
@@ -303,6 +312,15 @@ pub fn CDPT(comptime TypeProvider: type) type {
             return true;
         }
 
+        fn presentHeadedPage(self: *Self) !void {
+            if (self.browser.app.display.requested_mode != .headed) {
+                return;
+            }
+            const bc = &(self.browser_context orelse return);
+            const page = bc.session.currentPage() orelse return;
+            try lp.presentHeadedSessionPage(self.browser.app, page, &bc.presentation_state);
+        }
+
         const SendEventOpts = struct {
             session_id: ?[]const u8 = null,
         };
@@ -390,6 +408,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         captured_responses: std.AutoHashMapUnmanaged(usize, std.ArrayList(u8)),
 
         notification: *Notification,
+        presentation_state: lp.HeadedSessionPresentationState,
 
         const ViewportOverride = struct {
             width: u32,
@@ -435,6 +454,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .emulated_viewport_override = null,
                 .captured_responses = .empty,
                 .notification = notification,
+                .presentation_state = .{},
             };
             self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
             errdefer self.deinit();
@@ -476,6 +496,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.node_search_list.deinit();
             self.notification.unregisterAll(self);
             self.notification.deinit();
+            self.presentation_state.deinit(browser.app.allocator);
 
             if (self.http_proxy_changed) {
                 // has to be called after browser.closeSession, since it won't
@@ -696,7 +717,15 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn callInspector(self: *const Self, msg: []const u8) void {
-            self.inspector_session.send(msg);
+            if (self.session.currentPage()) |page| {
+                var ls: js.Local.Scope = undefined;
+                page.js.localScope(&ls);
+                defer ls.deinit();
+
+                self.inspector_session.send(msg);
+            } else {
+                self.inspector_session.send(msg);
+            }
             self.session.browser.env.runMicrotasks();
         }
 
@@ -993,6 +1022,24 @@ test "cdp: invalid sessionId" {
     }
 }
 
+test "cdp: handleMessage keeps socket open on command error" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    const handled = ctx.cdp().handleMessage("{\"id\":1,\"method\":\"Runtime.enable\"}");
+    try testing.expectEqual(true, handled);
+    try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 1 });
+}
+
+test "cdp: handleMessage keeps socket open on invalid json" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    const handled = ctx.cdp().handleMessage("invalid");
+    try testing.expectEqual(true, handled);
+    try ctx.expectSentCount(0);
+}
+
 test "cdp: STARTUP sessionId" {
     var ctx = testing.context();
     defer ctx.deinit();
@@ -1016,4 +1063,23 @@ test "cdp: STARTUP sessionId" {
         try ctx.processMessage(.{ .id = 4, .method = "Hi", .sessionId = "STARTUP" });
         try ctx.expectSentResult(null, .{ .id = 4, .index = 0, .session_id = "STARTUP" });
     }
+}
+
+test "cdp: headed presenter populates presentation state for the current page" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{
+        .url = "page/centered_inline_heading_layout.html",
+    });
+    const page = bc.session.currentPage() orelse return error.TestPageMissing;
+    try lp.presentHeadedSessionPage(ctx.cdp().browser.app, page, &bc.presentation_state);
+
+    try testing.expect(bc.presentation_state.last_presented_hash != 0);
+    try testing.expect(bc.presentation_state.committed_surface.hash != 0);
+    try testing.expect(bc.presentation_state.committed_surface.display_list != null);
+    try std.testing.expectEqualStrings(
+        "http://127.0.0.1:9582/src/browser/tests/page/centered_inline_heading_layout.html",
+        bc.presentation_state.committed_surface.url,
+    );
 }

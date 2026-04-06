@@ -1,0 +1,177 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Consent Submit Responsive Layout</title>
+  <style>
+    body {
+      margin: 0;
+      background: #f1f3f4;
+      color: #202124;
+      font: 16px Arial, sans-serif;
+    }
+
+    main {
+      display: flex;
+      justify-content: center;
+      padding: 40px 0;
+    }
+
+    .shell {
+      width: 760px;
+      padding: 48px 64px;
+      border: 1px solid #dadce0;
+      border-radius: 24px;
+      background: #fff;
+    }
+
+    .signin {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 28px;
+    }
+
+    .baseButtonGm3 {
+      display: inline-flex;
+      min-width: 120px;
+      height: 40px;
+      padding: 0 24px;
+      border-radius: 999px;
+      border: 1px solid #dadce0;
+      color: #1a73e8;
+      background: #fff;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 40px;
+      text-align: center;
+      text-decoration: none;
+      white-space: nowrap;
+      justify-content: center;
+      align-items: center;
+      box-sizing: border-box;
+    }
+
+    .filledButtonGm3 {
+      border-color: #1a73e8;
+      color: #fff;
+      background: #1a73e8;
+    }
+
+    .saveButtonContainer {
+      display: inline-block;
+      width: 100%;
+      margin-top: 28px;
+      text-align: center;
+    }
+
+    .saveButtonContainer form {
+      display: inline;
+      margin: 0;
+    }
+
+    .saveButtonContainer input[type="submit"] {
+      min-width: 182px;
+    }
+
+    .saveButtonContainerNarrowScreen {
+      display: none;
+      margin-top: 28px;
+      text-align: center;
+    }
+
+    .saveButtonContainerNarrowScreen form {
+      display: block;
+      margin: 0 0 12px 0;
+      text-align: center;
+    }
+
+    .saveButtonContainerNarrowScreen input[type="submit"] {
+      min-width: 182px;
+    }
+
+    .customButtonContainerGm3 {
+      margin-top: 20px;
+      text-align: center;
+    }
+
+    .hideOnNormalWidth,
+    .mobileOnly {
+      display: none;
+    }
+
+    .footer {
+      margin-top: 28px;
+      text-align: center;
+    }
+
+    @media (max-width: 599px) {
+      .saveButtonContainer {
+        display: none;
+      }
+
+      .saveButtonContainerNarrowScreen {
+        display: block;
+      }
+
+      .hideOnSmallWidth {
+        display: none;
+      }
+
+      .hideOnNormalWidth {
+        display: inline-flex;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="shell">
+      <div class="signin">
+        <a class="baseButtonGm3 filledButtonGm3 hideOnSmallWidth" href="/signin">Sign in</a>
+        <a class="baseButtonGm3 filledButtonGm3 hideOnNormalWidth" href="/signin">Sign in</a>
+      </div>
+
+      <h1>Before you continue to Google</h1>
+      <p>
+        We use cookies and data to deliver and maintain search services.
+      </p>
+
+      <div class="saveButtonContainer">
+        <form action="/save" method="post" style="display:inline;">
+          <input type="hidden" name="set_eom" value="true">
+          <input type="submit" value="Reject all" class="baseButtonGm3 filledButtonGm3 button searchButton" aria-label="Reject all">
+        </form>
+        <form action="/save" method="post" style="display:inline;">
+          <input type="hidden" name="set_aps" value="true">
+          <input type="submit" value="Accept all" class="baseButtonGm3 filledButtonGm3 button searchButton" aria-label="Accept all">
+        </form>
+      </div>
+
+      <div class="saveButtonContainerNarrowScreen">
+        <form action="/save" method="post" style="display:block;">
+          <input type="hidden" name="set_aps" value="true">
+          <input type="submit" value="Accept all" class="baseButtonGm3 filledButtonGm3 button searchButton" aria-label="Accept all">
+        </form>
+        <form action="/save" method="post" style="display:block;">
+          <input type="hidden" name="set_eom" value="true">
+          <input type="submit" value="Reject all" class="baseButtonGm3 filledButtonGm3 button searchButton" aria-label="Reject all">
+        </form>
+      </div>
+
+      <div class="customButtonContainerGm3">
+        <a href="/choices" class="baseButtonGm3">More options</a>
+      </div>
+
+      <div class="footer">
+        <form class="languagePicker" action="/ml" method="get" style="display:inline;">
+          <select id="language-select" name="hl" aria-label="Language: English">
+            <option value="en-GB">English (United Kingdom)</option>
+            <option value="en" selected>English (United States)</option>
+          </select>
+          <input type="submit" value="Change language" style="display:none;">
+        </form>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

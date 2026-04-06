@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const testing = std.testing;
 
 const log = @import("../../log.zig");
 const milliTimestamp = @import("../../datetime.zig").milliTimestamp;
@@ -50,6 +51,8 @@ pub fn init(allocator: std.mem.Allocator) Scheduler {
 pub fn deinit(self: *Scheduler) void {
     finalizeTasks(&self.low_priority);
     finalizeTasks(&self.high_priority);
+    self.low_priority.deinit();
+    self.high_priority.deinit();
 }
 
 const AddOpts = struct {
@@ -75,8 +78,15 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
 }
 
 pub fn run(self: *Scheduler) !?u64 {
-    _ = try self.runQueue(&self.low_priority);
-    return self.runQueue(&self.high_priority);
+    const low_next = try self.runQueue(&self.low_priority);
+    const high_next = try self.runQueue(&self.high_priority);
+    if (low_next == null) {
+        return high_next;
+    }
+    if (high_next == null) {
+        return low_next;
+    }
+    return @min(low_next.?, high_next.?);
 }
 
 pub fn hasReadyTasks(self: *Scheduler) bool {
@@ -90,31 +100,39 @@ fn runQueue(self: *Scheduler, queue: *Queue) !?u64 {
     }
 
     const now = milliTimestamp(.monotonic);
-
-    while (queue.peek()) |*task_| {
-        if (task_.run_at > now) {
-            return @intCast(task_.run_at - now);
-        }
-        var task = queue.remove();
-        if (comptime IS_DEBUG) {
-            log.debug(.scheduler, "scheduler.runTask", .{ .name = task.name });
-        }
-
-        const repeat_in_ms = task.callback(task.ctx) catch |err| {
-            log.warn(.scheduler, "task.callback", .{ .name = task.name, .err = err });
-            continue;
-        };
-
-        if (repeat_in_ms) |ms| {
-            // Task cannot be repeated immediately, and they should know that
-            if (comptime IS_DEBUG) {
-                std.debug.assert(ms != 0);
-            }
-            task.run_at = now + ms;
-            try self.low_priority.add(task);
-        }
+    const task_ = queue.peek() orelse return null;
+    if (task_.run_at > now) {
+        return @intCast(task_.run_at - now);
     }
-    return null;
+    var task = queue.remove();
+    if (comptime IS_DEBUG) {
+        log.debug(.scheduler, "scheduler.runTask", .{ .name = task.name });
+    }
+
+    const repeat_in_ms = task.callback(task.ctx) catch |err| {
+        log.warn(.scheduler, "task.callback", .{ .name = task.name, .err = err });
+        return nextDelay(queue);
+    };
+
+    if (repeat_in_ms) |ms| {
+        // Task cannot be repeated immediately, and they should know that
+        if (comptime IS_DEBUG) {
+            std.debug.assert(ms != 0);
+        }
+        task.run_at = now + ms;
+        try self.low_priority.add(task);
+    }
+
+    return nextDelay(queue);
+}
+
+fn nextDelay(queue: *Queue) ?u64 {
+    const next = queue.peek() orelse return null;
+    const now = milliTimestamp(.monotonic);
+    if (next.run_at <= now) {
+        return 0;
+    }
+    return @intCast(next.run_at - now);
 }
 
 fn queueuHasReadyTask(queue: *Queue, now: u64) bool {
@@ -142,3 +160,54 @@ const Task = struct {
 
 const Callback = *const fn (ctx: *anyopaque) anyerror!?u32;
 const Finalizer = *const fn (ctx: *anyopaque) void;
+
+test "scheduler run yields after one ready task from a queue" {
+    var scheduler = Scheduler.init(testing.allocator);
+    defer scheduler.deinit();
+
+    var count: usize = 0;
+
+    const CallbackHarness = struct {
+        fn run(ctx: *anyopaque) !?u32 {
+            const counter: *usize = @ptrCast(@alignCast(ctx));
+            counter.* += 1;
+            return null;
+        }
+    };
+
+    try scheduler.add(&count, CallbackHarness.run, 0, .{ .name = "first" });
+    try scheduler.add(&count, CallbackHarness.run, 0, .{ .name = "second" });
+
+    const first_next = try scheduler.run();
+    try testing.expectEqual(@as(usize, 1), count);
+    try testing.expectEqual(@as(?u64, 0), first_next);
+
+    const second_next = try scheduler.run();
+    try testing.expectEqual(@as(usize, 2), count);
+    try testing.expectEqual(@as(?u64, null), second_next);
+}
+
+test "scheduler run reports low-priority delay when high queue is empty" {
+    var scheduler = Scheduler.init(testing.allocator);
+    defer scheduler.deinit();
+
+    var count: usize = 0;
+
+    const CallbackHarness = struct {
+        fn run(ctx: *anyopaque) !?u32 {
+            const counter: *usize = @ptrCast(@alignCast(ctx));
+            counter.* += 1;
+            return null;
+        }
+    };
+
+    try scheduler.add(&count, CallbackHarness.run, 25, .{
+        .name = "low-later",
+        .low_priority = true,
+    });
+
+    const next = try scheduler.run();
+    try testing.expectEqual(@as(usize, 0), count);
+    try testing.expect(next != null);
+    try testing.expect(next.? <= 25);
+}

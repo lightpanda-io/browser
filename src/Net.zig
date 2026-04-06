@@ -589,6 +589,9 @@ pub const Handles = struct {
     }
 
     pub fn poll(self: *Handles, extra_fds: []libcurl.CurlWaitFd, timeout_ms: c_int) !void {
+        if (timeout_ms <= 0) {
+            return;
+        }
         try libcurl.curl_multi_poll(self.multi, extra_fds, timeout_ms, null);
     }
 
@@ -1157,7 +1160,7 @@ pub const WsConnection = struct {
         };
 
         LOOP: while (pos < data.len) {
-            const written = posix.write(self.socket, data[pos..]) catch |err| switch (err) {
+            const written = posix.send(self.socket, data[pos..], 0) catch |err| switch (err) {
                 error.WouldBlock => {
                     if (comptime builtin.os.tag == .windows) {
                         std.Thread.sleep(100 * std.time.ns_per_us);
@@ -1232,7 +1235,7 @@ pub const WsConnection = struct {
     }
 
     pub fn read(self: *WsConnection) !usize {
-        const n = try posix.read(self.socket, self.reader.readBuf());
+        const n = try posix.recv(self.socket, self.reader.readBuf(), 0);
         self.reader.len += n;
         return n;
     }

@@ -8,18 +8,20 @@
 
 <script id=matchMedia_basic>
 {
-  const mql = window.matchMedia('(min-width: 600px)');
+  const query = `(min-width: ${window.innerWidth}px)`;
+  const mql = window.matchMedia(query);
   testing.expectEqual('object', typeof mql);
-  testing.expectEqual('(min-width: 600px)', mql.media);
-  testing.expectEqual(false, mql.matches);
+  testing.expectEqual(query, mql.media);
+  testing.expectEqual(true, mql.matches);
 }
 </script>
 
 <script id=matchMedia_different_queries>
 {
-  const mql1 = window.matchMedia('(max-width: 1024px)');
-  testing.expectEqual('(max-width: 1024px)', mql1.media);
-  testing.expectEqual(false, mql1.matches);
+  const mql1_query = `(max-width: ${window.innerWidth}px)`;
+  const mql1 = window.matchMedia(mql1_query);
+  testing.expectEqual(mql1_query, mql1.media);
+  testing.expectEqual(true, mql1.matches);
 
   const mql2 = window.matchMedia('(prefers-color-scheme: dark)');
   testing.expectEqual('(prefers-color-scheme: dark)', mql2.media);
@@ -29,9 +31,11 @@
 
 <script id=matchMedia_event_target>
 {
-  const mql = window.matchMedia('(orientation: portrait)');
+  const orientation = window.innerHeight >= window.innerWidth ? 'portrait' : 'landscape';
+  const mql = window.matchMedia(`(orientation: ${orientation})`);
   testing.expectEqual('function', typeof mql.addEventListener);
   testing.expectEqual('function', typeof mql.removeEventListener);
   testing.expectEqual('function', typeof mql.dispatchEvent);
+  testing.expectEqual(true, mql.matches);
 }
 </script>

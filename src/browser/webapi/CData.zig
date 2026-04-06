@@ -221,6 +221,11 @@ pub fn render(self: *const CData, writer: *std.io.Writer, opts: RenderOpts) !boo
 
 pub fn setData(self: *CData, value: ?[]const u8, page: *Page) !void {
     const old_value = self._data;
+    const next_value = value orelse "";
+
+    if (std.mem.eql(u8, old_value.str(), next_value)) {
+        return;
+    }
 
     if (value) |v| {
         self._data = try page.dupeSSO(v);

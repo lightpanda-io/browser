@@ -60,12 +60,28 @@ pub const LinkRegion = struct {
 };
 
 pub const ControlRegion = struct {
+    pub const invalid_command_index = std.math.maxInt(usize);
+
     x: i32,
     y: i32,
     width: i32,
     height: i32,
     z_index: i32 = 0,
     dom_path: []u16 = &.{},
+    command_start: usize = invalid_command_index,
+    command_end: usize = invalid_command_index,
+
+    pub fn hasCommandSpan(self: *const ControlRegion, command_count: usize) bool {
+        if (self.command_start == invalid_command_index or self.command_end == invalid_command_index) {
+            return false;
+        }
+        return self.command_start <= self.command_end and self.command_end <= command_count;
+    }
+
+    pub fn clearCommandSpan(self: *ControlRegion) void {
+        self.command_start = invalid_command_index;
+        self.command_end = invalid_command_index;
+    }
 };
 
 pub const ImageCommand = struct {
@@ -257,7 +273,7 @@ pub const Command = union(enum) {
         };
     }
 
-    fn deinit(self: *Command, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Command, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .text => |text| {
                 allocator.free(text.font_family);
@@ -346,6 +362,8 @@ pub fn cloneOwned(self: *const DisplayList, allocator: std.mem.Allocator) !Displ
             .height = region.height,
             .z_index = region.z_index,
             .dom_path = try allocator.dupe(u16, region.dom_path),
+            .command_start = region.command_start,
+            .command_end = region.command_end,
         });
     }
     try copy.font_faces.ensureTotalCapacity(allocator, self.font_faces.items.len);
@@ -474,6 +492,8 @@ pub fn addControlRegion(self: *DisplayList, allocator: std.mem.Allocator, region
         .height = region.height,
         .z_index = region.z_index,
         .dom_path = try allocator.dupe(u16, region.dom_path),
+        .command_start = region.command_start,
+        .command_end = region.command_end,
     });
     self.content_height = @max(self.content_height, region.y + region.height);
 }
@@ -648,4 +668,39 @@ fn clippedCommandBottom(y: i32, height: i32, clip_rect: ?ClipRect) i32 {
         return @min(command_bottom, clip.y + clip.height);
     }
     return command_bottom;
+}
+
+test "hashInto ignores control command span metadata" {
+    var list_a = DisplayList{};
+    defer list_a.deinit(std.testing.allocator);
+    try list_a.addControlRegion(std.testing.allocator, .{
+        .x = 10,
+        .y = 20,
+        .width = 120,
+        .height = 32,
+        .z_index = 4,
+        .dom_path = @constCast(&[_]u16{ 0, 3, 2 }),
+        .command_start = 1,
+        .command_end = 4,
+    });
+
+    var list_b = DisplayList{};
+    defer list_b.deinit(std.testing.allocator);
+    try list_b.addControlRegion(std.testing.allocator, .{
+        .x = 10,
+        .y = 20,
+        .width = 120,
+        .height = 32,
+        .z_index = 4,
+        .dom_path = @constCast(&[_]u16{ 0, 3, 2 }),
+        .command_start = 40,
+        .command_end = 44,
+    });
+
+    var hasher_a = std.hash.Wyhash.init(0);
+    list_a.hashInto(&hasher_a);
+    var hasher_b = std.hash.Wyhash.init(0);
+    list_b.hashInto(&hasher_b);
+
+    try std.testing.expectEqual(hasher_a.final(), hasher_b.final());
 }

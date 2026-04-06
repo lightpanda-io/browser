@@ -355,6 +355,16 @@ pub const Client = struct {
         var ms_remaining = self.ws.timeout_ms;
 
         while (true) {
+            switch (self.readSocketIfAvailable()) {
+                .handled => {
+                    last_message = timestamp(.monotonic);
+                    ms_remaining = self.ws.timeout_ms;
+                    continue;
+                },
+                .closed => return,
+                .none => {},
+            }
+
             switch (cdp.pageWait(ms_remaining)) {
                 .cdp_socket => {
                     if (self.readSocket() == false) {
@@ -414,17 +424,33 @@ pub const Client = struct {
     }
 
     fn readSocket(self: *Client) bool {
-        const n = self.ws.read() catch |err| {
-            log.warn(.app, "CDP read", .{ .err = err });
-            return false;
+        return switch (self.readSocketIfAvailable()) {
+            .handled, .none => true,
+            .closed => false,
+        };
+    }
+
+    const ReadSocketStatus = enum {
+        none,
+        handled,
+        closed,
+    };
+
+    fn readSocketIfAvailable(self: *Client) ReadSocketStatus {
+        const n = self.ws.read() catch |err| switch (err) {
+            error.WouldBlock => return .none,
+            else => {
+                log.warn(.app, "CDP read", .{ .err = err });
+                return .closed;
+            },
         };
 
         if (n == 0) {
             log.info(.app, "CDP disconnect", .{});
-            return false;
+            return .closed;
         }
 
-        return self.processData() catch false;
+        return if (self.processData() catch false) .handled else .closed;
     }
 
     fn processData(self: *Client) !bool {

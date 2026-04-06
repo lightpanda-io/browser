@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>BeforeInput Pending</title>
+</head>
+<body>
+  <input id="q" name="q" value="">
+  <script>
+    const q = document.getElementById("q");
+    window.events = [];
+    window.blockBeforeInput = false;
+
+    q.addEventListener("beforeinput", (e) => {
+      const data = e.data == null ? "" : e.data;
+      window.events.push(["BI", data, e.inputType || "", e.isComposing ? 1 : 0].join("|"));
+      if (window.blockBeforeInput) {
+        e.preventDefault();
+      }
+      document.title = "BI:" + data;
+    });
+
+    q.addEventListener("input", (e) => {
+      const data = e.data == null ? "" : e.data;
+      window.events.push(["IN", q.value, data, e.inputType || "", e.isComposing ? 1 : 0].join("|"));
+      document.title = "IN:" + q.value;
+    });
+
+    document.body.onload = function () {
+      q.focus();
+      document.title = "FOCUSED";
+    };
+  </script>
+</body>
+</html>

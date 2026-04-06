@@ -20,6 +20,8 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 const EventTarget = @import("../EventTarget.zig");
+const Page = @import("../../Page.zig");
+const CSSStyleSheet = @import("CSSStyleSheet.zig");
 
 const MediaQueryList = @This();
 
@@ -38,6 +40,10 @@ pub fn getMedia(self: *const MediaQueryList) []const u8 {
     return self._media;
 }
 
+pub fn getMatches(self: *const MediaQueryList, page: *Page) bool {
+    return CSSStyleSheet.mediaQueryMatchesViewport(self._media, page);
+}
+
 pub fn addListener(_: *const MediaQueryList, _: js.Function) void {}
 pub fn removeListener(_: *const MediaQueryList, _: js.Function) void {}
 
@@ -51,7 +57,7 @@ pub const JsApi = struct {
     };
 
     pub const media = bridge.accessor(MediaQueryList.getMedia, null, .{});
-    pub const matches = bridge.property(false, .{ .template = false, .readonly = true });
+    pub const matches = bridge.accessor(MediaQueryList.getMatches, null, .{});
     pub const addListener = bridge.function(MediaQueryList.addListener, .{ .noop = true });
     pub const removeListener = bridge.function(MediaQueryList.removeListener, .{ .noop = true });
 };

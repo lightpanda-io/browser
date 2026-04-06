@@ -361,7 +361,17 @@ fn usesLegacyPrintableCharCode(self: *const KeyboardEvent) bool {
     return !std.mem.eql(u8, event_type, "keydown") and !std.mem.eql(u8, event_type, "keyup");
 }
 
+fn usesLegacyPrintableKeyCode(self: *const KeyboardEvent) bool {
+    return std.mem.eql(u8, self._proto._proto.getType(), "keypress");
+}
+
 pub fn getKeyCode(self: *const KeyboardEvent) u32 {
+    if (self.usesLegacyPrintableKeyCode()) {
+        const char_code = charCodeForKey(self._key);
+        if (char_code != 0) {
+            return char_code;
+        }
+    }
     return legacyKeyCodeForKey(self._key);
 }
 

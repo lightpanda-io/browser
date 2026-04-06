@@ -26,6 +26,7 @@ const HtmlElement = @import("../Html.zig");
 const Form = @import("Form.zig");
 const Selection = @import("../../Selection.zig");
 const Event = @import("../../Event.zig");
+const DOMInputEvent = @import("../../event/InputEvent.zig");
 
 const TextArea = @This();
 
@@ -55,12 +56,30 @@ fn dispatchSelectionChangeEvent(self: *TextArea, page: *Page) !void {
     try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
+pub fn dispatchBeforeInputEvent(self: *TextArea, data: ?[]const u8, input_type: []const u8, page: *Page) !bool {
+    const event = try DOMInputEvent.initTrusted(comptime .wrap("beforeinput"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .data = data,
+        .inputType = input_type,
+    }, page);
+    try page._event_manager.dispatch(self.asElement().asEventTarget(), event.asEvent());
+    return !event.asEvent()._prevent_default;
+}
+
 pub fn dispatchInputEvent(self: *TextArea, page: *Page) !void {
-    const event = try Event.initTrusted(comptime .wrap("input"), .{
+    return self.dispatchInputEventWithData(null, "", page);
+}
+
+pub fn dispatchInputEventWithData(self: *TextArea, data: ?[]const u8, input_type: []const u8, page: *Page) !void {
+    const event = try DOMInputEvent.initTrusted(comptime .wrap("input"), .{
         .bubbles = true,
         .composed = true,
+        .data = data,
+        .inputType = input_type,
     }, page);
-    try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
+    try page._event_manager.dispatch(self.asElement().asEventTarget(), event.asEvent());
 }
 
 pub fn asElement(self: *TextArea) *Element {
@@ -83,7 +102,7 @@ pub fn getValue(self: *const TextArea) []const u8 {
 pub fn setValue(self: *TextArea, value: []const u8, page: *Page) !void {
     const owned = try page.arena.dupe(u8, value);
     self._value = owned;
-    page.presentationChanged();
+    page.presentationChangedForTextControl(self.asElement());
 }
 
 pub fn getDefaultValue(self: *const TextArea) []const u8 {
@@ -171,7 +190,7 @@ pub fn innerInsert(self: *TextArea, str: []const u8, page: *Page) !void {
             self._selection_end = @intCast(new_value.len);
             self._selection_direction = .none;
             try self.dispatchSelectionChangeEvent(page);
-            try self.dispatchInputEvent(page);
+            try self.dispatchInputEventWithData(str, "insertText", page);
         },
         .partial => |range| {
             // if the text area is partially selected, replace the selected content.
@@ -191,7 +210,7 @@ pub fn innerInsert(self: *TextArea, str: []const u8, page: *Page) !void {
             self._selection_end = @intCast(new_pos);
             self._selection_direction = .none;
             try self.dispatchSelectionChangeEvent(page);
-            try self.dispatchInputEvent(page);
+            try self.dispatchInputEventWithData(str, "insertText", page);
         },
         .none => {
             // if the text area is not selected, just insert at cursor.
@@ -215,7 +234,7 @@ pub fn innerInsert(self: *TextArea, str: []const u8, page: *Page) !void {
             self._selection_end = new_pos;
             self._selection_direction = .none;
             try self.dispatchSelectionChangeEvent(page);
-            try self.dispatchInputEvent(page);
+            try self.dispatchInputEventWithData(str, "insertText", page);
         },
     }
 }

@@ -122,6 +122,15 @@ pub fn setTitle(self: *HTMLDocument, title: []const u8, page: *Page) !void {
     var it = head.asNode().childrenIterator();
     while (it.next()) |node| {
         if (node.is(Element.Html.Title)) |title_element| {
+            const first_child = title_element.asNode().firstChild();
+            if (first_child) |child| {
+                if (child.nextSibling() == null) {
+                    if (child.is(Node.CData)) |cdata| {
+                        try cdata.setData(title, page);
+                        return;
+                    }
+                }
+            }
             // Replace children, but don't create text node for empty string
             if (title.len == 0) {
                 return title_element.asElement().replaceChildren(&.{}, page);

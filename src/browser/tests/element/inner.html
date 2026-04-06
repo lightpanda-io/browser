@@ -175,4 +175,7 @@
   testing.expectEqual("This is a\ntext", d2.innerText);
   testing.expectEqual("Hello World", $('#d3').innerText);
   testing.expectEqual("Hello World", $('#d4').innerText);
+
+  d1.innerHTML = '<noscript><div>Enable javascript</div></noscript><span>Visible content</span>';
+  testing.expectEqual('Visible content', d1.innerText);
 </script>

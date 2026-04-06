@@ -112,11 +112,36 @@ pub fn runMacrotasks(self: *Browser) !?u64 {
     env.isolate.enter();
     defer env.isolate.exit();
 
-    const time_to_next = try self.env.runMacrotasks();
-    env.pumpMessageLoop();
+    var time_to_next: ?u64 = null;
+    var iterations: usize = 0;
+    while (iterations < 32) : (iterations += 1) {
+        var iteration_next = try self.env.runMacrotasks();
+        const pumped_message = env.pumpMessageLoopStep();
+        if (pumped_message and (iteration_next == null or iteration_next.? > 1)) {
+            iteration_next = 1;
+        }
 
-    // either of the above could have queued more microtasks
-    env.runMicrotasks();
+        // Either the scheduler still has ready work (0ms) or V8/platform
+        // just pumped a message that can queue immediate follow-up tasks.
+        // Drain a bounded burst here so async startup chains settle without
+        // forcing the outer wait loop to interleave unrelated input.
+        if (iteration_next) |delay| {
+            time_to_next = if (time_to_next) |current| @min(current, delay) else delay;
+        }
+
+        // Either of the above could have queued more microtasks.
+        env.runMicrotasks();
+
+        if (pumped_message) {
+            continue;
+        }
+        if (iteration_next) |delay| {
+            if (delay == 0) {
+                continue;
+            }
+        }
+        break;
+    }
 
     return time_to_next;
 }

@@ -272,6 +272,17 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
 
     // get the global object for the context, this maps to our Window
     const global_obj = v8.v8__Context__Global(v8_context).?;
+    if (v8.v8__Object__GetPrototype(global_obj)) |global_proto| {
+        const temporary_name = v8.v8__String__NewFromUtf8(isolate.handle, "TEMPORARY", v8.kNormal, 9);
+        const persistent_name = v8.v8__String__NewFromUtf8(isolate.handle, "PERSISTENT", v8.kNormal, 10);
+        const temporary_value = js.simpleZigValueToJs(.{ .handle = isolate.handle }, @as(i32, 0), true, false);
+        const persistent_value = js.simpleZigValueToJs(.{ .handle = isolate.handle }, @as(i32, 1), true, false);
+        var maybe_temporary: v8.MaybeBool = undefined;
+        var maybe_persistent: v8.MaybeBool = undefined;
+        const flags = v8.ReadOnly + v8.DontDelete;
+        v8.v8__Object__DefineOwnProperty(@ptrCast(global_proto), v8_context, temporary_name, temporary_value, flags, &maybe_temporary);
+        v8.v8__Object__DefineOwnProperty(@ptrCast(global_proto), v8_context, persistent_name, persistent_value, flags, &maybe_persistent);
+    }
     {
         // Store our TAO inside the internal field of the global object. This
         // maps the v8::Object -> Zig instance. Almost all objects have this, and
@@ -309,11 +320,27 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         .scheduler = .init(context_arena),
         .finalizer_callback_pool = std.heap.MemoryPool(Context.FinalizerCallback).init(self.app.allocator),
     };
-    try context.identity_map.putNoClobber(context_arena, @intFromPtr(page.window), global_global);
+    try context.identity_map.putNoClobber(
+        context_arena,
+        Context.identityMapKey(@intFromPtr(page.window), Window.JsApi.Meta.class_id, false),
+        global_global,
+    );
 
-    // Store a pointer to our context inside the v8 context so that, given
-    // a v8 context, we can get our context out
+    // Store a pointer to our context inside the v8 context before any
+    // user-visible property installation. V8 may consult named handlers while
+    // defining properties, and those callbacks need a valid embedder context.
     v8.v8__Context__SetAlignedPointerInEmbedderData(v8_context, Context.embedder_data_index, @ptrCast(context));
+
+    {
+        var ls: js.Local.Scope = undefined;
+        context.localScope(&ls);
+        defer ls.deinit();
+
+        try page.window.installOwnJsProperties(.{
+            .local = &ls.local,
+            .handle = global_obj,
+        });
+    }
 
     const count = self.context_count;
     if (count >= self.contexts.len) {
@@ -404,14 +431,18 @@ pub fn runMacrotasks(self: *Env) !?u64 {
     return ms_to_next_task;
 }
 
-pub fn pumpMessageLoop(self: *const Env) void {
+pub fn pumpMessageLoopStep(self: *const Env) bool {
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate.handle);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
     const isolate = self.isolate.handle;
     const platform = self.platform.handle;
-    while (v8.v8__Platform__PumpMessageLoop(platform, isolate, false)) {}
+    return v8.v8__Platform__PumpMessageLoop(platform, isolate, false);
+}
+
+pub fn pumpMessageLoop(self: *const Env) void {
+    while (self.pumpMessageLoopStep()) {}
 }
 
 pub fn hasBackgroundTasks(self: *const Env) bool {

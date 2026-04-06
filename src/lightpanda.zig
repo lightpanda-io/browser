@@ -52,6 +52,31 @@ const testing = @import("testing.zig");
 
 const builtin = @import("builtin");
 const IS_DEBUG = builtin.mode == .Debug;
+var browse_render_trace_lock: std.Thread.Mutex = .{};
+
+fn googleRenderTraceEnabled(url: []const u8) bool {
+    return std.mem.indexOf(u8, url, "google-home-") != null or
+        std.mem.indexOf(u8, url, "google.com") != null;
+}
+
+fn appendBrowseRenderTrace(stage: []const u8, url: []const u8, detail: []const u8) void {
+    if (!googleRenderTraceEnabled(url)) {
+        return;
+    }
+    browse_render_trace_lock.lock();
+    defer browse_render_trace_lock.unlock();
+
+    const path = "tmp-browser-smoke/google-investigation-next/browse-render.log";
+    var file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch blk: {
+        break :blk std.fs.cwd().createFile(path, .{}) catch return;
+    };
+    defer file.close();
+
+    file.seekFromEnd(0) catch return;
+    var line_buf: [768]u8 = undefined;
+    const line = std.fmt.bufPrint(&line_buf, "{s}|url={s}|{s}\n", .{ stage, url, detail }) catch return;
+    file.writeAll(line) catch return;
+}
 
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
@@ -115,10 +140,119 @@ const CommittedBrowseSurface = struct {
         };
     }
 
+    fn replaceOwned(
+        self: *CommittedBrowseSurface,
+        allocator: std.mem.Allocator,
+        title: []const u8,
+        url: []const u8,
+        body: []const u8,
+        display_list: *@import("render/DisplayList.zig"),
+        hash: u64,
+        state_hash: u64,
+    ) !void {
+        const next_title = try allocator.dupe(u8, title);
+        errdefer allocator.free(next_title);
+        const next_url = try allocator.dupe(u8, url);
+        errdefer allocator.free(next_url);
+        const next_body = try allocator.dupe(u8, body);
+        errdefer allocator.free(next_body);
+
+        const next_display_list = display_list.*;
+        display_list.* = .{};
+
+        self.deinit(allocator);
+        self.* = .{
+            .title = next_title,
+            .url = next_url,
+            .body = next_body,
+            .display_list = next_display_list,
+            .hash = hash,
+            .state_hash = state_hash,
+        };
+    }
+
+    fn refreshMetadata(
+        self: *CommittedBrowseSurface,
+        allocator: std.mem.Allocator,
+        title: []const u8,
+        url: []const u8,
+        body: []const u8,
+        hash: u64,
+    ) !void {
+        const next_title = try allocator.dupe(u8, title);
+        errdefer allocator.free(next_title);
+        const next_url = try allocator.dupe(u8, url);
+        errdefer allocator.free(next_url);
+        const next_body = try allocator.dupe(u8, body);
+        errdefer allocator.free(next_body);
+
+        allocator.free(self.title);
+        allocator.free(self.url);
+        allocator.free(self.body);
+        self.title = next_title;
+        self.url = next_url;
+        self.body = next_body;
+        self.hash = hash;
+    }
+
+    fn refreshStateHashForSameOutput(
+        self: *CommittedBrowseSurface,
+        rendered_hash: u64,
+        state_hash: u64,
+    ) bool {
+        if (!self.available()) {
+            return false;
+        }
+        if (self.hash != rendered_hash) {
+            return false;
+        }
+        if (self.state_hash == state_hash) {
+            return false;
+        }
+        self.state_hash = state_hash;
+        return true;
+    }
+
     fn available(self: *const CommittedBrowseSurface) bool {
         return self.hash != 0;
     }
 };
+
+pub const HeadedSessionPresentationState = struct {
+    committed_surface: CommittedBrowseSurface = .{},
+    last_presented_hash: u64 = 0,
+    zoom_percent: i32 = 100,
+    page_token: usize = 0,
+
+    pub fn deinit(self: *HeadedSessionPresentationState, allocator: std.mem.Allocator) void {
+        self.committed_surface.deinit(allocator);
+        self.* = .{};
+    }
+
+    pub fn reset(self: *HeadedSessionPresentationState, allocator: std.mem.Allocator) void {
+        self.deinit(allocator);
+    }
+};
+
+pub fn presentHeadedSessionPage(
+    app: *App,
+    page: *Page,
+    state: *HeadedSessionPresentationState,
+) !void {
+    const page_token = @intFromPtr(page);
+    if (state.page_token != page_token) {
+        state.reset(app.allocator);
+        state.page_token = page_token;
+    }
+    return presentPage(
+        app,
+        page,
+        &state.last_presented_hash,
+        &state.committed_surface,
+        state.zoom_percent,
+        null,
+    );
+}
 
 const BrowseErrorKind = enum {
     invalid_address,
@@ -1035,6 +1169,15 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
         }
 
         for (tabs.items, 0..) |tab, index| {
+            if (index == active_tab_index and app.display.hasPendingNativeInput()) {
+                if (tab.session.currentPage()) |page| {
+                    if (std.mem.indexOf(u8, page.url, "google-home-") != null or std.mem.indexOf(u8, page.url, "google.com") != null) {
+                        log.warn(.app, "browse wait pending in", .{
+                            .url = page.url,
+                        });
+                    }
+                }
+            }
             _ = if (index == active_tab_index)
                 tab.session.wait(opts.wait_ms)
             else
@@ -1060,6 +1203,9 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
         }
 
         active_tab_index = normalizeActiveTabIndex(active_tab_index, tabs.items.len);
+        if (app.display.hasPendingNativeInput()) {
+            continue;
+        }
         try activatePendingRestoreForTabIfNeeded(app, &shell, active_tab_index, &settings, &downloads);
         if (tabs.items[active_tab_index].session.currentPage()) |active_page| {
             const active_internal_page = parseInternalBrowsePage(active_page.url);
@@ -4006,6 +4152,24 @@ fn updateActiveBrowseDisplay(
         displayed_tab_index.* = null;
         return;
     }
+    const trace_url = if (tabs.len == 0) "" else blk: {
+        const trace_index = normalizeActiveTabIndex(active_tab_index, tabs.len);
+        const trace_page = tabs[trace_index].session.currentPage() orelse break :blk "";
+        break :blk trace_page.url;
+    };
+    var trace_timer: std.time.Timer = undefined;
+    if (googleRenderTraceEnabled(trace_url)) {
+        trace_timer = try std.time.Timer.start();
+        appendBrowseRenderTrace("update_begin", trace_url, "enter");
+    }
+    defer if (googleRenderTraceEnabled(trace_url)) {
+        var detail_buf: [96]u8 = undefined;
+        const detail = std.fmt.bufPrint(&detail_buf, "elapsed_ms={d}", .{trace_timer.read() / std.time.ns_per_ms}) catch "elapsed_ms=?";
+        appendBrowseRenderTrace("update_end", trace_url, detail);
+    };
+    if (app.display.hasPendingNativeInput()) {
+        return;
+    }
 
     const active_index = normalizeActiveTabIndex(active_tab_index, tabs.len);
     const active_tab = tabs[active_index];
@@ -6807,6 +6971,21 @@ fn presentPage(
     zoom_percent: i32,
     title_override: ?[]const u8,
 ) !void {
+    const paint_settle_window_ms: u64 = 120;
+    const trace_render = googleRenderTraceEnabled(page.url);
+    var trace_timer: std.time.Timer = undefined;
+    if (trace_render) {
+        trace_timer = try std.time.Timer.start();
+        appendBrowseRenderTrace("present_begin", page.url, "enter");
+    }
+    defer if (trace_render) {
+        var detail_buf: [128]u8 = undefined;
+        const detail = std.fmt.bufPrint(&detail_buf, "elapsed_ms={d}", .{trace_timer.read() / std.time.ns_per_ms}) catch "elapsed_ms=?";
+        appendBrowseRenderTrace("present_end", page.url, detail);
+    };
+    if (app.display.hasPendingNativeInput()) {
+        return;
+    }
     if (pageIsBlankIdle(page)) {
         const title = "New Tab";
         const url = "about:blank";
@@ -6844,36 +7023,128 @@ fn presentPage(
         return;
     }
 
-    var presentation_state_hasher = std.hash.Wyhash.init(0);
-    presentation_state_hasher.update(page.url);
-    presentation_state_hasher.update(std.mem.asBytes(&zoom_percent));
-    const presentation_revision = page.presentationRevision();
-    presentation_state_hasher.update(std.mem.asBytes(&presentation_revision));
-    if (title_override) |override| {
-        presentation_state_hasher.update(override);
-    }
-    const presentation_state_hash = presentation_state_hasher.final();
+    const title = title_override orelse ((try page.getTitle()) orelse "");
+    const url = page.url;
 
-    if (committed_surface.available() and
-        last_presented_hash.* == committed_surface.hash and
-        committed_surface.state_hash == presentation_state_hash)
-    {
+    var visual_state_hasher = std.hash.Wyhash.init(0);
+    visual_state_hasher.update(url);
+    visual_state_hasher.update(std.mem.asBytes(&zoom_percent));
+    const presentation_revision = page.presentationRevision();
+    visual_state_hasher.update(std.mem.asBytes(&presentation_revision));
+    const visual_state_hash = visual_state_hasher.final();
+
+    if (committed_surface.available() and committed_surface.state_hash == visual_state_hash) {
+        var reuse_hasher = std.hash.Wyhash.init(0);
+        reuse_hasher.update(title);
+        reuse_hasher.update(url);
+        reuse_hasher.update(committed_surface.body);
+        if (committed_surface.display_list) |*display_list| {
+            display_list.hashInto(&reuse_hasher);
+        }
+        const reuse_hash = reuse_hasher.final();
+        if (reuse_hash == last_presented_hash.*) {
+            return;
+        }
+
+        last_presented_hash.* = reuse_hash;
+        try committed_surface.refreshMetadata(app.allocator, title, url, committed_surface.body, reuse_hash);
+        page.clearPresentationHint();
+        try app.display.presentPageView(
+            committed_surface.title,
+            committed_surface.url,
+            committed_surface.body,
+            if (committed_surface.display_list) |*display_list| display_list else null,
+        );
+        return;
+    }
+
+    if (committed_surface.available()) {
+        if (try tryPresentIncrementalTextControlPatch(
+            app,
+            page,
+            last_presented_hash,
+            committed_surface,
+            zoom_percent,
+            title,
+            url,
+            visual_state_hash,
+            trace_render,
+        )) {
+            return;
+        }
+    }
+
+    if (committed_surface.available()) {
+        const last_change_ms = page.lastPresentationChangeMs();
+        const age_ms = if (last_change_ms != 0)
+            @import("datetime.zig").milliTimestamp(.monotonic) - last_change_ms
+        else
+            null;
+        if (shouldCoalescePaint(true, age_ms, paint_settle_window_ms)) {
+            if (trace_render) {
+                var detail_buf: [128]u8 = undefined;
+                const detail = std.fmt.bufPrint(
+                    &detail_buf,
+                    "age_ms={d}|window_ms={d}|revision={d}",
+                    .{ age_ms.?, paint_settle_window_ms, presentation_revision },
+                ) catch "age_ms=?";
+                appendBrowseRenderTrace("paint_coalesced", page.url, detail);
+            }
+            return;
+        }
+    }
+
+    if (app.display.hasPendingNativeInput()) {
+        return;
+    }
+    var stage_timer: std.time.Timer = undefined;
+    if (trace_render) {
+        stage_timer = try std.time.Timer.start();
+    }
+    var display_list = DocumentPainter.paintDocument(app.allocator, page, .{
+        .viewport_width = @intCast(app.display.viewport.width),
+        .viewport_height = @intCast(app.display.viewport.height),
+        .layout_scale = zoom_percent,
+    }) catch |err| switch (err) {
+        error.PaintInterrupted => {
+            if (trace_render) {
+                var detail_buf: [128]u8 = undefined;
+                const detail = std.fmt.bufPrint(&detail_buf, "elapsed_ms={d}", .{stage_timer.read() / std.time.ns_per_ms}) catch "elapsed_ms=?";
+                appendBrowseRenderTrace("paint_document_interrupted", page.url, detail);
+            }
+            return;
+        },
+        else => return err,
+    };
+    defer display_list.deinit(app.allocator);
+    if (trace_render) {
+        var detail_buf: [128]u8 = undefined;
+        const detail = std.fmt.bufPrint(
+            &detail_buf,
+            "elapsed_ms={d}|commands={d}|links={d}|controls={d}",
+            .{
+                stage_timer.read() / std.time.ns_per_ms,
+                display_list.commands.items.len,
+                display_list.link_regions.items.len,
+                display_list.control_regions.items.len,
+            },
+        ) catch "elapsed_ms=?";
+        appendBrowseRenderTrace("paint_document", page.url, detail);
+    }
+    if (app.display.hasPendingNativeInput()) {
         return;
     }
 
     var body = std.Io.Writer.Allocating.init(app.allocator);
     defer body.deinit();
+    const text = blk: {
+        if (display_list.commands.items.len > 0) {
+            break :blk "";
+        }
+        try markdown.dump(page.window._document.asNode(), .{}, &body.writer, page);
+        break :blk body.written();
+    };
 
-    try markdown.dump(page.window._document.asNode(), .{}, &body.writer, page);
-    var display_list = try DocumentPainter.paintDocument(app.allocator, page, .{
-        .viewport_width = @intCast(app.display.viewport.width),
-        .layout_scale = zoom_percent,
-    });
-    defer display_list.deinit(app.allocator);
-
-    const title = title_override orelse ((try page.getTitle()) orelse "");
-    const url = page.url;
-    const text = body.written();
     app.display.setImageRequestCookieJar(page._session.cookie_jar);
 
     var hasher = std.hash.Wyhash.init(0);
@@ -6883,12 +7154,127 @@ fn presentPage(
     display_list.hashInto(&hasher);
     const next_hash = hasher.final();
     if (next_hash == last_presented_hash.*) {
+        if (committed_surface.refreshStateHashForSameOutput(next_hash, visual_state_hash) and trace_render) {
+            var detail_buf: [128]u8 = undefined;
+            const detail = std.fmt.bufPrint(
+                &detail_buf,
+                "hash={d}|state_hash={d}",
+                .{ next_hash, visual_state_hash },
+            ) catch "hash=?";
+            appendBrowseRenderTrace("commit_surface_state_refresh", page.url, detail);
+        }
+        page.clearPresentationHint();
         return;
     }
 
     last_presented_hash.* = next_hash;
-    try committed_surface.replace(app.allocator, title, url, text, &display_list, next_hash, presentation_state_hash);
+    if (trace_render) {
+        stage_timer = try std.time.Timer.start();
+    }
+    try committed_surface.replace(app.allocator, title, url, text, &display_list, next_hash, visual_state_hash);
+    if (trace_render) {
+        var detail_buf: [128]u8 = undefined;
+        const detail = std.fmt.bufPrint(&detail_buf, "elapsed_ms={d}", .{stage_timer.read() / std.time.ns_per_ms}) catch "elapsed_ms=?";
+        appendBrowseRenderTrace("commit_surface", page.url, detail);
+        stage_timer = try std.time.Timer.start();
+    }
+    page.clearPresentationHint();
     try app.display.presentPageView(title, url, text, &display_list);
+    if (trace_render) {
+        var detail_buf: [128]u8 = undefined;
+        const detail = std.fmt.bufPrint(&detail_buf, "elapsed_ms={d}", .{stage_timer.read() / std.time.ns_per_ms}) catch "elapsed_ms=?";
+        appendBrowseRenderTrace("present_view", page.url, detail);
+    }
+}
+
+fn shouldCoalescePaint(committed_surface_available: bool, age_ms: ?u64, window_ms: u64) bool {
+    if (!committed_surface_available) {
+        return false;
+    }
+    const age = age_ms orelse return false;
+    return age < window_ms;
+}
+
+fn tryPresentIncrementalTextControlPatch(
+    app: *App,
+    page: *Page,
+    last_presented_hash: *u64,
+    committed_surface: *CommittedBrowseSurface,
+    zoom_percent: i32,
+    title: []const u8,
+    url: []const u8,
+    visual_state_hash: u64,
+    trace_render: bool,
+) !bool {
+    const target_element = switch (page.presentationHint()) {
+        .text_control => |element| element,
+        else => return false,
+    };
+
+    const committed_display_list = committed_surface.display_list orelse return false;
+    var patched_display_list = try committed_display_list.cloneOwned(app.allocator);
+    errdefer patched_display_list.deinit(app.allocator);
+
+    var stage_timer: std.time.Timer = undefined;
+    if (trace_render) {
+        stage_timer = try std.time.Timer.start();
+    }
+
+    if (!(try DocumentPainter.patchTextControlDisplayList(
+        app.allocator,
+        page,
+        &patched_display_list,
+        target_element,
+        .{
+            .viewport_width = @intCast(app.display.viewport.width),
+            .viewport_height = @intCast(app.display.viewport.height),
+            .layout_scale = zoom_percent,
+        },
+    ))) {
+        return false;
+    }
+
+    const body = committed_surface.body;
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(title);
+    hasher.update(url);
+    hasher.update(body);
+    patched_display_list.hashInto(&hasher);
+    const next_hash = hasher.final();
+
+    if (next_hash == last_presented_hash.*) {
+        _ = committed_surface.refreshStateHashForSameOutput(next_hash, visual_state_hash);
+        page.clearPresentationHint();
+        if (trace_render) {
+            var detail_buf: [128]u8 = undefined;
+            const detail = std.fmt.bufPrint(&detail_buf, "elapsed_ms={d}", .{stage_timer.read() / std.time.ns_per_ms}) catch "elapsed_ms=?";
+            appendBrowseRenderTrace("incremental_text_control_noop", page.url, detail);
+        }
+        return true;
+    }
+
+    last_presented_hash.* = next_hash;
+    try committed_surface.replaceOwned(app.allocator, title, url, body, &patched_display_list, next_hash, visual_state_hash);
+    app.display.setImageRequestCookieJar(page._session.cookie_jar);
+    page.clearPresentationHint();
+    if (trace_render) {
+        var detail_buf: [128]u8 = undefined;
+        const detail = std.fmt.bufPrint(&detail_buf, "elapsed_ms={d}", .{stage_timer.read() / std.time.ns_per_ms}) catch "elapsed_ms=?";
+        appendBrowseRenderTrace("incremental_text_control_patch", page.url, detail);
+        stage_timer = try std.time.Timer.start();
+    }
+    try app.display.presentPageView(
+        committed_surface.title,
+        committed_surface.url,
+        committed_surface.body,
+        if (committed_surface.display_list) |*display_list| display_list else null,
+    );
+    if (trace_render) {
+        var detail_buf: [128]u8 = undefined;
+        const detail = std.fmt.bufPrint(&detail_buf, "elapsed_ms={d}", .{stage_timer.read() / std.time.ns_per_ms}) catch "elapsed_ms=?";
+        appendBrowseRenderTrace("incremental_text_control_present", page.url, detail);
+    }
+    return true;
 }
 
 fn restoreCommittedBrowseSurface(
@@ -8859,6 +9245,31 @@ test "makeInternalBrowsePageDisplayTitle reflects live counts" {
     const error_title = try makeInternalBrowsePageDisplayTitle(std.testing.allocator, abs_dir, tabs[0..], 0, &downloads, .error_page);
     defer std.testing.allocator.free(error_title);
     try std.testing.expectEqualStrings("Navigation Error", error_title);
+}
+
+test "shouldCoalescePaint only defers repaint when a committed surface exists and the mutation is recent" {
+    try std.testing.expect(!shouldCoalescePaint(false, null, 120));
+    try std.testing.expect(!shouldCoalescePaint(false, 10, 120));
+    try std.testing.expect(!shouldCoalescePaint(true, null, 120));
+    try std.testing.expect(shouldCoalescePaint(true, 10, 120));
+    try std.testing.expect(!shouldCoalescePaint(true, 120, 120));
+    try std.testing.expect(!shouldCoalescePaint(true, 240, 120));
+}
+
+test "CommittedBrowseSurface refreshStateHashForSameOutput advances revision for identical output" {
+    var display_list = @import("render/DisplayList.zig").DisplayList{ .layout_scale = 100, .page_margin = 20 };
+    defer display_list.deinit(std.testing.allocator);
+
+    var surface = CommittedBrowseSurface{};
+    defer surface.deinit(std.testing.allocator);
+    try surface.replace(std.testing.allocator, "Title", "http://example.test/", "", &display_list, 42, 7);
+
+    try std.testing.expect(surface.refreshStateHashForSameOutput(42, 11));
+    try std.testing.expectEqual(@as(u64, 42), surface.hash);
+    try std.testing.expectEqual(@as(u64, 11), surface.state_hash);
+    try std.testing.expect(surface.display_list != null);
+    try std.testing.expect(!surface.refreshStateHashForSameOutput(41, 13));
+    try std.testing.expect(!surface.refreshStateHashForSameOutput(42, 11));
 }
 
 test "hashInternalBrowsePageState changes after bookmark and download mutations" {

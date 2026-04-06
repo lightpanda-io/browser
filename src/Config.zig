@@ -277,7 +277,8 @@ pub const Common = struct {
 /// Pre-formatted HTTP headers for reuse across Http and Client.
 /// Must be initialized with an allocator that outlives all HTTP connections.
 pub const HttpHeaders = struct {
-    const user_agent_base: [:0]const u8 = "Lightpanda/1.0";
+    const user_agent_headless_base: [:0]const u8 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/146.0.0.0 Safari/537.36";
+    const user_agent_headed_base: [:0]const u8 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 
     user_agent: [:0]const u8, // User agent value (e.g. "Lightpanda/1.0")
     user_agent_header: [:0]const u8,
@@ -285,6 +286,7 @@ pub const HttpHeaders = struct {
     proxy_bearer_header: ?[:0]const u8,
 
     pub fn init(allocator: Allocator, config: *const Config) !HttpHeaders {
+        const user_agent_base = if (config.browserMode() == .headed) user_agent_headed_base else user_agent_headless_base;
         const user_agent: [:0]const u8 = if (config.userAgentSuffix()) |suffix|
             try std.fmt.allocPrintSentinel(allocator, "{s} {s}", .{ user_agent_base, suffix }, 0)
         else
@@ -311,7 +313,7 @@ pub const HttpHeaders = struct {
             allocator.free(hdr);
         }
         allocator.free(self.user_agent_header);
-        if (self.user_agent.ptr != user_agent_base.ptr) {
+        if (self.user_agent.ptr != user_agent_headless_base.ptr and self.user_agent.ptr != user_agent_headed_base.ptr) {
             allocator.free(self.user_agent);
         }
     }
@@ -1130,3 +1132,4 @@ test "explicit http timeout overrides interactive defaults" {
 
     try std.testing.expectEqual(@as(u31, 1234), config.httpTimeout());
 }
+

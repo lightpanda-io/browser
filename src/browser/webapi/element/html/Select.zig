@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../../../js/js.zig");
 const Page = @import("../../../Page.zig");
 
@@ -68,7 +69,53 @@ pub fn getValue(self: *Select, page: *Page) []const u8 {
     return "";
 }
 
+fn displayedOption(self: *Select) ?*Option {
+    var first_option: ?*Option = null;
+    var iter = self.asNode().childrenIterator();
+    while (iter.next()) |child| {
+        const option = child.is(Option) orelse continue;
+        if (option.getDisabled()) {
+            continue;
+        }
+        if (option.getSelected()) {
+            return option;
+        }
+        if (first_option == null) {
+            first_option = option;
+        }
+    }
+    return first_option;
+}
+
+fn collapseWhitespaceAlloc(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    var collapsed = std.ArrayList(u8).empty;
+    errdefer collapsed.deinit(allocator);
+
+    var saw_whitespace = false;
+    for (text) |ch| {
+        if (std.ascii.isWhitespace(ch)) {
+            saw_whitespace = true;
+            continue;
+        }
+        if (saw_whitespace and collapsed.items.len > 0) {
+            try collapsed.append(allocator, ' ');
+        }
+        saw_whitespace = false;
+        try collapsed.append(allocator, ch);
+    }
+
+    return collapsed.toOwnedSlice(allocator);
+}
+
+pub fn getDisplayedTextAlloc(self: *Select, allocator: std.mem.Allocator, _: *Page) ![]u8 {
+    const option = self.displayedOption() orelse return allocator.dupe(u8, "");
+    const raw = try option.asNode().getTextContentAlloc(allocator);
+    defer allocator.free(raw);
+    return collapseWhitespaceAlloc(allocator, std.mem.trim(u8, raw, &std.ascii.whitespace));
+}
+
 pub fn setValue(self: *Select, value: []const u8, page: *Page) !void {
+    const previous_option = self.displayedOption();
     // Find option with matching value and select it
     // Note: This updates the current state (_selected), not the default state (attribute)
     // Setting value always deselects all others, even for multiple selects
@@ -76,6 +123,9 @@ pub fn setValue(self: *Select, value: []const u8, page: *Page) !void {
     while (iter.next()) |child| {
         const option = child.is(Option) orelse continue;
         option._selected = std.mem.eql(u8, option.getValue(page), value);
+    }
+    if (previous_option != self.displayedOption()) {
+        page.presentationChangedForTextControl(self.asElement());
     }
 }
 
@@ -99,7 +149,8 @@ pub fn getSelectedIndex(self: *Select) i32 {
     return if (has_options) 0 else -1;
 }
 
-pub fn setSelectedIndex(self: *Select, index: i32) !void {
+pub fn setSelectedIndex(self: *Select, index: i32, page: *Page) !void {
+    const previous_option = self.displayedOption();
     // Mark that selectedIndex has been explicitly set
     self._selected_index_set = true;
 
@@ -117,6 +168,9 @@ pub fn setSelectedIndex(self: *Select, index: i32) !void {
             option._selected = false;
         }
         current_index += 1;
+    }
+    if (previous_option != self.displayedOption()) {
+        page.presentationChangedForTextControl(self.asElement());
     }
 }
 
@@ -266,7 +320,6 @@ pub const Build = struct {
     }
 };
 
-const std = @import("std");
 const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Select" {
     try testing.htmlRunner("element/html/select.html", .{});

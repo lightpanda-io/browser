@@ -480,7 +480,7 @@ pub fn setOuterHTML(self: *Element, html: []const u8, page: *Page) !void {
     const node = self.asNode();
     const parent = node._parent orelse return;
 
-    page.domChanged();
+    page.domChangedForNode(parent);
     if (html.len > 0) {
         const fragment = (try Node.DocumentFragment.init(page)).asNode();
         try page.parseHtmlAsChildren(fragment, html);
@@ -499,7 +499,7 @@ pub fn setInnerHTML(self: *Element, html: []const u8, page: *Page) !void {
     const parent = self.asNode();
 
     // Remove all existing children
-    page.domChanged();
+    page.domChangedForNode(parent);
     var it = parent.childrenIterator();
     while (it.next()) |child| {
         page.removeNode(parent, child, .{ .will_be_reconnected = false });
@@ -800,8 +800,8 @@ pub fn getDataset(self: *Element, page: *Page) !*DOMStringMap {
 }
 
 pub fn replaceChildren(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
-    page.domChanged();
     var parent = self.asNode();
+    page.domChangedForNode(parent);
 
     var it = parent.childrenIterator();
     while (it.next()) |child| {
@@ -821,10 +821,9 @@ pub fn replaceChildren(self: *Element, nodes: []const Node.NodeOrText, page: *Pa
 }
 
 pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
-    page.domChanged();
-
     const ref_node = self.asNode();
     const parent = ref_node._parent orelse return;
+    page.domChangedForNode(parent);
 
     const parent_is_connected = parent.isConnected();
 
@@ -859,9 +858,9 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, page: *Page) 
 }
 
 pub fn remove(self: *Element, page: *Page) void {
-    page.domChanged();
     const node = self.asNode();
     const parent = node._parent orelse return;
+    page.domChangedForNode(parent);
     page.removeNode(parent, node, .{ .will_be_reconnected = false });
 }
 
@@ -915,7 +914,10 @@ pub fn focus(self: *Element, page: *Page) !void {
     }
 
     page.document._active_element = self;
-    page.domChanged();
+    if (old_active) |old| {
+        page.domChangedForNode(old.asNode());
+    }
+    page.domChangedForNode(self.asNode());
 
     if (old_active) |old| {
         const old_target = old.asEventTarget();
@@ -946,7 +948,7 @@ pub fn blur(self: *Element, page: *Page) !void {
     if (page.document._active_element != self) return;
 
     page.document._active_element = null;
-    page.domChanged();
+    page.domChangedForNode(self.asNode());
 
     const FocusEvent = @import("event/FocusEvent.zig");
     const old_target = self.asEventTarget();
@@ -1137,6 +1139,14 @@ fn isHitTestVisibleElement(self: *Element) bool {
 }
 
 fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height: f64 } {
+    if (!page.layout_boxes_generation_in_progress and
+        (!page.layout_boxes_valid or page.layout_boxes_revision != page.presentationRevision()))
+    {
+        page.ensureElementLayoutBoxes();
+    }
+
+    populateDerivedLayoutBox(self, page);
+
     if (page._element_layout_boxes.get(self)) |layout_box| {
         return .{
             .width = @floatFromInt(layout_box.width),
@@ -1304,6 +1314,14 @@ pub fn getBoundingClientRectForVisible(self: *Element, page: *Page) DOMRect {
     var y = calculateDocumentPosition(self.asNode());
 
     // Use sibling position for x coordinate to ensure siblings have different x values
+    if (!page.layout_boxes_generation_in_progress and
+        (!page.layout_boxes_valid or page.layout_boxes_revision != page.presentationRevision()))
+    {
+        page.ensureElementLayoutBoxes();
+    }
+
+    populateDerivedLayoutBox(self, page);
+
     if (page._element_layout_boxes.get(self)) |layout_box| {
         x = @floatFromInt(layout_box.x);
         y = @floatFromInt(layout_box.y);
@@ -1330,6 +1348,70 @@ pub fn getBoundingClientRectForVisible(self: *Element, page: *Page) DOMRect {
         ._width = dims.width,
         ._height = dims.height,
     };
+}
+
+fn populateDerivedLayoutBox(self: *Element, page: *Page) void {
+    if (page._element_layout_boxes.get(self) != null) {
+        return;
+    }
+
+    const derived = deriveLayoutBoxFromChildren(self, page) orelse return;
+    if (std.mem.indexOf(u8, page.url, "consent.google.com") != null) {
+        const class_name = self.getAttributeSafe(comptime .wrap("class")) orelse "";
+        const href = self.getAttributeSafe(comptime .wrap("href")) orelse "";
+        const should_log = std.mem.indexOf(u8, class_name, "footer") != null or
+            std.mem.indexOf(u8, class_name, "languagePicker") != null or
+            std.mem.indexOf(u8, href, "/privacy") != null or
+            std.mem.indexOf(u8, href, "/terms") != null;
+        if (should_log) {
+            const file = std.fs.cwd().createFile("tmp-browser-smoke/google-investigation-next/runtime-renderer.log", .{
+                .truncate = false,
+            }) catch null;
+            if (file) |f| {
+                defer f.close();
+                f.seekFromEnd(0) catch {};
+                var line_buf: [1024]u8 = undefined;
+                const line = std.fmt.bufPrint(
+                    &line_buf,
+                    "layout_box|derive_layout_box|tag={any}|class={s}|href={s}|x={d}|y={d}|w={d}|h={d}\n",
+                    .{ self.getTag(), class_name, href, derived.x, derived.y, derived.width, derived.height },
+                ) catch "";
+                if (line.len > 0) {
+                    f.writeAll(line) catch {};
+                }
+            }
+        }
+    }
+    page.setElementLayoutBox(self, derived) catch {};
+}
+
+fn deriveLayoutBoxFromChildren(self: *Element, page: *Page) ?LayoutBox {
+    var union_box: ?LayoutBox = null;
+    var child = self.asNode().firstChild();
+    while (child) |current| : (child = current.nextSibling()) {
+        const child_element = current.is(Element) orelse continue;
+        if (!child_element.checkVisibility(page)) {
+            continue;
+        }
+
+        populateDerivedLayoutBox(child_element, page);
+        const child_box = page._element_layout_boxes.get(child_element) orelse continue;
+
+        union_box = if (union_box) |existing| blk: {
+            const left = @min(existing.x, child_box.x);
+            const top = @min(existing.y, child_box.y);
+            const right = @max(existing.x + existing.width, child_box.x + child_box.width);
+            const bottom = @max(existing.y + existing.height, child_box.y + child_box.height);
+            break :blk .{
+                .x = left,
+                .y = top,
+                .width = @max(@as(i32, 0), right - left),
+                .height = @max(@as(i32, 0), bottom - top),
+            };
+        } else child_box;
+    }
+
+    return union_box;
 }
 
 pub fn getClientRects(self: *Element, page: *Page) ![]DOMRect {

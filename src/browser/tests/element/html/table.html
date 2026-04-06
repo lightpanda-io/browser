@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<table id="table">
+  <tbody id="body">
+    <tr id="r0"><td>first</td></tr>
+    <tr id="r1"><td>second</td></tr>
+  </tbody>
+</table>
+
+<script id="insertRowCreatesTbodyForEmptyTable">
+  {
+    const empty = document.createElement('table');
+    const row = empty.insertRow();
+    testing.expectEqual('TR', row.tagName);
+    testing.expectEqual('TBODY', row.parentNode.tagName);
+    testing.expectEqual('TABLE', row.parentNode.parentNode.tagName);
+    testing.expectEqual(1, empty.querySelectorAll('tr').length);
+  }
+</script>
+
+<script id="insertRowRespectsIndexWithinSectionRows">
+  {
+    const table = document.getElementById('table');
+    const middle = table.insertRow(1);
+    middle.id = 'mid';
+    const order = Array.from(table.querySelectorAll('tr')).map((row) => row.id).join(',');
+    testing.expectEqual('r0,mid,r1', order);
+    testing.expectEqual('TBODY', middle.parentNode.tagName);
+  }
+</script>
+
+<script id="insertRowRejectsOutOfRangeIndex">
+  {
+    const table = document.getElementById('table');
+    testing.expectError('IndexSizeError', () => table.insertRow(99));
+    testing.expectError('IndexSizeError', () => table.insertRow(-2));
+  }
+</script>

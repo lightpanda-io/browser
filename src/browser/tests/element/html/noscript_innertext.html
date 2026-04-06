@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<div id="host">
+  <noscript><div>Enable javascript</div></noscript>
+  <span>Visible content</span>
+</div>
+
+<script id="noscriptInnerTextSkipsFallback">
+  {
+    const host = document.getElementById("host");
+    testing.expectEqual("Visible content", host.innerText);
+  }
+</script>

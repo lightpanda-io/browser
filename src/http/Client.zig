@@ -751,12 +751,43 @@ pub const PerformStatus = enum {
 };
 
 fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
+    const interactive = timeout_ms == 0;
+    var stage_timer: std.time.Timer = undefined;
+    if (interactive) {
+        stage_timer = try std.time.Timer.start();
+    }
     const running = try self.handles.perform();
+    if (interactive) {
+        const elapsed_ms = stage_timer.read() / std.time.ns_per_ms;
+        if (elapsed_ms > 10) {
+            log.warn(.http, "interactive http step", .{
+                .stage = "perform",
+                .elapsed_ms = elapsed_ms,
+                .active = self.active,
+                .running = running,
+                .intercepted = self.intercepted,
+            });
+        }
+        stage_timer.reset();
+    }
 
     // We're potentially going to block for a while until we get data. Process
     // whatever messages we have waiting ahead of time.
     if (try self.processMessages()) {
         return .normal;
+    }
+    if (interactive) {
+        const elapsed_ms = stage_timer.read() / std.time.ns_per_ms;
+        if (elapsed_ms > 10) {
+            log.warn(.http, "interactive http step", .{
+                .stage = "messages_pre_poll",
+                .elapsed_ms = elapsed_ms,
+                .active = self.active,
+                .running = running,
+                .intercepted = self.intercepted,
+            });
+        }
+        stage_timer.reset();
     }
 
     var status = PerformStatus.normal;
@@ -776,8 +807,33 @@ fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
     } else if (running > 0) {
         try self.handles.poll(&.{}, timeout_ms);
     }
+    if (interactive) {
+        const elapsed_ms = stage_timer.read() / std.time.ns_per_ms;
+        if (elapsed_ms > 10) {
+            log.warn(.http, "interactive http step", .{
+                .stage = "poll",
+                .elapsed_ms = elapsed_ms,
+                .active = self.active,
+                .running = running,
+                .intercepted = self.intercepted,
+            });
+        }
+        stage_timer.reset();
+    }
 
     _ = try self.processMessages();
+    if (interactive) {
+        const elapsed_ms = stage_timer.read() / std.time.ns_per_ms;
+        if (elapsed_ms > 10) {
+            log.warn(.http, "interactive http step", .{
+                .stage = "messages_post_poll",
+                .elapsed_ms = elapsed_ms,
+                .active = self.active,
+                .running = running,
+                .intercepted = self.intercepted,
+            });
+        }
+    }
     return status;
 }
 

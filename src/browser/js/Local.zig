@@ -170,8 +170,13 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
         },
         .pointer => |ptr| {
             const resolved = resolveValue(value);
+            const identity_key = Context.identityMapKey(
+                @intFromPtr(resolved.ptr),
+                resolved.class_id,
+                @sizeOf(ptr.child) == 0,
+            );
 
-            const gop = try ctx.identity_map.getOrPut(arena, @intFromPtr(resolved.ptr));
+            const gop = try ctx.identity_map.getOrPut(arena, identity_key);
             if (gop.found_existing) {
                 // we've seen this instance before, return the same object
                 return (js.Object.Global{ .handle = gop.value_ptr.* }).local(self);
@@ -215,6 +220,10 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 // When we try to map this from JS->Zig, in
                 // TaggedOpaque, we'll also know there that
                 // the type is empty and can create an empty instance.
+            }
+
+            if (@hasDecl(ptr.child, "installOwnJsProperties")) {
+                try value.installOwnJsProperties(js_obj);
             }
 
             // dont' use js_obj.persist(), because we don't want to track this in

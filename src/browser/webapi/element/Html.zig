@@ -216,18 +216,25 @@ const innerTextState = struct {
     trim_left: bool = true,
 };
 
+fn hasNonWhitespaceText(text: []const u8) bool {
+    for (text) |c| {
+        if (!std.ascii.isWhitespace(c)) return true;
+    }
+    return false;
+}
+
 fn _getInnerText(self: *HtmlElement, writer: *std.Io.Writer, state: *innerTextState) !void {
     var it = self.asElement().asNode().childrenIterator();
     while (it.next()) |child| {
         switch (child._type) {
             .element => |e| switch (e._type) {
-                .html => |he| switch (he._type) {
+                .html => |he| switch (he.asElement().getTag()) {
                     .br => {
                         try writer.writeByte('\n');
                         state.pre_w = false; // prevent a next pre space.
                         state.trim_left = true;
                     },
-                    .script, .style, .template => {
+                    .script, .style, .template, .noscript => {
                         state.pre_w = false; // prevent a next pre space.
                         state.trim_left = true;
                     },
@@ -241,6 +248,12 @@ fn _getInnerText(self: *HtmlElement, writer: *std.Io.Writer, state: *innerTextSt
                     state.trim_left = true;
                 },
                 .text => {
+                    const data = c.getData().str();
+                    if (!hasNonWhitespaceText(data)) {
+                        state.pre_w = state.pre_w or !state.trim_left;
+                        state.trim_left = state.pre_w;
+                        continue;
+                    }
                     if (state.pre_w) try writer.writeByte(' ');
                     state.pre_w = try c.render(writer, .{ .trim_left = state.trim_left });
                     // if we had a pre space, trim left next one.
@@ -264,7 +277,7 @@ pub fn setInnerText(self: *HtmlElement, text: []const u8, page: *Page) !void {
     const parent = self.asElement().asNode();
 
     // Remove all existing children
-    page.domChanged();
+    page.domChangedForNode(parent);
     var it = parent.childrenIterator();
     while (it.next()) |child| {
         page.removeNode(parent, child, .{ .will_be_reconnected = false });
@@ -1359,4 +1372,7 @@ test "WebApi: HTML.event_listeners" {
 }
 test "WebApi: HTMLElement.props" {
     try testing.htmlRunner("element/html/htmlelement-props.html", .{});
+}
+test "WebApi: HTML.noscript innerText" {
+    try testing.htmlRunner("element/html/noscript_innertext.html", .{});
 }

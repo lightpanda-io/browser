@@ -38,6 +38,7 @@ const EventManager = @import("EventManager.zig");
 const ScriptManager = @import("ScriptManager.zig");
 
 const Parser = @import("parser/Parser.zig");
+const CssParser = @import("css/Parser.zig");
 
 const URL = @import("URL.zig");
 const Blob = @import("webapi/Blob.zig");
@@ -57,6 +58,7 @@ const VisualViewport = @import("webapi/VisualViewport.zig");
 const PerformanceObserver = @import("webapi/PerformanceObserver.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
+const ResizeObserver = @import("webapi/ResizeObserver.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const storage = @import("webapi/storage/storage.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
@@ -77,10 +79,41 @@ const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lo
 
 var default_url = WebApiURL{ ._raw = "about:blank" };
 pub var default_location: Location = Location{ ._url = &default_url };
+var browse_invalidation_trace_lock: std.Thread.Mutex = .{};
 
 pub const BUF_SIZE = 1024;
 
 const Page = @This();
+
+pub const PresentationHint = union(enum) {
+    none,
+    full,
+    text_control: *Element,
+};
+
+fn googlePresentationTraceEnabled(url: []const u8) bool {
+    return std.mem.indexOf(u8, url, "google-home-") != null or
+        std.mem.indexOf(u8, url, "google.com") != null;
+}
+
+fn appendBrowseInvalidationTrace(stage: []const u8, url: []const u8, detail: []const u8) void {
+    if (!googlePresentationTraceEnabled(url)) {
+        return;
+    }
+    browse_invalidation_trace_lock.lock();
+    defer browse_invalidation_trace_lock.unlock();
+
+    const path = "tmp-browser-smoke/google-investigation-next/browse-render.log";
+    var file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch blk: {
+        break :blk std.fs.cwd().createFile(path, .{}) catch return;
+    };
+    defer file.close();
+
+    file.seekFromEnd(0) catch return;
+    var line_buf: [768]u8 = undefined;
+    const line = std.fmt.bufPrint(&line_buf, "{s}|url={s}|{s}\n", .{ stage, url, detail }) catch return;
+    file.writeAll(line) catch return;
+}
 
 // This is the "id" of the frame. It can be re-used from page-to-page, e.g.
 // when navigating.
@@ -156,6 +189,11 @@ _mutation_delivery_depth: u32 = 0,
 _intersection_observers: std.ArrayList(*IntersectionObserver) = .{},
 _intersection_check_scheduled: bool = false,
 _intersection_delivery_scheduled: bool = false,
+
+// List of active ResizeObservers
+_resize_observers: std.ArrayList(*ResizeObserver) = .{},
+_resize_check_scheduled: bool = false,
+_resize_delivery_scheduled: bool = false,
 
 // Slots that need slotchange events to be fired
 _slots_pending_slotchange: std.AutoHashMapUnmanaged(*Element.Html.Slot, void) = .{},
@@ -235,6 +273,11 @@ frames_sorted: bool = true,
 // DOM version used to invalidate cached state of "live" collections
 version: usize = 0,
 presentation_version: usize = 0,
+last_presentation_change_ms: u64 = 0,
+presentation_hint: PresentationHint = .none,
+layout_boxes_revision: usize = 0,
+layout_boxes_valid: bool = false,
+layout_boxes_generation_in_progress: bool = false,
 
 // This is maybe not great. It's a counter on the number of events that we're
 // waiting on before triggering the "load" event. Essentially, we need all
@@ -432,6 +475,19 @@ pub const RequestHeaderPolicy = struct {
     referer_override_url: ?[]const u8 = null,
     authorization_source_url: ?[:0]const u8 = null,
 };
+
+fn addChromeNavigationHeaders(headers: *Http.Headers) !void {
+    try headers.add("Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
+    try headers.add("Accept-Language: en-GB,en-US;q=0.9,en;q=0.8");
+    try headers.add("Sec-CH-UA: \"Chromium\";v=\"146\", \"Not-A.Brand\";v=\"24\", \"Google Chrome\";v=\"146\"");
+    try headers.add("Sec-CH-UA-Mobile: ?0");
+    try headers.add("Sec-CH-UA-Platform: \"Windows\"");
+    try headers.add("Sec-Fetch-Site: none");
+    try headers.add("Sec-Fetch-Mode: navigate");
+    try headers.add("Sec-Fetch-User: ?1");
+    try headers.add("Sec-Fetch-Dest: document");
+    try headers.add("Upgrade-Insecure-Requests: 1");
+}
 
 pub fn headersForRequestWithPolicy(
     self: *Page,
@@ -646,6 +702,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     };
 
     var headers = try http_client.newHeaders();
+    try addChromeNavigationHeaders(&headers);
     if (opts.header) |hdr| {
         try headers.add(hdr);
     }
@@ -947,7 +1004,7 @@ fn _documentIsComplete(self: *Page) !void {
 }
 
 fn focusAutofocusElement(self: *Page) !void {
-    if (self.document._active_element != null) {
+    if (self.document.getFocusedElement() != null) {
         return;
     }
 
@@ -1408,26 +1465,339 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
 }
 
 pub fn domChanged(self: *Page) void {
-    self.version +%= 1;
+    self.domChangedForNode(self.document.asNode());
+}
+
+fn invalidatePresentationForNode(self: *Page, node: *Node, comptime bump_dom_version: bool) bool {
+    const affects_presentation = nodeAffectsPresentation(self, node);
+    if (bump_dom_version) {
+        self.version +%= 1;
+    }
+
+    if (!affects_presentation) {
+        return false;
+    }
+
+    if (googlePresentationTraceEnabled(self.url)) {
+        var node_name_buf: [64]u8 = undefined;
+        var parent_name_buf: [64]u8 = undefined;
+        const node_name = node.getNodeName(&node_name_buf);
+        const parent_name = if (node._parent) |parent| parent.getNodeName(&parent_name_buf) else "NONE";
+        var detail_buf: [256]u8 = undefined;
+        const detail = std.fmt.bufPrint(
+            &detail_buf,
+            "kind={s}|node={s}|parent={s}|dom_version={d}|presentation_revision={d}",
+            .{
+                if (bump_dom_version) "dom" else "cdata",
+                node_name,
+                parent_name,
+                self.version,
+                self.presentation_version,
+            },
+        ) catch "kind=?|node=?|parent=?";
+        appendBrowseInvalidationTrace("presentation_invalidate", self.url, detail);
+    }
+
     self.presentationChanged();
     self.resetElementLayoutBoxes();
 
     if (self._intersection_check_scheduled) {
-        return;
+        return true;
     }
 
     self._intersection_check_scheduled = true;
     self.js.queueIntersectionChecks() catch |err| {
         log.err(.page, "page.schedIntersectChecks", .{ .err = err, .type = self._type, .url = self.url });
     };
+    return true;
+}
+
+fn nodeAffectsPresentation(page: *Page, node: *Node) bool {
+    if (node._type != .document and !node.isConnected()) {
+        return false;
+    }
+
+    var current: ?*Node = node;
+    while (current) |candidate| : (current = candidate._parent) {
+        if (candidate.is(Element)) |element| {
+            if (element.is(Element.Html)) |html| {
+                switch (html._type) {
+                    .link,
+                    .style,
+                    => return true,
+                    .base,
+                    .head,
+                    .meta,
+                    .script,
+                    .template,
+                    .title,
+                    => return false,
+                    else => {},
+                }
+            }
+
+            var element_current: ?*Element = element;
+            while (element_current) |candidate_element| : (element_current = candidate_element.parentElement()) {
+                const style = page.window.getComputedStyle(candidate_element, null, page) catch null;
+                if (style) |resolved| {
+                    const decl = resolved.asCSSStyleDeclaration();
+                    const display = std.mem.trim(u8, decl.getPropertyValue("display", page), &std.ascii.whitespace);
+                    if (std.ascii.eqlIgnoreCase(display, "none")) {
+                        return false;
+                    }
+                    const visibility = std.mem.trim(u8, decl.getPropertyValue("visibility", page), &std.ascii.whitespace);
+                    if (std.ascii.eqlIgnoreCase(visibility, "hidden") or
+                        std.ascii.eqlIgnoreCase(visibility, "collapse"))
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+    }
+    return true;
+}
+
+pub fn domChangedForNode(self: *Page, node: *Node) void {
+    _ = self.invalidatePresentationForNode(node, true);
+}
+
+pub fn attributePresentationChanged(
+    self: *Page,
+    element: *Element,
+    name: String,
+    value: ?String,
+    old_value: ?String,
+) void {
+    const classification = classifyAttributePresentationMutation(self, element, name, value, old_value);
+    switch (classification) {
+        .full => {
+            self.domChangedForNode(element.asNode());
+        },
+        .none => {
+            self.version +%= 1;
+        },
+        .text_control => {
+            self.version +%= 1;
+            if (!nodeAffectsPresentation(self, element.asNode())) {
+                return;
+            }
+            self.notePresentationChange(.{ .text_control = element });
+        },
+    }
+}
+
+const AttributePresentationClassification = enum {
+    none,
+    full,
+    text_control,
+};
+
+const NormalizedStyleDeclaration = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
+fn classifyAttributePresentationMutation(
+    self: *Page,
+    element: *Element,
+    name: String,
+    value: ?String,
+    old_value: ?String,
+) AttributePresentationClassification {
+    const new_value = if (value) |v| v.str() else null;
+    const old_value_slice = if (old_value) |v| v.str() else null;
+
+    if (name.eqlSlice("style")) {
+        return classifyStyleAttributePresentationMutation(self, element, new_value orelse "", old_value_slice orelse "");
+    }
+
+    if (supportsIncrementalTextControlElement(element)) {
+        if (name.eqlSlice("placeholder") or name.eqlSlice("disabled") or name.eqlSlice("readonly")) {
+            if (attributeValueSlicesEqual(new_value, old_value_slice)) {
+                return .none;
+            }
+            return .text_control;
+        }
+    }
+
+    return .full;
+}
+
+fn classifyStyleAttributePresentationMutation(
+    self: *Page,
+    element: *Element,
+    new_value: []const u8,
+    old_value: []const u8,
+) AttributePresentationClassification {
+    if (!supportsIncrementalTextControlElement(element)) {
+        return .full;
+    }
+
+    const old_props = collectNormalizedStyleDeclarations(self.call_arena, old_value) catch return .full;
+    const new_props = collectNormalizedStyleDeclarations(self.call_arena, new_value) catch return .full;
+
+    var changed_any = false;
+
+    for (old_props.items) |old_prop| {
+        const new_prop = findNormalizedStyleDeclaration(new_props.items, old_prop.name);
+        if (new_prop != null and std.mem.eql(u8, new_prop.?.value, old_prop.value)) {
+            continue;
+        }
+        changed_any = true;
+        if (!isIncrementalTextControlStyleProperty(old_prop.name)) {
+            return .full;
+        }
+    }
+
+    for (new_props.items) |new_prop| {
+        const old_prop = findNormalizedStyleDeclaration(old_props.items, new_prop.name);
+        if (old_prop != null and std.mem.eql(u8, old_prop.?.value, new_prop.value)) {
+            continue;
+        }
+        changed_any = true;
+        if (!isIncrementalTextControlStyleProperty(new_prop.name)) {
+            return .full;
+        }
+    }
+
+    return if (changed_any) .text_control else .none;
+}
+
+fn collectNormalizedStyleDeclarations(
+    allocator: Allocator,
+    raw: []const u8,
+) !std.ArrayList(NormalizedStyleDeclaration) {
+    var props = std.ArrayList(NormalizedStyleDeclaration).empty;
+    var it = CssParser.parseDeclarationsList(raw);
+    while (it.next()) |declaration| {
+        const lower_name = try allocator.dupe(u8, declaration.name);
+        _ = std.ascii.lowerString(lower_name, declaration.name);
+
+        if (findNormalizedStyleDeclarationPtr(props.items, lower_name)) |existing| {
+            existing.* = .{
+                .name = lower_name,
+                .value = declaration.value,
+            };
+            continue;
+        }
+
+        try props.append(allocator, .{
+            .name = lower_name,
+            .value = declaration.value,
+        });
+    }
+    return props;
+}
+
+fn findNormalizedStyleDeclaration(
+    declarations: []const NormalizedStyleDeclaration,
+    name: []const u8,
+) ?NormalizedStyleDeclaration {
+    for (declarations) |declaration| {
+        if (std.mem.eql(u8, declaration.name, name)) {
+            return declaration;
+        }
+    }
+    return null;
+}
+
+fn findNormalizedStyleDeclarationPtr(
+    declarations: []NormalizedStyleDeclaration,
+    name: []const u8,
+) ?*NormalizedStyleDeclaration {
+    for (declarations) |*declaration| {
+        if (std.mem.eql(u8, declaration.name, name)) {
+            return declaration;
+        }
+    }
+    return null;
+}
+
+fn isIncrementalTextControlStyleProperty(name: []const u8) bool {
+    return std.mem.eql(u8, name, "color") or
+        std.mem.eql(u8, name, "background-color") or
+        std.mem.eql(u8, name, "border-color") or
+        std.mem.eql(u8, name, "border-top-color") or
+        std.mem.eql(u8, name, "border-right-color") or
+        std.mem.eql(u8, name, "border-bottom-color") or
+        std.mem.eql(u8, name, "border-left-color") or
+        std.mem.eql(u8, name, "opacity") or
+        std.mem.eql(u8, name, "font-family") or
+        std.mem.eql(u8, name, "font-size") or
+        std.mem.eql(u8, name, "font-style") or
+        std.mem.eql(u8, name, "font-weight") or
+        std.mem.eql(u8, name, "line-height") or
+        std.mem.eql(u8, name, "letter-spacing") or
+        std.mem.eql(u8, name, "word-spacing") or
+        std.mem.eql(u8, name, "text-align") or
+        std.mem.eql(u8, name, "text-transform");
+}
+
+fn supportsIncrementalTextControlElement(element: *Element) bool {
+    const html = element.is(Element.Html) orelse return false;
+    return switch (html._type) {
+        .input => |input| input.supportsIncrementalTextPresentation(),
+        .textarea => true,
+        .button => true,
+        .select => true,
+        else => false,
+    };
+}
+
+fn attributeValueSlicesEqual(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return std.mem.eql(u8, a.?, b.?);
 }
 
 pub fn presentationChanged(self: *Page) void {
+    self.notePresentationChange(.full);
+}
+
+pub fn presentationChangedForTextControl(self: *Page, element: *Element) void {
+    self.notePresentationChange(.{ .text_control = element });
+}
+
+fn notePresentationChange(self: *Page, hint: PresentationHint) void {
     self.presentation_version +%= 1;
+    self.last_presentation_change_ms = milliTimestamp(.monotonic);
+    switch (hint) {
+        .none => self.presentation_hint = .none,
+        .full => self.presentation_hint = .full,
+        .text_control => |element| switch (self.presentation_hint) {
+            .full => {},
+            else => self.presentation_hint = .{ .text_control = element },
+        },
+    }
+    self.scheduleResizeChecks();
+}
+
+fn scheduleResizeChecks(self: *Page) void {
+    if (self._resize_observers.items.len == 0 or self._resize_check_scheduled) {
+        return;
+    }
+    self._resize_check_scheduled = true;
+    self.js.queueResizeChecks() catch |err| {
+        log.err(.page, "page.schedResizeChecks", .{ .err = err, .type = self._type, .url = self.url });
+    };
 }
 
 pub fn presentationRevision(self: *const Page) usize {
     return self.presentation_version;
+}
+
+pub fn lastPresentationChangeMs(self: *const Page) u64 {
+    return self.last_presentation_change_ms;
+}
+
+pub fn presentationHint(self: *const Page) PresentationHint {
+    return self.presentation_hint;
+}
+
+pub fn clearPresentationHint(self: *Page) void {
+    self.presentation_hint = .none;
 }
 
 const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
@@ -1583,9 +1953,28 @@ pub fn unregisterIntersectionObserver(self: *Page, observer: *IntersectionObserv
     }
 }
 
+pub fn registerResizeObserver(self: *Page, observer: *ResizeObserver) !void {
+    try self._resize_observers.append(self.arena, observer);
+}
+
+pub fn unregisterResizeObserver(self: *Page, observer: *ResizeObserver) void {
+    for (self._resize_observers.items, 0..) |obs, i| {
+        if (obs == observer) {
+            _ = self._resize_observers.swapRemove(i);
+            return;
+        }
+    }
+}
+
 pub fn checkIntersections(self: *Page) !void {
     for (self._intersection_observers.items) |observer| {
         try observer.checkIntersections(self);
+    }
+}
+
+pub fn checkResizes(self: *Page) !void {
+    for (self._resize_observers.items) |observer| {
+        try observer.checkSizes(self);
     }
 }
 
@@ -1617,6 +2006,14 @@ pub fn scheduleIntersectionDelivery(self: *Page) !void {
     try self.js.queueIntersectionDelivery();
 }
 
+pub fn scheduleResizeDelivery(self: *Page) !void {
+    if (self._resize_delivery_scheduled) {
+        return;
+    }
+    self._resize_delivery_scheduled = true;
+    try self.js.queueResizeDelivery();
+}
+
 pub fn scheduleSlotchangeDelivery(self: *Page) !void {
     if (self._slotchange_delivery_scheduled) {
         return;
@@ -1635,6 +2032,16 @@ pub fn performScheduledIntersectionChecks(self: *Page) void {
     };
 }
 
+pub fn performScheduledResizeChecks(self: *Page) void {
+    if (!self._resize_check_scheduled) {
+        return;
+    }
+    self._resize_check_scheduled = false;
+    self.checkResizes() catch |err| {
+        log.err(.page, "page.schedResizeChecks", .{ .err = err, .type = self._type, .url = self.url });
+    };
+}
+
 pub fn deliverIntersections(self: *Page) void {
     if (!self._intersection_delivery_scheduled) {
         return;
@@ -1648,6 +2055,22 @@ pub fn deliverIntersections(self: *Page) void {
         const observer = self._intersection_observers.items[i];
         observer.deliverEntries(self) catch |err| {
             log.err(.page, "page.deliverIntersections", .{ .err = err, .type = self._type, .url = self.url });
+        };
+    }
+}
+
+pub fn deliverResizes(self: *Page) void {
+    if (!self._resize_delivery_scheduled) {
+        return;
+    }
+    self._resize_delivery_scheduled = false;
+
+    var i = self._resize_observers.items.len;
+    while (i > 0) {
+        i -= 1;
+        const observer = self._resize_observers.items[i];
+        observer.deliverEntries(self) catch |err| {
+            log.err(.page, "page.deliverResizes", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -2725,6 +3148,19 @@ const RemoveNodeOpts = struct {
     will_be_reconnected: bool,
 };
 pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts) void {
+    if (!opts.will_be_reconnected) {
+        if (self.document.getFocusedElement()) |active| {
+            var current: ?*Node = active.asNode();
+            while (current) |node| {
+                if (node == child) {
+                    self.document._active_element = null;
+                    break;
+                }
+                current = node.parentNode();
+            }
+        }
+    }
+
     // Capture siblings before removing
     const previous_sibling = child.previousSibling();
     const next_sibling = child.nextSibling();
@@ -3126,6 +3562,8 @@ pub fn characterDataChange(
     target: *Node,
     old_value: String,
 ) void {
+    _ = self.invalidatePresentationForNode(target, false);
+
     var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
@@ -3559,6 +3997,8 @@ pub fn resetElementScrollMetrics(self: *Page) void {
 
 pub fn resetElementLayoutBoxes(self: *Page) void {
     self._element_layout_boxes.clearRetainingCapacity();
+    self.layout_boxes_revision = 0;
+    self.layout_boxes_valid = false;
 }
 
 pub fn setElementScrollMetrics(self: *Page, element: *Element, metrics: Element.ScrollMetrics) !void {
@@ -3572,6 +4012,152 @@ pub fn setElementScrollMetrics(self: *Page, element: *Element, metrics: Element.
 
 pub fn setElementLayoutBox(self: *Page, element: *Element, box: Element.LayoutBox) !void {
     try self._element_layout_boxes.put(self.arena, element, box);
+    self.layout_boxes_revision = self.presentation_version;
+    self.layout_boxes_valid = true;
+}
+
+pub fn mergeElementLayoutBox(self: *Page, element: *Element, box: Element.LayoutBox) !void {
+    if (self._element_layout_boxes.get(element)) |existing| {
+        const left = @min(existing.x, box.x);
+        const top = @min(existing.y, box.y);
+        const right = @max(existing.x + existing.width, box.x + box.width);
+        const bottom = @max(existing.y + existing.height, box.y + box.height);
+        try self._element_layout_boxes.put(self.arena, element, .{
+            .x = left,
+            .y = top,
+            .width = @max(@as(i32, 0), right - left),
+            .height = @max(@as(i32, 0), bottom - top),
+        });
+    } else {
+        try self._element_layout_boxes.put(self.arena, element, box);
+    }
+    self.layout_boxes_revision = self.presentation_version;
+    self.layout_boxes_valid = true;
+}
+
+pub fn ensureElementLayoutBoxes(self: *Page) void {
+    if (self.layout_boxes_generation_in_progress) {
+        return;
+    }
+
+    if (self.layout_boxes_valid and self.layout_boxes_revision == self.presentation_version) {
+        return;
+    }
+
+    self.layout_boxes_generation_in_progress = true;
+    defer self.layout_boxes_generation_in_progress = false;
+
+    const viewport_width = @max(@as(i32, 1), @as(i32, @intCast(self.window.getInnerWidth())));
+    const viewport_height = @max(@as(i32, 1), @as(i32, @intCast(self.window.getInnerHeight())));
+
+    var display_list = DocumentPainter.paintDocument(self.call_arena, self, .{
+        .viewport_width = viewport_width,
+        .viewport_height = viewport_height,
+    }) catch return;
+    defer display_list.deinit(self.call_arena);
+
+    for (display_list.link_regions.items) |region| {
+        if (region.width <= 0 or region.height <= 0 or region.dom_path.len == 0) continue;
+        const target = self.resolveNodePath(region.dom_path) orelse {
+            if (std.mem.indexOf(u8, self.url, "consent.google.com") != null and
+                (std.mem.indexOf(u8, region.url, "/privacy") != null or std.mem.indexOf(u8, region.url, "/terms") != null))
+            {
+                const file = std.fs.cwd().createFile("tmp-browser-smoke/google-investigation-next/runtime-renderer.log", .{
+                    .truncate = false,
+                }) catch null;
+                if (file) |f| {
+                    defer f.close();
+                    f.seekFromEnd(0) catch {};
+                    var line_buf: [512]u8 = undefined;
+                    const line = std.fmt.bufPrint(
+                        &line_buf,
+                        "layout_box|merge_link_region_miss|url={s}|x={d}|y={d}|w={d}|h={d}|path_len={d}\n",
+                        .{ region.url, region.x, region.y, region.width, region.height, region.dom_path.len },
+                    ) catch "";
+                    if (line.len > 0) f.writeAll(line) catch {};
+                }
+            }
+            continue;
+        };
+        const element = target.is(Element) orelse continue;
+        if (std.mem.indexOf(u8, self.url, "consent.google.com") != null) {
+            const href = element.getAttributeSafe(comptime .wrap("href")) orelse "";
+            if (std.mem.indexOf(u8, href, "/privacy") != null or std.mem.indexOf(u8, href, "/terms") != null) {
+                const file = std.fs.cwd().createFile("tmp-browser-smoke/google-investigation-next/runtime-renderer.log", .{
+                    .truncate = false,
+                }) catch null;
+                if (file) |f| {
+                    defer f.close();
+                    f.seekFromEnd(0) catch {};
+                    var line_buf: [512]u8 = undefined;
+                    const line = std.fmt.bufPrint(
+                        &line_buf,
+                        "layout_box|merge_link_region_hit|href={s}|x={d}|y={d}|w={d}|h={d}|path_len={d}\n",
+                        .{ href, region.x, region.y, region.width, region.height, region.dom_path.len },
+                    ) catch "";
+                    if (line.len > 0) f.writeAll(line) catch {};
+                }
+            }
+        }
+        self.mergeElementLayoutBox(element, .{
+            .x = region.x,
+            .y = region.y,
+            .width = region.width,
+            .height = region.height,
+        }) catch {};
+    }
+
+    for (display_list.control_regions.items) |region| {
+        if (region.width <= 0 or region.height <= 0 or region.dom_path.len == 0) continue;
+        const target = self.resolveNodePath(region.dom_path) orelse {
+            if (std.mem.indexOf(u8, self.url, "consent.google.com") != null) {
+                const file = std.fs.cwd().createFile("tmp-browser-smoke/google-investigation-next/runtime-renderer.log", .{
+                    .truncate = false,
+                }) catch null;
+                if (file) |f| {
+                    defer f.close();
+                    f.seekFromEnd(0) catch {};
+                    var line_buf: [512]u8 = undefined;
+                    const line = std.fmt.bufPrint(
+                        &line_buf,
+                        "layout_box|merge_control_region_miss|x={d}|y={d}|w={d}|h={d}|path_len={d}\n",
+                        .{ region.x, region.y, region.width, region.height, region.dom_path.len },
+                    ) catch "";
+                    if (line.len > 0) f.writeAll(line) catch {};
+                }
+            }
+            continue;
+        };
+        const element = target.is(Element) orelse continue;
+        if (std.mem.indexOf(u8, self.url, "consent.google.com") != null) {
+            const id = element.getAttributeSafe(comptime .wrap("id")) orelse "";
+            if (std.mem.eql(u8, id, "language-select")) {
+                const file = std.fs.cwd().createFile("tmp-browser-smoke/google-investigation-next/runtime-renderer.log", .{
+                    .truncate = false,
+                }) catch null;
+                if (file) |f| {
+                    defer f.close();
+                    f.seekFromEnd(0) catch {};
+                    var line_buf: [512]u8 = undefined;
+                    const line = std.fmt.bufPrint(
+                        &line_buf,
+                        "layout_box|merge_control_region_hit|id={s}|x={d}|y={d}|w={d}|h={d}|path_len={d}\n",
+                        .{ id, region.x, region.y, region.width, region.height, region.dom_path.len },
+                    ) catch "";
+                    if (line.len > 0) f.writeAll(line) catch {};
+                }
+            }
+        }
+        self.mergeElementLayoutBox(element, .{
+            .x = region.x,
+            .y = region.y,
+            .width = region.width,
+            .height = region.height,
+        }) catch {};
+    }
+
+    self.layout_boxes_revision = self.presentation_version;
+    self.layout_boxes_valid = true;
 }
 
 pub fn setElementScrollPosition(self: *Page, element: *Element, x: i32, y: i32) !bool {
@@ -3917,7 +4503,7 @@ pub fn handleMouseDown(self: *Page, target: *Node) !void {
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !bool {
     const event = keyboard_event.asEvent();
     const target = blk: {
-        if (self.window._document._active_element) |element| {
+        if (self.window._document.getFocusedElement()) |element| {
             break :blk element.asNode();
         }
         if (self.window._document.getActiveElement()) |element| {
@@ -4036,12 +4622,12 @@ pub fn triggerKeyboardKeyPressWithCode(
 }
 
 pub fn triggerWindowBlur(self: *Page) !void {
-    const active = self.document._active_element orelse return;
+    const active = self.document.getFocusedElement() orelse return;
     try active.blur(self);
 }
 
 pub fn triggerClipboardEvent(self: *Page, typ: []const u8) !bool {
-    const active = self.document._active_element orelse return false;
+    const active = self.document.getFocusedElement() orelse return false;
     const event = try Event.init(typ, .{
         .bubbles = true,
         .cancelable = true,
@@ -4242,7 +4828,7 @@ pub fn focusNextByTab(self: *Page, backwards: bool) !bool {
     std.mem.sort(TabFocusCandidate, candidates.items, {}, tabFocusCandidateLessThan);
 
     var current_index: ?usize = null;
-    if (self.document._active_element) |active| {
+    if (self.document.getFocusedElement()) |active| {
         for (candidates.items, 0..) |candidate, idx| {
             if (candidate.element != active) {
                 continue;
@@ -4542,13 +5128,20 @@ fn editInputValue(page: *Page, input: *Element.Html.Input, action: EditAction, f
     }
 
     if (selection.end > selection.start) {
+        const input_type = switch (action) {
+            .backspace => "deleteContentBackward",
+            .delete => "deleteContentForward",
+        };
+        if (!(try input.dispatchBeforeInputEvent(null, input_type, page))) {
+            return true;
+        }
         const new_value = try removeValueRange(page, current, selection.start, selection.end);
         try input.setValue(new_value, page);
         const pos: u32 = @intCast(selection.start);
         input._selection_start = pos;
         input._selection_end = pos;
         input._selection_direction = .none;
-        try input.dispatchInputEvent(page);
+        try input.dispatchInputEventWithData(null, input_type, page);
         return true;
     }
 
@@ -4566,6 +5159,13 @@ fn editInputValue(page: *Page, input: *Element.Html.Input, action: EditAction, f
             break :blk .{ cursor, remove_end };
         },
     };
+    const input_type = switch (action) {
+        .backspace => "deleteContentBackward",
+        .delete => "deleteContentForward",
+    };
+    if (!(try input.dispatchBeforeInputEvent(null, input_type, page))) {
+        return true;
+    }
     const new_value = try removeValueRange(page, current, remove_start, remove_end);
     try input.setValue(new_value, page);
 
@@ -4573,7 +5173,7 @@ fn editInputValue(page: *Page, input: *Element.Html.Input, action: EditAction, f
     input._selection_start = new_pos;
     input._selection_end = new_pos;
     input._selection_direction = .none;
-    try input.dispatchInputEvent(page);
+    try input.dispatchInputEventWithData(null, input_type, page);
     return true;
 }
 
@@ -4591,13 +5191,20 @@ fn editTextAreaValue(page: *Page, textarea: *Element.Html.TextArea, action: Edit
     }
 
     if (selection.end > selection.start) {
+        const input_type = switch (action) {
+            .backspace => "deleteContentBackward",
+            .delete => "deleteContentForward",
+        };
+        if (!(try textarea.dispatchBeforeInputEvent(null, input_type, page))) {
+            return true;
+        }
         const new_value = try removeValueRange(page, current, selection.start, selection.end);
         try textarea.setValue(new_value, page);
         const pos: u32 = @intCast(selection.start);
         textarea._selection_start = pos;
         textarea._selection_end = pos;
         textarea._selection_direction = .none;
-        try textarea.dispatchInputEvent(page);
+        try textarea.dispatchInputEventWithData(null, input_type, page);
         return true;
     }
 
@@ -4615,6 +5222,13 @@ fn editTextAreaValue(page: *Page, textarea: *Element.Html.TextArea, action: Edit
             break :blk .{ cursor, remove_end };
         },
     };
+    const input_type = switch (action) {
+        .backspace => "deleteContentBackward",
+        .delete => "deleteContentForward",
+    };
+    if (!(try textarea.dispatchBeforeInputEvent(null, input_type, page))) {
+        return true;
+    }
     const new_value = try removeValueRange(page, current, remove_start, remove_end);
     try textarea.setValue(new_value, page);
 
@@ -4622,7 +5236,7 @@ fn editTextAreaValue(page: *Page, textarea: *Element.Html.TextArea, action: Edit
     textarea._selection_start = new_pos;
     textarea._selection_end = new_pos;
     textarea._selection_direction = .none;
-    try textarea.dispatchInputEvent(page);
+    try textarea.dispatchInputEventWithData(null, input_type, page);
     return true;
 }
 
@@ -4845,25 +5459,99 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = form_element.asNode() });
 }
 
+fn reducedInputTraceEnabled(url: []const u8) bool {
+    return std.mem.indexOf(u8, url, "google-home-") != null or
+        std.mem.indexOf(u8, url, "google.com") != null or
+        std.mem.indexOf(u8, url, "click-focus-input") != null or
+        std.mem.indexOf(u8, url, "autoload-focus-input") != null;
+}
+
+fn reducedInputTraceTag(page: *Page, active: ?*Element) []const u8 {
+    const element = active orelse return "none";
+    return element.getTagNameSpec(&page.buf);
+}
+
+fn reducedInputTraceValue(active: ?*Element) []const u8 {
+    const element = active orelse return "";
+    if (element.is(Element.Html.Input)) |input| {
+        return input.getValue();
+    }
+    if (element.is(Element.Html.TextArea)) |textarea| {
+        return textarea.getValue();
+    }
+    return "";
+}
+
+fn logReducedInputTrace(page: *Page, stage: []const u8, active: ?*Element, text: []const u8, beforeinput_allowed: ?bool) void {
+    if (!reducedInputTraceEnabled(page.url)) {
+        return;
+    }
+
+    log.warn(.page, "insert text trace", .{
+        .stage = stage,
+        .url = page.url,
+        .active_tag = reducedInputTraceTag(page, active),
+        .text = text,
+        .beforeinput_allowed = beforeinput_allowed,
+        .value = reducedInputTraceValue(active),
+    });
+}
+
 pub fn insertText(self: *Page, v: []const u8) !void {
-    const html_element = self.document._active_element orelse return;
+    const html_element = self.document.getFocusedElement() orelse return;
+    logReducedInputTrace(self, "begin", html_element, v, null);
 
     if (html_element.is(Element.Html.Input)) |input| {
         const input_type = input._input_type;
         if (input_type == .radio or input_type == .checkbox) {
+            logReducedInputTrace(self, "skip_non_text_input", html_element, v, null);
             return;
         }
 
-        return input.innerInsert(v, self);
+        const allowed = try input.dispatchBeforeInputEvent(v, "insertText", self);
+        logReducedInputTrace(self, "beforeinput", html_element, v, allowed);
+        if (!allowed) {
+            return;
+        }
+        input.innerInsert(v, self) catch |err| {
+            log.warn(.page, "insert text trace error", .{
+                .stage = "input_inner_insert",
+                .url = self.url,
+                .text = v,
+                .err = err,
+                .value = input.getValue(),
+            });
+            return err;
+        };
+        logReducedInputTrace(self, "end", html_element, v, true);
+        return;
     }
 
     if (html_element.is(Element.Html.TextArea)) |textarea| {
-        return textarea.innerInsert(v, self);
+        const allowed = try textarea.dispatchBeforeInputEvent(v, "insertText", self);
+        logReducedInputTrace(self, "beforeinput", html_element, v, allowed);
+        if (!allowed) {
+            return;
+        }
+        textarea.innerInsert(v, self) catch |err| {
+            log.warn(.page, "insert text trace error", .{
+                .stage = "textarea_inner_insert",
+                .url = self.url,
+                .text = v,
+                .err = err,
+                .value = textarea.getValue(),
+            });
+            return err;
+        };
+        logReducedInputTrace(self, "end", html_element, v, true);
+        return;
     }
+
+    logReducedInputTrace(self, "skip_non_editable", html_element, v, null);
 }
 
 pub fn getActiveTextSelection(self: *Page) ?[]const u8 {
-    const html_element = self.document._active_element orelse return null;
+    const html_element = self.document.getFocusedElement() orelse return null;
 
     if (html_element.is(Element.Html.Input)) |input| {
         const range = selectedRangeFromInput(input) orelse return null;
@@ -4881,7 +5569,7 @@ pub fn getActiveTextSelection(self: *Page) ?[]const u8 {
 }
 
 pub fn deleteActiveTextSelection(self: *Page) !bool {
-    const html_element = self.document._active_element orelse return false;
+    const html_element = self.document.getFocusedElement() orelse return false;
 
     if (html_element.is(Element.Html.Input)) |input| {
         if (selectedRangeFromInput(input) == null) {
@@ -5345,6 +6033,48 @@ test "Page focus and typed input bump presentation revision" {
     try std.testing.expect(page.presentationRevision() > focused_revision);
 }
 
+test "Page visible textContent mutation only bumps presentation revision on real change" {
+    var page = try testing.pageTest("page/text_content_presentation.html");
+    defer page._session.removePage();
+
+    const initial_revision = page.presentationRevision();
+
+    var ls: JS.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.exec(
+        "document.getElementById('status').textContent = 'READY';",
+        "set visible text content",
+    );
+    const updated_revision = page.presentationRevision();
+    try std.testing.expect(updated_revision > initial_revision);
+
+    _ = try ls.local.exec(
+        "document.getElementById('status').textContent = 'READY';",
+        "set same visible text content",
+    );
+    try std.testing.expectEqual(updated_revision, page.presentationRevision());
+}
+
+test "Page title-only text mutation does not bump presentation revision" {
+    var page = try testing.pageTest("page/text_content_presentation.html");
+    defer page._session.removePage();
+
+    const initial_revision = page.presentationRevision();
+
+    var ls: JS.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.exec(
+        "document.title = 'Updated Title';",
+        "set document title only",
+    );
+
+    try std.testing.expectEqual(initial_revision, page.presentationRevision());
+}
+
 test "Page runtime keyboard events expose code for focused input" {
     var page = try testing.pageTest("page/keyboard_code_focus_input.html");
     defer page._session.removePage();
@@ -5364,10 +6094,237 @@ test "Page runtime keyboard events expose code for focused input" {
 
     const keypress_value = try ls.local.exec("window.lastKeyPress", "window.lastKeyPress");
     const keypress_actual = try keypress_value.toStringSlice();
-    try testing.expectString("a|KeyA|65|97|97", keypress_actual);
+    try testing.expectString("a|KeyA|97|97|97", keypress_actual);
 
     try page.insertText("a");
     try testing.expectString("TYPED:a", (try page.getTitle()).?);
+}
+
+test "Page insertText dispatches beforeinput and input events with Chromium-style data" {
+    var page = try testing.pageTest("page/beforeinput_sequence.html");
+    defer page._session.removePage();
+
+    const input = page.window._document.getElementById("q", page) orelse return error.TestInputMissing;
+    try testing.expectEqual(input, page.document._active_element.?);
+    try testing.expectString("FOCUSED", (try page.getTitle()).?);
+
+    try page.insertText("n");
+    try testing.expectString("IN:n", (try page.getTitle()).?);
+
+    var ls: JS.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    const events_value = try ls.local.exec("window.events.join(',')", "window.events.join(',')");
+    const events_actual = try events_value.toStringSlice();
+    try testing.expectString("BI|n|insertText|0,IN|n|n|insertText|0", events_actual);
+}
+
+test "Page beforeinput preventDefault blocks text insertion" {
+    var page = try testing.pageTest("page/beforeinput_sequence.html");
+    defer page._session.removePage();
+
+    var ls: JS.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.exec(
+        "window.blockBeforeInput = true; window.events = []; document.getElementById('q').value = ''; document.title = 'RESET';",
+        "reset beforeinput page",
+    );
+
+    try page.insertText("n");
+
+    const value = try ls.local.exec("document.getElementById('q').value", "document.getElementById('q').value");
+    const value_actual = try value.toStringSlice();
+    try testing.expectString("", value_actual);
+
+    const events_value = try ls.local.exec("window.events.join(',')", "window.events.join(',')");
+    const events_actual = try events_value.toStringSlice();
+    try testing.expectString("BI|n|insertText|0", events_actual);
+}
+
+test "Page insertText ignores a disconnected stale active input" {
+    var page = try testing.pageTest("page/beforeinput_sequence.html");
+    defer page._session.removePage();
+
+    var ls: JS.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.exec(
+        "window.removedInput = document.getElementById('q'); document.body.removeChild(window.removedInput); document.title = document.activeElement.tagName;",
+        "remove focused input from document",
+    );
+
+    try testing.expectString("BODY", (try page.getTitle()).?);
+
+    try page.insertText("n");
+
+    const value = try ls.local.exec("window.removedInput.value", "window.removedInput.value");
+    const value_actual = try value.toStringSlice();
+    try testing.expectString("", value_actual);
+
+    const active = try ls.local.exec("document.activeElement.tagName", "document.activeElement.tagName");
+    const active_actual = try active.toStringSlice();
+    try testing.expectString("BODY", active_actual);
+}
+
+test "Page backspace dispatches beforeinput and input events with deleteContentBackward" {
+    var page = try testing.pageTest("page/beforeinput_sequence.html");
+    defer page._session.removePage();
+
+    var ls: JS.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.exec(
+        "document.getElementById('q').value = 'ab'; document.getElementById('q').focus(); document.getElementById('q').setSelectionRange(2, 2); window.events = []; document.title = 'RESET';",
+        "seed beforeinput delete state",
+    );
+
+    _ = try page.triggerKeyboardKeyDownNoTextWithCodeAndRepeat("Backspace", "Backspace", .{}, false);
+
+    const value = try ls.local.exec("document.getElementById('q').value", "document.getElementById('q').value");
+    const value_actual = try value.toStringSlice();
+    try testing.expectString("a", value_actual);
+
+    const events_value = try ls.local.exec("window.events.join(',')", "window.events.join(',')");
+    const events_actual = try events_value.toStringSlice();
+    try testing.expectString("BI||deleteContentBackward|0,IN|a||deleteContentBackward|0", events_actual);
+}
+
+test "Page reduced Google fixture accepts focused keyboard text and Enter submit" {
+    var page = try testing.pageTest("page/google_home_title_probe.html");
+    defer page._session.removePage();
+
+    _ = page._session.wait(200);
+
+    var ls: JS.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    const focused_value = try ls.local.exec(
+        "document.activeElement === document.forms.f.q ? '1' : '0'",
+        "document.activeElement === document.forms.f.q ? '1' : '0'",
+    );
+    const focused_actual = try focused_value.toStringSlice();
+    try testing.expectString("1", focused_actual);
+
+    _ = try page.triggerKeyboardKeyDownNoTextWithCodeAndRepeat("n", "KeyN", .{}, false);
+    _ = try page.triggerKeyboardKeyPressWithCode("n", "KeyN", .{}, false);
+    try page.insertText("n");
+
+    const value = try ls.local.exec("document.forms.f.q.value", "document.forms.f.q.value");
+    const value_actual = try value.toStringSlice();
+    try testing.expectString("n", value_actual);
+
+    const events_value = try ls.local.exec("window.__lpEarlyEvents.join(',')", "window.__lpEarlyEvents.join(',')");
+    const events_actual = try events_value.toStringSlice();
+    try testing.expectString("KD:n|KeyN|78|78|0,KP:n|KeyN|110|110|110|0,BI:n|0,IN:n|0", events_actual);
+
+    _ = try page.triggerKeyboardKeyDownNoTextWithCodeAndRepeat("Enter", "Enter", .{}, false);
+
+    const title = (try page.getTitle()) orelse return error.TestTitleMissing;
+    try testing.expect(std.mem.startsWith(u8, title, "SUBMIT:n|"));
+}
+
+test "getBoundingClientRect computes layout boxes for an unpresented consent card page" {
+    var page = try testing.pageTest("page/consent_card_center_layout.html");
+    defer page._session.removePage();
+
+    try page.setViewport(1280, 720, 1.0);
+
+    const body = (try page.window._document.querySelector(.wrap("body"), page)).?;
+    const main = (try page.window._document.querySelector(.wrap("main"), page)).?;
+    const section = (try page.window._document.querySelector(.wrap("section"), page)).?;
+    const copy = page.window._document.getElementById("copy", page) orelse return error.TestElementMissing;
+    const button_row = page.window._document.getElementById("actions", page) orelse return error.TestElementMissing;
+    const language_form = page.window._document.getElementById("language-form", page) orelse return error.TestElementMissing;
+    const language_select = page.window._document.getElementById("language-select", page) orelse return error.TestElementMissing;
+    const inline_copy_link = (try page.window._document.querySelector(.wrap("#copy a"), page)).?;
+    const privacy_link = page.window._document.getElementById("privacy", page) orelse return error.TestElementMissing;
+    const terms_link = page.window._document.getElementById("terms", page) orelse return error.TestElementMissing;
+    const body_rect = body.getBoundingClientRect(page);
+    const main_rect = main.getBoundingClientRect(page);
+    const section_rect = section.getBoundingClientRect(page);
+    const copy_rect = copy.getBoundingClientRect(page);
+    const button_row_rect = button_row.getBoundingClientRect(page);
+    const language_form_rect = language_form.getBoundingClientRect(page);
+    const language_select_rect = language_select.getBoundingClientRect(page);
+    const inline_copy_link_rect = inline_copy_link.getBoundingClientRect(page);
+    const privacy_link_rect = privacy_link.getBoundingClientRect(page);
+    const terms_link_rect = terms_link.getBoundingClientRect(page);
+
+    try std.testing.expect(body_rect.getWidth() >= section_rect.getWidth());
+    try std.testing.expect(body_rect.getHeight() >= section_rect.getHeight());
+    try std.testing.expect(main_rect.getWidth() >= section_rect.getWidth());
+    try std.testing.expect(main_rect.getHeight() >= section_rect.getHeight());
+
+    try std.testing.expect(section_rect.getWidth() > 700);
+    try std.testing.expect(section_rect.getWidth() < 1000);
+    try std.testing.expect(section_rect.getHeight() > 280);
+    try std.testing.expect(section_rect.getX() > 100);
+    try std.testing.expect(section_rect.getX() < 300);
+
+    try std.testing.expect(copy_rect.getWidth() > 250);
+    try std.testing.expect(copy_rect.getWidth() < 380);
+    try std.testing.expect(copy_rect.getY() > section_rect.getY());
+    try std.testing.expect(copy_rect.getY() < section_rect.getBottom());
+
+    try std.testing.expect(button_row_rect.getWidth() > 200);
+    try std.testing.expect(button_row_rect.getHeight() >= 40);
+    try std.testing.expect(button_row_rect.getY() > copy_rect.getBottom());
+    try std.testing.expect(button_row_rect.getY() < section_rect.getBottom());
+
+    try std.testing.expect(language_form_rect.getWidth() > 120);
+    try std.testing.expect(language_form_rect.getHeight() >= 20);
+    try std.testing.expect(language_form_rect.getY() > button_row_rect.getBottom());
+    try std.testing.expect(language_form_rect.getY() < section_rect.getBottom());
+    try std.testing.expect(language_select_rect.getWidth() >= 150);
+    try std.testing.expect(language_select_rect.getHeight() >= 24);
+    try std.testing.expect(language_select_rect.getX() >= language_form_rect.getX());
+    try std.testing.expect(language_select_rect.getRight() <= language_form_rect.getRight() + 8);
+
+    try std.testing.expect(inline_copy_link_rect.getWidth() > 40);
+    try std.testing.expect(inline_copy_link_rect.getHeight() >= 16);
+    try std.testing.expect(inline_copy_link_rect.getWidth() < 140);
+    try std.testing.expect(inline_copy_link_rect.getHeight() < 40);
+    try std.testing.expect(inline_copy_link_rect.getX() >= copy_rect.getX());
+    try std.testing.expect(inline_copy_link_rect.getBottom() <= copy_rect.getBottom() + 12);
+
+    try std.testing.expect(privacy_link_rect.getWidth() > 70);
+    try std.testing.expect(privacy_link_rect.getHeight() >= 16);
+    try std.testing.expect(privacy_link_rect.getY() > button_row_rect.getBottom());
+    try std.testing.expect(privacy_link_rect.getX() > language_form_rect.getRight());
+    try std.testing.expect(terms_link_rect.getWidth() > 80);
+    try std.testing.expect(terms_link_rect.getHeight() >= 16);
+    try std.testing.expect(terms_link_rect.getY() > button_row_rect.getBottom());
+    try std.testing.expect(terms_link_rect.getX() > privacy_link_rect.getRight());
+}
+
+test "getBoundingClientRect stacks flex column children with margins" {
+    var page = try testing.pageTest("page/flex_column_margin_stack_layout.html");
+    defer page._session.removePage();
+
+    try page.setViewport(1280, 720, 1.0);
+
+    const title = page.window._document.getElementById("title", page) orelse return error.TestElementMissing;
+    const copy = page.window._document.getElementById("copy", page) orelse return error.TestElementMissing;
+    const cookies = page.window._document.getElementById("cookies", page) orelse return error.TestElementMissing;
+
+    const title_rect = title.getBoundingClientRect(page);
+    const copy_rect = copy.getBoundingClientRect(page);
+    const cookies_rect = cookies.getBoundingClientRect(page);
+
+    try std.testing.expect(title_rect.getWidth() > 250);
+    try std.testing.expect(title_rect.getWidth() < 380);
+    try std.testing.expect(copy_rect.getY() >= title_rect.getBottom() + 20);
+    try std.testing.expect(cookies_rect.getWidth() > 40);
+    try std.testing.expect(cookies_rect.getWidth() < 140);
+    try std.testing.expect(cookies_rect.getHeight() >= 16);
+    try std.testing.expect(cookies_rect.getX() >= copy_rect.getX());
+    try std.testing.expect(cookies_rect.getRight() <= copy_rect.getRight());
 }
 
 test "Page mouse down focuses input before click" {
@@ -5833,6 +6790,93 @@ test "Page requestCookie sends localhost cookie on top-level navigation" {
     }
 
     try std.testing.expect(found_cookie);
+}
+
+test "Page navigation requests include Chrome-like client hint and fetch headers" {
+    var page = try testing.pageTest("page/rendered_link_activation.html");
+    defer page._session.removePage();
+
+    var headers = try Http.Headers.init(page._session.browser.app.config.http_headers.user_agent_header);
+    defer headers.deinit();
+
+    try addChromeNavigationHeaders(&headers);
+
+    var found_accept = false;
+    var found_accept_language = false;
+    var found_sec_ch_ua = false;
+    var found_sec_ch_ua_mobile = false;
+    var found_sec_ch_ua_platform = false;
+    var found_sec_fetch_site = false;
+    var found_sec_fetch_mode = false;
+    var found_sec_fetch_user = false;
+    var found_sec_fetch_dest = false;
+    var found_upgrade_insecure_requests = false;
+
+    var iterator = headers.iterator();
+    while (iterator.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "Accept")) {
+            try std.testing.expect(std.mem.indexOf(u8, header.value, "text/html") != null);
+            found_accept = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Accept-Language")) {
+            try std.testing.expectEqualStrings("en-GB,en-US;q=0.9,en;q=0.8", header.value);
+            found_accept_language = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Sec-CH-UA")) {
+            try std.testing.expect(std.mem.indexOf(u8, header.value, "Chromium") != null);
+            try std.testing.expect(std.mem.indexOf(u8, header.value, "Google Chrome") != null);
+            found_sec_ch_ua = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Sec-CH-UA-Mobile")) {
+            try std.testing.expectEqualStrings("?0", header.value);
+            found_sec_ch_ua_mobile = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Sec-CH-UA-Platform")) {
+            try std.testing.expectEqualStrings("\"Windows\"", header.value);
+            found_sec_ch_ua_platform = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Sec-Fetch-Site")) {
+            try std.testing.expectEqualStrings("none", header.value);
+            found_sec_fetch_site = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Sec-Fetch-Mode")) {
+            try std.testing.expectEqualStrings("navigate", header.value);
+            found_sec_fetch_mode = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Sec-Fetch-User")) {
+            try std.testing.expectEqualStrings("?1", header.value);
+            found_sec_fetch_user = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Sec-Fetch-Dest")) {
+            try std.testing.expectEqualStrings("document", header.value);
+            found_sec_fetch_dest = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Upgrade-Insecure-Requests")) {
+            try std.testing.expectEqualStrings("1", header.value);
+            found_upgrade_insecure_requests = true;
+            continue;
+        }
+    }
+
+    try std.testing.expect(found_accept);
+    try std.testing.expect(found_accept_language);
+    try std.testing.expect(found_sec_ch_ua);
+    try std.testing.expect(found_sec_ch_ua_mobile);
+    try std.testing.expect(found_sec_ch_ua_platform);
+    try std.testing.expect(found_sec_fetch_site);
+    try std.testing.expect(found_sec_fetch_mode);
+    try std.testing.expect(found_sec_fetch_user);
+    try std.testing.expect(found_sec_fetch_dest);
+    try std.testing.expect(found_upgrade_insecure_requests);
 }
 
 test "WebApi: Frames" {

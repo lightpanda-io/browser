@@ -1,0 +1,112 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Consent Submit Column Flex Layout</title>
+  <style>
+    body {
+      margin: 0;
+      background: #f1f3f4;
+      color: #202124;
+      font: 16px Arial, sans-serif;
+    }
+
+    main {
+      display: flex;
+      justify-content: center;
+      padding: 40px 0;
+    }
+
+    #card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 700px;
+      padding: 32px 0;
+      border: 1px solid #dadce0;
+      border-radius: 24px;
+      background: #fff;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      font-weight: 500;
+      text-align: center;
+    }
+
+    p {
+      margin: 20px 40px 0 40px;
+      text-align: center;
+    }
+
+    .baseButtonGm3 {
+      display: inline-flex;
+      min-width: 120px;
+      height: 40px;
+      padding: 0 24px;
+      border-radius: 999px;
+      border: 1px solid #dadce0;
+      color: #0b57d0;
+      background: #fff;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 40px;
+      text-align: center;
+      text-decoration: none;
+      white-space: nowrap;
+      justify-content: center;
+      align-items: center;
+      box-sizing: border-box;
+    }
+
+    .filledButtonGm3 {
+      border-color: #0b57d0;
+      color: #fff;
+      background: #0b57d0;
+    }
+
+    #action-row {
+      display: inline-block;
+      width: 100%;
+      margin-top: 28px;
+      text-align: center;
+    }
+
+    #action-row form {
+      display: inline;
+      margin: 0;
+    }
+
+    #action-row input[type="submit"] {
+      min-width: 182px;
+    }
+
+    #more-options {
+      margin-top: 20px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section id="card">
+      <h1>Before you continue to Google</h1>
+      <p>We use cookies and data to deliver and maintain search services.</p>
+
+      <div id="action-row">
+        <form action="/save" method="post" style="display:inline;">
+          <input type="submit" value="Reject all" class="baseButtonGm3 filledButtonGm3">
+        </form>
+        <form action="/save" method="post" style="display:inline;">
+          <input type="submit" value="Accept all" class="baseButtonGm3 filledButtonGm3">
+        </form>
+      </div>
+
+      <div id="more-options">
+        <a href="/choices" class="baseButtonGm3">More options</a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

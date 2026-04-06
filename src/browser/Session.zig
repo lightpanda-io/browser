@@ -33,10 +33,42 @@ const HttpClient = @import("../http/Client.zig");
 const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
 const Notification = @import("../Notification.zig");
+const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 const QueuedNavigation = Page.QueuedNavigation;
 
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
+var google_wait_trace_lock: std.Thread.Mutex = .{};
+
+fn googleWaitTraceEnabled(url: []const u8) bool {
+    return std.mem.indexOf(u8, url, "google-home-") != null or
+        std.mem.indexOf(u8, url, "google.com") != null;
+}
+
+fn appendGoogleWaitTrace(stage: []const u8, url: []const u8, detail: []const u8) void {
+    if (!googleWaitTraceEnabled(url)) {
+        return;
+    }
+    google_wait_trace_lock.lock();
+    defer google_wait_trace_lock.unlock();
+
+    const path = "tmp-browser-smoke/google-investigation-next/session-wait.log";
+    var file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch blk: {
+        break :blk std.fs.cwd().createFile(path, .{}) catch return;
+    };
+    defer file.close();
+
+    file.seekFromEnd(0) catch return;
+    var writer_buf: [512]u8 = undefined;
+    var writer = file.writer(&writer_buf);
+    writer.interface.print("{d}|{s}|url={s}|{s}\n", .{
+        @as(i64, @intCast(milliTimestamp(.monotonic))),
+        stage,
+        url,
+        detail,
+    }) catch return;
+    writer.interface.flush() catch {};
+}
 
 // Session is like a browser's tab.
 // It owns the js env and the loader for all the pages of the session.
@@ -355,13 +387,31 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32, dispatch_native_input: bool)
     const exit_when_done = http_client.cdp_client == null;
 
     while (true) {
+        var handled_native_input = false;
+        if (dispatch_native_input and googleWaitTraceEnabled(page.url) and self.browser.app.display.hasPendingNativeInput()) {
+            log.warn(.browser, "session wait pending input", .{
+                .url = page.url,
+            });
+        }
         if (dispatch_native_input) {
-            self.browser.app.display.dispatchNativeInput(page) catch |err| {
+            appendGoogleWaitTrace("dispatch_native_input", page.url, "enter");
+            if (googleWaitTraceEnabled(page.url)) {
+                log.warn(.browser, "session dispatch native input", .{
+                    .url = page.url,
+                });
+            }
+            handled_native_input = self.browser.app.display.dispatchNativeInput(page) catch |err| {
                 log.err(.browser, "native input dispatch", .{
                     .err = err,
                     .url = page.url,
                 });
+                return .done;
             };
+            appendGoogleWaitTrace("dispatch_native_input", page.url, "exit");
+            if (self.browser.app.display.hasPendingNativeInput()) {
+                appendGoogleWaitTrace("dispatch_native_input", page.url, "pending_more=1");
+                continue;
+            }
         }
 
         switch (page._parse_state) {
@@ -372,10 +422,23 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32, dispatch_native_input: bool)
                     // haven't started navigating, I guess.
                     return .done;
                 }
+                if (http_client.active == 0 and http_client.intercepted == 0 and !exit_when_done) {
+                    if (!dispatch_native_input) {
+                        std.Thread.sleep(std.time.ns_per_ms * @as(u64, @intCast(@min(ms_remaining, 10))));
+                    }
+                    return .done;
+                }
                 // Either we have active http connections, or we're in CDP
                 // mode with an extra socket. Either way, we're waiting
                 // for http traffic
-                if (try http_client.tick(@intCast(ms_remaining)) == .cdp_socket) {
+                const http_wait_ms: u32 = if (dispatch_native_input)
+                    0
+                else if (exit_when_done)
+                    @intCast(ms_remaining)
+                else
+                    @min(@as(u32, @intCast(ms_remaining)), 50);
+                const tick_status = try http_client.tick(http_wait_ms);
+                if (tick_status == .cdp_socket) {
                     // exit_when_done is explicitly set when there isn't
                     // an extra socket, so it should not be possibl to
                     // get an cdp_socket message when exit_when_done
@@ -399,10 +462,22 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32, dispatch_native_input: bool)
                 // scheduler.run could trigger new http transfers, so do not
                 // store http_client.active BEFORE this call and then use
                 // it AFTER.
+                appendGoogleWaitTrace("run_macrotasks", page.url, "enter");
                 const ms_to_next_task = try browser.runMacrotasks();
+                var task_detail_buf: [64]u8 = undefined;
+                const task_detail = std.fmt.bufPrint(&task_detail_buf, "exit|ms_to_next_task={?}", .{ms_to_next_task}) catch "exit";
+                appendGoogleWaitTrace("run_macrotasks", page.url, task_detail);
+                if (dispatch_native_input and self.browser.app.display.hasPendingNativeInput()) {
+                    appendGoogleWaitTrace("run_macrotasks", page.url, "pending_input=1");
+                    continue;
+                }
 
                 // Each call to this runs scheduled load events.
                 try page.dispatchLoad();
+                if (handled_native_input) {
+                    appendGoogleWaitTrace("dispatch_native_input", page.url, "yield_after_input=1");
+                    return .done;
+                }
 
                 const http_active = http_client.active;
                 const total_network_activity = http_active + http_client.intercepted;
@@ -433,8 +508,18 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32, dispatch_native_input: bool)
                         }
 
                         if (browser.hasBackgroundTasks()) {
-                            // _we_ have nothing to run, but v8 is working on
-                            // background tasks. We'll wait for them.
+                            // On interactive headed sessions we cannot block
+                            // until V8 drains all background tasks. Pages like
+                            // Google can keep scheduling background work long
+                            // enough to starve queued native input. Yield
+                            // quickly instead so the next loop can dispatch
+                            // user input promptly.
+                            if (dispatch_native_input) {
+                                break :blk 5;
+                            }
+
+                            // Non-interactive paths can still afford to wait
+                            // for V8 background work to settle before exiting.
                             browser.waitForBackgroundTasks();
                             break :blk 20;
                         }
@@ -471,16 +556,26 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32, dispatch_native_input: bool)
                     // We should continue to run lowPriority tasks, so we
                     // minimize how long we'll poll for network I/O.
                     var ms_to_wait = @min(200, ms_to_next_task orelse 200);
+                    if (dispatch_native_input) {
+                        ms_to_wait = 0;
+                    }
                     if (ms_to_wait > 10 and browser.hasBackgroundTasks()) {
                         // if we have background tasks, we don't want to wait too
                         // long for a message from the client. We want to go back
                         // to the top of the loop and run macrotasks.
                         ms_to_wait = 10;
                     }
+                    var wait_detail_buf: [96]u8 = undefined;
+                    const wait_detail = std.fmt.bufPrint(&wait_detail_buf, "before_tick|http_active={d}|ms_to_wait={d}", .{
+                        http_active,
+                        ms_to_wait,
+                    }) catch "before_tick";
+                    appendGoogleWaitTrace("http_tick", page.url, wait_detail);
                     if (try http_client.tick(@min(ms_remaining, ms_to_wait)) == .cdp_socket) {
                         // data on a socket we aren't handling, return to caller
                         return .cdp_socket;
                     }
+                    appendGoogleWaitTrace("http_tick", page.url, "after_tick");
                 }
             },
             .err => {

@@ -63,6 +63,9 @@ const Win32Backend = if (builtin.os.tag == .windows) @import("win32_backend.zig"
     pub fn setHttpRuntime(_: *@This(), _: *Http) void {}
     pub fn setImageRequestCookieJar(_: *@This(), _: ?*CookieJar) void {}
     pub fn dispatchInput(_: *@This(), _: anytype) !void {}
+    pub fn hasPendingInput(_: *const @This()) bool {
+        return false;
+    }
     pub fn presentDocument(_: *@This(), _: []const u8, _: []const u8, _: []const u8) !void {}
     pub fn presentPageView(_: *@This(), _: []const u8, _: []const u8, _: []const u8, _: ?*const DisplayList) !void {}
     pub fn saveBitmap(_: *@This(), _: []const u8) bool {
@@ -341,12 +344,20 @@ pub fn setImageRequestCookieJar(self: *Display, cookie_jar: ?*CookieJar) void {
     }
 }
 
-pub fn dispatchNativeInput(self: *Display, page: anytype) !void {
-    switch (self.backend) {
+pub fn dispatchNativeInput(self: *Display, page: anytype) !bool {
+    return switch (self.backend) {
         .bare_metal => |*backend| try backend.dispatchInput(page),
         .headed_windows => |*backend| try backend.dispatchInput(page),
-        else => {},
-    }
+        else => false,
+    };
+}
+
+pub fn hasPendingNativeInput(self: *Display) bool {
+    return switch (self.backend) {
+        .bare_metal => |*backend| backend.hasPendingInput(),
+        .headed_windows => |*backend| backend.hasPendingInput(),
+        else => false,
+    };
 }
 
 pub fn presentDocument(self: *Display, title: []const u8, url: []const u8, body: []const u8) !void {

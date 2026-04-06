@@ -224,7 +224,7 @@ pub fn appendChild(self: *Node, child: *Node, page: *Page) !*Node {
 
     try validateNodeInsertion(self, child);
 
-    page.domChanged();
+    page.domChangedForNode(self);
 
     // If the child is currently connected, and if its new parent is connected,
     // then we can remove + add a bit more efficiently (we don't have to fully
@@ -283,23 +283,52 @@ pub fn getTextContentAlloc(self: *Node, allocator: Allocator) (Allocator.Error |
     return try buf.toOwnedSliceSentinel(0);
 }
 
-pub fn setTextContent(self: *Node, data: []const u8, page: *Page) !void {
-    switch (self._type) {
+fn replaceContainerTextContent(container: *Node, data: []const u8, page: *Page) !void {
+    switch (container._type) {
         .element => |el| {
             if (data.len == 0) {
                 return el.replaceChildren(&.{}, page);
             }
             return el.replaceChildren(&.{.{ .text = data }}, page);
         },
-        .cdata => |c| c._data = try page.dupeSSO(data),
-        .document => {},
-        .document_type => {},
         .document_fragment => |frag| {
             if (data.len == 0) {
                 return frag.replaceChildren(&.{}, page);
             }
             return frag.replaceChildren(&.{.{ .text = data }}, page);
         },
+        else => unreachable,
+    }
+}
+
+fn setContainerTextContent(container: *Node, data: []const u8, page: *Page) !void {
+    const first_child = container.firstChild() orelse {
+        if (data.len == 0) {
+            return;
+        }
+        return replaceContainerTextContent(container, data, page);
+    };
+
+    if (first_child.nextSibling() == null) {
+        if (first_child.is(CData)) |cdata| {
+            if (data.len == 0) {
+                _ = try container.removeChild(first_child, page);
+                return;
+            }
+            return cdata.setData(data, page);
+        }
+    }
+
+    return replaceContainerTextContent(container, data, page);
+}
+
+pub fn setTextContent(self: *Node, data: []const u8, page: *Page) !void {
+    switch (self._type) {
+        .element => return setContainerTextContent(self, data, page),
+        .cdata => |c| try c.setData(data, page),
+        .document => {},
+        .document_type => {},
+        .document_fragment => return setContainerTextContent(self, data, page),
         .attribute => |attr| return attr.setValue(.wrap(data), page),
     }
 }
@@ -509,7 +538,7 @@ pub fn removeChild(self: *Node, child: *Node, page: *Page) !*Node {
     var it = self.childrenIterator();
     while (it.next()) |n| {
         if (n == child) {
-            page.domChanged();
+            page.domChangedForNode(self);
             page.removeNode(self, child, .{ .will_be_reconnected = false });
             return child;
         }
@@ -524,7 +553,7 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, page: *Page
 
     // special case: if nodes are the same, ignore the change.
     if (new_node == ref_node_) {
-        page.domChanged();
+        page.domChangedForNode(self);
 
         if (page.hasMutationObservers()) {
             const parent = new_node._parent.?;
@@ -555,7 +584,7 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, page: *Page
     const parent_owner = self.ownerDocument(page) orelse self.as(Document);
     const adopting_to_new_document = child_owner != null and child_owner.? != parent_owner;
 
-    page.domChanged();
+    page.domChangedForNode(self);
     const will_be_reconnected = self.isConnected();
     if (new_node._parent) |parent| {
         page.removeNode(parent, new_node, .{ .will_be_reconnected = will_be_reconnected });

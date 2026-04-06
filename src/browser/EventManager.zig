@@ -149,15 +149,22 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
     const listener = try self.listener_pool.create();
     listener.* = .{
         .node = .{},
+        .event_manager = self,
         .once = opts.once,
         .capture = opts.capture,
         .passive = opts.passive,
         .function = func,
         .signal = opts.signal,
+        .signal_listener_id = null,
         .typ = type_string,
+        .list = gop.value_ptr.*,
     };
     // append the listener to the list of listeners for this target
     gop.value_ptr.*.append(&listener.node);
+
+    if (opts.signal) |signal| {
+        listener.signal_listener_id = try signal.registerNativeAbortListener(self.page, listener, nativeAbortCallback);
+    }
 
     // Track load listeners for script execution ignore list
     if (type_string.eql(comptime .wrap("load"))) {
@@ -350,6 +357,9 @@ pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, 
 
         was_dispatched = true;
         event._current_target = target;
+        const previous_passive = event._in_passive_listener;
+        event._in_passive_listener = listener.passive;
+        defer event._in_passive_listener = previous_passive;
 
         switch (listener.function) {
             .value => |value| ls.toLocal(value).callWithThis(void, target, .{event}) catch |err| {
@@ -637,6 +647,9 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
 
         was_handled.* = true;
         event._current_target = current_target;
+        const previous_passive = event._in_passive_listener;
+        event._in_passive_listener = listener.passive;
+        defer event._in_passive_listener = previous_passive;
 
         // Compute adjusted target for shadow DOM retargeting (only if needed)
         const original_target = event._target;
@@ -692,8 +705,13 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
 }
 
 fn removeListener(self: *EventManager, list: *std.DoublyLinkedList, listener: *Listener) void {
+    unregisterAbortSignal(listener);
+
     // If we're in a dispatch, defer removal to avoid invalidating iteration
     if (self.dispatch_depth > 0) {
+        if (listener.removed) {
+            return;
+        }
         listener.removed = true;
         self.deferred_removals.append(self.arena, .{ .list = list, .listener = listener }) catch unreachable;
     } else {
@@ -701,6 +719,20 @@ fn removeListener(self: *EventManager, list: *std.DoublyLinkedList, listener: *L
         list.remove(&listener.node);
         self.listener_pool.destroy(listener);
     }
+}
+
+fn unregisterAbortSignal(listener: *Listener) void {
+    const signal = listener.signal orelse return;
+    const listener_id = listener.signal_listener_id orelse return;
+    if (!signal.getAborted()) {
+        signal.unregisterNativeAbortListener(listener_id);
+    }
+    listener.signal_listener_id = null;
+}
+
+fn nativeAbortCallback(ctx: *anyopaque, _: *Page) void {
+    const listener: *Listener = @ptrCast(@alignCast(ctx));
+    listener.event_manager.removeListener(listener.list, listener);
 }
 
 fn findListener(list: *const std.DoublyLinkedList, callback: Callback, capture: bool) ?*Listener {
@@ -725,11 +757,14 @@ fn findListener(list: *const std.DoublyLinkedList, callback: Callback, capture: 
 
 const Listener = struct {
     typ: String,
+    event_manager: *EventManager,
     once: bool,
     capture: bool,
     passive: bool,
     function: Function,
     signal: ?*@import("webapi/AbortSignal.zig") = null,
+    signal_listener_id: ?u32,
+    list: *std.DoublyLinkedList,
     node: std.DoublyLinkedList.Node,
     removed: bool = false,
 };

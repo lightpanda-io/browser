@@ -226,7 +226,7 @@ pub const List = struct {
             };
             try page.addElementId(parent, element, entry._value.str());
         }
-        page.domChanged();
+        page.attributePresentationChanged(element, result.normalized, entry._value, old_value);
         page.attributeChange(element, result.normalized, entry._value, old_value);
         return entry;
     }
@@ -289,7 +289,7 @@ pub const List = struct {
             page.removeElementId(element, entry._value.str());
         }
 
-        page.domChanged();
+        page.attributePresentationChanged(element, result.normalized, null, old_value);
         page.attributeRemove(element, result.normalized, old_value);
         _ = page._attribute_lookup.remove(@intFromPtr(entry));
         self._list.remove(&entry._node);

@@ -55,6 +55,10 @@ const Allocator = std.mem.Allocator;
 
 const Window = @This();
 
+pub fn registerTypes() []const type {
+    return &.{ Window, TrustedTypes, Chrome, ChromeRuntime };
+}
+
 _proto: *EventTarget,
 _page: *Page,
 _document: *Document,
@@ -62,6 +66,8 @@ _css: CSS = .init,
 _crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
+_trusted_types: TrustedTypes = .{},
+_chrome: Chrome = .{},
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: Performance,
@@ -163,6 +169,21 @@ pub fn getCSS(self: *Window) *CSS {
     return &self._css;
 }
 
+pub fn getTrustedTypes(self: *Window) *TrustedTypes {
+    return &self._trusted_types;
+}
+
+pub fn getChrome(self: *Window) *Chrome {
+    return &self._chrome;
+}
+
+pub fn installOwnJsProperties(self: *Window, js_obj: js.Object) error{JsException}!void {
+    const chrome = js_obj.local.zigValueToJs(self.getChrome(), .{}) catch return error.JsException;
+    if (js_obj.defineOwnProperty("chrome", chrome, js.v8.ReadOnly + js.v8.DontDelete) != true) {
+        return error.JsException;
+    }
+}
+
 pub fn getPerformance(self: *Window) *Performance {
     return &self._performance;
 }
@@ -219,12 +240,89 @@ pub fn syncStorageBucket(self: *Window) !void {
     );
 }
 
+const TrustedTypes = struct {
+    pub fn createPolicy(_: *const TrustedTypes, _: []const u8, rules: js.Object) js.Object {
+        return rules;
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(TrustedTypes);
+
+        pub const Meta = struct {
+            pub const name = "TrustedTypePolicyFactory";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+            pub const empty_with_no_proto = true;
+        };
+
+        pub const createPolicy = bridge.function(TrustedTypes.createPolicy, .{});
+        pub const defaultPolicy = bridge.property(null, .{ .template = false });
+    };
+};
+
+const ChromeRuntime = struct {
+    _pad: bool = false,
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(ChromeRuntime);
+
+        pub const Meta = struct {
+            pub const name = "ChromeRuntime";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+            pub const empty_with_no_proto = true;
+        };
+    };
+};
+
+const Chrome = struct {
+    _runtime: ChromeRuntime = .{},
+
+    pub fn getRuntime(self: *Chrome) *ChromeRuntime {
+        return &self._runtime;
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(Chrome);
+
+        pub const Meta = struct {
+            pub const name = "Chrome";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+            pub const empty_with_no_proto = true;
+        };
+
+        pub const runtime = bridge.accessor(Chrome.getRuntime, null, .{});
+    };
+};
+
 pub fn getLocation(self: *const Window) *Location {
     return self._location;
 }
 
 pub fn getSelection(self: *const Window) *Selection {
     return &self._document._selection;
+}
+
+pub fn structuredClone(_: *Window, value: js.Value, page: *Page) !js.Value {
+    if (value.isUndefined() or value.isNull() or value.isBoolean() or value.isNumber() or value.isBigInt() or value.isString() != null) {
+        return value;
+    }
+
+    const local = page.js.local.?;
+    const serialized = value.toJson(page.call_arena) catch return error.JsException;
+    const global = js.Object{
+        .local = local,
+        .handle = js.v8.v8__Context__Global(local.handle).?,
+    };
+    const temp_name = "__lightpanda_structured_clone_json__";
+    defer _ = global.set(temp_name, null, .{}) catch {};
+
+    if (try global.set(temp_name, serialized, .{}) == false) {
+        return error.JsException;
+    }
+
+    return local.compileAndRun("JSON.parse(__lightpanda_structured_clone_json__)", "structuredClone");
 }
 
 pub fn setLocation(self: *Window, url: [:0]const u8, page: *Page) !void {
@@ -1003,6 +1101,8 @@ fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
     };
 }
 
+pub fn attachEvent(_: *Window, _: []const u8, _: js.Value.Temp) void {}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Window);
 
@@ -1030,8 +1130,12 @@ pub const JsApi = struct {
     pub const history = bridge.accessor(Window.getHistory, null, .{});
     pub const navigation = bridge.accessor(Window.getNavigation, null, .{});
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{});
+    pub const trustedTypes = bridge.accessor(Window.getTrustedTypes, null, .{});
+    pub const chrome = bridge.accessor(Window.getChrome, null, .{});
     pub const CSS = bridge.accessor(Window.getCSS, null, .{});
     pub const customElements = bridge.accessor(Window.getCustomElements, null, .{});
+    pub const TEMPORARY = bridge.property(0, .{ .template = false });
+    pub const PERSISTENT = bridge.property(1, .{ .template = false });
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
     pub const onpageshow = bridge.accessor(Window.getOnPageShow, Window.setOnPageShow, .{});
     pub const onpopstate = bridge.accessor(Window.getOnPopState, Window.setOnPopState, .{});
@@ -1053,6 +1157,8 @@ pub const JsApi = struct {
     pub const cancelIdleCallback = bridge.function(Window.cancelIdleCallback, .{});
     pub const matchMedia = bridge.function(Window.matchMedia, .{});
     pub const postMessage = bridge.function(Window.postMessage, .{});
+    pub const attachEvent = bridge.function(Window.attachEvent, .{});
+    pub const structuredClone = bridge.function(Window.structuredClone, .{});
     pub const btoa = bridge.function(Window.btoa, .{});
     pub const atob = bridge.function(Window.atob, .{});
     pub const reportError = bridge.function(Window.reportError, .{});

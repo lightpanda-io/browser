@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=compression_stream_basic>
+  {
+    const stream = new CompressionStream('gzip');
+    testing.expectEqual('object', typeof stream);
+    testing.expectEqual('object', typeof stream.readable);
+    testing.expectEqual('object', typeof stream.writable);
+  }
+</script>
+
+<script id=compression_stream_gzip_bytes>
+  (async function() {
+    const stream = new CompressionStream('gzip');
+    const writer = stream.writable.getWriter();
+    const reader = stream.readable.getReader();
+
+    await writer.write(new Uint8Array([104, 105]));
+    await writer.close();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual(true, result.value instanceof Uint8Array);
+    testing.expectEqual(0x1f, result.value[0]);
+    testing.expectEqual(0x8b, result.value[1]);
+    testing.expectEqual(0x08, result.value[2]);
+
+    const done = await reader.read();
+    testing.expectEqual(true, done.done);
+  })();
+</script>
+
+<script id=compression_stream_deflate_raw_bytes>
+  (async function() {
+    const stream = new CompressionStream('deflate-raw');
+    const writer = stream.writable.getWriter();
+    const reader = stream.readable.getReader();
+
+    await writer.write(new Uint8Array([104, 105]));
+    await writer.close();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual(true, result.value instanceof Uint8Array);
+    testing.expectEqual(true, result.value.length > 0);
+    testing.expectEqual(false, result.value[0] === 104 && result.value[1] === 105);
+  })();
+</script>

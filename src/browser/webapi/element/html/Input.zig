@@ -27,6 +27,7 @@ const HtmlElement = @import("../Html.zig");
 const Form = @import("Form.zig");
 const Selection = @import("../../Selection.zig");
 const Event = @import("../../Event.zig");
+const DOMInputEvent = @import("../../event/InputEvent.zig");
 
 const Input = @This();
 
@@ -107,12 +108,30 @@ fn dispatchSelectionChangeEvent(self: *Input, page: *Page) !void {
     try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
+pub fn dispatchBeforeInputEvent(self: *Input, data: ?[]const u8, input_type: []const u8, page: *Page) !bool {
+    const event = try DOMInputEvent.initTrusted(comptime .wrap("beforeinput"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .data = data,
+        .inputType = input_type,
+    }, page);
+    try page._event_manager.dispatch(self.asElement().asEventTarget(), event.asEvent());
+    return !event.asEvent()._prevent_default;
+}
+
 pub fn dispatchInputEvent(self: *Input, page: *Page) !void {
-    const event = try Event.initTrusted(comptime .wrap("input"), .{
+    return self.dispatchInputEventWithData(null, "", page);
+}
+
+pub fn dispatchInputEventWithData(self: *Input, data: ?[]const u8, input_type: []const u8, page: *Page) !void {
+    const event = try DOMInputEvent.initTrusted(comptime .wrap("input"), .{
         .bubbles = true,
         .composed = true,
+        .data = data,
+        .inputType = input_type,
     }, page);
-    try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
+    try page._event_manager.dispatch(self.asElement().asEventTarget(), event.asEvent());
 }
 
 pub fn dispatchChangeEvent(self: *Input, page: *Page) !void {
@@ -164,7 +183,11 @@ pub fn setValue(self: *Input, value: []const u8, page: *Page) !void {
     }
     // This should _not_ call setAttribute. It updates the current state only
     self._value = try self.sanitizeValue(true, value, page);
-    page.presentationChanged();
+    if (self.supportsIncrementalTextPresentation()) {
+        page.presentationChangedForTextControl(self.asElement());
+    } else {
+        page.presentationChanged();
+    }
 }
 
 pub fn getDefaultValue(self: *const Input) []const u8 {
@@ -188,6 +211,25 @@ pub fn setChecked(self: *Input, checked: bool, page: *Page) !void {
     self._checked = checked;
     self._checked_dirty = true;
     page.presentationChanged();
+}
+
+pub fn supportsIncrementalTextPresentation(self: *const Input) bool {
+    return switch (self._input_type) {
+        .text,
+        .password,
+        .email,
+        .url,
+        .tel,
+        .search,
+        .number,
+        .date,
+        .time,
+        .@"datetime-local",
+        .month,
+        .week,
+        => true,
+        else => false,
+    };
 }
 
 pub fn getIndeterminate(self: *const Input) bool {
@@ -503,7 +545,7 @@ pub fn innerInsert(self: *Input, str: []const u8, page: *Page) !void {
             self._selection_end = @intCast(new_value.len);
             self._selection_direction = .none;
             try self.dispatchSelectionChangeEvent(page);
-            try self.dispatchInputEvent(page);
+            try self.dispatchInputEventWithData(str, "insertText", page);
         },
         .partial => |range| {
             // if the input is partially selected, replace the selected content.
@@ -523,7 +565,7 @@ pub fn innerInsert(self: *Input, str: []const u8, page: *Page) !void {
             self._selection_end = @intCast(new_pos);
             self._selection_direction = .none;
             try self.dispatchSelectionChangeEvent(page);
-            try self.dispatchInputEvent(page);
+            try self.dispatchInputEventWithData(str, "insertText", page);
         },
         .none => {
             // if the input is not selected, just insert at cursor.
@@ -547,7 +589,7 @@ pub fn innerInsert(self: *Input, str: []const u8, page: *Page) !void {
             self._selection_end = new_pos;
             self._selection_direction = .none;
             try self.dispatchSelectionChangeEvent(page);
-            try self.dispatchInputEvent(page);
+            try self.dispatchInputEventWithData(str, "insertText", page);
         },
     }
 }

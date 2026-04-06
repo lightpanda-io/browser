@@ -82,8 +82,9 @@ local: ?*const js.Local = null,
 // every Global(Object) we've created during the lifetime of the context.
 // More importantly, it serves as an identity map - for a given Zig
 // instance, we map it to the same Global(Object).
-// The key is the @intFromPtr of the Zig value
-identity_map: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
+// Most types use their pointer as the key. Zero-sized Zig values can share
+// the same address, so those use a typed composite key instead.
+identity_map: std.AutoHashMapUnmanaged(IdentityKey, v8.Global) = .empty,
 
 // Any type that is stored in the identity_map which has a finalizer declared
 // will have its finalizer stored here. This is only used when shutting down
@@ -159,6 +160,18 @@ const ModuleResolutionOrder = struct {
     specifiers: std.ArrayListUnmanaged([:0]const u8) = .empty,
     next: usize = 0,
 };
+
+pub const IdentityKey = u128;
+
+pub inline fn identityMapKey(raw_ptr: usize, class_id: u16, zero_sized: bool) IdentityKey {
+    if (!zero_sized) {
+        return raw_ptr;
+    }
+
+    return (@as(IdentityKey, 1) << 127) |
+        (@as(IdentityKey, raw_ptr) << 16) |
+        @as(IdentityKey, class_id);
+}
 
 fn precompileStaticModuleDependencies(
     self: *Context,
@@ -345,7 +358,7 @@ pub fn release(self: *Context, item: anytype) void {
     if (@TypeOf(item) == *anyopaque) {
         // Existing *anyopaque path for identity_map. Called internally from
         // finalizers
-        var global = self.identity_map.fetchRemove(@intFromPtr(item)) orelse {
+        var global = self.identity_map.fetchRemove(@as(IdentityKey, @intFromPtr(item))) orelse {
             if (comptime IS_DEBUG) {
                 // should not be possible
                 std.debug.assert(false);
@@ -1167,6 +1180,22 @@ pub fn queueIntersectionDelivery(self: *Context) !void {
     self.enqueueMicrotask(struct {
         fn run(ctx: *Context) void {
             ctx.page.deliverIntersections();
+        }
+    }.run);
+}
+
+pub fn queueResizeChecks(self: *Context) !void {
+    self.enqueueMicrotask(struct {
+        fn run(ctx: *Context) void {
+            ctx.page.performScheduledResizeChecks();
+        }
+    }.run);
+}
+
+pub fn queueResizeDelivery(self: *Context) !void {
+    self.enqueueMicrotask(struct {
+        fn run(ctx: *Context) void {
+            ctx.page.deliverResizes();
         }
     }.run);
 }

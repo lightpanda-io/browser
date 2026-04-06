@@ -31,6 +31,7 @@ const ParsedRule = struct {
     selector_text: []const u8,
     declarations_text: []const u8,
     selectors: []const ParsedSelector,
+    media_query: ?[]const u8 = null,
     source_order: usize,
     rule: *CSSRule,
 };
@@ -146,6 +147,7 @@ pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, page: *Page) !void {
         self._request_base_url,
         self._request_referer_url,
         self._request_include_credentials,
+        null,
     );
 
     self._rules = try page.arena.dupe(ParsedRule, parsed.items);
@@ -157,6 +159,11 @@ pub fn applyMatchingRules(self: *const CSSStyleSheet, element: *Element, decl: *
     if (self._disabled) return;
 
     for (self._rules) |entry| {
+        if (entry.media_query) |media_query| {
+            if (!mediaQueryMatchesViewport(media_query, page)) {
+                continue;
+            }
+        }
         const scope = element.asNode();
         var matched_specificity: ?CSSStyleDeclaration.CascadeSpecificity = null;
         for (entry.selectors) |selector_entry| {
@@ -378,6 +385,7 @@ fn appendParsedRulesFromText(
     base_url: ?[:0]const u8,
     referer_url: ?[:0]const u8,
     include_credentials: bool,
+    active_media_query: ?[]const u8,
 ) anyerror!void {
     var cursor: usize = 0;
     while (cursor < text.len) {
@@ -400,6 +408,35 @@ fn appendParsedRulesFromText(
                 base_url,
                 referer_url,
                 include_credentials,
+                active_media_query,
+            );
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, text[selector_start..], "@media")) {
+            const open_index = std.mem.indexOfScalarPos(u8, text, selector_start, '{') orelse break;
+            const close_index = findMatchingBrace(text, open_index) orelse break;
+            cursor = close_index + 1;
+
+            const raw_condition = std.mem.trim(
+                u8,
+                text[selector_start + "@media".len .. open_index],
+                &std.ascii.whitespace,
+            );
+            if (raw_condition.len == 0) continue;
+
+            const combined_media_query = try combineMediaQueries(temp, active_media_query, raw_condition);
+            try self.appendParsedRulesFromText(
+                parsed,
+                font_faces,
+                text[open_index + 1 .. close_index],
+                page,
+                temp,
+                visited,
+                base_url,
+                referer_url,
+                include_credentials,
+                combined_media_query,
             );
             continue;
         }
@@ -449,6 +486,7 @@ fn appendParsedRulesFromText(
             .selector_text = selector_text_copy,
             .declarations_text = declarations_text_copy,
             .selectors = parsed_selectors,
+            .media_query = if (active_media_query) |query| try page.dupeString(query) else null,
             .source_order = parsed.items.len,
             .rule = rule,
         });
@@ -466,6 +504,7 @@ fn appendImportedRules(
     base_url: ?[:0]const u8,
     referer_url: ?[:0]const u8,
     include_credentials: bool,
+    active_media_query: ?[]const u8,
 ) anyerror!void {
     const current_base = base_url orelse return;
     const resolved_url = try URL.resolve(temp, current_base, import_specifier, .{ .encode = true, .always_dupe = true });
@@ -486,7 +525,193 @@ fn appendImportedRules(
         resolved_url,
         resolved_url,
         include_credentials,
+        active_media_query,
     );
+}
+
+fn combineMediaQueries(
+    allocator: std.mem.Allocator,
+    parent: ?[]const u8,
+    child: []const u8,
+) ![]const u8 {
+    const trimmed_child = std.mem.trim(u8, child, &std.ascii.whitespace);
+    if (trimmed_child.len == 0) {
+        return allocator.dupe(u8, parent orelse "");
+    }
+    if (parent) |parent_query| {
+        const trimmed_parent = std.mem.trim(u8, parent_query, &std.ascii.whitespace);
+        if (trimmed_parent.len == 0) {
+            return allocator.dupe(u8, trimmed_child);
+        }
+        return std.fmt.allocPrint(allocator, "{s} and {s}", .{ trimmed_parent, trimmed_child });
+    }
+    return allocator.dupe(u8, trimmed_child);
+}
+
+pub fn mediaQueryMatchesViewport(query: []const u8, page: *Page) bool {
+    return mediaQueryMatchesDimensions(query, page.window.getInnerWidth(), page.window.getInnerHeight());
+}
+
+fn mediaQueryMatchesDimensions(query: []const u8, viewport_width: u32, viewport_height: u32) bool {
+    var remaining = std.mem.trim(u8, query, &std.ascii.whitespace);
+    while (remaining.len > 0) {
+        const comma_index = topLevelCommaIndex(remaining);
+        const chunk = std.mem.trim(u8, remaining[0..comma_index], &std.ascii.whitespace);
+        if (chunk.len > 0 and mediaQueryClauseMatches(chunk, viewport_width, viewport_height)) {
+            return true;
+        }
+        if (comma_index >= remaining.len) break;
+        remaining = remaining[comma_index + 1 ..];
+    }
+    return false;
+}
+
+fn mediaQueryClauseMatches(query: []const u8, viewport_width: u32, viewport_height: u32) bool {
+    var clause = std.mem.trim(u8, query, &std.ascii.whitespace);
+    if (clause.len == 0) return true;
+
+    var negate = false;
+    if (startsWithWordIgnoreCase(clause, "only")) {
+        clause = std.mem.trimLeft(u8, clause["only".len..], &std.ascii.whitespace);
+    } else if (startsWithWordIgnoreCase(clause, "not")) {
+        negate = true;
+        clause = std.mem.trimLeft(u8, clause["not".len..], &std.ascii.whitespace);
+    }
+
+    var remaining = clause;
+    var saw_term = false;
+    while (remaining.len > 0) {
+        const and_index = topLevelMediaAndIndex(remaining);
+        const term = std.mem.trim(u8, remaining[0..and_index], &std.ascii.whitespace);
+        if (term.len > 0) {
+            saw_term = true;
+            if (!mediaQueryTermMatches(term, viewport_width, viewport_height)) {
+                return negate;
+            }
+        }
+        if (and_index >= remaining.len) break;
+        remaining = remaining[and_index + 3 ..];
+    }
+
+    const matched = if (saw_term) true else true;
+    return if (negate) !matched else matched;
+}
+
+fn mediaQueryTermMatches(term: []const u8, viewport_width: u32, viewport_height: u32) bool {
+    const trimmed = std.mem.trim(u8, term, &std.ascii.whitespace);
+    if (trimmed.len == 0) return true;
+    if (trimmed[0] == '(' and trimmed[trimmed.len - 1] == ')') {
+        return mediaFeatureMatches(trimmed[1 .. trimmed.len - 1], viewport_width, viewport_height);
+    }
+    if (std.ascii.eqlIgnoreCase(trimmed, "all")) return true;
+    if (std.ascii.eqlIgnoreCase(trimmed, "screen")) return true;
+    if (std.ascii.eqlIgnoreCase(trimmed, "print")) return false;
+    return false;
+}
+
+fn mediaFeatureMatches(feature: []const u8, viewport_width: u32, viewport_height: u32) bool {
+    const trimmed = std.mem.trim(u8, feature, &std.ascii.whitespace);
+    if (trimmed.len == 0) return false;
+
+    const colon_index = std.mem.indexOfScalar(u8, trimmed, ':') orelse return false;
+    const name = std.mem.trim(u8, trimmed[0..colon_index], &std.ascii.whitespace);
+    const value = std.mem.trim(u8, trimmed[colon_index + 1 ..], &std.ascii.whitespace);
+
+    if (std.ascii.eqlIgnoreCase(name, "min-width")) {
+        const px = parseMediaQueryPx(value) orelse return false;
+        return viewport_width >= px;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "max-width")) {
+        const px = parseMediaQueryPx(value) orelse return false;
+        return viewport_width <= px;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "min-height")) {
+        const px = parseMediaQueryPx(value) orelse return false;
+        return viewport_height >= px;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "max-height")) {
+        const px = parseMediaQueryPx(value) orelse return false;
+        return viewport_height <= px;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "orientation")) {
+        if (std.ascii.eqlIgnoreCase(value, "portrait")) {
+            return viewport_height >= viewport_width;
+        }
+        if (std.ascii.eqlIgnoreCase(value, "landscape")) {
+            return viewport_width >= viewport_height;
+        }
+        return false;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "prefers-color-scheme")) {
+        return std.ascii.eqlIgnoreCase(value, "light");
+    }
+    return false;
+}
+
+fn parseMediaQueryPx(value: []const u8) ?u32 {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+    if (std.mem.endsWith(u8, trimmed, "px")) {
+        const numeric = std.mem.trimRight(u8, trimmed[0 .. trimmed.len - 2], &std.ascii.whitespace);
+        return std.fmt.parseInt(u32, numeric, 10) catch null;
+    }
+    return std.fmt.parseInt(u32, trimmed, 10) catch null;
+}
+
+fn startsWithWordIgnoreCase(input: []const u8, word: []const u8) bool {
+    if (input.len < word.len) return false;
+    if (!std.ascii.eqlIgnoreCase(input[0..word.len], word)) return false;
+    if (input.len == word.len) return true;
+    return std.ascii.isWhitespace(input[word.len]);
+}
+
+fn topLevelMediaAndIndex(input: []const u8) usize {
+    var depth: usize = 0;
+    var in_quote: u8 = 0;
+    var i: usize = 0;
+    while (i < input.len) {
+        const c = input[i];
+        if (in_quote != 0) {
+            if (c == '\\') {
+                i += 1;
+                if (i < input.len) i += 1;
+                continue;
+            }
+            if (c == in_quote) {
+                in_quote = 0;
+            }
+            i += 1;
+            continue;
+        }
+
+        switch (c) {
+            '\\' => {
+                i += 1;
+                if (i < input.len) i += 1;
+            },
+            '"', '\'' => {
+                in_quote = c;
+                i += 1;
+            },
+            '(' => {
+                depth += 1;
+                i += 1;
+            },
+            ')' => {
+                if (depth > 0) depth -= 1;
+                i += 1;
+            },
+            else => {
+                if (depth == 0 and i + 3 <= input.len and std.ascii.eqlIgnoreCase(input[i .. i + 3], "and")) {
+                    const left_ok = i == 0 or std.ascii.isWhitespace(input[i - 1]);
+                    const right_ok = i + 3 == input.len or std.ascii.isWhitespace(input[i + 3]);
+                    if (left_ok and right_ok) return i;
+                }
+                i += 1;
+            },
+        }
+    }
+    return input.len;
 }
 
 fn fetchStylesheetText(
@@ -1022,6 +1247,87 @@ test "applyMatchingRules keeps valid selector-list branches when one branch is u
     const duplicate = (try page.window._document.querySelector(.wrap(".dup"), page)).?;
     const duplicate_style = try page.window.getComputedStyle(duplicate, null, page);
     try std.testing.expectEqualStrings("none", duplicate_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+}
+
+test "mediaQueryMatchesDimensions evaluates common responsive clauses" {
+    try std.testing.expect(mediaQueryMatchesDimensions("(min-width: 600px)", 960, 720));
+    try std.testing.expect(!mediaQueryMatchesDimensions("(max-width: 700px)", 960, 720));
+    try std.testing.expect(mediaQueryMatchesDimensions("screen and (max-width: 700px)", 480, 720));
+    try std.testing.expect(!mediaQueryMatchesDimensions("screen and (max-width: 700px)", 960, 720));
+    try std.testing.expect(mediaQueryMatchesDimensions("(orientation: portrait)", 480, 720));
+    try std.testing.expect(!mediaQueryMatchesDimensions("(orientation: portrait)", 960, 720));
+}
+
+test "applyMatchingRules switches responsive variants with viewport width" {
+    var page = try testing.pageTest("page/media_query_responsive_layout.html");
+    defer page._session.removePage();
+
+    const desktop_copy = (try page.window._document.querySelector(.wrap(".desktop-copy"), page)).?;
+    const mobile_copy = (try page.window._document.querySelector(.wrap(".mobile-copy"), page)).?;
+    const desktop_cta = (try page.window._document.querySelector(.wrap(".desktop-cta"), page)).?;
+    const mobile_cta = (try page.window._document.querySelector(.wrap(".mobile-cta"), page)).?;
+
+    page.window._visual_viewport.setMetrics(1280, 720, 1.0);
+    {
+        const desktop_copy_style = try page.window.getComputedStyle(desktop_copy, null, page);
+        const mobile_copy_style = try page.window.getComputedStyle(mobile_copy, null, page);
+        const desktop_cta_style = try page.window.getComputedStyle(desktop_cta, null, page);
+        const mobile_cta_style = try page.window.getComputedStyle(mobile_cta, null, page);
+
+        try std.testing.expectEqualStrings("block", desktop_copy_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+        try std.testing.expectEqualStrings("none", mobile_copy_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+        try std.testing.expectEqualStrings("block", desktop_cta_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+        try std.testing.expectEqualStrings("none", mobile_cta_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+    }
+
+    page.window._visual_viewport.setMetrics(480, 720, 1.0);
+    {
+        const desktop_copy_style = try page.window.getComputedStyle(desktop_copy, null, page);
+        const mobile_copy_style = try page.window.getComputedStyle(mobile_copy, null, page);
+        const desktop_cta_style = try page.window.getComputedStyle(desktop_cta, null, page);
+        const mobile_cta_style = try page.window.getComputedStyle(mobile_cta, null, page);
+
+        try std.testing.expectEqualStrings("none", desktop_copy_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+        try std.testing.expectEqualStrings("block", mobile_copy_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+        try std.testing.expectEqualStrings("none", desktop_cta_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+        try std.testing.expectEqualStrings("block", mobile_cta_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+    }
+}
+
+test "applyMatchingRules switches consent submit rows and sign-in variants with viewport width" {
+    var page = try testing.pageTest("page/consent_submit_responsive_layout.html");
+    defer page._session.removePage();
+
+    const wide_row = (try page.window._document.querySelector(.wrap(".saveButtonContainer"), page)).?;
+    const narrow_row = (try page.window._document.querySelector(.wrap(".saveButtonContainerNarrowScreen"), page)).?;
+    const wide_sign_in = (try page.window._document.querySelector(.wrap(".hideOnSmallWidth"), page)).?;
+    const narrow_sign_in = (try page.window._document.querySelector(.wrap(".hideOnNormalWidth"), page)).?;
+
+    page.window._visual_viewport.setMetrics(1280, 720, 1.0);
+    {
+        const wide_row_style = try page.window.getComputedStyle(wide_row, null, page);
+        const narrow_row_style = try page.window.getComputedStyle(narrow_row, null, page);
+        const wide_sign_in_style = try page.window.getComputedStyle(wide_sign_in, null, page);
+        const narrow_sign_in_style = try page.window.getComputedStyle(narrow_sign_in, null, page);
+
+        try std.testing.expectEqualStrings("inline-block", wide_row_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+        try std.testing.expectEqualStrings("none", narrow_row_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+        try std.testing.expectEqualStrings("inline-flex", wide_sign_in_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+        try std.testing.expectEqualStrings("none", narrow_sign_in_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+    }
+
+    page.window._visual_viewport.setMetrics(480, 720, 1.0);
+    {
+        const wide_row_style = try page.window.getComputedStyle(wide_row, null, page);
+        const narrow_row_style = try page.window.getComputedStyle(narrow_row, null, page);
+        const wide_sign_in_style = try page.window.getComputedStyle(wide_sign_in, null, page);
+        const narrow_sign_in_style = try page.window.getComputedStyle(narrow_sign_in, null, page);
+
+        try std.testing.expectEqualStrings("none", wide_row_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+        try std.testing.expectEqualStrings("block", narrow_row_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+        try std.testing.expectEqualStrings("none", wide_sign_in_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+        try std.testing.expectEqualStrings("inline-flex", narrow_sign_in_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+    }
 }
 
 const testing = @import("../../../testing.zig");

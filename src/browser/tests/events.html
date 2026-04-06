@@ -239,6 +239,56 @@
   testing.expectEqual(2, calls.length);
 </script>
 
+<script id=listener_options_object>
+  const listenerTarget = document.createElement('div');
+
+  let onceCalls = 0;
+  listenerTarget.addEventListener('once-event', () => {
+    onceCalls += 1;
+  }, { once: true });
+  listenerTarget.dispatchEvent(new Event('once-event'));
+  listenerTarget.dispatchEvent(new Event('once-event'));
+  testing.expectEqual(1, onceCalls);
+
+  let abortedCalls = 0;
+  const abortedController = new AbortController();
+  listenerTarget.addEventListener('abort-event', () => {
+    abortedCalls += 1;
+  }, { signal: abortedController.signal });
+  abortedController.abort();
+  listenerTarget.dispatchEvent(new Event('abort-event'));
+  testing.expectEqual(0, abortedCalls);
+
+  let preAbortedCalls = 0;
+  const preAbortedController = new AbortController();
+  preAbortedController.abort();
+  listenerTarget.addEventListener('pre-abort-event', () => {
+    preAbortedCalls += 1;
+  }, { signal: preAbortedController.signal });
+  listenerTarget.dispatchEvent(new Event('pre-abort-event'));
+  testing.expectEqual(0, preAbortedCalls);
+
+  let passiveDefaultPrevented = null;
+  const passiveEvent = new Event('passive-event', { cancelable: true });
+  listenerTarget.addEventListener('passive-event', (e) => {
+    e.preventDefault();
+    passiveDefaultPrevented = e.defaultPrevented;
+  }, { passive: true });
+  testing.expectEqual(true, listenerTarget.dispatchEvent(passiveEvent));
+  testing.expectEqual(false, passiveDefaultPrevented);
+  testing.expectEqual(false, passiveEvent.defaultPrevented);
+
+  let activeDefaultPrevented = null;
+  const activeEvent = new Event('active-event', { cancelable: true });
+  listenerTarget.addEventListener('active-event', (e) => {
+    e.preventDefault();
+    activeDefaultPrevented = e.defaultPrevented;
+  });
+  testing.expectEqual(false, listenerTarget.dispatchEvent(activeEvent));
+  testing.expectEqual(true, activeDefaultPrevented);
+  testing.expectEqual(true, activeEvent.defaultPrevented);
+</script>
+
 <div id=parent8><div id=child8></div></div>
 <script id=captureStopPropagation>
   // Test that stopPropagation during capture prevents target and bubble

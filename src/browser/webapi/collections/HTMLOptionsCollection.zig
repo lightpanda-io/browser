@@ -48,8 +48,8 @@ pub fn getSelectedIndex(self: *const HTMLOptionsCollection) i32 {
     return self._select.getSelectedIndex();
 }
 
-pub fn setSelectedIndex(self: *HTMLOptionsCollection, index: i32) !void {
-    return self._select.setSelectedIndex(index);
+pub fn setSelectedIndex(self: *HTMLOptionsCollection, index: i32, page: *Page) !void {
+    return self._select.setSelectedIndex(index, page);
 }
 
 const Option = @import("../element/html/Option.zig");

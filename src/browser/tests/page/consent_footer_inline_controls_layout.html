@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Consent Footer Inline Controls Layout</title>
+</head>
+<body style="margin:0;background:#f1f3f4;color:#202124;font:16px Arial,sans-serif;">
+  <main style="display:flex;justify-content:center;padding:40px 0;">
+    <section style="display:block;width:760px;padding:48px 64px;background:#fff;border:1px solid #dadce0;border-radius:24px;">
+      <div id="logo" style="display:block;width:74px;height:24px;margin:0 auto 24px auto;background:#4285f4;border-radius:12px;"></div>
+      <h1 style="display:block;margin:0 0 18px 0;text-align:center;font-size:26px;line-height:34px;font-weight:500;">
+        Before you continue to Google Search
+      </h1>
+      <p style="display:block;margin:0 auto 28px auto;width:440px;text-align:center;font-size:16px;line-height:28px;color:#3c4043;">
+        We use cookies and data to deliver and maintain search services.
+      </p>
+      <div id="actions" style="display:flex;justify-content:center;gap:16px;">
+        <button style="padding:0 24px;height:40px;border:1px solid #dadce0;border-radius:20px;background:#fff;color:#1a73e8;">Reject all</button>
+        <button style="padding:0 24px;height:40px;border:0;border-radius:20px;background:#1a73e8;color:#fff;">Accept all</button>
+      </div>
+      <div id="footer" class="footer" style="display:block;margin-top:28px;text-align:center;font-size:12px;line-height:20px;color:#5f6368;">
+        <form id="language-form" class="languagePicker" action="/ml" method="get" style="display:inline;">
+          <select id="language-select" name="hl" aria-label="Language: English">
+            <option value="af">Afrikaans</option>
+            <option value="en-GB">English (United Kingdom)</option>
+            <option value="en" selected>English (United States)</option>
+            <option value="fr">Français (France)</option>
+            <option value="ja">日本語</option>
+          </select>
+          <input type="hidden" name="oldhl" value="en">
+          <input type="hidden" name="gl" value="GB">
+          <input type="hidden" name="continue" value="https://www.google.com/search?q=brass+otter+lantern">
+          <input type="submit" value="Change language" style="display:none;">
+        </form>
+        <a id="privacy" href="/privacy">Privacy Policy</a>
+        <a id="terms" href="/terms">Terms of Service</a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

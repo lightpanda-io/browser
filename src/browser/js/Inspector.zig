@@ -67,13 +67,16 @@ pub fn init(allocator: Allocator, isolate: *v8.Isolate) !*Inspector {
     return self;
 }
 
-pub fn deinit(self: *const Inspector, allocator: Allocator) void {
+pub fn deinit(self: *Inspector, allocator: Allocator) void {
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
     if (self.session) |*s| {
         s.deinit();
+    }
+    if (self.default_context != null) {
+        v8.v8__Global__Reset(&self.default_context.?);
     }
     v8.v8_inspector__Client__IMPL__DELETE(self.client);
     v8.v8_inspector__Inspector__DELETE(self.handle);
@@ -124,19 +127,35 @@ pub fn contextCreated(
     );
 
     if (is_default_context) {
-        self.default_context = local.ctx.handle;
+        if (self.default_context != null) {
+            v8.v8__Global__Reset(&self.default_context.?);
+        }
+
+        var context_global: v8.Global = undefined;
+        v8.v8__Global__New(self.isolate, local.handle, &context_global);
+        self.default_context = context_global;
     }
 }
 
 pub fn contextDestroyed(self: *Inspector, context: *const v8.Context) void {
+    if (self.default_context) |*global_handle| {
+        if (v8.v8__Global__Get(global_handle, self.isolate) == context) {
+            v8.v8__Global__Reset(global_handle);
+            self.default_context = null;
+        }
+    }
     v8.v8_inspector__Inspector__ContextDestroyed(self.handle, context);
 }
 
-pub fn resetContextGroup(self: *const Inspector) void {
+pub fn resetContextGroup(self: *Inspector) void {
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
+    if (self.default_context != null) {
+        v8.v8__Global__Reset(&self.default_context.?);
+    }
+    self.default_context = null;
     v8.v8_inspector__Inspector__ResetContextGroup(self.handle, CONTEXT_GROUP_ID);
 }
 

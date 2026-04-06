@@ -290,10 +290,12 @@ pub fn pageRemove(bc: anytype) !void {
     for (bc.isolated_worlds.items) |isolated_world| {
         try isolated_world.removeContext();
     }
+    bc.presentation_state.reset(bc.cdp.browser.app.allocator);
 }
 
 pub fn pageCreated(bc: anytype, page: *Page) !void {
     _ = bc.cdp.page_arena.reset(.{ .retain_with_limit = 1024 * 512 });
+    bc.presentation_state.reset(bc.cdp.browser.app.allocator);
 
     for (bc.isolated_worlds.items) |isolated_world| {
         _ = try isolated_world.createContext(page);
@@ -381,17 +383,12 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
 
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
-    // When we actually recreated the context we should have the inspector send
-    // this event, see: resetContextGroup Sending this event will tell the
-    // client that the context ids they had are invalid and the context shouls
-    // be dropped The client will expect us to send new contextCreated events,
-    // such that the client has new id's for the active contexts.
-    // Only send executionContextsCleared for main frame navigations. For child
-    // frames (iframes), clearing all contexts would destroy the main frame's
-    // context, causing Puppeteer's page.evaluate()/page.content() to hang
-    // forever.
+    // Main-frame navigation must reset the inspector's internal context-group
+    // state, not just emit the public event. By-value Runtime serialization
+    // depends on that inspector bookkeeping staying aligned with the recreated
+    // JS contexts after navigation.
     if (event.frame_id == page._frame_id) {
-        try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
+        bc.inspector_session.inspector.resetContextGroup();
     }
 
     {

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="target" style="width: 100px; height: 40px;"></div>
+<div id="take" style="width: 80px; height: 20px;"></div>
+
+<script id="basic">
+  testing.async(async () => {
+    const target = document.getElementById('target');
+    let entries = null;
+    const observer = new ResizeObserver((observerEntries) => {
+      entries = observerEntries;
+    });
+
+    observer.observe(target);
+
+    testing.eventually(() => {
+      const rect = target.getBoundingClientRect();
+      testing.expectEqual(true, entries !== null);
+      testing.expectEqual(1, entries.length);
+      testing.expectEqual(target, entries[0].target);
+      testing.expectEqual(Math.round(rect.width), Math.round(entries[0].contentRect.width));
+      testing.expectEqual(Math.round(rect.height), Math.round(entries[0].contentRect.height));
+      testing.expectEqual(Math.round(rect.width), Math.round(entries[0].contentBoxSize[0].inlineSize));
+      testing.expectEqual(Math.round(rect.height), Math.round(entries[0].contentBoxSize[0].blockSize));
+      testing.expectEqual(Math.round(rect.width), Math.round(entries[0].borderBoxSize[0].inlineSize));
+      testing.expectEqual(Math.round(rect.height), Math.round(entries[0].borderBoxSize[0].blockSize));
+      testing.expectEqual(rect.width * window.devicePixelRatio, entries[0].devicePixelContentBoxSize[0].inlineSize);
+      testing.expectEqual(rect.height * window.devicePixelRatio, entries[0].devicePixelContentBoxSize[0].blockSize);
+      observer.disconnect();
+    });
+  });
+</script>
+
+<script id="style_change">
+  testing.async(async () => {
+    const target = document.getElementById('target');
+    const seen = [];
+    const observer = new ResizeObserver((entries) => {
+      seen.push(entries[0]);
+    });
+
+    observer.observe(target);
+    await Promise.resolve();
+    target.style.width = '150px';
+    target.style.height = '70px';
+
+    testing.eventually(() => {
+      const rect = target.getBoundingClientRect();
+      testing.expectEqual(true, seen.length >= 2);
+      const last = seen[seen.length - 1];
+      testing.expectEqual(Math.round(rect.width), Math.round(last.contentRect.width));
+      testing.expectEqual(Math.round(rect.height), Math.round(last.contentRect.height));
+      observer.disconnect();
+    });
+  });
+</script>
+
+<script id="take_records">
+  testing.async(async () => {
+    const target = document.getElementById('take');
+    let callbackCalled = false;
+    const observer = new ResizeObserver(() => {
+      callbackCalled = true;
+    });
+
+    observer.observe(target);
+    const taken = observer.takeRecords();
+    const rect = target.getBoundingClientRect();
+    testing.expectEqual(1, taken.length);
+    testing.expectEqual(Math.round(rect.width), Math.round(taken[0].contentRect.width));
+    testing.expectEqual(Math.round(rect.height), Math.round(taken[0].contentRect.height));
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(false, callbackCalled);
+      observer.disconnect();
+    });
+  });
+</script>

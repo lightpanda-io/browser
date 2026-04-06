@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      margin: 0;
+      font: 16px Arial, sans-serif;
+      color: #202124;
+      background: #fff;
+    }
+
+    .shell {
+      position: relative;
+      min-height: 240px;
+      padding-top: 24px;
+    }
+
+    .cta {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      padding: 12px 20px;
+      border-radius: 999px;
+      background: #1a73e8;
+      color: #fff;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .card {
+      width: 640px;
+      margin: 72px auto 0;
+      padding: 36px 44px;
+      border: 1px solid #dadce0;
+      text-align: center;
+    }
+
+    .desktop-copy,
+    .desktop-cta {
+      display: block;
+    }
+
+    .mobile-copy,
+    .mobile-cta {
+      display: none;
+    }
+
+    @media (max-width: 700px) {
+      .desktop-copy,
+      .desktop-cta {
+        display: none;
+      }
+
+      .mobile-copy,
+      .mobile-cta {
+        display: block;
+      }
+
+      .card {
+        width: auto;
+        margin: 64px 20px 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <a class="cta desktop-cta" href="#">Sign in</a>
+    <a class="cta mobile-cta" href="#">Sign in</a>
+
+    <div class="card">
+      <p class="desktop-copy">We use <a href="#">cookies</a> and data to</p>
+      <p class="mobile-copy">We use <a href="#">cookies</a> and data to</p>
+    </div>
+  </div>
+</body>
+</html>

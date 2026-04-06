@@ -7,6 +7,8 @@
   testing.expectEqual(window, window.self);
   testing.expectEqual(null, window.opener);
   testing.expectEqual('function', typeof window.open);
+  testing.expectEqual(0, window.TEMPORARY);
+  testing.expectEqual(1, window.PERSISTENT);
 
   const open_ref = window.open;
   testing.expectEqual('function', typeof open_ref);
@@ -148,6 +150,57 @@
   testing.expectEqual(24, screen.colorDepth);
   testing.expectEqual(24, screen.pixelDepth);
   testing.expectEqual(screen, window.screen);
+</script>
+
+<script id=trusted_types>
+  testing.expectEqual('object', typeof trustedTypes);
+  testing.expectEqual(trustedTypes, window.trustedTypes);
+  testing.expectEqual(false, trustedTypes === crypto);
+  testing.expectEqual('function', typeof trustedTypes.createPolicy);
+  testing.expectEqual('undefined', typeof trustedTypes.getRandomValues);
+  testing.expectEqual(null, trustedTypes.defaultPolicy);
+  testing.expectEqual('function', typeof crypto.getRandomValues);
+  testing.expectEqual('object', typeof crypto.subtle);
+
+  const rules = {
+    createHTML(value) { return value; },
+    createScript(value) { return value; },
+  };
+  const policy = trustedTypes.createPolicy('lightpanda-test', rules);
+  testing.expectEqual(rules, policy);
+  testing.expectEqual('<b>ok</b>', policy.createHTML('<b>ok</b>'));
+  testing.expectEqual('console.log(1)', policy.createScript('console.log(1)'));
+</script>
+
+<script id=chrome>
+  testing.expectEqual('object', typeof chrome);
+  testing.expectEqual(chrome, window.chrome);
+  testing.expectEqual('object', typeof chrome.runtime);
+</script>
+
+<script id=compression_stream>
+  testing.expectEqual('function', typeof CompressionStream);
+  const gzip = new CompressionStream('gzip');
+  testing.expectEqual('object', typeof gzip.readable);
+  testing.expectEqual('object', typeof gzip.writable);
+</script>
+
+<script id=structured_clone>
+  const original = {
+    name: 'Lightpanda',
+    nested: { count: 2, ok: true },
+    items: [1, { deep: 'value' }],
+  };
+  const copy = structuredClone(original);
+  testing.expectEqual(original, copy);
+  testing.expectEqual(false, copy === original);
+  testing.expectEqual(false, copy.nested === original.nested);
+  testing.expectEqual(false, copy.items === original.items);
+  testing.expectEqual(false, copy.items[1] === original.items[1]);
+  testing.expectEqual(undefined, structuredClone(undefined));
+  testing.expectEqual(null, structuredClone(null));
+  testing.expectEqual('abc', structuredClone('abc'));
+  testing.expectEqual(12, structuredClone(12));
 </script>
 
 <script id=unhandled_rejection>

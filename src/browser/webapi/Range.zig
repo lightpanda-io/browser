@@ -360,7 +360,7 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
     if (self._proto.getCollapsed()) {
         return;
     }
-    page.domChanged();
+    page.domChangedForNode(self._proto.getCommonAncestorContainer());
 
     // Simple case: same container
     if (self._proto._start_container == self._proto._end_container) {

@@ -79,7 +79,7 @@ pub fn setSelected(self: *Option, selected: bool, page: *Page) !void {
     // TODO: When setting selected=true, may need to unselect other options
     // in the parent <select> if it doesn't have multiple attribute
     self._selected = selected;
-    page.domChanged();
+    page.domChangedForNode(self.asNode());
 }
 
 pub fn getDefaultSelected(self: *const Option) bool {

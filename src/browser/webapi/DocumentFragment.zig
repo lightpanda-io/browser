@@ -143,8 +143,8 @@ pub fn prepend(self: *DocumentFragment, nodes: []const Node.NodeOrText, page: *P
 }
 
 pub fn replaceChildren(self: *DocumentFragment, nodes: []const Node.NodeOrText, page: *Page) !void {
-    page.domChanged();
     var parent = self.asNode();
+    page.domChangedForNode(parent);
 
     var it = parent.childrenIterator();
     while (it.next()) |child| {
@@ -172,7 +172,7 @@ pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer, page: *Page
 pub fn setInnerHTML(self: *DocumentFragment, html: []const u8, page: *Page) !void {
     const parent = self.asNode();
 
-    page.domChanged();
+    page.domChangedForNode(parent);
     var it = parent.childrenIterator();
     while (it.next()) |child| {
         page.removeNode(parent, child, .{ .will_be_reconnected = false });

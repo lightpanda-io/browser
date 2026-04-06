@@ -60,6 +60,25 @@
   testing.expectEqual(testing.HOST, document.domain);
 </script>
 
+<script id=document_storage_access>
+  testing.async(async () => {
+    testing.expectEqual('function', typeof document.hasStorageAccess);
+    testing.expectEqual('function', typeof document.requestStorageAccess);
+    testing.expectEqual(true, await document.hasStorageAccess());
+    testing.expectEqual(undefined, await document.requestStorageAccess());
+  });
+</script>
+
+<script id=document_feature_policy>
+  testing.expectEqual('object', typeof document.featurePolicy);
+  testing.expectEqual('function', typeof document.featurePolicy.allowedFeatures);
+  testing.expectEqual('function', typeof document.featurePolicy.features);
+  testing.expectEqual('function', typeof document.featurePolicy.allowsFeature);
+  testing.expectEqual(true, Array.isArray(document.featurePolicy.allowedFeatures()));
+  testing.expectEqual(0, document.featurePolicy.allowedFeatures().length);
+  testing.expectEqual(false, document.featurePolicy.allowsFeature('camera'));
+</script>
+
 <script id=programmatic_document_metadata>
   // Test document metadata properties on programmatically created document
   const doc = new Document();

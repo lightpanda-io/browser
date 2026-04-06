@@ -244,8 +244,9 @@ pub const BareMetalBackend = struct {
     pub fn setHttpRuntime(_: *@This(), _: *anyopaque) void {}
     pub fn setImageRequestCookieJar(_: *@This(), _: ?*anyopaque) void {}
 
-    pub fn dispatchInput(self: *@This(), page: anytype) !void {
+    pub fn dispatchInput(self: *@This(), page: anytype) !bool {
         try pollMailboxInput(self);
+        var processed_input = false;
 
         const PageType = std.meta.Child(@TypeOf(page));
         const KeyboardModifiers = if (@hasDecl(PageType, "KeyboardModifiers")) PageType.KeyboardModifiers else struct {
@@ -271,6 +272,7 @@ pub const BareMetalBackend = struct {
         const HasNodePathClick = @hasDecl(PageType, "triggerMouseClickOnNodePathWithResult");
 
         while (self.host.input.pop()) |event| {
+            processed_input = true;
             switch (event) {
                 .key => |key| {
                     var key_buf: [8]u8 = undefined;
@@ -376,6 +378,26 @@ pub const BareMetalBackend = struct {
                 },
             }
         }
+        return processed_input;
+    }
+
+    pub fn hasPendingInput(self: *const @This()) bool {
+        if (!self.host.input.isEmpty()) {
+            return true;
+        }
+
+        const app_data_path = self.app_data_path orelse return false;
+        var dir = openProfileDir(app_data_path) catch return false;
+        defer dir.close();
+
+        const file = dir.openFile(bare_metal_input_mailbox_file, .{}) catch |err| switch (err) {
+            error.FileNotFound => return false,
+            else => return false,
+        };
+        defer file.close();
+
+        const stat = file.stat() catch return false;
+        return stat.size > self.input_mailbox_offset;
     }
 
     pub fn presentDocument(self: *@This(), title: []const u8, url: []const u8, body: []const u8) !void {
@@ -1957,7 +1979,7 @@ test "bare metal backend drains queued input" {
     };
 
     var page = FakePage{};
-    try backend.dispatchInput(&page);
+    _ = try backend.dispatchInput(&page);
 
     try std.testing.expectEqual(@as(usize, 1), page.keys_down);
     try std.testing.expectEqual(@as(usize, 1), page.keys_up);
@@ -2059,7 +2081,7 @@ test "bare metal backend drains mailbox input" {
     };
 
     var page = FakePage{};
-    try backend.dispatchInput(&page);
+    _ = try backend.dispatchInput(&page);
 
     try std.testing.expectEqual(@as(usize, 1), page.keys_down);
     try std.testing.expectEqual(@as(usize, 1), page.keys_up);
@@ -2107,7 +2129,7 @@ test "bare metal backend queues rendered download clicks" {
     try host.input.pushPointer(std.testing.allocator, click_x, click_y, .left, true, 0);
     try host.input.pushPointer(std.testing.allocator, click_x, click_y, .left, false, 0);
 
-    try backend.dispatchInput(page);
+    _ = try backend.dispatchInput(page);
 
     var pending_downloads = page._session.takePendingDownloads();
     defer {
@@ -2229,7 +2251,7 @@ test "bare metal backend prefers presentation link regions for clicks" {
     };
 
     var page = FakePage{};
-    try backend.dispatchInput(&page);
+    _ = try backend.dispatchInput(&page);
 
     try std.testing.expectEqual(@as(usize, 1), page.node_clicks);
     try std.testing.expectEqual(@as(usize, 0), page.generic_clicks);
@@ -2334,7 +2356,7 @@ test "bare metal backend falls back to coordinate clicks when node path click mi
     };
 
     var page = FakePage{};
-    try backend.dispatchInput(&page);
+    _ = try backend.dispatchInput(&page);
 
     try std.testing.expectEqual(@as(usize, 1), page.node_clicks);
     try std.testing.expectEqual(@as(usize, 1), page.generic_clicks);
@@ -2392,7 +2414,7 @@ test "bare metal backend queues downloads shortcut and removal command" {
     var page = FakePage{};
     try host.input.pushKey(std.testing.allocator, 'J', true, modifier_ctrl);
     try host.input.pushKey(std.testing.allocator, 'J', false, modifier_ctrl);
-    try backend.dispatchInput(&page);
+    _ = try backend.dispatchInput(&page);
 
     try std.testing.expectEqual(@as(usize, 0), page.key_down);
     try std.testing.expectEqual(@as(usize, 1), page.key_up);
@@ -2412,7 +2434,7 @@ test "bare metal backend queues downloads shortcut and removal command" {
     page = .{};
     try host.input.pushKey(std.testing.allocator, 46, true, 0);
     try host.input.pushKey(std.testing.allocator, 46, false, 0);
-    try backend.dispatchInput(&page);
+    _ = try backend.dispatchInput(&page);
 
     const command = backend.nextBrowserCommand() orelse return error.TestExpected;
     try std.testing.expectEqual(BrowserCommand{ .download_remove = 0 }, command);
@@ -2495,7 +2517,7 @@ test "bare metal shortcut keys enqueue browser commands" {
     try host.input.pushKey(std.testing.allocator, 'W', true, modifier_ctrl);
     try host.input.pushKey(std.testing.allocator, 'W', false, modifier_ctrl);
 
-    try backend.dispatchInput(&page);
+    _ = try backend.dispatchInput(&page);
 
     try std.testing.expectEqual(@as(usize, 0), page.key_down);
     try std.testing.expectEqual(@as(usize, 5), page.key_up);
@@ -2586,7 +2608,7 @@ test "bare metal address edit ctrl+l commits typed navigation" {
     try host.input.pushKey(std.testing.allocator, c.VK_RETURN, true, 0);
     try host.input.pushKey(std.testing.allocator, c.VK_RETURN, false, 0);
 
-    try backend.dispatchInput(&page);
+    _ = try backend.dispatchInput(&page);
 
     try std.testing.expectEqual(@as(usize, 0), page.key_down);
     try std.testing.expectEqual(@as(usize, 0), page.key_up);

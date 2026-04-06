@@ -478,12 +478,15 @@ fn doAttachtoTarget(cmd: anytype, target_id: []const u8) !void {
         bc.extra_headers.clearRetainingCapacity();
     }
 
+    const title = bc.getTitle() orelse "";
+    const url = bc.getURL() orelse "about:blank";
+
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
         .sessionId = session_id,
         .targetInfo = TargetInfo{
             .targetId = target_id,
-            .title = bc.getTitle() orelse "",
-            .url = bc.getURL() orelse "about:blank",
+            .title = title,
+            .url = url,
             .browserContextId = bc.id,
         },
     }, .{ .session_id = bc.session_id });

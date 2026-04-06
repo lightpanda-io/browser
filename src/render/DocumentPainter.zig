@@ -19,6 +19,7 @@ const FontFaceResource = @import("DisplayList.zig").FontFaceResource;
 const FontFaceFormat = @import("DisplayList.zig").FontFaceFormat;
 const ClipRect = @import("DisplayList.zig").ClipRect;
 const CSSStyleSheet = @import("../browser/webapi/css/CSSStyleSheet.zig");
+const CSSStyleProperties = @import("../browser/webapi/css/CSSStyleProperties.zig");
 const win = if (builtin.os.tag == .windows) @cImport({
     @cDefine("WIN32_LEAN_AND_MEAN", "1");
     @cInclude("windows.h");
@@ -43,6 +44,14 @@ const MeasurementKey = struct {
     forced_height: i32,
 };
 
+const ChildrenMeasurementKey = struct {
+    element_ptr: usize,
+    available_width: i32,
+    forced_node_ptr: usize,
+    forced_width: i32,
+    forced_height: i32,
+};
+
 const MeasurementValue = struct {
     width: i32,
     height: i32,
@@ -60,6 +69,10 @@ pub fn paintDocument(allocator: std.mem.Allocator, page: *Page, opts: PaintOpts)
     defer paint_text_styles.deinit();
     var measurement_cache = std.AutoHashMap(MeasurementKey, MeasurementValue).init(allocator);
     defer measurement_cache.deinit();
+    var children_measurement_cache = std.AutoHashMap(ChildrenMeasurementKey, MeasurementValue).init(allocator);
+    defer children_measurement_cache.deinit();
+    var computed_style_cache = std.AutoHashMap(usize, *CSSStyleProperties).init(allocator);
+    defer computed_style_cache.deinit();
 
     const root = if (page.window._document.is(HTMLDocument)) |html_doc|
         if (html_doc.getBody()) |body| body.asNode() else page.window._document.asNode()
@@ -73,6 +86,8 @@ pub fn paintDocument(allocator: std.mem.Allocator, page: *Page, opts: PaintOpts)
         .list = &list,
         .paint_text_styles = &paint_text_styles,
         .measurement_cache = &measurement_cache,
+        .children_measurement_cache = &children_measurement_cache,
+        .computed_style_cache = &computed_style_cache,
     };
     var cursor = FlowCursor.init(
         opts.page_margin,
@@ -85,10 +100,223 @@ pub fn paintDocument(allocator: std.mem.Allocator, page: *Page, opts: PaintOpts)
     return list;
 }
 
+pub fn patchTextControlDisplayList(
+    allocator: std.mem.Allocator,
+    page: *Page,
+    display_list: *DisplayList,
+    element: *Element,
+    opts: PaintOpts,
+) !bool {
+    if (!supportsIncrementalTextControlPatch(element)) {
+        return false;
+    }
+
+    const dom_path = try encodeNodePath(page.call_arena, element.asNode());
+    const control_region_index = findControlRegionIndexForNodePath(display_list, dom_path) orelse return false;
+    const control_region = display_list.control_regions.items[control_region_index];
+    const control_bounds = Bounds{
+        .x = control_region.x,
+        .y = control_region.y,
+        .width = control_region.width,
+        .height = control_region.height,
+    };
+
+    var paint_text_styles = std.AutoHashMap(usize, PaintTextStyle).init(allocator);
+    defer paint_text_styles.deinit();
+    var measurement_cache = std.AutoHashMap(MeasurementKey, MeasurementValue).init(allocator);
+    defer measurement_cache.deinit();
+    var children_measurement_cache = std.AutoHashMap(ChildrenMeasurementKey, MeasurementValue).init(allocator);
+    defer children_measurement_cache.deinit();
+    var computed_style_cache = std.AutoHashMap(usize, *CSSStyleProperties).init(allocator);
+    defer computed_style_cache.deinit();
+
+    var painter = Painter{
+        .allocator = allocator,
+        .page = page,
+        .opts = opts,
+        .list = display_list,
+        .paint_text_styles = &paint_text_styles,
+        .measurement_cache = &measurement_cache,
+        .children_measurement_cache = &children_measurement_cache,
+        .computed_style_cache = &computed_style_cache,
+    };
+
+    return painter.replaceCommandsForIncrementalControl(element, control_region_index, control_bounds);
+}
+
+fn supportsIncrementalTextControlPatch(element: *Element) bool {
+    const html = element.is(Element.Html) orelse return false;
+    return switch (html._type) {
+        .input => |input| input.supportsIncrementalTextPresentation(),
+        .textarea => true,
+        .button => true,
+        .select => true,
+        else => false,
+    };
+}
+
+fn findControlRegionIndexForNodePath(display_list: *const DisplayList, dom_path: []const u16) ?usize {
+    for (display_list.control_regions.items, 0..) |region, index| {
+        if (std.mem.eql(u16, region.dom_path, dom_path)) {
+            return index;
+        }
+    }
+    return null;
+}
+
+fn setControlRegionCommandSpan(
+    display_list: *DisplayList,
+    control_region_index: usize,
+    command_start: usize,
+    command_end: usize,
+) void {
+    display_list.control_regions.items[control_region_index].command_start = command_start;
+    display_list.control_regions.items[control_region_index].command_end = command_end;
+}
+
+fn invalidateAllControlRegionCommandSpans(display_list: *DisplayList) void {
+    for (display_list.control_regions.items) |*region| {
+        region.clearCommandSpan();
+    }
+}
+
+fn shiftControlRegionCommandSpansAfterRemoval(
+    display_list: *DisplayList,
+    skipped_region_index: usize,
+    removed_start: usize,
+    removed_end: usize,
+    original_command_count: usize,
+) void {
+    const removed_count = removed_end - removed_start;
+    if (removed_count == 0) {
+        return;
+    }
+
+    for (display_list.control_regions.items, 0..) |*region, index| {
+        if (index == skipped_region_index or !region.hasCommandSpan(original_command_count)) {
+            continue;
+        }
+        if (region.command_end <= removed_start) {
+            continue;
+        }
+        if (region.command_start >= removed_end) {
+            region.command_start -= removed_count;
+            region.command_end -= removed_count;
+            continue;
+        }
+        region.clearCommandSpan();
+    }
+}
+
+fn removeControlPaintCommandsForRegion(
+    allocator: std.mem.Allocator,
+    display_list: *DisplayList,
+    control_region_index: usize,
+    bounds: Bounds,
+) bool {
+    const region = display_list.control_regions.items[control_region_index];
+    if (region.hasCommandSpan(display_list.commands.items.len)) {
+        const original_command_count = display_list.commands.items.len;
+        const removed_start = region.command_start;
+        const removed_end = region.command_end;
+        var index = removed_end;
+        while (index > removed_start) {
+            index -= 1;
+            var removed = display_list.commands.orderedRemove(index);
+            removed.deinit(allocator);
+        }
+        if (removed_end > removed_start) {
+            display_list.recomputeContentHeight();
+        }
+        shiftControlRegionCommandSpansAfterRemoval(
+            display_list,
+            control_region_index,
+            removed_start,
+            removed_end,
+            original_command_count,
+        );
+        display_list.control_regions.items[control_region_index].clearCommandSpan();
+        return removed_end > removed_start;
+    }
+
+    invalidateAllControlRegionCommandSpans(display_list);
+    return removeControlPaintCommandsWithinBounds(allocator, display_list, bounds);
+}
+
+fn withControlRegionCommandSpan(region: ControlRegion, command_start: usize, command_end: usize) ControlRegion {
+    var annotated = region;
+    annotated.command_start = command_start;
+    annotated.command_end = command_end;
+    return annotated;
+}
+
+fn withControlRegionCommandOffset(
+    region: ControlRegion,
+    source_command_count: usize,
+    command_offset: usize,
+) ControlRegion {
+    var annotated = region;
+    if (region.hasCommandSpan(source_command_count)) {
+        annotated.command_start = command_offset + region.command_start;
+        annotated.command_end = command_offset + region.command_end;
+    } else {
+        annotated.clearCommandSpan();
+    }
+    return annotated;
+}
+
+fn removeControlPaintCommandsWithinBounds(
+    allocator: std.mem.Allocator,
+    display_list: *DisplayList,
+    bounds: Bounds,
+) bool {
+    var removed_any = false;
+    var index = display_list.commands.items.len;
+    while (index > 0) {
+        index -= 1;
+        const remove = switch (display_list.commands.items[index]) {
+            .fill_rect => |rect| rectCommandBelongsToBounds(rect, bounds),
+            .stroke_rect => |rect| rectCommandBelongsToBounds(rect, bounds),
+            .text => |text| textCommandBelongsToBounds(text, bounds),
+            else => false,
+        };
+        if (!remove) {
+            continue;
+        }
+        var removed = display_list.commands.orderedRemove(index);
+        removed.deinit(allocator);
+        removed_any = true;
+    }
+    if (removed_any) {
+        display_list.recomputeContentHeight();
+    }
+    return removed_any;
+}
+
+fn rectCommandBelongsToBounds(rect: RectCommand, bounds: Bounds) bool {
+    return pointWithinBounds(
+        rect.x + @divTrunc(@max(rect.width, 1), 2),
+        rect.y + @divTrunc(@max(rect.height, 1), 2),
+        bounds,
+    );
+}
+
+fn textCommandBelongsToBounds(text: TextCommand, bounds: Bounds) bool {
+    const text_height = @max(text.height, text.font_size + 8);
+    return pointWithinBounds(
+        text.x + @divTrunc(@max(text.width, 1), 2),
+        text.y + @divTrunc(@max(text_height, 1), 2),
+        bounds,
+    );
+}
+
+fn pointWithinBounds(x: i32, y: i32, bounds: Bounds) bool {
+    return x >= bounds.x and x < bounds.x + bounds.width and
+        y >= bounds.y and y < bounds.y + bounds.height;
+}
+
 fn rendererDiagnosticsEnabled(page: *Page) bool {
-    return std.mem.indexOf(u8, page.url, "google-home") != null or
-        std.mem.indexOf(u8, page.url, "127.0.0.1:58170") != null or
-        std.mem.indexOf(u8, page.url, "google.com") != null;
+    return std.mem.indexOf(u8, page.url, "consent.google.com") != null;
 }
 
 fn appendRendererDiagnosticsLine(comptime label: []const u8, message: []const u8) void {
@@ -97,10 +325,9 @@ fn appendRendererDiagnosticsLine(comptime label: []const u8, message: []const u8
     }) catch return;
     defer file.close();
     file.seekFromEnd(0) catch return;
-    var buf: [1024]u8 = undefined;
-    var writer = file.writer(&buf);
-    writer.interface.print("{s}|{s}\n", .{ label, message }) catch return;
-    writer.interface.flush() catch return;
+    var line_buf: [1024]u8 = undefined;
+    const line = std.fmt.bufPrint(&line_buf, "{s}|{s}\n", .{ label, message }) catch return;
+    file.writeAll(line) catch return;
 }
 
 const FlowCursor = struct {
@@ -196,11 +423,20 @@ const FlexChildMeasure = struct {
     node: *Node,
     width: i32,
     height: i32,
+    margins: EdgeSizes = .{},
     order: i32 = 0,
     flex_grow: f32 = 0,
     flex_shrink: f32 = 1,
     align_self: FlexCrossAlignment = .auto,
     source_index: usize = 0,
+
+    fn outerWidth(self: FlexChildMeasure) i32 {
+        return self.width + self.margins.horizontal();
+    }
+
+    fn outerHeight(self: FlexChildMeasure) i32 {
+        return self.height + self.margins.vertical();
+    }
 };
 
 const FlexLineMeasure = struct {
@@ -602,16 +838,30 @@ const Painter = struct {
     list: *DisplayList,
     paint_text_styles: *std.AutoHashMap(usize, PaintTextStyle),
     measurement_cache: *std.AutoHashMap(MeasurementKey, MeasurementValue),
+    children_measurement_cache: *std.AutoHashMap(ChildrenMeasurementKey, MeasurementValue),
+    computed_style_cache: *std.AutoHashMap(usize, *CSSStyleProperties),
     cache_layout_boxes: bool = true,
     forced_item_node: ?*Node = null,
     forced_item_width: i32 = 0,
     forced_item_height: i32 = 0,
+    preemption_checkpoint_counter: usize = 0,
+
+    fn preemptionCheckpoint(self: *Painter) !void {
+        self.preemption_checkpoint_counter += 1;
+        if ((self.preemption_checkpoint_counter & 0x3F) != 0) {
+            return;
+        }
+        if (self.page._session.browser.app.display.hasPendingNativeInput()) {
+            return error.PaintInterrupted;
+        }
+    }
 
     fn paintNode(self: *Painter, node: *Node, cursor: *FlowCursor) anyerror!void {
         try self.paintNodeWithOpacity(node, cursor, 255);
     }
 
     fn paintNodeWithOpacity(self: *Painter, node: *Node, cursor: *FlowCursor, opacity: u8) anyerror!void {
+        try self.preemptionCheckpoint();
         switch (node._type) {
             .document, .document_fragment => {
                 var it = node.childrenIterator();
@@ -636,6 +886,23 @@ const Painter = struct {
             .width = rect.width,
             .height = rect.height,
         });
+        if (rendererDiagnosticsEnabled(self.page)) {
+            const class_name = element.getAttributeSafe(comptime .wrap("class")) orelse "";
+            const href = element.getAttributeSafe(comptime .wrap("href")) orelse "";
+            const should_log = std.mem.indexOf(u8, class_name, "footer") != null or
+                std.mem.indexOf(u8, class_name, "languagePicker") != null or
+                std.mem.indexOf(u8, href, "/privacy") != null or
+                std.mem.indexOf(u8, href, "/terms") != null;
+            if (should_log) {
+                const msg = std.fmt.allocPrint(
+                    self.allocator,
+                    "record_layout_box|tag={any}|class={s}|href={s}|x={d}|y={d}|w={d}|h={d}",
+                    .{ element.getTag(), class_name, href, rect.x, rect.y, rect.width, rect.height },
+                ) catch "";
+                defer if (msg.len > 0) self.allocator.free(msg);
+                appendRendererDiagnosticsLine("layout_box", msg);
+            }
+        }
     }
 
     fn translateSubtreeLayoutBoxes(self: *Painter, node: *Node, dx: i32, dy: i32) void {
@@ -653,6 +920,202 @@ const Painter = struct {
         while (child) |current| : (child = current.nextSibling()) {
             self.translateSubtreeLayoutBoxes(current, dx, dy);
         }
+    }
+
+    fn computedStyle(self: *Painter, element: *Element) !*CSSStyleProperties {
+        const key = @intFromPtr(element);
+        if (self.computed_style_cache.get(key)) |style| {
+            return style;
+        }
+        const style = try self.page.window.getComputedStyle(element, null, self.page);
+        try self.computed_style_cache.put(key, style);
+        return style;
+    }
+
+    fn replaceCommandsForIncrementalControl(
+        self: *Painter,
+        element: *Element,
+        control_region_index: usize,
+        rect: Bounds,
+    ) !bool {
+        const removed_any = removeControlPaintCommandsForRegion(
+            self.allocator,
+            self.list,
+            control_region_index,
+            rect,
+        );
+        const replacement_command_start = self.list.commands.items.len;
+
+        const style = try self.computedStyle(element);
+        const decl = style.asCSSStyleDeclaration();
+        const tag = element.getTag();
+        const text_style = try self.resolvePaintTextStyle(element, decl, tag);
+        const label = try self.elementLabel(element);
+        defer self.allocator.free(label);
+
+        const padding = resolveEdgeSizes(decl, self.page, "padding");
+        const fg = text_style.color;
+        const font_size = text_style.font_size;
+        const font_family = text_style.font_family;
+        const font_weight = text_style.font_weight;
+        const italic = text_style.italic;
+        const paint_z_index = try resolvePaintZIndex(element, decl, self.page);
+        const opacity = resolvePaintOpacity(decl, self.page, element);
+        const corner_radius = resolveBorderRadiusPx(
+            decl,
+            self.page,
+            rect.width,
+            rect.height,
+            self.opts.viewport_width,
+            self.opts.viewport_height,
+        );
+        const background_color = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
+        if (shouldPaintBox(tag)) {
+            if (background_color) |background| {
+                if (background.a > 0 and shouldPaintBackground(tag, false)) {
+                    try self.list.addFillRect(self.allocator, .{
+                        .x = rect.x,
+                        .y = rect.y,
+                        .width = rect.width,
+                        .height = rect.height,
+                        .z_index = paint_z_index,
+                        .corner_radius = corner_radius,
+                        .clip_rect = null,
+                        .opacity = opacity,
+                        .color = background,
+                    });
+                }
+            } else if (tag == .input or tag == .textarea or tag == .button or tag == .select) {
+                try self.list.addFillRect(self.allocator, .{
+                    .x = rect.x,
+                    .y = rect.y,
+                    .width = rect.width,
+                    .height = rect.height,
+                    .z_index = paint_z_index,
+                    .corner_radius = corner_radius,
+                    .clip_rect = null,
+                    .opacity = opacity,
+                    .color = .{ .r = 248, .g = 248, .b = 248 },
+                });
+            }
+
+            if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
+                try self.list.addStrokeRect(self.allocator, .{
+                    .x = rect.x,
+                    .y = rect.y,
+                    .width = rect.width,
+                    .height = rect.height,
+                    .z_index = paint_z_index,
+                    .corner_radius = corner_radius,
+                    .clip_rect = null,
+                    .opacity = opacity,
+                    .color = stroke,
+                });
+            }
+        }
+
+        if (label.len == 0) {
+            setControlRegionCommandSpan(
+                self.list,
+                control_region_index,
+                replacement_command_start,
+                self.list.commands.items.len,
+            );
+            return removed_any or shouldPaintBox(tag);
+        }
+
+        const text_area_width = @max(@as(i32, 40), rect.width - padding.horizontal() - 12);
+        const painted_label = if (text_style.text_transform == .none) label else blk: {
+            const transformed = try transformTextForPaint(self.allocator, label, text_style.text_transform);
+            break :blk transformed;
+        };
+        defer if (text_style.text_transform != .none) self.allocator.free(painted_label);
+
+        const base_text_height = @max(
+            font_size + 8,
+            estimateTextHeight(
+                painted_label,
+                text_area_width,
+                font_size,
+                font_family,
+                font_weight,
+                italic,
+            ) + 8,
+        );
+        const element_nowrap = text_style.white_space == .nowrap;
+        const text_height = if (element_nowrap)
+            @max(base_text_height, resolveTextLineHeightPx(text_style.line_height, font_size) orelse 0)
+        else
+            estimateStyledTextHeight(
+                painted_label,
+                text_area_width,
+                font_size,
+                font_family,
+                font_weight,
+                italic,
+                text_style.line_height,
+            );
+        var text_x = rect.x + padding.left + 6;
+        const text_align = resolveCssPropertyValue(decl, self.page, element, "text-align");
+        if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, text_align, &std.ascii.whitespace), "center")) {
+            const measured_text_width = estimateStyledTextWidth(
+                painted_label,
+                font_size,
+                font_family,
+                font_weight,
+                italic,
+                text_style.letter_spacing,
+                text_style.word_spacing,
+            );
+            text_x += @max(@as(i32, 0), @divTrunc(text_area_width - measured_text_width, 2));
+        }
+        const text_y = rect.y + padding.top + 4 + @divTrunc(@max(@as(i32, 0), text_height - base_text_height), 2);
+        try self.list.addText(self.allocator, .{
+            .x = text_x,
+            .y = text_y,
+            .width = text_area_width,
+            .height = text_height,
+            .z_index = paint_z_index,
+            .font_size = font_size,
+            .font_family = @constCast(font_family),
+            .font_weight = font_weight,
+            .italic = italic,
+            .clip_rect = null,
+            .opacity = opacity,
+            .color = fg,
+            .letter_spacing = text_style.letter_spacing,
+            .word_spacing = text_style.word_spacing,
+            .underline = shouldUnderlineText(element, decl, self.page, tag),
+            .nowrap = element_nowrap,
+            .text = @constCast(painted_label),
+        });
+        setControlRegionCommandSpan(
+            self.list,
+            control_region_index,
+            replacement_command_start,
+            self.list.commands.items.len,
+        );
+        return true;
+    }
+
+    fn hiddenBySpecifiedVisibilityChain(self: *Painter, element: *Element) !bool {
+        var current: ?*Element = element;
+        while (current) |candidate| {
+            const decl = (try self.computedStyle(candidate)).asCSSStyleDeclaration();
+            const specified = std.mem.trim(u8, decl.getSpecifiedPropertyValue("visibility", self.page), &std.ascii.whitespace);
+            if (specified.len == 0 or std.ascii.eqlIgnoreCase(specified, "inherit")) {
+                current = candidate.asNode().parentElement();
+                continue;
+            }
+            if (std.ascii.eqlIgnoreCase(specified, "visible")) {
+                return false;
+            }
+            if (std.ascii.eqlIgnoreCase(specified, "hidden") or std.ascii.eqlIgnoreCase(specified, "collapse")) {
+                return true;
+            }
+            return false;
+        }
+        return false;
     }
 
     fn measureNodePaintedBox(self: *Painter, node: *Node, available_width: i32) !struct { width: i32, height: i32 } {
@@ -679,6 +1142,8 @@ const Painter = struct {
             .list = &temp_list,
             .paint_text_styles = self.paint_text_styles,
             .measurement_cache = self.measurement_cache,
+            .children_measurement_cache = self.children_measurement_cache,
+            .computed_style_cache = self.computed_style_cache,
             .cache_layout_boxes = self.cache_layout_boxes,
         };
         var cursor = FlowCursor.init(0, 0, @max(@as(i32, 40), available_width));
@@ -702,6 +1167,17 @@ const Painter = struct {
     }
 
     fn measureElementChildrenPaintedBox(self: *Painter, element: *Element, available_width: i32) !struct { width: i32, height: i32 } {
+        const key = ChildrenMeasurementKey{
+            .element_ptr = @intFromPtr(element),
+            .available_width = available_width,
+            .forced_node_ptr = if (self.forced_item_node) |node| @intFromPtr(node) else 0,
+            .forced_width = self.forced_item_width,
+            .forced_height = self.forced_item_height,
+        };
+        if (self.children_measurement_cache.get(key)) |cached| {
+            return .{ .width = cached.width, .height = cached.height };
+        }
+
         var temp_list = DisplayList{
             .layout_scale = self.list.layout_scale,
             .page_margin = self.list.page_margin,
@@ -718,6 +1194,8 @@ const Painter = struct {
             .list = &temp_list,
             .paint_text_styles = self.paint_text_styles,
             .measurement_cache = self.measurement_cache,
+            .children_measurement_cache = self.children_measurement_cache,
+            .computed_style_cache = self.computed_style_cache,
             .cache_layout_boxes = self.cache_layout_boxes,
         };
         var cursor = FlowCursor.init(0, 0, @max(@as(i32, 40), available_width));
@@ -738,19 +1216,83 @@ const Painter = struct {
         }
 
         if (displayListBounds(&temp_list)) |bounds| {
-            return .{
+            const measured = MeasurementValue{
                 .width = bounds.width,
                 .height = bounds.height,
             };
+            try self.children_measurement_cache.put(key, measured);
+            return .{
+                .width = measured.width,
+                .height = measured.height,
+            };
         }
 
-        return .{
+        const measured = MeasurementValue{
             .width = @max(@as(i32, 0), cursor.cursor_x - cursor.left),
             .height = cursor.consumedHeightSince(0),
+        };
+        try self.children_measurement_cache.put(key, measured);
+        return .{
+            .width = measured.width,
+            .height = measured.height,
         };
     }
 
     fn appendDisplayListWithOffset(
+        self: *Painter,
+        source: *const DisplayList,
+        dx: i32,
+        dy: i32,
+        parent_clip_rect: ?ClipRect,
+    ) !void {
+        const command_base = self.list.commands.items.len;
+        try self.appendDisplayCommandsWithOffset(source, dx, dy, parent_clip_rect);
+
+        for (source.link_regions.items) |region| {
+            const shifted = Bounds{
+                .x = region.x + dx,
+                .y = region.y + dy,
+                .width = region.width,
+                .height = region.height,
+            };
+            if (intersectBoundsWithClipRect(shifted, parent_clip_rect)) |clipped| {
+                try self.list.addLinkRegion(self.allocator, .{
+                    .x = clipped.x,
+                    .y = clipped.y,
+                    .width = clipped.width,
+                    .height = clipped.height,
+                    .z_index = region.z_index,
+                    .url = region.url,
+                    .dom_path = region.dom_path,
+                    .download_filename = region.download_filename,
+                    .open_in_new_tab = region.open_in_new_tab,
+                    .target_name = region.target_name,
+                });
+            }
+        }
+
+        for (source.control_regions.items) |region| {
+            const shifted = Bounds{
+                .x = region.x + dx,
+                .y = region.y + dy,
+                .width = region.width,
+                .height = region.height,
+            };
+            if (intersectBoundsWithClipRect(shifted, parent_clip_rect)) |clipped| {
+                var shifted_region = withControlRegionCommandOffset(region, source.commands.items.len, command_base);
+                shifted_region.x = clipped.x;
+                shifted_region.y = clipped.y;
+                shifted_region.width = clipped.width;
+                shifted_region.height = clipped.height;
+                try self.list.addControlRegion(
+                    self.allocator,
+                    shifted_region,
+                );
+            }
+        }
+    }
+
+    fn appendDisplayCommandsWithOffset(
         self: *Painter,
         source: *const DisplayList,
         dx: i32,
@@ -852,47 +1394,37 @@ const Painter = struct {
                 }),
             }
         }
+    }
 
-        for (source.link_regions.items) |region| {
-            const shifted = Bounds{
-                .x = region.x + dx,
-                .y = region.y + dy,
-                .width = region.width,
-                .height = region.height,
-            };
-            if (intersectBoundsWithClipRect(shifted, parent_clip_rect)) |clipped| {
-                try self.list.addLinkRegion(self.allocator, .{
-                    .x = clipped.x,
-                    .y = clipped.y,
-                    .width = clipped.width,
-                    .height = clipped.height,
-                    .z_index = region.z_index,
-                    .url = region.url,
-                    .dom_path = region.dom_path,
-                    .download_filename = region.download_filename,
-                    .open_in_new_tab = region.open_in_new_tab,
-                    .target_name = region.target_name,
-                });
-            }
+    fn appendDisplayListFontFaces(self: *Painter, source: *const DisplayList) !void {
+        for (source.font_faces.items) |font_face| {
+            try self.list.addFontFace(self.allocator, font_face);
         }
+    }
 
-        for (source.control_regions.items) |region| {
-            const shifted = Bounds{
-                .x = region.x + dx,
-                .y = region.y + dy,
-                .width = region.width,
-                .height = region.height,
-            };
-            if (intersectBoundsWithClipRect(shifted, parent_clip_rect)) |clipped| {
-                try self.list.addControlRegion(self.allocator, .{
-                    .x = clipped.x,
-                    .y = clipped.y,
-                    .width = clipped.width,
-                    .height = clipped.height,
-                    .z_index = region.z_index,
-                    .dom_path = region.dom_path,
-                });
+    fn appendResolvedControlRegion(
+        self: *Painter,
+        element: *Element,
+        rect: Bounds,
+        paint_z_index: i32,
+        command_start: usize,
+    ) !void {
+        if (try resolvedControlRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
+            if (rendererDiagnosticsEnabled(self.page)) {
+                const id = element.getAttributeSafe(comptime .wrap("id")) orelse "";
+                const class_name = element.getAttributeSafe(comptime .wrap("class")) orelse "";
+                const msg = std.fmt.allocPrint(
+                    self.allocator,
+                    "add_control_region|tag={any}|id={s}|class={s}|x={d}|y={d}|w={d}|h={d}|path_len={d}",
+                    .{ element.getTag(), id, class_name, region.x, region.y, region.width, region.height, region.dom_path.len },
+                ) catch "";
+                defer if (msg.len > 0) self.allocator.free(msg);
+                appendRendererDiagnosticsLine("layout_box", msg);
             }
+            try self.list.addControlRegion(
+                self.allocator,
+                withControlRegionCommandSpan(region, command_start, self.list.commands.items.len),
+            );
         }
     }
 
@@ -996,6 +1528,8 @@ const Painter = struct {
             .list = &temp_list,
             .paint_text_styles = self.paint_text_styles,
             .measurement_cache = self.measurement_cache,
+            .children_measurement_cache = self.children_measurement_cache,
+            .computed_style_cache = self.computed_style_cache,
             .cache_layout_boxes = self.cache_layout_boxes,
         };
         var child_cursor = FlowCursor.init(0, 0, @max(@as(i32, 40), content_width));
@@ -1011,21 +1545,20 @@ const Painter = struct {
         const child_height = child_cursor.consumedHeightSince(0);
         const text_align = std.mem.trim(u8, text_align_value, &std.ascii.whitespace);
         const bounds = displayListBounds(&temp_list);
-        var offset_x = content_x;
         if (bounds) |child_bounds| {
-            if (std.ascii.eqlIgnoreCase(text_align, "center")) {
-                offset_x += @max(@as(i32, 0), @divTrunc(content_width - child_bounds.width, 2));
-            } else if (std.ascii.eqlIgnoreCase(text_align, "right") or std.ascii.eqlIgnoreCase(text_align, "end")) {
-                offset_x += @max(@as(i32, 0), content_width - child_bounds.width);
-            }
-            offset_x -= child_bounds.x;
+            try alignInlineFlowRows(&temp_list, self.allocator, content_width, text_align, child_bounds.x);
+            try self.appendDisplayListWithOffset(&temp_list, content_x - child_bounds.x, content_y, null);
+        } else {
+            try self.appendDisplayListWithOffset(&temp_list, content_x, content_y, null);
         }
-
-        try self.appendDisplayListWithOffset(&temp_list, offset_x, content_y, null);
         if (self.cache_layout_boxes) {
             var child_it_translate = element.asNode().childrenIterator();
             while (child_it_translate.next()) |child| {
-                self.translateSubtreeLayoutBoxes(child, offset_x, content_y);
+                if (bounds) |child_bounds| {
+                    self.translateSubtreeLayoutBoxes(child, content_x - child_bounds.x, content_y);
+                } else {
+                    self.translateSubtreeLayoutBoxes(child, content_x, content_y);
+                }
             }
         }
         if (out_of_flow_children.items.len > 0) {
@@ -1055,7 +1588,7 @@ const Painter = struct {
         };
 
         if (element.asNode().parentElement()) |parent| {
-            const parent_style = try self.page.window.getComputedStyle(parent, null, self.page);
+            const parent_style = try self.computedStyle(parent);
             resolved = try self.resolvePaintTextStyle(parent, parent_style.asCSSStyleDeclaration(), parent.getTag());
         }
 
@@ -1125,7 +1658,7 @@ const Painter = struct {
 
     fn paintInlineTextNode(self: *Painter, cdata: *Node.CData, cursor: *FlowCursor, opacity: u8) anyerror!void {
         const parent = cdata.asNode().parentElement() orelse return;
-        const parent_style = try self.page.window.getComputedStyle(parent, null, self.page);
+        const parent_style = try self.computedStyle(parent);
         const parent_decl = parent_style.asCSSStyleDeclaration();
         const parent_display = parent_decl.getPropertyValue("display", self.page);
         const inline_text_parent = isInlineDisplay(parent_display) or
@@ -1217,8 +1750,8 @@ const Painter = struct {
                 text_style.italic,
                 text_style.letter_spacing,
                 text_style.word_spacing,
-            ) + 8,
-            8,
+            ),
+            1,
             @max(@as(i32, 16), cursor.width),
         );
         const height = @max(base_height, resolveTextLineHeightPx(text_style.line_height, text_style.font_size) orelse 0);
@@ -1249,13 +1782,32 @@ const Painter = struct {
 
     fn paintElement(self: *Painter, element: *Element, cursor: *FlowCursor, opacity: u8) anyerror!void {
         const tag = element.getTag();
-        if (switch (tag) {
-            .script, .style, .template, .head, .meta, .link, .title => true,
-            else => false,
-        }) return;
+        var paint_timer: ?std.time.Timer = null;
+        if (rendererDiagnosticsEnabled(self.page)) {
+            paint_timer = try std.time.Timer.start();
+        }
+        defer if (paint_timer) |timer| {
+            var mutable_timer = timer;
+            const elapsed_ms = mutable_timer.read() / std.time.ns_per_ms;
+            if (elapsed_ms >= 25) {
+                const msg = std.fmt.allocPrint(
+                    self.allocator,
+                    "tag={any}|id={s}|class={s}|elapsed_ms={d}",
+                    .{
+                        tag,
+                        element.getAttributeSafe(comptime .wrap("id")) orelse "",
+                        element.getAttributeSafe(comptime .wrap("class")) orelse "",
+                        elapsed_ms,
+                    },
+                ) catch "";
+                defer if (msg.len > 0) self.allocator.free(msg);
+                appendRendererDiagnosticsLine("paint_element_slow", msg);
+            }
+        };
+        if (isNonRenderedTag(tag)) return;
         if (isHiddenFormControl(element)) return;
 
-        const style = try self.page.window.getComputedStyle(element, null, self.page);
+        const style = try self.computedStyle(element);
         const decl = style.asCSSStyleDeclaration();
         if (std.mem.eql(u8, decl.getPropertyValue("display", self.page), "none")) {
             return;
@@ -1288,8 +1840,16 @@ const Painter = struct {
         const inline_content_flow = (block_like or inline_atomic_box) and try usesInlineContentFlowContainer(element, decl, self.page, display);
         const position_value = resolveCssPropertyValue(decl, self.page, element, "position");
         const out_of_flow_positioned = isOutOfFlowPositioned(position_value);
+        const specified_visibility_value = std.mem.trim(u8, decl.getSpecifiedPropertyValue("visibility", self.page), &std.ascii.whitespace);
         const visibility_value = std.mem.trim(u8, resolveCssPropertyValue(decl, self.page, element, "visibility"), &std.ascii.whitespace);
-        if (out_of_flow_positioned and std.ascii.eqlIgnoreCase(visibility_value, "hidden")) {
+        const visibility_hidden = std.ascii.eqlIgnoreCase(visibility_value, "hidden") or
+            std.ascii.eqlIgnoreCase(visibility_value, "collapse") or
+            std.ascii.eqlIgnoreCase(specified_visibility_value, "hidden") or
+            std.ascii.eqlIgnoreCase(specified_visibility_value, "collapse");
+        if (try self.hiddenBySpecifiedVisibilityChain(element)) {
+            return;
+        }
+        if (out_of_flow_positioned and visibility_hidden) {
             return;
         }
         const paint_z_index = try resolvePaintZIndex(element, decl, self.page);
@@ -1316,11 +1876,19 @@ const Painter = struct {
             if (!canvas_surface_present) {
                 var child_it = element.asNode().childrenIterator();
                 while (child_it.next()) |child| {
+                    if (child.is(Element)) |child_el| {
+                        if (try self.isInlineAdornmentElement(child_el)) {
+                            continue;
+                        }
+                    }
                     try self.paintNodeWithOpacity(child, cursor, combined_opacity);
                 }
             }
 
             try self.appendInlineLinkRegionsForCommandRange(element, element_command_start);
+            if (recentOutputBounds(self, element_command_start, element_link_start, element_control_start)) |bounds| {
+                try self.recordElementLayoutBox(element, bounds);
+            }
             if (transform_value.len > 0) {
                 if (recentOutputBounds(self, element_command_start, element_link_start, element_control_start)) |bounds| {
                     applyTranslateTransformToRecentOutput(
@@ -1373,7 +1941,10 @@ const Painter = struct {
         if (!inline_box) {
             x = resolveAutoMarginAlignedX(cursor.*, decl, self.page, width, margins, x);
         }
-        if ((block_like or inline_atomic_box) and isFlexDisplay(display)) {
+        if (out_of_flow_positioned and isFarOutsideViewport(x, y, width, self.opts.viewport_width, self.opts.viewport_height)) {
+            return;
+        }
+        if (tag != .select and tag != .input and (block_like or inline_atomic_box) and isFlexDisplay(display)) {
             const rect = if (isFlexColumnContainer(display, decl, self.page))
                 try self.paintFlexColumnElement(
                     element,
@@ -1504,6 +2075,7 @@ const Painter = struct {
                     .color = stroke,
                 });
             }
+            try appendUnorderedListMarker(self, element, rect, padding, text_style, paint_z_index, combined_opacity);
             if (transform_value.len > 0) {
                 applyTranslateTransformToRecentOutput(
                     self,
@@ -1533,6 +2105,35 @@ const Painter = struct {
             label,
             text_style,
         );
+        const background_color = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
+        const stroke_color = resolveStrokeColor(decl, self.page, tag);
+        const raw_box_shadow = std.mem.trim(u8, decl.getPropertyValue("box-shadow", self.page), &std.ascii.whitespace);
+        const raw_background_image = std.mem.trim(u8, decl.getPropertyValue("background-image", self.page), &std.ascii.whitespace);
+        const has_box_shadow = raw_box_shadow.len > 0 and !std.ascii.eqlIgnoreCase(raw_box_shadow, "none");
+        const has_background_image = raw_background_image.len > 0 and !std.ascii.eqlIgnoreCase(raw_background_image, "none");
+        const has_paintable_background = if (background_color) |background|
+            background.a > 0 and shouldPaintBackground(tag, has_child_elements)
+        else
+            false;
+        const has_default_box_fill = background_color == null and switch (tag) {
+            .input, .textarea, .button, .select, .img => true,
+            else => false,
+        };
+        const clips_overflow = clipsOverflowContents(decl, self.page);
+        const tracks_scroll_metrics = clips_overflow or self.page._element_scroll_positions.contains(element);
+        const can_direct_paint_plain_block_children = has_child_elements and
+            !canvas_surface_present and
+            label.len == 0 and
+            own_content_height == 0 and
+            !inline_box and
+            !out_of_flow_positioned and
+            transform_value.len == 0 and
+            !tracks_scroll_metrics and
+            !has_box_shadow and
+            !has_background_image and
+            !has_paintable_background and
+            stroke_color == null and
+            !has_default_box_fill;
 
         const child_gap: i32 = if (has_child_elements and own_content_height > 0) 8 else 0;
         const child_indent = resolveChildIndent(tag, has_child_elements);
@@ -1540,6 +2141,44 @@ const Painter = struct {
         const child_containing_top = y + padding.top;
         const child_top = y + padding.top + own_content_height + child_gap;
         const child_width = @max(@as(i32, 40), width - padding.left - padding.right - child_indent);
+        if (can_direct_paint_plain_block_children) {
+            const child_height = try self.paintBlockChildrenWithFloats(
+                element,
+                child_left,
+                child_containing_top,
+                child_top,
+                child_width,
+                combined_opacity,
+            );
+            const explicit_height = resolveExplicitHeight(self, element, decl, self.page, tag, self.opts.viewport_height);
+            const min_height = resolveMinimumHeight(self, tag, block_like, own_content_height);
+            const css_min_height = resolveCssMinHeightPx(self, element, decl, self.page, self.opts.viewport_height);
+            const css_max_height = resolveCssMaxHeightPx(self, element, decl, self.page, self.opts.viewport_height);
+            const min_required_height = @max(min_height, css_min_height);
+            const height = clampBoxHeight(
+                min_required_height,
+                css_max_height,
+                if (has_explicit_height)
+                    explicit_height + box_sizing_extra_height
+                else
+                    padding.top + own_content_height + child_gap + child_height + padding.bottom,
+            );
+            const rect: Bounds = .{
+                .x = x,
+                .y = y,
+                .width = width,
+                .height = height,
+            };
+            try self.recordElementLayoutBox(element, rect);
+            if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
+                try self.list.addLinkRegion(self.allocator, region);
+            }
+            try self.appendResolvedControlRegion(element, rect, paint_z_index, element_command_start);
+            try appendUnorderedListMarker(self, element, rect, padding, text_style, paint_z_index, combined_opacity);
+            cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
+            return;
+        }
+
         var child_display_list: ?DisplayList = null;
         defer if (child_display_list) |*list| list.deinit(self.allocator);
         const child_height: i32 = if (has_child_elements and !canvas_surface_present) child_height: {
@@ -1554,6 +2193,8 @@ const Painter = struct {
                 .list = &temp_list,
                 .paint_text_styles = self.paint_text_styles,
                 .measurement_cache = self.measurement_cache,
+                .children_measurement_cache = self.children_measurement_cache,
+                .computed_style_cache = self.computed_style_cache,
                 .cache_layout_boxes = self.cache_layout_boxes,
             };
             const height = try temp_painter.paintBlockChildrenWithFloats(
@@ -1588,15 +2229,14 @@ const Painter = struct {
             .height = height,
         };
         try self.recordElementLayoutBox(element, rect);
-        const overflow_clip_rect = if (clipsOverflowContents(decl, self.page)) clipRectFromBounds(rect) else null;
+        const overflow_clip_rect = if (clips_overflow) clipRectFromBounds(rect) else null;
 
-        const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
         const fg = text_style.color;
         const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
 
         if (shouldPaintBox(tag)) {
             try appendResolvedBoxShadow(self, decl, rect, paint_z_index, combined_opacity, corner_radius, overflow_clip_rect);
-            if (bg) |background| {
+            if (background_color) |background| {
                 if (background.a > 0 and shouldPaintBackground(tag, has_child_elements)) {
                     try self.list.addFillRect(self.allocator, .{
                         .x = rect.x,
@@ -1664,11 +2304,21 @@ const Painter = struct {
             try resolvedCanvasCommand(self.allocator, element, rect.x, rect.y, rect.width, rect.height, paint_z_index, combined_opacity)
         else
             null;
+        var iframe_display_list = if (tag == .iframe)
+            try resolvedIFrameContentDisplayList(self.allocator, element, self.page, self.opts, rect.width, rect.height)
+        else
+            null;
+        defer if (iframe_display_list) |*list| list.deinit(self.allocator);
         if (image_command) |command| {
             try self.list.addImage(self.allocator, command);
         }
         if (canvas_command) |command| {
             try self.list.addCanvas(self.allocator, command);
+        }
+        if (iframe_display_list) |*list| {
+            const iframe_clip_rect = clipRectFromBounds(rect);
+            try self.appendDisplayListFontFaces(list);
+            try self.appendDisplayCommandsWithOffset(list, rect.x, rect.y, iframe_clip_rect);
         }
 
         if (label.len > 0 and shouldPaintText(tag) and image_command == null and canvas_command == null) {
@@ -1741,8 +2391,8 @@ const Painter = struct {
         if (child_display_list) |*list| {
             try self.appendDisplayListWithOffset(list, 0, 0, null);
         }
+        try appendUnorderedListMarker(self, element, rect, padding, text_style, paint_z_index, combined_opacity);
 
-        const tracks_scroll_metrics = overflow_clip_rect != null or self.page._element_scroll_positions.contains(element);
         if (tracks_scroll_metrics) {
             const content_box_width = @max(@as(i32, 0), rect.width - padding.horizontal());
             const content_box_height = @max(@as(i32, 0), rect.height - padding.vertical());
@@ -1789,9 +2439,7 @@ const Painter = struct {
         if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
             try self.list.addLinkRegion(self.allocator, region);
         }
-        if (try resolvedControlRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
-            try self.list.addControlRegion(self.allocator, region);
-        }
+        try self.appendResolvedControlRegion(element, rect, paint_z_index, element_command_start);
 
         if (transform_value.len > 0) {
             applyTranslateTransformToRecentOutput(
@@ -1843,6 +2491,7 @@ const Painter = struct {
         while (child_it.next()) |child| : (child_index += 1) {
             if (!isFlexRenderableChild(child)) continue;
 
+            var measured_width_override: ?i32 = null;
             var flex_grow: f32 = 0;
             var flex_shrink: f32 = 1;
             var order: i32 = 0;
@@ -1850,9 +2499,12 @@ const Painter = struct {
             var min_height: i32 = 0;
             var max_height: ?i32 = null;
             var flex_basis: ?i32 = null;
+            var child_margins: EdgeSizes = .{};
             if (child.is(Element)) |child_element| {
-                const child_style = try self.page.window.getComputedStyle(child_element, null, self.page);
+                const child_style = try self.computedStyle(child_element);
                 const child_decl = child_style.asCSSStyleDeclaration();
+                const child_tag = child_element.getTag();
+                child_margins = resolveEdgeSizes(child_decl, self.page, "margin");
                 flex_grow = resolveFlexGrow(child_decl, self.page);
                 flex_shrink = resolveFlexShrink(child_decl, self.page);
                 order = resolveFlexOrder(child_decl, self.page);
@@ -1860,6 +2512,23 @@ const Painter = struct {
                 flex_basis = resolveFlexBasisHeightPx(self, child_element, child_decl, self.opts.viewport_height);
                 min_height = resolveCssHeightConstraint(self, child_element, child_decl, self.page, "min-height", self.opts.viewport_height) orelse 0;
                 max_height = resolveCssHeightConstraint(self, child_element, child_decl, self.page, "max-height", self.opts.viewport_height);
+                const explicit_width = resolveExplicitWidth(self, child_element, child_decl, self.page, child_tag, content_width);
+                if (explicit_width > 0) {
+                    const child_padding = resolveEdgeSizes(child_decl, self.page, "padding");
+                    const has_explicit_width = hasExplicitDimensionValue(child_decl, self.page, "width");
+                    const box_sizing_extra_width = if (isContentBoxSizing(child_decl, self.page) and has_explicit_width)
+                        child_padding.horizontal()
+                    else
+                        0;
+                    const min_width = resolveWidthConstraintPx(child_decl, self.page, "min-width", "min-inline-size", content_width, self.opts.viewport_width) orelse 0;
+                    const max_width = resolveWidthConstraintPx(child_decl, self.page, "max-width", "max-inline-size", content_width, self.opts.viewport_width);
+                    var resolved_width = explicit_width + box_sizing_extra_width;
+                    resolved_width = @max(resolved_width, min_width);
+                    if (max_width) |limit| {
+                        resolved_width = @min(resolved_width, limit);
+                    }
+                    measured_width_override = resolved_width;
+                }
             }
 
             const measurement = try self.measureNodePaintedBox(child, content_width);
@@ -1873,15 +2542,16 @@ const Painter = struct {
 
             try measured_children.append(self.allocator, .{
                 .node = child,
-                .width = std.math.clamp(measurement.width, @as(i32, 0), content_width),
+                .width = std.math.clamp(measured_width_override orelse measurement.width, @as(i32, 0), content_width),
                 .height = measured_height,
+                .margins = child_margins,
                 .order = order,
                 .flex_grow = flex_grow,
                 .flex_shrink = flex_shrink,
                 .align_self = align_self,
                 .source_index = child_index,
             });
-            child_total_height += measured_height;
+            child_total_height += measured_height + child_margins.vertical();
         }
 
         std.mem.sort(FlexChildMeasure, measured_children.items, {}, flexChildMeasureLessThan);
@@ -2035,7 +2705,7 @@ const Painter = struct {
             if (item_align == .stretch) {
                 child_width = content_width;
             }
-            const free_horizontal_space = @max(@as(i32, 0), content_width - child_width);
+            const free_horizontal_space = @max(@as(i32, 0), content_width - (child_width + child_measure.margins.horizontal()));
             if (item_align == .center) {
                 child_x += @divTrunc(free_horizontal_space, 2);
             } else if (item_align == .end) {
@@ -2052,7 +2722,7 @@ const Painter = struct {
             self.forced_item_node = previous_forced_node;
             self.forced_item_height = previous_forced_height;
 
-            child_y += child_height;
+            child_y += child_height + child_measure.margins.vertical();
             if (index + 1 < measured_children.items.len) {
                 child_y += gap_between_items;
             }
@@ -2093,9 +2763,7 @@ const Painter = struct {
         if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
             try self.list.addLinkRegion(self.allocator, region);
         }
-        if (try resolvedControlRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
-            try self.list.addControlRegion(self.allocator, region);
-        }
+        try self.appendResolvedControlRegion(element, rect, paint_z_index, child_command_start);
 
         _ = margins;
         return rect;
@@ -2141,10 +2809,12 @@ const Painter = struct {
             var order: i32 = 0;
             var min_width: i32 = 0;
             var max_width: ?i32 = null;
+            var child_margins: EdgeSizes = .{};
             if (child.is(Element)) |child_element| {
-                const child_style = try self.page.window.getComputedStyle(child_element, null, self.page);
+                const child_style = try self.computedStyle(child_element);
                 const child_decl = child_style.asCSSStyleDeclaration();
                 const child_display = resolvedDisplayValue(child_decl, self.page, child_element);
+                child_margins = resolveEdgeSizes(child_decl, self.page, "margin");
                 flex_grow = resolveFlexGrow(child_decl, self.page);
                 flex_shrink = resolveFlexShrink(child_decl, self.page);
                 align_self = resolveFlexCrossAlignment(resolveCssPropertyValue(child_decl, self.page, child_element, "align-self"));
@@ -2173,6 +2843,7 @@ const Painter = struct {
                 .node = child,
                 .width = std.math.clamp(measured_width, @as(i32, 0), content_width),
                 .height = measurement.height,
+                .margins = child_margins,
                 .order = order,
                 .flex_grow = flex_grow,
                 .flex_shrink = flex_shrink,
@@ -2194,10 +2865,11 @@ const Painter = struct {
         var line_height: i32 = 0;
         var line_count: usize = 0;
         for (measured_children.items, 0..) |child_measure, index| {
+            const child_outer_width = child_measure.outerWidth();
             const next_width = if (line_count == 0)
-                child_measure.width
+                child_outer_width
             else
-                line_width + main_gap + child_measure.width;
+                line_width + main_gap + child_outer_width;
 
             if (wrap_enabled and line_count > 0 and next_width > content_width) {
                 try lines.append(self.allocator, .{
@@ -2207,14 +2879,14 @@ const Painter = struct {
                     .height = line_height,
                 });
                 line_start = index;
-                line_width = child_measure.width;
-                line_height = child_measure.height;
+                line_width = child_outer_width;
+                line_height = child_measure.outerHeight();
                 line_count = 1;
                 continue;
             }
 
             line_width = next_width;
-            line_height = @max(line_height, child_measure.height);
+            line_height = @max(line_height, child_measure.outerHeight());
             line_count += 1;
         }
 
@@ -2258,6 +2930,7 @@ const Painter = struct {
                     padding.top + content_height + padding.bottom,
             ),
         };
+        try self.recordElementLayoutBox(element, rect);
         const container_content_height = @max(@as(i32, 0), rect.height - padding.vertical());
         const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
         const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
@@ -2354,8 +3027,8 @@ const Painter = struct {
                 }
             }
 
-            for (resolved_widths.items) |child_width| {
-                line_width_used += child_width;
+            for (resolved_widths.items, 0..) |child_width, local_index| {
+                line_width_used += child_width + measured_children.items[line.start_index + local_index].margins.horizontal();
             }
             if (item_count > 1) {
                 line_width_used += main_gap * (item_count - 1);
@@ -2412,7 +3085,8 @@ const Painter = struct {
                     remaining_flex_grow -= child_measure.flex_grow;
                 }
                 var item_y = child_y;
-                const item_free_vertical_space = @max(@as(i32, 0), (line.height + line_extra_height) - child_measure.height);
+                const item_outer_height = child_measure.height + child_measure.margins.vertical();
+                const item_free_vertical_space = @max(@as(i32, 0), (line.height + line_extra_height) - item_outer_height);
                 const item_align = effectiveFlexCrossAlignment(align_items, child_measure.align_self);
                 var item_forced_height: i32 = 0;
                 if (item_align == .center) {
@@ -2420,7 +3094,10 @@ const Painter = struct {
                 } else if (item_align == .end) {
                     item_y += item_free_vertical_space;
                 } else if (item_align == .stretch) {
-                    item_forced_height = @max(child_measure.height, line.height + line_extra_height);
+                    item_forced_height = @max(
+                        child_measure.height,
+                        @max(@as(i32, 0), line.height + line_extra_height - child_measure.margins.vertical()),
+                    );
                 }
 
                 {
@@ -2438,7 +3115,7 @@ const Painter = struct {
                     self.forced_item_width = previous_forced_width;
                     self.forced_item_height = previous_forced_height;
                 }
-                child_x += child_width;
+                child_x += child_width + child_measure.margins.horizontal();
                 if (line_child_index + 1 < line.end_index) {
                     child_x += gap;
                 }
@@ -2485,9 +3162,7 @@ const Painter = struct {
         if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
             try self.list.addLinkRegion(self.allocator, region);
         }
-        if (try resolvedControlRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
-            try self.list.addControlRegion(self.allocator, region);
-        }
+        try self.appendResolvedControlRegion(element, rect, paint_z_index, child_command_start);
 
         _ = margins;
         return rect;
@@ -2533,7 +3208,7 @@ const Painter = struct {
                     legacy_center_use_viewport_width = true;
                     legacy_center_width = @max(child_width, self.opts.viewport_width - (self.opts.page_margin * 2));
                 } else if (child.is(Element)) |child_el| {
-                    const child_style = try self.page.window.getComputedStyle(child_el, null, self.page);
+                    const child_style = try self.computedStyle(child_el);
                     const child_decl = child_style.asCSSStyleDeclaration();
                     const child_display = resolvedDisplayValue(child_decl, self.page, child_el);
                     if (isInlineDisplay(child_display) or isAtomicInlineDisplay(child_display)) {
@@ -2657,12 +3332,22 @@ const Painter = struct {
             }
 
             if (legacy_center) {
-                if (recentOutputBounds(self, child_command_start, child_link_start, child_control_start)) |child_bounds| {
+                if (recentOutputBounds(self, child_command_start, child_link_start, child_control_start)) |_| {
                     const center_width = if (legacy_center_use_viewport_width) legacy_center_width else child_width;
-                    const centered_x = child_left + @max(@as(i32, 0), @divTrunc(center_width - child_bounds.width, 2));
-                    const dx = centered_x - child_bounds.x;
-                    translateRecentOutput(self, child_command_start, child_link_start, child_control_start, dx, 0);
-                    self.translateSubtreeLayoutBoxes(child, dx, 0);
+                    alignRecentOutputRows(
+                        self,
+                        child_command_start,
+                        child_link_start,
+                        child_control_start,
+                        child_left,
+                        center_width,
+                    ) catch {};
+                    if (recentOutputBounds(self, child_command_start, child_link_start, child_control_start)) |centered_bounds| {
+                        const centered_x = child_left + @max(@as(i32, 0), @divTrunc(center_width - centered_bounds.width, 2));
+                        const dx = centered_x - centered_bounds.x;
+                        translateRecentOutput(self, child_command_start, child_link_start, child_control_start, dx, 0);
+                        self.translateSubtreeLayoutBoxes(child, dx, 0);
+                    }
                 }
             }
         }
@@ -2684,7 +3369,7 @@ const Painter = struct {
     }
 
     fn resolveFloatPaintWidth(self: *Painter, element: *Element, available_width: i32) !i32 {
-        const style = try self.page.window.getComputedStyle(element, null, self.page);
+        const style = try self.computedStyle(element);
         const decl = style.asCSSStyleDeclaration();
         const display = resolvedDisplayValue(decl, self.page, element);
         const explicit_width = resolveExplicitWidth(self, element, decl, self.page, element.getTag(), available_width);
@@ -2752,7 +3437,7 @@ const Painter = struct {
             var cells = try collectTableCells(self.allocator, row);
             defer cells.deinit(self.allocator);
             for (cells.items, 0..) |cell, col_index| {
-                const cell_style = try self.page.window.getComputedStyle(cell, null, self.page);
+                const cell_style = try self.computedStyle(cell);
                 const cell_decl = cell_style.asCSSStyleDeclaration();
                 const explicit_width = resolveExplicitWidth(self, cell, cell_decl, self.page, cell.getTag(), columns_available);
                 if (explicit_width > column_widths[col_index]) {
@@ -2901,17 +3586,28 @@ const Painter = struct {
                 };
             },
             .textarea => {
-                const text = try element.asNode().getTextContentAlloc(self.allocator);
-                defer self.allocator.free(text);
+                const textarea = element.as(Element.Html.TextArea);
+                const current_value = textarea.getValue();
                 if (element.getAttributeSafe(comptime .wrap("placeholder"))) |placeholder| {
-                    return self.allocator.dupe(u8, placeholder);
+                    if (current_value.len == 0) {
+                        return self.allocator.dupe(u8, placeholder);
+                    }
                 }
-                if (std.mem.trim(u8, text, &std.ascii.whitespace).len > 0) {
-                    return collapseWhitespace(self.allocator, text);
+                if (std.mem.trim(u8, current_value, &std.ascii.whitespace).len > 0) {
+                    return collapseWhitespace(self.allocator, current_value);
                 }
                 return self.allocator.dupe(u8, "[textarea]");
             },
-            .button, .option, .select => {
+            .select => {
+                const select = element.as(Element.Html.Select);
+                const label = try select.getDisplayedTextAlloc(self.allocator, self.page);
+                if (label.len > 0) {
+                    return label;
+                }
+                self.allocator.free(label);
+                return self.allocator.dupe(u8, "[control]");
+            },
+            .button, .option => {
                 const text = try element.asNode().getTextContentAlloc(self.allocator);
                 defer self.allocator.free(text);
                 const collapsed = try collapseWhitespace(self.allocator, text);
@@ -2944,9 +3640,7 @@ const Painter = struct {
         if (!isPureInlineDisplay(display)) {
             return false;
         }
-        if (margins.top != 0 or margins.right != 0 or margins.bottom != 0 or margins.left != 0) {
-            return false;
-        }
+        _ = margins;
         if (padding.top != 0 or padding.right != 0 or padding.bottom != 0 or padding.left != 0) {
             return false;
         }
@@ -2966,14 +3660,18 @@ const Painter = struct {
                 continue;
             }
             if (child.is(Element)) |child_el| {
-                const child_style = try self.page.window.getComputedStyle(child_el, null, self.page);
+                if (try self.isInlineAdornmentElement(child_el)) {
+                    continue;
+                }
+                const child_style = try self.computedStyle(child_el);
                 const child_decl = child_style.asCSSStyleDeclaration();
                 const child_display = resolvedDisplayValue(child_decl, self.page, child_el);
-                if (!isInlineFlowDisplayForElement(child_el, child_display)) {
+                const child_atomic_inline = isAtomicInlineDisplay(child_display);
+                if (!child_atomic_inline and !isInlineFlowDisplayForElement(child_el, child_display)) {
                     return false;
                 }
                 const child_has_children = hasRenderableChildElements(child_el);
-                if (child_has_children) {
+                if (child_has_children and !child_atomic_inline) {
                     const child_margins = resolveEdgeSizes(child_decl, self.page, "margin");
                     const child_padding = resolveEdgeSizes(child_decl, self.page, "padding");
                     const child_label = try self.elementLabel(child_el);
@@ -2999,6 +3697,36 @@ const Painter = struct {
         return true;
     }
 
+    fn isInlineAdornmentElement(self: *Painter, element: *Element) !bool {
+        if (element._namespace == .svg) {
+            return true;
+        }
+
+        var saw_adornment_descendant = false;
+        var it = element.asNode().childrenIterator();
+        while (it.next()) |child| {
+            if (child.is(Node.CData.Text)) |text| {
+                if (std.mem.trim(u8, text.getWholeText(), &std.ascii.whitespace).len > 0) {
+                    return false;
+                }
+                continue;
+            }
+            if (child.is(Element)) |child_el| {
+                if (isNonRenderedTag(child_el.getTag())) {
+                    continue;
+                }
+                if (!(try self.isInlineAdornmentElement(child_el))) {
+                    return false;
+                }
+                saw_adornment_descendant = true;
+                continue;
+            }
+            return false;
+        }
+
+        return saw_adornment_descendant;
+    }
+
     fn appendInlineLinkRegionsForCommandRange(
         self: *Painter,
         element: *Element,
@@ -3021,9 +3749,18 @@ const Painter = struct {
         const download_filename = element.getAttributeSafe(comptime .wrap("download")) orelse "";
         const open_in_new_tab = linkOpensFreshTab(element);
         const target_name = linkTargetName(element);
-        const style = try self.page.window.getComputedStyle(element, null, self.page);
+        const style = try self.computedStyle(element);
         const paint_z_index = try resolvePaintZIndex(element, style.asCSSStyleDeclaration(), self.page);
         for (fragments.items) |fragment| {
+            if (rendererDiagnosticsEnabled(self.page)) {
+                const msg = std.fmt.allocPrint(
+                    self.allocator,
+                    "add_link_region|href={s}|x={d}|y={d}|w={d}|h={d}|path_len={d}",
+                    .{ href, fragment.x, fragment.y, fragment.width, fragment.height, dom_path.len },
+                ) catch "";
+                defer if (msg.len > 0) self.allocator.free(msg);
+                appendRendererDiagnosticsLine("layout_box", msg);
+            }
             try self.list.addLinkRegion(self.allocator, .{
                 .x = fragment.x,
                 .y = fragment.y,
@@ -3057,9 +3794,24 @@ const CommandBounds = struct {
 
 fn shouldPaintBox(tag: Element.Tag) bool {
     return switch (tag) {
-        .html, .body, .head, .meta, .link, .script, .style, .title => false,
-        else => true,
+        .html, .body => false,
+        else => !isNonRenderedTag(tag),
     };
+}
+
+fn isNonRenderedTag(tag: Element.Tag) bool {
+    return switch (tag) {
+        .head, .meta, .link, .script, .style, .template, .title, .noscript => true,
+        else => false,
+    };
+}
+
+fn isFarOutsideViewport(x: i32, y: i32, width: i32, viewport_width: i32, viewport_height: i32) bool {
+    const slack = 256;
+    return x + width < -slack or
+        x > viewport_width + slack or
+        y < -slack or
+        y > viewport_height + slack;
 }
 
 fn shouldStrokeBox(tag: Element.Tag) bool {
@@ -3199,7 +3951,39 @@ fn countAsciiSpaces(text: []const u8) i32 {
 }
 
 fn resolveTextSpacingGap(style: PaintTextStyle) i32 {
-    return 2 + style.word_spacing + (style.letter_spacing * 2);
+    _ = style;
+    return 0;
+}
+
+fn appendUnorderedListMarker(
+    self: *Painter,
+    element: *Element,
+    rect: Bounds,
+    padding: EdgeSizes,
+    text_style: PaintTextStyle,
+    paint_z_index: i32,
+    opacity: u8,
+) !void {
+    if (element.getTag() != .li) return;
+    const parent = element.asNode().parentElement() orelse return;
+    if (parent.getTag() != .ul) return;
+
+    const marker_size = @max(@as(i32, 4), @divTrunc(text_style.font_size, 3));
+    const marker_gap = @max(@as(i32, 8), marker_size + 4);
+    const line_height = resolveTextLineHeightPx(text_style.line_height, text_style.font_size) orelse @max(text_style.font_size + 8, 20);
+    const marker_y = rect.y + padding.top + @max(@as(i32, 0), @divTrunc(line_height - marker_size, 2));
+
+    try self.list.addFillRect(self.allocator, .{
+        .x = rect.x - marker_gap,
+        .y = marker_y,
+        .width = marker_size,
+        .height = marker_size,
+        .z_index = paint_z_index,
+        .corner_radius = @divTrunc(marker_size, 2),
+        .clip_rect = null,
+        .opacity = opacity,
+        .color = text_style.color,
+    });
 }
 
 fn shouldUnderlineText(element: *Element, decl: anytype, page: *Page, tag: Element.Tag) bool {
@@ -3335,6 +4119,130 @@ fn collectCommandRowFragments(
         try mergeCommandBoundsIntoFragments(allocator, &fragments, bounds);
     }
     return fragments;
+}
+
+fn alignInlineFlowRows(
+    list: *DisplayList,
+    allocator: std.mem.Allocator,
+    content_width: i32,
+    text_align: []const u8,
+    base_x: i32,
+) !void {
+    const centered = std.ascii.eqlIgnoreCase(text_align, "center");
+    const right_aligned = std.ascii.eqlIgnoreCase(text_align, "right") or std.ascii.eqlIgnoreCase(text_align, "end");
+    if (!centered and !right_aligned) return;
+
+    var fragments = try collectCommandRowFragments(allocator, list.commands.items);
+    defer fragments.deinit(allocator);
+    if (fragments.items.len == 0) return;
+
+    sortCommandRowFragments(fragments.items);
+    for (fragments.items) |fragment| {
+        const normalized_x = fragment.x - base_x;
+        const target_x = if (centered)
+            @max(@as(i32, 0), @divTrunc(content_width - fragment.width, 2))
+        else
+            @max(@as(i32, 0), content_width - fragment.width);
+        const delta = target_x - normalized_x;
+        if (delta == 0) continue;
+        translateDisplayListRow(list, fragment, delta);
+    }
+}
+
+fn alignRecentOutputRows(
+    self: *Painter,
+    command_start: usize,
+    link_start: usize,
+    control_start: usize,
+    content_left: i32,
+    content_width: i32,
+) !void {
+    var fragments = try collectCommandRowFragments(self.allocator, self.list.commands.items[command_start..]);
+    defer fragments.deinit(self.allocator);
+    if (fragments.items.len == 0) return;
+
+    sortCommandRowFragments(fragments.items);
+    for (fragments.items) |fragment| {
+        const target_x = content_left + @max(@as(i32, 0), @divTrunc(content_width - fragment.width, 2));
+        const delta = target_x - fragment.x;
+        if (delta == 0) continue;
+        translateRecentOutputRow(self, command_start, link_start, control_start, fragment, delta);
+    }
+}
+
+fn translateDisplayListRow(list: *DisplayList, row: CommandBounds, dx: i32) void {
+    for (list.commands.items) |*command| {
+        const bounds = commandBounds(command.*) orelse continue;
+        if (!commandBoundsShareInlineRow(bounds, row)) continue;
+        switch (command.*) {
+            .fill_rect => |*rect| rect.x += dx,
+            .stroke_rect => |*rect| rect.x += dx,
+            .text => |*text| text.x += dx,
+            .image => |*image| image.x += dx,
+            .canvas => |*canvas| canvas.x += dx,
+        }
+    }
+
+    for (list.link_regions.items) |*region| {
+        if (!commandBoundsShareInlineRow(.{
+            .x = region.x,
+            .y = region.y,
+            .width = region.width,
+            .height = region.height,
+        }, row)) continue;
+        region.x += dx;
+    }
+
+    for (list.control_regions.items) |*region| {
+        if (!commandBoundsShareInlineRow(.{
+            .x = region.x,
+            .y = region.y,
+            .width = region.width,
+            .height = region.height,
+        }, row)) continue;
+        region.x += dx;
+    }
+}
+
+fn translateRecentOutputRow(
+    self: *Painter,
+    command_start: usize,
+    link_start: usize,
+    control_start: usize,
+    row: CommandBounds,
+    dx: i32,
+) void {
+    for (self.list.commands.items[command_start..]) |*command| {
+        const bounds = commandBounds(command.*) orelse continue;
+        if (!commandBoundsShareInlineRow(bounds, row)) continue;
+        switch (command.*) {
+            .fill_rect => |*rect| rect.x += dx,
+            .stroke_rect => |*rect| rect.x += dx,
+            .text => |*text| text.x += dx,
+            .image => |*image| image.x += dx,
+            .canvas => |*canvas| canvas.x += dx,
+        }
+    }
+
+    for (self.list.link_regions.items[link_start..]) |*region| {
+        if (!commandBoundsShareInlineRow(.{
+            .x = region.x,
+            .y = region.y,
+            .width = region.width,
+            .height = region.height,
+        }, row)) continue;
+        region.x += dx;
+    }
+
+    for (self.list.control_regions.items[control_start..]) |*region| {
+        if (!commandBoundsShareInlineRow(.{
+            .x = region.x,
+            .y = region.y,
+            .width = region.width,
+            .height = region.height,
+        }, row)) continue;
+        region.x += dx;
+    }
 }
 
 fn encodeNodePath(
@@ -4370,25 +5278,21 @@ fn isLegacyCenterElement(element: *Element) bool {
 }
 
 fn isInlineFlowDisplayForElement(element: *Element, display: []const u8) bool {
-    if (isInlineDisplay(display)) return true;
-
     const trimmed = std.mem.trim(u8, display, &std.ascii.whitespace);
-    if (trimmed.len == 0 or std.ascii.eqlIgnoreCase(trimmed, "block")) {
-        if (inlineStylePropertyValue(element, "display") == null) {
-            return isInlineDisplay(defaultDisplayForTag(element.getTag()));
-        }
+    if (trimmed.len == 0) {
+        return isInlineDisplay(defaultDisplayForTag(element.getTag()));
     }
-    return false;
+    return isInlineDisplay(trimmed);
 }
 
 fn hasRenderableChildElements(element: *Element) bool {
+    if (element.getTag() == .select) {
+        return false;
+    }
     var it = element.asNode().childrenIterator();
     while (it.next()) |child| {
         if (child.is(Element)) |child_el| {
-            if (switch (child_el.getTag()) {
-                .script, .style, .template, .head, .meta, .link, .title => true,
-                else => false,
-            }) continue;
+            if (isNonRenderedTag(child_el.getTag())) continue;
             if (isHiddenFormControl(child_el)) continue;
             return true;
         }
@@ -4422,10 +5326,7 @@ fn hasOnlyInlineFlowChildren(element: *Element, page: *Page) !bool {
             continue;
         }
         if (child.is(Element)) |child_el| {
-            if (switch (child_el.getTag()) {
-                .script, .style, .template, .head, .meta, .link, .title => true,
-                else => false,
-            }) continue;
+            if (isNonRenderedTag(child_el.getTag())) continue;
             if (child_el.getTag() == .br) {
                 saw_flow_child = true;
                 continue;
@@ -4534,6 +5435,45 @@ test "paintDocument keeps inline-block wrappers on one row with nested block chi
     const alpha_beta_dy = if (alpha.y > beta.y) alpha.y - beta.y else beta.y - alpha.y;
     try std.testing.expect(alpha_beta_dy <= 4);
     try std.testing.expect(beta.x > alpha.x + 40);
+}
+
+test "paintDocument shrink-wraps inline-block wrappers with nested block children" {
+    var page = try testing.pageTest("page/inline_block_wrapper_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var pill_rects = std.ArrayList(Bounds){};
+    defer pill_rects.deinit(std.testing.allocator);
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 210 and rect.color.r <= 220 and
+                    rect.color.g >= 210 and rect.color.g <= 220 and
+                    rect.color.b >= 210 and rect.color.b <= 220)
+                {
+                    try pill_rects.append(std.testing.allocator, .{
+                        .x = rect.x,
+                        .y = rect.y,
+                        .width = rect.width,
+                        .height = rect.height,
+                    });
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), pill_rects.items.len);
+    try std.testing.expect(pill_rects.items[0].width >= 60);
+    try std.testing.expect(pill_rects.items[0].width <= 120);
+    try std.testing.expect(pill_rects.items[1].width >= 60);
+    try std.testing.expect(pill_rects.items[1].width <= 120);
+    try std.testing.expect(pill_rects.items[1].x >= pill_rects.items[0].x + pill_rects.items[0].width + 8);
 }
 
 fn isFlexDisplay(display: []const u8) bool {
@@ -4869,10 +5809,7 @@ fn isFlexRenderableChild(node: *Node) bool {
         return std.mem.trim(u8, text.getWholeText(), &std.ascii.whitespace).len > 0;
     }
     if (node.is(Element)) |element| {
-        return switch (element.getTag()) {
-            .script, .style, .template, .head, .meta, .link, .title => false,
-            else => true,
-        };
+        return !isNonRenderedTag(element.getTag());
     }
     return false;
 }
@@ -5258,7 +6195,7 @@ fn measureFlexAutoMainWidth(
 
         var child_width = (try self.measureNodePaintedBox(child, content_width)).width;
         if (child.is(Element)) |child_el| {
-            const child_style = try self.page.window.getComputedStyle(child_el, null, self.page);
+            const child_style = try self.computedStyle(child_el);
             const child_decl = child_style.asCSSStyleDeclaration();
             const child_margins = resolveEdgeSizes(child_decl, self.page, "margin");
             child_width += child_margins.left + child_margins.right;
@@ -5290,7 +6227,7 @@ fn estimateInlineAtomicDescendantWidth(
         .input, .button, .select, .textarea => 24,
         else => 16,
     };
-    const style = try self.page.window.getComputedStyle(element, null, self.page);
+    const style = try self.computedStyle(element);
     const decl = style.asCSSStyleDeclaration();
     const text_style = try self.resolvePaintTextStyle(element, decl, element.getTag());
     const font_size = text_style.font_size;
@@ -5332,13 +6269,10 @@ fn estimateInlineAtomicDescendantWidth(
         }
         if (child.is(Element)) |child_el| {
             const child_tag = child_el.getTag();
-            if (switch (child_tag) {
-                .script, .style, .template, .head, .meta, .link, .title => true,
-                else => false,
-            }) continue;
+            if (isNonRenderedTag(child_tag)) continue;
             if (isHiddenFormControl(child_el)) continue;
 
-            const child_style = try self.page.window.getComputedStyle(child_el, null, self.page);
+            const child_style = try self.computedStyle(child_el);
             const child_decl = child_style.asCSSStyleDeclaration();
             const child_display = resolvedDisplayValue(child_decl, self.page, child_el);
             if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, child_display, &std.ascii.whitespace), "none")) continue;
@@ -5352,9 +6286,18 @@ fn estimateInlineAtomicDescendantWidth(
 
             const explicit_child_width = resolveExplicitWidth(self, child_el, child_decl, self.page, child_tag, available_width);
             var child_best = if (explicit_child_width > 0) explicit_child_width + child_extra else 0;
-            const child_measurement = try self.measureNodePaintedBox(child, available_width);
-            if (child_measurement.width > 0) {
-                child_best = @max(child_best, child_measurement.width + child_margins.left + child_margins.right);
+            const shrink_auto_block_child = !isInlineFlowDisplayForElement(child_el, child_display) and explicit_child_width <= 0 and
+                !isOutOfFlowPositioned(resolveCssPropertyValue(child_decl, self.page, child_el, "position"));
+            if (shrink_auto_block_child) {
+                const child_children = try self.measureElementChildrenPaintedBox(child_el, available_width);
+                if (child_children.width > 0) {
+                    child_best = @max(child_best, child_children.width + child_extra);
+                }
+            } else {
+                const child_measurement = try self.measureNodePaintedBox(child, available_width);
+                if (child_measurement.width > 0) {
+                    child_best = @max(child_best, child_measurement.width + child_margins.left + child_margins.right);
+                }
             }
 
             const child_label = try self.elementLabel(child_el);
@@ -5482,6 +6425,32 @@ fn resolveExplicitHeight(self: *const Painter, element: *Element, decl: anytype,
         }
     }
     return 0;
+}
+
+fn resolvedIFrameContentDisplayList(
+    allocator: std.mem.Allocator,
+    element: *Element,
+    parent_page: *Page,
+    opts: PaintOpts,
+    width: i32,
+    height: i32,
+) !?DisplayList {
+    const iframe = element.is(Element.Html.IFrame) orelse return null;
+    const frame_window = iframe.getContentWindow() orelse return null;
+    const frame_page = frame_window._page;
+    if (frame_page == parent_page) {
+        return null;
+    }
+
+    return try paintDocument(allocator, frame_page, .{
+        .viewport_width = @max(@as(i32, 1), width),
+        .viewport_height = @max(@as(i32, 1), height),
+        .layout_scale = opts.layout_scale,
+        .page_margin = 0,
+        .block_min_width = @max(@as(i32, 1), @min(opts.block_min_width, width)),
+        .inline_min_width = @max(@as(i32, 1), @min(opts.inline_min_width, width)),
+        .min_height = opts.min_height,
+    });
 }
 
 fn resolveCssHeightConstraint(
@@ -5632,8 +6601,8 @@ fn flowSpacingAfter(tag: Element.Tag, block_like: bool) i32 {
 
 fn shouldPaintText(tag: Element.Tag) bool {
     return switch (tag) {
-        .html, .body, .head, .meta, .link, .script, .style, .template, .img => false,
-        else => true,
+        .html, .body, .img => false,
+        else => !isNonRenderedTag(tag),
     };
 }
 
@@ -5755,24 +6724,116 @@ const MeasuredTextMetrics = struct {
     height: i32,
 };
 
-fn measureTextMetricsWin32(
+const TextMetricsCacheKey = struct {
+    text_hash: u64,
+    text_len: u32,
+    wrap_width: i32,
+    font_size: i32,
+    font_family_hash: u64,
+    font_family_len: u32,
+    font_weight: i32,
+    italic: bool,
+};
+
+const TextMeasureFontKey = struct {
+    face_hash: u64,
+    face_len: u32,
+    pitch_family: u32,
+    font_size: i32,
+    font_weight: i32,
+    italic: bool,
+};
+
+const TextMeasureFontHandle = struct {
+    handle: win.HFONT,
+    owned_temp: bool,
+};
+
+var text_metrics_cache_mutex: std.Thread.Mutex = .{};
+var text_metrics_cache: std.AutoHashMapUnmanaged(TextMetricsCacheKey, MeasuredTextMetrics) = .empty;
+const text_metrics_cache_max_entries: usize = 32768;
+var text_measure_dc: ?win.HDC = null;
+var text_measure_font_cache: std.AutoHashMapUnmanaged(TextMeasureFontKey, win.HFONT) = .empty;
+const text_measure_font_cache_max_entries: usize = 256;
+
+fn textMetricsCacheKey(
     text: []const u8,
     wrap_width: ?i32,
     font_size: i32,
     font_family: []const u8,
     font_weight: i32,
     italic: bool,
-) !MeasuredTextMetrics {
-    if (text.len == 0) {
-        return .{ .width = 0, .height = font_size + 8 };
+) TextMetricsCacheKey {
+    var text_hasher = std.hash.Wyhash.init(0);
+    text_hasher.update(text);
+
+    var family_hasher = std.hash.Wyhash.init(0);
+    family_hasher.update(font_family);
+
+    return .{
+        .text_hash = text_hasher.final(),
+        .text_len = @intCast(@min(text.len, std.math.maxInt(u32))),
+        .wrap_width = wrap_width orelse 0,
+        .font_size = font_size,
+        .font_family_hash = family_hasher.final(),
+        .font_family_len = @intCast(@min(font_family.len, std.math.maxInt(u32))),
+        .font_weight = font_weight,
+        .italic = italic,
+    };
+}
+
+fn getCachedTextMetricsWin32(key: TextMetricsCacheKey) ?MeasuredTextMetrics {
+    text_metrics_cache_mutex.lock();
+    defer text_metrics_cache_mutex.unlock();
+    return text_metrics_cache.get(key);
+}
+
+fn putCachedTextMetricsWin32(key: TextMetricsCacheKey, metrics: MeasuredTextMetrics) void {
+    text_metrics_cache_mutex.lock();
+    defer text_metrics_cache_mutex.unlock();
+    if (text_metrics_cache.count() >= text_metrics_cache_max_entries) {
+        return;
+    }
+    text_metrics_cache.put(std.heap.c_allocator, key, metrics) catch {};
+}
+
+fn textMeasureFontKey(font_spec: MeasuredFontSpec, font_size: i32, font_weight: i32, italic: bool) TextMeasureFontKey {
+    var face_hasher = std.hash.Wyhash.init(0);
+    face_hasher.update(font_spec.face_name);
+    return .{
+        .face_hash = face_hasher.final(),
+        .face_len = @intCast(@min(font_spec.face_name.len, std.math.maxInt(u32))),
+        .pitch_family = font_spec.pitch_family,
+        .font_size = font_size,
+        .font_weight = font_weight,
+        .italic = italic,
+    };
+}
+
+fn ensureTextMeasureDcWin32() !win.HDC {
+    if (text_measure_dc == null) {
+        text_measure_dc = win.CreateCompatibleDC(null) orelse return error.TextMeasureDcFailed;
+    }
+    return text_measure_dc.?;
+}
+
+fn getOrCreateCachedTextMeasureFontWin32(
+    font_spec: MeasuredFontSpec,
+    font_size: i32,
+    font_weight: i32,
+    italic: bool,
+) !TextMeasureFontHandle {
+    const key = textMeasureFontKey(font_spec, font_size, font_weight, italic);
+    if (text_measure_font_cache.get(key)) |font| {
+        return .{
+            .handle = font,
+            .owned_temp = false,
+        };
     }
 
-    const hdc = win.CreateCompatibleDC(null) orelse return error.TextMeasureDcFailed;
-    defer _ = win.DeleteDC(hdc);
-
-    const font_spec = resolveMeasuredFontSpec(font_family);
     const wide_face = try std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, font_spec.face_name);
     defer std.heap.c_allocator.free(wide_face);
+
     const font = win.CreateFontW(
         -@as(i32, @intCast(@max(@as(i32, 1), font_size))),
         0,
@@ -5789,11 +6850,63 @@ fn measureTextMetricsWin32(
         @as(win.DWORD, @intCast(font_spec.pitch_family)),
         wide_face.ptr,
     );
-    if (font == null) return error.TextMeasureFontFailed;
-    const previous_font = win.SelectObject(hdc, font);
+    if (font == null) {
+        return error.TextMeasureFontFailed;
+    }
+
+    if (text_measure_font_cache.count() >= text_measure_font_cache_max_entries) {
+        return .{
+            .handle = font,
+            .owned_temp = true,
+        };
+    }
+
+    text_measure_font_cache.put(std.heap.c_allocator, key, font) catch {
+        return .{
+            .handle = font,
+            .owned_temp = true,
+        };
+    };
+    return .{
+        .handle = font,
+        .owned_temp = false,
+    };
+}
+
+fn measureTextMetricsWin32(
+    text: []const u8,
+    wrap_width: ?i32,
+    font_size: i32,
+    font_family: []const u8,
+    font_weight: i32,
+    italic: bool,
+) !MeasuredTextMetrics {
+    if (text.len == 0) {
+        return .{ .width = 0, .height = font_size + 8 };
+    }
+
+    const cache_key = textMetricsCacheKey(text, wrap_width, font_size, font_family, font_weight, italic);
+    if (getCachedTextMetricsWin32(cache_key)) |cached| {
+        return cached;
+    }
+
+    const font_spec = resolveMeasuredFontSpec(font_family);
+    text_metrics_cache_mutex.lock();
+    defer text_metrics_cache_mutex.unlock();
+
+    if (text_metrics_cache.get(cache_key)) |cached| {
+        return cached;
+    }
+
+    const hdc = try ensureTextMeasureDcWin32();
+    const font_handle = try getOrCreateCachedTextMeasureFontWin32(font_spec, font_size, font_weight, italic);
+    defer if (font_handle.owned_temp) {
+        _ = win.DeleteObject(font_handle.handle);
+    };
+
+    const previous_font = win.SelectObject(hdc, font_handle.handle);
     defer {
         _ = win.SelectObject(hdc, previous_font);
-        _ = win.DeleteObject(font);
     }
 
     const wide_text = try std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, text);
@@ -5811,10 +6924,14 @@ fn measureTextMetricsWin32(
         win.DT_LEFT | win.DT_TOP | win.DT_NOPREFIX | win.DT_CALCRECT | win.DT_SINGLELINE;
     _ = win.DrawTextW(hdc, wide_text.ptr, @intCast(wide_text.len), &rect, flags);
 
-    return .{
+    const measured = MeasuredTextMetrics{
         .width = @max(@as(i32, 0), rect.right - rect.left),
         .height = @max(@as(i32, 0), rect.bottom - rect.top),
     };
+    if (text_metrics_cache.count() < text_metrics_cache_max_entries) {
+        text_metrics_cache.put(std.heap.c_allocator, cache_key, measured) catch {};
+    }
+    return measured;
 }
 
 const MeasuredFontSpec = struct {
@@ -9222,6 +10339,490 @@ test "elementFromPoint sees legacy centered search input region" {
     try std.testing.expect(hit == input);
 }
 
+test "patchTextControlDisplayList updates legacy centered search input text incrementally" {
+    var page = try testing.pageTest("page/legacy_table_layout.html");
+    defer page._session.removePage();
+
+    const input = (try page.window._document.querySelector(.wrap(".search-shell input"), page)).?;
+    const input_html = input.is(Element.Html.Input) orelse return error.LegacyTableInputMissing;
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 1280,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    const control_count = display_list.control_regions.items.len;
+    try input_html.setValue("brass otter lantern", page);
+    try std.testing.expect(try patchTextControlDisplayList(
+        std.testing.allocator,
+        page,
+        &display_list,
+        input,
+        .{
+            .viewport_width = 1280,
+            .viewport_height = 720,
+        },
+    ));
+    try std.testing.expectEqual(control_count, display_list.control_regions.items.len);
+
+    var found_value = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "brass otter lantern")) {
+                    found_value = true;
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(found_value);
+
+    try input_html.setValue("", page);
+    try std.testing.expect(try patchTextControlDisplayList(
+        std.testing.allocator,
+        page,
+        &display_list,
+        input,
+        .{
+            .viewport_width = 1280,
+            .viewport_height = 720,
+        },
+    ));
+
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| if (std.mem.eql(u8, text.text, "brass otter lantern")) {
+                return error.LegacyTableIncrementalInputTextStillPresent;
+            },
+            else => {},
+        }
+    }
+}
+
+test "patchTextControlDisplayList repaints full input visuals for paint-only style changes" {
+    var page = try testing.pageTest("page/legacy_table_layout.html");
+    defer page._session.removePage();
+
+    const input = (try page.window._document.querySelector(.wrap(".search-shell input"), page)).?;
+    const input_html = input.is(Element.Html.Input) orelse return error.LegacyTableInputMissing;
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 1280,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try input_html.setValue("renderer path", page);
+    try input.setAttributeSafe(
+        comptime .wrap("style"),
+        .wrap("color: rgb(210, 40, 30); background-color: rgb(12, 34, 56); border-color: rgb(200, 210, 220);"),
+        page,
+    );
+
+    switch (page.presentationHint()) {
+        .text_control => |hint_element| try std.testing.expectEqual(input, hint_element),
+        else => return error.ExpectedTextControlPresentationHint,
+    }
+
+    try std.testing.expect(try patchTextControlDisplayList(
+        std.testing.allocator,
+        page,
+        &display_list,
+        input,
+        .{
+            .viewport_width = 1280,
+            .viewport_height = 720,
+        },
+    ));
+
+    var saw_fill = false;
+    var saw_stroke = false;
+    var saw_text = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r == 12 and rect.color.g == 34 and rect.color.b == 56) {
+                    saw_fill = true;
+                }
+            },
+            .stroke_rect => |rect| {
+                if (rect.x >= 0 and rect.y >= 0 and rect.width > 0 and rect.height > 0) {
+                    saw_stroke = true;
+                }
+            },
+            .text => |text| {
+                if (text.color.r == 210 and text.color.g == 40 and text.color.b == 30) {
+                    saw_text = true;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(saw_fill);
+    try std.testing.expect(saw_stroke);
+    try std.testing.expect(saw_text);
+}
+
+test "patchTextControlDisplayList preserves sibling control command spans in flex layout" {
+    var page = try testing.pageTest("page/flex_two_text_inputs_layout.html");
+    defer page._session.removePage();
+
+    const first = (try page.window._document.querySelector(.wrap("#first"), page)).?;
+    const second = (try page.window._document.querySelector(.wrap("#second"), page)).?;
+    const first_html = first.is(Element.Html.Input) orelse return error.FirstFlexInputMissing;
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 320,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    const first_path = try encodeNodePath(page.call_arena, first.asNode());
+    const second_path = try encodeNodePath(page.call_arena, second.asNode());
+    const first_region_index = findControlRegionIndexForNodePath(&display_list, first_path) orelse return error.FirstFlexInputControlRegionMissing;
+    const second_region_index = findControlRegionIndexForNodePath(&display_list, second_path) orelse return error.SecondFlexInputControlRegionMissing;
+
+    const second_region_before = display_list.control_regions.items[second_region_index];
+    try std.testing.expect(second_region_before.hasCommandSpan(display_list.commands.items.len));
+
+    var saw_second_value_before = false;
+    for (display_list.commands.items[second_region_before.command_start..second_region_before.command_end]) |command| {
+        switch (command) {
+            .text => |text| if (std.mem.eql(u8, text.text, "bravo field")) {
+                saw_second_value_before = true;
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(saw_second_value_before);
+
+    try first_html.setValue("delta forge", page);
+    try std.testing.expect(try patchTextControlDisplayList(
+        std.testing.allocator,
+        page,
+        &display_list,
+        first,
+        .{
+            .viewport_width = 960,
+            .viewport_height = 320,
+        },
+    ));
+
+    const first_region_after = display_list.control_regions.items[first_region_index];
+    const second_region_after = display_list.control_regions.items[second_region_index];
+    try std.testing.expect(first_region_after.hasCommandSpan(display_list.commands.items.len));
+    try std.testing.expect(second_region_after.hasCommandSpan(display_list.commands.items.len));
+
+    var saw_first_value_after = false;
+    for (display_list.commands.items[first_region_after.command_start..first_region_after.command_end]) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "delta forge")) {
+                    saw_first_value_after = true;
+                }
+                if (std.mem.eql(u8, text.text, "alpha lane")) {
+                    return error.FirstFlexInputRetainedOldCommandSpanText;
+                }
+            },
+            else => {},
+        }
+    }
+
+    var saw_second_value_after = false;
+    for (display_list.commands.items[second_region_after.command_start..second_region_after.command_end]) |command| {
+        switch (command) {
+            .text => |text| if (std.mem.eql(u8, text.text, "bravo field")) {
+                saw_second_value_after = true;
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(saw_first_value_after);
+    try std.testing.expect(saw_second_value_after);
+}
+
+test "patchTextControlDisplayList repaints button visuals for paint-only style changes" {
+    var page = try testing.pageTest("page/button_incremental_layout.html");
+    defer page._session.removePage();
+
+    const button = (try page.window._document.querySelector(.wrap("#action"), page)).?;
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 720,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try button.setAttributeSafe(
+        comptime .wrap("style"),
+        .wrap("color: rgb(244, 248, 252); background-color: rgb(28, 44, 96); border-color: rgb(196, 204, 214);"),
+        page,
+    );
+
+    switch (page.presentationHint()) {
+        .text_control => |hint_element| try std.testing.expectEqual(button, hint_element),
+        else => return error.ExpectedButtonTextControlPresentationHint,
+    }
+
+    try std.testing.expect(try patchTextControlDisplayList(
+        std.testing.allocator,
+        page,
+        &display_list,
+        button,
+        .{
+            .viewport_width = 720,
+            .viewport_height = 240,
+        },
+    ));
+
+    var saw_fill = false;
+    var saw_stroke = false;
+    var saw_text = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r == 28 and rect.color.g == 44 and rect.color.b == 96) {
+                    saw_fill = true;
+                }
+            },
+            .stroke_rect => |rect| {
+                if (rect.color.r == 196 and rect.color.g == 204 and rect.color.b == 214) {
+                    saw_stroke = true;
+                }
+            },
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Run Slice") and
+                    text.color.r == 244 and text.color.g == 248 and text.color.b == 252)
+                {
+                    saw_text = true;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(saw_fill);
+    try std.testing.expect(saw_stroke);
+    try std.testing.expect(saw_text);
+}
+
+test "paintDocument renders select using displayed option label" {
+    var page = try testing.pageTest("page/select_incremental_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 720,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var saw_selected_label = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| if (std.mem.eql(u8, text.text, "Bravo Two")) {
+                saw_selected_label = true;
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(saw_selected_label);
+}
+
+test "paintDocument treats closed select as one control without painting option descendants" {
+    var page = try testing.pageTest("page/select_incremental_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 720,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), display_list.control_regions.items.len);
+
+    var saw_selected_label = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Bravo Two")) {
+                    saw_selected_label = true;
+                } else if (std.mem.eql(u8, text.text, "Alpha One") or std.mem.eql(u8, text.text, "Charlie Three")) {
+                    return error.SelectPaintedHiddenOptionLabel;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(saw_selected_label);
+}
+
+test "paintDocument keeps inline-flex select on the control renderer path" {
+    var page = try testing.pageTest("page/select_inline_flex_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 720,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), display_list.control_regions.items.len);
+
+    const control = display_list.control_regions.items[0];
+    try std.testing.expect(control.width >= 180);
+    try std.testing.expect(control.height >= 30);
+
+    var saw_selected_label = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Bravo Two")) {
+                    saw_selected_label = true;
+                } else if (std.mem.eql(u8, text.text, "Alpha One") or std.mem.eql(u8, text.text, "Charlie Three")) {
+                    return error.InlineFlexSelectPaintedHiddenOptionLabel;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(saw_selected_label);
+}
+
+test "patchTextControlDisplayList updates select label incrementally after selectedIndex change" {
+    var page = try testing.pageTest("page/select_incremental_layout.html");
+    defer page._session.removePage();
+
+    const select = (try page.window._document.querySelector(.wrap("#chooser"), page)).?;
+    const select_html = select.is(Element.Html.Select) orelse return error.SelectIncrementalControlMissing;
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 720,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try select_html.setSelectedIndex(2, page);
+    switch (page.presentationHint()) {
+        .text_control => |hint_element| try std.testing.expectEqual(select, hint_element),
+        else => return error.ExpectedSelectTextControlPresentationHint,
+    }
+
+    try std.testing.expect(try patchTextControlDisplayList(
+        std.testing.allocator,
+        page,
+        &display_list,
+        select,
+        .{
+            .viewport_width = 720,
+            .viewport_height = 240,
+        },
+    ));
+
+    var saw_new_label = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Charlie Three")) {
+                    saw_new_label = true;
+                }
+                if (std.mem.eql(u8, text.text, "Bravo Two")) {
+                    return error.SelectIncrementalLabelRetainedOldText;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(saw_new_label);
+}
+
+test "paintDocument renders textarea using live runtime value" {
+    var page = try testing.pageTest("page/textarea_incremental_layout.html");
+    defer page._session.removePage();
+
+    const textarea = (try page.window._document.querySelector(.wrap("#notes"), page)).?;
+    const textarea_html = textarea.is(Element.Html.TextArea) orelse return error.TextAreaIncrementalControlMissing;
+    try textarea_html.setValue("Bravo runtime note", page);
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 720,
+        .viewport_height = 260,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var saw_runtime_value = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Bravo runtime note")) {
+                    saw_runtime_value = true;
+                }
+                if (std.mem.eql(u8, text.text, "Alpha draft")) {
+                    return error.TextAreaPaintRetainedDefaultDomText;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(saw_runtime_value);
+}
+
+test "patchTextControlDisplayList updates textarea value incrementally" {
+    var page = try testing.pageTest("page/textarea_incremental_layout.html");
+    defer page._session.removePage();
+
+    const textarea = (try page.window._document.querySelector(.wrap("#notes"), page)).?;
+    const textarea_html = textarea.is(Element.Html.TextArea) orelse return error.TextAreaIncrementalControlMissing;
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 720,
+        .viewport_height = 260,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try textarea_html.setValue("Charlie runtime note", page);
+    switch (page.presentationHint()) {
+        .text_control => |hint_element| try std.testing.expectEqual(textarea, hint_element),
+        else => return error.ExpectedTextAreaTextControlPresentationHint,
+    }
+
+    try std.testing.expect(try patchTextControlDisplayList(
+        std.testing.allocator,
+        page,
+        &display_list,
+        textarea,
+        .{
+            .viewport_width = 720,
+            .viewport_height = 260,
+        },
+    ));
+
+    var saw_runtime_value = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Charlie runtime note")) {
+                    saw_runtime_value = true;
+                }
+                if (std.mem.eql(u8, text.text, "Alpha draft")) {
+                    return error.TextAreaIncrementalPatchRetainedOldText;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(saw_runtime_value);
+}
+
 test "paintDocument emits tiled and non-repeated background image commands" {
     var page = try testing.pageTest("page/background_image_layout.html");
     defer page._session.removePage();
@@ -10248,6 +11849,61 @@ test "elementFromPoint sees translated button region" {
     }
 }
 
+test "paintDocument keeps inline phrase width close to measured text width" {
+    var page = try testing.pageTest("page/inline_phrase_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var min_x: ?i32 = null;
+    var max_x: i32 = 0;
+    var text_count: usize = 0;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                text_count += 1;
+                min_x = if (min_x) |current| @min(current, text.x) else text.x;
+                max_x = @max(max_x, text.x + text.width);
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(text_count >= 4);
+    const actual_width = max_x - (min_x orelse return error.PhraseTextMissing);
+    const expected_width = estimateStyledTextWidth("Deliver and maintain Google services", 16, "", 400, false, 0, 0);
+    try std.testing.expect(actual_width <= expected_width + 20);
+}
+
+test "paintDocument draws unordered list markers" {
+    var page = try testing.pageTest("page/unordered_list_marker_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var marker_count: usize = 0;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.width <= 8 and rect.height <= 8 and rect.corner_radius >= 2) {
+                    marker_count += 1;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(marker_count >= 2);
+}
+
 test "paintDocument centers inline children when text-align is center" {
     var page = try testing.pageTest("page/text_align_center_layout.html");
     defer page._session.removePage();
@@ -10268,6 +11924,309 @@ test "paintDocument centers inline children when text-align is center" {
     try std.testing.expect(input.width >= 280);
 }
 
+test "paintDocument centers each wrapped inline row when text-align is center" {
+    var page = try testing.pageTest("page/centered_mixed_inline_wrap_flow.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 520,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var row_y = std.ArrayList(i32){};
+    defer row_y.deinit(std.testing.allocator);
+    var row_min_x = std.ArrayList(i32){};
+    defer row_min_x.deinit(std.testing.allocator);
+    var below_y: ?i32 = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Below ")) {
+                    below_y = text.y;
+                    continue;
+                }
+                if (below_y == null) {
+                    var matched_row = false;
+                    for (row_y.items, row_min_x.items, 0..) |baseline_y, *min_x, idx| {
+                        _ = idx;
+                        if (@abs(text.y - baseline_y) <= 8) {
+                            min_x.* = @min(min_x.*, text.x);
+                            matched_row = true;
+                            break;
+                        }
+                    }
+                    if (!matched_row) {
+                        try row_y.append(std.testing.allocator, text.y);
+                        try row_min_x.append(std.testing.allocator, text.x);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 3), row_y.items.len);
+    try std.testing.expect(row_min_x.items[2] > row_min_x.items[0] + 40);
+    try std.testing.expect(below_y != null);
+    try std.testing.expect(below_y.? > row_y.items[row_y.items.len - 1] + 24);
+}
+
+test "paintDocument centers each wrapped row for legacy center children" {
+    var page = try testing.pageTest("page/legacy_center_mixed_inline_wrap_flow.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 520,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var row_y = std.ArrayList(i32){};
+    defer row_y.deinit(std.testing.allocator);
+    var row_min_x = std.ArrayList(i32){};
+    defer row_min_x.deinit(std.testing.allocator);
+
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                var matched_row = false;
+                for (row_y.items, row_min_x.items) |baseline_y, *min_x| {
+                    if (@abs(text.y - baseline_y) <= 8) {
+                        min_x.* = @min(min_x.*, text.x);
+                        matched_row = true;
+                        break;
+                    }
+                }
+                if (!matched_row) {
+                    try row_y.append(std.testing.allocator, text.y);
+                    try row_min_x.append(std.testing.allocator, text.x);
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 3), row_y.items.len);
+    try std.testing.expect(row_min_x.items[0] > 110);
+    try std.testing.expect(row_min_x.items[2] > row_min_x.items[0] + 40);
+}
+
+test "paintDocument centers block heading labels using text-align center" {
+    var page = try testing.pageTest("page/centered_inline_heading_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 900,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var min_x: ?i32 = null;
+    var max_right: ?i32 = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                min_x = if (min_x) |current| @min(current, text.x) else text.x;
+                max_right = if (max_right) |current| @max(current, text.x + text.width) else (text.x + text.width);
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(min_x != null);
+    try std.testing.expect(max_right != null);
+    const span_center = @divTrunc(min_x.? + max_right.?, 2);
+    try std.testing.expect(span_center > 280);
+    try std.testing.expect(span_center < 340);
+}
+
+test "paintDocument keeps centered consent-card sections stacked and de-duplicated" {
+    var page = try testing.pageTest("page/consent_card_center_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 1280,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var logo_bottom: ?i32 = null;
+    var heading_min_y: ?i32 = null;
+    var heading_max_bottom: ?i32 = null;
+    var copy_min_y: ?i32 = null;
+    var copy_max_bottom: ?i32 = null;
+    var buttons_min_y: ?i32 = null;
+    var footer_min_y: ?i32 = null;
+    var cookies_count: usize = 0;
+    var cookies_y: ?i32 = null;
+    var and_y: ?i32 = null;
+    var language_x: ?i32 = null;
+    var privacy_x: ?i32 = null;
+    var terms_x: ?i32 = null;
+
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r == 66 and rect.color.g == 133 and rect.color.b == 244 and rect.width <= 90 and rect.height <= 40) {
+                    logo_bottom = rect.y + rect.height;
+                }
+            },
+            .text => |text| {
+                if (std.mem.eql(u8, std.mem.trim(u8, text.text, " "), "cookies")) {
+                    cookies_count += 1;
+                    cookies_y = text.y;
+                    copy_min_y = if (copy_min_y) |current| @min(current, text.y) else text.y;
+                    copy_max_bottom = if (copy_max_bottom) |current| @max(current, text.y + text.height) else (text.y + text.height);
+                    continue;
+                }
+                if (std.mem.eql(u8, std.mem.trim(u8, text.text, " "), "and")) {
+                    and_y = text.y;
+                }
+                if (std.mem.indexOf(u8, text.text, "English") != null) {
+                    language_x = text.x;
+                    footer_min_y = if (footer_min_y) |current| @min(current, text.y) else text.y;
+                }
+                if (std.mem.indexOf(u8, text.text, "Privacy") != null) {
+                    privacy_x = text.x;
+                    footer_min_y = if (footer_min_y) |current| @min(current, text.y) else text.y;
+                }
+                if (std.mem.indexOf(u8, text.text, "Terms") != null) {
+                    terms_x = text.x;
+                    footer_min_y = if (footer_min_y) |current| @min(current, text.y) else text.y;
+                }
+                if (std.mem.indexOf(u8, text.text, "Before") != null or
+                    std.mem.indexOf(u8, text.text, "continue") != null or
+                    std.mem.indexOf(u8, text.text, "Google") != null or
+                    std.mem.indexOf(u8, text.text, "Search") != null)
+                {
+                    heading_min_y = if (heading_min_y) |current| @min(current, text.y) else text.y;
+                    heading_max_bottom = if (heading_max_bottom) |current| @max(current, text.y + text.height) else (text.y + text.height);
+                } else if (std.mem.indexOf(u8, text.text, "We") != null or
+                    std.mem.indexOf(u8, text.text, "data") != null or
+                    std.mem.indexOf(u8, text.text, "deliver") != null or
+                    std.mem.indexOf(u8, text.text, "maintain") != null or
+                    std.mem.indexOf(u8, text.text, "services") != null)
+                {
+                    copy_min_y = if (copy_min_y) |current| @min(current, text.y) else text.y;
+                    copy_max_bottom = if (copy_max_bottom) |current| @max(current, text.y + text.height) else (text.y + text.height);
+                }
+            },
+            else => {},
+        }
+    }
+    for (display_list.control_regions.items) |region| {
+        buttons_min_y = if (buttons_min_y) |current| @min(current, region.y) else region.y;
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), cookies_count);
+    try std.testing.expect(cookies_y != null);
+    try std.testing.expect(and_y != null);
+    try std.testing.expect(logo_bottom != null);
+    try std.testing.expect(heading_min_y != null);
+    try std.testing.expect(heading_max_bottom != null);
+    try std.testing.expect(copy_min_y != null);
+    try std.testing.expect(copy_max_bottom != null);
+    try std.testing.expect(buttons_min_y != null);
+    try std.testing.expect(footer_min_y != null);
+    try std.testing.expect(language_x != null);
+    try std.testing.expect(privacy_x != null);
+    try std.testing.expect(terms_x != null);
+    const copy_line_delta = if (and_y.? >= cookies_y.?) and_y.? - cookies_y.? else cookies_y.? - and_y.?;
+    try std.testing.expect(copy_line_delta <= 8);
+    try std.testing.expect(heading_min_y.? > logo_bottom.? + 12);
+    try std.testing.expect(copy_min_y.? > heading_max_bottom.? + 12);
+    try std.testing.expect(buttons_min_y.? > copy_max_bottom.? + 16);
+    try std.testing.expect(footer_min_y.? > buttons_min_y.? + 40);
+    try std.testing.expect(privacy_x.? > language_x.? + 120);
+    try std.testing.expect(terms_x.? > privacy_x.? + 80);
+}
+
+test "paintDocument renders one wide consent submit row with visible filled labels" {
+    var page = try testing.pageTest("page/consent_submit_responsive_layout.html");
+    defer page._session.removePage();
+
+    page.window._visual_viewport.setMetrics(1280, 720, 1.0);
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 1280,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), display_list.control_regions.items.len);
+
+    var reject_count: usize = 0;
+    var accept_count: usize = 0;
+    var reject_text: ?TextCommand = null;
+    var accept_text: ?TextCommand = null;
+    var more_text: ?TextCommand = null;
+
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                const trimmed = std.mem.trim(u8, text.text, " ");
+                if (std.mem.eql(u8, trimmed, "Reject all")) {
+                    reject_count += 1;
+                    reject_text = text;
+                } else if (std.mem.eql(u8, trimmed, "Accept all")) {
+                    accept_count += 1;
+                    accept_text = text;
+                } else if (std.mem.eql(u8, trimmed, "More options")) {
+                    more_text = text;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), reject_count);
+    try std.testing.expectEqual(@as(usize, 1), accept_count);
+
+    const reject = reject_text orelse return error.ConsentRejectLabelMissing;
+    const accept = accept_text orelse return error.ConsentAcceptLabelMissing;
+    _ = more_text orelse return error.ConsentMoreOptionsLabelMissing;
+
+    try std.testing.expectEqual(@as(u8, 255), reject.color.r);
+    try std.testing.expectEqual(@as(u8, 255), reject.color.g);
+    try std.testing.expectEqual(@as(u8, 255), reject.color.b);
+    try std.testing.expectEqual(@as(u8, 255), accept.color.r);
+    try std.testing.expectEqual(@as(u8, 255), accept.color.g);
+    try std.testing.expectEqual(@as(u8, 255), accept.color.b);
+    try std.testing.expect(reject.y >= 250);
+    try std.testing.expectEqual(reject.y, accept.y);
+    try std.testing.expect(reject.x + reject.width < accept.x + accept.width);
+}
+
+test "paintDocument keeps width 100 inline-block row wide inside centered flex column" {
+    var page = try testing.pageTest("page/consent_submit_column_flex_layout.html");
+    defer page._session.removePage();
+
+    page.window._visual_viewport.setMetrics(1280, 720, 1.0);
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 1280,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    const card = page.window._document.getElementById("card", page) orelse return error.ConsentColumnCardMissing;
+    const action_row = page.window._document.getElementById("action-row", page) orelse return error.ConsentColumnActionRowMissing;
+    const more_options = page.window._document.getElementById("more-options", page) orelse return error.ConsentColumnMoreOptionsMissing;
+    const card_box = page._element_layout_boxes.get(card) orelse return error.ConsentColumnCardLayoutBoxMissing;
+    const action_row_box = page._element_layout_boxes.get(action_row) orelse return error.ConsentColumnActionRowLayoutBoxMissing;
+    const more_options_box = page._element_layout_boxes.get(more_options) orelse return error.ConsentColumnMoreOptionsLayoutBoxMissing;
+
+    try std.testing.expect(action_row_box.width >= card_box.width - 4);
+    try std.testing.expect(more_options_box.y >= action_row_box.y + action_row_box.height + 8);
+
+    try std.testing.expectEqual(@as(usize, 2), display_list.control_regions.items.len);
+    const reject_region = display_list.control_regions.items[0];
+    const accept_region = display_list.control_regions.items[1];
+    try std.testing.expectEqual(reject_region.y, accept_region.y);
+    try std.testing.expect(accept_region.x > reject_region.x + reject_region.width);
+}
+
 test "paintDocument sizes submit inputs from label instead of generic text-input width" {
     var page = try testing.pageTest("page/input_submit_sizing_layout.html");
     defer page._session.removePage();
@@ -10286,6 +12245,53 @@ test "paintDocument sizes submit inputs from label instead of generic text-input
     try std.testing.expect(text_input.width >= 160);
     try std.testing.expect(submit_input.width <= 100);
     try std.testing.expect(submit_input.width < text_input.width);
+}
+
+test "paintDocument keeps inline footer select controls and later links on the footer row" {
+    var page = try testing.pageTest("page/consent_footer_inline_controls_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 1280,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var buttons_min_y: ?i32 = null;
+    for (display_list.control_regions.items) |region| {
+        if (region.width >= 100 and region.height >= 30) {
+            buttons_min_y = if (buttons_min_y) |current| @min(current, region.y) else region.y;
+        }
+    }
+
+    const footer = page.window._document.getElementById("footer", page);
+    const language_form = page.window._document.getElementById("language-form", page);
+    const language_select = page.window._document.getElementById("language-select", page);
+    const privacy = page.window._document.getElementById("privacy", page);
+    const terms = page.window._document.getElementById("terms", page);
+
+    try std.testing.expect(footer != null);
+    try std.testing.expect(language_form != null);
+    try std.testing.expect(language_select != null);
+    try std.testing.expect(privacy != null);
+    try std.testing.expect(terms != null);
+    try std.testing.expect(buttons_min_y != null);
+
+    const footer_rect = footer.?.getBoundingClientRect(page);
+    const form_rect = language_form.?.getBoundingClientRect(page);
+    const select_rect = language_select.?.getBoundingClientRect(page);
+    const privacy_rect = privacy.?.getBoundingClientRect(page);
+    const terms_rect = terms.?.getBoundingClientRect(page);
+
+    try std.testing.expect(footer_rect._y > @as(f64, @floatFromInt(buttons_min_y.? + 12)));
+    try std.testing.expect(form_rect._y > @as(f64, @floatFromInt(buttons_min_y.? + 12)));
+    try std.testing.expect(select_rect._y > @as(f64, @floatFromInt(buttons_min_y.? + 12)));
+    try std.testing.expect(privacy_rect._y > @as(f64, @floatFromInt(buttons_min_y.? + 12)));
+    try std.testing.expect(terms_rect._y > @as(f64, @floatFromInt(buttons_min_y.? + 12)));
+
+    try std.testing.expect(select_rect._width >= 120);
+    try std.testing.expect(privacy_rect._x > select_rect._x + select_rect._width + 12);
+    try std.testing.expect(terms_rect._x > privacy_rect._x + privacy_rect._width + 12);
 }
 
 test "paintDocument ignores hidden and script descendants when sizing inline submit wrappers" {
@@ -10319,6 +12325,127 @@ test "paintDocument ignores hidden and script descendants when sizing inline sub
 
     try std.testing.expect(widest_wrapper_rect > 0);
     try std.testing.expect(widest_wrapper_rect <= submit_input.width + 24);
+}
+
+test "paintDocument composites iframe child content into the iframe box without exposing child hit regions" {
+    var page = try testing.pageTest("page/iframe_paint_layout.html");
+    defer page._session.removePage();
+
+    const iframe = (try page.window._document.querySelector(.wrap("#embed"), page)).?;
+    const iframe_html = iframe.is(Element.Html.IFrame) orelse return error.IFramePaintElementMissing;
+    const frame_window = iframe_html.getContentWindow() orelse return error.IFramePaintWindowMissing;
+    try std.testing.expect(std.mem.indexOf(u8, frame_window._page.url, "iframe_paint_child.html") != null);
+
+    var frame_doc_text: ?[:0]const u8 = null;
+    defer if (frame_doc_text) |text| std.testing.allocator.free(text);
+    var settle_timer = try std.time.Timer.start();
+    while (settle_timer.read() < (std.time.ns_per_ms * 2000)) {
+        _ = page._session.wait(50);
+        testing.test_browser.runMicrotasks();
+        const frame_doc = iframe_html.getContentDocument() orelse continue;
+        const html_doc = frame_doc.is(HTMLDocument) orelse continue;
+        const body = html_doc.getBody() orelse continue;
+        const text = try body.asNode().getTextContentAlloc(std.testing.allocator);
+        if (std.mem.indexOf(u8, text, "Frame hello") != null) {
+            frame_doc_text = text;
+            break;
+        }
+        std.testing.allocator.free(text);
+        std.Thread.sleep(std.time.ns_per_ms * 10);
+    }
+    try std.testing.expect(frame_doc_text != null);
+
+    const frame_doc = iframe_html.getContentDocument() orelse return error.IFramePaintDocumentMissing;
+    const frame_html_doc = frame_doc.is(HTMLDocument) orelse return error.IFramePaintHtmlDocumentMissing;
+    _ = frame_html_doc.getBody() orelse return error.IFramePaintBodyMissing;
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 320,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    const iframe_rect = iframe.getBoundingClientRect(page);
+    var iframe_inner_list = (try resolvedIFrameContentDisplayList(
+        std.testing.allocator,
+        iframe,
+        page,
+        .{
+            .viewport_width = 640,
+            .viewport_height = 320,
+        },
+        @as(i32, @intFromFloat(@round(iframe_rect._width))),
+        @as(i32, @intFromFloat(@round(iframe_rect._height))),
+    )).?;
+    defer iframe_inner_list.deinit(std.testing.allocator);
+
+    var iframe_inner_text = std.ArrayList(u8){};
+    defer iframe_inner_text.deinit(std.testing.allocator);
+    for (iframe_inner_list.commands.items) |command| {
+        const text = switch (command) {
+            .text => |value| value,
+            else => continue,
+        };
+        try iframe_inner_text.appendSlice(std.testing.allocator, text.text);
+        try iframe_inner_text.append(std.testing.allocator, ' ');
+    }
+    try std.testing.expect(std.mem.indexOf(u8, iframe_inner_text.items, "Frame") != null);
+    try std.testing.expect(std.mem.indexOf(u8, iframe_inner_text.items, "hello") != null);
+
+    var composited_text = std.ArrayList(u8){};
+    defer composited_text.deinit(std.testing.allocator);
+    var saw_iframe_text_clip = false;
+    for (display_list.commands.items) |command| {
+        const text = switch (command) {
+            .text => |value| value,
+            else => continue,
+        };
+        try composited_text.appendSlice(std.testing.allocator, text.text);
+        try composited_text.append(std.testing.allocator, ' ');
+        if (std.mem.indexOf(u8, text.text, "Frame") == null and std.mem.indexOf(u8, text.text, "hello") == null) {
+            continue;
+        }
+        if (text.clip_rect) |clip| {
+            try std.testing.expectEqual(@as(i32, @intFromFloat(@round(iframe_rect._x))), clip.x);
+            try std.testing.expectEqual(@as(i32, @intFromFloat(@round(iframe_rect._y))), clip.y);
+            try std.testing.expectEqual(@as(i32, @intFromFloat(@round(iframe_rect._width))), clip.width);
+            try std.testing.expectEqual(@as(i32, @intFromFloat(@round(iframe_rect._height))), clip.height);
+            saw_iframe_text_clip = true;
+        }
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, composited_text.items, "Frame") != null);
+    try std.testing.expect(std.mem.indexOf(u8, composited_text.items, "hello") != null);
+    try std.testing.expect(saw_iframe_text_clip);
+    try std.testing.expectEqual(@as(usize, 0), display_list.control_regions.items.len);
+}
+
+test "paintDocument ignores noscript fallback text when scripting is enabled" {
+    var page = try testing.pageTest("page/noscript_render_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 240,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var saw_visible = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                try std.testing.expect(!std.mem.containsAtLeast(u8, text.text, 1, "Enable javascript"));
+                if (std.mem.containsAtLeast(u8, text.text, 1, "Visible") or
+                    std.mem.containsAtLeast(u8, text.text, 1, "content"))
+                {
+                    saw_visible = true;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(saw_visible);
 }
 
 test "paintDocument shrink-wraps auto-width absolute nav bars when only one edge is pinned" {

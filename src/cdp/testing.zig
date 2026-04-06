@@ -63,7 +63,11 @@ const Client = struct {
     }
 
     pub fn sendJSONRaw(self: *Client, buf: std.ArrayList(u8)) !void {
-        const value = try json.parseFromSliceLeaky(json.Value, self.allocator, buf.items, .{});
+        const payload = blk: {
+            const json_start = std.mem.indexOfScalar(u8, buf.items, '{') orelse 0;
+            break :blk buf.items[json_start..];
+        };
+        const value = try json.parseFromSliceLeaky(json.Value, self.allocator, payload, .{});
         try self.sent.append(self.allocator, value);
     }
 };

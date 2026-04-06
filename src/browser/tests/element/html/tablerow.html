@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<table>
+  <tbody>
+    <tr id="row">
+      <td id="first">a</td>
+      <th id="second">b</th>
+    </tr>
+  </tbody>
+</table>
+
+<script id="insertCellInsertsAndAppendsTdElements">
+  {
+    const row = document.getElementById('row');
+    const inserted = row.insertCell(1);
+    inserted.id = 'middle';
+    const appended = row.insertCell();
+    appended.id = 'tail';
+
+    const order = Array.from(row.childNodes)
+      .filter((node) => node.nodeType === Node.ELEMENT_NODE)
+      .map((node) => node.id || node.tagName)
+      .join(',');
+
+    testing.expectEqual('first,middle,second,tail', order);
+    testing.expectEqual('TD', inserted.tagName);
+    testing.expectEqual('TD', appended.tagName);
+  }
+</script>
+
+<script id="insertCellRejectsOutOfRangeIndex">
+  {
+    const row = document.getElementById('row');
+    testing.expectError('IndexSizeError', () => row.insertCell(99));
+    testing.expectError('IndexSizeError', () => row.insertCell(-2));
+  }
+</script>

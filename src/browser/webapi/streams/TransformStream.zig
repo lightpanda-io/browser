@@ -28,6 +28,12 @@ const TransformStream = @This();
 pub const DefaultController = TransformStreamDefaultController;
 
 pub const ZigTransformFn = *const fn (*TransformStreamDefaultController, js.Value) anyerror!void;
+pub const ZigTransformContextFn = *const fn (*anyopaque, *TransformStreamDefaultController, js.Value) anyerror!void;
+pub const ZigFlushContextFn = *const fn (*anyopaque, *TransformStreamDefaultController) anyerror!void;
+pub const ZigContext = struct {
+    ctx: *anyopaque,
+    flush: ?ZigFlushContextFn,
+};
 
 _readable: *ReadableStream,
 _writable: *WritableStream,
@@ -53,6 +59,8 @@ pub fn init(transformer_: ?Transformer, page: *Page) !*TransformStream {
         if (transformer_) |t| t.transform else null,
         if (transformer_) |t| t.flush else null,
         null,
+        null,
+        null,
         page,
     );
     self._controller = transform_controller;
@@ -77,7 +85,32 @@ pub fn initWithZigTransform(zig_transform: ZigTransformFn, page: *Page) !*Transf
         ._controller = undefined,
     });
 
-    const transform_controller = try TransformStreamDefaultController.init(self, null, null, zig_transform, page);
+    const transform_controller = try TransformStreamDefaultController.init(self, null, null, zig_transform, null, null, page);
+    self._controller = transform_controller;
+
+    self._writable = try WritableStream.initForTransform(self, page);
+
+    return self;
+}
+
+pub fn initWithZigContext(
+    zig_ctx: *anyopaque,
+    zig_transform: ZigTransformContextFn,
+    zig_flush: ?ZigFlushContextFn,
+    page: *Page,
+) !*TransformStream {
+    const readable = try ReadableStream.init(null, null, page);
+
+    const self = try page._factory.create(TransformStream{
+        ._readable = readable,
+        ._writable = undefined,
+        ._controller = undefined,
+    });
+
+    const transform_controller = try TransformStreamDefaultController.init(self, null, null, null, zig_transform, .{
+        .ctx = zig_ctx,
+        .flush = zig_flush,
+    }, page);
     self._controller = transform_controller;
 
     self._writable = try WritableStream.initForTransform(self, page);
@@ -86,6 +119,11 @@ pub fn initWithZigTransform(zig_transform: ZigTransformFn, page: *Page) !*Transf
 }
 
 pub fn transformWrite(self: *TransformStream, chunk: js.Value, page: *Page) !void {
+    if (self._controller._zig_transform_context_fn) |zig_fn| {
+        try zig_fn(self._controller._zig_context.?.ctx, self._controller, chunk);
+        return;
+    }
+
     if (self._controller._zig_transform_fn) |zig_fn| {
         // Zig-level transform (used by TextEncoderStream etc.)
         try zig_fn(self._controller, chunk);
@@ -104,6 +142,12 @@ pub fn transformWrite(self: *TransformStream, chunk: js.Value, page: *Page) !voi
 }
 
 pub fn transformClose(self: *TransformStream, page: *Page) !void {
+    if (self._controller._zig_context) |zig_context| {
+        if (zig_context.flush) |zig_flush| {
+            try zig_flush(zig_context.ctx, self._controller);
+        }
+    }
+
     if (self._controller._flush_fn) |flush_fn| {
         var ls: js.Local.Scope = undefined;
         page.js.localScope(&ls);
@@ -149,12 +193,16 @@ pub const TransformStreamDefaultController = struct {
     _transform_fn: ?js.Function.Global,
     _flush_fn: ?js.Function.Global,
     _zig_transform_fn: ?ZigTransformFn,
+    _zig_transform_context_fn: ?ZigTransformContextFn,
+    _zig_context: ?ZigContext,
 
     pub fn init(
         stream: *TransformStream,
         transform_fn: ?js.Function.Global,
         flush_fn: ?js.Function.Global,
         zig_transform_fn: ?ZigTransformFn,
+        zig_transform_context_fn: ?ZigTransformContextFn,
+        zig_context: ?ZigContext,
         page: *Page,
     ) !*TransformStreamDefaultController {
         return page._factory.create(TransformStreamDefaultController{
@@ -162,6 +210,8 @@ pub const TransformStreamDefaultController = struct {
             ._transform_fn = transform_fn,
             ._flush_fn = flush_fn,
             ._zig_transform_fn = zig_transform_fn,
+            ._zig_transform_context_fn = zig_transform_context_fn,
+            ._zig_context = zig_context,
         });
     }
 

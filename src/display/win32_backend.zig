@@ -19,6 +19,8 @@
 const std = @import("std");
 const log = @import("../log.zig");
 const Page = @import("../browser/Page.zig");
+const Element = @import("../browser/webapi/Element.zig");
+const testing = @import("../testing.zig");
 const URL = @import("../browser/URL.zig");
 const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 const Http = @import("../http/Http.zig");
@@ -38,6 +40,94 @@ const modifier_ctrl = 1 << 1;
 const modifier_alt = 1 << 2;
 const modifier_meta = 1 << 3;
 const win32_input_mailbox_env = "LIGHTPANDA_WIN32_INPUT";
+var runtime_input_trace_lock: std.Thread.Mutex = .{};
+var google_window_trace_lock: std.Thread.Mutex = .{};
+
+fn googleInputTraceEnabled(url: []const u8) bool {
+    return std.mem.indexOf(u8, url, "google-home-") != null or
+        std.mem.indexOf(u8, url, "google.com") != null;
+}
+
+fn runtimeInputTraceEnabled(url: []const u8) bool {
+    return googleInputTraceEnabled(url) or
+        std.mem.indexOf(u8, url, "click-focus-input") != null or
+        std.mem.indexOf(u8, url, "autoload-focus-input") != null;
+}
+
+fn shouldLogLiveKeyMessage(vk: u32) bool {
+    return (vk >= '0' and vk <= '9') or
+        (vk >= 'A' and vk <= 'Z') or
+        vk == c.VK_SPACE or
+        vk == c.VK_RETURN or
+        vk == c.VK_BACK;
+}
+
+fn activeTextValueForTrace(page: *Page) []const u8 {
+    const active = page.document.getFocusedElement() orelse return "";
+    if (active.is(Element.Html.Input)) |input| {
+        return input.getValue();
+    }
+    if (active.is(Element.Html.TextArea)) |textarea| {
+        return textarea.getValue();
+    }
+    return "";
+}
+
+fn appendRuntimeInputTrace(url: []const u8, stage: []const u8, detail: []const u8) void {
+    if (url.len == 0) {
+        if (!std.mem.eql(u8, stage, "mailbox_input")) {
+            return;
+        }
+    } else if (!runtimeInputTraceEnabled(url)) {
+        return;
+    }
+    runtime_input_trace_lock.lock();
+    defer runtime_input_trace_lock.unlock();
+
+    var path_buf: [160]u8 = undefined;
+    const path = std.fmt.bufPrint(
+        &path_buf,
+        "tmp-browser-smoke/google-investigation-next/runtime-input-backend-{d}.log",
+        .{c.GetCurrentProcessId()},
+    ) catch return;
+
+    var file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch blk: {
+        break :blk std.fs.cwd().createFile(path, .{}) catch return;
+    };
+    defer file.close();
+
+    file.seekFromEnd(0) catch return;
+    var writer_buf: [1024]u8 = undefined;
+    var writer = file.writer(&writer_buf);
+    writer.interface.print("{s}|url={s}|{s}\n", .{ stage, url, detail }) catch return;
+    writer.interface.flush() catch {};
+}
+
+fn appendGoogleWindowTrace(url: []const u8, stage: []const u8, detail: []const u8) void {
+    if (!googleInputTraceEnabled(url)) {
+        return;
+    }
+    google_window_trace_lock.lock();
+    defer google_window_trace_lock.unlock();
+
+    var path_buf: [160]u8 = undefined;
+    const path = std.fmt.bufPrint(
+        &path_buf,
+        "tmp-browser-smoke/google-investigation-next/wndproc-input-{d}.log",
+        .{c.GetCurrentProcessId()},
+    ) catch return;
+
+    var file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch blk: {
+        break :blk std.fs.cwd().createFile(path, .{}) catch return;
+    };
+    defer file.close();
+
+    file.seekFromEnd(0) catch return;
+    var writer_buf: [1024]u8 = undefined;
+    var writer = file.writer(&writer_buf);
+    writer.interface.print("{s}|url={s}|{s}\n", .{ stage, url, detail }) catch return;
+    writer.interface.flush() catch {};
+}
 
 const c = @cImport({
     @cDefine("WIN32_LEAN_AND_MEAN", "1");
@@ -49,6 +139,22 @@ const c = @cImport({
     @cInclude("imm.h");
     @cInclude("urlmon.h");
 });
+
+fn logGoogleFocusState(url: []const u8, hwnd: c.HWND, stage: []const u8, wparam: usize) void {
+    if (url.len != 0 and !googleInputTraceEnabled(url)) {
+        return;
+    }
+
+    const focused = c.GetFocus();
+    const foreground = c.GetForegroundWindow();
+    log.warn(.app, "win focus state", .{
+        .stage = stage,
+        .url = url,
+        .wparam = wparam,
+        .focused_matches = focused == hwnd,
+        .foreground_matches = foreground == hwnd,
+    });
+}
 
 const DWRITE_FACTORY_TYPE_SHARED: c_int = 0;
 const DWRITE_CONTAINER_TYPE_UNKNOWN: c_int = 0;
@@ -214,6 +320,7 @@ pub const Win32Backend = struct {
     pending_high_surrogate: ?u16 = null,
     ime_composing: bool = false,
     suppress_wm_char_units: u32 = 0,
+    pending_text_input_suppressions: u32 = 0,
     input_mailbox_path: ?[]u8 = null,
     input_mailbox_offset: u64 = 0,
 
@@ -810,13 +917,23 @@ pub const Win32Backend = struct {
         }
     }
 
-    pub fn dispatchInput(self: *Win32Backend, page: *Page) !void {
+    pub fn dispatchInput(self: *Win32Backend, page: *Page) !bool {
         try pollMailboxInput(self);
 
         var pending: std.ArrayListUnmanaged(InputEvent) = .{};
         self.input_lock.lock();
         std.mem.swap(std.ArrayListUnmanaged(InputEvent), &pending, &self.input_events);
         self.input_lock.unlock();
+        const processed_input = pending.items.len > 0;
+        if (googleInputTraceEnabled(page.url) and pending.items.len > 0) {
+            var detail_buf: [128]u8 = undefined;
+            const detail = std.fmt.bufPrint(&detail_buf, "pending={d}", .{pending.items.len}) catch "";
+            appendGoogleWindowTrace(page.url, "dispatch_loop_begin", detail);
+            log.warn(.app, "win dispatch pending", .{
+                .url = page.url,
+                .pending = pending.items.len,
+            });
+        }
         defer {
             for (pending.items) |*event| {
                 deinitInputEvent(self, event);
@@ -825,8 +942,20 @@ pub const Win32Backend = struct {
         }
 
         var key_buf: [2]u8 = undefined;
-        var suppress_text_input_events: u32 = 0;
         for (pending.items) |event| {
+            if (googleInputTraceEnabled(page.url)) {
+                switch (event) {
+                    .mouse_down => |mouse| log.warn(.app, "win dispatch event", .{ .url = page.url, .kind = "mouse_down", .x = mouse.x, .y = mouse.y }),
+                    .mouse_up => |mouse| log.warn(.app, "win dispatch event", .{ .url = page.url, .kind = "mouse_up", .x = mouse.x, .y = mouse.y }),
+                    .mouse_move => |mouse| log.warn(.app, "win dispatch event", .{ .url = page.url, .kind = "mouse_move", .x = mouse.x, .y = mouse.y }),
+                    .mouse_wheel => |wheel| log.warn(.app, "win dispatch event", .{ .url = page.url, .kind = "mouse_wheel", .x = wheel.x, .y = wheel.y }),
+                    .rendered_control_activate => |activation| log.warn(.app, "win dispatch event", .{ .url = page.url, .kind = "rendered_control_activate", .x = activation.x, .y = activation.y, .path_len = activation.dom_path.len }),
+                    .key_down => |key_down| log.warn(.app, "win dispatch event", .{ .url = page.url, .kind = "key_down", .vk = key_down.vk, .repeat = key_down.repeat }),
+                    .key_up => |key_up| log.warn(.app, "win dispatch event", .{ .url = page.url, .kind = "key_up", .vk = key_up.vk, .repeat = key_up.repeat }),
+                    .text_input => |text_input| log.warn(.app, "win dispatch event", .{ .url = page.url, .kind = "text_input", .len = text_input.len }),
+                    .window_blur => log.warn(.app, "win dispatch event", .{ .url = page.url, .kind = "window_blur" }),
+                }
+            }
             switch (event) {
                 .mouse_down => |mouse| try page.triggerMouseDown(mouse.x, mouse.y, mouse.button, mouse.modifiers),
                 .mouse_up => |mouse| {
@@ -892,6 +1021,43 @@ pub const Win32Backend = struct {
                 .key_down => |key_down| {
                     const key = mapVirtualKey(key_down.vk, key_down.modifiers.shift, &key_buf) orelse continue;
                     const code = mapVirtualKeyCode(key_down.vk);
+                    const trace_google_input = googleInputTraceEnabled(page.url);
+                    const value_before_key = if (trace_google_input) activeTextValueForTrace(page) else "";
+                    if (trace_google_input) {
+                        var detail_buf: [256]u8 = undefined;
+                        const active_tag = if (page.document.getFocusedElement()) |active|
+                            active.getTagNameSpec(&page.buf)
+                        else
+                            "none";
+                        const detail = std.fmt.bufPrint(&detail_buf, "key={s}|vk={d}|active_tag={s}|value_before={s}", .{
+                            key,
+                            key_down.vk,
+                            active_tag,
+                            value_before_key,
+                        }) catch "";
+                        appendGoogleWindowTrace(page.url, "dispatch_keydown_begin", detail);
+                    }
+                    if (runtimeInputTraceEnabled(page.url)) {
+                        var detail_buf: [256]u8 = undefined;
+                        const active_tag = if (page.document.getFocusedElement()) |active|
+                            active.getTagNameSpec(&page.buf)
+                        else
+                            "none";
+                        const detail = std.fmt.bufPrint(
+                            &detail_buf,
+                            "key={s}|vk={d}|active_tag={s}|value_before={s}",
+                            .{ key, key_down.vk, active_tag, activeTextValueForTrace(page) },
+                        ) catch "";
+                        appendRuntimeInputTrace(page.url, "key_down_begin", detail);
+                    }
+                    if (trace_google_input and shouldLogLiveKeyMessage(key_down.vk)) {
+                        log.warn(.app, "win key dispatch begin", .{
+                            .url = page.url,
+                            .key = key,
+                            .vk = key_down.vk,
+                            .value_before = value_before_key,
+                        });
+                    }
                     if (comptime IS_DEBUG) {
                         const active_tag = if (page.document._active_element) |active|
                             active.getTagNameSpec(&page.buf)
@@ -922,12 +1088,43 @@ pub const Win32Backend = struct {
                         if (allow_text_input) {
                             try page.insertText(key);
                         }
-                        suppress_text_input_events +|= 1;
+                        self.pending_text_input_suppressions +|= 1;
+                        if (runtimeInputTraceEnabled(page.url)) {
+                            var detail_buf: [320]u8 = undefined;
+                            const detail = std.fmt.bufPrint(
+                                &detail_buf,
+                                "key={s}|vk={d}|default_allowed={any}|allow_text_input={any}|value_before={s}|value_after={s}",
+                                .{ key, key_down.vk, default_allowed, allow_text_input, value_before_key, activeTextValueForTrace(page) },
+                            ) catch "";
+                            appendRuntimeInputTrace(page.url, "key_down_end", detail);
+                        }
+                        if (trace_google_input) {
+                            log.warn(.app, "google key dispatch", .{
+                                .url = page.url,
+                                .key = key,
+                                .vk = key_down.vk,
+                                .default_allowed = default_allowed,
+                                .allow_text_input = allow_text_input,
+                                .value_before = value_before_key,
+                                .value_after = activeTextValueForTrace(page),
+                            });
+                        }
                     }
                     if (default_allowed) {
                         if (clipboardShortcutAction(key_down.vk, key_down.modifiers)) |action| {
                             try handleClipboardShortcut(self.allocator, page, action);
                         }
+                    }
+                    if (trace_google_input) {
+                        var detail_buf: [320]u8 = undefined;
+                        const detail = std.fmt.bufPrint(&detail_buf, "key={s}|vk={d}|default_allowed={any}|allow_text_input={any}|value_after={s}", .{
+                            key,
+                            key_down.vk,
+                            default_allowed,
+                            allow_text_input,
+                            activeTextValueForTrace(page),
+                        }) catch "";
+                        appendGoogleWindowTrace(page.url, "dispatch_keydown_end", detail);
                     }
                 },
                 .key_up => |key_up| {
@@ -936,9 +1133,44 @@ pub const Win32Backend = struct {
                     _ = try page.triggerKeyboardKeyUpWithCode(key, code, key_up.modifiers);
                 },
                 .text_input => |text_input| {
-                    if (suppress_text_input_events > 0) {
-                        suppress_text_input_events -= 1;
+                    if (runtimeInputTraceEnabled(page.url)) {
+                        log.warn(.app, "win text dispatch begin", .{
+                            .url = page.url,
+                            .text = text_input.bytes[0..text_input.len],
+                            .suppressed = self.pending_text_input_suppressions,
+                        });
+                    }
+                    if (self.pending_text_input_suppressions > 0) {
+                        self.pending_text_input_suppressions -= 1;
                         continue;
+                    }
+                    const trace_google_input = googleInputTraceEnabled(page.url);
+                    const value_before_text = if (trace_google_input) activeTextValueForTrace(page) else "";
+                    if (trace_google_input) {
+                        var detail_buf: [256]u8 = undefined;
+                        const active_tag = if (page.document.getFocusedElement()) |active|
+                            active.getTagNameSpec(&page.buf)
+                        else
+                            "none";
+                        const detail = std.fmt.bufPrint(&detail_buf, "text={s}|active_tag={s}|value_before={s}", .{
+                            text_input.bytes[0..text_input.len],
+                            active_tag,
+                            value_before_text,
+                        }) catch "";
+                        appendGoogleWindowTrace(page.url, "dispatch_text_begin", detail);
+                    }
+                    if (runtimeInputTraceEnabled(page.url)) {
+                        var detail_buf: [256]u8 = undefined;
+                        const active_tag = if (page.document.getFocusedElement()) |active|
+                            active.getTagNameSpec(&page.buf)
+                        else
+                            "none";
+                        const detail = std.fmt.bufPrint(
+                            &detail_buf,
+                            "text={s}|active_tag={s}|value_before={s}",
+                            .{ text_input.bytes[0..text_input.len], active_tag, activeTextValueForTrace(page) },
+                        ) catch "";
+                        appendRuntimeInputTrace(page.url, "text_input_begin", detail);
                     }
                     if (comptime IS_DEBUG) {
                         const active_tag = if (page.document._active_element) |active|
@@ -951,10 +1183,64 @@ pub const Win32Backend = struct {
                         });
                     }
                     try page.insertText(text_input.bytes[0..text_input.len]);
+                    if (runtimeInputTraceEnabled(page.url)) {
+                        var detail_buf: [256]u8 = undefined;
+                        const detail = std.fmt.bufPrint(
+                            &detail_buf,
+                            "text={s}|value_before={s}|value_after={s}",
+                            .{ text_input.bytes[0..text_input.len], value_before_text, activeTextValueForTrace(page) },
+                        ) catch "";
+                        appendRuntimeInputTrace(page.url, "text_input_end", detail);
+                    }
+                    if (trace_google_input) {
+                        log.warn(.app, "google text dispatch", .{
+                            .url = page.url,
+                            .text = text_input.bytes[0..text_input.len],
+                            .value_before = value_before_text,
+                            .value_after = activeTextValueForTrace(page),
+                        });
+                        var detail_buf: [256]u8 = undefined;
+                        const detail = std.fmt.bufPrint(&detail_buf, "text={s}|value_after={s}", .{
+                            text_input.bytes[0..text_input.len],
+                            activeTextValueForTrace(page),
+                        }) catch "";
+                        appendGoogleWindowTrace(page.url, "dispatch_text_end", detail);
+                    }
                 },
                 .window_blur => try page.triggerWindowBlur(),
             }
         }
+        if (googleInputTraceEnabled(page.url) and pending.items.len > 0) {
+            var detail_buf: [128]u8 = undefined;
+            const detail = std.fmt.bufPrint(&detail_buf, "pending={d}", .{pending.items.len}) catch "";
+            appendGoogleWindowTrace(page.url, "dispatch_loop_end", detail);
+        }
+        return processed_input;
+    }
+
+    pub fn hasPendingInput(self: *Win32Backend) bool {
+        self.input_lock.lock();
+        const has_queued = self.input_events.items.len > 0;
+        self.input_lock.unlock();
+        if (has_queued) {
+            return true;
+        }
+
+        const mailbox_path = self.input_mailbox_path orelse return false;
+        const file = if (std.fs.path.isAbsolute(mailbox_path))
+            std.fs.openFileAbsolute(mailbox_path, .{}) catch |err| switch (err) {
+                error.FileNotFound => return false,
+                else => return false,
+            }
+        else
+            std.fs.cwd().openFile(mailbox_path, .{}) catch |err| switch (err) {
+                error.FileNotFound => return false,
+                else => return false,
+            };
+        defer file.close();
+
+        const stat = file.stat() catch return false;
+        return stat.size > self.input_mailbox_offset;
     }
 
     pub fn presentDocument(self: *Win32Backend, title: []const u8, url: []const u8, body: []const u8) !void {
@@ -988,6 +1274,12 @@ pub const Win32Backend = struct {
 
         self.presentation_lock.lock();
         defer self.presentation_lock.unlock();
+
+        const presentation_url_changed = self.presentation_url.len > 0 and
+            !std.mem.eql(u8, self.presentation_url, next_url);
+        if (presentation_url_changed) {
+            clearQueuedPageInput(self);
+        }
 
         self.allocator.free(self.presentation_title);
         self.allocator.free(self.presentation_url);
@@ -1149,14 +1441,88 @@ fn deinitInputEvent(backend: *Win32Backend, event: *const Win32Backend.InputEven
     }
 }
 
+fn clearQueuedPageInput(self: *Win32Backend) void {
+    self.input_lock.lock();
+    defer self.input_lock.unlock();
+
+    for (self.input_events.items) |*event| {
+        deinitInputEvent(self, event);
+    }
+    self.input_events.clearRetainingCapacity();
+    self.pending_high_surrogate = null;
+    self.ime_composing = false;
+    self.suppress_wm_char_units = 0;
+    self.pending_text_input_suppressions = 0;
+}
+
+fn inputEventsCanCoalesce(existing: Win32Backend.InputEvent, incoming: Win32Backend.InputEvent) bool {
+    return switch (existing) {
+        .mouse_move => |existing_move| switch (incoming) {
+            .mouse_move => |incoming_move| std.meta.eql(existing_move.modifiers, incoming_move.modifiers),
+            else => false,
+        },
+        .mouse_wheel => |existing_wheel| switch (incoming) {
+            .mouse_wheel => |incoming_wheel| existing_wheel.x == incoming_wheel.x and
+                existing_wheel.y == incoming_wheel.y and
+                std.meta.eql(existing_wheel.modifiers, incoming_wheel.modifiers),
+            else => false,
+        },
+        .window_blur => incoming == .window_blur,
+        else => false,
+    };
+}
+
+fn coalesceQueuedInputEvent(existing: *Win32Backend.InputEvent, incoming: Win32Backend.InputEvent) void {
+    switch (existing.*) {
+        .mouse_move => switch (incoming) {
+            .mouse_move => |move| existing.* = .{ .mouse_move = move },
+            else => unreachable,
+        },
+        .mouse_wheel => |wheel| switch (incoming) {
+            .mouse_wheel => |incoming_wheel| existing.* = .{ .mouse_wheel = .{
+                .x = incoming_wheel.x,
+                .y = incoming_wheel.y,
+                .delta_x = wheel.delta_x + incoming_wheel.delta_x,
+                .delta_y = wheel.delta_y + incoming_wheel.delta_y,
+                .modifiers = wheel.modifiers,
+            } },
+            else => unreachable,
+        },
+        .window_blur => {},
+        else => unreachable,
+    }
+}
+
 fn queueInputEvent(self: *Win32Backend, event: Win32Backend.InputEvent) void {
     self.input_lock.lock();
     defer self.input_lock.unlock();
+
+    if (self.input_events.items.len > 0) {
+        const last_index = self.input_events.items.len - 1;
+        if (inputEventsCanCoalesce(self.input_events.items[last_index], event)) {
+            coalesceQueuedInputEvent(&self.input_events.items[last_index], event);
+            return;
+        }
+    }
+
     self.input_events.append(self.allocator, event) catch |err| {
         deinitInputEvent(self, &event);
         log.warn(.app, "win input queue overflow", .{ .err = err });
         return;
     };
+}
+
+fn queueActivateControlInput(backend: *Win32Backend, activation: BrowserCommand.ActivateControlRegion) void {
+    const owned_dom_path = backend.allocator.dupe(u16, activation.dom_path) catch |err| {
+        log.warn(.app, "win ctrl activation queue copy", .{ .err = err });
+        return;
+    };
+
+    queueInputEvent(backend, .{ .rendered_control_activate = .{
+        .x = activation.x,
+        .y = activation.y,
+        .dom_path = owned_dom_path,
+    } });
 }
 
 fn parseMailboxBool(value: []const u8) !bool {
@@ -1318,7 +1684,8 @@ fn queueMailboxClick(
         )) |command| {
             switch (command) {
                 .activate_control_region => |activation| {
-                    queueInputEvent(backend, .{ .rendered_control_activate = activation });
+                    queueActivateControlInput(backend, activation);
+                    command.deinit(backend.allocator);
                 },
                 else => queueBrowserCommand(backend, command),
             }
@@ -1394,6 +1761,14 @@ fn processMailboxLine(backend: *Win32Backend, line: []const u8) !void {
     }
 
     if (std.mem.startsWith(u8, trimmed, "text|")) {
+        if (runtimeInputTraceEnabled(backend.presentation_url)) {
+            var detail_buf: [192]u8 = undefined;
+            const detail = std.fmt.bufPrint(&detail_buf, "bytes={d}|text={s}", .{
+                trimmed["text|".len..].len,
+                trimmed["text|".len..],
+            }) catch "";
+            appendRuntimeInputTrace(backend.presentation_url, "mailbox_text_line", detail);
+        }
         try queueMailboxTextUtf8(backend, trimmed["text|".len..]);
         return;
     }
@@ -1404,6 +1779,15 @@ fn processMailboxLine(backend: *Win32Backend, line: []const u8) !void {
         const code = try parseMailboxU32(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
         const pressed = try parseMailboxBool(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
         const modifiers = try parseMailboxU8(std.mem.trim(u8, parts.next() orelse return error.InvalidMailboxInput, " \t\r"));
+        if (runtimeInputTraceEnabled(backend.presentation_url)) {
+            var detail_buf: [160]u8 = undefined;
+            const detail = std.fmt.bufPrint(&detail_buf, "code={d}|pressed={any}|modifiers={d}", .{
+                code,
+                pressed,
+                modifiers,
+            }) catch "";
+            appendRuntimeInputTrace(backend.presentation_url, "mailbox_key_line", detail);
+        }
         const event: Win32Backend.InputEvent = if (pressed)
             .{ .key_down = .{
                 .vk = code,
@@ -1497,6 +1881,22 @@ fn pollMailboxInput(backend: *Win32Backend) !void {
     }
 
     var it = std.mem.splitScalar(u8, data[0..complete_len], '\n');
+    if (complete_len > 0) {
+        log.warn(.app, "win mailbox input", .{
+            .path = mailbox_path,
+            .bytes = complete_len,
+        });
+        var detail_buf: [256]u8 = undefined;
+        const detail = std.fmt.bufPrint(&detail_buf, "path={s}|bytes={d}", .{
+            mailbox_path,
+            complete_len,
+        }) catch "";
+        appendRuntimeInputTrace(
+            backend.presentation_url,
+            "mailbox_input",
+            detail,
+        );
+    }
     while (it.next()) |raw_line| {
         processMailboxLine(backend, raw_line) catch |err| switch (err) {
             error.InvalidMailboxInput => continue,
@@ -5944,6 +6344,35 @@ fn renderPresentationDisplayList(
                 drawPresentationStrokeRect(hdc, rect, rect_cmd);
             },
             .text => |text_cmd| {
+                if (std.mem.indexOf(u8, snapshot.url, "consent.google.com") != null and
+                    (std.mem.indexOf(u8, text_cmd.text, "Before") != null or
+                        std.mem.indexOf(u8, text_cmd.text, "continue") != null or
+                        std.mem.indexOf(u8, text_cmd.text, "We") != null or
+                        std.mem.indexOf(u8, text_cmd.text, "cookies") != null or
+                        std.mem.indexOf(u8, text_cmd.text, "data") != null or
+                        std.mem.indexOf(u8, text_cmd.text, "Deliver") != null or
+                        std.mem.indexOf(u8, text_cmd.text, "Track") != null or
+                        std.mem.indexOf(u8, text_cmd.text, "Measure") != null))
+                {
+                    var detail_buf: [512]u8 = undefined;
+                    const detail = std.fmt.bufPrint(
+                        &detail_buf,
+                        "index={d}|text={s}|x={d}|y={d}|width={d}|height={d}|font={d}|letter={d}|word={d}|nowrap={any}",
+                        .{
+                            command_index,
+                            text_cmd.text,
+                            text_cmd.x,
+                            text_cmd.y,
+                            text_cmd.width,
+                            text_cmd.height,
+                            text_cmd.font_size,
+                            text_cmd.letter_spacing,
+                            text_cmd.word_spacing,
+                            text_cmd.nowrap,
+                        },
+                    ) catch "";
+                    appendRuntimeInputTrace(snapshot.url, "present_text", detail);
+                }
                 if (text_cmd.clip_rect) |clip| {
                     if (clip.width <= 0 or clip.height <= 0) continue;
                 }
@@ -7806,6 +8235,14 @@ fn queueTextCodePoint(backend: *Win32Backend, cp_in: u32) void {
     const len = std.unicode.utf8Encode(cp, &text_input.bytes) catch return;
     text_input.len = @intCast(len);
     queueInputEvent(backend, .{ .text_input = text_input });
+    if (runtimeInputTraceEnabled(backend.presentation_url)) {
+        var detail_buf: [128]u8 = undefined;
+        const detail = std.fmt.bufPrint(&detail_buf, "text={s}|len={d}", .{
+            text_input.bytes[0..text_input.len],
+            text_input.len,
+        }) catch "";
+        appendRuntimeInputTrace(backend.presentation_url, "queued_text_input", detail);
+    }
 }
 
 fn queueTextFromUtf16Unit(backend: *Win32Backend, code_unit: u16) void {
@@ -8049,17 +8486,38 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
             return 0;
         },
         c.WM_SETFOCUS => {
+            if (getBackendPtr(hwnd)) |backend| {
+                logGoogleFocusState(backend.presentation_url, hwnd, "wm_setfocus", @intCast(wparam));
+                _ = c.InvalidateRect(hwnd, null, c.FALSE);
+            }
             return 0;
         },
         c.WM_ACTIVATE => {
+            if (getBackendPtr(hwnd)) |backend| {
+                const state: u16 = @intCast(wparam & 0xFFFF);
+                if (state != c.WA_INACTIVE) {
+                    _ = c.SetFocus(hwnd);
+                    _ = c.InvalidateRect(hwnd, null, c.FALSE);
+                }
+                logGoogleFocusState(backend.presentation_url, hwnd, "wm_activate", state);
+            }
             return c.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+        c.WM_MOUSEACTIVATE => {
+            if (getBackendPtr(hwnd)) |backend| {
+                activateWindowForInput(hwnd);
+                logGoogleFocusState(backend.presentation_url, hwnd, "wm_mouseactivate", @intCast(wparam));
+            }
+            return c.MA_ACTIVATE;
         },
         c.WM_KILLFOCUS => {
             if (getBackendPtr(hwnd)) |backend| {
+                logGoogleFocusState(backend.presentation_url, hwnd, "wm_killfocus", @intCast(wparam));
                 backend.pending_high_surrogate = null;
                 backend.ime_composing = false;
                 backend.suppress_wm_char_units = 0;
                 queueInputEvent(backend, .window_blur);
+                _ = c.InvalidateRect(hwnd, null, c.FALSE);
             }
             return 0;
         },
@@ -8218,7 +8676,8 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                         _ = c.ReleaseCapture();
                         switch (command) {
                             .activate_control_region => |activation| {
-                                queueInputEvent(backend, .{ .rendered_control_activate = activation });
+                                queueActivateControlInput(backend, activation);
+                                command.deinit(backend.allocator);
                             },
                             else => queueBrowserCommand(backend, command),
                         }
@@ -8371,13 +8830,42 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
             if (getBackendPtr(hwnd)) |backend| {
                 const vk: u32 = @intCast(wparam & 0xFFFF);
                 const modifiers = keyboardModifiersFromKeyState();
+                if (googleInputTraceEnabled(backend.presentation_url)) {
+                    var detail_buf: [256]u8 = undefined;
+                    const detail = std.fmt.bufPrint(&detail_buf, "vk={d}|address_edit={any}|find_edit={any}|history_open={any}|bookmark_open={any}|download_open={any}", .{
+                        vk,
+                        presentationAddressEditing(backend),
+                        presentationFindEditing(backend),
+                        presentationHistoryOverlayOpen(backend),
+                        presentationBookmarkOverlayOpen(backend),
+                        presentationDownloadOverlayOpen(backend),
+                    }) catch "";
+                    appendGoogleWindowTrace(backend.presentation_url, "wndproc_keydown", detail);
+                    log.warn(.app, "win keydown msg", .{
+                        .url = backend.presentation_url,
+                        .vk = vk,
+                        .foreground_matches = c.GetForegroundWindow() == hwnd,
+                        .focus_matches = c.GetFocus() == hwnd,
+                    });
+                }
+                if (shouldLogLiveKeyMessage(vk) and runtimeInputTraceEnabled(backend.presentation_url)) {
+                    log.warn(.app, "win key queued", .{
+                        .url = backend.presentation_url,
+                        .vk = vk,
+                        .foreground_matches = c.GetForegroundWindow() == hwnd,
+                        .focus_matches = c.GetFocus() == hwnd,
+                    });
+                }
                 if (handlePresentationShortcutKey(hwnd, backend, vk, modifiers)) {
+                    appendGoogleWindowTrace(backend.presentation_url, "wndproc_keydown_shortcut", "handled=1");
                     return 0;
                 }
                 if (presentationAddressEditing(backend) or presentationFindEditing(backend) or presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend) or presentationDownloadOverlayOpen(backend)) {
+                    appendGoogleWindowTrace(backend.presentation_url, "wndproc_keydown_swallowed", "chrome_state=1");
                     return 0;
                 }
                 if (handlePresentationScrollKey(hwnd, backend, vk)) {
+                    appendGoogleWindowTrace(backend.presentation_url, "wndproc_keydown_scroll", "handled=1");
                     return 0;
                 }
                 const key_down: Win32Backend.InputEvent = .{ .key_down = .{
@@ -8386,6 +8874,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     .repeat = keyRepeatFromLParam(lparam),
                 } };
                 queueInputEvent(backend, key_down);
+                appendGoogleWindowTrace(backend.presentation_url, "wndproc_keydown_queued", "queued=1");
             }
             return 0;
         },
@@ -8405,6 +8894,12 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
         },
         c.WM_IME_COMPOSITION => {
             if (getBackendPtr(hwnd)) |backend| {
+                if (googleInputTraceEnabled(backend.presentation_url)) {
+                    log.warn(.app, "win ime composition", .{
+                        .url = backend.presentation_url,
+                        .lparam = @as(usize, @bitCast(lparam)),
+                    });
+                }
                 if (presentationAddressEditing(backend) or presentationFindEditing(backend) or presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend) or presentationDownloadOverlayOpen(backend)) {
                     return 0;
                 }
@@ -8417,6 +8912,11 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
         },
         c.WM_IME_STARTCOMPOSITION => {
             if (getBackendPtr(hwnd)) |backend| {
+                if (googleInputTraceEnabled(backend.presentation_url)) {
+                    log.warn(.app, "win ime start", .{
+                        .url = backend.presentation_url,
+                    });
+                }
                 backend.ime_composing = true;
                 backend.pending_high_surrogate = null;
                 backend.suppress_wm_char_units = 0;
@@ -8425,19 +8925,54 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
         },
         c.WM_IME_ENDCOMPOSITION => {
             if (getBackendPtr(hwnd)) |backend| {
+                if (googleInputTraceEnabled(backend.presentation_url)) {
+                    log.warn(.app, "win ime end", .{
+                        .url = backend.presentation_url,
+                    });
+                }
                 backend.ime_composing = false;
                 backend.pending_high_surrogate = null;
                 backend.suppress_wm_char_units = 0;
             }
             return 0;
         },
-        c.WM_CHAR, c.WM_SYSCHAR => {
+        c.WM_CHAR, c.WM_SYSCHAR, c.WM_IME_CHAR => {
             if (getBackendPtr(hwnd)) |backend| {
                 const code_unit: u16 = @intCast(wparam & 0xFFFF);
+                if (runtimeInputTraceEnabled(backend.presentation_url) and ((code_unit >= 0x20 and code_unit < 0x7F) or code_unit == '\r')) {
+                    log.warn(.app, "win char msg", .{
+                        .url = backend.presentation_url,
+                        .msg = msg,
+                        .code_unit = code_unit,
+                        .address_edit = presentationAddressEditing(backend),
+                        .find_edit = presentationFindEditing(backend),
+                        .history_open = presentationHistoryOverlayOpen(backend),
+                        .bookmark_open = presentationBookmarkOverlayOpen(backend),
+                        .download_open = presentationDownloadOverlayOpen(backend),
+                        .settings_open = presentationSettingsOverlayOpen(backend),
+                        .suppress_units = backend.suppress_wm_char_units,
+                    });
+                }
+                if (googleInputTraceEnabled(backend.presentation_url)) {
+                    var detail_buf: [256]u8 = undefined;
+                    const detail = std.fmt.bufPrint(&detail_buf, "msg={d}|code_unit={d}|address_edit={any}|find_edit={any}|history_open={any}|bookmark_open={any}|download_open={any}|settings_open={any}|suppress_units={d}", .{
+                        msg,
+                        code_unit,
+                        presentationAddressEditing(backend),
+                        presentationFindEditing(backend),
+                        presentationHistoryOverlayOpen(backend),
+                        presentationBookmarkOverlayOpen(backend),
+                        presentationDownloadOverlayOpen(backend),
+                        presentationSettingsOverlayOpen(backend),
+                        backend.suppress_wm_char_units,
+                    }) catch "";
+                    appendGoogleWindowTrace(backend.presentation_url, "wndproc_char", detail);
+                }
                 if (presentationAddressEditing(backend)) {
                     if (code_unit != '\r' and code_unit != 0x0008 and appendAddressUtf16Unit(backend, code_unit)) {
                         _ = c.InvalidateRect(hwnd, null, c.TRUE);
                     }
+                    appendGoogleWindowTrace(backend.presentation_url, "wndproc_char_address", "handled=1");
                     return 0;
                 }
                 if (presentationFindEditing(backend)) {
@@ -8445,6 +8980,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                         _ = updateFindSelection(hwnd, backend, .preserve);
                         _ = c.InvalidateRect(hwnd, null, c.TRUE);
                     }
+                    appendGoogleWindowTrace(backend.presentation_url, "wndproc_char_find", "handled=1");
                     return 0;
                 }
                 if (presentationHistoryOverlayOpen(backend) or
@@ -8452,17 +8988,25 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     presentationDownloadOverlayOpen(backend) or
                     presentationSettingsOverlayOpen(backend))
                 {
+                    appendGoogleWindowTrace(backend.presentation_url, "wndproc_char_overlay", "handled=1");
                     return 0;
                 }
                 if (backend.suppress_wm_char_units > 0) {
                     backend.suppress_wm_char_units -= 1;
+                    appendGoogleWindowTrace(backend.presentation_url, "wndproc_char_suppressed", "handled=1");
                     return 0;
                 }
+                if ((code_unit >= 0x20 and code_unit < 0x7F) or code_unit == '\r') {
+                    log.warn(.app, "win text char", .{
+                        .msg = msg,
+                        .code_unit = code_unit,
+                    });
+                }
                 queueTextFromUtf16Unit(backend, code_unit);
+                appendGoogleWindowTrace(backend.presentation_url, "wndproc_char_queued", "queued=1");
             }
             return 0;
         },
-        c.WM_IME_CHAR => return 0,
         c.WM_UNICHAR => {
             if (@as(u32, @intCast(wparam)) == 0xFFFF) {
                 return 1;
@@ -9023,6 +9567,132 @@ test "win32 address edit ctrl+a then backspace clears all" {
     try std.testing.expect(deleteLastAddressCodepoint(&backend));
     try std.testing.expectEqual(@as(usize, 0), backend.address_input.items.len);
     try std.testing.expect(!backend.address_input_select_all);
+}
+
+test "win32 presentPageView clears queued page input on url change" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    backend.presentation_url = try std.testing.allocator.dupe(u8, "http://example.com");
+    queueInputEvent(&backend, .{ .key_down = .{
+        .vk = 'A',
+        .modifiers = .{},
+        .repeat = false,
+    } });
+    queueTextFromUtf16Unit(&backend, 'a');
+    try std.testing.expectEqual(@as(usize, 2), backend.input_events.items.len);
+
+    try backend.presentPageView("Next", "http://next.test/", "", null);
+    try std.testing.expectEqual(@as(usize, 0), backend.input_events.items.len);
+}
+
+test "win32 dispatchInput suppresses later text_input after printable keydown across batches" {
+    var page = try testing.pageTest("page/flex_two_text_inputs_layout.html");
+    defer page._session.removePage();
+
+    const input_element = page.window._document.getElementById("first", page) orelse return error.TestInputMissing;
+    const input = input_element.is(Element.Html.Input) orelse return error.TestInputMissing;
+    try input_element.focus(page);
+    try input.setValue("", page);
+    try testing.expectEqual(input_element, page.document._active_element.?);
+
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    queueInputEvent(&backend, .{ .key_down = .{
+        .vk = 'A',
+        .modifiers = .{},
+        .repeat = false,
+    } });
+    try std.testing.expect(try backend.dispatchInput(page));
+    try testing.expectString("a", input.getValue());
+    try std.testing.expectEqual(@as(u32, 1), backend.pending_text_input_suppressions);
+
+    queueTextFromUtf16Unit(&backend, 'a');
+    try std.testing.expect(try backend.dispatchInput(page));
+    try testing.expectString("a", input.getValue());
+    try std.testing.expectEqual(@as(u32, 0), backend.pending_text_input_suppressions);
+}
+
+test "win32 queued control activation owns dom path independently of source command" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    var source_command: BrowserCommand = .{ .activate_control_region = .{
+        .x = 42,
+        .y = 84,
+        .dom_path = try std.testing.allocator.dupe(u16, &.{ 1, 4, 2 }),
+    } };
+    defer source_command.deinit(std.testing.allocator);
+
+    const source_ptr = source_command.activate_control_region.dom_path.ptr;
+    queueActivateControlInput(&backend, source_command.activate_control_region);
+
+    try std.testing.expectEqual(@as(usize, 1), backend.input_events.items.len);
+    switch (backend.input_events.items[0]) {
+        .rendered_control_activate => |activation| {
+            try std.testing.expectEqual(@as(f64, 42), activation.x);
+            try std.testing.expectEqual(@as(f64, 84), activation.y);
+            try std.testing.expectEqualSlices(u16, &.{ 1, 4, 2 }, activation.dom_path);
+            try std.testing.expect(activation.dom_path.ptr != source_ptr);
+        },
+        else => return error.TestUnexpectedEventType,
+    }
+}
+
+test "win32 queueInputEvent coalesces trailing mouse_move updates" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    queueInputEvent(&backend, .{ .mouse_move = .{
+        .x = 10,
+        .y = 20,
+        .modifiers = .{ .shift = true },
+    } });
+    queueInputEvent(&backend, .{ .mouse_move = .{
+        .x = 30,
+        .y = 40,
+        .modifiers = .{ .shift = true },
+    } });
+
+    try std.testing.expectEqual(@as(usize, 1), backend.input_events.items.len);
+    switch (backend.input_events.items[0]) {
+        .mouse_move => |move| {
+            try std.testing.expectEqual(@as(f64, 30), move.x);
+            try std.testing.expectEqual(@as(f64, 40), move.y);
+            try std.testing.expect(move.modifiers.shift);
+        },
+        else => return error.TestUnexpectedEventType,
+    }
+}
+
+test "win32 queueInputEvent accumulates trailing mouse_wheel deltas at one point" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    queueInputEvent(&backend, .{ .mouse_wheel = .{
+        .x = 100,
+        .y = 120,
+        .delta_x = 0,
+        .delta_y = -40,
+        .modifiers = .{ .ctrl = true },
+    } });
+    queueInputEvent(&backend, .{ .mouse_wheel = .{
+        .x = 100,
+        .y = 120,
+        .delta_x = 0,
+        .delta_y = -80,
+        .modifiers = .{ .ctrl = true },
+    } });
+
+    try std.testing.expectEqual(@as(usize, 1), backend.input_events.items.len);
+    switch (backend.input_events.items[0]) {
+        .mouse_wheel => |wheel| {
+            try std.testing.expectEqual(@as(f64, -120), wheel.delta_y);
+            try std.testing.expect(wheel.modifiers.ctrl);
+        },
+        else => return error.TestUnexpectedEventType,
+    }
 }
 
 test "win32 find match collector finds case-insensitive text commands" {
@@ -10267,3 +10937,4 @@ test "win32 translucent text opacity blends against background" {
     try std.testing.expect(darkest_pixel[1] > 40 and darkest_pixel[1] < 240);
     try std.testing.expect(darkest_pixel[2] > 40 and darkest_pixel[2] < 240);
 }
+

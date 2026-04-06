@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body>
+  <input id="input1" type="text">
+</body>
+
+<script id="remove_focused_element_clears_activeElement">
+{
+  const input1 = $('#input1');
+  input1.focus();
+  testing.expectEqual(input1, document.activeElement);
+
+  document.body.removeChild(input1);
+  testing.expectEqual('BODY', document.activeElement.tagName);
+}
+</script>

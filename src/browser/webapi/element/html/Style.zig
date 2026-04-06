@@ -27,6 +27,8 @@ const HtmlElement = @import("../Html.zig");
 const Style = @This();
 _proto: *HtmlElement,
 _sheet: ?*CSSStyleSheet = null,
+_sheet_source_hash: u64 = 0,
+_sheet_source_loaded: bool = false,
 
 pub fn asElement(self: *Style) *Element {
     return self._proto._proto;
@@ -77,35 +79,58 @@ pub fn setDisabled(self: *Style, disabled: bool, page: *Page) !void {
 }
 
 const CSSStyleSheet = @import("../../css/CSSStyleSheet.zig");
+fn stylesheetSourceHash(text: []const u8, base_url: []const u8, referer_url: []const u8, include_credentials: bool) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(text);
+    hasher.update(base_url);
+    hasher.update(referer_url);
+    hasher.update(&[_]u8{@intFromBool(include_credentials)});
+    return hasher.final();
+}
+
 pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
     // Per spec, sheet is null for disconnected elements or non-CSS types.
     // Valid types: absent (defaults to "text/css"), empty string, or
     // case-insensitive match for "text/css".
     if (!self.asNode().isConnected()) {
         self._sheet = null;
+        self._sheet_source_loaded = false;
+        self._sheet_source_hash = 0;
         return null;
     }
     const t = self.getType();
     if (t.len != 0 and !std.ascii.eqlIgnoreCase(t, "text/css")) {
         self._sheet = null;
+        self._sheet_source_loaded = false;
+        self._sheet_source_hash = 0;
         return null;
     }
 
+    const base_url = page.base();
+    const referer_url = page.url;
+    const include_credentials = true;
+    const text = try self.asNode().getTextContentAlloc(page.call_arena);
+    const source_hash = stylesheetSourceHash(text, base_url, referer_url, include_credentials);
+
     if (self._sheet) |sheet| {
-        sheet._request_base_url = try page.arena.dupeZ(u8, page.base());
-        sheet._request_referer_url = try page.arena.dupeZ(u8, page.url);
-        sheet._request_include_credentials = true;
-        const text = try self.asNode().getTextContentAlloc(page.call_arena);
-        try sheet.replaceSync(text, page);
+        sheet._request_base_url = try page.arena.dupeZ(u8, base_url);
+        sheet._request_referer_url = try page.arena.dupeZ(u8, referer_url);
+        sheet._request_include_credentials = include_credentials;
+        if (!self._sheet_source_loaded or self._sheet_source_hash != source_hash) {
+            try sheet.replaceSync(text, page);
+            self._sheet_source_hash = source_hash;
+            self._sheet_source_loaded = true;
+        }
         return sheet;
     }
     const sheet = try CSSStyleSheet.initWithOwner(self.asElement(), page);
-    sheet._request_base_url = try page.arena.dupeZ(u8, page.base());
-    sheet._request_referer_url = try page.arena.dupeZ(u8, page.url);
-    sheet._request_include_credentials = true;
-    const text = try self.asNode().getTextContentAlloc(page.call_arena);
+    sheet._request_base_url = try page.arena.dupeZ(u8, base_url);
+    sheet._request_referer_url = try page.arena.dupeZ(u8, referer_url);
+    sheet._request_include_credentials = include_credentials;
     try sheet.replaceSync(text, page);
     self._sheet = sheet;
+    self._sheet_source_hash = source_hash;
+    self._sheet_source_loaded = true;
     return sheet;
 }
 
@@ -137,4 +162,25 @@ pub const JsApi = struct {
 const testing = @import("../../../../testing.zig");
 test "WebApi: Style" {
     try testing.htmlRunner("element/html/style.html", .{});
+}
+
+test "WebApi: Style caches unchanged inline stylesheet source" {
+    var page = try testing.pageTest("element/html/style_cache.html");
+    defer page._session.removePage();
+
+    const style_element = page.window._document.getElementById("sheet", page) orelse return error.TestExpected;
+    const style = style_element.is(Element.Html.Style) orelse return error.TestExpected;
+
+    const first_sheet = (try style.getSheet(page)) orelse return error.TestExpected;
+    const first_rules_ptr = first_sheet._rules.ptr;
+
+    const second_sheet = (try style.getSheet(page)) orelse return error.TestExpected;
+    try std.testing.expectEqual(first_sheet, second_sheet);
+    try std.testing.expectEqual(first_rules_ptr, second_sheet._rules.ptr);
+
+    try style_element.asNode().setTextContent("body { color: rgb(4, 5, 6); }", page);
+
+    const refreshed_sheet = (try style.getSheet(page)) orelse return error.TestExpected;
+    try std.testing.expectEqual(first_sheet, refreshed_sheet);
+    try std.testing.expect(refreshed_sheet._rules.ptr != first_rules_ptr);
 }
