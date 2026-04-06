@@ -3438,10 +3438,7 @@ pub fn handleClick(self: *Page, target: *Node) !void {
 
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
     const event = keyboard_event.asEvent();
-    const element = self.window._document._active_element orelse {
-        _ = event.releaseRef(self._session);
-        return;
-    };
+    const element = self.window._document._active_element orelse return;
 
     if (comptime IS_DEBUG) {
         log.debug(.page, "page keydown", .{
