@@ -646,14 +646,14 @@ fn sendPageLifecycle(bc: *CDP.BrowserContext, name: []const u8, timestamp: u64, 
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-handleJavaScriptDialog
 fn handleJavaScriptDialog(cmd: *CDP.Command) !void {
-    // Dialogs auto-dismiss in headless mode, so this is an acknowledgement.
-    // accept and promptText params are parsed but not used since the dialog
-    // already returned by the time the CDP client sends this.
+    // Dialogs auto-dismiss in headless mode. By the time the CDP client
+    // sends this command, the dialog has already returned and there is
+    // no pending dialog to accept or dismiss.
     _ = try cmd.params(struct {
         accept: bool,
         promptText: ?[]const u8 = null,
     });
-    try cmd.sendResult(null, .{});
+    return cmd.sendError(-32000, "No dialog is showing", .{});
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Page/#event-javascriptDialogOpening
