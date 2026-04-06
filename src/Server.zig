@@ -260,14 +260,14 @@ pub const Client = struct {
 
     fn start(self: *Client) void {
         const http = self.http;
-        http.cdp_client = .{
+        http.setCdpClient(.{
             .socket = self.ws.socket,
             .ctx = self,
             .blocking_read_start = Client.blockingReadStart,
             .blocking_read = Client.blockingRead,
             .blocking_read_end = Client.blockingReadStop,
-        };
-        defer http.cdp_client = null;
+        });
+        defer http.setCdpClient(null);
 
         self.httpLoop(http) catch |err| {
             log.err(.app, "CDP client loop", .{ .err = err });
