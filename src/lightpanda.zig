@@ -249,7 +249,7 @@ pub fn RC(comptime T: type) type {
         }
 
         pub fn release(self: *@This(), value: anytype, session: *Session) void {
-            assert(self._refs > 0, "release overflow", .{.type = @typeName(@TypeOf(value))});
+            assert(self._refs > 0, "release overflow", .{ .type = @typeName(@TypeOf(value)) });
 
             const refs = self._refs - 1;
             self._refs = refs;
