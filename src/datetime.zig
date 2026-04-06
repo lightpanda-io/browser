@@ -335,7 +335,7 @@ pub const DateTime = struct {
         }
         const tm = try parser.time(false);
 
-        if (parser.consumeIf(' ') == false) {
+        if (parser.unconsumed() == 0 or parser.consumeIf(' ') == false) {
             return error.InvalidTime;
         }
 
@@ -1495,6 +1495,9 @@ test "DateTime: parse RFC822" {
     try testing.expectError(error.InvalidTime, DateTime.parse("Wed, 01 Jan 20 20:1a:22  Z", .rfc822));
     try testing.expectError(error.InvalidTime, DateTime.parse("Wed, 01 Jan 20 20:1a:22 X", .rfc822));
     try testing.expectError(error.InvalidTime, DateTime.parse("Wed, 01 Jan 20 20:1a:22 ZZ", .rfc822));
+
+    // Missing timezone - input ends exactly at time boundary (was causing index out of bounds)
+    try testing.expectError(error.InvalidTime, DateTime.parse("Wed, 01 Jan 2020 10:10:10", .rfc822));
 
     {
         const dt = try DateTime.parse("31 Dec 68 23:59 Z", .rfc822);
