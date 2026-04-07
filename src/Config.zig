@@ -54,12 +54,16 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
         .exec_name = exec_name,
         .http_headers = undefined,
     };
-    config.http_headers = try HttpHeaders.init(allocator, &config);
+    if (mode != .help and mode != .version) {
+        config.http_headers = try HttpHeaders.init(allocator, &config);
+    }
     return config;
 }
 
 pub fn deinit(self: *const Config, allocator: Allocator) void {
-    self.http_headers.deinit(allocator);
+    if (self.mode != .help and self.mode != .version) {
+        self.http_headers.deinit(allocator);
+    }
 }
 
 fn commonOpts(self: *const Config) Common {
@@ -214,12 +218,14 @@ pub const AiProvider = enum {
     anthropic,
     openai,
     gemini,
+    ollama,
 };
 
 pub const Agent = struct {
     common: Common = .{},
     provider: AiProvider = .anthropic,
     model: ?[:0]const u8 = null,
+    base_url: ?[:0]const u8 = null,
     system_prompt: ?[:0]const u8 = null,
     repl: bool = true,
     script_file: ?[]const u8 = null,
@@ -492,18 +498,24 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\agent command
         \\Starts an interactive AI agent that can browse the web
         \\Example: {s} agent --provider anthropic --model claude-sonnet-4-20250514
+        \\Example: {s} agent --provider ollama --model gemma4
         \\
         \\Options:
-        \\--provider      The AI provider: anthropic, openai, or gemini.
+        \\--provider      The AI provider: anthropic, openai, gemini, or ollama.
         \\                Defaults to "anthropic".
         \\
         \\--model         The model name to use.
         \\                Defaults to a sensible default per provider.
         \\
+        \\--base-url      Override the API base URL for the provider.
+        \\                Defaults to the provider's standard endpoint.
+        \\                Ollama default: http://localhost:11434/v1
+        \\
         \\--system-prompt Override the default system prompt.
         \\
         \\The API key is read from the environment:
         \\ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
+        \\Ollama does not require an API key.
         \\
     ++ common_options ++
         \\
@@ -514,7 +526,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\Displays this message
         \\
     ;
-    std.debug.print(usage, .{ self.exec_name, self.exec_name, self.exec_name, self.exec_name, self.exec_name, self.exec_name });
+    std.debug.print(usage, .{ self.exec_name, self.exec_name, self.exec_name, self.exec_name, self.exec_name, self.exec_name, self.exec_name });
     if (success) {
         return std.process.cleanExit();
     }
@@ -923,6 +935,15 @@ fn parseAgentArgs(
                 return error.InvalidArgument;
             };
             result.model = try allocator.dupeZ(u8, str);
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--base-url", opt) or std.mem.eql(u8, "--base_url", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            result.base_url = try allocator.dupeZ(u8, str);
             continue;
         }
 

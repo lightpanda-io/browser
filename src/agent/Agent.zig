@@ -70,11 +70,12 @@ const AiClient = union(Config.AiProvider) {
     anthropic: *zenai.anthropic.Client,
     openai: *zenai.openai.Client,
     gemini: *zenai.gemini.Client,
+    ollama: *zenai.openai.Client,
 
     fn toProvider(self: AiClient) zenai.provider.Client {
         return switch (self) {
             .anthropic => |c| .{ .anthropic = c },
-            .openai => |c| .{ .openai = c },
+            .openai, .ollama => |c| .{ .openai = c },
             .gemini => |c| .{ .gemini = c },
         };
     }
@@ -100,18 +101,25 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     const ai_client: ?AiClient = if (api_key) |key| switch (opts.provider) {
         .anthropic => blk: {
             const client = try allocator.create(zenai.anthropic.Client);
-            client.* = zenai.anthropic.Client.init(allocator, key, .{});
+            client.* = zenai.anthropic.Client.init(allocator, key, if (opts.base_url) |url| .{ .base_url = url } else .{});
             break :blk .{ .anthropic = client };
         },
         .openai => blk: {
             const client = try allocator.create(zenai.openai.Client);
-            client.* = zenai.openai.Client.init(allocator, key, .{});
+            client.* = zenai.openai.Client.init(allocator, key, if (opts.base_url) |url| .{ .base_url = url } else .{});
             break :blk .{ .openai = client };
         },
         .gemini => blk: {
             const client = try allocator.create(zenai.gemini.Client);
-            client.* = zenai.gemini.Client.init(allocator, key, .{});
+            client.* = zenai.gemini.Client.init(allocator, key, if (opts.base_url) |url| .{ .base_url = url } else .{});
             break :blk .{ .gemini = client };
+        },
+        .ollama => blk: {
+            const client = try allocator.create(zenai.openai.Client);
+            client.* = zenai.openai.Client.init(allocator, key, .{
+                .base_url = opts.base_url orelse "http://localhost:11434/v1",
+            });
+            break :blk .{ .ollama = client };
         },
     } else null;
 
@@ -511,6 +519,7 @@ fn getEnvApiKey(provider_type: Config.AiProvider) ?[:0]const u8 {
         .anthropic => std.posix.getenv("ANTHROPIC_API_KEY"),
         .openai => std.posix.getenv("OPENAI_API_KEY"),
         .gemini => std.posix.getenv("GOOGLE_API_KEY") orelse std.posix.getenv("GEMINI_API_KEY"),
+        .ollama => "ollama",
     };
 }
 
@@ -519,5 +528,6 @@ fn defaultModel(provider_type: Config.AiProvider) []const u8 {
         .anthropic => "claude-sonnet-4-20250514",
         .openai => "gpt-4o",
         .gemini => "gemini-2.5-flash",
+        .ollama => "gemma4",
     };
 }
