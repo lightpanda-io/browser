@@ -20,11 +20,13 @@ const std = @import("std");
 
 const String = @import("../../../string.zig").String;
 const js = @import("../../js/js.zig");
-
 const Page = @import("../../Page.zig");
+const Factory = @import("../../Factory.zig");
 const Session = @import("../../Session.zig");
+
 const Event = @import("../Event.zig");
 const Window = @import("../Window.zig");
+
 const Allocator = std.mem.Allocator;
 
 const MessageEvent = @This();
@@ -53,19 +55,19 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*MessageEvent {
     const arena = try page.getArena(.small, "MessageEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
-    return initWithTrusted(arena, type_string, opts_, false, page);
+    return initWithTrusted(arena, type_string, opts_, false, page._factory);
 }
 
-pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*MessageEvent {
-    const arena = try page.getArena(.small, "MessageEvent.trusted");
-    errdefer page.releaseArena(arena);
-    return initWithTrusted(arena, typ, opts_, true, page);
+pub fn initTrusted(typ: String, opts_: ?Options, session: *Session) !*MessageEvent {
+    const arena = try session.getArena(.small, "MessageEvent.trusted");
+    errdefer session.releaseArena(arena);
+    return initWithTrusted(arena, typ, opts_, true, &session.factory);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, page: *Page) !*MessageEvent {
+fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, factory: *Factory) !*MessageEvent {
     const opts = opts_ orelse Options{};
 
-    const event = try page._factory.event(
+    const event = try factory.event(
         arena,
         typ,
         MessageEvent{

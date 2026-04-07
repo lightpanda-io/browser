@@ -58,7 +58,7 @@ fn throwDetachedError(isolate: *v8.Isolate) void {
     _ = v8.v8__Isolate__ThrowException(isolate, js_exception);
 }
 
-fn initWithContext(self: *Caller, ctx: *Context, v8_context: *const v8.Context) void {
+pub fn initWithContext(self: *Caller, ctx: *Context, v8_context: *const v8.Context) void {
     ctx.call_depth += 1;
     self.* = Caller{
         .local = .{

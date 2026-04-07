@@ -400,14 +400,14 @@ pub const Property = struct {
 pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
     const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
 
-    // During snapshot creation, there's no Context in embedder data yet
+    // During snapshot creation, there's no Context in embedder data yet.
+    // I hate this check, but there doesn't seem to be a way to add this method
+    // to the global, without triggering it during snapshot creation.
     const v8_context = v8.v8__Isolate__GetCurrentContext(v8_isolate) orelse return 0;
-    if (v8.v8__Context__GetAlignedPointerFromEmbedderData(v8_context, 1) == null) return 0;
+    const ctx: *Context = @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(v8_context, 1) orelse return 0));
 
     var caller: Caller = undefined;
-    if (!caller.init(v8_isolate)) {
-        return 0;
-    }
+    caller.initWithContext(ctx, v8_context);
     defer caller.deinit();
 
     const local = &caller.local;
@@ -578,7 +578,7 @@ fn PrototypeType(comptime T: type) ?type {
     return Struct(std.meta.fieldInfo(T, ._proto).type);
 }
 
-pub fn flattenTypes(comptime Types: []const type) [countFlattenedTypes(Types)]type {
+fn flattenTypes(comptime Types: []const type) [countFlattenedTypes(Types)]type {
     var index: usize = 0;
     var flat: [countFlattenedTypes(Types)]type = undefined;
     for (Types) |T| {

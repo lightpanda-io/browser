@@ -178,7 +178,7 @@ pub fn create() !Snapshot {
 
             // V8 requires a default context. We could probably make this our
             // Page context, but having both the Page and Worker context be
-            // indexed via addContext makes things a little more consistent.
+            // added via addContext makes things a little more consistent.
             v8.v8__SnapshotCreator__setDefaultContext(snapshot_creator, temp_context);
         }
 
@@ -456,10 +456,6 @@ fn collectExternalReferences() [countExternalReferences()]isize {
     return references;
 }
 
-fn protoIndexLookup(comptime JsApi: type) ?u16 {
-    return protoIndexLookupFor(&JsApis, JsApi);
-}
-
 fn countInternalFields(comptime JsApi: type) u8 {
     var last_used_id = 0;
     var cache_count: u8 = 0;
@@ -526,7 +522,7 @@ fn hasNamedIndexedGetter(comptime JsApi: type) bool {
 }
 
 // Generic prototype index lookup for a given API list
-fn protoIndexLookupFor(comptime ApiList: []const type, comptime JsApi: type) ?u16 {
+fn protoIndexLookup(comptime JsApi: type) ?u16 {
     @setEvalBranchQuota(100_000);
     comptime {
         const T = JsApi.bridge.type;
@@ -536,7 +532,7 @@ fn protoIndexLookupFor(comptime ApiList: []const type, comptime JsApi: type) ?u1
         const Ptr = std.meta.fieldInfo(T, ._proto).type;
         const F = @typeInfo(Ptr).pointer.child;
         // Look up in the provided API list
-        for (ApiList, 0..) |Api, i| {
+        for (JsApis, 0..) |Api, i| {
             if (Api == F.JsApi) {
                 return i;
             }
@@ -618,6 +614,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
                 }
             },
             bridge.Function => {
+                // For non-static functions, use the signature to validate the receiver
                 const func_signature = if (value.static) null else signature;
                 const function_template = v8.v8__FunctionTemplate__New__Config(isolate, &.{
                     .callback = value.func,
@@ -671,7 +668,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
             bridge.Property => {
                 const js_value = switch (value.value) {
                     .null => js.simpleZigValueToJs(.{ .handle = isolate }, null, true, false),
-                    inline .bool, .int, .float, .string => |pv| js.simpleZigValueToJs(.{ .handle = isolate }, pv, true, false),
+                    inline .bool, .int, .float, .string => |v| js.simpleZigValueToJs(.{ .handle = isolate }, v, true, false),
                 };
                 const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
 
