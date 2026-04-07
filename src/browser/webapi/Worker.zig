@@ -190,19 +190,26 @@ pub fn terminate(self: *Worker) void {
 }
 
 // Posts a message from the page to the worker.
-// The message is serialized via JSON and dispatched on the WorkerGlobalScope.
 pub fn postMessage(self: *Worker, message: js.Value) !void {
-    const session = self._page._session;
+    const worker_scope = self._worker_scope;
+
+    // Enter worker context to clone the message
+    var ls: js.Local.Scope = undefined;
+    worker_scope.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Clone message from page context to worker context
+    const cloned = try message.structuredCloneTo(&ls.local);
+    const data = try cloned.temp();
+    errdefer data.release();
+
+    const session = worker_scope._session;
     const message_arena = try session.getArena(.{ .debug = "Worker.postMessage" });
     errdefer session.releaseArena(message_arena);
 
-    const json = try message.toJson(message_arena);
-
-    const worker_scope = self._worker_scope;
-
     const callback = try message_arena.create(PostMessageToWorkerCallback);
     callback.* = .{
-        .json = json,
+        .data = data,
         .arena = message_arena,
         .worker_scope = worker_scope,
     };
@@ -215,16 +222,17 @@ pub fn postMessage(self: *Worker, message: js.Value) !void {
 }
 
 const PostMessageToWorkerCallback = struct {
-    json: []const u8,
+    data: js.Value.Temp,
     arena: Allocator,
     worker_scope: *WorkerGlobalScope,
 
     fn cancelled(ctx: *anyopaque) void {
-        var self: *PostMessageToWorkerCallback = @ptrCast(@alignCast(ctx));
+        const self: *PostMessageToWorkerCallback = @ptrCast(@alignCast(ctx));
         self.deinit();
     }
 
     fn deinit(self: *PostMessageToWorkerCallback) void {
+        self.data.release();
         self.worker_scope._session.releaseArena(self.arena);
     }
 
@@ -239,11 +247,8 @@ const PostMessageToWorkerCallback = struct {
         worker_scope.js.localScope(&ls);
         defer ls.deinit();
 
-        // Deserialize the message in worker context
-        const data = ls.local.parseJSON(self.json) catch |err| {
-            log.err(.browser, "worker msg parse fail", .{ .err = err });
-            return null;
-        };
+        // Get the cloned message data in worker context
+        const data = self.data.local(&ls.local);
 
         // Call the onmessage handler with a simple object {data: value}
         // TODO: Create proper MessageEvent
