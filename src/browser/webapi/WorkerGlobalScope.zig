@@ -153,37 +153,61 @@ pub fn setOnMessage(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
 }
 
 /// Posts a message from the worker back to the page.
-/// The message is serialized via JSON and dispatched on the Worker object.
+/// The message is cloned via structured clone and dispatched on the Worker object.
 pub fn postMessage(self: *WorkerGlobalScope, message: JS.Value, exec: *JS.Execution) !void {
+    _ = exec;
+
     const worker = self._worker;
     const page = worker._page;
+    const session = self._session;
 
-    // Serialize message to JSON
-    const json = try message.toJson(self.arena);
+    const message_arena = try session.getArena(.{ .debug = "WorkerGlobalScope.postMessage" });
+    errdefer session.releaseArena(message_arena);
+
+    // Enter page context to clone the message
+    var ls: JS.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Clone message from worker context to page context
+    const cloned = try message.structuredCloneTo(&ls.local);
+    const data = try cloned.temp();
 
     // Create callback to deliver message to Worker
-    const callback = try self.arena.create(PostMessageToPageCallback);
+    const callback = try message_arena.create(PostMessageToPageCallback);
     callback.* = .{
+        .data = data,
+        .arena = message_arena,
         .worker = worker,
-        .json = json,
     };
 
     try page.js.scheduler.add(callback, PostMessageToPageCallback.run, 0, .{
         .name = "WorkerGlobalScope.postMessage",
         .low_priority = false,
+        .finalizer = PostMessageToPageCallback.cancelled,
     });
-
-    _ = exec;
 }
 
 const PostMessageToPageCallback = struct {
+    data: JS.Value.Temp,
+    arena: Allocator,
     worker: *Worker,
-    json: []const u8,
+
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *PostMessageToPageCallback = @ptrCast(@alignCast(ctx));
+        self.deinit();
+    }
+
+    fn deinit(self: *PostMessageToPageCallback) void {
+        self.data.release();
+        self.worker._page._session.releaseArena(self.arena);
+    }
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *PostMessageToPageCallback = @ptrCast(@alignCast(ctx));
-        const worker = self.worker;
+        defer self.deinit();
 
+        const worker = self.worker;
         const on_message = worker._on_message orelse return null;
 
         const page = worker._page;
@@ -192,11 +216,8 @@ const PostMessageToPageCallback = struct {
         page.js.localScope(&ls);
         defer ls.deinit();
 
-        // Deserialize the message in page context
-        const data = ls.local.parseJSON(self.json) catch |err| {
-            log.err(.browser, "page msg parse fail", .{ .err = err });
-            return null;
-        };
+        // Get the cloned message data in page context
+        const data = self.data.local(&ls.local);
 
         // Call the onmessage handler with a simple object {data: value}
         // TODO: Create proper MessageEvent
