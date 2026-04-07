@@ -179,7 +179,7 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
 
 pub fn disconnect(self: *MutationObserver, page: *Page) void {
     for (self._pending_records.items) |record| {
-        _ = record.releaseRef(page._session);
+        record.deinit(page._session);
     }
     self._pending_records.clearRetainingCapacity();
 
