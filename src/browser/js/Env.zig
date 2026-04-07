@@ -174,6 +174,13 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         v8.v8__FunctionTemplate__Inherit(js_global, templates[window_index]);
 
         const global_template_local = v8.v8__FunctionTemplate__InstanceTemplate(js_global).?;
+
+        // Allow cross-origin access to Window properties (e.g. postMessage).
+        // Without this, V8 blocks all property access on cross-origin Window
+        // objects, breaking iframe.contentWindow.postMessage() which is required
+        // by the HTML spec to be cross-origin accessible.
+        v8.v8__ObjectTemplate__SetAccessCheckCallback(global_template_local, accessCheckCallback, null);
+
         v8.v8__ObjectTemplate__SetNamedHandler(global_template_local, &.{
             .getter = bridge.unknownWindowPropertyCallback,
             .setter = null,
@@ -508,6 +515,17 @@ pub fn dumpMemoryStats(self: *Env) void {
 
 pub fn terminate(self: *const Env) void {
     v8.v8__Isolate__TerminateExecution(self.isolate.handle);
+}
+
+/// V8 access check callback for the Window global template.
+/// Always returns true to allow cross-origin property access on Window objects.
+/// TODO implement the check.
+fn accessCheckCallback(
+    _: ?*const v8.Context,
+    _: ?*const v8.Object,
+    _: ?*const v8.Value,
+) callconv(.c) bool {
+    return true;
 }
 
 fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) void {
