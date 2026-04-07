@@ -210,7 +210,6 @@ pub const Serve = struct {
 
 pub const Mcp = struct {
     common: Common = .{},
-    version: mcp.Version = .default,
     cdp_port: ?u16 = null,
 };
 
@@ -408,13 +407,13 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
 
     //                                                                     MAX_HELP_LEN|
     const usage =
-        \\usage: {s} command [options] [URL]
+        \\usage: {0s} command [options] [URL]
         \\
         \\Command can be either 'fetch', 'serve', 'mcp', 'agent' or 'help'
         \\
         \\fetch command
         \\Fetches the specified URL
-        \\Example: {s} fetch --dump html https://lightpanda.io/
+        \\Example: {0s} fetch --dump html https://lightpanda.io/
         \\
         \\Options:
         \\--dump          Dumps document to stdout.
@@ -455,7 +454,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\serve command
         \\Starts a websocket CDP server
-        \\Example: {s} serve --host 127.0.0.1 --port 9222
+        \\Example: {0s} serve --host 127.0.0.1 --port 9222
         \\
         \\Options:
         \\--host          Host of the CDP server
@@ -484,20 +483,14 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\mcp command
         \\Starts an MCP (Model Context Protocol) server over stdio
-        \\Example: {s} mcp
-        \\
-        \\Options:
-        \\--version
-        \\                Override the reported MCP version.
-        \\                Valid: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25.
-        \\                Defaults to "2024-11-05".
+        \\Example: {0s} mcp
         \\
     ++ common_options ++
         \\
         \\agent command
         \\Starts an interactive AI agent that can browse the web
-        \\Example: {s} agent --provider anthropic --model claude-sonnet-4-20250514
-        \\Example: {s} agent --provider ollama --model gemma4
+        \\Example: {0s} agent --provider anthropic --model claude-sonnet-4-20250514
+        \\Example: {0s} agent --provider ollama --model gemma4
         \\
         \\Options:
         \\--provider      The AI provider: anthropic, openai, gemini, or ollama.
@@ -519,13 +512,13 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
     ++ common_options ++
         \\
         \\version command
-        \\Displays the version of {s}
+        \\Displays the version of {0s}
         \\
         \\help command
         \\Displays this message
         \\
     ;
-    std.debug.print(usage, .{ self.exec_name, self.exec_name, self.exec_name, self.exec_name, self.exec_name, self.exec_name, self.exec_name });
+    std.debug.print(usage, .{self.exec_name});
     if (success) {
         return std.process.cleanExit();
     }
@@ -708,18 +701,6 @@ fn parseMcpArgs(
     var result: Mcp = .{};
 
     while (args.next()) |opt| {
-        if (std.mem.eql(u8, "--version", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.mcp, "missing argument value", .{ .arg = opt });
-                return error.InvalidArgument;
-            };
-            result.version = std.meta.stringToEnum(mcp.Version, str) orelse {
-                log.fatal(.mcp, "invalid protocol version", .{ .value = str });
-                return error.InvalidArgument;
-            };
-            continue;
-        }
-
         if (std.mem.eql(u8, "--cdp-port", opt) or std.mem.eql(u8, "--cdp_port", opt)) {
             const str = args.next() orelse {
                 log.fatal(.mcp, "missing argument value", .{ .arg = opt });
