@@ -203,7 +203,7 @@ fn findNodeIdByText(arena: std.mem.Allocator, elements_json: []const u8, target:
     var pos: usize = 0;
     while (std.mem.indexOfPos(u8, elements_json, pos, target)) |idx| {
         // Search backwards from idx for "backendNodeId":
-        const search_start = if (idx > 200) idx - 200 else 0;
+        const search_start = if (idx > 500) idx - 500 else 0;
         const window = elements_json[search_start..idx];
         if (std.mem.lastIndexOf(u8, window, "\"backendNodeId\":")) |bid_offset| {
             const num_start = search_start + bid_offset + "\"backendNodeId\":".len;

@@ -100,6 +100,11 @@ pub fn call(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, argume
         fill,
         scroll,
         waitForSelector,
+        hover,
+        press,
+        selectOption,
+        setChecked,
+        findElement,
     };
 
     const action_map = std.StaticStringMap(Action).initComptime(.{
@@ -118,6 +123,11 @@ pub fn call(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, argume
         .{ "fill", .fill },
         .{ "scroll", .scroll },
         .{ "waitForSelector", .waitForSelector },
+        .{ "hover", .hover },
+        .{ "press", .press },
+        .{ "selectOption", .selectOption },
+        .{ "setChecked", .setChecked },
+        .{ "findElement", .findElement },
     });
 
     const action = action_map.get(tool_name) orelse return "Error: unknown tool";
@@ -136,6 +146,11 @@ pub fn call(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, argume
         .fill => self.execFill(arena, arguments),
         .scroll => self.execScroll(arena, arguments),
         .waitForSelector => self.execWaitForSelector(arena, arguments),
+        .hover => self.execHover(arena, arguments),
+        .press => self.execPress(arena, arguments),
+        .selectOption => self.execSelectOption(arena, arguments),
+        .setChecked => self.execSetChecked(arena, arguments),
+        .findElement => self.execFindElement(arena, arguments),
     };
 }
 
@@ -408,6 +423,149 @@ fn execWaitForSelector(self: *Self, arena: std.mem.Allocator, arguments: ?std.js
 
     const registered = self.node_registry.register(node) catch return "Element found.";
     return std.fmt.allocPrint(arena, "Element found. backendNodeId: {d}", .{registered.id}) catch "Element found.";
+}
+
+fn execHover(self: *Self, arena: std.mem.Allocator, arguments: ?std.json.Value) []const u8 {
+    const Params = struct { backendNodeId: CDPNode.Id };
+    const args = parseArgsOrErr(Params, arena, arguments) orelse return "Error: missing backendNodeId";
+
+    const page = self.session.currentPage() orelse return "Error: page not loaded";
+    const node = self.node_registry.lookup_by_id.get(args.backendNodeId) orelse return "Error: node not found";
+
+    lp.actions.hover(node.dom, page) catch |err| {
+        if (err == error.InvalidNodeType) return "Error: node is not an HTML element";
+        return "Error: failed to hover element";
+    };
+
+    const page_title = page.getTitle() catch null;
+    return std.fmt.allocPrint(arena, "Hovered element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
+        args.backendNodeId,
+        page.url,
+        page_title orelse "(none)",
+    }) catch "Hovered element.";
+}
+
+fn execPress(self: *Self, arena: std.mem.Allocator, arguments: ?std.json.Value) []const u8 {
+    const Params = struct {
+        key: []const u8,
+        backendNodeId: ?CDPNode.Id = null,
+    };
+    const args = parseArgsOrErr(Params, arena, arguments) orelse return "Error: missing 'key' argument";
+
+    const page = self.session.currentPage() orelse return "Error: page not loaded";
+
+    var target_node: ?*@import("../browser/webapi/Node.zig") = null;
+    if (args.backendNodeId) |node_id| {
+        const node = self.node_registry.lookup_by_id.get(node_id) orelse return "Error: node not found";
+        target_node = node.dom;
+    }
+
+    lp.actions.press(target_node, args.key, page) catch |err| {
+        if (err == error.InvalidNodeType) return "Error: node is not an HTML element";
+        return "Error: failed to press key";
+    };
+
+    const page_title = page.getTitle() catch null;
+    return std.fmt.allocPrint(arena, "Pressed key '{s}'. Page url: {s}, title: {s}", .{
+        args.key,
+        page.url,
+        page_title orelse "(none)",
+    }) catch "Pressed key.";
+}
+
+fn execSelectOption(self: *Self, arena: std.mem.Allocator, arguments: ?std.json.Value) []const u8 {
+    const Params = struct {
+        backendNodeId: CDPNode.Id,
+        value: []const u8,
+    };
+    const args = parseArgsOrErr(Params, arena, arguments) orelse return "Error: missing backendNodeId or value";
+
+    const page = self.session.currentPage() orelse return "Error: page not loaded";
+    const node = self.node_registry.lookup_by_id.get(args.backendNodeId) orelse return "Error: node not found";
+
+    lp.actions.selectOption(node.dom, args.value, page) catch |err| {
+        if (err == error.InvalidNodeType) return "Error: node is not a <select> element";
+        return "Error: failed to select option";
+    };
+
+    const page_title = page.getTitle() catch null;
+    return std.fmt.allocPrint(arena, "Selected option '{s}' (backendNodeId: {d}). Page url: {s}, title: {s}", .{
+        args.value,
+        args.backendNodeId,
+        page.url,
+        page_title orelse "(none)",
+    }) catch "Selected option.";
+}
+
+fn execSetChecked(self: *Self, arena: std.mem.Allocator, arguments: ?std.json.Value) []const u8 {
+    const Params = struct {
+        backendNodeId: CDPNode.Id,
+        checked: bool,
+    };
+    const args = parseArgsOrErr(Params, arena, arguments) orelse return "Error: missing backendNodeId or checked";
+
+    const page = self.session.currentPage() orelse return "Error: page not loaded";
+    const node = self.node_registry.lookup_by_id.get(args.backendNodeId) orelse return "Error: node not found";
+
+    lp.actions.setChecked(node.dom, args.checked, page) catch |err| {
+        if (err == error.InvalidNodeType) return "Error: node is not a checkbox or radio input";
+        return "Error: failed to set checked state";
+    };
+
+    const state_str = if (args.checked) "checked" else "unchecked";
+    const page_title = page.getTitle() catch null;
+    return std.fmt.allocPrint(arena, "Set element (backendNodeId: {d}) to {s}. Page url: {s}, title: {s}", .{
+        args.backendNodeId,
+        state_str,
+        page.url,
+        page_title orelse "(none)",
+    }) catch "Set checked state.";
+}
+
+fn execFindElement(self: *Self, arena: std.mem.Allocator, arguments: ?std.json.Value) []const u8 {
+    const Params = struct {
+        role: ?[]const u8 = null,
+        name: ?[]const u8 = null,
+    };
+    const args = parseArgsOrDefault(Params, arena, arguments);
+
+    if (args.role == null and args.name == null) return "Error: at least one of 'role' or 'name' must be provided";
+
+    const page = self.session.currentPage() orelse return "Error: page not loaded";
+
+    const elements = lp.interactive.collectInteractiveElements(page.window._document.asNode(), arena, page) catch
+        return "Error: failed to collect interactive elements";
+
+    var matches: std.ArrayListUnmanaged(lp.interactive.InteractiveElement) = .empty;
+    for (elements) |el| {
+        if (args.role) |role| {
+            const el_role = el.role orelse continue;
+            if (!std.ascii.eqlIgnoreCase(el_role, role)) continue;
+        }
+        if (args.name) |name| {
+            const el_name = el.name orelse continue;
+            if (!containsIgnoreCase(el_name, name)) continue;
+        }
+        matches.append(arena, el) catch return "Error: allocation failed";
+    }
+
+    const matched = matches.toOwnedSlice(arena) catch return "Error: allocation failed";
+    lp.interactive.registerNodes(matched, &self.node_registry) catch
+        return "Error: failed to register element nodes";
+
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    std.json.Stringify.value(matched, .{}, &aw.writer) catch return "Error: serialization failed";
+    return aw.written();
+}
+
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len > haystack.len) return false;
+    if (needle.len == 0) return true;
+    const end = haystack.len - needle.len + 1;
+    for (0..end) |i| {
+        if (std.ascii.eqlIgnoreCase(haystack[i..][0..needle.len], needle)) return true;
+    }
+    return false;
 }
 
 fn ensurePage(self: *Self, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !*lp.Page {
