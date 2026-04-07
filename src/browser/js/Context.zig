@@ -294,12 +294,7 @@ pub fn getIncumbent(self: *Context) *Page {
     const ctx = fromC(v8.v8__Isolate__GetIncumbentContext(self.env.isolate.handle).?).?;
     return switch (ctx.global) {
         .page => |page| page,
-        .worker => {
-            if (comptime IS_DEBUG) {
-                std.debug.assert(false);
-            }
-            unreachable;
-        },
+        .worker => unreachable,
     };
 }
 

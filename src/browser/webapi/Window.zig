@@ -780,7 +780,7 @@ const PostMessageCallback = struct {
                 .source = self.source,
                 .bubbles = false,
                 .cancelable = false,
-            }, page)).asEvent();
+            }, page._session)).asEvent();
             try page._event_manager.dispatchDirect(event_target, event, window._on_message, .{ .context = "window.postMessage" });
         }
 

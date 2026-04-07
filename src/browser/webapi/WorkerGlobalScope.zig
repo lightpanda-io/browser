@@ -23,8 +23,10 @@ const log = @import("../../log.zig");
 
 const Console = @import("Console.zig");
 const Crypto = @import("Crypto.zig");
+const EventManagerBase = @import("../EventManagerBase.zig");
 const EventTarget = @import("EventTarget.zig");
 const Factory = @import("../Factory.zig");
+const MessageEvent = @import("event/MessageEvent.zig");
 const Performance = @import("Performance.zig");
 const Session = @import("../Session.zig");
 const Worker = @import("Worker.zig");
@@ -47,6 +49,9 @@ js: *JS.Context,
 
 // Reference back to the Worker object (for postMessage to page)
 _worker: *Worker,
+
+// Event management for non-DOM targets in worker context
+_event_manager: EventManagerBase,
 
 // These fields represent the "Window"-like component of the WGS
 _proto: *EventTarget,
@@ -76,6 +81,7 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
         ._proto = undefined,
         ._factory = factory,
         ._worker = worker,
+        ._event_manager = EventManagerBase.init(arena),
         ._performance = .init(),
     });
     errdefer factory.destroy(self);
@@ -102,6 +108,21 @@ pub fn base(self: *const WorkerGlobalScope) [:0]const u8 {
 
 pub fn asEventTarget(self: *WorkerGlobalScope) *EventTarget {
     return self._proto;
+}
+
+const Event = @import("Event.zig");
+
+/// Dispatch an event to listeners on the given target within this worker context.
+pub fn dispatch(self: *WorkerGlobalScope, target: *EventTarget, event: *Event, handler: anytype) !void {
+    try self._event_manager.dispatchDirect(
+        self.call_arena,
+        self.js,
+        target,
+        event,
+        handler,
+        self._session,
+        .{},
+    );
 }
 
 pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {
@@ -152,89 +173,44 @@ pub fn setOnMessage(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
     self._on_message = getFunctionFromSetter(setter);
 }
 
-/// Posts a message from the worker back to the page.
-/// The message is cloned via structured clone and dispatched on the Worker object.
-pub fn postMessage(self: *WorkerGlobalScope, message: JS.Value, exec: *JS.Execution) !void {
-    _ = exec;
-
-    const worker = self._worker;
-    const page = worker._page;
-    const session = self._session;
-
-    const message_arena = try session.getArena(.{ .debug = "WorkerGlobalScope.postMessage" });
-    errdefer session.releaseArena(message_arena);
-
-    // Enter page context to clone the message
-    var ls: JS.Local.Scope = undefined;
-    page.js.localScope(&ls);
-    defer ls.deinit();
-
-    // Clone message from worker context to page context
-    const cloned = try message.structuredCloneTo(&ls.local);
-    const data = try cloned.temp();
-
-    // Create callback to deliver message to Worker
-    const callback = try message_arena.create(PostMessageToPageCallback);
-    callback.* = .{
-        .data = data,
-        .arena = message_arena,
-        .worker = worker,
-    };
-
-    try page.js.scheduler.add(callback, PostMessageToPageCallback.run, 0, .{
-        .name = "WorkerGlobalScope.postMessage",
-        .low_priority = false,
-        .finalizer = PostMessageToPageCallback.cancelled,
-    });
+// Posts a message from the worker back to the page.
+// The message is cloned via structured clone and dispatched on the Worker object.
+pub fn postMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
+    try self._worker.receiveMessage(data);
 }
 
-const PostMessageToPageCallback = struct {
-    data: JS.Value.Temp,
-    arena: Allocator,
-    worker: *Worker,
-
-    fn cancelled(ctx: *anyopaque) void {
-        const self: *PostMessageToPageCallback = @ptrCast(@alignCast(ctx));
-        self.deinit();
-    }
-
-    fn deinit(self: *PostMessageToPageCallback) void {
-        self.data.release();
-        self.worker._page._session.releaseArena(self.arena);
-    }
-
-    fn run(ctx: *anyopaque) !?u32 {
-        const self: *PostMessageToPageCallback = @ptrCast(@alignCast(ctx));
-        defer self.deinit();
-
-        const worker = self.worker;
-        const on_message = worker._on_message orelse return null;
-
-        const page = worker._page;
-
+// Called internally by Worker when it wants to post a message to us
+pub fn receiveMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
+    const cloned_data = blk: {
+        // Enter our context to clone the message
         var ls: JS.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        self.js.localScope(&ls);
         defer ls.deinit();
 
-        // Get the cloned message data in page context
-        const data = self.data.local(&ls.local);
+        // clones from where it currently is (the Worker's Page context) to our Context
+        const cloned = try data.structuredCloneTo(&ls.local);
+        break :blk try cloned.temp();
+    };
+    errdefer cloned_data.release();
 
-        // Call the onmessage handler with a simple object {data: value}
-        // TODO: Create proper MessageEvent
-        const message_obj = ls.local.newObject();
-        _ = message_obj.set("data", data, .{}) catch |err| {
-            log.err(.browser, "message data set fail", .{ .err = err });
-            return null;
-        };
+    const session = self._session;
 
-        const func = on_message.local(&ls.local);
-        _ = func.call(void, .{message_obj.toValue()}) catch |err| {
-            log.err(.browser, "page onmessage fail", .{ .err = err });
-        };
+    const message_arena = try session.getArena(.{ .debug = "WorkerGlobalScope.receiveMessage" });
+    errdefer session.releaseArena(message_arena);
 
-        return null;
-    }
-};
+    const callback = try message_arena.create(ReceiveMessageCallback);
+    callback.* = .{
+        .data = cloned_data,
+        .worker_scope = self,
+        .arena = message_arena,
+    };
+
+    try self.js.scheduler.add(callback, ReceiveMessageCallback.run, 0, .{
+        .name = "WorkerGlobalScope.receiveMessage",
+        .low_priority = false,
+        .finalizer = ReceiveMessageCallback.cancelled,
+    });
+}
 
 pub fn btoa(_: *const WorkerGlobalScope, input: []const u8, exec: *JS.Execution) ![]const u8 {
     const base64 = @import("encoding/base64.zig");
@@ -267,6 +243,45 @@ fn getFunctionFromSetter(setter_: ?FunctionSetter) ?JS.Function.Global {
         .anything => null,
     };
 }
+
+const ReceiveMessageCallback = struct {
+    data: JS.Value.Temp,
+    arena: Allocator,
+    worker_scope: *WorkerGlobalScope,
+
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *ReceiveMessageCallback = @ptrCast(@alignCast(ctx));
+        self.data.release();
+        self.deinit();
+    }
+
+    fn deinit(self: *ReceiveMessageCallback) void {
+        self.worker_scope._session.releaseArena(self.arena);
+    }
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *ReceiveMessageCallback = @ptrCast(@alignCast(ctx));
+        defer self.deinit();
+
+        const worker_scope = self.worker_scope;
+        const target = worker_scope.asEventTarget();
+        const on_message = worker_scope._on_message;
+
+        // Check if there are any listeners before creating the event
+        if (!worker_scope._event_manager.hasDirectListeners(target, "message", on_message)) {
+            self.data.release();
+            return null;
+        }
+
+        const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
+            .data = .{ .value = self.data },
+            .bubbles = false,
+            .cancelable = false,
+        }, worker_scope._session)).asEvent();
+        try worker_scope.dispatch(target, event, on_message);
+        return null;
+    }
+};
 
 pub const JsApi = struct {
     pub const bridge = JS.Bridge(WorkerGlobalScope);

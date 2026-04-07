@@ -1556,7 +1556,7 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
             continue;
         };
         const target = slot.asNode().asEventTarget();
-        _ = target.dispatchEvent(event, self) catch |err| {
+        self._event_manager.dispatch(target, event) catch |err| {
             log.err(.page, "deliverSlotchange.dispatch", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
