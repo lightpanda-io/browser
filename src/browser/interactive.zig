@@ -204,7 +204,7 @@ pub fn buildListenerTargetMap(page: *Page, arena: Allocator) !ListenerTargetMap 
     var map = ListenerTargetMap{};
 
     // addEventListener registrations
-    var it = page._event_manager.lookup.iterator();
+    var it = page._event_manager.base.lookup.iterator();
     while (it.next()) |entry| {
         const list = entry.value_ptr.*;
         if (list.first != null) {

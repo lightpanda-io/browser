@@ -63,6 +63,7 @@ _response_type: ResponseType = .text,
 _ready_state: ReadyState = .unsent,
 _on_ready_state_change: ?js.Function.Temp = null,
 _with_credentials: bool = false,
+_timeout: u32 = 0,
 
 const ReadyState = enum(u8) {
     unsent = 0,
@@ -180,6 +181,14 @@ pub fn setWithCredentials(self: *XMLHttpRequest, value: bool) !void {
     self._with_credentials = value;
 }
 
+pub fn getTimeout(self: *const XMLHttpRequest) u32 {
+    return self._timeout;
+}
+
+pub fn setTimeout(self: *XMLHttpRequest, value: u32) void {
+    self._timeout = value;
+}
+
 // TODO: this takes an optional 3 more parameters
 // TODO: url should be a union, as it can be multiple things
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void {
@@ -256,6 +265,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         .cookie_jar = if (cookie_support) &page._session.cookie_jar else null,
         .cookie_origin = page.url,
         .resource_type = .xhr,
+        .timeout_ms = self._timeout,
         .notification = page._session.notification,
         .start_callback = httpStartCallback,
         .header_callback = httpHeaderDoneCallback,
@@ -542,6 +552,7 @@ fn handleError(self: *XMLHttpRequest, err: anyerror) void {
 }
 fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
     const is_abort = err == error.Abort;
+    const is_timeout = err == error.OperationTimedout;
 
     const new_state: ReadyState = if (is_abort) .unsent else .done;
     if (new_state != self._ready_state) {
@@ -550,8 +561,12 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
         try self.stateChanged(new_state, page);
         if (is_abort) {
             try self._proto.dispatch(.abort, null, page);
+        } else if (is_timeout) {
+            try self._proto.dispatch(.timeout, null, page);
         }
-        try self._proto.dispatch(.err, null, page);
+        if (!is_timeout) {
+            try self._proto.dispatch(.err, null, page);
+        }
         try self._proto.dispatch(.load_end, null, page);
     }
 
@@ -613,6 +628,7 @@ pub const JsApi = struct {
     pub const DONE = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.done), .{ .template = true });
 
     pub const onreadystatechange = bridge.accessor(XMLHttpRequest.getOnReadyStateChange, XMLHttpRequest.setOnReadyStateChange, .{});
+    pub const timeout = bridge.accessor(XMLHttpRequest.getTimeout, XMLHttpRequest.setTimeout, .{});
     pub const withCredentials = bridge.accessor(XMLHttpRequest.getWithCredentials, XMLHttpRequest.setWithCredentials, .{ .dom_exception = true });
     pub const open = bridge.function(XMLHttpRequest.open, .{});
     pub const send = bridge.function(XMLHttpRequest.send, .{ .dom_exception = true });

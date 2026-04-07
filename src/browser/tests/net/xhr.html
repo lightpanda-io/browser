@@ -306,3 +306,27 @@
     URL.revokeObjectURL(blobUrl);
   });
 </script>
+
+<script id=xhr_timeout>
+  // timeout property: default is 0
+  const req = new XMLHttpRequest();
+  testing.expectEqual(0, req.timeout);
+
+  // timeout can be set and read back
+  req.timeout = 5000;
+  testing.expectEqual(5000, req.timeout);
+
+  // request with timeout set succeeds normally when server responds in time
+  testing.async(async (restore) => {
+    const event = await new Promise((resolve) => {
+      req.onload = resolve;
+      req.open('GET', 'http://127.0.0.1:9582/xhr');
+      req.send();
+    });
+
+    restore();
+    testing.expectEqual('load', event.type);
+    testing.expectEqual(200, req.status);
+    testing.expectEqual(5000, req.timeout);
+  });
+</script>
