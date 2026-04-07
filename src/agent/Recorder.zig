@@ -56,17 +56,9 @@ pub fn recordComment(self: *Self, comment: []const u8) void {
 fn isNonRecordedCommand(cmd_word: []const u8) bool {
     const non_recorded = [_][]const u8{ "WAIT", "TREE", "MARKDOWN", "MD" };
     inline for (non_recorded) |skip| {
-        if (eqlIgnoreCase(cmd_word, skip)) return true;
+        if (Command.eqlIgnoreCase(cmd_word, skip)) return true;
     }
     return false;
-}
-
-fn eqlIgnoreCase(a: []const u8, comptime upper: []const u8) bool {
-    if (a.len != upper.len) return false;
-    for (a, upper) |ac, uc| {
-        if (std.ascii.toUpper(ac) != uc) return false;
-    }
-    return true;
 }
 
 // --- Tests ---

@@ -211,7 +211,7 @@ fn extractQuoted(s: []const u8) ?[]const u8 {
     return result.value;
 }
 
-fn eqlIgnoreCase(a: []const u8, comptime upper: []const u8) bool {
+pub fn eqlIgnoreCase(a: []const u8, comptime upper: []const u8) bool {
     if (a.len != upper.len) return false;
     for (a, upper) |ac, uc| {
         if (std.ascii.toUpper(ac) != uc) return false;
