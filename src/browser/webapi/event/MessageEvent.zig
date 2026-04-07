@@ -30,14 +30,21 @@ const Allocator = std.mem.Allocator;
 const MessageEvent = @This();
 
 _proto: *Event,
-_data: ?js.Value.Temp = null,
+_data: ?Data = null,
 _origin: []const u8 = "",
 _source: ?*Window = null,
 
 const MessageEventOptions = struct {
-    data: ?js.Value.Temp = null,
+    data: ?Data = null,
     origin: ?[]const u8 = null,
     source: ?*Window = null,
+};
+
+pub const Data = union(enum) {
+    value: js.Value.Temp,
+    string: []const u8,
+    arraybuffer: js.ArrayBuffer,
+    blob: *@import("../Blob.zig"),
 };
 
 const Options = Event.inheritOptions(MessageEvent, MessageEventOptions);
@@ -75,7 +82,11 @@ fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool
 
 pub fn deinit(self: *MessageEvent, session: *Session) void {
     if (self._data) |d| {
-        d.release();
+        switch (d) {
+            .value => |js_val| js_val.release(),
+            .blob => |blob| blob.releaseRef(session),
+            .string, .arraybuffer => {},
+        }
     }
     self._proto.deinit(session);
 }
@@ -92,7 +103,7 @@ pub fn asEvent(self: *MessageEvent) *Event {
     return self._proto;
 }
 
-pub fn getData(self: *const MessageEvent) ?js.Value.Temp {
+pub fn getData(self: *const MessageEvent) ?Data {
     return self._data;
 }
 

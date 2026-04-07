@@ -125,7 +125,7 @@ const PostMessageCallback = struct {
         const target = self.port.asEventTarget();
         if (page._event_manager.hasDirectListeners(target, "message", self.port._on_message)) {
             const event = (MessageEvent.initTrusted(comptime .wrap("message"), .{
-                .data = self.message,
+                .data = .{ .value = self.message },
                 .origin = "",
                 .source = null,
             }, page) catch |err| {

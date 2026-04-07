@@ -28,7 +28,9 @@ pub const ENABLE_DEBUG = false;
 
 pub const Blob = libcurl.CurlBlob;
 pub const WaitFd = libcurl.CurlWaitFd;
+pub const readfunc_pause = libcurl.curl_readfunc_pause;
 pub const writefunc_error = libcurl.curl_writefunc_error;
+pub const WsFrameType = libcurl.WsFrameType;
 
 const Error = libcurl.Error;
 
@@ -222,15 +224,19 @@ pub const ResponseHead = struct {
 
 pub const Connection = struct {
     _easy: *libcurl.Curl,
+    transport: Transport,
     node: std.DoublyLinkedList.Node = .{},
 
-    pub fn init(
-        ca_blob: ?libcurl.CurlBlob,
-        config: *const Config,
-    ) !Connection {
+    pub const Transport = union(enum) {
+        none, // used for cases that manage their own connection, e.g. telemetry
+        http: *@import("../browser/HttpClient.zig").Transfer,
+        websocket: *@import("../browser/webapi/net/WebSocket.zig"),
+    };
+
+    pub fn init(ca_blob: ?libcurl.CurlBlob, config: *const Config) !Connection {
         const easy = libcurl.curl_easy_init() orelse return error.FailedToInitializeEasy;
 
-        const self = Connection{ ._easy = easy };
+        var self = Connection{ ._easy = easy, .transport = .none };
         errdefer self.deinit();
 
         try self.reset(config, ca_blob);
@@ -310,7 +316,12 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(self._easy, .user_pwd, creds.ptr);
     }
 
-    pub fn setCallbacks(
+    pub fn setConnectOnly(self: *const Connection, connect_only: bool) !void {
+        const value: c_long = if (connect_only) 2 else 0;
+        try libcurl.curl_easy_setopt(self._easy, .connect_only, value);
+    }
+
+    pub fn setWriteCallback(
         self: *Connection,
         comptime data_cb: libcurl.CurlWriteFunction,
     ) !void {
@@ -318,12 +329,40 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(self._easy, .write_function, data_cb);
     }
 
+    pub fn setReadCallback(
+        self: *Connection,
+        comptime data_cb: libcurl.CurlReadFunction,
+        upload: bool,
+    ) !void {
+        try libcurl.curl_easy_setopt(self._easy, .read_data, self);
+        try libcurl.curl_easy_setopt(self._easy, .read_function, data_cb);
+        if (upload) {
+            try libcurl.curl_easy_setopt(self._easy, .upload, true);
+        }
+    }
+
+    pub fn setHeaderCallback(
+        self: *Connection,
+        comptime data_cb: libcurl.CurlHeaderFunction,
+    ) !void {
+        try libcurl.curl_easy_setopt(self._easy, .header_data, self);
+        try libcurl.curl_easy_setopt(self._easy, .header_function, data_cb);
+    }
+
+    pub fn pause(
+        self: *Connection,
+        flags: libcurl.CurlPauseFlags,
+    ) !void {
+        try libcurl.curl_easy_pause(self._easy, flags);
+    }
+
     pub fn reset(
-        self: *const Connection,
+        self: *Connection,
         config: *const Config,
         ca_blob: ?libcurl.CurlBlob,
     ) !void {
         libcurl.curl_easy_reset(self._easy);
+        self.transport = .none;
 
         // timeouts
         try libcurl.curl_easy_setopt(self._easy, .timeout_ms, config.httpTimeout());
@@ -460,12 +499,6 @@ pub const Connection = struct {
         };
     }
 
-    pub fn getPrivate(self: *const Connection) !*anyopaque {
-        var private: *anyopaque = undefined;
-        try libcurl.curl_easy_getinfo(self._easy, .private, &private);
-        return private;
-    }
-
     // These are headers that may not be send to the users for inteception.
     pub fn secretHeaders(_: *const Connection, headers: *Headers, http_headers: *const Config.HttpHeaders) !void {
         if (http_headers.proxy_bearer_header) |hdr| {
@@ -481,6 +514,14 @@ pub const Connection = struct {
 
         try libcurl.curl_easy_perform(self._easy);
         return self.getResponseCode();
+    }
+
+    pub fn wsStartFrame(self: *const Connection, frame_type: libcurl.WsFrameType, size: usize) !void {
+        try libcurl.curl_ws_start_frame(self._easy, frame_type, @intCast(size));
+    }
+
+    pub fn wsMeta(self: *const Connection) ?libcurl.WsFrameMeta {
+        return libcurl.curl_ws_meta(self._easy);
     }
 };
 
@@ -519,17 +560,21 @@ pub const Handles = struct {
     }
 
     pub const MultiMessage = struct {
-        conn: Connection,
+        conn: *Connection,
         err: ?Error,
     };
 
-    pub fn readMessage(self: *Handles) ?MultiMessage {
+    pub fn readMessage(self: *Handles) !?MultiMessage {
         var messages_count: c_int = 0;
         const msg = libcurl.curl_multi_info_read(self.multi, &messages_count) orelse return null;
         return switch (msg.data) {
-            .done => |err| .{
-                .conn = .{ ._easy = msg.easy_handle },
-                .err = err,
+            .done => |err| {
+                var private: *anyopaque = undefined;
+                try libcurl.curl_easy_getinfo(msg.easy_handle, .private, &private);
+                return .{
+                    .conn = @ptrCast(@alignCast(private)),
+                    .err = err,
+                };
             },
             else => unreachable,
         };
