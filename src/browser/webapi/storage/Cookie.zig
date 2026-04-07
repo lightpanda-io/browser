@@ -273,6 +273,12 @@ pub fn parseDomain(arena: Allocator, url_: ?[:0]const u8, explicit_domain: ?[]co
                 // can't set a cookie for a TLD
                 return error.InvalidDomain;
             }
+
+            // Can't set a cookie for a public suffix (e.g. co.uk, com.au).
+            if (public_suffix_list(owned_domain[1..])) {
+                return error.InvalidDomain;
+            }
+
             if (encoded_host) |host| {
                 if (std.mem.endsWith(u8, host, owned_domain[1..]) == false) {
                     return error.InvalidDomain;
@@ -1033,6 +1039,15 @@ test "Cookie: parse domain" {
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.lightpanda.io");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.lightpanda.com");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.example.com");
+
+    // Public suffixes should be rejected (test PSL entries: "gov.uk", "api.gov.uk")
+    try expectError(error.InvalidDomain, "http://example.gov.uk/", "b;domain=gov.uk");
+    try expectError(error.InvalidDomain, "http://example.gov.uk/", "b;domain=.gov.uk");
+    try expectError(error.InvalidDomain, "http://test.api.gov.uk/", "b;domain=api.gov.uk");
+
+    // Subdomains of public suffixes should still be accepted
+    try expectAttribute(.{ .domain = ".example.gov.uk" }, "http://example.gov.uk/", "b;domain=example.gov.uk");
+    try expectAttribute(.{ .domain = ".example.gov.uk" }, "http://sub.example.gov.uk/", "b;domain=example.gov.uk");
 }
 
 test "Cookie: parse limit" {
