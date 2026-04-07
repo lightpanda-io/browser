@@ -62,60 +62,43 @@ pub fn deinit(self: *const Config, allocator: Allocator) void {
     self.http_headers.deinit(allocator);
 }
 
-pub fn tlsVerifyHost(self: *const Config) bool {
+fn commonOpts(self: *const Config) Common {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.tls_verify_host,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common,
         else => unreachable,
     };
+}
+
+pub fn tlsVerifyHost(self: *const Config) bool {
+    return self.commonOpts().tls_verify_host;
 }
 
 pub fn obeyRobots(self: *const Config) bool {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.obey_robots,
-        else => unreachable,
-    };
+    return self.commonOpts().obey_robots;
 }
 
 pub fn httpProxy(self: *const Config) ?[:0]const u8 {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.http_proxy,
-        else => unreachable,
-    };
+    return self.commonOpts().http_proxy;
 }
 
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.proxy_bearer_token,
-        .help, .version => null,
-    };
+    return self.commonOpts().proxy_bearer_token;
 }
 
 pub fn httpMaxConcurrent(self: *const Config) u8 {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.http_max_concurrent orelse 10,
-        else => unreachable,
-    };
+    return self.commonOpts().http_max_concurrent orelse 10;
 }
 
 pub fn httpMaxHostOpen(self: *const Config) u8 {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.http_max_host_open orelse 4,
-        else => unreachable,
-    };
+    return self.commonOpts().http_max_host_open orelse 4;
 }
 
 pub fn httpConnectTimeout(self: *const Config) u31 {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.http_connect_timeout orelse 0,
-        else => unreachable,
-    };
+    return self.commonOpts().http_connect_timeout orelse 0;
 }
 
 pub fn httpTimeout(self: *const Config) u31 {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.http_timeout orelse 5000,
-        else => unreachable,
-    };
+    return self.commonOpts().http_timeout orelse 5000;
 }
 
 pub fn httpMaxRedirects(_: *const Config) u8 {
@@ -123,45 +106,27 @@ pub fn httpMaxRedirects(_: *const Config) u8 {
 }
 
 pub fn httpMaxResponseSize(self: *const Config) ?usize {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.http_max_response_size,
-        else => unreachable,
-    };
+    return self.commonOpts().http_max_response_size;
 }
 
 pub fn wsMaxConcurrent(self: *const Config) u8 {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.ws_max_concurrent orelse 8,
-        else => unreachable,
-    };
+    return self.commonOpts().ws_max_concurrent orelse 8;
 }
 
 pub fn logLevel(self: *const Config) ?log.Level {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.log_level,
-        else => unreachable,
-    };
+    return self.commonOpts().log_level;
 }
 
 pub fn logFormat(self: *const Config) ?log.Format {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.log_format,
-        else => unreachable,
-    };
+    return self.commonOpts().log_format;
 }
 
 pub fn logFilterScopes(self: *const Config) ?[]const log.Scope {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.log_filter_scopes,
-        else => unreachable,
-    };
+    return self.commonOpts().log_filter_scopes;
 }
 
 pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.user_agent_suffix,
-        .help, .version => null,
-    };
+    return self.commonOpts().user_agent_suffix;
 }
 
 pub fn httpCacheDir(self: *const Config) ?[]const u8 {
@@ -196,13 +161,11 @@ pub fn advertiseHost(self: *const Config) []const u8 {
 }
 
 pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| WebBotAuthConfig{
-            .key_file = opts.common.web_bot_auth_key_file orelse return null,
-            .keyid = opts.common.web_bot_auth_keyid orelse return null,
-            .domain = opts.common.web_bot_auth_domain orelse return null,
-        },
-        .help, .version => null,
+    const common = self.commonOpts();
+    return .{
+        .key_file = common.web_bot_auth_key_file orelse return null,
+        .keyid = common.web_bot_auth_keyid orelse return null,
+        .domain = common.web_bot_auth_domain orelse return null,
     };
 }
 
