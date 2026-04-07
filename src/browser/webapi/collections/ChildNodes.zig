@@ -126,8 +126,12 @@ fn versionCheck(self: *ChildNodes, page: *Page) bool {
 }
 
 const NodeList = @import("NodeList.zig");
-pub fn runtimeGenericWrap(self: *ChildNodes, page: *Page) !*NodeList {
-    return page._factory.create(NodeList{ ._data = .{ .child_nodes = self } });
+pub fn runtimeGenericWrap(self: *ChildNodes, _: *const Page) !*NodeList {
+    const nl = try self._arena.create(NodeList);
+    nl.* = .{
+        ._data = .{ .child_nodes = self },
+    };
+    return nl;
 }
 
 const Iterator = struct {
