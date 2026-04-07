@@ -364,84 +364,47 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
         .content = try ma.dupe(u8, user_input),
     });
 
-    // Loop: send to LLM, execute tool calls, repeat until we get text
-    var max_iterations: u32 = 20;
-    while (max_iterations > 0) : (max_iterations -= 1) {
-        const provider_client = (self.ai_client orelse return error.NoAiClient).toProvider();
-        var result = provider_client.generateContent(self.model, self.messages.items, .{
+    const provider_client = (self.ai_client orelse return error.NoAiClient).toProvider();
+
+    var result = provider_client.runTools(
+        self.model,
+        &self.messages,
+        self.allocator,
+        ma,
+        .{ .context = @ptrCast(self), .callFn = &handleToolCall },
+        .{
             .tools = self.tools,
             .max_tokens = 4096,
-        }) catch |err| {
-            log.err(.app, "AI API error", .{ .err = err });
-            return error.ApiError;
-        };
-        defer result.deinit();
+            .tool_choice = .auto,
+        },
+    ) catch |err| {
+        log.err(.app, "AI API error", .{ .err = err });
+        return error.ApiError;
+    };
+    defer result.deinit();
 
-        log.debug(.app, "LLM response", .{
-            .finish_reason = @tagName(result.finish_reason),
-            .has_text = result.text != null,
-            .has_tool_calls = result.tool_calls != null,
-        });
-
-        // Handle tool calls (check for tool_calls presence, not just finish_reason,
-        // because some providers like Gemini return finish_reason=STOP for tool calls)
-        if (result.tool_calls) |tool_calls| {
-            // Add the assistant message with tool calls
-            try self.messages.append(self.allocator, .{
-                .role = .assistant,
-                .content = if (result.text) |t| try ma.dupe(u8, t) else null,
-                .tool_calls = try self.dupeToolCalls(tool_calls),
-            });
-
-            // Execute each tool call and collect results
-            var tool_results: std.ArrayListUnmanaged(zenai.provider.ToolResult) = .empty;
-
-            for (tool_calls) |tc| {
-                self.terminal.printToolCall(tc.name, tc.arguments);
-
-                var tool_arena = std.heap.ArenaAllocator.init(self.allocator);
-                defer tool_arena.deinit();
-
-                const tool_result = self.tool_executor.call(tool_arena.allocator(), tc.name, tc.arguments) catch "Error: tool execution failed";
-                self.terminal.printToolResult(tc.name, tool_result);
-
-                // Record resolved tool call as Pandascript command
-                if (!std.mem.startsWith(u8, tool_result, "Error:")) {
-                    self.recordToolCall(tool_arena.allocator(), tc.name, tc.arguments);
-                }
-
-                try tool_results.append(ma, .{
-                    .id = try ma.dupe(u8, tc.id),
-                    .name = try ma.dupe(u8, tc.name),
-                    .content = try ma.dupe(u8, tool_result),
-                });
-            }
-
-            // Add tool results as a message
-            try self.messages.append(self.allocator, .{
-                .role = .tool,
-                .tool_results = try tool_results.toOwnedSlice(ma),
-            });
-
-            continue;
+    // Record tool calls as Pandascript
+    for (result.tool_calls_made) |tc| {
+        if (!std.mem.startsWith(u8, tc.result, "Error:")) {
+            self.recordToolCall(ma, tc.name, tc.arguments);
         }
-
-        // Text response
-        if (result.text) |text| {
-            std.debug.print("\n", .{});
-            self.terminal.printAssistant(text);
-            std.debug.print("\n\n", .{});
-
-            try self.messages.append(self.allocator, .{
-                .role = .assistant,
-                .content = try ma.dupe(u8, text),
-            });
-        } else {
-            self.terminal.printInfo("(no response from model)");
-        }
-
-        break;
     }
+
+    if (result.text) |text| {
+        std.debug.print("\n", .{});
+        self.terminal.printAssistant(text);
+        std.debug.print("\n\n", .{});
+    } else {
+        self.terminal.printInfo("(no response from model)");
+    }
+}
+
+fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) []const u8 {
+    const self: *Self = @ptrCast(@alignCast(ctx));
+    self.terminal.printToolCall(tool_name, arguments);
+    const tool_result = self.tool_executor.call(allocator, tool_name, arguments) catch "Error: tool execution failed";
+    self.terminal.printToolResult(tool_name, tool_result);
+    return tool_result;
 }
 
 /// Convert a tool call (name + JSON arguments) into a Pandascript command and record it.
@@ -499,19 +462,6 @@ fn recordToolCall(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, 
     if (panda_cmd) |cmd| {
         self.recorder.record(cmd);
     }
-}
-
-fn dupeToolCalls(self: *Self, calls: []const zenai.provider.ToolCall) ![]const zenai.provider.ToolCall {
-    const ma = self.message_arena.allocator();
-    const duped = try ma.alloc(zenai.provider.ToolCall, calls.len);
-    for (calls, 0..) |tc, i| {
-        duped[i] = .{
-            .id = try ma.dupe(u8, tc.id),
-            .name = try ma.dupe(u8, tc.name),
-            .arguments = try ma.dupe(u8, tc.arguments),
-        };
-    }
-    return duped;
 }
 
 fn getEnvApiKey(provider_type: Config.AiProvider) ?[:0]const u8 {
