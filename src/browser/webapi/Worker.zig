@@ -29,6 +29,7 @@ const HttpClient = @import("../HttpClient.zig");
 
 const EventTarget = @import("EventTarget.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
+const ErrorEvent = @import("event/ErrorEvent.zig");
 const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 
 const Execution = js.Execution;
@@ -161,7 +162,9 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 
     _ = ls.local.eval(script, url) catch |err| {
         log.err(.browser, "worker script error", .{ .url = url, .err = err });
-        // TODO: Fire error event on Worker
+        self.fireErrorEvent(@errorName(err), null) catch |e| {
+            log.warn(.browser, "worker error event failed", .{ .err = e });
+        };
         return;
     };
 
@@ -177,7 +180,35 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
         .err = err,
     });
 
-    // TODO: Fire error event on Worker
+    self.fireErrorEvent(@errorName(err), null) catch |e| {
+        log.warn(.browser, "worker error event failed", .{ .err = e });
+    };
+}
+
+// Fire an error event on the Worker object (parent context)
+fn fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Temp) !void {
+    const page = self._page;
+    const session = page._session;
+    const target = self.asEventTarget();
+    const on_error = self._on_error;
+
+    // Check if there are any listeners
+    if (!page._event_manager.hasDirectListeners(target, "error", on_error)) {
+        if (error_value) |ev| ev.release();
+        return;
+    }
+
+    const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
+        .@"error" = error_value,
+        .message = message,
+        .filename = self._url,
+        .bubbles = false,
+        .cancelable = true,
+    }, session);
+
+    try page._event_manager.dispatchDirect(target, error_event.asEvent(), on_error, .{
+        .context = "Worker.onerror",
+    });
 }
 
 pub fn terminate(self: *Worker) void {
@@ -195,7 +226,7 @@ pub fn postMessage(self: *Worker, data: js.Value) !void {
     try self._worker_scope.receiveMessage(data);
 }
 
-// Called internally by WorkerGlobalScope when it wants to post a message to use
+// Called internally by WorkerGlobalScope when it wants to post a message to us
 pub fn receiveMessage(self: *Worker, data: js.Value) !void {
     const page = self._page;
     const cloned_data = blk: {
@@ -204,10 +235,9 @@ pub fn receiveMessage(self: *Worker, data: js.Value) !void {
         defer ls.deinit();
 
         // clones from where it currently is (the Worker context) to our Page's context
-        const cloned = try data.structuredCloneTo(&ls.local);
-        break :blk try cloned.temp();
+        const cloned = data.structuredCloneTo(&ls.local) catch |err| break :blk err;
+        break :blk cloned.temp();
     };
-    errdefer cloned_data.release();
 
     const message_arena = try page.getArena(.{ .debug = "Worker.receiveMessage" });
     errdefer page.releaseArena(message_arena);
@@ -264,13 +294,15 @@ fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
 }
 
 const ReceiveMessageCallback = struct {
-    data: js.Value.Temp,
+    data: anyerror!js.Value.Temp,
     arena: Allocator,
     worker: *Worker,
 
     fn cancelled(ctx: *anyopaque) void {
         const self: *ReceiveMessageCallback = @ptrCast(@alignCast(ctx));
-        self.data.release();
+        if (self.data) |d| {
+            d.release();
+        } else |_| {}
         self.deinit();
     }
 
@@ -285,16 +317,32 @@ const ReceiveMessageCallback = struct {
         const worker = self.worker;
         const page = worker._page;
         const target = worker.asEventTarget();
+
+        // If data is null, structured clone failed - fire messageerror
+        const data = self.data catch |err| {
+            const on_messageerror = worker._on_messageerror;
+            if (!page._event_manager.hasDirectListeners(target, "messageerror", on_messageerror)) {
+                return null;
+            }
+            const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
+                .data = .{ .string = @errorName(err) },
+                .bubbles = false,
+                .cancelable = false,
+            }, page._session)).asEvent();
+            try page._event_manager.dispatchDirect(target, event, on_messageerror, .{ .context = "Worker.messageerror" });
+            return null;
+        };
+
         const on_message = worker._on_message;
 
         // Check if there are any listeners before creating the event
         if (!page._event_manager.hasDirectListeners(target, "message", on_message)) {
-            self.data.release();
+            data.release();
             return null;
         }
 
         const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
-            .data = .{ .value = self.data },
+            .data = .{ .value = data },
             .bubbles = false,
             .cancelable = false,
         }, page._session)).asEvent();

@@ -35,8 +35,10 @@ const Console = @import("Console.zig");
 const EventTarget = @import("EventTarget.zig");
 const Performance = @import("Performance.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
+const ErrorEvent = @import("event/ErrorEvent.zig");
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
+const builtin = @import("builtin");
+const IS_DEBUG = builtin.mode == .Debug;
 
 const Allocator = std.mem.Allocator;
 
@@ -69,6 +71,7 @@ _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
 _on_message: ?JS.Function.Global = null,
+_on_messageerror: ?JS.Function.Global = null,
 
 pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
     const arena = worker._arena;
@@ -180,6 +183,14 @@ pub fn setOnMessage(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
     self._on_message = getFunctionFromSetter(setter);
 }
 
+pub fn getOnMessageError(self: *const WorkerGlobalScope) ?JS.Function.Global {
+    return self._on_messageerror;
+}
+
+pub fn setOnMessageError(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
+    self._on_messageerror = getFunctionFromSetter(setter);
+}
+
 // Posts a message from the worker back to the page.
 // The message is cloned via structured clone and dispatched on the Worker object.
 pub fn postMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
@@ -188,17 +199,16 @@ pub fn postMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
 
 // Called internally by Worker when it wants to post a message to us
 pub fn receiveMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
-    const cloned_data = blk: {
+    const cloned_data: ?JS.Value.Temp = blk: {
         // Enter our context to clone the message
         var ls: JS.Local.Scope = undefined;
         self.js.localScope(&ls);
         defer ls.deinit();
 
         // clones from where it currently is (the Worker's Page context) to our Context
-        const cloned = try data.structuredCloneTo(&ls.local);
-        break :blk try cloned.temp();
+        const cloned = data.structuredCloneTo(&ls.local) catch break :blk null;
+        break :blk cloned.temp() catch break :blk null;
     };
-    errdefer cloned_data.release();
 
     const session = self._session;
 
@@ -259,6 +269,56 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rej
     }
 }
 
+pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
+    const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
+        .@"error" = try err.temp(),
+        .message = err.toStringSlice() catch "Unknown error",
+        .bubbles = false,
+        .cancelable = true,
+    }, self._session);
+
+    // Invoke onerror callback if set (per WHATWG spec, this is called
+    // with 5 arguments: message, source, lineno, colno, error)
+    // If it returns true, the event is cancelled.
+    var prevent_default = false;
+    if (self._on_error) |on_error| {
+        var ls: JS.Local.Scope = undefined;
+        self.js.localScope(&ls);
+        defer ls.deinit();
+
+        const local_func = ls.toLocal(on_error);
+        const result = local_func.call(JS.Value, .{
+            error_event._message,
+            error_event._filename,
+            error_event._line_number,
+            error_event._column_number,
+            err,
+        }) catch null;
+
+        // Per spec: returning true from onerror cancels the event
+        if (result) |r| {
+            prevent_default = r.isTrue();
+        }
+    }
+
+    const event = error_event.asEvent();
+    event._prevent_default = prevent_default;
+    // Pass null as handler: onerror was already called above with 5 args.
+    // We still dispatch so that addEventListener('error', ...) listeners fire.
+    try self.dispatch(self.asEventTarget(), event, null);
+
+    if (comptime builtin.is_test == false) {
+        if (!event._prevent_default) {
+            log.warn(.js, "worker.reportError", .{
+                .message = error_event._message,
+                .filename = error_event._filename,
+                .line_number = error_event._line_number,
+                .column_number = error_event._column_number,
+            });
+        }
+    }
+}
+
 // TODO: importScripts - needs script loading infrastructure
 // TODO: location - needs WorkerLocation
 // TODO: navigator - needs WorkerNavigator
@@ -278,13 +338,13 @@ fn getFunctionFromSetter(setter_: ?FunctionSetter) ?JS.Function.Global {
 }
 
 const ReceiveMessageCallback = struct {
-    data: JS.Value.Temp,
+    data: ?JS.Value.Temp,
     arena: Allocator,
     worker_scope: *WorkerGlobalScope,
 
     fn cancelled(ctx: *anyopaque) void {
         const self: *ReceiveMessageCallback = @ptrCast(@alignCast(ctx));
-        self.data.release();
+        if (self.data) |d| d.release();
         self.deinit();
     }
 
@@ -298,16 +358,31 @@ const ReceiveMessageCallback = struct {
 
         const worker_scope = self.worker_scope;
         const target = worker_scope.asEventTarget();
+
+        // If data is null, structured clone failed - fire messageerror
+        if (self.data == null) {
+            const on_messageerror = worker_scope._on_messageerror;
+            if (!worker_scope._event_manager.hasDirectListeners(target, "messageerror", on_messageerror)) {
+                return null;
+            }
+            const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
+                .bubbles = false,
+                .cancelable = false,
+            }, worker_scope._session)).asEvent();
+            try worker_scope.dispatch(target, event, on_messageerror);
+            return null;
+        }
+
         const on_message = worker_scope._on_message;
 
         // Check if there are any listeners before creating the event
         if (!worker_scope._event_manager.hasDirectListeners(target, "message", on_message)) {
-            self.data.release();
+            self.data.?.release();
             return null;
         }
 
         const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
-            .data = .{ .value = self.data },
+            .data = .{ .value = self.data.? },
             .bubbles = false,
             .cancelable = false,
         }, worker_scope._session)).asEvent();
@@ -338,8 +413,10 @@ pub const JsApi = struct {
     pub const atob = bridge.function(WorkerGlobalScope.atob, .{ .dom_exception = true });
     pub const structuredClone = bridge.function(WorkerGlobalScope.structuredClone, .{});
     pub const postMessage = bridge.function(WorkerGlobalScope.postMessage, .{});
+    pub const reportError = bridge.function(WorkerGlobalScope.reportError, .{});
 
     pub const onmessage = bridge.accessor(WorkerGlobalScope.getOnMessage, WorkerGlobalScope.setOnMessage, .{});
+    pub const onmessageerror = bridge.accessor(WorkerGlobalScope.getOnMessageError, WorkerGlobalScope.setOnMessageError, .{});
 
     // Return false since workers don't have secure-context-only APIs
     pub const isSecureContext = bridge.property(false, .{ .template = false });
