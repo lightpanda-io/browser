@@ -313,14 +313,13 @@ pub const HttpHeaders = struct {
     proxy_bearer_header: ?[:0]const u8,
 
     pub fn init(allocator: Allocator, config: *const Config) !HttpHeaders {
-        const ua_needs_free = config.userAgent() != null or config.userAgentSuffix() != null;
         const user_agent: [:0]const u8 = if (config.userAgent()) |ua|
             try allocator.dupeZ(u8, ua)
         else if (config.userAgentSuffix()) |suffix|
             try std.fmt.allocPrintSentinel(allocator, "{s} {s}", .{ user_agent_base, suffix }, 0)
         else
             user_agent_base;
-        errdefer if (ua_needs_free) allocator.free(user_agent);
+        errdefer if (config.userAgent() != null or config.userAgentSuffix() != null) allocator.free(user_agent);
 
         const user_agent_header = try std.fmt.allocPrintSentinel(allocator, "User-Agent: {s}", .{user_agent}, 0);
         errdefer allocator.free(user_agent_header);
@@ -1056,17 +1055,27 @@ fn parseCommonArg(
         return true;
     }
 
-    if (std.mem.eql(u8, "--user-agent", opt) or std.mem.eql(u8, "--user_agent", opt)) {
+    if (std.mem.eql(u8, "--user-agent", opt)) {
         const str = args.next() orelse {
             log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
+
         for (str) |c| {
             if (!std.ascii.isPrint(c)) {
                 log.fatal(.app, "not printable character", .{ .arg = opt });
                 return error.InvalidArgument;
             }
         }
+
+        if (std.mem.startsWith(u8, str, "Mozilla/5.0")) {
+            log.fatal(.app, "invalid value", .{
+                .detail = "user-agent can't start with Mozilla/5.0",
+                .arg = opt,
+            });
+            return error.InvalidArgument;
+        }
+
         common.user_agent = try allocator.dupe(u8, str);
         return true;
     }
@@ -1076,6 +1085,15 @@ fn parseCommonArg(
             log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
+
+        if (common.user_agent != null) {
+            log.fatal(.app, "exclusive options", .{
+                .arg = opt,
+                .detail = "--user-agent and --user-agent-suffix are exclusive",
+            });
+            return error.InvalidArgument;
+        }
+
         for (str) |c| {
             if (!std.ascii.isPrint(c)) {
                 log.fatal(.app, "not printable character", .{ .arg = opt });
