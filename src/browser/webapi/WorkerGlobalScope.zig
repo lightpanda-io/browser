@@ -16,20 +16,27 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// The struct is like a mix of Page and Window, but a very limited Page and
+// a very limited Window. This dual-purpose does make it a bit harder to know
+// what's what...e.g what is a WebAPI call and what it called internally.
+
 const std = @import("std");
-const JS = @import("../js/js.zig");
 
 const log = @import("../../log.zig");
 
-const Console = @import("Console.zig");
-const Crypto = @import("Crypto.zig");
-const EventManagerBase = @import("../EventManagerBase.zig");
-const EventTarget = @import("EventTarget.zig");
+const JS = @import("../js/js.zig");
 const Factory = @import("../Factory.zig");
-const MessageEvent = @import("event/MessageEvent.zig");
-const Performance = @import("Performance.zig");
 const Session = @import("../Session.zig");
+const EventManagerBase = @import("../EventManagerBase.zig");
+
 const Worker = @import("Worker.zig");
+const Crypto = @import("Crypto.zig");
+const Console = @import("Console.zig");
+const EventTarget = @import("EventTarget.zig");
+const Performance = @import("Performance.zig");
+const MessageEvent = @import("event/MessageEvent.zig");
+
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Allocator = std.mem.Allocator;
 
@@ -112,7 +119,7 @@ pub fn asEventTarget(self: *WorkerGlobalScope) *EventTarget {
 
 const Event = @import("Event.zig");
 
-/// Dispatch an event to listeners on the given target within this worker context.
+// Dispatch an event to listeners on the given target within this worker context.
 pub fn dispatch(self: *WorkerGlobalScope, target: *EventTarget, event: *Event, handler: anytype) !void {
     try self._event_manager.dispatchDirect(
         self.call_arena,
@@ -224,6 +231,32 @@ pub fn atob(_: *const WorkerGlobalScope, input: []const u8, exec: *JS.Execution)
 
 pub fn structuredClone(_: *const WorkerGlobalScope, value: JS.Value) !JS.Value {
     return value.structuredClone();
+}
+
+pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rejection: JS.PromiseRejection) !void {
+    if (comptime IS_DEBUG) {
+        log.debug(.js, "unhandled rejection", .{
+            .target = "worker",
+            .value = rejection.reason(),
+            .stack = rejection.local.stackTrace() catch |err| @errorName(err) orelse "???",
+        });
+    }
+
+    const event_name, const attribute_callback = blk: {
+        if (no_handler) {
+            break :blk .{ "unhandledrejection", self._on_unhandled_rejection };
+        }
+        break :blk .{ "rejectionhandled", self._on_rejection_handled };
+    };
+
+    const target = self.asEventTarget();
+    if (self._event_manager.hasDirectListeners(target, event_name, attribute_callback)) {
+        const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
+            .reason = if (rejection.reason()) |r| try r.temp() else null,
+            .promise = try rejection.promise().temp(),
+        }, self._session)).asEvent();
+        try self.dispatch(target, event, attribute_callback);
+    }
 }
 
 // TODO: importScripts - needs script loading infrastructure

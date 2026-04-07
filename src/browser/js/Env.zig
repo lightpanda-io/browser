@@ -504,17 +504,23 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
         .call_arena = ctx.call_arena,
     };
 
+    const no_handler = promise_event == v8.kPromiseRejectWithNoHandler;
     switch (ctx.global) {
         .page => |page| {
-            page.window.unhandledPromiseRejection(promise_event == v8.kPromiseRejectWithNoHandler, .{
+            page.window.unhandledPromiseRejection(no_handler, .{
                 .local = &local,
                 .handle = &message_handle,
             }, page) catch |err| {
-                log.warn(.browser, "unhandled rejection handler", .{ .err = err });
+                log.warn(.browser, "unhandled rejection handler", .{ .err = err, .target = "window" });
             };
         },
-        .worker => {
-            // TODO: Worker promise rejection handling
+        .worker => |wsg| {
+            wsg.unhandledPromiseRejection(no_handler, .{
+                .local = &local,
+                .handle = &message_handle,
+            }) catch |err| {
+                log.warn(.browser, "unhandled rejection handler", .{ .err = err, .target = "worker" });
+            };
         },
     }
 }
