@@ -306,6 +306,7 @@ pub const Common = struct {
 /// Must be initialized with an allocator that outlives all HTTP connections.
 pub const HttpHeaders = struct {
     const user_agent_base: [:0]const u8 = "Lightpanda/1.0";
+    pub const sec_ch_ua: [:0]const u8 = "Sec-Ch-Ua: \"Lightpanda\";v=\"1\"";
 
     user_agent: [:0]const u8, // User agent value (e.g. "Lightpanda/1.0")
     user_agent_header: [:0]const u8,
@@ -411,6 +412,10 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                http, unknown_prop, event, ...
         \\
         \\--user-agent    Override the User-Agent header entirely
+        \\                User-Agent mustn't impersonate other browser.
+        \\                Starting the value with "Mozilla/5.0" is forbidden.
+        \\                The browser will continue to send Sec-Ch-Ua header.
+        \\                Incompatible with --user-agent-suffix
         \\
         \\--user-agent-suffix
         \\                Suffix to append to the Lightpanda/X.Y User-Agent
