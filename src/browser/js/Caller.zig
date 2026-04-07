@@ -21,6 +21,7 @@ const log = @import("../../log.zig");
 const string = @import("../../string.zig");
 
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 
 const js = @import("js.zig");
@@ -449,6 +450,10 @@ fn isPage(comptime T: type) bool {
     return T == *Page or T == *const Page;
 }
 
+fn isSession(comptime T: type) bool {
+    return T == *Session or T == *const Session;
+}
+
 fn isExecution(comptime T: type) bool {
     return T == *js.Execution or T == *const js.Execution;
 }
@@ -463,6 +468,10 @@ fn getGlobalArg(comptime T: type, ctx: *Context) T {
 
     if (comptime isExecution(T)) {
         return &ctx.execution;
+    }
+
+    if (comptime isSession(T)) {
+        return ctx.session;
     }
 
     @compileError("Unsupported global arg type: " ++ @typeName(T));
@@ -743,7 +752,7 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
         // from our params slice, because we don't want to bind it to
         // a JS argument
         const LastParamType = params[params.len - 1].type.?;
-        if (comptime isPage(LastParamType) or isExecution(LastParamType)) {
+        if (comptime isPage(LastParamType) or isExecution(LastParamType) or isSession(LastParamType)) {
             @field(args, tupleFieldName(params.len - 1 + offset)) = getGlobalArg(LastParamType, local.ctx);
             break :blk params[0 .. params.len - 1];
         }
@@ -800,6 +809,8 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             @compileError("Page must be the last parameter: " ++ @typeName(F));
         } else if (comptime isExecution(param.type.?)) {
             @compileError("Execution must be the last parameter: " ++ @typeName(F));
+        } else if (comptime isSession(param.type.?)) {
+            @compileError("Session must be the last parameter: " ++ @typeName(F));
         } else if (i >= js_parameter_count) {
             if (@typeInfo(param.type.?) != .optional) {
                 return error.InvalidArgument;

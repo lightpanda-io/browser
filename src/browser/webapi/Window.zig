@@ -574,6 +574,7 @@ pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
 pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.PromiseRejection, page: *Page) !void {
     if (comptime IS_DEBUG) {
         log.debug(.js, "unhandled rejection", .{
+            .target = "window",
             .value = rejection.reason(),
             .stack = rejection.local.stackTrace() catch |err| @errorName(err) orelse "???",
         });
@@ -591,7 +592,7 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.
         const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
             .reason = if (rejection.reason()) |r| try r.temp() else null,
             .promise = try rejection.promise().temp(),
-        }, page)).asEvent();
+        }, page._session)).asEvent();
         try page._event_manager.dispatchDirect(target, event, attribute_callback, .{ .context = "window.unhandledrejection" });
     }
 }
