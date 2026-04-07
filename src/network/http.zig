@@ -251,6 +251,10 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(self._easy, .url, url.ptr);
     }
 
+    pub fn setTimeout(self: *const Connection, timeout_ms: u32) !void {
+        try libcurl.curl_easy_setopt(self._easy, .timeout_ms, timeout_ms);
+    }
+
     // a libcurl request has 2 methods. The first is the method that
     // controls how libcurl behaves. This specifically influences how redirects
     // are handled. For example, if you do a POST and get a 301, libcurl will
