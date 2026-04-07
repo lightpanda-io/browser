@@ -230,7 +230,6 @@ pub const Agent = struct {
     repl: bool = true,
     script_file: ?[]const u8 = null,
     record_file: ?[]const u8 = null,
-    no_record: bool = false,
 };
 
 pub const DumpFormat = enum {
@@ -971,7 +970,7 @@ fn parseAgentArgs(
         }
 
         if (std.mem.eql(u8, "--no-record", opt) or std.mem.eql(u8, "--no_record", opt)) {
-            result.no_record = true;
+            result.record_file = null;
             continue;
         }
 
@@ -987,11 +986,6 @@ fn parseAgentArgs(
 
         log.fatal(.app, "unknown argument", .{ .mode = "agent", .arg = opt });
         return error.UnkownOption;
-    }
-
-    // If --no-record is set, clear the record file
-    if (result.no_record) {
-        result.record_file = null;
     }
 
     return result;
