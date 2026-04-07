@@ -335,7 +335,7 @@ pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
         .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
-    }, page);
+    }, page._session);
 
     // Invoke window.onerror callback if set (per WHATWG spec, this is called
     // with 5 arguments: message, source, lineno, colno, error)
