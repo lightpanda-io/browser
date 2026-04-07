@@ -271,7 +271,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 
     // Special handling for evaluate/eval: JS errors are returned as isError results, not protocol errors
     if (std.mem.eql(u8, call_params.name, "evaluate") or std.mem.eql(u8, call_params.name, "eval")) {
-        const result = browser_tools.callEval(server.session, arena, call_params.arguments);
+        const result = browser_tools.callEval(server.session, &server.node_registry, arena, call_params.arguments);
         const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
         return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });
     }

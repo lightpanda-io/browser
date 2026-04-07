@@ -92,15 +92,15 @@ pub fn call(
     const action = action_map.get(tool_name) orelse return ToolError.InvalidParams;
 
     return switch (action) {
-        .goto, .navigate => execGoto(session, arena, arguments),
-        .markdown => execMarkdown(session, arena, arguments),
-        .links => execLinks(session, arena, arguments),
+        .goto, .navigate => execGoto(session, registry, arena, arguments),
+        .markdown => execMarkdown(session, registry, arena, arguments),
+        .links => execLinks(session, registry, arena, arguments),
         .nodeDetails => execNodeDetails(session, registry, arena, arguments),
         .interactiveElements => execInteractiveElements(session, registry, arena, arguments),
-        .structuredData => execStructuredData(session, arena, arguments),
+        .structuredData => execStructuredData(session, registry, arena, arguments),
         .detectForms => execDetectForms(session, registry, arena, arguments),
         .evaluate, .eval => blk: {
-            const result = execEvaluate(session, arena, arguments);
+            const result = execEvaluate(session, registry, arena, arguments);
             break :blk result.text;
         },
         .semantic_tree => execSemanticTree(session, registry, arena, arguments),
@@ -119,10 +119,11 @@ pub fn call(
 /// Like `call`, but for evaluate/eval returns the full EvalResult with is_error flag.
 pub fn callEval(
     session: *lp.Session,
+    registry: *CDPNode.Registry,
     arena: std.mem.Allocator,
     arguments: ?std.json.Value,
 ) EvalResult {
-    return execEvaluate(session, arena, arguments);
+    return execEvaluate(session, registry, arena, arguments);
 }
 
 /// Check if a tool name is recognized.
@@ -132,15 +133,15 @@ pub fn isKnownTool(tool_name: []const u8) bool {
 
 // --- Tool implementations ---
 
-fn execGoto(session: *lp.Session, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execGoto(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = parseArgsOrErr(GotoParams, arena, arguments) orelse return ToolError.InvalidParams;
-    try performGoto(session, args.url, args.timeout, args.waitUntil);
+    try performGoto(session, registry, args.url, args.timeout, args.waitUntil);
     return "Navigated successfully.";
 }
 
-fn execMarkdown(session: *lp.Session, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execMarkdown(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = parseArgsOrDefault(UrlParams, arena, arguments);
-    const page = try ensurePage(session, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
     var aw: std.Io.Writer.Allocating = .init(arena);
     lp.markdown.dump(page.document.asNode(), .{}, &aw.writer, page) catch
@@ -148,9 +149,9 @@ fn execMarkdown(session: *lp.Session, arena: std.mem.Allocator, arguments: ?std.
     return aw.written();
 }
 
-fn execLinks(session: *lp.Session, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execLinks(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = parseArgsOrDefault(UrlParams, arena, arguments);
-    const page = try ensurePage(session, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
     const links_list = lp.links.collectLinks(arena, page.document.asNode(), page) catch
         return ToolError.InternalError;
@@ -172,7 +173,7 @@ fn execSemanticTree(session: *lp.Session, registry: *CDPNode.Registry, arena: st
         waitUntil: ?lp.Config.WaitUntil = null,
     };
     const args = parseArgsOrDefault(TreeParams, arena, arguments);
-    const page = try ensurePage(session, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
     var root_node = page.document.asNode();
     if (args.backendNodeId) |node_id| {
@@ -215,7 +216,7 @@ fn execNodeDetails(session: *lp.Session, registry: *CDPNode.Registry, arena: std
 
 fn execInteractiveElements(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = parseArgsOrDefault(UrlParams, arena, arguments);
-    const page = try ensurePage(session, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
     const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch
         return ToolError.InternalError;
@@ -227,9 +228,9 @@ fn execInteractiveElements(session: *lp.Session, registry: *CDPNode.Registry, ar
     return aw.written();
 }
 
-fn execStructuredData(session: *lp.Session, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execStructuredData(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = parseArgsOrDefault(UrlParams, arena, arguments);
-    const page = try ensurePage(session, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
     const data = lp.structured_data.collectStructuredData(page.document.asNode(), arena, page) catch
         return ToolError.InternalError;
@@ -240,7 +241,7 @@ fn execStructuredData(session: *lp.Session, arena: std.mem.Allocator, arguments:
 
 fn execDetectForms(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = parseArgsOrDefault(UrlParams, arena, arguments);
-    const page = try ensurePage(session, args.url, args.timeout, args.waitUntil);
+    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
     const forms_data = lp.forms.collectForms(arena, page.document.asNode(), page) catch
         return ToolError.InternalError;
@@ -252,7 +253,7 @@ fn execDetectForms(session: *lp.Session, registry: *CDPNode.Registry, arena: std
     return aw.written();
 }
 
-fn execEvaluate(session: *lp.Session, arena: std.mem.Allocator, arguments: ?std.json.Value) EvalResult {
+fn execEvaluate(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) EvalResult {
     const Params = struct {
         script: [:0]const u8,
         url: ?[:0]const u8 = null,
@@ -260,7 +261,7 @@ fn execEvaluate(session: *lp.Session, arena: std.mem.Allocator, arguments: ?std.
         waitUntil: ?lp.Config.WaitUntil = null,
     };
     const args = parseArgsOrErr(Params, arena, arguments) orelse return .{ .text = "Error: missing 'script' argument", .is_error = true };
-    const page = ensurePage(session, args.url, args.timeout, args.waitUntil) catch return .{ .text = "Error: page not loaded", .is_error = true };
+    const page = ensurePage(session, registry, args.url, args.timeout, args.waitUntil) catch return .{ .text = "Error: page not loaded", .is_error = true };
 
     var ls: lp.js.Local.Scope = undefined;
     page.js.localScope(&ls);
@@ -498,15 +499,16 @@ fn execFindElement(session: *lp.Session, registry: *CDPNode.Registry, arena: std
 
 // --- Shared helpers ---
 
-fn ensurePage(session: *lp.Session, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!*lp.Page {
+fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!*lp.Page {
     if (url) |u| {
-        try performGoto(session, u, timeout, waitUntil);
+        try performGoto(session, registry, u, timeout, waitUntil);
     }
     return session.currentPage() orelse ToolError.PageNotLoaded;
 }
 
-fn performGoto(session: *lp.Session, url: [:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!void {
+fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!void {
     if (session.page != null) {
+        registry.reset();
         session.removePage();
     }
     const page = session.createPage() catch return ToolError.NavigationFailed;
