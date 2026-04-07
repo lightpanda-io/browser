@@ -220,7 +220,6 @@ pub const Agent = struct {
     common: Common = .{},
     provider: AiProvider = .anthropic,
     model: ?[:0]const u8 = null,
-    api_key: ?[:0]const u8 = null,
     system_prompt: ?[:0]const u8 = null,
     repl: bool = true,
     script_file: ?[]const u8 = null,
@@ -501,10 +500,10 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--model         The model name to use.
         \\                Defaults to a sensible default per provider.
         \\
-        \\--api-key       The API key. Can also be set via environment variable:
-        \\                ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
-        \\
         \\--system-prompt Override the default system prompt.
+        \\
+        \\The API key is read from the environment:
+        \\ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
         \\
     ++ common_options ++
         \\
@@ -924,15 +923,6 @@ fn parseAgentArgs(
                 return error.InvalidArgument;
             };
             result.model = try allocator.dupeZ(u8, str);
-            continue;
-        }
-
-        if (std.mem.eql(u8, "--api-key", opt) or std.mem.eql(u8, "--api_key", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = opt });
-                return error.InvalidArgument;
-            };
-            result.api_key = try allocator.dupeZ(u8, str);
             continue;
         }
 

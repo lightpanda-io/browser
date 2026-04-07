@@ -84,9 +84,9 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     const is_script_mode = opts.script_file != null;
 
     // API key is only required for REPL mode and self-healing
-    const api_key: ?[:0]const u8 = opts.api_key orelse getEnvApiKey(opts.provider) orelse if (!is_script_mode) {
+    const api_key: ?[:0]const u8 = getEnvApiKey(opts.provider) orelse if (!is_script_mode) {
         log.fatal(.app, "missing API key", .{
-            .hint = "Set the API key via --api-key or environment variable",
+            .hint = "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY",
         });
         return error.MissingApiKey;
     } else null;
