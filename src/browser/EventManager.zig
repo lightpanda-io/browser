@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -30,165 +30,65 @@ const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
 
+const EventManagerBase = @import("EventManagerBase.zig");
+
 const Allocator = std.mem.Allocator;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
-const EventKey = struct {
-    event_target: usize,
-    type_string: String,
-};
-
-const EventKeyContext = struct {
-    pub fn hash(_: @This(), key: EventKey) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(std.mem.asBytes(&key.event_target));
-        hasher.update(key.type_string.str());
-        return hasher.final();
-    }
-
-    pub fn eql(_: @This(), a: EventKey, b: EventKey) bool {
-        return a.event_target == b.event_target and a.type_string.eql(b.type_string);
-    }
-};
-
 pub const EventManager = @This();
 
+// Re-export types from EventManagerBase for API compatibility
+pub const RegisterOptions = EventManagerBase.RegisterOptions;
+pub const Callback = EventManagerBase.Callback;
+pub const Listener = EventManagerBase.Listener;
+
 page: *Page,
-arena: Allocator,
+base: EventManagerBase,
+
 // Used as an optimization in Page._documentIsComplete. If we know there are no
 // 'load' listeners in the document, we can skip dispatching the per-resource
 // 'load' event (e.g. amazon product page has no listener and ~350 resources)
 has_dom_load_listener: bool,
-listener_pool: std.heap.MemoryPool(Listener),
+
 ignore_list: std.ArrayList(*Listener),
-list_pool: std.heap.MemoryPool(std.DoublyLinkedList),
-lookup: std.HashMapUnmanaged(
-    EventKey,
-    *std.DoublyLinkedList,
-    EventKeyContext,
-    std.hash_map.default_max_load_percentage,
-),
-dispatch_depth: usize,
-deferred_removals: std.ArrayList(struct { list: *std.DoublyLinkedList, listener: *Listener }),
 
 pub fn init(arena: Allocator, page: *Page) EventManager {
     return .{
         .page = page,
-        .lookup = .{},
-        .arena = arena,
         .ignore_list = .{},
-        .list_pool = .init(arena),
-        .listener_pool = .init(arena),
-        .dispatch_depth = 0,
-        .deferred_removals = .{},
         .has_dom_load_listener = false,
+        .base = EventManagerBase.init(arena),
     };
 }
 
-pub const RegisterOptions = struct {
-    once: bool = false,
-    capture: bool = false,
-    passive: bool = false,
-    signal: ?*@import("webapi/AbortSignal.zig") = null,
-};
-
-pub const Callback = union(enum) {
-    function: js.Function,
-    object: js.Object,
-};
-
 pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, opts: RegisterOptions) !void {
-    if (comptime IS_DEBUG) {
-        log.debug(.event, "eventManager.register", .{ .type = typ, .capture = opts.capture, .once = opts.once, .target = target.toString() });
-    }
-
-    // If a signal is provided and already aborted, don't register the listener
-    if (opts.signal) |signal| {
-        if (signal.getAborted()) {
-            return;
-        }
-    }
-
-    // Allocate the type string we'll use in both listener and key
-    const type_string = try String.init(self.arena, typ, .{});
-
-    if (type_string.eql(comptime .wrap("load")) and target._type == .node) {
-        self.has_dom_load_listener = true;
-    }
-
-    const gop = try self.lookup.getOrPut(self.arena, .{
-        .type_string = type_string,
-        .event_target = @intFromPtr(target),
-    });
-    if (gop.found_existing) {
-        // check for duplicate callbacks already registered
-        var node = gop.value_ptr.*.first;
-        while (node) |n| {
-            const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
-            const is_duplicate = switch (callback) {
-                .object => |obj| listener.function.eqlObject(obj),
-                .function => |func| listener.function.eqlFunction(func),
-            };
-            if (is_duplicate and listener.capture == opts.capture) {
-                return;
-            }
-            node = n.next;
-        }
-    } else {
-        gop.value_ptr.* = try self.list_pool.create();
-        gop.value_ptr.*.* = .{};
-    }
-
-    const func = switch (callback) {
-        .function => |f| Function{ .value = try f.persist() },
-        .object => |o| Function{ .object = try o.persist() },
+    const listener = self.base.register(target, typ, callback, opts) catch |err| switch (err) {
+        error.SignalAborted, error.DuplicateListener => return,
+        else => return err,
     };
 
-    const listener = try self.listener_pool.create();
-    listener.* = .{
-        .node = .{},
-        .once = opts.once,
-        .capture = opts.capture,
-        .passive = opts.passive,
-        .function = func,
-        .signal = opts.signal,
-        .typ = type_string,
-    };
-    // append the listener to the list of listeners for this target
-    gop.value_ptr.*.append(&listener.node);
-
-    // Track load listeners for script execution ignore list
-    if (type_string.eql(comptime .wrap("load"))) {
-        try self.ignore_list.append(self.arena, listener);
+    if (listener.typ.eql(comptime .wrap("load"))) {
+        if (target._type == .node) {
+            // Track load listeners on DOM nodes for optimization
+            self.has_dom_load_listener = true;
+        }
+        // Track load listeners for script execution ignore list. See the
+        // `apply_ignore` field of DispatchOpts
+        try self.ignore_list.append(self.base.arena, listener);
     }
 }
 
 pub fn remove(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, use_capture: bool) void {
-    const list = self.lookup.get(.{
-        .type_string = .wrap(typ),
-        .event_target = @intFromPtr(target),
-    }) orelse return;
-    if (findListener(list, callback, use_capture)) |listener| {
-        self.removeListener(list, listener);
-    }
+    self.base.remove(target, typ, callback, use_capture);
 }
 
 pub fn clearIgnoreList(self: *EventManager) void {
     self.ignore_list.clearRetainingCapacity();
 }
 
-// Dispatching can be recursive from the compiler's point of view, so we need to
-// give it an explicit error set so that other parts of the code can use and
-// inferred error.
-const DispatchError = error{
-    OutOfMemory,
-    StringTooLarge,
-    JSExecCallback,
-    CompilationError,
-    ExecutionError,
-    JsException,
-};
+// Re-export DispatchError from base
+pub const DispatchError = EventManagerBase.DispatchError;
 
 pub const DispatchOpts = struct {
     // A "load" event triggered by a script (in ScriptManager) should not trigger
@@ -222,10 +122,7 @@ pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, co
 // property is just a shortcut for calling addEventListener, but they are distinct.
 // An event set via property cannot be removed by removeEventListener. If you
 // set both the property and add a listener, they both execute.
-const DispatchDirectOptions = struct {
-    context: []const u8,
-    inject_target: bool = true,
-};
+const DispatchDirectOptions = EventManagerBase.DispatchDirectOptions;
 
 // Direct dispatch for non-DOM targets (Window, XHR, AbortSignal) or DOM nodes with
 // property handlers. No propagation - just calls the handler and registered listeners.
@@ -239,159 +136,13 @@ pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, 
     window._current_event = event;
     defer window._current_event = prev_event;
 
-    event.acquireRef();
-    defer _ = event.releaseRef(page._session);
-
-    if (comptime IS_DEBUG) {
-        log.debug(.event, "dispatchDirect", .{ .type = event._type_string, .context = opts.context });
-    }
-
-    if (comptime opts.inject_target) {
-        event._target = target;
-        event._dispatch_target = target; // Store original target for composedPath()
-    }
-
-    var was_dispatched = false;
-
-    var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
-    defer {
-        ls.local.runMicrotasks();
-        ls.deinit();
-    }
-
-    if (getFunction(handler, &ls.local)) |func| {
-        event._current_target = target;
-        if (func.callWithThis(void, target, .{event})) {
-            was_dispatched = true;
-        } else |err| {
-            // a non-JS error
-            log.warn(.event, opts.context, .{ .err = err });
-        }
-    }
-
-    // listeners reigstered via addEventListener
-    const list = self.lookup.get(.{
-        .event_target = @intFromPtr(target),
-        .type_string = event._type_string,
-    }) orelse return;
-
-    // This is a slightly simplified version of what you'll find in dispatchPhase
-    // It is simpler because, for direct dispatching, we know there's no ancestors
-    // and only the single target phase.
-
-    // Track dispatch depth for deferred removal
-    self.dispatch_depth += 1;
-    defer {
-        const dispatch_depth = self.dispatch_depth;
-        // Only destroy deferred listeners when we exit the outermost dispatch
-        if (dispatch_depth == 1) {
-            for (self.deferred_removals.items) |removal| {
-                removal.list.remove(&removal.listener.node);
-                self.listener_pool.destroy(removal.listener);
-            }
-            self.deferred_removals.clearRetainingCapacity();
-        } else {
-            self.dispatch_depth = dispatch_depth - 1;
-        }
-    }
-
-    // Use the last listener in the list as sentinel - listeners added during dispatch will be after it
-    const last_node = list.last orelse return;
-    const last_listener: *Listener = @alignCast(@fieldParentPtr("node", last_node));
-
-    // Iterate through the list, stopping after we've encountered the last_listener
-    var node = list.first;
-    var is_done = false;
-    while (node) |n| {
-        if (is_done) {
-            break;
-        }
-
-        const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
-        is_done = (listener == last_listener);
-        node = n.next;
-
-        // Skip removed listeners
-        if (listener.removed) {
-            continue;
-        }
-
-        // If the listener has an aborted signal, remove it and skip
-        if (listener.signal) |signal| {
-            if (signal.getAborted()) {
-                self.removeListener(list, listener);
-                continue;
-            }
-        }
-
-        // Remove "once" listeners BEFORE calling them so nested dispatches don't see them
-        if (listener.once) {
-            self.removeListener(list, listener);
-        }
-
-        was_dispatched = true;
-        event._current_target = target;
-
-        switch (listener.function) {
-            .value => |value| try ls.toLocal(value).callWithThis(void, target, .{event}),
-            .string => |string| {
-                const str = try page.call_arena.dupeZ(u8, string.str());
-                try ls.local.eval(str, null);
-            },
-            .object => |obj_global| {
-                const obj = ls.toLocal(obj_global);
-                if (try obj.getFunction("handleEvent")) |handleEvent| {
-                    try handleEvent.callWithThis(void, obj, .{event});
-                }
-            },
-        }
-
-        if (event._stop_immediate_propagation) {
-            return;
-        }
-    }
-}
-
-fn getFunction(handler: anytype, local: *const js.Local) ?js.Function {
-    const T = @TypeOf(handler);
-    const ti = @typeInfo(T);
-
-    if (ti == .null) {
-        return null;
-    }
-    if (ti == .optional) {
-        return getFunction(handler orelse return null, local);
-    }
-    return switch (T) {
-        js.Function => handler,
-        js.Function.Temp => local.toLocal(handler),
-        js.Function.Global => local.toLocal(handler),
-        else => @compileError("handler must be null or \\??js.Function(\\.(Temp|Global))?"),
-    };
+    try self.base.dispatchDirect(page.call_arena, page.js, target, event, handler, page._session, opts);
 }
 
 /// Check if there are any listeners for a direct dispatch (non-DOM target).
 /// Use this to avoid creating an event when there are no listeners.
 pub fn hasDirectListeners(self: *EventManager, target: *EventTarget, typ: []const u8, handler: anytype) bool {
-    if (hasHandler(handler)) {
-        return true;
-    }
-    return self.lookup.get(.{
-        .event_target = @intFromPtr(target),
-        .type_string = .wrap(typ),
-    }) != null;
-}
-
-fn hasHandler(handler: anytype) bool {
-    const ti = @typeInfo(@TypeOf(handler));
-    if (ti == .null) {
-        return false;
-    }
-    if (ti == .optional) {
-        return handler != null;
-    }
-    return true;
+    return self.base.hasDirectListeners(target, typ, handler);
 }
 
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts: DispatchOpts) !void {
@@ -498,10 +249,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         i -= 1;
         if (event._stop_propagation) return;
         const current_target = path[i];
-        if (self.lookup.get(.{
-            .event_target = @intFromPtr(current_target),
-            .type_string = event._type_string,
-        })) |list| {
+        if (self.base.getListeners(current_target, event._type_string)) |list| {
             try self.dispatchPhase(list, current_target, event, &was_handled, &ls.local, comptime .init(true, opts));
         }
     }
@@ -528,10 +276,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             }
         }
 
-        if (self.lookup.get(.{
-            .type_string = event._type_string,
-            .event_target = @intFromPtr(target_et),
-        })) |list| {
+        if (self.base.getListeners(target_et, event._type_string)) |list| {
             try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, comptime .init(null, opts));
             if (event._stop_propagation) {
                 return;
@@ -545,10 +290,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         event._event_phase = .bubbling_phase;
         for (path[1..]) |current_target| {
             if (event._stop_propagation) break;
-            if (self.lookup.get(.{
-                .type_string = event._type_string,
-                .event_target = @intFromPtr(current_target),
-            })) |list| {
+            if (self.base.getListeners(current_target, event._type_string)) |list| {
                 try self.dispatchPhase(list, current_target, event, &was_handled, &ls.local, comptime .init(false, opts));
             }
         }
@@ -569,20 +311,21 @@ const DispatchPhaseOpts = struct {
 
 fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime opts: DispatchPhaseOpts) !void {
     const page = self.page;
+    const base = &self.base;
 
     // Track dispatch depth for deferred removal
-    self.dispatch_depth += 1;
+    base.dispatch_depth += 1;
     defer {
-        const dispatch_depth = self.dispatch_depth;
+        const dispatch_depth = base.dispatch_depth;
         // Only destroy deferred listeners when we exit the outermost dispatch
         if (dispatch_depth == 1) {
-            for (self.deferred_removals.items) |removal| {
+            for (base.deferred_removals.items) |removal| {
                 removal.list.remove(&removal.listener.node);
-                self.listener_pool.destroy(removal.listener);
+                base.listener_pool.destroy(removal.listener);
             }
-            self.deferred_removals.clearRetainingCapacity();
+            base.deferred_removals.clearRetainingCapacity();
         } else {
-            self.dispatch_depth = dispatch_depth - 1;
+            base.dispatch_depth = dispatch_depth - 1;
         }
     }
 
@@ -617,7 +360,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
         // If the listener has an aborted signal, remove it and skip
         if (listener.signal) |signal| {
             if (signal.getAborted()) {
-                self.removeListener(list, listener);
+                base.removeListener(list, listener);
                 continue;
             }
         }
@@ -632,7 +375,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
 
         // Remove "once" listeners BEFORE calling them so nested dispatches don't see them
         if (listener.once) {
-            self.removeListener(list, listener);
+            base.removeListener(list, listener);
         }
 
         was_handled.* = true;
@@ -684,69 +427,6 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
         return null;
     };
 }
-
-fn removeListener(self: *EventManager, list: *std.DoublyLinkedList, listener: *Listener) void {
-    // If we're in a dispatch, defer removal to avoid invalidating iteration
-    if (self.dispatch_depth > 0) {
-        listener.removed = true;
-        self.deferred_removals.append(self.arena, .{ .list = list, .listener = listener }) catch unreachable;
-    } else {
-        // Outside dispatch, remove immediately
-        list.remove(&listener.node);
-        self.listener_pool.destroy(listener);
-    }
-}
-
-fn findListener(list: *const std.DoublyLinkedList, callback: Callback, capture: bool) ?*Listener {
-    var node = list.first;
-    while (node) |n| {
-        node = n.next;
-        const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
-        const matches = switch (callback) {
-            .object => |obj| listener.function.eqlObject(obj),
-            .function => |func| listener.function.eqlFunction(func),
-        };
-        if (!matches) {
-            continue;
-        }
-        if (listener.capture != capture) {
-            continue;
-        }
-        return listener;
-    }
-    return null;
-}
-
-const Listener = struct {
-    typ: String,
-    once: bool,
-    capture: bool,
-    passive: bool,
-    function: Function,
-    signal: ?*@import("webapi/AbortSignal.zig") = null,
-    node: std.DoublyLinkedList.Node,
-    removed: bool = false,
-};
-
-const Function = union(enum) {
-    value: js.Function.Global,
-    string: String,
-    object: js.Object.Global,
-
-    fn eqlFunction(self: Function, func: js.Function) bool {
-        return switch (self) {
-            .value => |v| v.isEqual(func),
-            else => false,
-        };
-    }
-
-    fn eqlObject(self: Function, obj: js.Object) bool {
-        return switch (self) {
-            .object => |o| return o.isEqual(obj),
-            else => false,
-        };
-    }
-};
 
 // Computes the adjusted target for shadow DOM event retargeting
 // Returns the lowest shadow-including ancestor of original_target that is
