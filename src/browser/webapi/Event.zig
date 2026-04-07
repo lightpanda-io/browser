@@ -80,6 +80,7 @@ pub const Type = union(enum) {
     promise_rejection_event: *@import("event/PromiseRejectionEvent.zig"),
     submit_event: *@import("event/SubmitEvent.zig"),
     form_data_event: *@import("event/FormDataEvent.zig"),
+    close_event: *@import("event/CloseEvent.zig"),
 };
 
 pub const Options = struct {
@@ -171,6 +172,7 @@ pub fn is(self: *Event, comptime T: type) ?*T {
         .promise_rejection_event => |e| return if (T == @import("event/PromiseRejectionEvent.zig")) e else null,
         .submit_event => |e| return if (T == @import("event/SubmitEvent.zig")) e else null,
         .form_data_event => |e| return if (T == @import("event/FormDataEvent.zig")) e else null,
+        .close_event => |e| return if (T == @import("event/CloseEvent.zig")) e else null,
         .ui_event => |e| {
             if (T == @import("event/UIEvent.zig")) {
                 return e;

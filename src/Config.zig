@@ -129,6 +129,13 @@ pub fn httpMaxResponseSize(self: *const Config) ?usize {
     };
 }
 
+pub fn wsMaxConcurrent(self: *const Config) u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.common.ws_max_concurrent orelse 8,
+        else => unreachable,
+    };
+}
+
 pub fn logLevel(self: *const Config) ?log.Level {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.common.log_level,
@@ -295,6 +302,7 @@ pub const Common = struct {
     http_timeout: ?u31 = null,
     http_connect_timeout: ?u31 = null,
     http_max_response_size: ?usize = null,
+    ws_max_concurrent: ?u8 = null,
     tls_verify_host: bool = true,
     log_level: ?log.Level = null,
     log_format: ?log.Format = null,
@@ -394,6 +402,10 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Limits the acceptable response size for any request
         \\                (e.g. XHR, fetch, script loading, ...).
         \\                Defaults to no limit.
+        \\
+        \\--ws-max-concurrent
+        \\                The maximum number of concurrent WebSocket connections.
+        \\                Defaults to 8.
         \\
         \\--log-level     The log level: debug, info, warn, error or fatal.
         \\                Defaults to
@@ -1104,6 +1116,19 @@ fn parseCommonArg(
         };
 
         common.http_max_response_size = std.fmt.parseInt(usize, str, 10) catch |err| {
+            log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
+            return error.InvalidArgument;
+        };
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--ws-max-concurrent", opt) or std.mem.eql(u8, "--ws_max_concurrent", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
+            return error.InvalidArgument;
+        };
+
+        common.ws_max_concurrent = std.fmt.parseInt(u8, str, 10) catch |err| {
             log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
             return error.InvalidArgument;
         };

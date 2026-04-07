@@ -791,7 +791,7 @@ const PostMessageCallback = struct {
         const event_target = window.asEventTarget();
         if (page._event_manager.hasDirectListeners(event_target, "message", window._on_message)) {
             const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
-                .data = self.message,
+                .data = .{ .value = self.message },
                 .origin = self.origin,
                 .source = self.source,
                 .bubbles = false,
@@ -903,15 +903,31 @@ pub const JsApi = struct {
     pub const opener = bridge.property(null, .{ .template = false });
 
     pub const alert = bridge.function(struct {
-        fn alert(_: *const Window, _: ?[]const u8) void {}
-    }.alert, .{ .noop = true });
+        fn alert(_: *const Window, message: ?[]const u8, page: *Page) void {
+            page._session.notification.dispatch(.javascript_dialog_opening, &.{
+                .url = page.url,
+                .message = message orelse "",
+                .dialog_type = "alert",
+            });
+        }
+    }.alert, .{});
     pub const confirm = bridge.function(struct {
-        fn confirm(_: *const Window, _: ?[]const u8) bool {
+        fn confirm(_: *const Window, message: ?[]const u8, page: *Page) bool {
+            page._session.notification.dispatch(.javascript_dialog_opening, &.{
+                .url = page.url,
+                .message = message orelse "",
+                .dialog_type = "confirm",
+            });
             return false;
         }
     }.confirm, .{});
     pub const prompt = bridge.function(struct {
-        fn prompt(_: *const Window, _: ?[]const u8, _: ?[]const u8) ?[]const u8 {
+        fn prompt(_: *const Window, message: ?[]const u8, _: ?[]const u8, page: *Page) ?[]const u8 {
+            page._session.notification.dispatch(.javascript_dialog_opening, &.{
+                .url = page.url,
+                .message = message orelse "",
+                .dialog_type = "prompt",
+            });
             return null;
         }
     }.prompt, .{});

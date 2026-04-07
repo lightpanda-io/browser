@@ -829,6 +829,8 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/net/URLSearchParams.zig"),
     @import("../webapi/net/XMLHttpRequest.zig"),
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
+    @import("../webapi/net/WebSocket.zig"),
+    @import("../webapi/event/CloseEvent.zig"),
     @import("../webapi/streams/ReadableStream.zig"),
     @import("../webapi/streams/ReadableStreamDefaultReader.zig"),
     @import("../webapi/streams/ReadableStreamDefaultController.zig"),

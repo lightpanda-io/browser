@@ -495,6 +495,7 @@ fn buildCurl(
         .CURL_DISABLE_SMTP = true,
         .CURL_DISABLE_TELNET = true,
         .CURL_DISABLE_TFTP = true,
+        .CURL_DISABLE_WEBSOCKETS = false, // Enable WebSocket support
 
         .ssize_t = null,
         ._FILE_OFFSET_BITS = 64,
