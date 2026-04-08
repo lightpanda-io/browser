@@ -39,6 +39,30 @@ pub extern "c" fn html5ever_parse_document(
     appendBasedOnParentNodeCallback: *const fn (ctx: *anyopaque, element_ref: *anyopaque, prev_element_ref: *anyopaque, NodeOrText) callconv(.c) void,
 ) void;
 
+/// Parse HTML document with encoding conversion. Converts from charset to UTF-8 before parsing.
+pub extern "c" fn html5ever_parse_document_with_encoding(
+    html: [*c]const u8,
+    len: usize,
+    charset: [*c]const u8,
+    charset_len: usize,
+    doc: *anyopaque,
+    ctx: *anyopaque,
+    createElementCallback: *const fn (ctx: *anyopaque, data: *anyopaque, QualName, AttributeIterator) callconv(.c) ?*anyopaque,
+    elemNameCallback: *const fn (node_ref: *anyopaque) callconv(.c) *anyopaque,
+    appendCallback: *const fn (ctx: *anyopaque, parent_ref: *anyopaque, NodeOrText) callconv(.c) void,
+    parseErrorCallback: *const fn (ctx: *anyopaque, StringSlice) callconv(.c) void,
+    popCallback: *const fn (ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void,
+    createCommentCallback: *const fn (ctx: *anyopaque, StringSlice) callconv(.c) ?*anyopaque,
+    createProcessingInstruction: *const fn (ctx: *anyopaque, StringSlice, StringSlice) callconv(.c) ?*anyopaque,
+    appendDoctypeToDocument: *const fn (ctx: *anyopaque, StringSlice, StringSlice, StringSlice) callconv(.c) void,
+    addAttrsIfMissingCallback: *const fn (ctx: *anyopaque, target_ref: *anyopaque, AttributeIterator) callconv(.c) void,
+    getTemplateContentsCallback: *const fn (ctx: *anyopaque, target_ref: *anyopaque) callconv(.c) ?*anyopaque,
+    removeFromParentCallback: *const fn (ctx: *anyopaque, target_ref: *anyopaque) callconv(.c) void,
+    reparentChildrenCallback: *const fn (ctx: *anyopaque, node_ref: *anyopaque, new_parent_ref: *anyopaque) callconv(.c) void,
+    appendBeforeSiblingCallback: *const fn (ctx: *anyopaque, sibling_ref: *anyopaque, NodeOrText) callconv(.c) void,
+    appendBasedOnParentNodeCallback: *const fn (ctx: *anyopaque, element_ref: *anyopaque, prev_element_ref: *anyopaque, NodeOrText) callconv(.c) void,
+) void;
+
 pub extern "c" fn html5ever_parse_fragment(
     html: [*c]const u8,
     len: usize,

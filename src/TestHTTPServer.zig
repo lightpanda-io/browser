@@ -131,6 +131,10 @@ fn getContentType(file_path: []const u8) []const u8 {
         return "application/json";
     }
 
+    if (std.mem.endsWith(u8, file_path, ".GB2312.html")) {
+        return "text/html; charset=GB2312";
+    }
+
     if (std.mem.endsWith(u8, file_path, ".html")) {
         return "text/html";
     }

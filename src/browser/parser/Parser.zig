@@ -103,6 +103,32 @@ pub fn parse(self: *Parser, html: []const u8) void {
     );
 }
 
+/// Parse HTML with encoding conversion. Converts from charset to UTF-8 before parsing.
+pub fn parseWithEncoding(self: *Parser, html: []const u8, charset: []const u8) void {
+    h5e.html5ever_parse_document_with_encoding(
+        html.ptr,
+        html.len,
+        charset.ptr,
+        charset.len,
+        &self.container,
+        self,
+        createElementCallback,
+        getDataCallback,
+        appendCallback,
+        parseErrorCallback,
+        popCallback,
+        createCommentCallback,
+        createProcessingInstruction,
+        appendDoctypeToDocument,
+        addAttrsIfMissingCallback,
+        getTemplateContentsCallback,
+        removeFromParentCallback,
+        reparentChildrenCallback,
+        appendBeforeSiblingCallback,
+        appendBasedOnParentNodeCallback,
+    );
+}
+
 pub fn parseXML(self: *Parser, xml: []const u8) void {
     h5e.xml5ever_parse_document(
         xml.ptr,
