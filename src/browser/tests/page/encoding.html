@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<body></body>
+<script src="../testing.js"></script>
+
+<script id="gbk_encoding">
+  {
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    iframe.src = 'encoding/gbk.html';
+
+    testing.onload(() => {
+      // GBK-encoded "中文" should be decoded to UTF-8
+      testing.expectEqual('中文', iframe.contentDocument.getElementById('test').textContent);
+    });
+  }
+</script>
+
+<script id="shift_jis_encoding">
+  {
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    iframe.src = 'encoding/shift_jis.html';
+
+    testing.onload(() => {
+      // Shift_JIS-encoded "日本語" should be decoded to UTF-8
+      testing.expectEqual('日本語', iframe.contentDocument.getElementById('test').textContent);
+    });
+  }
+</script>
+
+<script id="latin1_encoding">
+  {
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    iframe.src = 'encoding/latin1.html';
+
+    testing.onload(() => {
+      // ISO-8859-1-encoded "Café" should be decoded to UTF-8
+      testing.expectEqual('Café', iframe.contentDocument.getElementById('test').textContent);
+    });
+  }
+</script>
+
+<script id="content_type_header_charset">
+  {
+    // Test charset from Content-Type HTTP header (no meta charset in file)
+    // TestHTTPServer returns "text/html; charset=GB2312" for *.GB2312.html files
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    iframe.src = testing.BASE_URL + 'page/encoding/content_type.GB2312.html';
+
+    testing.onload(() => {
+      // GB2312-encoded "中文" should be decoded to UTF-8 via Content-Type header charset
+      testing.expectEqual('中文', iframe.contentDocument.getElementById('test').textContent);
+    });
+  }
+</script>
+
+<script id="no_charset_fallback">
+  {
+    // Test file with non-UTF-8 bytes but NO charset declaration anywhere.
+    // Without charset info, the bytes are parsed as UTF-8, producing replacement characters.
+    // This documents the "broken" behavior for files without proper encoding declaration.
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    iframe.src = 'encoding/no_charset.html';
+
+    testing.onload(() => {
+      // The GBK bytes D6 D0 CE C4 are invalid UTF-8, each becomes U+FFFD
+      const text = iframe.contentDocument.getElementById('test').textContent;
+      // Should contain replacement characters (the exact count depends on how invalid bytes are handled)
+      testing.expectTrue(text.includes('\uFFFD'));
+    });
+  }
+</script>
