@@ -138,7 +138,8 @@ pub fn fromC(c_context: *const v8.Context) ?*Context {
 /// Returns the Context and v8::Context for the given isolate.
 /// If the current context is from a destroyed Context (e.g., navigated-away iframe),
 /// falls back to the incumbent context (the calling context).
-pub fn fromIsolate(isolate: js.Isolate) struct { *Context, *const v8.Context } {
+/// Returns null if neither context has a valid Context struct (both were destroyed).
+pub fn fromIsolate(isolate: js.Isolate) ?struct { *Context, *const v8.Context } {
     const v8_context = v8.v8__Isolate__GetCurrentContext(isolate.handle).?;
     if (fromC(v8_context)) |ctx| {
         return .{ ctx, v8_context };
@@ -146,7 +147,8 @@ pub fn fromIsolate(isolate: js.Isolate) struct { *Context, *const v8.Context } {
     // The current context's Context struct has been freed (e.g., iframe navigated away).
     // Fall back to the incumbent context (the calling context).
     const v8_incumbent = v8.v8__Isolate__GetIncumbentContext(isolate.handle).?;
-    return .{ fromC(v8_incumbent).?, v8_incumbent };
+    const ctx = fromC(v8_incumbent) orelse return null;
+    return .{ ctx, v8_incumbent };
 }
 
 pub fn deinit(self: *Context) void {
@@ -806,7 +808,9 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
     const then_callback = newFunctionWithData(local, struct {
         pub fn callback(callback_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
             var c: Caller = undefined;
-            c.initFromHandle(callback_handle);
+            if (!c.initFromHandle(callback_handle)) {
+                return;
+            }
             defer c.deinit();
 
             const info = Caller.FunctionCallbackInfo{ .handle = callback_handle.? };
@@ -830,7 +834,7 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
     const catch_callback = newFunctionWithData(local, struct {
         pub fn callback(callback_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
             var c: Caller = undefined;
-            c.initFromHandle(callback_handle);
+            if (!c.initFromHandle(callback_handle)) return;
             defer c.deinit();
 
             const info = Caller.FunctionCallbackInfo{ .handle = callback_handle.? };
