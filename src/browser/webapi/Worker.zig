@@ -82,7 +82,7 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
             log.warn(.js, "invalid blob", .{ .target = "worker" });
             return error.BlobNotFound;
         };
-        try self.execute(blob._slice);
+        try self.loadInitialScript(blob._slice);
         return self;
     }
 
@@ -164,10 +164,10 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
         });
     }
 
-    try self.execute(script);
+    try self.loadInitialScript(script);
 }
 
-fn execute(self: *Worker, script: []const u8) !void {
+fn loadInitialScript(self: *Worker, script: []const u8) !void {
     var ls: js.Local.Scope = undefined;
     self._worker_scope.js.localScope(&ls);
     defer ls.deinit();

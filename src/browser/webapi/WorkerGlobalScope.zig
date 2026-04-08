@@ -63,6 +63,7 @@ _worker: *Worker,
 _event_manager: EventManagerBase,
 
 // These fields represent the "Window"-like component of the WGS
+_closed: bool = false,
 _proto: *EventTarget,
 _console: Console = .init,
 _crypto: Crypto = .init,
@@ -199,6 +200,10 @@ pub fn postMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
 
 // Called internally by Worker when it wants to post a message to us
 pub fn receiveMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
+    if (self._closed) {
+        return;
+    }
+
     const cloned_data: ?JS.Value.Temp = blk: {
         // Enter our context to clone the message
         var ls: JS.Local.Scope = undefined;
@@ -267,6 +272,12 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rej
         }, self._session)).asEvent();
         try self.dispatch(target, event, attribute_callback);
     }
+}
+
+pub fn close(self: *WorkerGlobalScope) void {
+    // TOOD: we should also stop new tasks from being scheduled
+    self.js.scheduler.reset();
+    self._closed = true;
 }
 
 pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
@@ -414,6 +425,7 @@ pub const JsApi = struct {
     pub const structuredClone = bridge.function(WorkerGlobalScope.structuredClone, .{});
     pub const postMessage = bridge.function(WorkerGlobalScope.postMessage, .{});
     pub const reportError = bridge.function(WorkerGlobalScope.reportError, .{});
+    pub const close = bridge.function(WorkerGlobalScope.close, .{});
 
     pub const onmessage = bridge.accessor(WorkerGlobalScope.getOnMessage, WorkerGlobalScope.setOnMessage, .{});
     pub const onmessageerror = bridge.accessor(WorkerGlobalScope.getOnMessageError, WorkerGlobalScope.setOnMessageError, .{});
