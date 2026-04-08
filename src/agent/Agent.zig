@@ -24,8 +24,9 @@ const default_system_prompt =
     \\
     \\IMPORTANT: When using click or fill tools, always pass a CSS selector
     \\instead of backendNodeId. This makes actions reproducible across sessions.
-    \\Use getEnv to read environment variables like $LP_USERNAME and $LP_PASSWORD
-    \\rather than passing them as literal strings.
+    \\When filling credentials, pass environment variable references like
+    \\$LP_USERNAME and $LP_PASSWORD directly as the value — they will be
+    \\resolved automatically. Do NOT use getEnv to resolve them first.
 ;
 
 const self_heal_prompt_prefix =

@@ -341,7 +341,8 @@ fn execFill(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Al
         value: []const u8 = "",
     };
     const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
-    const text = if (args.text.len > 0) args.text else if (args.value.len > 0) args.value else return ToolError.InvalidParams;
+    const raw_text = if (args.text.len > 0) args.text else if (args.value.len > 0) args.value else return ToolError.InvalidParams;
+    const text = substituteEnvVars(arena, raw_text);
     const resolved = if (args.selector) |sel|
         try resolveBySelector(session, sel)
     else if (args.backendNodeId) |nid|
@@ -354,15 +355,17 @@ fn execFill(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Al
         return ToolError.InternalError;
     };
 
+    // Show the original reference (e.g. $LP_PASSWORD) in the result, not the resolved value
+    const display_text = if (text.ptr != raw_text.ptr) raw_text else text;
     const page_title = resolved.page.getTitle() catch null;
     if (args.selector) |sel| {
         return std.fmt.allocPrint(arena, "Filled element (selector: {s}) with \"{s}\". Page url: {s}, title: {s}", .{
-            sel, text, resolved.page.url, page_title orelse "(none)",
+            sel, display_text, resolved.page.url, page_title orelse "(none)",
         }) catch return ToolError.InternalError;
     }
     return std.fmt.allocPrint(arena, "Filled element (backendNodeId: {d}) with \"{s}\". Page url: {s}, title: {s}", .{
         args.backendNodeId.?,
-        text,
+        display_text,
         resolved.page.url,
         page_title orelse "(none)",
     }) catch return ToolError.InternalError;
@@ -646,6 +649,39 @@ fn parseArgsOrDefault(comptime T: type, arena: std.mem.Allocator, arguments: ?st
 fn parseArgsOrErr(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) ?T {
     const args_raw = arguments orelse return null;
     return std.json.parseFromValueLeaky(T, arena, args_raw, .{ .ignore_unknown_fields = true }) catch null;
+}
+
+/// Substitute $VAR_NAME references with values from the environment.
+fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8 {
+    if (std.mem.indexOfScalar(u8, input, '$') == null) return input;
+
+    var result: std.ArrayListUnmanaged(u8) = .empty;
+    var i: usize = 0;
+    while (i < input.len) {
+        if (input[i] == '$') {
+            const var_start = i + 1;
+            var var_end = var_start;
+            while (var_end < input.len and (std.ascii.isAlphanumeric(input[var_end]) or input[var_end] == '_')) {
+                var_end += 1;
+            }
+            if (var_end > var_start) {
+                const var_name_z = arena.dupeZ(u8, input[var_start..var_end]) catch return input;
+                if (std.posix.getenv(var_name_z)) |env_val| {
+                    result.appendSlice(arena, env_val) catch return input;
+                } else {
+                    result.appendSlice(arena, input[i..var_end]) catch return input;
+                }
+                i = var_end;
+            } else {
+                result.append(arena, '$') catch return input;
+                i += 1;
+            }
+        } else {
+            result.append(arena, input[i]) catch return input;
+            i += 1;
+        }
+    }
+    return result.toOwnedSlice(arena) catch input;
 }
 
 pub fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
