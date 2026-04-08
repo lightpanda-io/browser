@@ -135,7 +135,7 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
 
 pub fn userAgent(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.user_agent,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.common.user_agent,
         .help, .version => null,
     };
 }
