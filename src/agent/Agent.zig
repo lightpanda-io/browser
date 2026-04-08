@@ -103,7 +103,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
             const ClientPtr = @FieldType(AiClient, @tagName(tag));
             const Client = @typeInfo(ClientPtr).pointer.child;
             const client = try allocator.create(Client);
-            const url = opts.base_url orelse if (tag == .ollama) "http://localhost:11434/v1" else null;
+            const url: ?[]const u8 = opts.base_url orelse if (tag == .ollama) "http://localhost:11434/v1" else null;
             client.* = Client.init(allocator, key, if (url) |u| .{ .base_url = u } else .{});
             break :blk @unionInit(AiClient, @tagName(tag), client);
         },
