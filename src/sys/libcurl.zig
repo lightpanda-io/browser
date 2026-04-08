@@ -60,10 +60,6 @@ pub const CurlSockAddr = extern struct {
 
 pub const CURL_SOCKET_BAD: c.curl_socket_t = c.CURL_SOCKET_BAD;
 
-/// Zig-side opensocket callback: purpose and address first, user data last.
-/// Return a valid socket fd to allow the connection, or CURL_SOCKET_BAD to block.
-pub const CurlOpenSocketFunction = fn (CurlSockType, *CurlSockAddr, ?*anyopaque) c.curl_socket_t;
-
 pub const FreeCallback = fn (ptr: ?*anyopaque) void;
 pub const StrdupCallback = fn (str: [*:0]const u8) ?[*:0]u8;
 pub const MallocCallback = fn (size: usize) ?*anyopaque;
