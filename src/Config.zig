@@ -950,11 +950,6 @@ fn parseAgentArgs(
             continue;
         }
 
-        if (std.mem.eql(u8, "--no-record", opt) or std.mem.eql(u8, "--no_record", opt)) {
-            result.record_file = null;
-            continue;
-        }
-
         if (try parseCommonArg(allocator, opt, args, &result.common)) {
             continue;
         }
