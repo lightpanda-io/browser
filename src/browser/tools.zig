@@ -428,10 +428,17 @@ fn execPress(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
         return ToolError.InternalError;
     };
 
-    const page_title = page.getTitle() catch null;
+    // Pressing Enter on a form input triggers implicit form submission.
+    if (session.queued_navigation.items.len != 0) {
+        var runner = session.runner(.{}) catch return ToolError.InternalError;
+        runner.wait(.{ .ms = 10000, .until = .done }) catch return ToolError.NavigationFailed;
+    }
+
+    const current_page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const page_title = current_page.getTitle() catch null;
     return std.fmt.allocPrint(arena, "Pressed key '{s}'. Page url: {s}, title: {s}", .{
         args.key,
-        page.url,
+        current_page.url,
         page_title orelse "(none)",
     }) catch return ToolError.InternalError;
 }
