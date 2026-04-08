@@ -57,6 +57,8 @@ const Action = enum {
     findElement,
     getEnv,
     consoleLogs,
+    getUrl,
+    getCookies,
 };
 
 const action_map = std.StaticStringMap(Action).initComptime(.{
@@ -82,6 +84,8 @@ const action_map = std.StaticStringMap(Action).initComptime(.{
     .{ "findElement", .findElement },
     .{ "getEnv", .getEnv },
     .{ "consoleLogs", .consoleLogs },
+    .{ "getUrl", .getUrl },
+    .{ "getCookies", .getCookies },
 });
 
 /// Execute a tool by name. Returns the result text.
@@ -119,6 +123,8 @@ pub fn call(
         .findElement => execFindElement(session, registry, arena, arguments),
         .getEnv => execGetEnv(arena, arguments),
         .consoleLogs => execConsoleLogs(session, arena),
+        .getUrl => execGetUrl(session),
+        .getCookies => execGetCookies(session, arena),
     };
 }
 
@@ -526,6 +532,27 @@ fn execConsoleLogs(
         writer.print("[{s}] {s}\n", .{ @tagName(msg.level), msg.text }) catch return ToolError.InternalError;
     }
     page.console_messages.clearRetainingCapacity();
+    return aw.written();
+}
+
+fn execGetUrl(session: *lp.Session) ToolError![]const u8 {
+    const page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    return page.url;
+}
+
+fn execGetCookies(session: *lp.Session, arena: std.mem.Allocator) ToolError![]const u8 {
+    const cookies = session.cookie_jar.cookies.items;
+    if (cookies.len == 0) return "No cookies.";
+
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    const writer = &aw.writer;
+    for (cookies) |*cookie| {
+        writer.print("{s}={s}", .{ cookie.name, cookie.value }) catch return ToolError.InternalError;
+        writer.print("; domain={s}; path={s}", .{ cookie.domain, cookie.path }) catch return ToolError.InternalError;
+        if (cookie.secure) writer.writeAll("; Secure") catch return ToolError.InternalError;
+        if (cookie.http_only) writer.writeAll("; HttpOnly") catch return ToolError.InternalError;
+        writer.writeAll("\n") catch return ToolError.InternalError;
+    }
     return aw.written();
 }
 

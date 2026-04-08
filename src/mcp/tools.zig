@@ -249,6 +249,20 @@ pub const tool_list = [_]protocol.Tool{
         ),
     },
     .{
+        .name = "getUrl",
+        .description = "Get the current page URL. Useful to check if a navigation or redirect occurred.",
+        .inputSchema = protocol.minify(
+            \\{ "type": "object", "properties": {} }
+        ),
+    },
+    .{
+        .name = "getCookies",
+        .description = "Get all cookies in the browser. Useful for debugging authentication and session state.",
+        .inputSchema = protocol.minify(
+            \\{ "type": "object", "properties": {} }
+        ),
+    },
+    .{
         .name = "getEnv",
         .description = "Read the value of an environment variable. Useful for retrieving credentials or configuration without hardcoding them.",
         .inputSchema = protocol.minify(
