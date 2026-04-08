@@ -241,6 +241,19 @@ pub const tool_list = [_]protocol.Tool{
             \\}
         ),
     },
+    .{
+        .name = "getEnv",
+        .description = "Read the value of an environment variable. Useful for retrieving credentials or configuration without hardcoding them.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "name": { "type": "string", "description": "The environment variable name to read." }
+            \\  },
+            \\  "required": ["name"]
+            \\}
+        ),
+    },
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {

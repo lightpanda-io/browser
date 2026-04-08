@@ -55,6 +55,7 @@ const Action = enum {
     selectOption,
     setChecked,
     findElement,
+    getEnv,
 };
 
 const action_map = std.StaticStringMap(Action).initComptime(.{
@@ -78,6 +79,7 @@ const action_map = std.StaticStringMap(Action).initComptime(.{
     .{ "selectOption", .selectOption },
     .{ "setChecked", .setChecked },
     .{ "findElement", .findElement },
+    .{ "getEnv", .getEnv },
 });
 
 /// Execute a tool by name. Returns the result text.
@@ -113,6 +115,7 @@ pub fn call(
         .selectOption => execSelectOption(session, registry, arena, arguments),
         .setChecked => execSetChecked(session, registry, arena, arguments),
         .findElement => execFindElement(session, registry, arena, arguments),
+        .getEnv => execGetEnv(arena, arguments),
     };
 }
 
@@ -495,6 +498,15 @@ fn execFindElement(session: *lp.Session, registry: *CDPNode.Registry, arena: std
     var aw: std.Io.Writer.Allocating = .init(arena);
     std.json.Stringify.value(matched, .{}, &aw.writer) catch return ToolError.InternalError;
     return aw.written();
+}
+
+fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+    const Params = struct { name: []const u8 };
+    const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const name_z = arena.dupeZ(u8, args.name) catch return ToolError.InternalError;
+    const value = std.posix.getenv(name_z) orelse
+        return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{args.name}) catch ToolError.InternalError;
+    return value;
 }
 
 // --- Shared helpers ---
