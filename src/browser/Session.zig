@@ -367,7 +367,7 @@ pub fn processQueuedNavigation(self: *Session) !void {
 
     // First pass: process async navigations (non-about:blank)
     for (navigations.items) |page| {
-        const qn = page._queued_navigation.?;
+        const qn = page._queued_navigation orelse continue;
 
         if (qn.is_about_blank) {
             // Defer about:blank to second pass
@@ -385,7 +385,7 @@ pub fn processQueuedNavigation(self: *Session) !void {
     // Second pass: process synchronous navigations (about:blank)
     // These may trigger new navigations which go into queued_navigation
     for (about_blank_queue.items) |page| {
-        const qn = page._queued_navigation.?;
+        const qn = page._queued_navigation orelse continue;
         try self.processFrameNavigation(page, qn);
     }
 
