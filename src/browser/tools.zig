@@ -303,10 +303,18 @@ fn execClick(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
         return ToolError.InternalError;
     };
 
-    const page_title = resolved.page.getTitle() catch null;
+    // If the click triggered a navigation (e.g. form submission, link click),
+    // wait for it to complete.
+    if (session.queued_navigation.items.len != 0) {
+        var runner = session.runner(.{}) catch return ToolError.InternalError;
+        runner.wait(.{ .ms = 10000, .until = .done }) catch return ToolError.NavigationFailed;
+    }
+
+    const page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const page_title = page.getTitle() catch null;
     return std.fmt.allocPrint(arena, "Clicked element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
         args.backendNodeId,
-        resolved.page.url,
+        page.url,
         page_title orelse "(none)",
     }) catch return ToolError.InternalError;
 }
