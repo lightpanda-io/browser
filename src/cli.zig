@@ -19,8 +19,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-/// Creates a new CLI parser from given commands recipe.
-pub fn Commands(comptime commands: anytype) type {
+pub fn Builder(comptime commands: anytype) type {
     return struct {
         const Self = @This();
 
@@ -41,59 +40,64 @@ pub fn Commands(comptime commands: anytype) type {
             });
         };
 
+        /// Creates an array of `StructField` out of given options.
+        fn optionsToStructFields(comptime options: anytype) [options.len]std.builtin.Type.StructField {
+            var fields: [options.len]std.builtin.Type.StructField = undefined;
+
+            inline for (options, 0..) |option, j| {
+                const is_multiple = @hasField(@TypeOf(option), "multiple") and option.multiple;
+                const T, const default = type_and_default: {
+                    if (is_multiple) {
+                        // We currently don't allow default values for lists.
+                        if (@hasField(@TypeOf(option), "default")) unreachable;
+                        // If `multiple` provided, prefer `ArrayList`.
+                        const T = std.ArrayList(option.type);
+                        break :type_and_default .{ T, &@as(T, .{}) };
+                    }
+
+                    const T = option.type;
+                    break :type_and_default .{ T, &@as(T, option.default) };
+                };
+
+                fields[j] = .{
+                    .name = option.name,
+                    .type = T,
+                    .default_value_ptr = @ptrCast(default),
+                    .is_comptime = false,
+                    .alignment = @alignOf(T),
+                };
+            }
+
+            return fields;
+        }
+
         /// Union type for provided commands.
         pub const Union = blk: {
             var union_fields: [commands.len]std.builtin.Type.UnionField = undefined;
-            // Populate both `enum_fields` and `union_fields`.
             for (commands, 0..) |command, i| {
+                const Command = @TypeOf(command);
                 const options = command.options;
-
-                // Whether this command has `positional` argument.
-                const has_positional = @hasField(@TypeOf(command), "positional");
-                const fields_len = if (has_positional) options.len + 1 else options.len;
-
-                var struct_fields: [fields_len]std.builtin.Type.StructField = undefined;
-                for (options, 0..) |option, j| {
-                    const is_multiple = @hasField(@TypeOf(option), "multiple") and option.multiple;
-                    const T, const default = type_and_default: {
-                        if (is_multiple) {
-                            // We currently don't allow default values for lists.
-                            if (@hasField(@TypeOf(option), "default")) unreachable;
-                            // If `multiple` provided, prefer `ArrayList`.
-                            const T = std.ArrayList(option.type);
-                            break :type_and_default .{ T, &@as(T, .{}) };
-                        }
-
-                        const T = option.type;
-                        break :type_and_default .{ T, &@as(T, option.default) };
-                    };
-
-                    struct_fields[j] = .{
-                        .name = option.name,
-                        .type = T,
-                        .default_value_ptr = default,
-                        .is_comptime = false,
-                        .alignment = @alignOf(T),
-                    };
-                }
-
-                // Add a field for `positional`.
-                if (has_positional) {
-                    const positional = command.positional;
-                    const T = positional.type;
-                    struct_fields[fields_len - 1] = .{
-                        .name = positional.name,
-                        .type = T,
-                        .default_value_ptr = &@as(T, null),
-                        .is_comptime = false,
-                        .alignment = @alignOf(T),
-                    };
-                }
 
                 const T = @Type(.{
                     .@"struct" = .{
                         .decls = &.{},
-                        .fields = &struct_fields,
+                        .fields = &(optionsToStructFields(options) ++
+                            (if (@hasField(Command, "shared_options"))
+                                optionsToStructFields(command.shared_options)
+                            else
+                                .{}) ++
+                            (if (@hasField(Command, "positional"))
+                                [1]std.builtin.Type.StructField{
+                                    .{
+                                        .name = command.positional.name,
+                                        .type = command.positional.type,
+                                        .default_value_ptr = @ptrCast(&@as(command.positional.type, null)),
+                                        .is_comptime = false,
+                                        .alignment = @alignOf(command.positional.type),
+                                    },
+                                }
+                            else
+                                .{})),
                         .is_tuple = false,
                         .layout = .auto,
                     },
@@ -112,19 +116,29 @@ pub fn Commands(comptime commands: anytype) type {
             });
         };
 
-        pub fn parse(allocator: Allocator) !Union {
+        /// Parses executable name, command and options via single call.
+        pub fn parse(allocator: Allocator) !struct { []const u8, Union } {
             var args = try std.process.argsWithAllocator(allocator);
             defer args.deinit();
 
-            // Skip program name.
             const exec_name = std.fs.path.basename(args.next().?);
-            _ = exec_name;
 
+            // TODO: Return error.
             const cmd_str: []const u8 = args.next().?;
-
             inline for (commands) |command| {
-                if (std.mem.eql(u8, cmd_str, command.name)) {
-                    return parseCommand(allocator, command, &args);
+                // Command name together with it's aliases.
+                const with_aliases = blk: {
+                    if (@hasField(@TypeOf(command), "aliases")) {
+                        break :blk command.aliases ++ .{command.name};
+                    }
+
+                    break :blk .{command.name};
+                };
+
+                inline for (with_aliases) |name| {
+                    if (std.mem.eql(u8, cmd_str, name)) {
+                        return .{ exec_name, try parseCommand(allocator, command, &args) };
+                    }
                 }
             }
 
@@ -141,7 +155,13 @@ pub fn Commands(comptime commands: anytype) type {
             const Command = @FieldType(Union, command.name);
             var c = Command{};
 
-            const options = command.options;
+            const options = blk: {
+                if (@hasField(@TypeOf(command), "shared_options")) {
+                    break :blk command.options ++ command.shared_options;
+                }
+
+                break :blk command.options;
+            };
             iter_args: while (args.next()) |option_name| {
                 inline for (options) |option| {
                     // We allow both `--my-option` and `--my_option` variants;
