@@ -62,7 +62,14 @@ pub const Headers = struct {
         if (header_list == null) {
             return error.OutOfMemory;
         }
-        return .{ .headers = header_list };
+
+        // Always add sec-CH-UA header
+        const updated_headers = libcurl.curl_slist_append(header_list, Config.HttpHeaders.sec_ch_ua);
+        if (updated_headers == null) {
+            return error.OutOfMemory;
+        }
+
+        return .{ .headers = updated_headers };
     }
 
     pub fn deinit(self: *const Headers) void {

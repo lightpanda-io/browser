@@ -163,6 +163,13 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn userAgent(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.common.user_agent,
+        .help, .version => null,
+    };
+}
+
 pub fn httpCacheDir(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp => |opts| opts.common.http_cache_dir,
@@ -287,6 +294,7 @@ pub const Common = struct {
     log_format: ?log.Format = null,
     log_filter_scopes: ?[]log.Scope = null,
     user_agent_suffix: ?[]const u8 = null,
+    user_agent: ?[]const u8 = null,
     http_cache_dir: ?[]const u8 = null,
 
     web_bot_auth_key_file: ?[]const u8 = null,
@@ -298,6 +306,7 @@ pub const Common = struct {
 /// Must be initialized with an allocator that outlives all HTTP connections.
 pub const HttpHeaders = struct {
     const user_agent_base: [:0]const u8 = "Lightpanda/1.0";
+    pub const sec_ch_ua: [:0]const u8 = "Sec-Ch-Ua: \"Lightpanda\";v=\"1\"";
 
     user_agent: [:0]const u8, // User agent value (e.g. "Lightpanda/1.0")
     user_agent_header: [:0]const u8,
@@ -305,11 +314,13 @@ pub const HttpHeaders = struct {
     proxy_bearer_header: ?[:0]const u8,
 
     pub fn init(allocator: Allocator, config: *const Config) !HttpHeaders {
-        const user_agent: [:0]const u8 = if (config.userAgentSuffix()) |suffix|
+        const user_agent: [:0]const u8 = if (config.userAgent()) |ua|
+            try allocator.dupeZ(u8, ua)
+        else if (config.userAgentSuffix()) |suffix|
             try std.fmt.allocPrintSentinel(allocator, "{s} {s}", .{ user_agent_base, suffix }, 0)
         else
             user_agent_base;
-        errdefer if (config.userAgentSuffix() != null) allocator.free(user_agent);
+        errdefer if (config.userAgent() != null or config.userAgentSuffix() != null) allocator.free(user_agent);
 
         const user_agent_header = try std.fmt.allocPrintSentinel(allocator, "User-Agent: {s}", .{user_agent}, 0);
         errdefer allocator.free(user_agent_header);
@@ -399,6 +410,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--log-filter-scopes
         \\                Filter out too verbose logs per scope:
         \\                http, unknown_prop, event, ...
+        \\
+        \\--user-agent    Override the User-Agent header entirely
+        \\                User-Agent mustn't impersonate other browser.
+        \\                Any value containing "Mozilla" is forbidden.
+        \\                The browser will continue to send Sec-Ch-Ua header.
+        \\                Incompatible with --user-agent-suffix
         \\
         \\--user-agent-suffix
         \\                Suffix to append to the Lightpanda/X.Y User-Agent
@@ -1043,11 +1060,45 @@ fn parseCommonArg(
         return true;
     }
 
+    if (std.mem.eql(u8, "--user-agent", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = opt });
+            return error.InvalidArgument;
+        };
+
+        for (str) |c| {
+            if (!std.ascii.isPrint(c)) {
+                log.fatal(.app, "not printable character", .{ .arg = opt });
+                return error.InvalidArgument;
+            }
+        }
+
+        if (std.ascii.indexOfIgnoreCase(str, "mozilla") != null) {
+            log.fatal(.app, "invalid value", .{
+                .detail = "user-agent can't contain Mozilla",
+                .arg = opt,
+            });
+            return error.InvalidArgument;
+        }
+
+        common.user_agent = try allocator.dupe(u8, str);
+        return true;
+    }
+
     if (std.mem.eql(u8, "--user-agent-suffix", opt) or std.mem.eql(u8, "--user_agent_suffix", opt)) {
         const str = args.next() orelse {
             log.fatal(.app, "missing argument value", .{ .arg = opt });
             return error.InvalidArgument;
         };
+
+        if (common.user_agent != null) {
+            log.fatal(.app, "exclusive options", .{
+                .arg = opt,
+                .detail = "--user-agent and --user-agent-suffix are exclusive",
+            });
+            return error.InvalidArgument;
+        }
+
         for (str) |c| {
             if (!std.ascii.isPrint(c)) {
                 log.fatal(.app, "not printable character", .{ .arg = opt });
