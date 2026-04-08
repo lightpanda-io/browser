@@ -36,20 +36,20 @@ pub const Command = union(enum) {
     pub fn format(self: Command, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
             .goto => |url| try writer.print("GOTO {s}", .{url}),
-            .click => |sel| try writer.print("CLICK \"{s}\"", .{sel}),
-            .type_cmd => |args| try writer.print("TYPE \"{s}\" \"{s}\"", .{ args.selector, args.value }),
-            .wait => |sel| try writer.print("WAIT \"{s}\"", .{sel}),
+            .click => |sel| try writer.print("CLICK '{s}'", .{sel}),
+            .type_cmd => |args| try writer.print("TYPE '{s}' '{s}'", .{ args.selector, args.value }),
+            .wait => |sel| try writer.print("WAIT '{s}'", .{sel}),
             .tree => try writer.writeAll("TREE"),
             .markdown => try writer.writeAll("MARKDOWN"),
             .extract => |args| {
-                try writer.print("EXTRACT \"{s}\"", .{args.selector});
+                try writer.print("EXTRACT '{s}'", .{args.selector});
                 if (args.file) |f| try writer.print(" > {s}", .{f});
             },
             .eval_js => |script| {
                 if (std.mem.indexOfScalar(u8, script, '\n') != null) {
-                    try writer.print("EVAL \"\"\"\n{s}\n\"\"\"", .{script});
+                    try writer.print("EVAL '''\n{s}\n'''", .{script});
                 } else {
-                    try writer.print("EVAL \"{s}\"", .{script});
+                    try writer.print("EVAL '{s}'", .{script});
                 }
             },
             .login => try writer.writeAll("LOGIN"),
@@ -204,16 +204,16 @@ pub const ScriptIterator = struct {
         const cmd_word = line[0..cmd_end];
         if (!eqlIgnoreCase(cmd_word, "EVAL")) return false;
         const rest = std.mem.trim(u8, line[cmd_end..], &std.ascii.whitespace);
-        return std.mem.startsWith(u8, rest, "\"\"\"");
+        return std.mem.startsWith(u8, rest, "\"\"\"") or std.mem.startsWith(u8, rest, "'''");
     }
 
-    /// Collect lines until closing """, return the JS content.
+    /// Collect lines until closing triple quote (""" or '''), return the JS content.
     fn collectEvalBlock(self: *ScriptIterator) ?[]const u8 {
         var parts: std.ArrayListUnmanaged(u8) = .empty;
         while (self.lines.next()) |line| {
             self.line_num += 1;
             const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-            if (std.mem.eql(u8, trimmed, "\"\"\"")) {
+            if (std.mem.eql(u8, trimmed, "\"\"\"") or std.mem.eql(u8, trimmed, "'''")) {
                 return parts.toOwnedSlice(self.allocator) catch null;
             }
             if (parts.items.len > 0) {
@@ -233,8 +233,10 @@ const QuotedResult = struct {
 };
 
 fn extractQuotedWithRemainder(s: []const u8) ?QuotedResult {
-    if (s.len < 2 or s[0] != '"') return null;
-    const end = std.mem.indexOfScalarPos(u8, s, 1, '"') orelse return null;
+    if (s.len < 2) return null;
+    const quote = s[0];
+    if (quote != '"' and quote != '\'') return null;
+    const end = std.mem.indexOfScalarPos(u8, s, 1, quote) orelse return null;
     return .{
         .value = s[1..end],
         .remainder = s[end + 1 ..],
@@ -285,6 +287,17 @@ test "parse TYPE two quoted args" {
     const cmd = parse("TYPE \"#email\" \"user@test.com\"");
     try std.testing.expectEqualStrings("#email", cmd.type_cmd.selector);
     try std.testing.expectEqualStrings("user@test.com", cmd.type_cmd.value);
+}
+
+test "parse TYPE single-quoted with inner double quotes" {
+    const cmd = parse("TYPE 'input[name=\"acct\"]' '$LP_USERNAME'");
+    try std.testing.expectEqualStrings("input[name=\"acct\"]", cmd.type_cmd.selector);
+    try std.testing.expectEqualStrings("$LP_USERNAME", cmd.type_cmd.value);
+}
+
+test "parse CLICK single-quoted" {
+    const cmd = parse("CLICK 'a[href*=\"login\"]'");
+    try std.testing.expectEqualStrings("a[href*=\"login\"]", cmd.click);
 }
 
 test "parse TYPE missing second arg" {

@@ -40,9 +40,10 @@ pub fn record(self: *Self, cmd: Command.Command) void {
     writer.flush() catch return;
 }
 
-/// Record a comment line (e.g. # INTENT: ...).
+/// Record a comment line (e.g. user's natural language input).
 pub fn recordComment(self: *Self, comment: []const u8) void {
     const f = self.file orelse return;
+    f.writeAll("\n# ") catch return;
     f.writeAll(comment) catch return;
     f.writeAll("\n") catch return;
 }
@@ -64,7 +65,7 @@ test "record writes state-mutating commands" {
     recorder.record(Command.parse("WAIT \".dashboard\"")); // should be skipped
     recorder.record(Command.parse("MARKDOWN")); // should be skipped
     recorder.record(Command.parse("EXTRACT \".title\""));
-    recorder.recordComment("# INTENT: LOGIN");
+    recorder.recordComment("LOGIN");
 
     // Read back and verify
     file.seekTo(0) catch unreachable;
@@ -73,9 +74,9 @@ test "record writes state-mutating commands" {
     const content = buf[0..n];
 
     try std.testing.expect(std.mem.indexOf(u8, content, "GOTO https://example.com\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "CLICK \"Login\"\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "EXTRACT \".title\"\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "# INTENT: LOGIN\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "CLICK 'Login'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "EXTRACT '.title'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "\n# LOGIN\n") != null);
     // Verify skipped commands are NOT present
     try std.testing.expect(std.mem.indexOf(u8, content, "TREE") == null);
     try std.testing.expect(std.mem.indexOf(u8, content, "WAIT") == null);

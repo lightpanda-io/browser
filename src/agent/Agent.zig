@@ -22,11 +22,16 @@ const default_system_prompt =
     \\Use the semantic_tree or interactiveElements tools to understand page structure
     \\before clicking or filling forms. Be concise in your responses.
     \\
-    \\IMPORTANT: When using click or fill tools, always pass a CSS selector
-    \\instead of backendNodeId. This makes actions reproducible across sessions.
-    \\When filling credentials, pass environment variable references like
-    \\$LP_USERNAME and $LP_PASSWORD directly as the value — they will be
-    \\resolved automatically. Do NOT use getEnv to resolve them first.
+    \\IMPORTANT RULES:
+    \\- NEVER use backendNodeId with click or fill tools. Always use a CSS selector.
+    \\  Use findElement to resolve a description into a CSS selector if needed.
+    \\  Example: click with selector "#login-btn", NOT with backendNodeId 42.
+    \\- Use specific CSS selectors that uniquely identify elements. Include
+    \\  distinguishing attributes like value, name, or position to avoid ambiguity.
+    \\  Example: input[type="submit"][value="login"], NOT just input[type="submit"].
+    \\- When filling credentials, pass environment variable references like
+    \\  $LP_USERNAME and $LP_PASSWORD directly as the value — they will be
+    \\  resolved automatically. Do NOT use getEnv to resolve them first.
 ;
 
 const self_heal_prompt_prefix =
@@ -175,14 +180,14 @@ fn runRepl(self: *Self) void {
             .exit => break,
             .comment => continue,
             .login => {
-                self.recorder.recordComment("# INTENT: LOGIN");
+                self.recorder.recordComment(line);
                 self.processUserMessage(login_prompt) catch |err| {
                     const msg = std.fmt.allocPrint(self.allocator, "LOGIN failed: {s}", .{@errorName(err)}) catch "LOGIN failed";
                     self.terminal.printError(msg);
                 };
             },
             .accept_cookies => {
-                self.recorder.recordComment("# INTENT: ACCEPT_COOKIES");
+                self.recorder.recordComment(line);
                 self.processUserMessage(accept_cookies_prompt) catch |err| {
                     const msg = std.fmt.allocPrint(self.allocator, "ACCEPT_COOKIES failed: {s}", .{@errorName(err)}) catch "ACCEPT_COOKIES failed";
                     self.terminal.printError(msg);
@@ -192,6 +197,7 @@ fn runRepl(self: *Self) void {
                 // "quit" as a convenience alias
                 if (std.mem.eql(u8, line, "quit")) break;
 
+                self.recorder.recordComment(line);
                 self.processUserMessage(line) catch |err| {
                     const msg = std.fmt.allocPrint(self.allocator, "Request failed: {s}", .{@errorName(err)}) catch "Request failed";
                     self.terminal.printError(msg);

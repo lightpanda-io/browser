@@ -112,7 +112,8 @@ pub const InteractiveElement = struct {
 
         if (self.value) |v| {
             try jw.objectField("value");
-            try jw.write(v);
+            const is_password = if (self.input_type) |t| std.mem.eql(u8, t, "password") else false;
+            try jw.write(if (is_password) "***" else v);
         }
 
         if (self.element_name) |v| {

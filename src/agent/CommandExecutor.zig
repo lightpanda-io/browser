@@ -61,11 +61,15 @@ fn execGoto(self: *Self, arena: std.mem.Allocator, raw_url: []const u8) ExecResu
 
 fn execClick(self: *Self, arena: std.mem.Allocator, raw_target: []const u8) ExecResult {
     const target = substituteEnvVars(arena, raw_target);
-    // First get interactive elements to find the target
+
+    // Try as CSS selector first
+    const selector_result = self.callTool(arena, "click", buildJson(arena, .{ .selector = target }));
+    if (!selector_result.failed) return selector_result;
+
+    // Fall back to text search in interactive elements
     const elements_result = self.tool_executor.call(arena, "interactiveElements", "") catch
         return .{ .output = "failed to get interactive elements", .failed = true };
 
-    // Try to find a backendNodeId by searching the elements result for the target text
     if (findNodeIdByText(elements_result, target)) |node_id| {
         const args = std.fmt.allocPrint(arena, "{{\"backendNodeId\":{d}}}", .{node_id}) catch
             return .{ .output = "failed to build click args", .failed = true };
