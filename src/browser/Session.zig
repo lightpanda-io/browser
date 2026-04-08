@@ -236,6 +236,9 @@ pub fn releaseOrigin(self: *Session, origin: *js.Origin) void {
 /// Reset page_arena and factory for a clean slate.
 /// Called when root page is removed.
 fn resetPageResources(self: *Session) void {
+    self.identity.deinit();
+    self.identity = .{};
+
     // Force cleanup all remaining finalized objects
     {
         var it = self.finalizer_callbacks.valueIterator();
@@ -259,9 +262,6 @@ fn resetPageResources(self: *Session) void {
         }
         self.temps = .empty;
     }
-
-    self.identity.deinit();
-    self.identity = .{};
 
     if (comptime IS_DEBUG) {
         std.debug.assert(self.origins.count() == 0);
