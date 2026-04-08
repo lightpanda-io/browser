@@ -52,6 +52,11 @@ pub fn deinit(self: *Scheduler) void {
     finalizeTasks(&self.high_priority);
 }
 
+pub fn reset(self: *Scheduler) void {
+    self.low_priority.clearRetainingCapacity();
+    self.high_priority.clearRetainingCapacity();
+}
+
 const AddOpts = struct {
     name: []const u8 = "",
     low_priority: bool = false,
