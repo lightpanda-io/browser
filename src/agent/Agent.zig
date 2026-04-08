@@ -53,7 +53,7 @@ const accept_cookies_prompt =
 ;
 
 allocator: std.mem.Allocator,
-ai_client: ?AiClient,
+ai_client: ?zenai.provider.Client,
 tool_executor: *ToolExecutor,
 terminal: Terminal,
 cmd_executor: CommandExecutor,
@@ -65,21 +65,6 @@ model: []const u8,
 system_prompt: []const u8,
 script_file: ?[]const u8,
 record_file: ?[]const u8,
-
-const AiClient = union(Config.AiProvider) {
-    anthropic: *zenai.anthropic.Client,
-    openai: *zenai.openai.Client,
-    gemini: *zenai.gemini.Client,
-    ollama: *zenai.openai.Client,
-
-    fn toProvider(self: AiClient) zenai.provider.Client {
-        return switch (self) {
-            .anthropic => |c| .{ .anthropic = c },
-            .openai, .ollama => |c| .{ .openai = c },
-            .gemini => |c| .{ .gemini = c },
-        };
-    }
-};
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
     const is_script_mode = opts.script_file != null;
@@ -98,14 +83,15 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
-    const ai_client: ?AiClient = if (api_key) |key| switch (opts.provider) {
+    const ai_client: ?zenai.provider.Client = if (api_key) |key| switch (opts.provider) {
         inline else => |tag| blk: {
-            const ClientPtr = @FieldType(AiClient, @tagName(tag));
+            const ProviderClient = zenai.provider.Client;
+            const ClientPtr = @FieldType(ProviderClient, @tagName(tag));
             const Client = @typeInfo(ClientPtr).pointer.child;
             const client = try allocator.create(Client);
             const url: ?[]const u8 = opts.base_url orelse if (tag == .ollama) "http://localhost:11434/v1" else null;
             client.* = Client.init(allocator, key, if (url) |u| .{ .base_url = u } else .{});
-            break :blk @unionInit(AiClient, @tagName(tag), client);
+            break :blk @unionInit(ProviderClient, @tagName(tag), client);
         },
     } else null;
 
@@ -350,7 +336,7 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
         .content = try ma.dupe(u8, user_input),
     });
 
-    const provider_client = (self.ai_client orelse return error.NoAiClient).toProvider();
+    const provider_client = self.ai_client orelse return error.NoAiClient;
 
     var result = provider_client.runTools(
         self.model,
