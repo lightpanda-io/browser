@@ -413,7 +413,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--user-agent    Override the User-Agent header entirely
         \\                User-Agent mustn't impersonate other browser.
-        \\                Starting the value with "Mozilla/5.0" is forbidden.
+        \\                Any value containing "Mozilla" is forbidden.
         \\                The browser will continue to send Sec-Ch-Ua header.
         \\                Incompatible with --user-agent-suffix
         \\
@@ -1073,9 +1073,9 @@ fn parseCommonArg(
             }
         }
 
-        if (std.mem.startsWith(u8, str, "Mozilla/5.0")) {
+        if (std.ascii.indexOfIgnoreCase(str, "mozilla") != null) {
             log.fatal(.app, "invalid value", .{
-                .detail = "user-agent can't start with Mozilla/5.0",
+                .detail = "user-agent can't contain Mozilla",
                 .arg = opt,
             });
             return error.InvalidArgument;
