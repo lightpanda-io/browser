@@ -30,7 +30,7 @@ pub const Opts = struct {
     strip: Opts.Strip = .{},
     shadow: Opts.Shadow = .rendered,
 
-    pub const Strip = struct {
+    pub const Strip = packed struct(u3) {
         js: bool = false,
         ui: bool = false,
         css: bool = false,
