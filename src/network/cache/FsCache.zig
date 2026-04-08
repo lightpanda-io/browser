@@ -476,6 +476,10 @@ test "FsCache: put override" {
 }
 
 test "FsCache: garbage file" {
+    const LogFilter = @import("../../testing.zig").LogFilter;
+    const filter: LogFilter = .init(&.{.cache});
+    defer filter.deinit();
+
     var setup = try setupCache();
     defer {
         setup.cache.deinit();
