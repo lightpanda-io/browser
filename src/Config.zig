@@ -236,6 +236,7 @@ pub const Agent = struct {
     repl: bool = true,
     script_file: ?[]const u8 = null,
     record_file: ?[]const u8 = null,
+    self_heal: bool = false,
 };
 
 pub const DumpFormat = enum {
@@ -955,6 +956,11 @@ fn parseAgentArgs(
                 return error.InvalidArgument;
             };
             result.script_file = str;
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--self-heal", opt) or std.mem.eql(u8, "--self_heal", opt)) {
+            result.self_heal = true;
             continue;
         }
 

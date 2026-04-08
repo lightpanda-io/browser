@@ -76,6 +76,7 @@ model: []const u8,
 system_prompt: []const u8,
 script_file: ?[]const u8,
 record_file: ?[]const u8,
+self_heal: bool,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
     const is_script_mode = opts.script_file != null;
@@ -125,6 +126,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
         .record_file = opts.record_file,
+        .self_heal = opts.self_heal,
     };
 
     self.cmd_executor = CommandExecutor.init(allocator, tool_executor, &self.terminal);
@@ -291,8 +293,8 @@ fn runScript(self: *Self, path: []const u8) void {
                 std.debug.print("\n", .{});
 
                 if (result.failed) {
-                    // Attempt self-healing via LLM
-                    if (self.ai_client != null) {
+                    // Attempt self-healing via LLM (opt-in with --self-heal)
+                    if (self.self_heal and self.ai_client != null) {
                         self.terminal.printInfo("Command failed, attempting self-healing...");
                         if (self.attemptSelfHeal(last_intent, entry.raw_line)) {
                             continue;
