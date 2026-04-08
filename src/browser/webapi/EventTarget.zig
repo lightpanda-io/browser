@@ -19,7 +19,7 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
-const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const EventManager = @import("../EventManager.zig");
 
 const Event = @import("Event.zig");
@@ -52,8 +52,8 @@ pub const Type = union(enum) {
     websocket: *@import("net/WebSocket.zig"),
 };
 
-pub fn init(page: *Page) !*EventTarget {
-    return page._factory.create(EventTarget{
+pub fn init(session: *Session) !*EventTarget {
+    return session.factory.create(EventTarget{
         ._type = .generic,
     });
 }
