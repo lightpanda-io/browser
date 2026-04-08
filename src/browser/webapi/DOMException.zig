@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
 
 const DOMException = @This();
 
@@ -129,7 +128,7 @@ pub fn getMessage(self: *const DOMException) []const u8 {
     };
 }
 
-pub fn toString(self: *const DOMException, page: *Page) ![]const u8 {
+pub fn toString(self: *const DOMException, exec: *js.Execution) ![]const u8 {
     const msg = blk: {
         if (self._custom_message) |msg| {
             break :blk msg;
@@ -139,7 +138,7 @@ pub fn toString(self: *const DOMException, page: *Page) ![]const u8 {
             else => break :blk self.getMessage(),
         }
     };
-    return std.fmt.bufPrint(&page.buf, "{s}: {s}", .{ self.getName(), msg }) catch return msg;
+    return std.fmt.bufPrint(exec.buf, "{s}: {s}", .{ self.getName(), msg }) catch return msg;
 }
 
 const Code = enum(u8) {

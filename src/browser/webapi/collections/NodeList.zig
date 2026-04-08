@@ -83,7 +83,7 @@ pub fn keys(self: *NodeList, page: *Page) !*KeyIterator {
 }
 
 pub fn values(self: *NodeList, page: *Page) !*ValueIterator {
-    return .init(.{ .list = self }, page.js.execution);
+    return .init(.{ .list = self }, page);
 }
 
 pub fn entries(self: *NodeList, page: *Page) !*EntryIterator {
@@ -101,7 +101,6 @@ pub fn forEach(self: *NodeList, cb: js.Function, page: *Page) !void {
             return;
         };
     }
-}
 }
 
 const GenericIterator = @import("iterator.zig").Entry;

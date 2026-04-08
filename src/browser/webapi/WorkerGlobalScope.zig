@@ -33,7 +33,6 @@ const Worker = @import("Worker.zig");
 const Crypto = @import("Crypto.zig");
 const Console = @import("Console.zig");
 const EventTarget = @import("EventTarget.zig");
-const Performance = @import("Performance.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 
@@ -67,7 +66,6 @@ _closed: bool = false,
 _proto: *EventTarget,
 _console: Console = .init,
 _crypto: Crypto = .init,
-_performance: Performance,
 _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
@@ -92,8 +90,7 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
         ._proto = undefined,
         ._factory = factory,
         ._worker = worker,
-        ._event_manager = EventManagerBase.init(arena),
-        ._performance = .init(),
+        ._event_manager = .init(arena),
     });
     errdefer factory.destroy(self);
 
@@ -146,10 +143,6 @@ pub fn getConsole(self: *WorkerGlobalScope) *Console {
 
 pub fn getCrypto(self: *WorkerGlobalScope) *Crypto {
     return &self._crypto;
-}
-
-pub fn getPerformance(self: *WorkerGlobalScope) *Performance {
-    return &self._performance;
 }
 
 pub fn getOnError(self: *const WorkerGlobalScope) ?JS.Function.Global {
@@ -414,7 +407,6 @@ pub const JsApi = struct {
     pub const self = bridge.accessor(WorkerGlobalScope.getSelf, null, .{});
     pub const console = bridge.accessor(WorkerGlobalScope.getConsole, null, .{});
     pub const crypto = bridge.accessor(WorkerGlobalScope.getCrypto, null, .{});
-    pub const performance = bridge.accessor(WorkerGlobalScope.getPerformance, null, .{});
 
     pub const onerror = bridge.accessor(WorkerGlobalScope.getOnError, WorkerGlobalScope.setOnError, .{});
     pub const onrejectionhandled = bridge.accessor(WorkerGlobalScope.getOnRejectionHandled, WorkerGlobalScope.setOnRejectionHandled, .{});
