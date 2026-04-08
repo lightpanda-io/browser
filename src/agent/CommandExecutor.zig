@@ -70,7 +70,7 @@ fn execClick(self: *Self, arena: std.mem.Allocator, raw_target: []const u8) Exec
     const elements_result = self.tool_executor.call(arena, "interactiveElements", "") catch
         return .{ .output = "failed to get interactive elements", .failed = true };
 
-    if (findNodeIdByText(elements_result, target)) |node_id| {
+    if (findNodeIdByText(arena, elements_result, target)) |node_id| {
         const args = std.fmt.allocPrint(arena, "{{\"backendNodeId\":{d}}}", .{node_id}) catch
             return .{ .output = "failed to build click args", .failed = true };
         return self.callTool(arena, "click", args);
@@ -200,25 +200,28 @@ fn sanitizePath(path: []const u8) ?[]const u8 {
     return path;
 }
 
-fn findNodeIdByText(elements_json: []const u8, target: []const u8) ?u32 {
-    // Simple text search in the JSON result for the target text
-    // Look for patterns like "backendNodeId":N near the target text
-    // This is a heuristic — search for the target text, then scan backwards for backendNodeId
-    var pos: usize = 0;
-    while (std.mem.indexOfPos(u8, elements_json, pos, target)) |idx| {
-        // Search backwards from idx for "backendNodeId":
-        const search_start = if (idx > 500) idx - 500 else 0;
-        const window = elements_json[search_start..idx];
-        if (std.mem.lastIndexOf(u8, window, "\"backendNodeId\":")) |bid_offset| {
-            const num_start = search_start + bid_offset + "\"backendNodeId\":".len;
-            const num_end = std.mem.indexOfAnyPos(u8, elements_json, num_start, ",}] \n") orelse continue;
-            const num_str = elements_json[num_start..num_end];
-            return std.fmt.parseInt(u32, num_str, 10) catch {
-                pos = idx + 1;
-                continue;
-            };
+const ElementMatch = struct {
+    backendNodeId: ?u32 = null,
+    name: ?[]const u8 = null,
+    value: ?[]const u8 = null,
+    elementName: ?[]const u8 = null,
+    placeholder: ?[]const u8 = null,
+};
+
+fn findNodeIdByText(arena: std.mem.Allocator, elements_json: []const u8, target: []const u8) ?u32 {
+    const elements = std.json.parseFromSliceLeaky([]ElementMatch, arena, elements_json, .{
+        .ignore_unknown_fields = true,
+    }) catch return null;
+
+    for (elements) |el| {
+        const fields = [_]?[]const u8{ el.name, el.value, el.elementName, el.placeholder };
+        for (fields) |maybe_field| {
+            if (maybe_field) |field| {
+                if (std.ascii.indexOfIgnoreCase(field, target) != null) {
+                    return el.backendNodeId;
+                }
+            }
         }
-        pos = idx + 1;
     }
     return null;
 }
@@ -299,4 +302,40 @@ test "substituteEnvVars bare dollar" {
 
     const result = substituteEnvVars(arena.allocator(), "price is $ 5");
     try std.testing.expectEqualStrings("price is $ 5", result);
+}
+
+test "findNodeIdByText matches name field" {
+    const json =
+        \\[{"backendNodeId":42,"tagName":"button","role":"button","name":"Sign In","type":"native","tabIndex":0}]
+    ;
+    try std.testing.expectEqual(@as(?u32, 42), findNodeIdByText(std.testing.allocator, json, "Sign In"));
+}
+
+test "findNodeIdByText matches case-insensitively" {
+    const json =
+        \\[{"backendNodeId":7,"tagName":"a","role":"link","name":"Login Here","type":"native","tabIndex":0}]
+    ;
+    try std.testing.expectEqual(@as(?u32, 7), findNodeIdByText(std.testing.allocator, json, "login here"));
+}
+
+test "findNodeIdByText matches elementName" {
+    const json =
+        \\[{"backendNodeId":10,"tagName":"input","role":null,"name":null,"type":"native","tabIndex":0,"elementName":"username"}]
+    ;
+    try std.testing.expectEqual(@as(?u32, 10), findNodeIdByText(std.testing.allocator, json, "username"));
+}
+
+test "findNodeIdByText returns null on no match" {
+    const json =
+        \\[{"backendNodeId":1,"tagName":"button","role":"button","name":"Submit","type":"native","tabIndex":0}]
+    ;
+    try std.testing.expectEqual(@as(?u32, null), findNodeIdByText(std.testing.allocator, json, "Cancel"));
+}
+
+test "findNodeIdByText handles empty array" {
+    try std.testing.expectEqual(@as(?u32, null), findNodeIdByText(std.testing.allocator, "[]", "anything"));
+}
+
+test "findNodeIdByText handles invalid json" {
+    try std.testing.expectEqual(@as(?u32, null), findNodeIdByText(std.testing.allocator, "not json", "test"));
 }
