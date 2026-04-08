@@ -66,7 +66,7 @@ fn execClick(self: *Self, arena: std.mem.Allocator, raw_target: []const u8) Exec
         return .{ .output = "failed to get interactive elements", .failed = true };
 
     // Try to find a backendNodeId by searching the elements result for the target text
-    if (findNodeIdByText(arena, elements_result, target)) |node_id| {
+    if (findNodeIdByText(elements_result, target)) |node_id| {
         const args = std.fmt.allocPrint(arena, "{{\"backendNodeId\":{d}}}", .{node_id}) catch
             return .{ .output = "failed to build click args", .failed = true };
         return self.callTool(arena, "click", args);
@@ -196,8 +196,7 @@ fn sanitizePath(path: []const u8) ?[]const u8 {
     return path;
 }
 
-fn findNodeIdByText(arena: std.mem.Allocator, elements_json: []const u8, target: []const u8) ?u32 {
-    _ = arena;
+fn findNodeIdByText(elements_json: []const u8, target: []const u8) ?u32 {
     // Simple text search in the JSON result for the target text
     // Look for patterns like "backendNodeId":N near the target text
     // This is a heuristic — search for the target text, then scan backwards for backendNodeId
