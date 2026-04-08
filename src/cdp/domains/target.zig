@@ -250,7 +250,25 @@ fn attachToTarget(cmd: *CDP.Command) !void {
 }
 
 fn attachToBrowserTarget(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    // When called during STARTUP (e.g. Playwright's newCDPSession before a
+    // real BrowserContext exists), create a browser-level session so the
+    // driver can proceed. This mirrors the pattern in setAutoAttach.
+    const bc = cmd.browser_context orelse {
+        const session_id = cmd.cdp.session_id_gen.next();
+
+        try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
+            .sessionId = session_id,
+            .targetInfo = TargetInfo{
+                .targetId = "TID-BROWSER",
+                .title = "",
+                .url = "",
+                .type = "browser",
+                .browserContextId = null,
+            },
+        }, .{});
+
+        return cmd.sendResult(.{ .sessionId = session_id }, .{});
+    };
 
     const session_id = bc.session_id orelse cmd.cdp.session_id_gen.next();
 
@@ -790,5 +808,62 @@ test "cdp.target: setAutoAttach false sends detachedFromTarget" {
         try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = session_id }, .{});
         try testing.expectEqual(null, bc.session_id);
         try ctx.expectSentResult(null, .{ .id = 12 });
+    }
+}
+
+test "cdp.target: attachToBrowserTarget without browser context" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    {
+        // no browser context - should still respond with a browser session
+        try ctx.processMessage(.{ .id = 10, .method = "Target.attachToBrowserTarget" });
+
+        try ctx.expectSentEvent("Target.attachedToTarget", .{
+            .sessionId = "SID-000000000A",
+            .targetInfo = .{
+                .targetId = "TID-BROWSER",
+                .title = "",
+                .url = "",
+                .type = "browser",
+                .attached = true,
+                .canAccessOpener = false,
+                .browserContextId = null,
+            },
+            .waitingForDebugger = false,
+        }, .{});
+
+        try ctx.expectSentResult(.{
+            .sessionId = "SID-000000000A",
+        }, .{ .id = 10 });
+    }
+}
+
+test "cdp.target: attachToBrowserTarget with browser context" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    {
+        const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
+        try ctx.processMessage(.{ .id = 10, .method = "Target.attachToBrowserTarget" });
+
+        const session_id = bc.session_id.?;
+        try ctx.expectSentEvent("Target.attachedToTarget", .{
+            .sessionId = session_id,
+            .targetInfo = .{
+                .targetId = "BID-9",
+                .title = "",
+                .url = "",
+                .type = "browser",
+                .attached = true,
+                .canAccessOpener = false,
+                .browserContextId = null,
+            },
+            .waitingForDebugger = false,
+        }, .{});
+
+        try ctx.expectSentResult(.{
+            .sessionId = session_id,
+        }, .{ .id = 10 });
     }
 }

@@ -194,6 +194,13 @@ fn dispatchStartupCommand(command: *Command, method: []const u8) !void {
         return dispatchCommand(command, method);
     }
 
+    // Playwright sends Target.attachToBrowserTarget during newCDPSession()
+    // before a real BrowserContext exists. Forward to the real handler so
+    // it can respond appropriately instead of returning a silent null.
+    if (std.mem.eql(u8, method, "Target.attachToBrowserTarget")) {
+        return dispatchCommand(command, method);
+    }
+
     return command.sendResult(null, .{});
 }
 
