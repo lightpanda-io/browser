@@ -242,6 +242,13 @@ pub const tool_list = [_]protocol.Tool{
         ),
     },
     .{
+        .name = "consoleLogs",
+        .description = "Get buffered console.log/warn/error messages from the current page. Returns all messages since last call and clears the buffer.",
+        .inputSchema = protocol.minify(
+            \\{ "type": "object", "properties": {} }
+        ),
+    },
+    .{
         .name = "getEnv",
         .description = "Read the value of an environment variable. Useful for retrieving credentials or configuration without hardcoding them.",
         .inputSchema = protocol.minify(

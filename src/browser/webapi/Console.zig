@@ -38,18 +38,22 @@ pub fn trace(_: *const Console, values: []js.Value, page: *Page) !void {
 
 pub fn debug(_: *const Console, values: []js.Value, page: *Page) void {
     logger.debug(.js, "console.debug", .{ValueWriter{ .page = page, .values = values }});
+    page.appendConsoleMessage(.debug, values);
 }
 
 pub fn info(_: *const Console, values: []js.Value, page: *Page) void {
     logger.info(.js, "console.info", .{ValueWriter{ .page = page, .values = values }});
+    page.appendConsoleMessage(.info, values);
 }
 
 pub fn log(_: *const Console, values: []js.Value, page: *Page) void {
     logger.info(.js, "console.log", .{ValueWriter{ .page = page, .values = values }});
+    page.appendConsoleMessage(.log, values);
 }
 
 pub fn warn(_: *const Console, values: []js.Value, page: *Page) void {
     logger.warn(.js, "console.warn", .{ValueWriter{ .page = page, .values = values }});
+    page.appendConsoleMessage(.warn, values);
 }
 
 pub fn clear(_: *const Console) void {}
@@ -59,10 +63,12 @@ pub fn assert(_: *const Console, assertion: js.Value, values: []js.Value, page: 
         return;
     }
     logger.warn(.js, "console.assert", .{ValueWriter{ .page = page, .values = values }});
+    page.appendConsoleMessage(.warn, values);
 }
 
 pub fn @"error"(_: *const Console, values: []js.Value, page: *Page) void {
     logger.warn(.js, "console.error", .{ValueWriter{ .page = page, .values = values, .include_stack = true }});
+    page.appendConsoleMessage(.@"error", values);
 }
 
 pub fn table(_: *const Console, data: js.Value, columns: ?js.Value) void {

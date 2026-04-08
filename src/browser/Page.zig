@@ -240,6 +240,7 @@ _parent_notified: bool = false,
 
 _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
+console_messages: std.ArrayListUnmanaged(ConsoleMessage) = .{},
 _navigated_options: ?NavigatedOpts = null,
 
 pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void {
@@ -2530,6 +2531,16 @@ fn isXmlNameChar(c: u21) bool {
         (c >= 0x203F and c <= 0x2040);
 }
 
+pub fn appendConsoleMessage(self: *Page, level: ConsoleMessage.Level, values: []JS.Value) void {
+    var aw: std.Io.Writer.Allocating = .init(self.arena);
+    for (values, 0..) |value, i| {
+        if (i > 0) aw.writer.writeAll(" ") catch return;
+        value.format(&aw.writer) catch return;
+    }
+    const text = aw.written();
+    self.console_messages.append(self.arena, .{ .level = level, .text = text }) catch return;
+}
+
 pub fn dupeString(self: *Page, value: []const u8) ![]const u8 {
     if (String.intern(value)) |v| {
         return v;
@@ -3256,6 +3267,13 @@ pub const NavigateReason = enum {
     history,
     navigation,
     initialFrameNavigation,
+};
+
+pub const ConsoleMessage = struct {
+    level: Level,
+    text: []const u8,
+
+    pub const Level = enum { log, debug, info, warn, @"error" };
 };
 
 pub const NavigateOpts = struct {

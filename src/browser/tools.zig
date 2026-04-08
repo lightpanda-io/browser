@@ -56,6 +56,7 @@ const Action = enum {
     setChecked,
     findElement,
     getEnv,
+    consoleLogs,
 };
 
 const action_map = std.StaticStringMap(Action).initComptime(.{
@@ -80,6 +81,7 @@ const action_map = std.StaticStringMap(Action).initComptime(.{
     .{ "setChecked", .setChecked },
     .{ "findElement", .findElement },
     .{ "getEnv", .getEnv },
+    .{ "consoleLogs", .consoleLogs },
 });
 
 /// Execute a tool by name. Returns the result text.
@@ -116,6 +118,7 @@ pub fn call(
         .setChecked => execSetChecked(session, registry, arena, arguments),
         .findElement => execFindElement(session, registry, arena, arguments),
         .getEnv => execGetEnv(arena, arguments),
+        .consoleLogs => execConsoleLogs(session, arena),
     };
 }
 
@@ -507,6 +510,23 @@ fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]
     const value = std.posix.getenv(name_z) orelse
         return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{args.name}) catch ToolError.InternalError;
     return value;
+}
+
+fn execConsoleLogs(
+    session: *lp.Session,
+    arena: std.mem.Allocator,
+) ToolError![]const u8 {
+    const page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const messages = page.console_messages.items;
+    if (messages.len == 0) return "No console messages.";
+
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    const writer = &aw.writer;
+    for (messages) |msg| {
+        writer.print("[{s}] {s}\n", .{ @tagName(msg.level), msg.text }) catch return ToolError.InternalError;
+    }
+    page.console_messages.clearRetainingCapacity();
+    return aw.written();
 }
 
 // --- Shared helpers ---
