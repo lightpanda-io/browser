@@ -434,9 +434,9 @@ fn getEnvApiKey(provider_type: Config.AiProvider) ?[:0]const u8 {
 
 fn defaultModel(provider_type: Config.AiProvider) []const u8 {
     return switch (provider_type) {
-        .anthropic => "claude-sonnet-4-20250514",
-        .openai => "gpt-4o",
-        .gemini => "gemini-2.5-flash",
+        .anthropic => "claude-haiku-4-5-20251001",
+        .openai => "gpt-5.4-nano-2026-03-17",
+        .gemini => "gemini-3.1-flash-lite-preview",
         .ollama => "gemma4",
     };
 }

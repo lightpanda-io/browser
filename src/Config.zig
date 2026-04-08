@@ -506,7 +506,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\agent command
         \\Starts an interactive AI agent that can browse the web
-        \\Example: {0s} agent --provider anthropic --model claude-sonnet-4-20250514
+        \\Example: {0s} agent --provider anthropic --model claude-haiku-4-5-20251001
         \\Example: {0s} agent --provider ollama --model gemma4
         \\
         \\Options:
