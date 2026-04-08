@@ -92,20 +92,11 @@ pub fn entries(self: *NodeList, page: *Page) !*EntryIterator {
 
 pub fn forEach(self: *NodeList, cb: js.Function, page: *Page) !void {
     var i: i32 = 0;
-
-    var it = try self.values(page);
-
-    // the iterator takes a reference against our list
-    defer self.releaseRef(page._session);
-
     while (true) : (i += 1) {
-        const next = try it.next(page);
-        if (next.done) {
-            return;
-        }
+        const node = try self.getAtIndex(@intCast(i), page) orelse return;
 
         var caught: js.TryCatch.Caught = undefined;
-        cb.tryCall(void, .{ next.value, i, self }, &caught) catch {
+        cb.tryCall(void, .{ node, i, self }, &caught) catch {
             log.debug(.js, "forEach callback", .{ .caught = caught, .source = "nodelist" });
             return;
         };
