@@ -304,38 +304,34 @@ test "substituteEnvVars bare dollar" {
     try std.testing.expectEqualStrings("price is $ 5", result);
 }
 
-test "findNodeIdByText matches name field" {
-    const json =
+test "findNodeIdByText" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // matches name field
+    try std.testing.expectEqual(@as(?u32, 42), findNodeIdByText(a,
         \\[{"backendNodeId":42,"tagName":"button","role":"button","name":"Sign In","type":"native","tabIndex":0}]
-    ;
-    try std.testing.expectEqual(@as(?u32, 42), findNodeIdByText(std.testing.allocator, json, "Sign In"));
-}
+    , "Sign In"));
 
-test "findNodeIdByText matches case-insensitively" {
-    const json =
+    // matches case-insensitively
+    try std.testing.expectEqual(@as(?u32, 7), findNodeIdByText(a,
         \\[{"backendNodeId":7,"tagName":"a","role":"link","name":"Login Here","type":"native","tabIndex":0}]
-    ;
-    try std.testing.expectEqual(@as(?u32, 7), findNodeIdByText(std.testing.allocator, json, "login here"));
-}
+    , "login here"));
 
-test "findNodeIdByText matches elementName" {
-    const json =
+    // matches elementName
+    try std.testing.expectEqual(@as(?u32, 10), findNodeIdByText(a,
         \\[{"backendNodeId":10,"tagName":"input","role":null,"name":null,"type":"native","tabIndex":0,"elementName":"username"}]
-    ;
-    try std.testing.expectEqual(@as(?u32, 10), findNodeIdByText(std.testing.allocator, json, "username"));
-}
+    , "username"));
 
-test "findNodeIdByText returns null on no match" {
-    const json =
+    // returns null on no match
+    try std.testing.expectEqual(@as(?u32, null), findNodeIdByText(a,
         \\[{"backendNodeId":1,"tagName":"button","role":"button","name":"Submit","type":"native","tabIndex":0}]
-    ;
-    try std.testing.expectEqual(@as(?u32, null), findNodeIdByText(std.testing.allocator, json, "Cancel"));
-}
+    , "Cancel"));
 
-test "findNodeIdByText handles empty array" {
-    try std.testing.expectEqual(@as(?u32, null), findNodeIdByText(std.testing.allocator, "[]", "anything"));
-}
+    // handles empty array
+    try std.testing.expectEqual(@as(?u32, null), findNodeIdByText(a, "[]", "anything"));
 
-test "findNodeIdByText handles invalid json" {
-    try std.testing.expectEqual(@as(?u32, null), findNodeIdByText(std.testing.allocator, "not json", "test"));
+    // handles invalid json
+    try std.testing.expectEqual(@as(?u32, null), findNodeIdByText(a, "not json", "test"));
 }
