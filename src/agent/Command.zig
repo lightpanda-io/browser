@@ -24,6 +24,41 @@ pub const Command = union(enum) {
     exit: void,
     comment: void,
     natural_language: []const u8,
+
+    pub fn isRecorded(self: Command) bool {
+        return switch (self) {
+            .wait, .tree, .markdown, .comment, .exit => false,
+            .goto, .click, .type_cmd, .extract, .eval_js, .login, .accept_cookies => true,
+            .natural_language => |text| text.len > 0,
+        };
+    }
+
+    pub fn format(self: Command, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        switch (self) {
+            .goto => |url| try writer.print("GOTO {s}", .{url}),
+            .click => |sel| try writer.print("CLICK \"{s}\"", .{sel}),
+            .type_cmd => |args| try writer.print("TYPE \"{s}\" \"{s}\"", .{ args.selector, args.value }),
+            .wait => |sel| try writer.print("WAIT \"{s}\"", .{sel}),
+            .tree => try writer.writeAll("TREE"),
+            .markdown => try writer.writeAll("MARKDOWN"),
+            .extract => |args| {
+                try writer.print("EXTRACT \"{s}\"", .{args.selector});
+                if (args.file) |f| try writer.print(" > {s}", .{f});
+            },
+            .eval_js => |script| {
+                if (std.mem.indexOfScalar(u8, script, '\n') != null) {
+                    try writer.print("EVAL \"\"\"\n{s}\n\"\"\"", .{script});
+                } else {
+                    try writer.print("EVAL \"{s}\"", .{script});
+                }
+            },
+            .login => try writer.writeAll("LOGIN"),
+            .accept_cookies => try writer.writeAll("ACCEPT_COOKIES"),
+            .exit => try writer.writeAll("EXIT"),
+            .comment => try writer.writeAll("#"),
+            .natural_language => |text| try writer.writeAll(text),
+        }
+    }
 };
 
 /// Parse a line of REPL input into a Pandascript command.
@@ -321,6 +356,18 @@ test "parse whitespace trimming" {
 test "parse empty input" {
     const cmd = parse("");
     try std.testing.expect(cmd == .natural_language);
+}
+
+test "isRecorded" {
+    try std.testing.expect(parse("GOTO https://example.com").isRecorded());
+    try std.testing.expect(parse("CLICK \"btn\"").isRecorded());
+    try std.testing.expect(parse("TYPE \"sel\" \"val\"").isRecorded());
+    try std.testing.expect(parse("EXTRACT \".title\"").isRecorded());
+    try std.testing.expect(parse("EVAL \"1+1\"").isRecorded());
+    try std.testing.expect(!parse("TREE").isRecorded());
+    try std.testing.expect(!parse("WAIT \".x\"").isRecorded());
+    try std.testing.expect(!parse("MARKDOWN").isRecorded());
+    try std.testing.expect(!parse("md").isRecorded());
 }
 
 test "ScriptIterator basic commands" {

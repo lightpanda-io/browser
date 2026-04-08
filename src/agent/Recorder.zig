@@ -27,23 +27,17 @@ pub fn deinit(self: *Self) void {
     if (self.file) |f| f.close();
 }
 
-/// Record a successfully executed command line to the .panda file.
-/// Skips read-only commands (WAIT, TREE, MARKDOWN).
-pub fn record(self: *Self, line: []const u8) void {
+/// Record a successfully executed command to the .panda file.
+/// Skips read-only commands based on `Command.isRecorded()`.
+pub fn record(self: *Self, cmd: Command.Command) void {
     const f = self.file orelse return;
+    if (!cmd.isRecorded()) return;
 
-    // Check if this command should be skipped
-    const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-    if (trimmed.len == 0) return;
-    if (trimmed[0] == '#') return;
-
-    const cmd_end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
-    const cmd_word = trimmed[0..cmd_end];
-
-    if (isNonRecordedCommand(cmd_word)) return;
-
-    f.writeAll(trimmed) catch return;
-    f.writeAll("\n") catch return;
+    var buf: [4096]u8 = undefined;
+    var file_writer = f.writerStreaming(&buf);
+    const writer = &file_writer.interface;
+    writer.print("{f}\n", .{cmd}) catch return;
+    writer.flush() catch return;
 }
 
 /// Record a comment line (e.g. # INTENT: ...).
@@ -53,27 +47,7 @@ pub fn recordComment(self: *Self, comment: []const u8) void {
     f.writeAll("\n") catch return;
 }
 
-fn isNonRecordedCommand(cmd_word: []const u8) bool {
-    const non_recorded = [_][]const u8{ "WAIT", "TREE", "MARKDOWN", "MD" };
-    inline for (non_recorded) |skip| {
-        if (Command.eqlIgnoreCase(cmd_word, skip)) return true;
-    }
-    return false;
-}
-
 // --- Tests ---
-
-test "isNonRecordedCommand" {
-    try std.testing.expect(isNonRecordedCommand("WAIT"));
-    try std.testing.expect(isNonRecordedCommand("wait"));
-    try std.testing.expect(isNonRecordedCommand("TREE"));
-    try std.testing.expect(isNonRecordedCommand("MARKDOWN"));
-    try std.testing.expect(isNonRecordedCommand("MD"));
-    try std.testing.expect(isNonRecordedCommand("md"));
-    try std.testing.expect(!isNonRecordedCommand("GOTO"));
-    try std.testing.expect(!isNonRecordedCommand("CLICK"));
-    try std.testing.expect(!isNonRecordedCommand("EXTRACT"));
-}
 
 test "record writes state-mutating commands" {
     var tmp = std.testing.tmpDir(.{});
@@ -84,12 +58,12 @@ test "record writes state-mutating commands" {
     var recorder = Self{ .file = file };
     defer recorder.deinit();
 
-    recorder.record("GOTO https://example.com");
-    recorder.record("CLICK \"Login\"");
-    recorder.record("TREE"); // should be skipped
-    recorder.record("WAIT \".dashboard\""); // should be skipped
-    recorder.record("MARKDOWN"); // should be skipped
-    recorder.record("EXTRACT \".title\"");
+    recorder.record(Command.parse("GOTO https://example.com"));
+    recorder.record(Command.parse("CLICK \"Login\""));
+    recorder.record(Command.parse("TREE")); // should be skipped
+    recorder.record(Command.parse("WAIT \".dashboard\"")); // should be skipped
+    recorder.record(Command.parse("MARKDOWN")); // should be skipped
+    recorder.record(Command.parse("EXTRACT \".title\""));
     recorder.recordComment("# INTENT: LOGIN");
 
     // Read back and verify
@@ -117,10 +91,10 @@ test "record skips empty and comment lines" {
     var recorder = Self{ .file = file };
     defer recorder.deinit();
 
-    recorder.record("");
-    recorder.record("   ");
-    recorder.record("# this is a comment");
-    recorder.record("GOTO https://example.com");
+    recorder.record(Command.parse(""));
+    recorder.record(Command.parse("   "));
+    recorder.record(Command.parse("# this is a comment"));
+    recorder.record(Command.parse("GOTO https://example.com"));
 
     file.seekTo(0) catch unreachable;
     var buf: [256]u8 = undefined;
@@ -132,7 +106,7 @@ test "record skips empty and comment lines" {
 
 test "recorder with null file is no-op" {
     var recorder = Self{ .file = null };
-    recorder.record("GOTO https://example.com");
+    recorder.record(Command.parse("GOTO https://example.com"));
     recorder.recordComment("# test");
     recorder.deinit();
 }

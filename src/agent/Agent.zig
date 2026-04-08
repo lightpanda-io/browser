@@ -221,7 +221,7 @@ fn runRepl(self: *Self) void {
             },
             else => {
                 self.cmd_executor.execute(cmd);
-                self.recorder.record(line);
+                self.recorder.record(cmd);
             },
         }
     }
@@ -415,24 +415,19 @@ fn recordToolCall(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, 
         else => return,
     };
 
-    const panda_cmd: ?[]const u8 = if (std.mem.eql(u8, tool_name, "goto") or std.mem.eql(u8, tool_name, "navigate")) blk: {
-        const url = switch (obj.get("url") orelse break :blk null) {
-            .string => |s| s,
-            else => break :blk null,
+    const cmd: ?Command.Command = if (std.mem.eql(u8, tool_name, "goto") or std.mem.eql(u8, tool_name, "navigate")) blk: {
+        break :blk switch (obj.get("url") orelse break :blk null) {
+            .string => |s| .{ .goto = s },
+            else => null,
         };
-        break :blk std.fmt.allocPrint(arena, "GOTO {s}", .{url}) catch null;
     } else if (std.mem.eql(u8, tool_name, "click")) blk: {
         if (obj.get("selector")) |sel_val| {
-            const sel = switch (sel_val) {
-                .string => |s| s,
-                else => break :blk null,
+            break :blk switch (sel_val) {
+                .string => |s| .{ .click = s },
+                else => null,
             };
-            break :blk std.fmt.allocPrint(arena, "CLICK \"{s}\"", .{sel}) catch null;
         }
-        if (obj.get("backendNodeId")) |_| {
-            // Can't meaningfully record a node ID as Pandascript
-            break :blk null;
-        }
+        // Can't meaningfully record a backendNodeId as Pandascript
         break :blk null;
     } else if (std.mem.eql(u8, tool_name, "fill")) blk: {
         const sel = switch (obj.get("selector") orelse break :blk null) {
@@ -443,24 +438,16 @@ fn recordToolCall(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, 
             .string => |s| s,
             else => break :blk null,
         };
-        break :blk std.fmt.allocPrint(arena, "TYPE \"{s}\" \"{s}\"", .{ sel, val }) catch null;
-    } else if (std.mem.eql(u8, tool_name, "waitForSelector")) blk: {
-        // WAIT is read-only, not recorded — Recorder will skip it anyway
-        break :blk null;
+        break :blk .{ .type_cmd = .{ .selector = sel, .value = val } };
     } else if (std.mem.eql(u8, tool_name, "evaluate") or std.mem.eql(u8, tool_name, "eval")) blk: {
-        const script = switch (obj.get("script") orelse break :blk null) {
-            .string => |s| s,
-            else => break :blk null,
+        break :blk switch (obj.get("script") orelse break :blk null) {
+            .string => |s| .{ .eval_js = s },
+            else => null,
         };
-        // Use multi-line format if the script contains newlines
-        if (std.mem.indexOfScalar(u8, script, '\n') != null) {
-            break :blk std.fmt.allocPrint(arena, "EVAL \"\"\"\n{s}\n\"\"\"", .{script}) catch null;
-        }
-        break :blk std.fmt.allocPrint(arena, "EVAL \"{s}\"", .{script}) catch null;
     } else null;
 
-    if (panda_cmd) |cmd| {
-        self.recorder.record(cmd);
+    if (cmd) |c| {
+        self.recorder.record(c);
     }
 }
 
