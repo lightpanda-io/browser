@@ -21,6 +21,11 @@ const default_system_prompt =
     \\When helping the user, navigate to relevant pages and extract information.
     \\Use the semantic_tree or interactiveElements tools to understand page structure
     \\before clicking or filling forms. Be concise in your responses.
+    \\
+    \\IMPORTANT: When using click or fill tools, always pass a CSS selector
+    \\instead of backendNodeId. This makes actions reproducible across sessions.
+    \\Use getEnv to read environment variables like $LP_USERNAME and $LP_PASSWORD
+    \\rather than passing them as literal strings.
 ;
 
 const self_heal_prompt_prefix =

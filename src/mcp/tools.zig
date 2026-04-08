@@ -120,28 +120,29 @@ pub const tool_list = [_]protocol.Tool{
     },
     .{
         .name = "click",
-        .description = "Click on an interactive element. Returns the current page URL and title after the click.",
+        .description = "Click on an interactive element. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Returns the current page URL and title after the click.",
         .inputSchema = protocol.minify(
             \\{
             \\  "type": "object",
             \\  "properties": {
+            \\    "selector": { "type": "string", "description": "CSS selector of the element to click. Preferred over backendNodeId." },
             \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to click." }
-            \\  },
-            \\  "required": ["backendNodeId"]
+            \\  }
             \\}
         ),
     },
     .{
         .name = "fill",
-        .description = "Fill text into an input element. Returns the filled value and current page URL and title.",
+        .description = "Fill text into an input element. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId.",
         .inputSchema = protocol.minify(
             \\{
             \\  "type": "object",
             \\  "properties": {
+            \\    "selector": { "type": "string", "description": "CSS selector of the input element to fill. Preferred over backendNodeId." },
             \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the input element to fill." },
-            \\    "text": { "type": "string", "description": "The text to fill into the input element." }
+            \\    "value": { "type": "string", "description": "The text to fill into the input element." }
             \\  },
-            \\  "required": ["backendNodeId", "text"]
+            \\  "required": ["value"]
             \\}
         ),
     },
