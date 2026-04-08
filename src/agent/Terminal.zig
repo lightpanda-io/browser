@@ -49,9 +49,11 @@ pub fn printToolCall(_: *Self, name: []const u8, args: []const u8) void {
     std.debug.print("\n{s}{s}[tool: {s}]{s} {s}\n", .{ ansi_dim, ansi_cyan, name, ansi_reset, args });
 }
 
+const max_result_display_len = 500;
+
 pub fn printToolResult(_: *Self, name: []const u8, result: []const u8) void {
-    const truncated = if (result.len > 500) result[0..500] else result;
-    const ellipsis: []const u8 = if (result.len > 500) "..." else "";
+    const truncated = result[0..@min(result.len, max_result_display_len)];
+    const ellipsis: []const u8 = if (result.len > max_result_display_len) "..." else "";
     std.debug.print("{s}{s}[result: {s}]{s} {s}{s}\n", .{ ansi_dim, ansi_green, name, ansi_reset, truncated, ellipsis });
 }
 

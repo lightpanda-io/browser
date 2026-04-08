@@ -99,27 +99,13 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     errdefer allocator.destroy(self);
 
     const ai_client: ?AiClient = if (api_key) |key| switch (opts.provider) {
-        .anthropic => blk: {
-            const client = try allocator.create(zenai.anthropic.Client);
-            client.* = zenai.anthropic.Client.init(allocator, key, if (opts.base_url) |url| .{ .base_url = url } else .{});
-            break :blk .{ .anthropic = client };
-        },
-        .openai => blk: {
-            const client = try allocator.create(zenai.openai.Client);
-            client.* = zenai.openai.Client.init(allocator, key, if (opts.base_url) |url| .{ .base_url = url } else .{});
-            break :blk .{ .openai = client };
-        },
-        .gemini => blk: {
-            const client = try allocator.create(zenai.gemini.Client);
-            client.* = zenai.gemini.Client.init(allocator, key, if (opts.base_url) |url| .{ .base_url = url } else .{});
-            break :blk .{ .gemini = client };
-        },
-        .ollama => blk: {
-            const client = try allocator.create(zenai.openai.Client);
-            client.* = zenai.openai.Client.init(allocator, key, .{
-                .base_url = opts.base_url orelse "http://localhost:11434/v1",
-            });
-            break :blk .{ .ollama = client };
+        inline else => |tag| blk: {
+            const ClientPtr = @FieldType(AiClient, @tagName(tag));
+            const Client = @typeInfo(ClientPtr).pointer.child;
+            const client = try allocator.create(Client);
+            const url = opts.base_url orelse if (tag == .ollama) "http://localhost:11434/v1" else null;
+            client.* = Client.init(allocator, key, if (url) |u| .{ .base_url = u } else .{});
+            break :blk @unionInit(AiClient, @tagName(tag), client);
         },
     } else null;
 
