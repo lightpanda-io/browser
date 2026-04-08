@@ -27,6 +27,7 @@ const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
 const HttpClient = @import("../HttpClient.zig");
 
+const Blob = @import("Blob.zig");
 const EventTarget = @import("EventTarget.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
@@ -63,9 +64,7 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
     const arena = try session.getArena(.{ .debug = "Worker" });
     errdefer session.releaseArena(arena);
 
-    // Resolve URL relative to current context
     const resolved_url = try URL.resolve(arena, exec.url.*, url, .{});
-
     const self = try session.factory.eventTargetWithAllocator(arena, Worker{
         ._arena = arena,
         ._proto = undefined,
@@ -75,8 +74,17 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
     });
     self._worker_scope = try WorkerGlobalScope.init(self, resolved_url);
     errdefer self._worker_scope.deinit();
-
     try page.trackWorker(self);
+
+    if (std.mem.startsWith(u8, url, "blob:")) {
+        errdefer page.removeWorker(self);
+        const blob: *Blob = page.lookupBlobUrl(url) orelse {
+            log.warn(.js, "invalid blob", .{ .target = "worker" });
+            return error.BlobNotFound;
+        };
+        try self.execute(blob._slice);
+        return self;
+    }
 
     const http_client = session.browser.http_client;
     http_client.request(.{
@@ -156,15 +164,22 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
         });
     }
 
+    try self.execute(script);
+}
+
+fn execute(self: *Worker, script: []const u8) !void {
     var ls: js.Local.Scope = undefined;
     self._worker_scope.js.localScope(&ls);
     defer ls.deinit();
 
-    _ = ls.local.eval(script, url) catch |err| {
-        log.err(.browser, "worker script error", .{ .url = url, .err = err });
-        self.fireErrorEvent(@errorName(err), null) catch |e| {
-            log.warn(.browser, "worker error event failed", .{ .err = e });
-        };
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = ls.local.eval(script, self._url) catch |err| {
+        const caught = try_catch.caughtOrError(self._arena, err);
+        log.err(.browser, "worker script error", .{ .url = self._url, .caught = caught });
+        self.fireErrorEvent(caught.exception orelse @errorName(err), null);
         return;
     };
 
@@ -180,13 +195,17 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
         .err = err,
     });
 
-    self.fireErrorEvent(@errorName(err), null) catch |e| {
-        log.warn(.browser, "worker error event failed", .{ .err = e });
-    };
+    self.fireErrorEvent(@errorName(err), null);
 }
 
 // Fire an error event on the Worker object (parent context)
-fn fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Temp) !void {
+fn fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Temp) void {
+    self._fireErrorEvent(message, error_value) catch |err| {
+        log.warn(.browser, "worker fire error", .{ .err = err, .message = message });
+    };
+}
+
+fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Temp) !void {
     const page = self._page;
     const session = page._session;
     const target = self.asEventTarget();
