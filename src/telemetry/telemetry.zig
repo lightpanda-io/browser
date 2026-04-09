@@ -107,7 +107,7 @@ pub const Event = union(enum) {
     const Navigate = struct {
         tls: bool,
         proxy: bool,
-        driver: enum{cdp} = .cdp,
+        driver: enum { cdp } = .cdp,
     };
 
     const BufferOverflow = struct {
@@ -165,9 +165,9 @@ test "telemetry: sends event to provider" {
     telemetry.disabled = false;
     const mock = telemetry.provider;
 
-    telemetry.record(.{ .buffer_overflow = .{.dropped = 1} });
-    telemetry.record(.{ .buffer_overflow = .{.dropped = 2} });
-    telemetry.record(.{ .buffer_overflow = .{.dropped = 3} });
+    telemetry.record(.{ .buffer_overflow = .{ .dropped = 1 } });
+    telemetry.record(.{ .buffer_overflow = .{ .dropped = 2 } });
+    telemetry.record(.{ .buffer_overflow = .{ .dropped = 3 } });
     try testing.expectEqual(3, mock.events.items.len);
 
     for (mock.events.items, 0..) |event, i| {
