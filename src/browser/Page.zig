@@ -37,6 +37,7 @@ const ScriptManager = @import("ScriptManager.zig");
 const StyleManager = @import("StyleManager.zig");
 
 const Parser = @import("parser/Parser.zig");
+const h5e = @import("parser/html5ever.zig");
 
 const URL = @import("URL.zig");
 const Blob = @import("webapi/Blob.zig");
@@ -961,7 +962,11 @@ fn pageDataCallback(response: HttpClient.Response, data: []const u8) !void {
         }
 
         switch (mime.content_type) {
-            .text_html => self._parse_state = .{ .html = .{} },
+            .text_html => {
+                self._parse_state = .{ .html = .{
+                    .mime = mime,
+                } };
+            },
             .application_json, .text_javascript, .text_css, .text_plain => {
                 var arr: std.ArrayList(u8) = .empty;
                 try arr.appendSlice(self.arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>");
@@ -975,7 +980,7 @@ fn pageDataCallback(response: HttpClient.Response, data: []const u8) !void {
     }
 
     switch (self._parse_state) {
-        .html => |*buf| try buf.appendSlice(self.arena, data),
+        .html => |*html| try html.buf.appendSlice(self.arena, data),
         .text => |*buf| {
             // we have to escape the data...
             var v = data;
@@ -1024,8 +1029,13 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
     var parser = Parser.init(parse_arena, self.document.asNode(), self);
 
     switch (self._parse_state) {
-        .html => |buf| {
-            parser.parse(buf.items);
+        .html => |*html_state| {
+            const raw_html = html_state.buf.items;
+            if (html_state.needsEncodingConversion()) {
+                parser.parseWithEncoding(raw_html, html_state.mime.charsetString());
+            } else {
+                parser.parse(raw_html);
+            }
             self._script_manager.staticScriptsDone();
             self._parse_state = .complete;
         },
@@ -1092,7 +1102,6 @@ fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
         return;
     };
 }
-
 pub fn isGoingAway(self: *const Page) bool {
     if (self._queued_navigation != null) {
         return true;
@@ -3166,11 +3175,21 @@ const ParseState = union(enum) {
     pre,
     complete,
     err: anyerror,
-    html: std.ArrayList(u8),
+    html: Html,
     text: std.ArrayList(u8),
     image: std.ArrayList(u8),
     raw: std.ArrayList(u8),
     raw_done: []const u8,
+
+    const Html = struct {
+        mime: Mime,
+        buf: std.ArrayList(u8) = .empty,
+
+        fn needsEncodingConversion(self: *const Html) bool {
+            const charset = self.mime.charsetString();
+            return !std.ascii.eqlIgnoreCase(charset, "utf-8") and !std.ascii.eqlIgnoreCase(charset, "utf8");
+        }
+    };
 };
 
 const LoadState = enum {

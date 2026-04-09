@@ -15,6 +15,7 @@ typed-arena = "2.0.2"
 tikv-jemallocator = {version = "0.6.0", features = ["stats"]}
 tikv-jemalloc-ctl = {version = "0.6.0", features = ["stats"]}
 xml5ever = "0.35.0"
+encoding_rs = "0.8"
 
 [profile.release]
 lto = true

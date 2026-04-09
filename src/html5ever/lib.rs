@@ -27,6 +27,7 @@ use std::cell::Cell;
 use std::os::raw::{c_uchar, c_void};
 use types::*;
 
+use encoding_rs::Encoding;
 use html5ever::interface::tree_builder::QuirksMode;
 use html5ever::tendril::{StrTendril, TendrilSink};
 use html5ever::{ns, parse_document, parse_fragment, LocalName, ParseOpts, Parser, QualName};
@@ -83,6 +84,71 @@ pub extern "C" fn html5ever_parse_document(
     parse_document(sink, Default::default())
         .from_utf8()
         .one(bytes);
+}
+
+/// Parse an HTML document with encoding conversion.
+/// If charset is provided, converts from that encoding to UTF-8 before parsing.
+/// Uses Cow<str> internally so no allocation if content is already valid UTF-8.
+#[no_mangle]
+pub extern "C" fn html5ever_parse_document_with_encoding(
+    html: *mut c_uchar,
+    len: usize,
+    charset: *const c_uchar,
+    charset_len: usize,
+    document: Ref,
+    ctx: Ref,
+    create_element_callback: CreateElementCallback,
+    get_data_callback: GetDataCallback,
+    append_callback: AppendCallback,
+    parse_error_callback: ParseErrorCallback,
+    pop_callback: PopCallback,
+    create_comment_callback: CreateCommentCallback,
+    create_processing_instruction: CreateProcessingInstruction,
+    append_doctype_to_document: AppendDoctypeToDocumentCallback,
+    add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
+    get_template_contents_callback: GetTemplateContentsCallback,
+    remove_from_parent_callback: RemoveFromParentCallback,
+    reparent_children_callback: ReparentChildrenCallback,
+    append_before_sibling_callback: AppendBeforeSiblingCallback,
+    append_based_on_parent_node_callback: AppendBasedOnParentNodeCallback,
+) -> () {
+    if html.is_null() || len == 0 {
+        return ();
+    }
+
+    let input = unsafe { std::slice::from_raw_parts(html, len) };
+    let charset_bytes = unsafe { std::slice::from_raw_parts(charset, charset_len) };
+
+    // Decode to UTF-8. Returns Cow<str> - no allocation if already valid UTF-8.
+    let encoding = Encoding::for_label(charset_bytes).unwrap_or(encoding_rs::UTF_8);
+    let (decoded, _, _) = encoding.decode(input);
+
+    let arena = typed_arena::Arena::new();
+
+    let sink = sink::Sink {
+        ctx: ctx,
+        arena: &arena,
+        document: document,
+        quirks_mode: Cell::new(QuirksMode::NoQuirks),
+        pop_callback: pop_callback,
+        append_callback: append_callback,
+        get_data_callback: get_data_callback,
+        parse_error_callback: parse_error_callback,
+        create_element_callback: create_element_callback,
+        create_comment_callback: create_comment_callback,
+        create_processing_instruction: create_processing_instruction,
+        append_doctype_to_document: append_doctype_to_document,
+        add_attrs_if_missing_callback: add_attrs_if_missing_callback,
+        get_template_contents_callback: get_template_contents_callback,
+        remove_from_parent_callback: remove_from_parent_callback,
+        reparent_children_callback: reparent_children_callback,
+        append_before_sibling_callback: append_before_sibling_callback,
+        append_based_on_parent_node_callback: append_based_on_parent_node_callback,
+    };
+
+    // Parse directly from decoded string
+    parse_document(sink, Default::default())
+        .one(StrTendril::from(decoded.as_ref()));
 }
 
 #[no_mangle]
