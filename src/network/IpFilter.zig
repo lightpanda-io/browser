@@ -27,13 +27,48 @@ pub const Ipv4Addr = [4]u8;
 pub const Ipv6Addr = [16]u8;
 
 pub const CidrV4 = struct {
-    network: Ipv4Addr,
-    prefix_len: u6, // 0-32
+    network: u32,
+    mask: u32,
+
+    fn fromPrefix(addr: Ipv4Addr, prefix_len: u6) CidrV4 {
+        const network = std.mem.readInt(u32, &addr, .big);
+        const mask: u32 = if (prefix_len == 0)
+            0
+        else if (prefix_len == 32)
+            0xFFFFFFFF
+        else
+            ~(@as(u32, 0xFFFFFFFF) >> @intCast(prefix_len));
+        return .{ .network = network, .mask = mask };
+    }
 };
 
 pub const CidrV6 = struct {
-    network: Ipv6Addr,
-    prefix_len: u8, // 0-128
+    network_hi: u64,
+    network_lo: u64,
+    mask_hi: u64,
+    mask_lo: u64,
+
+    fn fromPrefix(addr: Ipv6Addr, prefix_len: u8) CidrV6 {
+        const network_hi = std.mem.readInt(u64, addr[0..8], .big);
+        const network_lo = std.mem.readInt(u64, addr[8..16], .big);
+        var mask_hi: u64 = 0;
+        var mask_lo: u64 = 0;
+        if (prefix_len > 0) {
+            if (prefix_len < 64) {
+                mask_hi = ~(@as(u64, 0xFFFFFFFFFFFFFFFF) >> @intCast(prefix_len));
+            } else if (prefix_len == 64) {
+                mask_hi = 0xFFFFFFFFFFFFFFFF;
+            } else if (prefix_len < 128) {
+                mask_hi = 0xFFFFFFFFFFFFFFFF;
+                mask_lo = ~(@as(u64, 0xFFFFFFFFFFFFFFFF) >> @intCast(prefix_len - 64));
+            } else {
+                // prefix_len == 128
+                mask_hi = 0xFFFFFFFFFFFFFFFF;
+                mask_lo = 0xFFFFFFFFFFFFFFFF;
+            }
+        }
+        return .{ .network_hi = network_hi, .network_lo = network_lo, .mask_hi = mask_hi, .mask_lo = mask_lo };
+    }
 };
 
 // IpFilter fields
@@ -62,12 +97,12 @@ fn parseIpv4Comptime(comptime s: []const u8) Ipv4Addr {
 
 /// Comptime helper: build a CidrV4.
 fn makeCidrV4(comptime addr: []const u8, comptime prefix: u6) CidrV4 {
-    return .{ .network = parseIpv4Comptime(addr), .prefix_len = prefix };
+    return CidrV4.fromPrefix(parseIpv4Comptime(addr), prefix);
 }
 
 /// Comptime helper: build a CidrV6 from a 16-byte literal array.
 fn makeCidrV6(comptime bytes: Ipv6Addr, comptime prefix: u8) CidrV6 {
-    return .{ .network = bytes, .prefix_len = prefix };
+    return CidrV6.fromPrefix(bytes, prefix);
 }
 
 // ── Comptime CIDR range tables ───────────────────────────────────────────────
@@ -82,6 +117,8 @@ const PRIVATE_V4 = [_]CidrV4{
 };
 
 const PRIVATE_V6 = [_]CidrV6{
+    // ::/128 — IPv6 Unspecified
+    makeCidrV6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 128),
     // ::1/128 — IPv6 localhost
     makeCidrV6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, 128),
     // fe80::/10 — link-local
@@ -128,40 +165,16 @@ fn isIpv4Mapped(addr: Ipv6Addr) ?Ipv4Addr {
 
 /// Check if IPv4 address falls within a CIDR range.
 fn matchesCidrV4(addr: Ipv4Addr, cidr: CidrV4) bool {
-    if (cidr.prefix_len == 0) return true;
-    const full_bytes: usize = cidr.prefix_len / 8;
-    const rem_bits: u4 = @intCast(cidr.prefix_len % 8);
-
-    var i: usize = 0;
-    // Check full bytes
-    while (i < full_bytes) : (i += 1) {
-        if (addr[i] != cidr.network[i]) return false;
-    }
-    // Check partial byte (if any)
-    if (rem_bits > 0 and i < 4) {
-        const shift: u3 = @intCast(8 - rem_bits);
-        const mask: u8 = @as(u8, 0xFF) << shift;
-        if ((addr[i] & mask) != (cidr.network[i] & mask)) return false;
-    }
-    return true;
+    const addr_int = std.mem.readInt(u32, &addr, .big);
+    return (addr_int ^ cidr.network) & cidr.mask == 0;
 }
 
 /// Check if IPv6 address falls within a CIDR range.
 fn matchesCidrV6(addr: Ipv6Addr, cidr: CidrV6) bool {
-    if (cidr.prefix_len == 0) return true;
-    const full_bytes: usize = cidr.prefix_len / 8;
-    const rem_bits: u4 = @intCast(cidr.prefix_len % 8);
-
-    var i: usize = 0;
-    while (i < full_bytes) : (i += 1) {
-        if (addr[i] != cidr.network[i]) return false;
-    }
-    if (rem_bits > 0 and i < 16) {
-        const shift: u3 = @intCast(8 - rem_bits);
-        const mask: u8 = @as(u8, 0xFF) << shift;
-        if ((addr[i] & mask) != (cidr.network[i] & mask)) return false;
-    }
-    return true;
+    const addr_hi = std.mem.readInt(u64, addr[0..8], .big);
+    const addr_lo = std.mem.readInt(u64, addr[8..16], .big);
+    return ((addr_hi ^ cidr.network_hi) & cidr.mask_hi == 0) and
+        ((addr_lo ^ cidr.network_lo) & cidr.mask_lo == 0);
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -213,7 +226,7 @@ pub fn parseCidrList(
         if (parseIpv4(addr_str)) |v4| {
             const prefix = std.fmt.parseInt(u8, prefix_str, 10) catch return error.InvalidCidr;
             if (prefix > 32) return error.InvalidCidr;
-            const cidr = CidrV4{ .network = v4, .prefix_len = @intCast(prefix) };
+            const cidr = CidrV4.fromPrefix(v4, @intCast(prefix));
             if (is_allow) {
                 try allow_v4_list.append(allocator, cidr);
             } else {
@@ -222,7 +235,7 @@ pub fn parseCidrList(
         } else if (parseIpv6(addr_str)) |v6| {
             const prefix = std.fmt.parseInt(u8, prefix_str, 10) catch return error.InvalidCidr;
             if (prefix > 128) return error.InvalidCidr;
-            const cidr = CidrV6{ .network = v6, .prefix_len = prefix };
+            const cidr = CidrV6.fromPrefix(v6, prefix);
             if (is_allow) {
                 try allow_v6_list.append(allocator, cidr);
             } else {
@@ -243,10 +256,10 @@ pub fn parseCidrList(
     return .{ .v4 = v4, .v6 = v6, .allow_v4 = allow_v4, .allow_v6 = allow_v6 };
 }
 
-/// Create a heap-allocated IpFilter. Set block_private to block outbound
-/// requests to RFC1918, localhost, link-local, and ULA ranges. Pass parsed
-/// CIDRs for additional custom block/allow ranges; the filter takes ownership
-/// of the Cidrs and will free them on deinit.
+// Create a IpFilter. Set block_private to block outbound requests to RFC1918,
+// localhost, link-local, and ULA ranges. Pass parsed CIDRs for additional
+// custom block/allow ranges; the filter takes ownership of the Cidrs and will
+// free them on deinit.
 pub fn init(
     block_private: bool,
     cidrs: ?Cidrs,
@@ -258,42 +271,55 @@ pub fn init(
 }
 
 pub fn deinit(self: IpFilter, allocator: std.mem.Allocator) void {
-    if (self.cidrs) |c| c.deinit(allocator);
+    if (self.cidrs) |c| {
+        c.deinit(allocator);
+    }
 }
 
 fn isBlockedV4(self: *const IpFilter, addr: Ipv4Addr) bool {
     if (self.cidrs) |c| {
         for (c.allow_v4) |cidr| {
-            if (matchesCidrV4(addr, cidr)) return false;
+            if (matchesCidrV4(addr, cidr)) {
+                return false;
+            }
+        }
+        for (c.v4) |cidr| {
+            if (matchesCidrV4(addr, cidr)) {
+                return true;
+            }
         }
     }
+
     if (self.block_private) {
         for (PRIVATE_V4) |cidr| {
-            if (matchesCidrV4(addr, cidr)) return true;
+            if (matchesCidrV4(addr, cidr)) {
+                return true;
+            }
         }
     }
-    if (self.cidrs) |c| {
-        for (c.v4) |cidr| {
-            if (matchesCidrV4(addr, cidr)) return true;
-        }
-    }
+
     return false;
 }
 
 fn isBlockedV6(self: *const IpFilter, addr: Ipv6Addr) bool {
     if (self.cidrs) |c| {
         for (c.allow_v6) |cidr| {
-            if (matchesCidrV6(addr, cidr)) return false;
+            if (matchesCidrV6(addr, cidr)) {
+                return false;
+            }
+        }
+        for (c.v6) |cidr| {
+            if (matchesCidrV6(addr, cidr)) {
+                return true;
+            }
         }
     }
+
     if (self.block_private) {
         for (PRIVATE_V6) |cidr| {
-            if (matchesCidrV6(addr, cidr)) return true;
-        }
-    }
-    if (self.cidrs) |c| {
-        for (c.v6) |cidr| {
-            if (matchesCidrV6(addr, cidr)) return true;
+            if (matchesCidrV6(addr, cidr)) {
+                return true;
+            }
         }
     }
     return false;
@@ -320,7 +346,271 @@ pub fn isBlockedSockaddr(self: *const IpFilter, sa: *const libcurl.CurlSockAddr)
     }
 }
 
-// ── Unit tests ───────────────────────────────────────────────────────────────
+const testing = @import("../testing.zig");
+test "IpFilter: IPv4 CIDR matching: private group boundaries" {
+    const filter = IpFilter.init(true, null);
+    defer filter.deinit(testing.allocator);
+
+    try testing.expect(filter.testBlocked("0.0.0.0"));
+
+    // Loopback
+    try testing.expect(filter.testBlocked("127.0.0.1"));
+    try testing.expect(filter.testBlocked("127.255.255.255"));
+    try testing.expect(!filter.testBlocked("128.0.0.1"));
+
+    // RFC1918 10.0.0.0/8
+    try testing.expect(filter.testBlocked("10.0.0.1"));
+    try testing.expect(filter.testBlocked("10.255.255.255"));
+    try testing.expect(!filter.testBlocked("11.0.0.0"));
+
+    // RFC1918 172.16.0.0/12 — critical boundary
+    try testing.expect(!filter.testBlocked("172.15.255.255")); // MUST NOT block
+    try testing.expect(filter.testBlocked("172.16.0.0")); // MUST block
+    try testing.expect(filter.testBlocked("172.31.255.255")); // MUST block
+    try testing.expect(!filter.testBlocked("172.32.0.0")); // MUST NOT block
+
+    // RFC1918 192.168.0.0/16
+    try testing.expect(filter.testBlocked("192.168.0.1"));
+    try testing.expect(!filter.testBlocked("192.169.0.0"));
+
+    // Link-local
+    try testing.expect(filter.testBlocked("169.254.1.1"));
+    try testing.expect(!filter.testBlocked("169.255.0.0"));
+
+    // Public IP — must NOT be blocked
+    try testing.expect(!filter.testBlocked("8.8.8.8"));
+    try testing.expect(!filter.testBlocked("1.1.1.1"));
+    try testing.expect(!filter.testBlocked("93.184.216.34")); // example.com
+}
+
+test "IpFilter: IPv6 CIDR matching: private group" {
+    const filter = IpFilter.init(true, null);
+    defer filter.deinit(testing.allocator);
+
+    try testing.expect(filter.testBlocked("::")); // unspecified
+    try testing.expect(filter.testBlocked("::1")); // localhost
+    try testing.expect(filter.testBlocked("fe80::1")); // link-local
+    try testing.expect(filter.testBlocked("fc00::1")); // ULA
+    try testing.expect(filter.testBlocked("fd00::1")); // ULA (fd is fc00::/7)
+    try testing.expect(!filter.testBlocked("2001:db8::1")); // documentation range — public
+    try testing.expect(!filter.testBlocked("2606:4700::1111")); // Cloudflare
+}
+
+test "IpFilter: IPv4-mapped IPv6 bypass prevention" {
+    const filter = IpFilter.init(true, null);
+    defer filter.deinit(testing.allocator);
+
+    // ::ffff:127.0.0.1 must be blocked (maps to loopback)
+    try testing.expect(filter.testBlocked("::ffff:127.0.0.1"));
+    // ::ffff:10.0.0.1 must be blocked (maps to RFC1918)
+    try testing.expect(filter.testBlocked("::ffff:10.0.0.1"));
+    // ::ffff:8.8.8.8 must NOT be blocked (maps to public)
+    try testing.expect(!filter.testBlocked("::ffff:8.8.8.8"));
+}
+
+test "IpFilter: fail-closed: unknown address family blocked by isBlockedSockaddr" {
+    const filter = IpFilter.init(false, null);
+    defer filter.deinit(testing.allocator);
+
+    // Construct a sockaddr with an unknown address family
+    var sa: libcurl.CurlSockAddr = .{
+        .family = 255, // not AF_INET or AF_INET6
+        .socktype = posix.SOCK.STREAM,
+        .protocol = 0,
+        .addrlen = 0,
+        .addr = undefined,
+    };
+    try testing.expect(filter.isBlockedSockaddr(&sa));
+}
+
+test "IpFilter: custom CIDR ranges" {
+    const cidrs = try parseCidrList(testing.allocator, "203.0.113.0/24");
+    const filter = IpFilter.init(false, cidrs);
+    defer filter.deinit(testing.allocator);
+
+    try testing.expect(filter.testBlocked("203.0.113.1")); // in custom range
+    try testing.expect(filter.testBlocked("203.0.113.255")); // in custom range
+    try testing.expect(!filter.testBlocked("203.0.114.0")); // outside custom range
+    try testing.expect(!filter.testBlocked("8.8.8.8")); // not in range
+}
+
+test "IpFilter: private group blocks cloud metadata IP via link-local" {
+    // 169.254.169.254 is in link-local (169.254.0.0/16) which is in the private group.
+    // Users who want targeted cloud-metadata-only blocking can use --block-cidrs.
+    const filter_private = IpFilter.init(true, null);
+    defer filter_private.deinit(testing.allocator);
+    const filter_none = IpFilter.init(false, null);
+    defer filter_none.deinit(testing.allocator);
+
+    try testing.expect(filter_private.testBlocked("169.254.169.254")); // blocked via link-local
+    try testing.expect(!filter_none.testBlocked("169.254.169.254")); // not blocked when disabled
+}
+
+test "IpFilter: parseCidrList: mixed IPv4 and IPv6" {
+    const cidrs = try parseCidrList(testing.allocator, "203.0.113.0/24, 2001:db8::/32, 192.168.1.0/24");
+
+    try testing.expectEqual(2, cidrs.v4.len);
+    try testing.expectEqual(1, cidrs.v6.len);
+
+    // spot-check: 203.0.113.0/24 and 192.168.1.0/24
+    const f = IpFilter.init(false, cidrs);
+    defer f.deinit(testing.allocator);
+    try testing.expect(f.testBlocked("203.0.113.1"));
+    try testing.expect(!f.testBlocked("203.0.114.0"));
+    try testing.expect(f.testBlocked("192.168.1.1"));
+    try testing.expect(f.testBlocked("2001:db8::1"));
+    try testing.expect(!f.testBlocked("2001:db9::1"));
+}
+
+test "IpFilter: allow list exempts from private blocking" {
+    const cidrs = try parseCidrList(testing.allocator, "-10.0.0.42/32,-fc00::1/128");
+    const filter = IpFilter.init(true, cidrs);
+    defer filter.deinit(testing.allocator);
+
+    // Allowed IPs pass through despite being in private ranges
+    try testing.expect(!filter.testBlocked("10.0.0.42"));
+    try testing.expect(!filter.testBlocked("fc00::1"));
+
+    // Other private IPs still blocked
+    try testing.expect(filter.testBlocked("10.0.0.43"));
+    try testing.expect(filter.testBlocked("10.0.0.41"));
+    try testing.expect(filter.testBlocked("192.168.1.1"));
+    try testing.expect(filter.testBlocked("fc00::2"));
+}
+
+test "IpFilter: allow list exempts from custom CIDR blocking" {
+    const cidrs = try parseCidrList(testing.allocator, "203.0.113.0/24,-203.0.113.100/32");
+    const filter = IpFilter.init(false, cidrs);
+    defer filter.deinit(testing.allocator);
+
+    try testing.expect(!filter.testBlocked("203.0.113.100")); // allowed
+    try testing.expect(filter.testBlocked("203.0.113.99")); // blocked
+    try testing.expect(filter.testBlocked("203.0.113.101")); // blocked
+}
+
+test "IpFilter: parseCidrList: allow entries with '-' prefix" {
+    const cidrs = try parseCidrList(testing.allocator, "10.0.0.0/8,-10.0.0.42/32,-fc00::1/128");
+
+    try testing.expectEqual(1, cidrs.v4.len);
+    try testing.expectEqual(0, cidrs.v6.len);
+    try testing.expectEqual(1, cidrs.allow_v4.len);
+    try testing.expectEqual(1, cidrs.allow_v6.len);
+
+    const f = IpFilter.init(false, cidrs);
+    defer f.deinit(testing.allocator);
+    try testing.expect(!f.testBlocked("10.0.0.42")); // allowed
+    try testing.expect(f.testBlocked("10.0.0.43")); // blocked
+    try testing.expect(!f.testBlocked("fc00::1")); // allowed (not blocked by custom, but allow-listed)
+}
+
+test "IpFilter: parseCidrList: invalid input returns error" {
+    try testing.expectError(error.InvalidCidr, parseCidrList(testing.allocator, "not-a-cidr"));
+    try testing.expectError(error.InvalidCidr, parseCidrList(testing.allocator, "10.0.0.0/33")); // prefix too large
+    try testing.expectError(error.InvalidCidr, parseCidrList(testing.allocator, "10.0.0.0")); // missing prefix
+    try testing.expectError(error.InvalidCidr, parseCidrList(testing.allocator, "10.0.0.0/abc")); // non-numeric prefix
+}
+
+test "IpFilter: matchesCidrV4: exact match /32" {
+    const cidr = CidrV4.fromPrefix(.{ 192, 168, 1, 100 }, 32);
+    try testing.expect(matchesCidrV4(.{ 192, 168, 1, 100 }, cidr));
+    try testing.expect(!matchesCidrV4(.{ 192, 168, 1, 101 }, cidr));
+    try testing.expect(!matchesCidrV4(.{ 192, 168, 1, 99 }, cidr));
+}
+
+test "IpFilter: matchesCidrV4: /0 matches everything" {
+    const cidr = CidrV4.fromPrefix(.{ 0, 0, 0, 0 }, 0);
+    try testing.expect(matchesCidrV4(.{ 0, 0, 0, 0 }, cidr));
+    try testing.expect(matchesCidrV4(.{ 255, 255, 255, 255 }, cidr));
+    try testing.expect(matchesCidrV4(.{ 192, 168, 1, 1 }, cidr));
+}
+
+test "IpFilter: matchesCidrV4: /8 boundary" {
+    const cidr = CidrV4.fromPrefix(.{ 10, 0, 0, 0 }, 8);
+    try testing.expect(matchesCidrV4(.{ 10, 0, 0, 0 }, cidr));
+    try testing.expect(matchesCidrV4(.{ 10, 255, 255, 255 }, cidr));
+    try testing.expect(!matchesCidrV4(.{ 11, 0, 0, 0 }, cidr));
+    try testing.expect(!matchesCidrV4(.{ 9, 255, 255, 255 }, cidr));
+}
+
+test "IpFilter: matchesCidrV4: /12 boundary (172.16.0.0/12)" {
+    const cidr = CidrV4.fromPrefix(.{ 172, 16, 0, 0 }, 12);
+    // In range
+    try testing.expect(matchesCidrV4(.{ 172, 16, 0, 0 }, cidr));
+    try testing.expect(matchesCidrV4(.{ 172, 31, 255, 255 }, cidr));
+    try testing.expect(matchesCidrV4(.{ 172, 20, 100, 50 }, cidr));
+    // Out of range
+    try testing.expect(!matchesCidrV4(.{ 172, 15, 255, 255 }, cidr));
+    try testing.expect(!matchesCidrV4(.{ 172, 32, 0, 0 }, cidr));
+}
+
+test "IpFilter: matchesCidrV4: /24 network" {
+    const cidr = CidrV4.fromPrefix(.{ 203, 0, 113, 0 }, 24);
+    try testing.expect(matchesCidrV4(.{ 203, 0, 113, 0 }, cidr));
+    try testing.expect(matchesCidrV4(.{ 203, 0, 113, 255 }, cidr));
+    try testing.expect(!matchesCidrV4(.{ 203, 0, 112, 255 }, cidr));
+    try testing.expect(!matchesCidrV4(.{ 203, 0, 114, 0 }, cidr));
+}
+
+test "IpFilter: matchesCidrV4: non-byte-aligned /25" {
+    const cidr = CidrV4.fromPrefix(.{ 192, 168, 1, 0 }, 25);
+    // 192.168.1.0 - 192.168.1.127 should match
+    try testing.expect(matchesCidrV4(.{ 192, 168, 1, 0 }, cidr));
+    try testing.expect(matchesCidrV4(.{ 192, 168, 1, 127 }, cidr));
+    // 192.168.1.128+ should not match
+    try testing.expect(!matchesCidrV4(.{ 192, 168, 1, 128 }, cidr));
+    try testing.expect(!matchesCidrV4(.{ 192, 168, 1, 255 }, cidr));
+}
+
+test "IpFilter: matchesCidrV6: /128 exact match" {
+    const addr: Ipv6Addr = .{ 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+    const cidr = CidrV6.fromPrefix(addr, 128);
+    try testing.expect(matchesCidrV6(addr, cidr));
+
+    var different = addr;
+    different[15] = 2;
+    try testing.expect(!matchesCidrV6(different, cidr));
+}
+
+test "IpFilter: matchesCidrV6: /0 matches everything" {
+    const cidr = CidrV6.fromPrefix(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 0);
+    try testing.expect(matchesCidrV6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, cidr));
+    try testing.expect(matchesCidrV6(.{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }, cidr));
+}
+
+test "IpFilter: matchesCidrV6: /64 boundary" {
+    // 2001:db8::/64
+    const cidr = CidrV6.fromPrefix(.{ 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 64);
+    // In range - any suffix in lower 64 bits
+    try testing.expect(matchesCidrV6(.{ 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, cidr));
+    try testing.expect(matchesCidrV6(.{ 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }, cidr));
+    // Out of range - different prefix
+    try testing.expect(!matchesCidrV6(.{ 0x20, 0x01, 0x0d, 0xb9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, cidr));
+}
+
+test "IpFilter: matchesCidrV6: /48 network" {
+    // 2001:db8:abcd::/48
+    const cidr = CidrV6.fromPrefix(.{ 0x20, 0x01, 0x0d, 0xb8, 0xab, 0xcd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 48);
+    try testing.expect(matchesCidrV6(.{ 0x20, 0x01, 0x0d, 0xb8, 0xab, 0xcd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, cidr));
+    try testing.expect(matchesCidrV6(.{ 0x20, 0x01, 0x0d, 0xb8, 0xab, 0xcd, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }, cidr));
+    try testing.expect(!matchesCidrV6(.{ 0x20, 0x01, 0x0d, 0xb8, 0xab, 0xce, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, cidr));
+}
+
+test "IpFilter: matchesCidrV6: /10 link-local (fe80::/10)" {
+    const cidr = CidrV6.fromPrefix(.{ 0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 10);
+    // fe80:: through febf:: should match (first 10 bits: 1111111010)
+    try testing.expect(matchesCidrV6(.{ 0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, cidr));
+    try testing.expect(matchesCidrV6(.{ 0xfe, 0xbf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }, cidr));
+    // fec0:: should NOT match (11th bit differs)
+    try testing.expect(!matchesCidrV6(.{ 0xfe, 0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, cidr));
+}
+
+test "IpFilter: matchesCidrV6: prefix > 64 bits (/96)" {
+    // ::ffff:0:0/96 (IPv4-mapped prefix)
+    const cidr = CidrV6.fromPrefix(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0 }, 96);
+    try testing.expect(matchesCidrV6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 1 }, cidr));
+    try testing.expect(matchesCidrV6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 10, 0, 0, 1 }, cidr));
+    try testing.expect(!matchesCidrV6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xfe, 192, 168, 1, 1 }, cidr));
+}
 
 /// Test-only convenience: parse an IP string and check against the filter.
 /// Test inputs must be valid IPs; unreachable on parse failure.
@@ -331,179 +621,4 @@ fn testBlocked(self: *const IpFilter, ip: []const u8) bool {
         return self.isBlockedV6(v6);
     }
     unreachable;
-}
-
-test "IPv4 CIDR matching: private group boundaries" {
-    const t = std.testing;
-    const filter = IpFilter.init(true, null);
-    defer filter.deinit(t.allocator);
-
-    // Loopback
-    try t.expect(filter.testBlocked("127.0.0.1"));
-    try t.expect(filter.testBlocked("127.255.255.255"));
-    try t.expect(!filter.testBlocked("128.0.0.1"));
-
-    // RFC1918 10.0.0.0/8
-    try t.expect(filter.testBlocked("10.0.0.1"));
-    try t.expect(filter.testBlocked("10.255.255.255"));
-    try t.expect(!filter.testBlocked("11.0.0.0"));
-
-    // RFC1918 172.16.0.0/12 — critical boundary
-    try t.expect(!filter.testBlocked("172.15.255.255")); // MUST NOT block
-    try t.expect(filter.testBlocked("172.16.0.0")); // MUST block
-    try t.expect(filter.testBlocked("172.31.255.255")); // MUST block
-    try t.expect(!filter.testBlocked("172.32.0.0")); // MUST NOT block
-
-    // RFC1918 192.168.0.0/16
-    try t.expect(filter.testBlocked("192.168.0.1"));
-    try t.expect(!filter.testBlocked("192.169.0.0"));
-
-    // Link-local
-    try t.expect(filter.testBlocked("169.254.1.1"));
-    try t.expect(!filter.testBlocked("169.255.0.0"));
-
-    // Public IP — must NOT be blocked
-    try t.expect(!filter.testBlocked("8.8.8.8"));
-    try t.expect(!filter.testBlocked("1.1.1.1"));
-    try t.expect(!filter.testBlocked("93.184.216.34")); // example.com
-}
-
-test "IPv6 CIDR matching: private group" {
-    const t = std.testing;
-    const filter = IpFilter.init(true, null);
-    defer filter.deinit(t.allocator);
-
-    try t.expect(filter.testBlocked("::1")); // localhost
-    try t.expect(filter.testBlocked("fe80::1")); // link-local
-    try t.expect(filter.testBlocked("fc00::1")); // ULA
-    try t.expect(filter.testBlocked("fd00::1")); // ULA (fd is fc00::/7)
-    try t.expect(!filter.testBlocked("2001:db8::1")); // documentation range — public
-    try t.expect(!filter.testBlocked("2606:4700::1111")); // Cloudflare
-}
-
-test "IPv4-mapped IPv6 bypass prevention" {
-    const t = std.testing;
-    const filter = IpFilter.init(true, null);
-    defer filter.deinit(t.allocator);
-
-    // ::ffff:127.0.0.1 must be blocked (maps to loopback)
-    try t.expect(filter.testBlocked("::ffff:127.0.0.1"));
-    // ::ffff:10.0.0.1 must be blocked (maps to RFC1918)
-    try t.expect(filter.testBlocked("::ffff:10.0.0.1"));
-    // ::ffff:8.8.8.8 must NOT be blocked (maps to public)
-    try t.expect(!filter.testBlocked("::ffff:8.8.8.8"));
-}
-
-test "fail-closed: unknown address family blocked by isBlockedSockaddr" {
-    const t = std.testing;
-    const filter = IpFilter.init(false, null);
-    defer filter.deinit(t.allocator);
-
-    // Construct a sockaddr with an unknown address family
-    var sa: libcurl.CurlSockAddr = .{
-        .family = 255, // not AF_INET or AF_INET6
-        .socktype = posix.SOCK.STREAM,
-        .protocol = 0,
-        .addrlen = 0,
-        .addr = undefined,
-    };
-    try t.expect(filter.isBlockedSockaddr(&sa));
-}
-
-test "custom CIDR ranges" {
-    const t = std.testing;
-    const cidrs = try parseCidrList(t.allocator, "203.0.113.0/24");
-    const filter = IpFilter.init(false, cidrs);
-    defer filter.deinit(t.allocator);
-
-    try t.expect(filter.testBlocked("203.0.113.1")); // in custom range
-    try t.expect(filter.testBlocked("203.0.113.255")); // in custom range
-    try t.expect(!filter.testBlocked("203.0.114.0")); // outside custom range
-    try t.expect(!filter.testBlocked("8.8.8.8")); // not in range
-}
-
-test "private group blocks cloud metadata IP via link-local" {
-    // 169.254.169.254 is in link-local (169.254.0.0/16) which is in the private group.
-    // Users who want targeted cloud-metadata-only blocking can use --block-cidrs.
-    const t = std.testing;
-    const filter_private = IpFilter.init(true, null);
-    defer filter_private.deinit(t.allocator);
-    const filter_none = IpFilter.init(false, null);
-    defer filter_none.deinit(t.allocator);
-
-    try t.expect(filter_private.testBlocked("169.254.169.254")); // blocked via link-local
-    try t.expect(!filter_none.testBlocked("169.254.169.254")); // not blocked when disabled
-}
-
-test "parseCidrList: mixed IPv4 and IPv6" {
-    const t = std.testing;
-    const cidrs = try parseCidrList(t.allocator, "203.0.113.0/24, 2001:db8::/32, 192.168.1.0/24");
-
-    try t.expectEqual(2, cidrs.v4.len);
-    try t.expectEqual(1, cidrs.v6.len);
-
-    // spot-check: 203.0.113.0/24 and 192.168.1.0/24
-    const f = IpFilter.init(false, cidrs);
-    defer f.deinit(t.allocator);
-    try t.expect(f.testBlocked("203.0.113.1"));
-    try t.expect(!f.testBlocked("203.0.114.0"));
-    try t.expect(f.testBlocked("192.168.1.1"));
-    try t.expect(f.testBlocked("2001:db8::1"));
-    try t.expect(!f.testBlocked("2001:db9::1"));
-}
-
-test "allow list exempts from private blocking" {
-    const t = std.testing;
-    const cidrs = try parseCidrList(t.allocator, "-10.0.0.42/32,-fc00::1/128");
-    const filter = IpFilter.init(true, cidrs);
-    defer filter.deinit(t.allocator);
-
-    // Allowed IPs pass through despite being in private ranges
-    try t.expect(!filter.testBlocked("10.0.0.42"));
-    try t.expect(!filter.testBlocked("fc00::1"));
-
-    // Other private IPs still blocked
-    try t.expect(filter.testBlocked("10.0.0.43"));
-    try t.expect(filter.testBlocked("10.0.0.41"));
-    try t.expect(filter.testBlocked("192.168.1.1"));
-    try t.expect(filter.testBlocked("fc00::2"));
-}
-
-test "allow list exempts from custom CIDR blocking" {
-    const t = std.testing;
-    const cidrs = try parseCidrList(t.allocator, "203.0.113.0/24,-203.0.113.100/32");
-    const filter = IpFilter.init(false, cidrs);
-    defer filter.deinit(t.allocator);
-
-    try t.expect(!filter.testBlocked("203.0.113.100")); // allowed
-    try t.expect(filter.testBlocked("203.0.113.99")); // blocked
-    try t.expect(filter.testBlocked("203.0.113.101")); // blocked
-}
-
-test "parseCidrList: allow entries with '-' prefix" {
-    const t = std.testing;
-    const cidrs = try parseCidrList(t.allocator, "10.0.0.0/8,-10.0.0.42/32,-fc00::1/128");
-
-    try t.expectEqual(1, cidrs.v4.len);
-    try t.expectEqual(0, cidrs.v6.len);
-    try t.expectEqual(1, cidrs.allow_v4.len);
-    try t.expectEqual(1, cidrs.allow_v6.len);
-
-    const f = IpFilter.init(false, cidrs);
-    defer f.deinit(t.allocator);
-    try t.expect(!f.testBlocked("10.0.0.42")); // allowed
-    try t.expect(f.testBlocked("10.0.0.43")); // blocked
-    try t.expect(!f.testBlocked("fc00::1")); // allowed (not blocked by custom, but allow-listed)
-}
-
-test "parseCidrList: invalid input returns error" {
-    const t = std.testing;
-    try t.expectError(error.InvalidCidr, parseCidrList(t.allocator, "not-a-cidr"));
-    try t.expectError(error.InvalidCidr, parseCidrList(t.allocator, "10.0.0.0/33")); // prefix too large
-    try t.expectError(error.InvalidCidr, parseCidrList(t.allocator, "10.0.0.0")); // missing prefix
-    try t.expectError(error.InvalidCidr, parseCidrList(t.allocator, "10.0.0.0/abc")); // non-numeric prefix
-}
-
-test {
-    std.testing.refAllDecls(@This());
 }
