@@ -268,7 +268,7 @@ jobs:
           fi
 
           mkdir -p $CG_ROOT/$CG
-          cgexec -g memory:$CG ./lightpanda serve & echo $! > LPD.pid
+          cgexec -g memory:$CG ./lightpanda serve --log-level info & echo $! > LPD.pid
 
           sleep 2
 
