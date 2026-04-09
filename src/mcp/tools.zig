@@ -46,8 +46,8 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         return server.sendError(id, .MethodNotFound, "Tool not found");
     }
 
-    // Special handling for evaluate/eval: JS errors are returned as isError results, not protocol errors
-    if (std.mem.eql(u8, call_params.name, "evaluate") or std.mem.eql(u8, call_params.name, "eval")) {
+    // Special handling for eval: JS errors are returned as isError results, not protocol errors
+    if (std.mem.eql(u8, call_params.name, "eval")) {
         const result = browser_tools.callEval(server.session, &server.node_registry, arena, call_params.arguments);
         const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
         return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });
@@ -70,20 +70,20 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 const router = @import("router.zig");
 const testing = @import("../testing.zig");
 
-test "MCP - evaluate error reporting" {
+test "MCP - eval error reporting" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
-    // Call evaluate with a script that throws an error
+    // Call eval with a script that throws an error
     const msg =
         \\{
         \\  "jsonrpc": "2.0",
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "evaluate",
+        \\    "name": "eval",
         \\    "arguments": {
         \\      "script": "throw new Error('test error')"
         \\    }

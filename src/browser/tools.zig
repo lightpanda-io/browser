@@ -42,18 +42,6 @@ fn minify(comptime json: []const u8) []const u8 {
     };
 }
 
-const goto_schema = minify(
-    \\{
-    \\  "type": "object",
-    \\  "properties": {
-    \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
-    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-    \\  },
-    \\  "required": ["url"]
-    \\}
-);
-
 const url_params_schema = minify(
     \\{
     \\  "type": "object",
@@ -65,29 +53,21 @@ const url_params_schema = minify(
     \\}
 );
 
-const evaluate_schema = minify(
-    \\{
-    \\  "type": "object",
-    \\  "properties": {
-    \\    "script": { "type": "string" },
-    \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
-    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-    \\  },
-    \\  "required": ["script"]
-    \\}
-);
-
 pub const tool_defs = [_]ToolDef{
     .{
         .name = "goto",
         .description = "Navigate to a specified URL and load the page in memory so it can be reused later for info extraction.",
-        .input_schema = goto_schema,
-    },
-    .{
-        .name = "navigate",
-        .description = "Alias for goto. Navigate to a specified URL and load the page in memory.",
-        .input_schema = goto_schema,
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+            \\  },
+            \\  "required": ["url"]
+            \\}
+        ),
     },
     .{
         .name = "markdown",
@@ -100,17 +80,23 @@ pub const tool_defs = [_]ToolDef{
         .input_schema = url_params_schema,
     },
     .{
-        .name = "evaluate",
-        .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first.",
-        .input_schema = evaluate_schema,
-    },
-    .{
         .name = "eval",
-        .description = "Alias for evaluate. Evaluate JavaScript in the current page context.",
-        .input_schema = evaluate_schema,
+        .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "script": { "type": "string" },
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+            \\  },
+            \\  "required": ["script"]
+            \\}
+        ),
     },
     .{
-        .name = "semantic_tree",
+        .name = "semanticTree",
         .description = "Get the page content as a simplified semantic DOM tree for AI reasoning. If a url is provided, it navigates to that url first.",
         .input_schema = minify(
             \\{
@@ -321,7 +307,7 @@ pub const ToolError = error{
     InternalError,
 };
 
-/// Result from evaluate that may represent a JS error (not a tool failure).
+/// Result from eval that may represent a JS error (not a tool failure).
 pub const EvalResult = struct {
     text: []const u8,
     is_error: bool = false,
@@ -345,16 +331,14 @@ const NodeAndPage = struct { node: *DOMNode, page: *lp.Page };
 
 const Action = enum {
     goto,
-    navigate,
     markdown,
     links,
     nodeDetails,
     interactiveElements,
     structuredData,
     detectForms,
-    evaluate,
     eval,
-    semantic_tree,
+    semanticTree,
     click,
     fill,
     scroll,
@@ -370,35 +354,8 @@ const Action = enum {
     getCookies,
 };
 
-const action_map = std.StaticStringMap(Action).initComptime(.{
-    .{ "goto", .goto },
-    .{ "navigate", .navigate },
-    .{ "markdown", .markdown },
-    .{ "links", .links },
-    .{ "nodeDetails", .nodeDetails },
-    .{ "interactiveElements", .interactiveElements },
-    .{ "structuredData", .structuredData },
-    .{ "detectForms", .detectForms },
-    .{ "evaluate", .evaluate },
-    .{ "eval", .eval },
-    .{ "semantic_tree", .semantic_tree },
-    .{ "click", .click },
-    .{ "fill", .fill },
-    .{ "scroll", .scroll },
-    .{ "waitForSelector", .waitForSelector },
-    .{ "hover", .hover },
-    .{ "press", .press },
-    .{ "selectOption", .selectOption },
-    .{ "setChecked", .setChecked },
-    .{ "findElement", .findElement },
-    .{ "getEnv", .getEnv },
-    .{ "consoleLogs", .consoleLogs },
-    .{ "getUrl", .getUrl },
-    .{ "getCookies", .getCookies },
-});
-
 /// Execute a tool by name. Returns the result text.
-/// For `evaluate`/`eval`, use `callEval` to distinguish JS errors from tool errors.
+/// For `eval`, use `callEval` to distinguish JS errors from tool errors.
 pub fn call(
     session: *lp.Session,
     registry: *CDPNode.Registry,
@@ -406,21 +363,18 @@ pub fn call(
     tool_name: []const u8,
     arguments: ?std.json.Value,
 ) ToolError![]const u8 {
-    const action = action_map.get(tool_name) orelse return ToolError.InvalidParams;
+    const action = std.meta.stringToEnum(Action, tool_name) orelse return ToolError.InvalidParams;
 
     return switch (action) {
-        .goto, .navigate => execGoto(session, registry, arena, arguments),
+        .goto => execGoto(session, registry, arena, arguments),
         .markdown => execMarkdown(session, registry, arena, arguments),
         .links => execLinks(session, registry, arena, arguments),
         .nodeDetails => execNodeDetails(session, registry, arena, arguments),
         .interactiveElements => execInteractiveElements(session, registry, arena, arguments),
         .structuredData => execStructuredData(session, registry, arena, arguments),
         .detectForms => execDetectForms(session, registry, arena, arguments),
-        .evaluate, .eval => blk: {
-            const result = execEvaluate(session, registry, arena, arguments);
-            break :blk result.text;
-        },
-        .semantic_tree => execSemanticTree(session, registry, arena, arguments),
+        .eval => execEval(session, registry, arena, arguments).text,
+        .semanticTree => execSemanticTree(session, registry, arena, arguments),
         .click => execClick(session, registry, arena, arguments),
         .fill => execFill(session, registry, arena, arguments),
         .scroll => execScroll(session, registry, arena, arguments),
@@ -437,19 +391,19 @@ pub fn call(
     };
 }
 
-/// Like `call`, but for evaluate/eval returns the full EvalResult with is_error flag.
+/// Like `call`, but for eval returns the full EvalResult with is_error flag.
 pub fn callEval(
     session: *lp.Session,
     registry: *CDPNode.Registry,
     arena: std.mem.Allocator,
     arguments: ?std.json.Value,
 ) EvalResult {
-    return execEvaluate(session, registry, arena, arguments);
+    return execEval(session, registry, arena, arguments);
 }
 
 /// Check if a tool name is recognized.
 pub fn isKnownTool(tool_name: []const u8) bool {
-    return action_map.get(tool_name) != null;
+    return std.meta.stringToEnum(Action, tool_name) != null;
 }
 
 // --- Tool implementations ---
@@ -574,7 +528,7 @@ fn execDetectForms(session: *lp.Session, registry: *CDPNode.Registry, arena: std
     return aw.written();
 }
 
-fn execEvaluate(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) EvalResult {
+fn execEval(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) EvalResult {
     const Params = struct {
         script: [:0]const u8,
         url: ?[:0]const u8 = null,
