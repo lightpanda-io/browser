@@ -421,6 +421,9 @@ pub const Connection = struct {
 
             // try libcurl.curl_easy_setopt(easy, .debug_function, debugCallback);
         }
+
+        // default write callback to prevent libcurl from writing to stdout
+        try self.setWriteCallback(discardBody);
     }
 
     fn discardBody(_: [*]const u8, count: usize, len: usize, _: ?*anyopaque) usize {
