@@ -125,7 +125,7 @@ await browser.disconnect();
 ```
 </details>
 
-### Native MCP
+### Native MCP and skill
 
 The MCP server communicates via MCP JSON-RPC 2.0 over stdio.
 
@@ -142,6 +142,8 @@ Add to your MCP configuration:
 ```
 
 [Read full documentation](https://lightpanda.io/docs/open-source/guides/mcp-server)
+
+A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpanda-io/agent-skill).
 
 ### Telemetry
 By default, Lightpanda collects and sends usage telemetry. This can be disabled by setting an environment variable `LIGHTPANDA_DISABLE_TELEMETRY=true`. You can read Lightpanda's privacy policy at: [https://lightpanda.io/privacy-policy](https://lightpanda.io/privacy-policy).
