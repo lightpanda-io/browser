@@ -15,13 +15,57 @@ const ansi_red = "\x1b[31m";
 
 history_path: ?[:0]const u8,
 
+const CommandInfo = struct { name: [:0]const u8, hint: [:0]const u8 };
+
+const commands = [_]CommandInfo{
+    .{ .name = "GOTO", .hint = " <url>" },
+    .{ .name = "CLICK", .hint = " '<selector>'" },
+    .{ .name = "TYPE", .hint = " '<selector>' '<value>'" },
+    .{ .name = "WAIT", .hint = " '<selector>'" },
+    .{ .name = "TREE", .hint = "" },
+    .{ .name = "MARKDOWN", .hint = "" },
+    .{ .name = "MD", .hint = "" },
+    .{ .name = "EXTRACT", .hint = " '<selector>' [> file]" },
+    .{ .name = "EVAL", .hint = " '<script>'" },
+    .{ .name = "LOGIN", .hint = "" },
+    .{ .name = "ACCEPT_COOKIES", .hint = "" },
+    .{ .name = "EXIT", .hint = "" },
+};
+
 pub fn init(history_path: ?[:0]const u8) Self {
     c.linenoiseSetMultiLine(1);
+    c.linenoiseSetCompletionCallback(&completionCallback);
+    c.linenoiseSetHintsCallback(&hintsCallback);
     const self = Self{ .history_path = history_path };
     if (history_path) |path| {
         _ = c.linenoiseHistoryLoad(path.ptr);
     }
     return self;
+}
+
+fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callconv(.c) void {
+    const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(buf)), 0);
+    if (input.len == 0) return;
+    if (std.mem.indexOfScalar(u8, input, ' ') != null) return;
+    for (commands) |cmd| {
+        if (cmd.name.len >= input.len and std.ascii.eqlIgnoreCase(cmd.name[0..input.len], input)) {
+            c.linenoiseAddCompletion(lc, cmd.name.ptr);
+        }
+    }
+}
+
+fn hintsCallback(buf: [*c]const u8, color: [*c]c_int, bold: [*c]c_int) callconv(.c) [*c]u8 {
+    const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(buf)), 0);
+    if (input.len == 0) return null;
+    if (std.mem.indexOfScalar(u8, input, ' ') != null) return null;
+    for (commands) |cmd| {
+        if (std.ascii.eqlIgnoreCase(cmd.name, input) and cmd.hint.len > 0) {
+            color.* = 90;
+            bold.* = 0;
+            return @ptrCast(@constCast(cmd.hint.ptr));
+        }
+    }
+    return null;
 }
 
 pub fn readLine(self: *Self, prompt: [*:0]const u8) ?[]const u8 {
