@@ -4,23 +4,18 @@ const Command = @import("Command.zig");
 const Self = @This();
 
 file: ?std.fs.File,
+needs_separator: bool,
 
-/// Commands that are read-only / ephemeral and should NOT be recorded.
 pub fn init(path: ?[]const u8) Self {
     const file: ?std.fs.File = if (path) |p|
-        std.fs.cwd().createFile(p, .{ .truncate = false }) catch |err| blk: {
+        std.fs.cwd().createFile(p, .{}) catch |err| blk: {
             std.debug.print("Warning: could not open recording file: {s}\n", .{@errorName(err)});
             break :blk null;
         }
     else
         null;
 
-    // Seek to end for appending
-    if (file) |f| {
-        f.seekFromEnd(0) catch {};
-    }
-
-    return .{ .file = file };
+    return .{ .file = file, .needs_separator = false };
 }
 
 pub fn deinit(self: *Self) void {
@@ -38,14 +33,21 @@ pub fn record(self: *Self, cmd: Command.Command) void {
     const writer = &file_writer.interface;
     writer.print("{f}\n", .{cmd}) catch return;
     writer.flush() catch return;
+    self.needs_separator = true;
 }
 
 /// Record a comment line (e.g. user's natural language input).
 pub fn recordComment(self: *Self, comment: []const u8) void {
     const f = self.file orelse return;
-    f.writeAll("\n# ") catch return;
-    f.writeAll(comment) catch return;
-    f.writeAll("\n") catch return;
+    var buf: [4096]u8 = undefined;
+    var file_writer = f.writerStreaming(&buf);
+    const writer = &file_writer.interface;
+    if (self.needs_separator) writer.writeByte('\n') catch return;
+    self.needs_separator = true;
+    writer.writeAll("# ") catch return;
+    writer.writeAll(comment) catch return;
+    writer.writeByte('\n') catch return;
+    writer.flush() catch return;
 }
 
 // --- Tests ---
@@ -56,7 +58,7 @@ test "record writes state-mutating commands" {
 
     const file = tmp.dir.createFile("test.panda", .{ .read = true }) catch unreachable;
 
-    var recorder = Self{ .file = file };
+    var recorder = Self{ .file = file, .needs_separator = false };
     defer recorder.deinit();
 
     recorder.record(Command.parse("GOTO https://example.com"));
@@ -89,7 +91,7 @@ test "record skips empty and comment lines" {
 
     const file = tmp.dir.createFile("test2.panda", .{ .read = true }) catch unreachable;
 
-    var recorder = Self{ .file = file };
+    var recorder = Self{ .file = file, .needs_separator = false };
     defer recorder.deinit();
 
     recorder.record(Command.parse(""));
@@ -106,7 +108,7 @@ test "record skips empty and comment lines" {
 }
 
 test "recorder with null file is no-op" {
-    var recorder = Self{ .file = null };
+    var recorder = Self{ .file = null, .needs_separator = false };
     recorder.record(Command.parse("GOTO https://example.com"));
     recorder.recordComment("# test");
     recorder.deinit();

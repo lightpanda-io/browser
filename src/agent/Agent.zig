@@ -182,15 +182,13 @@ fn runRepl(self: *Self) void {
             .exit => break,
             .comment => continue,
             .login => {
-                self.recorder.recordComment(line);
-                self.processUserMessage(login_prompt) catch |err| {
+                self.processUserMessage(login_prompt, line) catch |err| {
                     const msg = std.fmt.allocPrint(self.allocator, "LOGIN failed: {s}", .{@errorName(err)}) catch "LOGIN failed";
                     self.terminal.printError(msg);
                 };
             },
             .accept_cookies => {
-                self.recorder.recordComment(line);
-                self.processUserMessage(accept_cookies_prompt) catch |err| {
+                self.processUserMessage(accept_cookies_prompt, line) catch |err| {
                     const msg = std.fmt.allocPrint(self.allocator, "ACCEPT_COOKIES failed: {s}", .{@errorName(err)}) catch "ACCEPT_COOKIES failed";
                     self.terminal.printError(msg);
                 };
@@ -199,8 +197,7 @@ fn runRepl(self: *Self) void {
                 // "quit" as a convenience alias
                 if (std.mem.eql(u8, line, "quit")) break;
 
-                self.recorder.recordComment(line);
-                self.processUserMessage(line) catch |err| {
+                self.processUserMessage(line, line) catch |err| {
                     const msg = std.fmt.allocPrint(self.allocator, "Request failed: {s}", .{@errorName(err)}) catch "Request failed";
                     self.terminal.printError(msg);
                 };
@@ -269,7 +266,7 @@ fn runScript(self: *Self, path: []const u8) void {
                     return;
                 }
                 const prompt = if (entry.command == .login) login_prompt else accept_cookies_prompt;
-                self.processUserMessage(prompt) catch |err| {
+                self.processUserMessage(prompt, "") catch |err| {
                     const msg = std.fmt.allocPrint(self.allocator, "line {d}: {s} failed: {s}", .{
                         entry.line_num,
                         entry.raw_line,
@@ -329,11 +326,11 @@ fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8)
         self_heal_prompt_page_state,
     }) catch return false;
 
-    self.processUserMessage(prompt) catch return false;
+    self.processUserMessage(prompt, "") catch return false;
     return true;
 }
 
-fn processUserMessage(self: *Self, user_input: []const u8) !void {
+fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []const u8) !void {
     const ma = self.message_arena.allocator();
 
     // Add system prompt as first message if this is the first user message
@@ -369,10 +366,17 @@ fn processUserMessage(self: *Self, user_input: []const u8) !void {
     };
     defer result.deinit();
 
-    // Record tool calls as Pandascript
+    // Record tool calls as Pandascript (only if they produce commands)
+    var recorded_any = false;
     for (result.tool_calls_made) |tc| {
         if (!std.mem.startsWith(u8, tc.result, "Error:")) {
-            self.recordToolCall(ma, tc.name, tc.arguments);
+            if (toolCallToCommand(ma, tc.name, tc.arguments)) |cmd| {
+                if (!recorded_any) {
+                    if (record_comment.len > 0) self.recorder.recordComment(record_comment);
+                    recorded_any = true;
+                }
+                self.recorder.record(cmd);
+            }
         }
     }
 
@@ -393,15 +397,15 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     return tool_result;
 }
 
-/// Convert a tool call (name + JSON arguments) into a Pandascript command and record it.
-fn recordToolCall(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) void {
-    const parsed = std.json.parseFromSlice(std.json.Value, arena, arguments, .{}) catch return;
+/// Convert a tool call (name + JSON arguments) into a Pandascript command.
+fn toolCallToCommand(arena: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) ?Command.Command {
+    const parsed = std.json.parseFromSlice(std.json.Value, arena, arguments, .{}) catch return null;
     const obj = switch (parsed.value) {
         .object => |o| o,
-        else => return,
+        else => return null,
     };
 
-    const cmd: ?Command.Command = if (std.mem.eql(u8, tool_name, "goto") or std.mem.eql(u8, tool_name, "navigate")) blk: {
+    return if (std.mem.eql(u8, tool_name, "goto")) blk: {
         break :blk switch (obj.get("url") orelse break :blk null) {
             .string => |s| .{ .goto = s },
             else => null,
@@ -425,16 +429,12 @@ fn recordToolCall(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, 
             else => break :blk null,
         };
         break :blk .{ .type_cmd = .{ .selector = sel, .value = val } };
-    } else if (std.mem.eql(u8, tool_name, "evaluate") or std.mem.eql(u8, tool_name, "eval")) blk: {
+    } else if (std.mem.eql(u8, tool_name, "eval")) blk: {
         break :blk switch (obj.get("script") orelse break :blk null) {
             .string => |s| .{ .eval_js = s },
             else => null,
         };
     } else null;
-
-    if (cmd) |c| {
-        self.recorder.record(c);
-    }
 }
 
 fn getEnvApiKey(provider_type: Config.AiProvider) ?[:0]const u8 {
