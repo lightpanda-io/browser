@@ -25,20 +25,15 @@ Not a Chromium fork. Not a WebKit patch. A new browser, written in Zig.
 ](https://github.com/lightpanda-io/demo)
 </div>
 
-_chromedp requesting 933 real web pages over the network on a AWS EC2 m5.large instance.
-See [benchmark details](https://github.com/lightpanda-io/demo/blob/main/BENCHMARKS.md#crawler-benchmark)._
+## Benchmarks
 
-Lightpanda is the open-source browser made for headless usage:
+Requesting 933 real web pages over the network on a AWS EC2 m5.large instance.
+See [benchmark details](https://github.com/lightpanda-io/demo/blob/main/BENCHMARKS.md#crawler-benchmark).
 
-- Javascript execution
-- Support of Web APIs (partial, WIP)
-- Compatible with Playwright, Puppeteer, chromedp through [CDP](https://chromedevtools.github.io/devtools-protocol/)
-
-Fast web automation for AI agents, LLM training, scraping and testing:
-
-- Ultra-low memory footprint (16x less than Chrome)
-- Exceptionally fast execution (9x faster than Chrome)
-- Instant startup
+| Metric | Lightpanda | Headless Chrome | Difference |
+| :---- | :---- | :---- | :---- |
+| Memory (peak, 100 pages) | 123MB | 2GB | ~16 less |
+| Execution time (100 pages) | 5s | 46s | ~9x faster |
 
 ## Quick start
 
