@@ -19,7 +19,7 @@ const default_system_prompt =
     \\click links, and extract information.
     \\
     \\When helping the user, navigate to relevant pages and extract information.
-    \\Use the semantic_tree or interactiveElements tools to understand page structure
+    \\Use the semanticTree or interactiveElements tools to understand page structure
     \\before clicking or filling forms. Be concise in your responses.
     \\
     \\IMPORTANT RULES:
@@ -75,11 +75,10 @@ tools: []const zenai.provider.Tool,
 model: []const u8,
 system_prompt: []const u8,
 script_file: ?[]const u8,
-record_file: ?[]const u8,
 self_heal: bool,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
-    const is_script_mode = opts.script_file != null;
+    const is_script_mode = opts.script_file != null and !opts.save;
 
     // API key is only required for REPL mode and self-healing
     const api_key: ?[:0]const u8 = getEnvApiKey(opts.provider) orelse if (!is_script_mode) {
@@ -118,14 +117,13 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .tool_executor = tool_executor,
         .terminal = Terminal.init(null),
         .cmd_executor = undefined,
-        .recorder = Recorder.init(opts.record_file),
+        .recorder = Recorder.init(if (opts.save) opts.script_file else null),
         .messages = .empty,
         .message_arena = std.heap.ArenaAllocator.init(allocator),
         .tools = tools,
         .model = opts.model orelse defaultModel(opts.provider),
         .system_prompt = opts.system_prompt orelse default_system_prompt,
-        .script_file = opts.script_file,
-        .record_file = opts.record_file,
+        .script_file = if (!opts.save) opts.script_file else null,
         .self_heal = opts.self_heal,
     };
 
@@ -151,8 +149,8 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn run(self: *Self) void {
-    if (self.script_file) |script_file| {
-        self.runScript(script_file);
+    if (self.script_file) |path| {
+        self.runScript(path);
     } else {
         self.runRepl();
     }
@@ -183,14 +181,12 @@ fn runRepl(self: *Self) void {
             .comment => continue,
             .login => {
                 self.processUserMessage(login_prompt, line) catch |err| {
-                    const msg = std.fmt.allocPrint(self.allocator, "LOGIN failed: {s}", .{@errorName(err)}) catch "LOGIN failed";
-                    self.terminal.printError(msg);
+                    self.printAllocError("LOGIN failed: {s}", .{@errorName(err)});
                 };
             },
             .accept_cookies => {
                 self.processUserMessage(accept_cookies_prompt, line) catch |err| {
-                    const msg = std.fmt.allocPrint(self.allocator, "ACCEPT_COOKIES failed: {s}", .{@errorName(err)}) catch "ACCEPT_COOKIES failed";
-                    self.terminal.printError(msg);
+                    self.printAllocError("ACCEPT_COOKIES failed: {s}", .{@errorName(err)});
                 };
             },
             .natural_language => {
@@ -198,8 +194,7 @@ fn runRepl(self: *Self) void {
                 if (std.mem.eql(u8, line, "quit")) break;
 
                 self.processUserMessage(line, line) catch |err| {
-                    const msg = std.fmt.allocPrint(self.allocator, "Request failed: {s}", .{@errorName(err)}) catch "Request failed";
-                    self.terminal.printError(msg);
+                    self.printAllocError("Request failed: {s}", .{@errorName(err)});
                 };
             },
             else => {
@@ -212,17 +207,24 @@ fn runRepl(self: *Self) void {
     self.terminal.printInfo("Goodbye!");
 }
 
+fn printAllocError(self: *Self, comptime fmt: []const u8, args: anytype) void {
+    const msg = std.fmt.allocPrint(self.allocator, fmt, args) catch {
+        self.terminal.printError(fmt);
+        return;
+    };
+    defer self.allocator.free(msg);
+    self.terminal.printError(msg);
+}
+
 fn runScript(self: *Self, path: []const u8) void {
     const file = std.fs.cwd().openFile(path, .{}) catch |err| {
-        const msg = std.fmt.allocPrint(self.allocator, "Failed to open script '{s}': {s}", .{ path, @errorName(err) }) catch "Failed to open script";
-        self.terminal.printError(msg);
+        self.printAllocError("Failed to open script '{s}': {s}", .{ path, @errorName(err) });
         return;
     };
     defer file.close();
 
     const content = file.readToEndAlloc(self.allocator, 10 * 1024 * 1024) catch |err| {
-        const msg = std.fmt.allocPrint(self.allocator, "Failed to read script: {s}", .{@errorName(err)}) catch "Failed to read script";
-        self.terminal.printError(msg);
+        self.printAllocError("Failed to read script: {s}", .{@errorName(err)});
         return;
     };
     defer self.allocator.free(content);
@@ -251,28 +253,25 @@ fn runScript(self: *Self, path: []const u8) void {
                 continue;
             },
             .natural_language => {
-                const msg = std.fmt.allocPrint(self.allocator, "line {d}: unrecognized command: {s}", .{ entry.line_num, entry.raw_line }) catch "unrecognized command";
-                self.terminal.printError(msg);
+                self.printAllocError("line {d}: unrecognized command: {s}", .{ entry.line_num, entry.raw_line });
                 return;
             },
             .login, .accept_cookies => {
                 // High-level commands require LLM
                 if (self.ai_client == null) {
-                    const msg = std.fmt.allocPrint(self.allocator, "line {d}: {s} requires an API key for LLM resolution", .{
+                    self.printAllocError("line {d}: {s} requires an API key for LLM resolution", .{
                         entry.line_num,
                         entry.raw_line,
-                    }) catch "LLM required";
-                    self.terminal.printError(msg);
+                    });
                     return;
                 }
                 const prompt = if (entry.command == .login) login_prompt else accept_cookies_prompt;
                 self.processUserMessage(prompt, "") catch |err| {
-                    const msg = std.fmt.allocPrint(self.allocator, "line {d}: {s} failed: {s}", .{
+                    self.printAllocError("line {d}: {s} failed: {s}", .{
                         entry.line_num,
                         entry.raw_line,
                         @errorName(err),
-                    }) catch "command failed";
-                    self.terminal.printError(msg);
+                    });
                     return;
                 };
             },
@@ -297,11 +296,10 @@ fn runScript(self: *Self, path: []const u8) void {
                             continue;
                         }
                     }
-                    const msg = std.fmt.allocPrint(self.allocator, "line {d}: command failed: {s}", .{
+                    self.printAllocError("line {d}: command failed: {s}", .{
                         entry.line_num,
                         entry.raw_line,
-                    }) catch "command failed";
-                    self.terminal.printError(msg);
+                    });
                     return;
                 }
             },

@@ -1,4 +1,5 @@
 const std = @import("std");
+const browser_tools = @import("lightpanda").tools;
 const Command = @import("Command.zig");
 const ToolExecutor = @import("ToolExecutor.zig");
 const Terminal = @import("Terminal.zig");
@@ -126,43 +127,7 @@ fn execExtract(self: *Self, arena: std.mem.Allocator, args: Command.ExtractArgs)
     return .{ .output = result, .failed = false };
 }
 
-/// Substitute $VAR_NAME references with values from the environment.
-fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8 {
-    // Quick scan: if no $ present, return as-is
-    if (std.mem.indexOfScalar(u8, input, '$') == null) return input;
-
-    var result: std.ArrayListUnmanaged(u8) = .empty;
-    var i: usize = 0;
-    while (i < input.len) {
-        if (input[i] == '$') {
-            // Find the end of the variable name (alphanumeric + underscore)
-            const var_start = i + 1;
-            var var_end = var_start;
-            while (var_end < input.len and (std.ascii.isAlphanumeric(input[var_end]) or input[var_end] == '_')) {
-                var_end += 1;
-            }
-            if (var_end > var_start) {
-                const var_name = input[var_start..var_end];
-                // We need a null-terminated string for getenv
-                const var_name_z = arena.dupeZ(u8, var_name) catch return input;
-                if (std.posix.getenv(var_name_z)) |env_val| {
-                    result.appendSlice(arena, env_val) catch return input;
-                } else {
-                    // Keep the original $VAR if not found
-                    result.appendSlice(arena, input[i..var_end]) catch return input;
-                }
-                i = var_end;
-            } else {
-                result.append(arena, '$') catch return input;
-                i += 1;
-            }
-        } else {
-            result.append(arena, input[i]) catch return input;
-            i += 1;
-        }
-    }
-    return result.toOwnedSlice(arena) catch input;
-}
+const substituteEnvVars = browser_tools.substituteEnvVars;
 
 /// Escape a string for safe interpolation inside a JS double-quoted string literal.
 fn escapeJs(arena: std.mem.Allocator, input: []const u8) []const u8 {

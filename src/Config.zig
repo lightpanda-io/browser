@@ -235,7 +235,7 @@ pub const Agent = struct {
     system_prompt: ?[:0]const u8 = null,
     repl: bool = true,
     script_file: ?[]const u8 = null,
-    record_file: ?[]const u8 = null,
+    save: bool = false,
     self_heal: bool = false,
 };
 
@@ -950,12 +950,8 @@ fn parseAgentArgs(
             continue;
         }
 
-        if (std.mem.eql(u8, "--run", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = opt });
-                return error.InvalidArgument;
-            };
-            result.script_file = str;
+        if (std.mem.eql(u8, "--save", opt)) {
+            result.save = true;
             continue;
         }
 
@@ -977,9 +973,8 @@ fn parseAgentArgs(
             continue;
         }
 
-        // Positional argument: recording file for REPL mode (e.g. `agent --repl my_workflow.panda`)
         if (!std.mem.startsWith(u8, opt, "-")) {
-            result.record_file = opt;
+            result.script_file = opt;
             continue;
         }
 

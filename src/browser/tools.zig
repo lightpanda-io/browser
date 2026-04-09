@@ -475,12 +475,10 @@ fn execNodeDetails(session: *lp.Session, registry: *CDPNode.Registry, arena: std
     const Params = struct { backendNodeId: CDPNode.Id };
     const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
 
-    _ = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const page = session.currentPage() orelse return ToolError.PageNotLoaded;
 
     const node = registry.lookup_by_id.get(args.backendNodeId) orelse
         return ToolError.NodeNotFound;
-
-    const page = session.currentPage().?;
     const details = lp.SemanticTree.getNodeDetails(arena, node.dom, registry, page) catch
         return ToolError.InternalError;
 
@@ -802,7 +800,7 @@ fn execFindElement(session: *lp.Session, registry: *CDPNode.Registry, arena: std
         }
         if (args.name) |name| {
             const el_name = el.name orelse continue;
-            if (!containsIgnoreCase(el_name, name)) continue;
+            if (std.ascii.indexOfIgnoreCase(el_name, name) == null) continue;
         }
         matches.append(arena, el) catch return ToolError.InternalError;
     }
@@ -914,7 +912,7 @@ fn parseArgsOrErr(comptime T: type, arena: std.mem.Allocator, arguments: ?std.js
 }
 
 /// Substitute $VAR_NAME references with values from the environment.
-fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8 {
+pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8 {
     if (std.mem.indexOfScalar(u8, input, '$') == null) return input;
 
     var result: std.ArrayListUnmanaged(u8) = .empty;
@@ -944,14 +942,4 @@ fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8 {
         }
     }
     return result.toOwnedSlice(arena) catch input;
-}
-
-pub fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
-    if (needle.len > haystack.len) return false;
-    if (needle.len == 0) return true;
-    const end = haystack.len - needle.len + 1;
-    for (0..end) |i| {
-        if (std.ascii.eqlIgnoreCase(haystack[i..][0..needle.len], needle)) return true;
-    }
-    return false;
 }

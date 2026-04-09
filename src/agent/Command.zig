@@ -76,39 +76,39 @@ pub fn parse(line: []const u8) Command {
     const cmd_word = trimmed[0..cmd_end];
     const rest = std.mem.trim(u8, trimmed[cmd_end..], &std.ascii.whitespace);
 
-    if (eqlIgnoreCase(cmd_word, "GOTO")) {
+    if (std.ascii.eqlIgnoreCase(cmd_word, "GOTO")) {
         if (rest.len == 0) return .{ .natural_language = trimmed };
         return .{ .goto = rest };
     }
 
-    if (eqlIgnoreCase(cmd_word, "CLICK")) {
+    if (std.ascii.eqlIgnoreCase(cmd_word, "CLICK")) {
         const arg = extractQuoted(rest) orelse rest;
         if (arg.len == 0) return .{ .natural_language = trimmed };
         return .{ .click = arg };
     }
 
-    if (eqlIgnoreCase(cmd_word, "TYPE")) {
+    if (std.ascii.eqlIgnoreCase(cmd_word, "TYPE")) {
         const first = extractQuotedWithRemainder(rest) orelse return .{ .natural_language = trimmed };
         const second_arg = std.mem.trim(u8, first.remainder, &std.ascii.whitespace);
         const second = extractQuoted(second_arg) orelse return .{ .natural_language = trimmed };
         return .{ .type_cmd = .{ .selector = first.value, .value = second } };
     }
 
-    if (eqlIgnoreCase(cmd_word, "WAIT")) {
+    if (std.ascii.eqlIgnoreCase(cmd_word, "WAIT")) {
         const arg = extractQuoted(rest) orelse rest;
         if (arg.len == 0) return .{ .natural_language = trimmed };
         return .{ .wait = arg };
     }
 
-    if (eqlIgnoreCase(cmd_word, "TREE")) {
+    if (std.ascii.eqlIgnoreCase(cmd_word, "TREE")) {
         return .{ .tree = {} };
     }
 
-    if (eqlIgnoreCase(cmd_word, "MARKDOWN") or eqlIgnoreCase(cmd_word, "MD")) {
+    if (std.ascii.eqlIgnoreCase(cmd_word, "MARKDOWN") or std.ascii.eqlIgnoreCase(cmd_word, "MD")) {
         return .{ .markdown = {} };
     }
 
-    if (eqlIgnoreCase(cmd_word, "EXTRACT")) {
+    if (std.ascii.eqlIgnoreCase(cmd_word, "EXTRACT")) {
         const selector = extractQuoted(rest) orelse {
             if (rest.len == 0) return .{ .natural_language = trimmed };
             return .{ .extract = .{ .selector = rest, .file = null } };
@@ -123,21 +123,21 @@ pub fn parse(line: []const u8) Command {
         return .{ .extract = .{ .selector = selector, .file = null } };
     }
 
-    if (eqlIgnoreCase(cmd_word, "EVAL")) {
+    if (std.ascii.eqlIgnoreCase(cmd_word, "EVAL")) {
         if (rest.len == 0) return .{ .natural_language = trimmed };
         const arg = extractQuoted(rest) orelse rest;
         return .{ .eval_js = arg };
     }
 
-    if (eqlIgnoreCase(cmd_word, "LOGIN")) {
+    if (std.ascii.eqlIgnoreCase(cmd_word, "LOGIN")) {
         return .{ .login = {} };
     }
 
-    if (eqlIgnoreCase(cmd_word, "ACCEPT_COOKIES") or eqlIgnoreCase(cmd_word, "ACCEPT-COOKIES")) {
+    if (std.ascii.eqlIgnoreCase(cmd_word, "ACCEPT_COOKIES") or std.ascii.eqlIgnoreCase(cmd_word, "ACCEPT-COOKIES")) {
         return .{ .accept_cookies = {} };
     }
 
-    if (eqlIgnoreCase(cmd_word, "EXIT")) {
+    if (std.ascii.eqlIgnoreCase(cmd_word, "EXIT")) {
         return .{ .exit = {} };
     }
 
@@ -202,7 +202,7 @@ pub const ScriptIterator = struct {
     fn isEvalTripleQuote(line: []const u8) bool {
         const cmd_end = std.mem.indexOfAny(u8, line, &std.ascii.whitespace) orelse line.len;
         const cmd_word = line[0..cmd_end];
-        if (!eqlIgnoreCase(cmd_word, "EVAL")) return false;
+        if (!std.ascii.eqlIgnoreCase(cmd_word, "EVAL")) return false;
         const rest = std.mem.trim(u8, line[cmd_end..], &std.ascii.whitespace);
         return std.mem.startsWith(u8, rest, "\"\"\"") or std.mem.startsWith(u8, rest, "'''");
     }
@@ -246,14 +246,6 @@ fn extractQuotedWithRemainder(s: []const u8) ?QuotedResult {
 fn extractQuoted(s: []const u8) ?[]const u8 {
     const result = extractQuotedWithRemainder(s) orelse return null;
     return result.value;
-}
-
-pub fn eqlIgnoreCase(a: []const u8, comptime upper: []const u8) bool {
-    if (a.len != upper.len) return false;
-    for (a, upper) |ac, uc| {
-        if (std.ascii.toUpper(ac) != uc) return false;
-    }
-    return true;
 }
 
 // --- Tests ---
