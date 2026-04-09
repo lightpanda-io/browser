@@ -692,7 +692,7 @@ fn parseServeArgs(
         }
 
         log.fatal(.app, "unknown argument", .{ .mode = "serve", .arg = opt });
-        return error.UnkownOption;
+        return error.UnknownOption;
     }
 
     return serve;
@@ -723,7 +723,7 @@ fn parseMcpArgs(
         }
 
         log.fatal(.mcp, "unknown argument", .{ .mode = "mcp", .arg = opt });
-        return error.UnkownOption;
+        return error.UnknownOption;
     }
 
     return result;
@@ -865,7 +865,7 @@ fn parseFetchArgs(
 
         if (std.mem.startsWith(u8, opt, "--")) {
             log.fatal(.app, "unknown argument", .{ .mode = "fetch", .arg = opt });
-            return error.UnkownOption;
+            return error.UnknownOption;
         }
 
         if (url != null) {

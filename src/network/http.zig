@@ -104,7 +104,7 @@ pub const Headers = struct {
 
 // In normal cases, the header iterator comes from the curl linked list.
 // But it's also possible to inject a response, via `transfer.fulfill`. In that
-// case, the resposne headers are a list, []const Http.Header.
+// case, the response headers are a list, []const Http.Header.
 // This union, is an iterator that exposes the same API for either case.
 pub const HeaderIterator = union(enum) {
     curl: CurlHeaderIterator,

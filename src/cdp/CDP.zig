@@ -76,7 +76,7 @@ notification_arena: std.heap.ArenaAllocator,
 page_arena: std.heap.ArenaAllocator,
 
 // Valid for the entire lifetime of the BrowserContext. Should minimize
-// (or altogether elimiate) our use of this.
+// (or altogether eliminate) our use of this.
 browser_context_arena: std.heap.ArenaAllocator,
 
 pub fn init(client: *Client) !CDP {
@@ -444,7 +444,7 @@ pub const BrowserContext = struct {
         env.inspector.?.resetContextGroup();
         env.inspector.?.stopSession();
 
-        // abort all intercepted requests before closing the sesion/page
+        // abort all intercepted requests before closing the session/page
         // since some of these might callback into the page/scriptmanager
         for (self.intercept_state.pendingTransfers()) |transfer| {
             transfer.abort(error.ClientDisconnect);
@@ -787,7 +787,7 @@ const ScriptOnNewDocument = struct {
 };
 
 /// in the isolated world by using its Context ID or the worldName.
-/// grantUniveralAccess Indecated whether the isolated world can reference objects like the DOM or other JS Objects.
+/// grantUniversalAccess Indicates whether the isolated world can reference objects like the DOM or other JS Objects.
 /// An isolated world has it's own instance of globals like Window.
 /// Generally the client needs to resolve a node into the isolated world to be able to work with it.
 /// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
@@ -819,7 +819,7 @@ const IsolatedWorld = struct {
     }
 
     // The isolate world must share at least some of the state with the related page, specifically the DocumentHTML
-    // (assuming grantUniveralAccess will be set to True!).
+    // (assuming grantUniversalAccess will be set to True!).
     // We just created the world and the page. The page's state lives in the session, but is update on navigation.
     // This also means this pointer becomes invalid after removePage until a new page is created.
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
@@ -862,7 +862,7 @@ pub const Command = struct {
 
     // In most cases, Sender is going to be cdp itself. We'll call
     // sender.sendJSON() and CDP will send it to the client. But some
-    // comamnds are dispatched internally, in which cases the Sender will
+    // commands are dispatched internally, in which cases the Sender will
     // be code to capture the data that we were "sending".
     sender: Sender,
 
@@ -1021,14 +1021,14 @@ test "cdp: invalid sessionId" {
     }
 
     {
-        // we have a brower context but no session_id
+        // we have a browser context but no session_id
         _ = try ctx.loadBrowserContext(.{});
         try ctx.processMessage(.{ .method = "Hi", .sessionId = "BC-Has-No-SessionId" });
         try ctx.expectSentError(-32001, "Unknown sessionId", .{});
     }
 
     {
-        // we have a brower context with a different session_id
+        // we have a browser context with a different session_id
         _ = try ctx.loadBrowserContext(.{ .session_id = "SESS-2" });
         try ctx.processMessage(.{ .method = "Hi", .sessionId = "SESS-1" });
         try ctx.expectSentError(-32001, "Unknown sessionId", .{});
@@ -1046,14 +1046,14 @@ test "cdp: STARTUP sessionId" {
     }
 
     {
-        // we have a brower context but no session_id
+        // we have a browser context but no session_id
         _ = try ctx.loadBrowserContext(.{});
         try ctx.processMessage(.{ .id = 3, .method = "Hi", .sessionId = "STARTUP" });
         try ctx.expectSentResult(null, .{ .id = 3, .index = 1, .session_id = "STARTUP" });
     }
 
     {
-        // we have a brower context with a different session_id
+        // we have a browser context with a different session_id
         _ = try ctx.loadBrowserContext(.{ .session_id = "SESS-2" });
         try ctx.processMessage(.{ .id = 4, .method = "Hi", .sessionId = "STARTUP" });
         try ctx.expectSentResult(null, .{ .id = 4, .index = 2, .session_id = "STARTUP" });

@@ -146,7 +146,7 @@
   if (IS_TEST_RUNNER === false) {
     // The page is running in a different browser. Probably a developer making sure
     // a test is correct. There are a few tweaks we need to do to make this a
-    // seemless, namely around adapting paths/urls.
+    // seamless, namely around adapting paths/urls.
     console.warn(`The page is not being executed in the test runner, certain behavior has been adjusted`);
     window.testing.HOST = location.hostname;
     window.testing.ORIGIN = location.origin;
