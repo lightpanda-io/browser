@@ -332,32 +332,31 @@ zig build -Doptimize=ReleaseFast run
 
 ## Contributing
 
-Lightpanda accepts pull requests through GitHub.
+See [CONTRIBUTING.md](https://github.com/lightpanda-io/browser/blob/main/CONTRIBUTING.md) for guidelines.
+You must sign our [CLA](CLA.md) during the pull request process.
+- [Discord](https://discord.gg/K63XeymfB5)
 
-You have to sign our [CLA](CLA.md) during the pull request process otherwise
-we're not able to accept your contributions.
-
-## Why?
+## Why Lightpanda?
 
 ### Javascript execution is mandatory for the modern web
 
-In the good old days, scraping a webpage was as easy as making an HTTP request, cURL-like. It’s not possible anymore, because Javascript is everywhere, like it or not:
+Simple HTTP requests used to be enough for web automation. That's no longer the case. Javascript now drives most of the web:
 
-- Ajax, Single Page App, infinite loading, “click to display”, instant search, etc.
-- JS web frameworks: React, Vue, Angular & others
+- Ajax, Single Page Apps, infinite loading, instant search
+- JS frameworks: React, Vue, Angular, and others
 
 ### Chrome is not the right tool
 
-If we need Javascript, why not use a real web browser? Take a huge desktop application, hack it, and run it on the server. Hundreds or thousands of instances of Chrome if you use it at scale. Are you sure it’s such a good idea?
+Running a full desktop browser on a server works, but it does not scale well. Chrome at hundreds or thousands of instances is expensive:
 
-- Heavy on RAM and CPU, expensive to run
-- Hard to package, deploy and maintain at scale
-- Bloated, lots of features are not useful in headless usage
+- Heavy on RAM and CPU
+- Hard to package, deploy, and maintain at scale
+- Many features are not necessary in headless made
 
 ### Lightpanda is built for performance
 
-If we want both Javascript and performance in a true headless browser, we need to start from scratch. Not another iteration of Chromium, really from a blank page. Crazy right? But that’s what we did:
+Supporting Javascript with real performance meant building from scratch rather than forking Chromium:
 
-- Not based on Chromium, Blink or WebKit
-- Low-level system programming language (Zig) with optimisations in mind
-- Opinionated: without graphical rendering
+- Not based on Chromium, Blink, or WebKit
+- Written in Zig, a low-level language with explicit memory control
+- No graphical rendering engine
