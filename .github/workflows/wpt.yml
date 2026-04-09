@@ -171,6 +171,21 @@ jobs:
           CGO_ENABLED=0 go build
 
       - run: |
+         ./wptdiff/wptdiff --completion |tee completion.log
+
+      - name: Send completion to slack
+        uses: slackapi/slack-github-action@v3.0.1
+        with:
+          errors: true
+          method: files.uploadV2
+          token: ${{ secrets.CI_SLACK_BOT_TOKEN }}
+          payload: |
+            channel_id: ${{ vars.WPT_SLACK_CHANNEL_ID }}
+            initial_comment: "Last WPT completion"
+            file: "./completion.log"
+            filename: "wpt-completion-${{ github.sha }}.txt"
+
+      - run: |
          ./wptdiff/wptdiff |tee diff.log
 
       - name: Send regression to slack
