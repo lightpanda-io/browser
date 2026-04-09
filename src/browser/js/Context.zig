@@ -114,7 +114,7 @@ scheduler: Scheduler,
 unknown_properties: (if (IS_DEBUG) std.StringHashMapUnmanaged(UnknownPropertyStat) else void) = if (IS_DEBUG) .{} else {},
 
 const ModuleEntry = struct {
-    // Can be null if we're asynchrously loading the module, in
+    // Can be null if we're asynchronously loading the module, in
     // which case resolver_promise cannot be null.
     module: ?js.Module.Global = null,
 
@@ -742,7 +742,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     // since we're going to be doing all the work.
     entry.resolver_promise = try promise.persist();
 
-    // But we can skip direclty to `resolveDynamicModule` which is
+    // But we can skip directly to `resolveDynamicModule` which is
     // what the above callback will eventually do.
     self.resolveDynamicModule(state, entry.*, local);
     return promise;

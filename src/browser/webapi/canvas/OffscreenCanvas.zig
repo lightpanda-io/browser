@@ -31,7 +31,7 @@ pub const _prototype_root = true;
 _width: u32,
 _height: u32,
 
-/// Since there's no base class rendering contextes inherit from,
+/// Since there's no base class rendering contexts inherit from,
 /// we're using tagged union.
 const DrawingContext = union(enum) {
     @"2d": *OffscreenCanvasRenderingContext2D,

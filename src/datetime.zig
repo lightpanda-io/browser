@@ -354,7 +354,7 @@ pub const DateTime = struct {
             return error.OutsideJulianPeriod;
         }
 
-        // Per the spec, it can be argued thatt 't' and even ' ' should be allowed,
+        // Per the spec, it can be argued that 't' and even ' ' should be allowed,
         // but certainly not encouraged.
         if (parser.consumeIf('T') == false) {
             return error.InvalidDateTime;
@@ -569,7 +569,7 @@ fn writeDate(into: []u8, date: Date) u8 {
     // cast year to a u16 so it doesn't insert a sign
     // we don't want the + sign, ever
     // and we don't even want it to insert the - sign, because it screws up
-    // the padding (we need to do it ourselfs)
+    // the padding (we need to do it ourselves)
     const year = date.year;
     if (year < 0) {
         _ = std.fmt.printInt(into[1..], @as(u16, @intCast(year * -1)), 10, .lower, .{ .width = 4, .fill = '0' });

@@ -82,7 +82,7 @@ pub fn run(self: *Scheduler) !void {
 
 pub fn hasReadyTasks(self: *Scheduler) bool {
     const now = milliTimestamp(.monotonic);
-    return queueuHasReadyTask(&self.low_priority, now) or queueuHasReadyTask(&self.high_priority, now);
+    return queueHasReadyTask(&self.low_priority, now) or queueHasReadyTask(&self.high_priority, now);
 }
 
 pub fn msToNextHigh(self: *Scheduler) ?u64 {
@@ -125,7 +125,7 @@ fn runQueue(self: *Scheduler, queue: *Queue, now: u64) !void {
     return;
 }
 
-fn queueuHasReadyTask(queue: *Queue, now: u64) bool {
+fn queueHasReadyTask(queue: *Queue, now: u64) bool {
     const task = queue.peek() orelse return false;
     return task.run_at <= now;
 }

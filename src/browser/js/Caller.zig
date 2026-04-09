@@ -348,7 +348,7 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         error.InvalidArgument => isolate.createTypeError("invalid argument"),
         error.TypeError => isolate.createTypeError(""),
         error.OutOfMemory => isolate.createError("out of memory"),
-        error.IllegalConstructor => isolate.createError("Illegal Contructor"),
+        error.IllegalConstructor => isolate.createError("Illegal Constructor"),
         else => blk: {
             if (comptime opts.dom_exception) {
                 const DOMException = @import("../webapi/DOMException.zig");
@@ -617,7 +617,7 @@ pub const Function = struct {
                 if (v8.v8__Object__GetInternalField(js_this, idx)) |cached| {
                     // means we can't cache undefined, since we can't tell the
                     // difference between "it isn't in the cache" and  "it's
-                    // in the cache with a valud of undefined"
+                    // in the cache with a value of undefined"
                     if (!v8.v8__Value__IsUndefined(cached)) {
                         return_value.set(cached);
                         return true;

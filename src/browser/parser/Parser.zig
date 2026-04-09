@@ -35,7 +35,7 @@ pub const ParsedNode = struct {
     // Data associated with this element to be passed back to html5ever as needed
     // We only have this for Elements. For other types, like comments, it's null.
     // html5ever should never ask us for this data on a non-element, and we'll
-    // assert that, with this opitonal, to make sure our assumption is correct.
+    // assert that, with this optional, to make sure our assumption is correct.
     data: ?*anyopaque,
 };
 

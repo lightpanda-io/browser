@@ -380,7 +380,7 @@ pub fn destroy(self: *Factory, value: anytype) void {
         // We should always destroy from the leaf down.
         if (@hasDecl(S, "_prototype_root")) {
             // A Event{._type == .generic} (or any other similar types)
-            // _should_ be destoyed directly. The _type = .generic is a pseudo
+            // _should_ be destroyed directly. The _type = .generic is a pseudo
             // child
             if (S != Event or value._type != .generic) {
                 log.fatal(.bug, "factory.destroy.event", .{ .type = @typeName(S) });

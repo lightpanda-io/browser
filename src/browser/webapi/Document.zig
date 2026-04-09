@@ -645,7 +645,7 @@ pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
             if (self._script_created_parser) |*parser| {
                 parser.read(html) catch |err| {
                     log.warn(.dom, "document.write parser error", .{ .err = err });
-                    // was alrady closed
+                    // was already closed
                     self._script_created_parser = null;
                 };
             }
@@ -657,7 +657,7 @@ pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
     const script = self._current_script.?;
     const parent = script.asNode().parentNode() orelse return;
 
-    // Our implemnetation is hacky. We'll write to a DocumentFragment, then
+    // Our implementation is hacky. We'll write to a DocumentFragment, then
     // append its children.
     const fragment = try Node.DocumentFragment.init(page);
     const fragment_node = fragment.asNode();

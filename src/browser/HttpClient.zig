@@ -98,7 +98,7 @@ pending_robots_queue: std.StringHashMapUnmanaged(std.ArrayList(Request)) = .empt
 
 // Once we have a handle/easy to process a request with, we create a Transfer
 // which contains the Request as well as any state we need to process the
-// request. These wil come and go with each request.
+// request. These will come and go with each request.
 transfer_pool: std.heap.MemoryPool(Transfer),
 
 // The current proxy. CDP can change it, changeProxy(null) restores
@@ -635,7 +635,7 @@ fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
 }
 
 // Above, request will not process if there's an interception request. In such
-// cases, the interecptor is expected to call resume to continue the transfer
+// cases, the interceptor is expected to call resume to continue the transfer
 // or transfer.abort() to abort it.
 fn process(self: *Client, transfer: *Transfer) !void {
     // libcurl doesn't allow recursive calls, if we're in a `perform()` operation
@@ -772,7 +772,7 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
     // cleaning things up. That's why the above code is in a block. If anything
     // fails BEFORE `curl_multi_add_handle` succeeds, the we still need to do
     // cleanup. But if things fail after `curl_multi_add_handle`, we expect
-    // perfom to pickup the failure and cleanup.
+    // perform to pickup the failure and cleanup.
     self.trackConn(conn) catch |err| {
         transfer._conn = null;
         transfer.deinit();
@@ -859,7 +859,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             }
             transfer._intercept_state = .pending;
 
-            // Wether or not this is a blocking request, we're not going
+            // Whether or not this is a blocking request, we're not going
             // to process it now. We can end the transfer, which will
             // release the easy handle back into the pool. The transfer
             // is still valid/alive (just has no handle).

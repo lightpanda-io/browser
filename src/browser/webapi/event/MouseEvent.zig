@@ -34,7 +34,7 @@ const MouseEvent = @This();
 
 pub const MouseButton = enum(u8) {
     main = 0,
-    auxillary = 1,
+    auxiliary = 1,
     secondary = 2,
     fourth = 3,
     fifth = 4,

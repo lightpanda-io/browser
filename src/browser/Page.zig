@@ -97,7 +97,7 @@ _parse_mode: enum { document, fragment, document_write } = .document,
 // identity (a given attribute should return the same *Attribute), so we do
 // a look here. We don't store this in the Element or Attribute.List.Entry
 // because that would require additional space per element / Attribute.List.Entry
-// even thoug we'll create very few (if any) actual *Attributes.
+// even though we'll create very few (if any) actual *Attributes.
 _attribute_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute) = .empty,
 
 // Same as _atlribute_lookup, but instead of individual attributes, this is for
@@ -479,7 +479,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
 
         // even though this might be the same _data_ as `default_location`, we
         // have to do this to make sure window.location is at a unique _address_.
-        // If we don't do this, mulitple window._location will have the same
+        // If we don't do this, multiple window._location will have the same
         // address and thus be mapped to the same v8::Object in the identity map.
         self.window._location = try Location.init(self.url, self);
 
@@ -689,7 +689,7 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
     });
 
     // This is a micro-optimization. Terminate any inflight request as early
-    // as we can. This will be more propery shutdown when we process the
+    // as we can. This will be more properly shutdown when we process the
     // scheduled navigation.
     if (target.parent == null) {
         session.browser.http_client.abort();
@@ -1173,7 +1173,7 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
     iframe._window = page_frame.window;
     errdefer iframe._window = null;
 
-    // on first load, dispatch frame_created evnet
+    // on first load, dispatch frame_created event
     self._session.notification.dispatch(.page_frame_created, &.{
         .frame_id = frame_id,
         .parent_id = self._frame_id,
@@ -3202,7 +3202,7 @@ const IdleNotification = union(enum) {
     init,
 
     // timestamp where the state was first triggered. If the state stays
-    // true (e.g. 0 nework activity for NetworkIdle, or <= 2 for NetworkAlmostIdle)
+    // true (e.g. 0 network activity for NetworkIdle, or <= 2 for NetworkAlmostIdle)
     // for 500ms, it'll send the notification and transition to .done. If
     // the state doesn't stay true, it'll revert to .init.
     triggered: u64,
@@ -3457,7 +3457,10 @@ pub fn handleClick(self: *Page, target: *Node) !void {
 
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
     const event = keyboard_event.asEvent();
-    const element = self.window._document._active_element orelse return;
+    const element = self.window._document._active_element orelse {
+        event.deinit(self._session);
+        return;
+    };
 
     if (comptime IS_DEBUG) {
         log.debug(.page, "page keydown", .{

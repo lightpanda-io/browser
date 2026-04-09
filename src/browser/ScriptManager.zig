@@ -71,7 +71,7 @@ allocator: Allocator,
 // source is placed here (keyed by the full url) for some point in the future
 // when v8 asks for it.
 // The type is confusing (too confusing? move to a union). Starts of as `null`
-// then transitions to either an error (from errorCalback) or the completed
+// then transitions to either an error (from errorCallback) or the completed
 // buffer from doneCallback
 imported_modules: std.StringHashMapUnmanaged(ImportedModule),
 
