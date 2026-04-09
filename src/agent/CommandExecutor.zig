@@ -29,10 +29,10 @@ pub fn executeWithResult(self: *Self, a: std.mem.Allocator, cmd: Command.Command
         .click => |target| self.execClick(a, target),
         .type_cmd => |args| self.execType(a, args),
         .wait => |selector| self.callTool(a, "waitForSelector", buildJson(a, .{ .selector = selector })),
-        .tree => self.callTool(a, "semantic_tree", ""),
+        .tree => self.callTool(a, "semanticTree", ""),
         .markdown => self.callTool(a, "markdown", ""),
         .extract => |args| self.execExtract(a, args),
-        .eval_js => |script| self.callTool(a, "evaluate", buildJson(a, .{ .script = script })),
+        .eval_js => |script| self.callTool(a, "eval", buildJson(a, .{ .script = script })),
         .exit, .natural_language, .comment, .login, .accept_cookies => unreachable,
     };
 }
@@ -94,7 +94,7 @@ fn execType(self: *Self, arena: std.mem.Allocator, args: Command.TypeArgs) ExecR
         \\}})()
     , .{ selector, value }) catch return .{ .output = "failed to build type script", .failed = true };
 
-    return self.callTool(arena, "evaluate", buildJson(arena, .{ .script = script }));
+    return self.callTool(arena, "eval", buildJson(arena, .{ .script = script }));
 }
 
 fn execExtract(self: *Self, arena: std.mem.Allocator, args: Command.ExtractArgs) ExecResult {
@@ -104,7 +104,7 @@ fn execExtract(self: *Self, arena: std.mem.Allocator, args: Command.ExtractArgs)
         \\JSON.stringify(Array.from(document.querySelectorAll("{s}")).map(el => el.textContent.trim()))
     , .{selector}) catch return .{ .output = "failed to build extract script", .failed = true };
 
-    const result = self.tool_executor.call(arena, "evaluate", buildJson(arena, .{ .script = script })) catch
+    const result = self.tool_executor.call(arena, "eval", buildJson(arena, .{ .script = script })) catch
         return .{ .output = "extract failed", .failed = true };
 
     if (args.file) |raw_file| {
