@@ -5,6 +5,314 @@ const DOMNode = @import("webapi/Node.zig");
 const CDPNode = @import("../cdp/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
 
+pub const ToolDef = struct {
+    name: []const u8,
+    description: []const u8,
+    input_schema: []const u8,
+};
+
+fn minify(comptime json: []const u8) []const u8 {
+    @setEvalBranchQuota(100000);
+    return comptime blk: {
+        var res: []const u8 = "";
+        var in_string = false;
+        var escaped = false;
+        for (json) |c| {
+            if (in_string) {
+                res = res ++ [1]u8{c};
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    in_string = false;
+                }
+            } else {
+                switch (c) {
+                    ' ', '\n', '\r', '\t' => continue,
+                    '"' => {
+                        in_string = true;
+                        res = res ++ [1]u8{c};
+                    },
+                    else => res = res ++ [1]u8{c},
+                }
+            }
+        }
+        break :blk res;
+    };
+}
+
+const goto_schema = minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
+    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+    \\  },
+    \\  "required": ["url"]
+    \\}
+);
+
+const url_params_schema = minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing." },
+    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+    \\  }
+    \\}
+);
+
+const evaluate_schema = minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "script": { "type": "string" },
+    \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
+    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+    \\  },
+    \\  "required": ["script"]
+    \\}
+);
+
+pub const tool_defs = [_]ToolDef{
+    .{
+        .name = "goto",
+        .description = "Navigate to a specified URL and load the page in memory so it can be reused later for info extraction.",
+        .input_schema = goto_schema,
+    },
+    .{
+        .name = "navigate",
+        .description = "Alias for goto. Navigate to a specified URL and load the page in memory.",
+        .input_schema = goto_schema,
+    },
+    .{
+        .name = "markdown",
+        .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
+        .input_schema = url_params_schema,
+    },
+    .{
+        .name = "links",
+        .description = "Extract all links in the opened page. If a url is provided, it navigates to that url first.",
+        .input_schema = url_params_schema,
+    },
+    .{
+        .name = "evaluate",
+        .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first.",
+        .input_schema = evaluate_schema,
+    },
+    .{
+        .name = "eval",
+        .description = "Alias for evaluate. Evaluate JavaScript in the current page context.",
+        .input_schema = evaluate_schema,
+    },
+    .{
+        .name = "semantic_tree",
+        .description = "Get the page content as a simplified semantic DOM tree for AI reasoning. If a url is provided, it navigates to that url first.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." },
+            \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root." },
+            \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
+            \\  }
+            \\}
+        ),
+    },
+    .{
+        .name = "nodeDetails",
+        .description = "Get detailed information about a specific node by its backend node ID. Returns tag, role, name, interactivity, disabled state, value, input type, placeholder, href, checked state, and select options.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to inspect." }
+            \\  },
+            \\  "required": ["backendNodeId"]
+            \\}
+        ),
+    },
+    .{
+        .name = "interactiveElements",
+        .description = "Extract interactive elements from the opened page. If a url is provided, it navigates to that url first.",
+        .input_schema = url_params_schema,
+    },
+    .{
+        .name = "structuredData",
+        .description = "Extract structured data (like JSON-LD, OpenGraph, etc) from the opened page. If a url is provided, it navigates to that url first.",
+        .input_schema = url_params_schema,
+    },
+    .{
+        .name = "detectForms",
+        .description = "Detect all forms on the page and return their structure including fields, types, and required status. If a url is provided, it navigates to that url first.",
+        .input_schema = url_params_schema,
+    },
+    .{
+        .name = "click",
+        .description = "Click on an interactive element. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Returns the current page URL and title after the click.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "selector": { "type": "string", "description": "CSS selector of the element to click. Preferred over backendNodeId." },
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to click." }
+            \\  }
+            \\}
+        ),
+    },
+    .{
+        .name = "fill",
+        .description = "Fill text into an input element. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "selector": { "type": "string", "description": "CSS selector of the input element to fill. Preferred over backendNodeId." },
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the input element to fill." },
+            \\    "value": { "type": "string", "description": "The text to fill into the input element." }
+            \\  },
+            \\  "required": ["value"]
+            \\}
+        ),
+    },
+    .{
+        .name = "scroll",
+        .description = "Scroll the page or a specific element. Returns the scroll position and current page URL and title.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If omitted, scrolls the window." },
+            \\    "x": { "type": "integer", "description": "Optional: The horizontal scroll offset." },
+            \\    "y": { "type": "integer", "description": "Optional: The vertical scroll offset." }
+            \\  }
+            \\}
+        ),
+    },
+    .{
+        .name = "waitForSelector",
+        .description = "Wait for an element matching a CSS selector to appear in the page. Returns the backend node ID of the matched element.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "selector": { "type": "string", "description": "The CSS selector to wait for." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
+            \\  },
+            \\  "required": ["selector"]
+            \\}
+        ),
+    },
+    .{
+        .name = "hover",
+        .description = "Hover over an element, triggering mouseover and mouseenter events. Useful for menus, tooltips, and hover states.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to hover over." }
+            \\  },
+            \\  "required": ["backendNodeId"]
+            \\}
+        ),
+    },
+    .{
+        .name = "press",
+        .description = "Press a keyboard key, dispatching keydown and keyup events. Use key names like 'Enter', 'Tab', 'Escape', 'ArrowDown', 'Backspace', or single characters like 'a', '1'.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "key": { "type": "string", "description": "The key to press (e.g. 'Enter', 'Tab', 'a')." },
+            \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the document." }
+            \\  },
+            \\  "required": ["key"]
+            \\}
+        ),
+    },
+    .{
+        .name = "selectOption",
+        .description = "Select an option in a <select> dropdown element by its value. Dispatches input and change events.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the <select> element." },
+            \\    "value": { "type": "string", "description": "The value of the option to select." }
+            \\  },
+            \\  "required": ["backendNodeId", "value"]
+            \\}
+        ),
+    },
+    .{
+        .name = "setChecked",
+        .description = "Check or uncheck a checkbox or radio button. Dispatches input, change, and click events.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the checkbox or radio input element." },
+            \\    "checked": { "type": "boolean", "description": "Whether to check (true) or uncheck (false) the element." }
+            \\  },
+            \\  "required": ["backendNodeId", "checked"]
+            \\}
+        ),
+    },
+    .{
+        .name = "findElement",
+        .description = "Find interactive elements by role and/or accessible name. Returns matching elements with their backend node IDs. Useful for locating specific elements without parsing the full semantic tree.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "role": { "type": "string", "description": "Optional ARIA role to match (e.g. 'button', 'link', 'textbox', 'checkbox')." },
+            \\    "name": { "type": "string", "description": "Optional accessible name substring to match (case-insensitive)." }
+            \\  }
+            \\}
+        ),
+    },
+    .{
+        .name = "consoleLogs",
+        .description = "Get buffered console.log/warn/error messages from the current page. Returns all messages since last call and clears the buffer.",
+        .input_schema = minify(
+            \\{ "type": "object", "properties": {} }
+        ),
+    },
+    .{
+        .name = "getUrl",
+        .description = "Get the current page URL. Useful to check if a navigation or redirect occurred.",
+        .input_schema = minify(
+            \\{ "type": "object", "properties": {} }
+        ),
+    },
+    .{
+        .name = "getCookies",
+        .description = "Get all cookies in the browser. Useful for debugging authentication and session state.",
+        .input_schema = minify(
+            \\{ "type": "object", "properties": {} }
+        ),
+    },
+    .{
+        .name = "getEnv",
+        .description = "Read the value of an environment variable. Useful for retrieving credentials or configuration without hardcoding them.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "name": { "type": "string", "description": "The environment variable name to read." }
+            \\  },
+            \\  "required": ["name"]
+            \\}
+        ),
+    },
+};
+
 pub const ToolError = error{
     PageNotLoaded,
     InvalidParams,

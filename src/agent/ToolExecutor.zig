@@ -5,7 +5,6 @@ const zenai = @import("zenai");
 const App = @import("../App.zig");
 const HttpClient = @import("../browser/HttpClient.zig");
 const CDPNode = @import("../cdp/Node.zig");
-const mcp_tools = @import("../mcp/tools.zig");
 const browser_tools = lp.tools;
 
 const Self = @This();
@@ -59,17 +58,17 @@ pub fn deinit(self: *Self) void {
 /// Returns the list of tools in zenai provider.Tool format.
 pub fn getTools(self: *Self) ![]const zenai.provider.Tool {
     const arena = self.tool_schema_arena.allocator();
-    const tools = try arena.alloc(zenai.provider.Tool, mcp_tools.tool_list.len);
-    for (mcp_tools.tool_list, 0..) |t, i| {
+    const tools = try arena.alloc(zenai.provider.Tool, browser_tools.tool_defs.len);
+    for (browser_tools.tool_defs, 0..) |t, i| {
         const parsed = try std.json.parseFromSliceLeaky(
             std.json.Value,
             arena,
-            t.inputSchema,
+            t.input_schema,
             .{},
         );
         tools[i] = .{
             .name = t.name,
-            .description = t.description orelse "",
+            .description = t.description,
             .parameters = parsed,
         };
     }
