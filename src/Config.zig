@@ -37,6 +37,20 @@ pub const CDP_MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
 
 const Config = @This();
 
+fn logFilterScopesValidator(allocator: Allocator, args: *std.process.ArgIterator, list: *std.ArrayList(log.Scope)) !void {
+    const str = args.next() orelse return error.InvalidOption;
+
+    var it = std.mem.splitScalar(u8, str, ',');
+    while (it.next()) |part| {
+        const v = std.meta.stringToEnum(log.Scope, part) orelse {
+            log.fatal(.app, "invalid option choice", .{ .arg = "log-filter-scopes", .value = part });
+            return error.InvalidOption;
+        };
+
+        try list.append(allocator, v);
+    }
+}
+
 /// Common CLI args.
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
@@ -51,7 +65,7 @@ const CommonOptions = .{
     .{ .name = "insecure_disable_tls_host_verification", .type = bool },
     .{ .name = "log_level", .type = ?log.Level },
     .{ .name = "log_format", .type = ?log.Format },
-    // TODO: log_filter_scopes (?[]log.Scope) — parser doesn't yet support `multiple` for enums.
+    .{ .name = "log_filter_scopes", .type = log.Scope, .multiple = true, .validator = logFilterScopesValidator },
     .{ .name = "user_agent_suffix", .type = ?[]const u8 },
     .{ .name = "http_cache_dir", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_key_file", .type = ?[]const u8 },
@@ -232,12 +246,12 @@ pub fn logFormat(self: *const Config) ?log.Format {
     };
 }
 
-//pub fn logFilterScopes(self: *const Config) ?[]const log.Scope {
-//    return switch (self.mode) {
-//        inline .serve, .fetch, .mcp => |opts| opts.log_filter_scopes,
-//        else => unreachable,
-//    };
-//}
+pub fn logFilterScopes(self: *const Config) std.ArrayList(log.Scope) {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.log_filter_scopes,
+        else => unreachable,
+    };
+}
 
 pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
