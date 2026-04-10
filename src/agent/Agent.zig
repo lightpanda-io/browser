@@ -111,11 +111,15 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         return error.ToolInitFailed;
     };
 
+    // Persist REPL history in a cwd-relative `.lp-history`. Skipped in pure
+    // replay mode (no REPL is opened).
+    const history_path: ?[:0]const u8 = if (is_script_mode) null else ".lp-history";
+
     self.* = .{
         .allocator = allocator,
         .ai_client = ai_client,
         .tool_executor = tool_executor,
-        .terminal = Terminal.init(),
+        .terminal = Terminal.init(history_path),
         .cmd_executor = undefined,
         .recorder = Recorder.init(if (opts.save) opts.script_file else null),
         .messages = .empty,
