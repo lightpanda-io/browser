@@ -22,6 +22,7 @@ const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Location = @import("Location.zig");
 const PopStateEvent = @import("event/PopStateEvent.zig");
+const URL = @import("URL.zig");
 
 const History = @This();
 
@@ -52,24 +53,28 @@ pub fn setScrollRestoration(self: *History, str: []const u8) void {
 
 pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page._session.arena;
-    const url = if (_url) |u| try arena.dupeZ(u8, u) else try arena.dupeZ(u8, page.url);
+    const url = if (_url) |u|
+        try @import("../URL.zig").resolve(arena, page.url, u, .{ .always_dupe = true })
+    else
+        try arena.dupeZ(u8, page.url);
 
     const json = state.toJson(arena) catch return error.DataClone;
     _ = try page._session.navigation.pushEntry(url, .{ .source = .history, .value = json }, page, true);
 
-    // Update page URL and location so that location.pathname reflects the pushed state
     page.url = url;
-    page.window._location = try Location.init(url, page);
+    page.window._location._url = try URL.init(url, null, page);
 }
 
 pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page._session.arena;
-    const url = if (_url) |u| try arena.dupeZ(u8, u) else try arena.dupeZ(u8, page.url);
+    const url = if (_url) |u|
+        try @import("../URL.zig").resolve(arena, page.url, u, .{ .always_dupe = true })
+    else
+        try arena.dupeZ(u8, page.url);
 
     const json = state.toJson(arena) catch return error.DataClone;
     _ = try page._session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, page, true);
 
-    // Update page URL and location so that location.pathname reflects the replaced state
     page.url = url;
     page.window._location = try Location.init(url, page);
 }
