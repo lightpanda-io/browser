@@ -241,6 +241,19 @@ fn linkHtml5Ever(b: *Build, mod: *Build.Module) !void {
         "--manifest-path", "src/html5ever/Cargo.toml",
     });
 
+    // Track Rust sources so edits invalidate the cargo step's cache.
+    // Without this, Zig keys the step on argv only and won't re-run cargo
+    // when lib.rs/Cargo.toml change.
+    for ([_][]const u8{
+        "src/html5ever/Cargo.toml",
+        "src/html5ever/Cargo.lock",
+        "src/html5ever/lib.rs",
+        "src/html5ever/sink.rs",
+        "src/html5ever/types.rs",
+    }) |path| {
+        exec_cargo.addFileInput(b.path(path));
+    }
+
     // TODO: We can prefer `--artifact-dir` once it become stable.
     const out_dir = exec_cargo.addPrefixedOutputDirectoryArg("--target-dir=", "html5ever");
 
