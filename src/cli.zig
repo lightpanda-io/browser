@@ -329,25 +329,19 @@ pub fn Builder(comptime commands: anytype) type {
                                     }
                                 },
                                 .@"enum" => {
-                                    if (is_multiple) {
-                                        @compileError("multiple option is not supported for enums");
-                                    }
-
                                     const E = switch (@typeInfo(T)) {
                                         .optional => |optional| optional.child,
                                         inline else => T,
                                     };
 
-                                    // This type only, we peek ahead to check if there's a following arg.
-                                    // If there isn't, the default is set already.
-                                    var peek_args = args.*;
-                                    if (peek_args.next()) |next_arg| {
-                                        const v = std.meta.stringToEnum(E, next_arg) orelse {
-                                            return error.UnknownArgument;
-                                        };
-                                        // Discard.
-                                        _ = args.next();
+                                    // TODO: Return errors.
+                                    const v = std.meta.stringToEnum(E, args.next().?) orelse {
+                                        return error.UnknownArgument;
+                                    };
 
+                                    if (is_multiple) {
+                                        try @field(c, option.name).append(allocator, v);
+                                    } else {
                                         @field(c, option.name) = v;
                                     }
                                 },
