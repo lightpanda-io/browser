@@ -50,9 +50,7 @@ jobs:
           fetch-depth: 0
 
       - uses: ./.github/actions/install
-
-      - name: v8 snapshot
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
+      - uses: ./.github/actions/v8-snapshot
 
       - name: zig build release
         run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64

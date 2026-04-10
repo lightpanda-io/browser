@@ -1,5 +1,5 @@
-name: "Browsercore install"
-description: "Install deps for the project browsercore"
+name: "Deps install"
+description: "Install deps for the browser"
 
 inputs:
   arch:
