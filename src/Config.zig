@@ -39,25 +39,41 @@ const Config = @This();
 
 /// Common CLI args.
 const CommonOptions = .{
-    .{ .name = "obey_robots", .type = bool, .default = false },
-    .{ .name = "proxy_bearer_token", .type = ?[:0]const u8, .default = null },
-    .{ .name = "http_proxy", .type = ?[:0]const u8, .default = null },
-    .{ .name = "http_max_concurrent", .type = ?u8, .default = null },
-    .{ .name = "http_max_host_open", .type = ?u8, .default = null },
-    .{ .name = "http_timeout", .type = ?u31, .default = null },
-    .{ .name = "http_connect_timeout", .type = ?u31, .default = null },
-    .{ .name = "http_max_response_size", .type = ?usize, .default = null },
-    .{ .name = "ws_max_concurrent", .type = ?u8, .default = null },
-    .{ .name = "insecure_disable_tls_host_verification", .type = bool, .default = false },
-    .{ .name = "log_level", .type = ?log.Level, .default = null },
-    .{ .name = "log_format", .type = ?log.Format, .default = null },
+    .{ .name = "obey_robots", .type = bool },
+    .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
+    .{ .name = "http_proxy", .type = ?[:0]const u8 },
+    .{ .name = "http_max_concurrent", .type = ?u8 },
+    .{ .name = "http_max_host_open", .type = ?u8 },
+    .{ .name = "http_timeout", .type = ?u31 },
+    .{ .name = "http_connect_timeout", .type = ?u31 },
+    .{ .name = "http_max_response_size", .type = ?usize },
+    .{ .name = "ws_max_concurrent", .type = ?u8 },
+    .{ .name = "insecure_disable_tls_host_verification", .type = bool },
+    .{ .name = "log_level", .type = ?log.Level },
+    .{ .name = "log_format", .type = ?log.Format },
     // TODO: log_filter_scopes (?[]log.Scope) — parser doesn't yet support `multiple` for enums.
-    .{ .name = "user_agent_suffix", .type = ?[]const u8, .default = null },
-    .{ .name = "http_cache_dir", .type = ?[]const u8, .default = null },
-    .{ .name = "web_bot_auth_key_file", .type = ?[]const u8, .default = null },
-    .{ .name = "web_bot_auth_keyid", .type = ?[]const u8, .default = null },
-    .{ .name = "web_bot_auth_domain", .type = ?[]const u8, .default = null },
+    .{ .name = "user_agent_suffix", .type = ?[]const u8 },
+    .{ .name = "http_cache_dir", .type = ?[]const u8 },
+    .{ .name = "web_bot_auth_key_file", .type = ?[]const u8 },
+    .{ .name = "web_bot_auth_keyid", .type = ?[]const u8 },
+    .{ .name = "web_bot_auth_domain", .type = ?[]const u8 },
 };
+
+fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
+    // Peek next argument.
+    var peek_args = args.*;
+    if (peek_args.next()) |next_arg| {
+        // Skip the argument we peek if successful.
+        defer _ = args.next();
+        return std.meta.stringToEnum(DumpFormat, next_arg) orelse {
+            return error.UnknownDumpOption;
+        };
+    }
+
+    // Means we couldn't get something like `--dump html` but we do have
+    // `--dump`; which should fall to `html` by default.
+    return .html;
+}
 
 /// Definition for all the commands and its arguments. See @cli.zig for further.
 const Commands = cli.Builder(.{
@@ -66,7 +82,7 @@ const Commands = cli.Builder(.{
         .options = .{
             .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
             .{ .name = "port", .type = u16, .default = 9222 },
-            .{ .name = "advertise_host", .type = ?[]const u8, .default = null },
+            .{ .name = "advertise_host", .type = ?[]const u8 },
             .{ .name = "timeout", .type = u31, .default = 10 },
             .{ .name = "cdp_max_connections", .type = u16, .default = 16 },
             .{ .name = "cdp_max_pending_connections", .type = u16, .default = 128 },
@@ -76,24 +92,30 @@ const Commands = cli.Builder(.{
     .{
         .name = "fetch",
         .aliases = .{ "f", "get" },
-        // Fetch only; this argument can be given anywhere.
+        // This argument can be given out of order.
         .positional = .{ .name = "url", .type = ?[:0]const u8 },
         .options = .{
-            .{ .name = "dump", .type = ?DumpFormat, .default = null },
-            .{ .name = "with_base", .type = bool, .default = false },
-            .{ .name = "with_frames", .type = bool, .default = false },
+            .{
+                .name = "dump",
+                // Prefixed by `-` (single dash).
+                .shortcuts = .{"d"},
+                .type = ?DumpFormat,
+                .validator = dumpValidator,
+            },
+            .{ .name = "with_base", .type = bool },
+            .{ .name = "with_frames", .type = bool },
             .{ .name = "strip", .type = dump.Opts.Strip, .default = dump.Opts.Strip{} },
             .{ .name = "wait_ms", .type = u32, .default = 5_000 },
-            .{ .name = "wait_until", .type = ?WaitUntil, .default = null },
-            .{ .name = "wait_script", .type = ?[:0]const u8, .default = null },
-            .{ .name = "wait_selector", .type = ?[:0]const u8, .default = null },
+            .{ .name = "wait_until", .type = ?WaitUntil },
+            .{ .name = "wait_script", .type = ?[:0]const u8 },
+            .{ .name = "wait_selector", .type = ?[:0]const u8 },
         },
         .shared_options = CommonOptions,
     },
     .{
         .name = "mcp",
         .options = .{
-            .{ .name = "cdp_port", .type = ?u16, .default = null },
+            .{ .name = "cdp_port", .type = ?u16 },
         },
         .shared_options = CommonOptions,
     },
