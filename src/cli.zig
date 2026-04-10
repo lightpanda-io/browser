@@ -242,11 +242,13 @@ pub fn Builder(comptime commands: anytype) type {
 
                         // Prefer custom validator logic instead.
                         if (has_validator) {
-                            const v = try @call(.auto, option.validator, .{ allocator, args });
-
+                            const validator = option.validator;
                             if (is_multiple) {
-                                try @field(c, option.name).append(allocator, v);
+                                // Pass the list.
+                                try @call(.auto, validator, .{ allocator, args, &@field(c, option.name) });
                             } else {
+                                // Receive the value from return.
+                                const v = try @call(.auto, validator, .{ allocator, args });
                                 @field(c, option.name) = v;
                             }
                         } else {
