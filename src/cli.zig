@@ -404,6 +404,12 @@ pub fn Builder(comptime commands: anytype) type {
                 }
             }
 
+            // Parsing is complete and positional is null.
+            const positional_is_null = @hasField(@TypeOf(command), "positional") and @field(c, command.positional.name) == null;
+            if (positional_is_null) {
+                return error.MissingArgument;
+            }
+
             return @unionInit(Union, command.name, c);
         }
     };
