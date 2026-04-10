@@ -38,14 +38,14 @@ const Options = Event.inheritOptions(FormDataEvent, struct {
 });
 
 pub fn init(typ: []const u8, maybe_options: Options, page: *Page) !*FormDataEvent {
-    const arena = try page.getArena(.{ .debug = "FormDataEvent" });
+    const arena = try page.getArena(.tiny, "FormDataEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
     return initWithTrusted(arena, type_string, maybe_options, false, page);
 }
 
 pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*FormDataEvent {
-    const arena = try page.getArena(.{ .debug = "FormDataEvent.trusted" });
+    const arena = try page.getArena(.tiny, "FormDataEvent.trusted");
     errdefer page.releaseArena(arena);
     return initWithTrusted(arena, typ, _opts, true, page);
 }

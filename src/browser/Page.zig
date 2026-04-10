@@ -248,7 +248,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         log.debug(.page, "page.init", .{});
     }
 
-    const call_arena = try session.getArena(.{ .debug = "call_arena" });
+    const call_arena = try session.getArena(.medium, "call_arena");
     errdefer session.releaseArena(call_arena);
 
     const factory = &session.factory;
@@ -429,8 +429,8 @@ pub fn headersForRequest(self: *Page, headers: *HttpClient.Headers) !void {
     }
 }
 
-pub fn getArena(self: *Page, comptime opts: Session.GetArenaOpts) !Allocator {
-    return self._session.getArena(opts);
+pub fn getArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !Allocator {
+    return self._session.getArena(size_or_bucket, debug);
 }
 
 pub fn releaseArena(self: *Page, allocator: Allocator) void {
@@ -510,7 +510,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
                 log.warn(.js, "invalid blob", .{ .url = request_url });
                 return error.BlobNotFound;
             };
-            const parse_arena = try self.getArena(.{ .debug = "Page.parseBlob" });
+            const parse_arena = try self.getArena(.medium, "Page.parseBlob");
             defer self.releaseArena(parse_arena);
             var parser = Parser.init(parse_arena, self.document.asNode(), self);
             parser.parse(blob._slice);
@@ -619,7 +619,7 @@ pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOp
     if (self.canScheduleNavigation(std.meta.activeTag(nt)) == false) {
         return;
     }
-    const arena = try self._session.getArena(.{ .debug = "scheduleNavigation" });
+    const arena = try self._session.getArena(.small, "scheduleNavigation");
     errdefer self._session.releaseArena(arena);
     return self.scheduleNavigationWithArena(arena, request_url, opts, nt);
 }
@@ -1022,7 +1022,7 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
         });
     };
 
-    const parse_arena = try self.getArena(.{ .debug = "Page.parse" });
+    const parse_arena = try self.getArena(.medium, "Page.parse");
     defer self.releaseArena(parse_arena);
 
     var parser = Parser.init(parse_arena, self.document.asNode(), self);
@@ -3568,7 +3568,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     // I don't think this is technically correct, but FormData handles it ok
     const form_data = try FormData.init(form, submitter_, self);
 
-    const arena = try self._session.getArena(.{ .debug = "submitForm" });
+    const arena = try self._session.getArena(.medium, "submitForm");
     errdefer self._session.releaseArena(arena);
 
     const encoding = form_element.getAttributeSafe(comptime .wrap("enctype"));

@@ -374,7 +374,8 @@ fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
 fn processRequest(self: *Client, req: Request) !void {
     if (self.network.cache) |*cache| {
         if (req.method == .GET) {
-            const arena = try self.network.app.arena_pool.acquire(.{ .debug = "HttpClient.processRequest.cache" });
+            // cache is only used to read the meta data
+            const arena = try self.network.app.arena_pool.acquire(.small, "HttpClient.cache");
             defer self.network.app.arena_pool.release(arena);
 
             var iter = req.headers.iterator();

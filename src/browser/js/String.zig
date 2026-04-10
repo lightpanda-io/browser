@@ -44,11 +44,11 @@ fn _toSlice(self: String, comptime null_terminate: bool, allocator: Allocator) !
     const handle = self.handle;
     const isolate = local.isolate.handle;
 
-    const len = v8.v8__String__Utf8Length(handle, isolate);
-    const buf = try (if (comptime null_terminate) allocator.allocSentinel(u8, @intCast(len), 0) else allocator.alloc(u8, @intCast(len)));
+    const l = v8.v8__String__Utf8Length(handle, isolate);
+    const buf = try (if (comptime null_terminate) allocator.allocSentinel(u8, @intCast(l), 0) else allocator.alloc(u8, @intCast(l)));
     const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
     if (comptime IS_DEBUG) {
-        std.debug.assert(n == len);
+        std.debug.assert(n == l);
     }
 
     return buf;
@@ -64,32 +64,32 @@ pub fn toSSOWithAlloc(self: String, allocator: Allocator) !SSO {
     const handle = self.handle;
     const isolate = self.local.isolate.handle;
 
-    const len: usize = @intCast(v8.v8__String__Utf8Length(handle, isolate));
+    const l: usize = @intCast(v8.v8__String__Utf8Length(handle, isolate));
 
-    if (len <= 12) {
+    if (l <= 12) {
         var content: [12]u8 = undefined;
         const n = v8.v8__String__WriteUtf8(handle, isolate, &content[0], content.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
         if (comptime IS_DEBUG) {
-            std.debug.assert(n == len);
+            std.debug.assert(n == l);
         }
         // Weird that we do this _after_, but we have to..I've seen weird issues
         // in ReleaseMode where v8 won't write to content if it starts off zero
         // initiated
-        @memset(content[len..], 0);
-        return .{ .len = @intCast(len), .payload = .{ .content = content } };
+        @memset(content[l..], 0);
+        return .{ .len = @intCast(l), .payload = .{ .content = content } };
     }
 
-    const buf = try allocator.alloc(u8, len);
+    const buf = try allocator.alloc(u8, l);
     const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
     if (comptime IS_DEBUG) {
-        std.debug.assert(n == len);
+        std.debug.assert(n == l);
     }
 
     var prefix: [4]u8 = @splat(0);
     @memcpy(&prefix, buf[0..4]);
 
     return .{
-        .len = @intCast(len),
+        .len = @intCast(l),
         .payload = .{ .heap = .{
             .prefix = prefix,
             .ptr = buf.ptr,
@@ -103,9 +103,13 @@ pub fn format(self: String, writer: *std.Io.Writer) !void {
     const isolate = local.isolate.handle;
 
     var small: [1024]u8 = undefined;
-    const len = v8.v8__String__Utf8Length(handle, isolate);
-    var buf = if (len < 1024) &small else local.call_arena.alloc(u8, @intCast(len)) catch return error.WriteFailed;
+    const l = v8.v8__String__Utf8Length(handle, isolate);
+    var buf = if (l < 1024) &small else local.call_arena.alloc(u8, @intCast(l)) catch return error.WriteFailed;
 
     const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
     return writer.writeAll(buf[0..n]);
+}
+
+pub fn len(self: String) usize {
+    return @intCast(v8.v8__String__Utf8Length(self.handle, self.local.isolate.handle));
 }

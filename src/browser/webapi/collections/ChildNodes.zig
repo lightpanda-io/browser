@@ -39,7 +39,7 @@ pub const ValueIterator = GenericIterator(Iterator, "1");
 pub const EntryIterator = GenericIterator(Iterator, null);
 
 pub fn init(node: *Node, page: *Page) !*ChildNodes {
-    const arena = try page.getArena(.{ .debug = "ChildNodes" });
+    const arena = try page.getArena(.small, "ChildNodes");
     errdefer page.releaseArena(arena);
 
     const self = try arena.create(ChildNodes);

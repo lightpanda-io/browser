@@ -487,10 +487,10 @@ pub const BrowserContext = struct {
 
     pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
         const browser = &self.cdp.browser;
-        const arena = try browser.arena_pool.acquire(.{ .debug = "IsolatedWorld" });
+        const arena = try browser.arena_pool.acquire(.small, "IsolatedWorld");
         errdefer browser.arena_pool.release(arena);
 
-        const call_arena = try browser.arena_pool.acquire(.{ .debug = "IsolatedWorld.call_arena" });
+        const call_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.call_arena");
         errdefer browser.arena_pool.release(call_arena);
 
         const world = try arena.create(IsolatedWorld);

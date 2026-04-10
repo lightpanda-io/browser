@@ -50,7 +50,7 @@ pub fn parseFromString(
         @"image/svg+xml",
     }, mime_type) orelse return error.NotSupported;
 
-    const arena = try page.getArena(.{ .debug = "DOMParser.parseFromString" });
+    const arena = try page.getArena(.medium, "DOMParser.parseFromString");
     defer page.releaseArena(arena);
 
     return switch (target_mime) {

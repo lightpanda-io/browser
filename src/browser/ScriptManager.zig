@@ -188,7 +188,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     var handover = false;
     const page = self.page;
 
-    const arena = try page.getArena(.{ .debug = "addFromElement" });
+    const arena = try page.getArena(.large, "SM.addFromElement");
     errdefer if (!handover) {
         page.releaseArena(arena);
     };
@@ -369,7 +369,7 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
     errdefer _ = self.imported_modules.remove(url);
 
     const page = self.page;
-    const arena = try page.getArena(.{ .debug = "preloadImport" });
+    const arena = try page.getArena(.large, "SM.preloadImport");
     errdefer page.releaseArena(arena);
 
     const script = try arena.create(Script);
@@ -469,7 +469,7 @@ pub fn waitForImport(self: *ScriptManager, url: [:0]const u8) !ModuleSource {
 
 pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.Callback, cb_data: *anyopaque, referrer: []const u8) !void {
     const page = self.page;
-    const arena = try page.getArena(.{ .debug = "getAsyncImport" });
+    const arena = try page.getArena(.large, "SM.getAsyncImport");
     errdefer page.releaseArena(arena);
 
     const script = try arena.create(Script);

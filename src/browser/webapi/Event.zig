@@ -90,14 +90,14 @@ pub const Options = struct {
 };
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
-    const arena = try page.getArena(.{ .debug = "Event" });
+    const arena = try page.getArena(.tiny, "Event");
     errdefer page.releaseArena(arena);
     const str = try String.init(arena, typ, .{});
     return initWithTrusted(arena, str, opts_, false);
 }
 
 pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*Event {
-    const arena = try page.getArena(.{ .debug = "Event.trusted" });
+    const arena = try page.getArena(.tiny, "Event.trusted");
     errdefer page.releaseArena(arena);
     return initWithTrusted(arena, typ, opts_, true);
 }

@@ -42,13 +42,13 @@ pub const Options = Event.inheritOptions(
 );
 
 pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*FocusEvent {
-    const arena = try page.getArena(.{ .debug = "FocusEvent.trusted" });
+    const arena = try page.getArena(.tiny, "FocusEvent.trusted");
     errdefer page.releaseArena(arena);
     return initWithTrusted(arena, typ, _opts, true, page);
 }
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*FocusEvent {
-    const arena = try page.getArena(.{ .debug = "FocusEvent" });
+    const arena = try page.getArena(.tiny, "FocusEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
     return initWithTrusted(arena, type_string, _opts, false, page);

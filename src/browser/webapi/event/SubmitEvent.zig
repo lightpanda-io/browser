@@ -39,14 +39,14 @@ const SubmitEventOptions = struct {
 const Options = Event.inheritOptions(SubmitEvent, SubmitEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*SubmitEvent {
-    const arena = try page.getArena(.{ .debug = "SubmitEvent" });
+    const arena = try page.getArena(.tiny, "SubmitEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
     return initWithTrusted(arena, type_string, opts_, false, page);
 }
 
 pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*SubmitEvent {
-    const arena = try page.getArena(.{ .debug = "SubmitEvent.trusted" });
+    const arena = try page.getArena(.tiny, "SubmitEvent.trusted");
     errdefer page.releaseArena(arena);
     return initWithTrusted(arena, typ, _opts, true, page);
 }

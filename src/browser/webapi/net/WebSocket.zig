@@ -105,7 +105,7 @@ pub fn init(url: []const u8, protocols_: ?[]const u8, page: *Page) !*WebSocket {
         }
     }
 
-    const arena = try page.getArena(.{ .debug = "WebSocket" });
+    const arena = try page.getArena(.medium, "WebSocket");
     errdefer page.releaseArena(arena);
 
     const resolved_url = try URL.resolve(arena, page.base(), url, .{ .always_dupe = true, .encode = true });
@@ -272,12 +272,10 @@ pub fn send(self: *WebSocket, data: SendData) !void {
         return error.InvalidStateError;
     }
 
-    // Get a dedicated arena for this message
-    const arena = try self._page._session.getArena(.{ .debug = "WebSocket message" });
-    errdefer self._page._session.releaseArena(arena);
-
     switch (data) {
         .blob => |blob| {
+            const arena = try self._page._session.getArena(blob._slice.len, "WebSocket.message");
+            errdefer self._page._session.releaseArena(arena);
             try self.queueMessage(.{ .binary = .{
                 .arena = arena,
                 .data = try arena.dupe(u8, blob._slice),
@@ -285,15 +283,21 @@ pub fn send(self: *WebSocket, data: SendData) !void {
         },
         .js_val => |js_val| {
             if (js_val.isString()) |str| {
+                const arena = try self._page._session.getArena(str.len(), "WebSocket.message");
+                errdefer self._page._session.releaseArena(arena);
                 try self.queueMessage(.{ .text = .{
                     .arena = arena,
                     .data = try str.toSliceWithAlloc(arena),
                 } });
             } else {
                 const binary = try js_val.toZig(BinaryData);
+                const buffer = binary.asBuffer();
+
+                const arena = try self._page._session.getArena(buffer.len, "WebSocket.message");
+                errdefer self._page._session.releaseArena(arena);
                 try self.queueMessage(.{ .binary = .{
                     .arena = arena,
-                    .data = try arena.dupe(u8, binary.asBuffer()),
+                    .data = try arena.dupe(u8, buffer),
                 } });
             }
         },

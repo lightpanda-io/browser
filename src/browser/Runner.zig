@@ -249,7 +249,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
 }
 
 pub fn waitForSelector(self: *Runner, selector: [:0]const u8, timeout_ms: u32) !*Node.Element {
-    const arena = try self.session.getArena(.{ .debug = "Runner.waitForSelector" });
+    const arena = try self.session.getArena(.small, "Runner.waitForSelector");
     defer self.session.releaseArena(arena);
 
     var timer = try std.time.Timer.start();
