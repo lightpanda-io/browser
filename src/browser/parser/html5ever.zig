@@ -278,3 +278,27 @@ pub extern "c" fn encoding_decoder_decode(
 ) DecodeResult;
 
 pub extern "c" fn encoding_decoder_free(decoder: *anyopaque) void;
+
+// Encoding API (UTF-8 to legacy encoding with NCR fallback)
+pub const EncodeResult = extern struct {
+    status: u8,
+    bytes_read: usize,
+    bytes_written: usize,
+
+    pub fn isSuccess(self: *const EncodeResult) bool {
+        return self.status == 0;
+    }
+};
+
+pub extern "c" fn encoding_encode_with_ncr(
+    handle: *anyopaque,
+    input: ?[*]const u8,
+    input_len: usize,
+    output: [*]u8,
+    output_capacity: usize,
+) EncodeResult;
+
+pub extern "c" fn encoding_max_encode_buffer_length(
+    handle: *anyopaque,
+    input_len: usize,
+) usize;

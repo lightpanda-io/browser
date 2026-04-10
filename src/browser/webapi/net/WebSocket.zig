@@ -108,7 +108,7 @@ pub fn init(url: []const u8, protocols_: ?[]const u8, page: *Page) !*WebSocket {
     const arena = try page.getArena(.{ .debug = "WebSocket" });
     errdefer page.releaseArena(arena);
 
-    const resolved_url = try URL.resolve(arena, page.base(), url, .{ .always_dupe = true, .encode = true });
+    const resolved_url = try URL.resolve(arena, page.base(), url, .{ .always_dupe = true, .encoding = page.charset });
 
     const http_client = page._session.browser.http_client;
     const conn = http_client.network.newConnection() orelse {

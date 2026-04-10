@@ -334,6 +334,120 @@ pub extern "C" fn encoding_decoder_free(decoder_ptr: *mut c_void) {
     }
 }
 
+// === Encoding API (UTF-8 to legacy encoding with NCR fallback) ===
+
+/// Result of encoding operation
+#[repr(C)]
+pub struct EncodeResult {
+    /// 0 = success, 1 = output buffer too small
+    pub status: u8,
+    /// Number of input bytes consumed
+    pub bytes_read: usize,
+    /// Number of bytes written to output buffer
+    pub bytes_written: usize,
+}
+
+/// Encode UTF-8 to a legacy encoding, replacing unencodable characters with
+/// HTML decimal numeric character references (&#codepoint;).
+///
+/// This is used for URL query string encoding per WHATWG URL spec.
+/// encoding_rs's encode_from_utf8 already produces NCRs for unmappable chars.
+#[no_mangle]
+pub extern "C" fn encoding_encode_with_ncr(
+    handle: *const c_void,
+    input: *const c_uchar,
+    input_len: usize,
+    output: *mut c_uchar,
+    output_capacity: usize,
+) -> EncodeResult {
+    if handle.is_null() || output.is_null() {
+        return EncodeResult {
+            status: 1,
+            bytes_read: 0,
+            bytes_written: 0,
+        };
+    }
+
+    let encoding: &'static Encoding = unsafe { &*(handle as *const Encoding) };
+
+    let input_str = if input.is_null() || input_len == 0 {
+        ""
+    } else {
+        let bytes = unsafe { std::slice::from_raw_parts(input, input_len) };
+        match std::str::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => {
+                return EncodeResult {
+                    status: 1,
+                    bytes_read: 0,
+                    bytes_written: 0,
+                };
+            }
+        }
+    };
+
+    // For UTF-8 encoding, just copy directly (no NCR needed)
+    if encoding == encoding_rs::UTF_8 {
+        if input_len > output_capacity {
+            return EncodeResult {
+                bytes_read: 0,
+                bytes_written: 0,
+                status: 1,
+            };
+        }
+        let output_slice = unsafe { std::slice::from_raw_parts_mut(output, output_capacity) };
+        output_slice[..input_len].copy_from_slice(input_str.as_bytes());
+        return EncodeResult {
+            bytes_read: input_len,
+            bytes_written: input_len,
+            status: 0,
+        };
+    }
+
+    let output_slice = unsafe { std::slice::from_raw_parts_mut(output, output_capacity) };
+    let mut encoder = encoding.new_encoder();
+
+    // encode_from_utf8 automatically produces NCRs for unmappable characters
+    let (result, bytes_read, bytes_written, _had_unmappables) =
+        encoder.encode_from_utf8(input_str, output_slice, true);
+
+    match result {
+        encoding_rs::CoderResult::InputEmpty => EncodeResult {
+            bytes_read,
+            bytes_written,
+            status: 0,
+        },
+        encoding_rs::CoderResult::OutputFull => EncodeResult {
+            bytes_read,
+            bytes_written,
+            status: 1,
+        },
+    }
+}
+
+/// Calculate maximum output buffer size needed for encoding with NCR fallback.
+/// Worst case: every character becomes &#codepoint; where codepoint is up to 7 digits.
+#[no_mangle]
+pub extern "C" fn encoding_max_encode_buffer_length(
+    handle: *const c_void,
+    input_len: usize,
+) -> usize {
+    if handle.is_null() {
+        return 0;
+    }
+    let encoding: &'static Encoding = unsafe { &*(handle as *const Encoding) };
+    let encoder = encoding.new_encoder();
+    // This returns the max buffer size accounting for NCR expansion
+    encoder
+        .max_buffer_length_from_utf8_if_no_unmappables(input_len)
+        .map(|len| {
+            // Add extra space for potential NCRs (each char could become &#nnnnnn; = 10 bytes)
+            // But realistically, most chars are mappable, so add 2x as safety margin
+            len.saturating_mul(2)
+        })
+        .unwrap_or(input_len * 10)
+}
+
 #[no_mangle]
 pub extern "C" fn html5ever_parse_fragment(
     html: *mut c_uchar,

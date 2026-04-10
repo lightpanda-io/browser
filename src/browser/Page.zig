@@ -661,7 +661,7 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
             arena,
             page_base,
             request_url,
-            .{ .always_dupe = true, .encode = true },
+            .{ .always_dupe = true, .encoding = originator.charset },
         );
         break :blk .{ u, false };
     };
@@ -1196,7 +1196,7 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
             self.call_arena, // ok to use, page.navigate dupes this
             self.base(),
             src,
-            .{ .encode = true },
+            .{ .encoding = self.charset },
         );
     };
 

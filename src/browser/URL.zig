@@ -19,16 +19,19 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const ResolveOpts = struct {
-    encode: bool = false,
+pub const ResolveOpts = struct {
+    /// null = don't encode, "UTF-8" = standard percent encoding,
+    /// other charset = encode query string using that charset with NCR fallback
+    encoding: ?[]const u8 = null,
     always_dupe: bool = false,
 };
 
 // path is anytype, so that it can be used with both []const u8 and [:0]const u8
-pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, comptime opts: ResolveOpts) ![:0]const u8 {
+pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, opts: ResolveOpts) ![:0]const u8 {
     const PT = @TypeOf(source_path);
 
-    var path: [:0]const u8 = if (comptime !isNullTerminated(PT) or opts.always_dupe) try allocator.dupeZ(u8, source_path) else source_path;
+    const needs_dupe = comptime !isNullTerminated(PT);
+    var path: [:0]const u8 = if (needs_dupe or opts.always_dupe) try allocator.dupeZ(u8, source_path) else source_path;
 
     if (base.len == 0) {
         return processResolved(allocator, path, opts);
@@ -186,14 +189,12 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, c
     return processResolved(allocator, out[0..out_i :0], opts);
 }
 
-fn processResolved(allocator: Allocator, url: [:0]const u8, comptime opts: ResolveOpts) ![:0]const u8 {
-    if (!comptime opts.encode) {
-        return url;
-    }
-    return ensureEncoded(allocator, url);
+fn processResolved(allocator: Allocator, url: [:0]const u8, opts: ResolveOpts) ![:0]const u8 {
+    const encoding = opts.encoding orelse return url;
+    return ensureEncoded(allocator, url, encoding);
 }
 
-pub fn ensureEncoded(allocator: Allocator, url: [:0]const u8) ![:0]const u8 {
+pub fn ensureEncoded(allocator: Allocator, url: [:0]const u8, encoding: []const u8) ![:0]const u8 {
     const scheme_end = std.mem.indexOf(u8, url, "://");
     const authority_start = if (scheme_end) |end| end + 3 else 0;
     const path_start = std.mem.indexOfScalarPos(u8, url, authority_start, '/') orelse return url;
@@ -205,18 +206,18 @@ pub fn ensureEncoded(allocator: Allocator, url: [:0]const u8) ![:0]const u8 {
     const query_end = if (query_start) |_| (fragment_start orelse url.len) else path_end;
 
     const path_to_encode = url[path_start..path_end];
+    // Path is always UTF-8 percent encoded per URL spec
     const encoded_path = try percentEncodeSegment(allocator, path_to_encode, .path);
 
+    // Query string uses document encoding
     const encoded_query = if (query_start) |qs| blk: {
         const query_to_encode = url[qs + 1 .. query_end];
-        const encoded = try percentEncodeSegment(allocator, query_to_encode, .query);
-        break :blk encoded;
+        break :blk try encodeQueryString(allocator, query_to_encode, encoding);
     } else null;
 
     const encoded_fragment = if (fragment_start) |fs| blk: {
         const fragment_to_encode = url[fs + 1 ..];
-        const encoded = try percentEncodeSegment(allocator, fragment_to_encode, .query);
-        break :blk encoded;
+        break :blk try percentEncodeSegment(allocator, fragment_to_encode, .query);
     } else null;
 
     if (encoded_path.ptr == path_to_encode.ptr and
@@ -242,7 +243,7 @@ pub fn ensureEncoded(allocator: Allocator, url: [:0]const u8) ![:0]const u8 {
     return buf.items[0 .. buf.items.len - 1 :0];
 }
 
-const EncodeSet = enum { path, query, userinfo, fragment };
+const EncodeSet = enum { path, query, query_legacy, userinfo, fragment };
 
 fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime encode_set: EncodeSet) ![]const u8 {
     // Check if encoding is needed
@@ -285,17 +286,65 @@ fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime enco
     return buf.items;
 }
 
+const h5e = @import("parser/html5ever.zig");
+
+/// Encode a query string using the specified encoding.
+/// For UTF-8, this is standard percent encoding.
+/// For legacy encodings, unmappable characters are replaced with NCRs (&#codepoint;).
+fn encodeQueryString(allocator: Allocator, query: []const u8, encoding: []const u8) ![]const u8 {
+    // For UTF-8, use standard percent encoding
+    if (std.mem.eql(u8, encoding, "UTF-8")) {
+        return percentEncodeSegment(allocator, query, .query);
+    }
+
+    // For legacy encodings, first encode to the target charset with NCR fallback
+    const enc_info = h5e.encoding_for_label(encoding.ptr, encoding.len);
+    if (!enc_info.isValid()) {
+        // Unknown encoding, fall back to UTF-8
+        return percentEncodeSegment(allocator, query, .query);
+    }
+
+    // Calculate max buffer size for encoded output
+    const max_encoded_len = h5e.encoding_max_encode_buffer_length(enc_info.handle.?, query.len);
+    if (max_encoded_len == 0) {
+        return percentEncodeSegment(allocator, query, .query);
+    }
+
+    const encode_buf = try allocator.alloc(u8, max_encoded_len);
+    defer allocator.free(encode_buf);
+
+    // Encode UTF-8 to legacy encoding with NCR fallback
+    const result = h5e.encoding_encode_with_ncr(
+        enc_info.handle.?,
+        query.ptr,
+        query.len,
+        encode_buf.ptr,
+        encode_buf.len,
+    );
+
+    if (!result.isSuccess()) {
+        // Encoding failed, fall back to UTF-8
+        return percentEncodeSegment(allocator, query, .query);
+    }
+
+    // Now percent-encode the result using query_legacy to preserve NCRs
+    const encoded_bytes = encode_buf[0..result.bytes_written];
+    return percentEncodeSegment(allocator, encoded_bytes, .query_legacy);
+}
+
 fn shouldPercentEncode(c: u8, comptime encode_set: EncodeSet) bool {
     return switch (c) {
         // Unreserved characters (RFC 3986)
         'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => false,
-        // sub-delims allowed in path/query but some must be encoded in userinfo
-        '!', '$', '&', '\'', '(', ')', '*', '+', ',' => false,
-        ';', '=' => encode_set == .userinfo,
+        // sub-delims allowed in path/query but some must be encoded in userinfo/query_legacy
+        '!', '$', '\'', '(', ')', '*', '+', ',' => false,
+        // '&' and ';' must be encoded for legacy encoding (to preserve NCRs like &#nnnnn;)
+        '&', ';' => encode_set == .userinfo or encode_set == .query_legacy,
+        '=' => encode_set == .userinfo,
         // Separators: userinfo must encode these
         '/', ':', '@' => encode_set == .userinfo,
         // '?' is allowed in queries only
-        '?' => encode_set != .query,
+        '?' => encode_set != .query and encode_set != .query_legacy,
         // '#' is allowed in fragments only
         '#' => encode_set != .fragment,
         // Everything else needs encoding (including space)
@@ -1130,7 +1179,7 @@ test "URL: ensureEncoded" {
     };
 
     for (cases) |case| {
-        const result = try ensureEncoded(testing.arena_allocator, case.url);
+        const result = try ensureEncoded(testing.arena_allocator, case.url, "UTF-8");
         try testing.expectString(case.expected, result);
     }
 }
@@ -1296,7 +1345,7 @@ test "URL: resolve with encoding" {
     };
 
     for (cases) |case| {
-        const result = try resolve(testing.arena_allocator, case.base, case.path, .{ .encode = true });
+        const result = try resolve(testing.arena_allocator, case.base, case.path, .{ .encoding = "UTF-8" });
         try testing.expectString(case.expected, result);
     }
 }

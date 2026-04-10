@@ -182,7 +182,7 @@ pub fn collectInteractiveElements(
             .id = el.getAttributeSafe(comptime .wrap("id")),
             .class = el.getAttributeSafe(comptime .wrap("class")),
             .href = if (el.getAttributeSafe(comptime .wrap("href"))) |href|
-                URL.resolve(arena, page.base(), href, .{ .encode = true }) catch href
+                URL.resolve(arena, page.base(), href, .{ .encoding = page.charset }) catch href
             else
                 null,
             .input_type = getInputType(el),
