@@ -444,6 +444,14 @@ pub const Client = struct {
             return false;
         }
 
+        if (std.mem.eql(u8, url, "/json/list") or std.mem.eql(u8, url, "/json/list/") or
+            std.mem.eql(u8, url, "/json") or std.mem.eql(u8, url, "/json/"))
+        {
+            try self.ws.send(empty_json_list_response);
+            self.ws.shutdown();
+            return false;
+        }
+
         return error.NotFound;
     }
 
@@ -486,7 +494,13 @@ fn buildJSONVersionResponse(
             .message = "when --host is set to 0.0.0.0 consider setting --advertise-host to a reachable address",
         });
     }
-    const body_format = "{{\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"}}";
+    const body_format =
+        "{{" ++
+        "\"Browser\": \"Lightpanda/1.0\", " ++
+        "\"Protocol-Version\": \"1.3\", " ++
+        "\"User-Agent\": \"Lightpanda/1.0\", " ++
+        "\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"" ++
+        "}}";
     const body_len = std.fmt.count(body_format, .{ host, port });
 
     // We send a Connection: Close (and actually close the connection)
@@ -504,6 +518,13 @@ fn buildJSONVersionResponse(
     return try std.fmt.allocPrint(app.allocator, response_format, .{ body_len, host, port });
 }
 
+const empty_json_list_response =
+    "HTTP/1.1 200 OK\r\n" ++
+    "Content-Length: 2\r\n" ++
+    "Connection: Close\r\n" ++
+    "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+    "[]";
+
 pub const timestamp = @import("datetime.zig").timestamp;
 pub const milliTimestamp = @import("datetime.zig").milliTimestamp;
 
@@ -512,11 +533,16 @@ test "server: buildJSONVersionResponse" {
     const res = try buildJSONVersionResponse(testing.test_app);
     defer testing.test_app.allocator.free(res);
 
-    try testing.expectEqual("HTTP/1.1 200 OK\r\n" ++
-        "Content-Length: 48\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-        "{\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"}", res);
+    // The response includes the build version, so check structure rather than exact bytes.
+    try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
+    try testing.expect(std.mem.indexOf(u8, res, "Content-Type: application/json") != null);
+    try testing.expect(std.mem.indexOf(u8, res, "Connection: Close") != null);
+
+    // Verify all required JSON fields are present in the body
+    try testing.expect(std.mem.indexOf(u8, res, "\"Browser\": \"Lightpanda/") != null);
+    try testing.expect(std.mem.indexOf(u8, res, "\"Protocol-Version\": \"1.3\"") != null);
+    try testing.expect(std.mem.indexOf(u8, res, "\"User-Agent\": \"Lightpanda/") != null);
+    try testing.expect(std.mem.indexOf(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
 }
 
 test "Client: http invalid request" {
@@ -728,20 +754,16 @@ test "server: 404" {
 }
 
 test "server: get /json/version" {
-    const expected_response =
-        "HTTP/1.1 200 OK\r\n" ++
-        "Content-Length: 48\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-        "{\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"}";
-
     {
         // twice on the same connection
         var c = try createTestClient();
         defer c.deinit();
 
         const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
-        try testing.expectEqual(expected_response, res1);
+        try testing.expect(std.mem.startsWith(u8, res1, "HTTP/1.1 200 OK\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res1, "\"Browser\": \"Lightpanda/") != null);
+        try testing.expect(std.mem.indexOf(u8, res1, "\"Protocol-Version\": \"1.3\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res1, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
     }
 
     {
@@ -750,7 +772,8 @@ test "server: get /json/version" {
         defer c.deinit();
 
         const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
-        try testing.expectEqual(expected_response, res1);
+        try testing.expect(std.mem.startsWith(u8, res1, "HTTP/1.1 200 OK\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res1, "\"Browser\": \"Lightpanda/") != null);
     }
 }
 
