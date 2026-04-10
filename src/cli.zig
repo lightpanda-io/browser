@@ -363,11 +363,6 @@ pub fn Builder(comptime commands: anytype) type {
                     }
                 }
 
-                // An option we don't know of.
-                if (std.mem.startsWith(u8, option_name, "--")) {
-                    return error.UnkownOption;
-                }
-
                 // Parse positional arg if provided; can be given out of order:
                 //
                 // lightpanda fetch --wait-ms 2_000 "https://lightpanda.io" --dump "html"
@@ -410,6 +405,9 @@ pub fn Builder(comptime commands: anytype) type {
                         },
                         inline else => @compileError("not supported"),
                     }
+                } else {
+                    // An option we don't know of.
+                    return error.UnknownOption;
                 }
             }
 
