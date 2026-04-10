@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=url_updates>
+  {
+    const originalUrl = location.href;
+
+    // pushState updates the URL
+    history.pushState(null, '', '/test-push-path');
+    testing.expectEqual('/test-push-path', location.pathname);
+
+    // replaceState updates the URL
+    history.replaceState(null, '', '/test-replace-path');
+    testing.expectEqual('/test-replace-path', location.pathname);
+
+    // Restore original URL so other tests aren't affected
+    history.replaceState(null, '', originalUrl);
+  }
+</script>

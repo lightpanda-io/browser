@@ -138,4 +138,5 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: History" {
     try testing.htmlRunner("history.html", .{});
+    try testing.htmlRunner("history_url_update.html", .{});
 }
