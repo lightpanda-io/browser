@@ -38,7 +38,7 @@ const CustomEventOptions = struct {
 const Options = Event.inheritOptions(CustomEvent, CustomEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
-    const arena = try page.getArena(.{ .debug = "CustomEvent" });
+    const arena = try page.getArena(.tiny, "CustomEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 

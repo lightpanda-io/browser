@@ -57,7 +57,7 @@ const InitOpts = struct {
 };
 
 pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
-    const arena = try page.getArena(.{ .debug = "Response" });
+    const arena = try page.getArena(.large, "Response");
     errdefer page.releaseArena(arena);
 
     const opts = opts_ orelse InitOpts{};
@@ -174,7 +174,7 @@ pub fn bytes(self: *const Response, page: *Page) !js.Promise {
 }
 
 pub fn clone(self: *const Response, page: *Page) !*Response {
-    const arena = try page.getArena(.{ .debug = "Response.clone" });
+    const arena = try page.getArena((self._body orelse "").len + self._url.len + 256, "Response.clone");
     errdefer page.releaseArena(arena);
 
     const body = if (self._body) |b| try arena.dupe(u8, b) else null;

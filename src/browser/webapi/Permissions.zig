@@ -38,7 +38,7 @@ const QueryDescriptor = struct {
 };
 // We always report 'prompt' (the default safe value — neither granted nor denied).
 pub fn query(_: *const Permissions, qd: QueryDescriptor, page: *Page) !js.Promise {
-    const arena = try page.getArena(.{ .debug = "PermissionStatus" });
+    const arena = try page.getArena(.tiny, "PermissionStatus");
     errdefer page.releaseArena(arena);
 
     const status = try arena.create(PermissionStatus);

@@ -151,6 +151,303 @@ pub extern "C" fn html5ever_parse_document_with_encoding(
         .one(StrTendril::from(decoded.as_ref()));
 }
 
+// === Encoding API for TextDecoder ===
+
+/// Result of encoding label lookup
+#[repr(C)]
+pub struct EncodingInfo {
+    /// 0 = not found, 1 = found
+    pub found: u8,
+    /// Opaque handle to the encoding (actually &'static Encoding)
+    pub handle: *const c_void,
+    /// Length of canonical name
+    pub name_len: usize,
+    /// Pointer to canonical encoding name (static, lowercase)
+    pub name_ptr: *const c_uchar,
+}
+
+/// Look up an encoding by its label (case-insensitive, whitespace-trimmed)
+#[no_mangle]
+pub extern "C" fn encoding_for_label(
+    label: *const c_uchar,
+    label_len: usize,
+) -> EncodingInfo {
+    if label.is_null() || label_len == 0 {
+        return EncodingInfo {
+            found: 0,
+            name_len: 0,
+            handle: std::ptr::null(),
+            name_ptr: std::ptr::null(),
+        };
+    }
+
+    let label_bytes = unsafe { std::slice::from_raw_parts(label, label_len) };
+
+    match Encoding::for_label(label_bytes) {
+        Some(encoding) => {
+            let name = encoding.name();
+            EncodingInfo {
+                found: 1,
+                name_len: name.len(),
+                name_ptr: name.as_ptr(),
+                handle: encoding as *const _ as *const c_void,
+            }
+        }
+        None => EncodingInfo {
+            found: 0,
+            name_len: 0,
+            name_ptr: std::ptr::null(),
+            handle: std::ptr::null(),
+        },
+    }
+}
+
+/// Calculate maximum UTF-8 buffer size needed for decoding
+#[no_mangle]
+pub extern "C" fn encoding_max_utf8_buffer_length(
+    handle: *const c_void,
+    input_len: usize,
+) -> usize {
+    if handle.is_null() {
+        return 0;
+    }
+    let encoding: &'static Encoding = unsafe { &*(handle as *const Encoding) };
+    let decoder = encoding.new_decoder();
+    decoder.max_utf8_buffer_length(input_len).unwrap_or(0)
+}
+
+/// Result of decoding operation
+#[repr(C)]
+pub struct DecodeResult {
+    /// 0 = no errors, 1 = had malformed sequences (replaced with U+FFFD)
+    pub had_errors: u8,
+    /// Number of input bytes consumed
+    pub bytes_read: usize,
+    /// Number of UTF-8 bytes written to output buffer
+    pub bytes_written: usize,
+}
+
+/// Decode bytes from source encoding to UTF-8
+/// For streaming, set is_last=0; for final/complete decode, set is_last=1
+#[no_mangle]
+pub extern "C" fn encoding_decode(
+    handle: *const c_void,
+    input: *const c_uchar,
+    input_len: usize,
+    output: *mut c_uchar,
+    output_len: usize,
+    is_last: u8,
+) -> DecodeResult {
+    if handle.is_null() || output.is_null() {
+        return DecodeResult {
+            had_errors: 1,
+            bytes_read: 0,
+            bytes_written: 0,
+        };
+    }
+
+    let encoding: &'static Encoding = unsafe { &*(handle as *const Encoding) };
+    let input_bytes = if input.is_null() || input_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(input, input_len) }
+    };
+    let output_slice = unsafe { std::slice::from_raw_parts_mut(output, output_len) };
+
+    let mut decoder = encoding.new_decoder();
+    let last = is_last != 0;
+
+    let (result, bytes_read, bytes_written, had_errors) =
+        decoder.decode_to_utf8(input_bytes, output_slice, last);
+
+    // If output buffer was too small, we still report what we could process
+    let _ = result; // CoderResult::InputEmpty or CoderResult::OutputFull
+
+    DecodeResult {
+        had_errors: if had_errors { 1 } else { 0 },
+        bytes_read,
+        bytes_written,
+    }
+}
+
+// === Streaming Decoder API ===
+
+use encoding_rs::Decoder;
+
+/// Create a streaming decoder that maintains state across calls
+#[no_mangle]
+pub extern "C" fn encoding_decoder_new(handle: *const c_void) -> *mut c_void {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+    let encoding: &'static Encoding = unsafe { &*(handle as *const Encoding) };
+    let decoder = Box::new(encoding.new_decoder());
+    Box::into_raw(decoder) as *mut c_void
+}
+
+/// Decode using a streaming decoder (maintains state for incomplete sequences)
+#[no_mangle]
+pub extern "C" fn encoding_decoder_decode(
+    decoder_ptr: *mut c_void,
+    input: *const c_uchar,
+    input_len: usize,
+    output: *mut c_uchar,
+    output_len: usize,
+    is_last: u8,
+) -> DecodeResult {
+    if decoder_ptr.is_null() || output.is_null() {
+        return DecodeResult {
+            had_errors: 1,
+            bytes_read: 0,
+            bytes_written: 0,
+        };
+    }
+
+    let decoder: &mut Decoder = unsafe { &mut *(decoder_ptr as *mut Decoder) };
+    let input_bytes = if input.is_null() || input_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(input, input_len) }
+    };
+    let output_slice = unsafe { std::slice::from_raw_parts_mut(output, output_len) };
+
+    let last = is_last != 0;
+    let (result, bytes_read, bytes_written, had_errors) =
+        decoder.decode_to_utf8(input_bytes, output_slice, last);
+
+    let _ = result;
+
+    DecodeResult {
+        had_errors: if had_errors { 1 } else { 0 },
+        bytes_read,
+        bytes_written,
+    }
+}
+
+/// Free a streaming decoder
+#[no_mangle]
+pub extern "C" fn encoding_decoder_free(decoder_ptr: *mut c_void) {
+    if !decoder_ptr.is_null() {
+        unsafe {
+            drop(Box::from_raw(decoder_ptr as *mut Decoder));
+        }
+    }
+}
+
+// === Encoding API (UTF-8 to legacy encoding with NCR fallback) ===
+
+/// Result of encoding operation
+#[repr(C)]
+pub struct EncodeResult {
+    /// 0 = success, 1 = output buffer too small
+    pub status: u8,
+    /// Number of input bytes consumed
+    pub bytes_read: usize,
+    /// Number of bytes written to output buffer
+    pub bytes_written: usize,
+}
+
+/// Encode UTF-8 to a legacy encoding, replacing unencodable characters with
+/// HTML decimal numeric character references (&#codepoint;).
+///
+/// This is used for URL query string encoding per WHATWG URL spec.
+/// encoding_rs's encode_from_utf8 already produces NCRs for unmappable chars.
+#[no_mangle]
+pub extern "C" fn encoding_encode_with_ncr(
+    handle: *const c_void,
+    input: *const c_uchar,
+    input_len: usize,
+    output: *mut c_uchar,
+    output_capacity: usize,
+) -> EncodeResult {
+    if handle.is_null() || output.is_null() {
+        return EncodeResult {
+            status: 1,
+            bytes_read: 0,
+            bytes_written: 0,
+        };
+    }
+
+    let encoding: &'static Encoding = unsafe { &*(handle as *const Encoding) };
+
+    let input_str = if input.is_null() || input_len == 0 {
+        ""
+    } else {
+        let bytes = unsafe { std::slice::from_raw_parts(input, input_len) };
+        match std::str::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => {
+                return EncodeResult {
+                    status: 1,
+                    bytes_read: 0,
+                    bytes_written: 0,
+                };
+            }
+        }
+    };
+
+    // For UTF-8 encoding, just copy directly (no NCR needed)
+    if encoding == encoding_rs::UTF_8 {
+        if input_len > output_capacity {
+            return EncodeResult {
+                bytes_read: 0,
+                bytes_written: 0,
+                status: 1,
+            };
+        }
+        let output_slice = unsafe { std::slice::from_raw_parts_mut(output, output_capacity) };
+        output_slice[..input_len].copy_from_slice(input_str.as_bytes());
+        return EncodeResult {
+            bytes_read: input_len,
+            bytes_written: input_len,
+            status: 0,
+        };
+    }
+
+    let output_slice = unsafe { std::slice::from_raw_parts_mut(output, output_capacity) };
+    let mut encoder = encoding.new_encoder();
+
+    // encode_from_utf8 automatically produces NCRs for unmappable characters
+    let (result, bytes_read, bytes_written, _had_unmappables) =
+        encoder.encode_from_utf8(input_str, output_slice, true);
+
+    match result {
+        encoding_rs::CoderResult::InputEmpty => EncodeResult {
+            bytes_read,
+            bytes_written,
+            status: 0,
+        },
+        encoding_rs::CoderResult::OutputFull => EncodeResult {
+            bytes_read,
+            bytes_written,
+            status: 1,
+        },
+    }
+}
+
+/// Calculate maximum output buffer size needed for encoding with NCR fallback.
+/// Worst case: every character becomes &#codepoint; where codepoint is up to 7 digits.
+#[no_mangle]
+pub extern "C" fn encoding_max_encode_buffer_length(
+    handle: *const c_void,
+    input_len: usize,
+) -> usize {
+    if handle.is_null() {
+        return 0;
+    }
+    let encoding: &'static Encoding = unsafe { &*(handle as *const Encoding) };
+    let encoder = encoding.new_encoder();
+    // This returns the max buffer size accounting for NCR expansion
+    encoder
+        .max_buffer_length_from_utf8_if_no_unmappables(input_len)
+        .map(|len| {
+            // Add extra space for potential NCRs (each char could become &#nnnnnn; = 10 bytes)
+            // But realistically, most chars are mappable, so add 2x as safety margin
+            len.saturating_mul(2)
+        })
+        .unwrap_or(input_len * 10)
+}
+
 #[no_mangle]
 pub extern "C" fn html5ever_parse_fragment(
     html: *mut c_uchar,

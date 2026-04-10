@@ -288,7 +288,7 @@ fn collectLink(
 ) !void {
     const rel = el.getAttributeSafe(comptime .wrap("rel")) orelse return;
     const raw_href = el.getAttributeSafe(comptime .wrap("href")) orelse return;
-    const href = URL.resolve(arena, page.base(), raw_href, .{ .encode = true }) catch raw_href;
+    const href = URL.resolve(arena, page.base(), raw_href, .{ .encoding = page.charset }) catch raw_href;
 
     if (std.ascii.eqlIgnoreCase(rel, "alternate")) {
         try alternate.append(arena, .{

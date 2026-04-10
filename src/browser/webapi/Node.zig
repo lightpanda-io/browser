@@ -22,6 +22,7 @@ const String = @import("../../string.zig").String;
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const URL = @import("../URL.zig");
 const reflect = @import("../reflect.zig");
 
 const EventTarget = @import("EventTarget.zig");
@@ -509,6 +510,18 @@ pub fn ownerDocument(self: *const Node, page: *const Page) ?*Document {
 pub fn ownerPage(self: *const Node, default: *Page) *Page {
     const doc = self.ownerDocument(default) orelse return default;
     return doc._page orelse default;
+}
+
+pub const ResolveURLOpts = struct {
+    allocator: ?Allocator = null,
+};
+
+// Resolve a URL relative to this node's owning document.
+// Uses the document's charset for query string encoding (with NCR fallback for unmappable chars).
+pub fn resolveURL(self: *const Node, url: anytype, page: *Page, opts: ResolveURLOpts) ![:0]const u8 {
+    const owner_page = self.ownerPage(page);
+    const allocator = opts.allocator orelse page.call_arena;
+    return URL.resolve(allocator, owner_page.base(), url, .{ .encoding = owner_page.charset });
 }
 
 pub fn isSameDocumentAs(self: *const Node, other: *const Node, page: *const Page) bool {

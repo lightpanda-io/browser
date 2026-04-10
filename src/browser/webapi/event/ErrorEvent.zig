@@ -47,14 +47,14 @@ pub const ErrorEventOptions = struct {
 const Options = Event.inheritOptions(ErrorEvent, ErrorEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*ErrorEvent {
-    const arena = try page.getArena(.{ .debug = "ErrorEvent" });
+    const arena = try page.getArena(.small, "ErrorEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
     return initWithTrusted(arena, type_string, opts_, false, page);
 }
 
 pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*ErrorEvent {
-    const arena = try page.getArena(.{ .debug = "ErrorEvent.trusted" });
+    const arena = try page.getArena(.small, "ErrorEvent.trusted");
     errdefer page.releaseArena(arena);
     return initWithTrusted(arena, typ, opts_, true, page);
 }

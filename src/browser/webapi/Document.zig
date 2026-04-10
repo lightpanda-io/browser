@@ -666,7 +666,7 @@ pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
     page._parse_mode = .document_write;
     defer page._parse_mode = previous_parse_mode;
 
-    const arena = try page.getArena(.{ .debug = "Document.write" });
+    const arena = try page.getArena(.medium, "Document.write");
     defer page.releaseArena(arena);
 
     var parser = Parser.init(arena, fragment_node, page);
@@ -1068,10 +1068,15 @@ pub const JsApi = struct {
     pub const hasFocus = bridge.function(Document.hasFocus, .{});
 
     pub const prerendering = bridge.property(false, .{ .template = false });
-    pub const characterSet = bridge.property("UTF-8", .{ .template = false });
-    pub const charset = bridge.property("UTF-8", .{ .template = false });
-    pub const inputEncoding = bridge.property("UTF-8", .{ .template = false });
+    pub const characterSet = bridge.accessor(getCharacterSet, null, .{});
+    pub const charset = bridge.accessor(getCharacterSet, null, .{});
+    pub const inputEncoding = bridge.accessor(getCharacterSet, null, .{});
     pub const compatMode = bridge.property("CSS1Compat", .{ .template = false });
+
+    fn getCharacterSet(self: *const Document) []const u8 {
+        const doc_page = self._page orelse return "UTF-8";
+        return doc_page.charset;
+    }
     pub const referrer = bridge.property("", .{ .template = false });
 };
 

@@ -89,7 +89,7 @@ const ResponseType = enum {
 };
 
 pub fn init(page: *Page) !*XMLHttpRequest {
-    const arena = try page.getArena(.{ .debug = "XMLHttpRequest" });
+    const arena = try page.getArena(.large, "XMLHttpRequest");
     errdefer page.releaseArena(arena);
     const self = try page._factory.xhrEventTarget(arena, XMLHttpRequest{
         ._page = page,
@@ -210,7 +210,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
 
     const page = self._page;
     self._method = try parseMethod(method_);
-    self._url = try URL.resolve(self._arena, page.base(), url, .{ .always_dupe = true, .encode = true });
+    self._url = try URL.resolve(self._arena, page.base(), url, .{ .always_dupe = true, .encoding = page.charset });
     try self.stateChanged(.opened, page);
 }
 

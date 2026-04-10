@@ -671,7 +671,7 @@ pub fn getNodeDetails(
 
         if (el.getAttributeSafe(comptime .wrap("href"))) |h| {
             const URL = lp.URL;
-            href = URL.resolve(arena, page.base(), h, .{ .encode = true }) catch h;
+            href = URL.resolve(arena, page.base(), h, .{ .encoding = page.charset }) catch h;
         }
 
         if (el.is(Element.Html.Input)) |input| {

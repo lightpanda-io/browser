@@ -207,6 +207,9 @@ base_url: ?[:0]const u8 = null,
 // referer header cache.
 referer_header: ?[:0]const u8 = null,
 
+// Document charset (canonical name from encoding_rs, static lifetime)
+charset: []const u8 = "UTF-8",
+
 // Arbitrary buffer. Need to temporarily lowercase a value? Use this. No lifetime
 // guarantee - it's valid until someone else uses it.
 buf: [BUF_SIZE]u8 = undefined,
@@ -249,7 +252,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         log.debug(.page, "page.init", .{});
     }
 
-    const call_arena = try session.getArena(.{ .debug = "call_arena" });
+    const call_arena = try session.getArena(.medium, "call_arena");
     errdefer session.releaseArena(call_arena);
 
     const factory = &session.factory;
@@ -430,8 +433,8 @@ pub fn headersForRequest(self: *Page, headers: *HttpClient.Headers) !void {
     }
 }
 
-pub fn getArena(self: *Page, comptime opts: Session.GetArenaOpts) !Allocator {
-    return self._session.getArena(opts);
+pub fn getArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !Allocator {
+    return self._session.getArena(size_or_bucket, debug);
 }
 
 pub fn releaseArena(self: *Page, allocator: Allocator) void {
@@ -511,7 +514,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
                 log.warn(.js, "invalid blob", .{ .url = request_url });
                 return error.BlobNotFound;
             };
-            const parse_arena = try self.getArena(.{ .debug = "Page.parseBlob" });
+            const parse_arena = try self.getArena(.medium, "Page.parseBlob");
             defer self.releaseArena(parse_arena);
             var parser = Parser.init(parse_arena, self.document.asNode(), self);
             parser.parse(blob._slice);
@@ -620,7 +623,7 @@ pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOp
     if (self.canScheduleNavigation(std.meta.activeTag(nt)) == false) {
         return;
     }
-    const arena = try self._session.getArena(.{ .debug = "scheduleNavigation" });
+    const arena = try self._session.getArena(.small, "scheduleNavigation");
     errdefer self._session.releaseArena(arena);
     return self.scheduleNavigationWithArena(arena, request_url, opts, nt);
 }
@@ -659,7 +662,7 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
             arena,
             page_base,
             request_url,
-            .{ .always_dupe = true, .encode = true },
+            .{ .always_dupe = true, .encoding = originator.charset },
         );
         break :blk .{ u, false };
     };
@@ -963,9 +966,13 @@ fn pageDataCallback(response: HttpClient.Response, data: []const u8) !void {
 
         switch (mime.content_type) {
             .text_html => {
-                self._parse_state = .{ .html = .{
-                    .mime = mime,
-                } };
+                // Normalize and store the charset using encoding_rs canonical names
+                const charset_str = mime.charsetString();
+                const info = h5e.encoding_for_label(charset_str.ptr, charset_str.len);
+                if (info.isValid()) {
+                    self.charset = info.name();
+                }
+                self._parse_state = .{ .html = .empty };
             },
             .application_json, .text_javascript, .text_css, .text_plain => {
                 var arr: std.ArrayList(u8) = .empty;
@@ -980,7 +987,7 @@ fn pageDataCallback(response: HttpClient.Response, data: []const u8) !void {
     }
 
     switch (self._parse_state) {
-        .html => |*html| try html.buf.appendSlice(self.arena, data),
+        .html => |*html| try html.appendSlice(self.arena, data),
         .text => |*buf| {
             // we have to escape the data...
             var v = data;
@@ -1023,18 +1030,19 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
         });
     };
 
-    const parse_arena = try self.getArena(.{ .debug = "Page.parse" });
+    const parse_arena = try self.getArena(.medium, "Page.parse");
     defer self.releaseArena(parse_arena);
 
     var parser = Parser.init(parse_arena, self.document.asNode(), self);
 
     switch (self._parse_state) {
-        .html => |*html_state| {
-            const raw_html = html_state.buf.items;
-            if (html_state.needsEncodingConversion()) {
-                parser.parseWithEncoding(raw_html, html_state.mime.charsetString());
-            } else {
+        .html => |*html_buf| {
+            const raw_html = html_buf.items;
+
+            if (std.mem.eql(u8, self.charset, "UTF-8")) {
                 parser.parse(raw_html);
+            } else {
+                parser.parseWithEncoding(raw_html, self.charset);
             }
             self._script_manager.staticScriptsDone();
             self._parse_state = .complete;
@@ -1189,7 +1197,7 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
             self.call_arena, // ok to use, page.navigate dupes this
             self.base(),
             src,
-            .{ .encode = true },
+            .{ .encoding = self.charset },
         );
     };
 
@@ -3175,21 +3183,11 @@ const ParseState = union(enum) {
     pre,
     complete,
     err: anyerror,
-    html: Html,
+    html: std.ArrayList(u8),
     text: std.ArrayList(u8),
     image: std.ArrayList(u8),
     raw: std.ArrayList(u8),
     raw_done: []const u8,
-
-    const Html = struct {
-        mime: Mime,
-        buf: std.ArrayList(u8) = .empty,
-
-        fn needsEncodingConversion(self: *const Html) bool {
-            const charset = self.mime.charsetString();
-            return !std.ascii.eqlIgnoreCase(charset, "utf-8") and !std.ascii.eqlIgnoreCase(charset, "utf8");
-        }
-    };
 };
 
 const LoadState = enum {
@@ -3586,7 +3584,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     // I don't think this is technically correct, but FormData handles it ok
     const form_data = try FormData.init(form, submitter_, self);
 
-    const arena = try self._session.getArena(.{ .debug = "submitForm" });
+    const arena = try self._session.getArena(.medium, "submitForm");
     errdefer self._session.releaseArena(arena);
 
     const encoding = form_element.getAttributeSafe(comptime .wrap("enctype"));
@@ -3646,9 +3644,6 @@ fn asUint(comptime string: anytype) std.meta.Int(
 
 const testing = @import("../testing.zig");
 test "WebApi: Page" {
-    const filter: testing.LogFilter = .init(&.{ .http, .js });
-    defer filter.deinit();
-
     try testing.htmlRunner("page", .{});
 }
 

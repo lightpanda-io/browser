@@ -40,7 +40,7 @@ pub const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*TextEvent {
-    const arena = try page.getArena(.{ .debug = "TextEvent" });
+    const arena = try page.getArena(.tiny, "TextEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 

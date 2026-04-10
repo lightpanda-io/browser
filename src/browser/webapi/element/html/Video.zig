@@ -57,9 +57,7 @@ pub fn getPoster(self: *const Video, page: *Page) ![]const u8 {
     if (poster.len == 0) {
         return "";
     }
-
-    const URL = @import("../../URL.zig");
-    return URL.resolve(page.call_arena, page.base(), poster, .{ .encode = true });
+    return element.asConstNode().resolveURL(poster, page, .{});
 }
 
 pub fn setPoster(self: *Video, value: []const u8, page: *Page) !void {

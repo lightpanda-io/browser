@@ -97,7 +97,7 @@ pub fn getAction(self: *Form, page: *Page) ![]const u8 {
     if (action.len == 0) {
         return page.url;
     }
-    return URL.resolve(page.call_arena, page.base(), action, .{ .encode = true });
+    return element.asNode().resolveURL(action, page, .{});
 }
 
 pub fn setAction(self: *Form, value: []const u8, page: *Page) !void {

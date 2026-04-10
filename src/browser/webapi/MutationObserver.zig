@@ -76,7 +76,7 @@ pub const ObserveOptions = struct {
 };
 
 pub fn init(callback: js.Function.Temp, page: *Page) !*MutationObserver {
-    const arena = try page.getArena(.{ .debug = "MutationObserver" });
+    const arena = try page.getArena(.medium, "MutationObserver");
     errdefer page.releaseArena(arena);
 
     const self = try arena.create(MutationObserver);
@@ -227,7 +227,7 @@ pub fn notifyAttributeChange(
             }
         }
 
-        const arena = try page.getArena(.{ .debug = "MutationRecord" });
+        const arena = try page.getArena(.tiny, "MutationRecord");
         const record = try arena.create(MutationRecord);
         record.* = .{
             ._arena = arena,
@@ -271,7 +271,7 @@ pub fn notifyCharacterDataChange(
             continue;
         }
 
-        const arena = try page.getArena(.{ .debug = "MutationRecord" });
+        const arena = try page.getArena(.tiny, "MutationRecord");
         const record = try arena.create(MutationRecord);
         record.* = .{
             ._arena = arena,
@@ -318,7 +318,7 @@ pub fn notifyChildListChange(
             continue;
         }
 
-        const arena = try page.getArena(.{ .debug = "MutationRecord" });
+        const arena = try page.getArena(.tiny, "MutationRecord");
         const record = try arena.create(MutationRecord);
         record.* = .{
             ._arena = arena,

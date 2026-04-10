@@ -1479,7 +1479,7 @@ fn createFinalizerCallback(
 ) !*Session.FinalizerCallback {
     const session = self.ctx.session;
 
-    const arena = try session.getArena(.{ .debug = "FinalizerCallback" });
+    const arena = try session.getArena(.tiny, "FinalizerCallback");
     errdefer session.releaseArena(arena);
 
     const fc = try arena.create(Session.FinalizerCallback);

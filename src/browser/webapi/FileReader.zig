@@ -63,7 +63,7 @@ const Result = union(enum) {
 };
 
 pub fn init(page: *Page) !*FileReader {
-    const arena = try page.getArena(.{ .debug = "FileReader" });
+    const arena = try page.getArena(.tiny, "FileReader");
     errdefer page.releaseArena(arena);
 
     return page._factory.eventTargetWithAllocator(arena, FileReader{

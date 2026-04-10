@@ -278,7 +278,8 @@ const Context = struct {
                 }
                 try self.writer.writeAll("](");
                 if (el.getAttributeSafe(comptime .wrap("src"))) |src| {
-                    const absolute_src = URL.resolve(self.page.call_arena, self.page.base(), src, .{ .encode = true }) catch src;
+                    const page = self.page;
+                    const absolute_src = URL.resolve(page.call_arena, page.base(), src, .{ .encoding = page.charset }) catch src;
                     try self.writer.writeAll(absolute_src);
                 }
                 try self.writer.writeAll(")");
@@ -286,21 +287,24 @@ const Context = struct {
                 return;
             },
             .anchor => {
+                const page = self.page;
                 const info = analyzeContent(el.asNode());
                 const label = getAnchorLabel(el);
                 const href_raw = el.getAttributeSafe(comptime .wrap("href"));
 
                 if (!info.has_visible and label == null and href_raw == null) return;
 
-                const href = if (href_raw) |h| URL.resolve(self.page.call_arena, self.page.base(), h, .{ .encode = true }) catch h else null;
+                const href = if (href_raw) |h| URL.resolve(page.call_arena, page.base(), h, .{ .encoding = page.charset }) catch h else null;
 
                 if (info.has_block) {
                     try self.renderChildren(el.asNode());
                     if (href) |h| {
                         if (!self.state.last_char_was_newline) try self.writer.writeByte('\n');
-                        try self.writer.writeAll("([](");
+                        try self.writer.writeByte('[');
+                        try self.writer.writeAll(label orelse h);
+                        try self.writer.writeAll("](");
                         try self.writer.writeAll(h);
-                        try self.writer.writeAll("))\n");
+                        try self.writer.writeAll(")\n");
                         self.state.last_char_was_newline = true;
                     }
                     return;
@@ -587,7 +591,39 @@ test "browser.markdown: block link" {
         \\### Title
         \\
         \\Description
-        \\([](https://example.com))
+        \\[https://example.com](https://example.com)
+        \\
+    );
+}
+
+test "browser.markdown: block link with aria-label" {
+    try testMarkdownHTML(
+        \\<a href="https://example.com" aria-label="Docs">
+        \\  <h3>Title</h3>
+        \\  <p>Description</p>
+        \\</a>
+    ,
+        \\
+        \\### Title
+        \\
+        \\Description
+        \\[Docs](https://example.com)
+        \\
+    );
+}
+
+test "browser.markdown: block link with title" {
+    try testMarkdownHTML(
+        \\<a href="https://example.com" title="Docs">
+        \\  <h3>Title</h3>
+        \\  <p>Description</p>
+        \\</a>
+    ,
+        \\
+        \\### Title
+        \\
+        \\Description
+        \\[Docs](https://example.com)
         \\
     );
 }

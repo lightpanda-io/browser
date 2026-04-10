@@ -40,9 +40,7 @@ pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
     if (src.len == 0) {
         return "";
     }
-
-    // Always resolve the src against the page URL
-    return URL.resolve(page.call_arena, page.base(), src, .{ .encode = true });
+    return element.asConstNode().resolveURL(src, page, .{});
 }
 
 pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {

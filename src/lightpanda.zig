@@ -109,7 +109,7 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     //     }
     // }
 
-    const encoded_url = try URL.ensureEncoded(page.call_arena, url);
+    const encoded_url = try URL.ensureEncoded(page.call_arena, url, "UTF-8");
     _ = try page.navigate(encoded_url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },

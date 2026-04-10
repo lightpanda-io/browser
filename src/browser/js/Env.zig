@@ -261,7 +261,7 @@ pub const ContextParams = struct {
 };
 
 pub fn createContext(self: *Env, page: *Page, params: ContextParams) !*Context {
-    const context_arena = try self.app.arena_pool.acquire(.{ .debug = params.debug_name });
+    const context_arena = try self.app.arena_pool.acquire(.large, params.debug_name);
     errdefer self.app.arena_pool.release(context_arena);
 
     const isolate = self.isolate;

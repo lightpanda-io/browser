@@ -110,10 +110,10 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     const allocator = browser.app.allocator;
     const arena_pool = browser.arena_pool;
 
-    const arena = try arena_pool.acquire(.{ .debug = "Session" });
+    const arena = try arena_pool.acquire(.small, "Session");
     errdefer arena_pool.release(arena);
 
-    const page_arena = try arena_pool.acquire(.{ .debug = "Session.page_arena" });
+    const page_arena = try arena_pool.acquire(.large, "Session.page_arena");
     errdefer arena_pool.release(page_arena);
 
     self.* = .{
@@ -186,12 +186,8 @@ pub fn removePage(self: *Session) void {
     }
 }
 
-pub const GetArenaOpts = struct {
-    debug: []const u8,
-};
-
-pub fn getArena(self: *Session, opts: GetArenaOpts) !Allocator {
-    return self.arena_pool.acquire(.{ .debug = opts.debug });
+pub fn getArena(self: *Session, size_or_bucket: anytype, debug: []const u8) !Allocator {
+    return self.arena_pool.acquire(size_or_bucket, debug);
 }
 
 pub fn releaseArena(self: *Session, allocator: Allocator) void {

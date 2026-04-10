@@ -50,14 +50,14 @@ pub const Data = union(enum) {
 const Options = Event.inheritOptions(MessageEvent, MessageEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*MessageEvent {
-    const arena = try page.getArena(.{ .debug = "MessageEvent" });
+    const arena = try page.getArena(.small, "MessageEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
     return initWithTrusted(arena, type_string, opts_, false, page);
 }
 
 pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*MessageEvent {
-    const arena = try page.getArena(.{ .debug = "MessageEvent.trusted" });
+    const arena = try page.getArena(.small, "MessageEvent.trusted");
     errdefer page.releaseArena(arena);
     return initWithTrusted(arena, typ, opts_, true, page);
 }

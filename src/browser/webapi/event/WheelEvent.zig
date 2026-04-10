@@ -50,7 +50,7 @@ pub const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*WheelEvent {
-    const arena = try page.getArena(.{ .debug = "WheelEvent" });
+    const arena = try page.getArena(.medium, "WheelEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 

@@ -39,12 +39,11 @@ pub fn asNode(self: *Anchor) *Node {
 }
 
 pub fn getHref(self: *Anchor, page: *Page) ![]const u8 {
-    const element = self.asElement();
-    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return "";
+    const href = self.asElement().getAttributeSafe(comptime .wrap("href")) orelse return "";
     if (href.len == 0) {
         return "";
     }
-    return URL.resolve(page.call_arena, page.base(), href, .{ .encode = true });
+    return self.asNode().resolveURL(href, page, .{});
 }
 
 pub fn setHref(self: *Anchor, value: []const u8, page: *Page) !void {
@@ -203,7 +202,7 @@ fn getResolvedHref(self: *Anchor, page: *Page) !?[:0]const u8 {
     if (href.len == 0) {
         return null;
     }
-    return try URL.resolve(page.call_arena, page.base(), href, .{});
+    return try self.asNode().resolveURL(href, page, .{});
 }
 
 pub const JsApi = struct {
