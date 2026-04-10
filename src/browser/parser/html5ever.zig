@@ -216,3 +216,65 @@ pub extern "c" fn xml5ever_parse_document(
     appendBeforeSiblingCallback: *const fn (ctx: *anyopaque, sibling_ref: *anyopaque, NodeOrText) callconv(.c) void,
     appendBasedOnParentNodeCallback: *const fn (ctx: *anyopaque, element_ref: *anyopaque, prev_element_ref: *anyopaque, NodeOrText) callconv(.c) void,
 ) void;
+
+// General encoding api
+pub const EncodingInfo = extern struct {
+    found: u8,
+    handle: ?*anyopaque,
+    name_len: usize,
+    name_ptr: [*]const u8,
+
+    pub fn isValid(self: *const EncodingInfo) bool {
+        return self.found != 0;
+    }
+
+    pub fn name(self: *const EncodingInfo) []const u8 {
+        if (self.name_len == 0) {
+            return "";
+        }
+        return self.name_ptr[0..self.name_len];
+    }
+};
+
+pub const DecodeResult = extern struct {
+    had_errors: u8,
+    bytes_read: usize,
+    bytes_written: usize,
+
+    pub fn hadErrors(self: *const DecodeResult) bool {
+        return self.had_errors != 0;
+    }
+};
+
+pub extern "c" fn encoding_for_label(
+    label: [*]const u8,
+    label_len: usize,
+) EncodingInfo;
+
+pub extern "c" fn encoding_max_utf8_buffer_length(
+    handle: *anyopaque,
+    input_len: usize,
+) usize;
+
+pub extern "c" fn encoding_decode(
+    handle: *anyopaque,
+    input: ?[*]const u8,
+    input_len: usize,
+    output: [*]u8,
+    output_len: usize,
+    is_last: u8,
+) DecodeResult;
+
+// Streaming decoder API
+pub extern "c" fn encoding_decoder_new(handle: *anyopaque) ?*anyopaque;
+
+pub extern "c" fn encoding_decoder_decode(
+    decoder: *anyopaque,
+    input: ?[*]const u8,
+    input_len: usize,
+    output: [*]u8,
+    output_len: usize,
+    is_last: u8,
+) DecodeResult;
+
+pub extern "c" fn encoding_decoder_free(decoder: *anyopaque) void;
