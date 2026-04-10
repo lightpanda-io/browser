@@ -298,9 +298,11 @@ const Context = struct {
                     try self.renderChildren(el.asNode());
                     if (href) |h| {
                         if (!self.state.last_char_was_newline) try self.writer.writeByte('\n');
-                        try self.writer.writeAll("([](");
+                        try self.writer.writeByte('[');
+                        try self.writer.writeAll(label orelse h);
+                        try self.writer.writeAll("](");
                         try self.writer.writeAll(h);
-                        try self.writer.writeAll("))\n");
+                        try self.writer.writeAll(")\n");
                         self.state.last_char_was_newline = true;
                     }
                     return;
