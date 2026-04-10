@@ -115,7 +115,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .allocator = allocator,
         .ai_client = ai_client,
         .tool_executor = tool_executor,
-        .terminal = Terminal.init(null),
+        .terminal = Terminal.init(),
         .cmd_executor = undefined,
         .recorder = Recorder.init(if (opts.save) opts.script_file else null),
         .messages = .empty,
@@ -148,12 +148,13 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self);
 }
 
-pub fn run(self: *Self) void {
+/// Returns true on success, false if a script command failed.
+pub fn run(self: *Self) bool {
     if (self.script_file) |path| {
-        self.runScript(path);
-    } else {
-        self.runRepl();
+        return self.runScript(path);
     }
+    self.runRepl();
+    return true;
 }
 
 fn runRepl(self: *Self) void {
@@ -216,16 +217,16 @@ fn printAllocError(self: *Self, comptime fmt: []const u8, args: anytype) void {
     self.terminal.printError(msg);
 }
 
-fn runScript(self: *Self, path: []const u8) void {
+fn runScript(self: *Self, path: []const u8) bool {
     const file = std.fs.cwd().openFile(path, .{}) catch |err| {
         self.printAllocError("Failed to open script '{s}': {s}", .{ path, @errorName(err) });
-        return;
+        return false;
     };
     defer file.close();
 
     const content = file.readToEndAlloc(self.allocator, 10 * 1024 * 1024) catch |err| {
         self.printAllocError("Failed to read script: {s}", .{@errorName(err)});
-        return;
+        return false;
     };
     defer self.allocator.free(content);
 
@@ -243,7 +244,7 @@ fn runScript(self: *Self, path: []const u8) void {
         switch (entry.command) {
             .exit => {
                 self.terminal.printInfo("EXIT — stopping script.");
-                return;
+                return true;
             },
             .comment => {
                 // Track # INTENT: comments for self-healing
@@ -254,7 +255,7 @@ fn runScript(self: *Self, path: []const u8) void {
             },
             .natural_language => {
                 self.printAllocError("line {d}: unrecognized command: {s}", .{ entry.line_num, entry.raw_line });
-                return;
+                return false;
             },
             .login, .accept_cookies => {
                 // High-level commands require LLM
@@ -263,7 +264,7 @@ fn runScript(self: *Self, path: []const u8) void {
                         entry.line_num,
                         entry.raw_line,
                     });
-                    return;
+                    return false;
                 }
                 const prompt = if (entry.command == .login) login_prompt else accept_cookies_prompt;
                 self.processUserMessage(prompt, "") catch |err| {
@@ -272,7 +273,7 @@ fn runScript(self: *Self, path: []const u8) void {
                         entry.raw_line,
                         @errorName(err),
                     });
-                    return;
+                    return false;
                 };
             },
             else => {
@@ -300,22 +301,25 @@ fn runScript(self: *Self, path: []const u8) void {
                         entry.line_num,
                         entry.raw_line,
                     });
-                    return;
+                    return false;
                 }
             },
         }
     }
 
     self.terminal.printInfo("Script completed.");
+    return true;
 }
 
+const self_heal_max_attempts = 3;
+
 /// Attempt to self-heal a failed command by asking the LLM to resolve it.
+/// Retries up to `self_heal_max_attempts` times on transient API errors.
 fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8) bool {
     var heal_arena = std.heap.ArenaAllocator.init(self.allocator);
     defer heal_arena.deinit();
     const ha = heal_arena.allocator();
 
-    // Build the self-healing prompt
     const prompt = std.fmt.allocPrint(ha, "{s}{s}{s}{s}{s}", .{
         self_heal_prompt_prefix,
         intent orelse "(no recorded intent)",
@@ -324,8 +328,19 @@ fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8)
         self_heal_prompt_page_state,
     }) catch return false;
 
-    self.processUserMessage(prompt, "") catch return false;
-    return true;
+    var attempt: u8 = 0;
+    while (attempt < self_heal_max_attempts) : (attempt += 1) {
+        self.processUserMessage(prompt, "") catch |err| {
+            self.printAllocError("self-heal attempt {d}/{d} failed: {s}", .{
+                attempt + 1,
+                self_heal_max_attempts,
+                @errorName(err),
+            });
+            continue;
+        };
+        return true;
+    }
+    return false;
 }
 
 fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []const u8) !void {
@@ -390,7 +405,9 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) []const u8 {
     const self: *Self = @ptrCast(@alignCast(ctx));
     self.terminal.printToolCall(tool_name, arguments);
-    const tool_result = self.tool_executor.call(allocator, tool_name, arguments) catch "Error: tool execution failed";
+    const tool_result = self.tool_executor.call(allocator, tool_name, arguments) catch |err| blk: {
+        break :blk std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
+    };
     self.terminal.printToolResult(tool_name, tool_result);
     return tool_result;
 }
@@ -432,6 +449,23 @@ fn toolCallToCommand(arena: std.mem.Allocator, tool_name: []const u8, arguments:
             .string => |s| .{ .eval_js = s },
             else => null,
         };
+    } else if (std.mem.eql(u8, tool_name, "waitForSelector")) blk: {
+        break :blk switch (obj.get("selector") orelse break :blk null) {
+            .string => |s| .{ .wait = s },
+            else => null,
+        };
+    } else if (std.mem.eql(u8, tool_name, "scroll")) blk: {
+        // Only record window scrolls — element scrolls use ephemeral backendNodeId.
+        if (obj.get("backendNodeId") != null) break :blk null;
+        const x: i32 = switch (obj.get("x") orelse std.json.Value{ .integer = 0 }) {
+            .integer => |i| @intCast(i),
+            else => 0,
+        };
+        const y: i32 = switch (obj.get("y") orelse std.json.Value{ .integer = 0 }) {
+            .integer => |i| @intCast(i),
+            else => 0,
+        };
+        break :blk .{ .scroll = .{ .x = x, .y = y } };
     } else null;
 }
 
@@ -447,8 +481,8 @@ fn getEnvApiKey(provider_type: Config.AiProvider) ?[:0]const u8 {
 fn defaultModel(provider_type: Config.AiProvider) []const u8 {
     return switch (provider_type) {
         .anthropic => "claude-haiku-4-5-20251001",
-        .openai => "gpt-5.4-nano-2026-03-17",
-        .gemini => "gemini-3.1-flash-lite-preview",
-        .ollama => "gemma4",
+        .openai => "gpt-4o-mini",
+        .gemini => "gemini-2.5-flash",
+        .ollama => "gemma3",
     };
 }

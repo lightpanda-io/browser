@@ -30,6 +30,7 @@ pub fn executeWithResult(self: *Self, a: std.mem.Allocator, cmd: Command.Command
         .click => |target| self.execClick(a, target),
         .type_cmd => |args| self.execType(a, args),
         .wait => |selector| self.callTool(a, "waitForSelector", buildJson(a, .{ .selector = selector })),
+        .scroll => |args| self.callTool(a, "scroll", buildJson(a, .{ .x = args.x, .y = args.y })),
         .tree => self.callTool(a, "semanticTree", ""),
         .markdown => self.callTool(a, "markdown", ""),
         .extract => |args| self.execExtract(a, args),
@@ -81,21 +82,9 @@ fn execClick(self: *Self, arena: std.mem.Allocator, raw_target: []const u8) Exec
 }
 
 fn execType(self: *Self, arena: std.mem.Allocator, args: Command.TypeArgs) ExecResult {
-    const selector = escapeJs(arena, substituteEnvVars(arena, args.selector));
-    const value = escapeJs(arena, substituteEnvVars(arena, args.value));
-
-    // Use JavaScript to set the value on the element matching the selector
-    const script = std.fmt.allocPrint(arena,
-        \\(function() {{
-        \\  var el = document.querySelector("{s}");
-        \\  if (!el) return "Error: element not found";
-        \\  el.value = "{s}";
-        \\  el.dispatchEvent(new Event("input", {{bubbles: true}}));
-        \\  return "Typed into " + el.tagName;
-        \\}})()
-    , .{ selector, value }) catch return .{ .output = "failed to build type script", .failed = true };
-
-    return self.callTool(arena, "eval", buildJson(arena, .{ .script = script }));
+    const selector = substituteEnvVars(arena, args.selector);
+    const value = substituteEnvVars(arena, args.value);
+    return self.callTool(arena, "fill", buildJson(arena, .{ .selector = selector, .value = value }));
 }
 
 fn execExtract(self: *Self, arena: std.mem.Allocator, args: Command.ExtractArgs) ExecResult {

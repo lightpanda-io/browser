@@ -13,8 +13,6 @@ const ansi_green = "\x1b[32m";
 const ansi_yellow = "\x1b[33m";
 const ansi_red = "\x1b[31m";
 
-history_path: ?[:0]const u8,
-
 const CommandInfo = struct { name: [:0]const u8, hint: [:0]const u8 };
 
 const commands = [_]CommandInfo{
@@ -22,6 +20,7 @@ const commands = [_]CommandInfo{
     .{ .name = "CLICK", .hint = " '<selector>'" },
     .{ .name = "TYPE", .hint = " '<selector>' '<value>'" },
     .{ .name = "WAIT", .hint = " '<selector>'" },
+    .{ .name = "SCROLL", .hint = " [x] [y]" },
     .{ .name = "TREE", .hint = "" },
     .{ .name = "MARKDOWN", .hint = "" },
     .{ .name = "MD", .hint = "" },
@@ -32,15 +31,11 @@ const commands = [_]CommandInfo{
     .{ .name = "EXIT", .hint = "" },
 };
 
-pub fn init(history_path: ?[:0]const u8) Self {
+pub fn init() Self {
     c.linenoiseSetMultiLine(1);
     c.linenoiseSetCompletionCallback(&completionCallback);
     c.linenoiseSetHintsCallback(&hintsCallback);
-    const self = Self{ .history_path = history_path };
-    if (history_path) |path| {
-        _ = c.linenoiseHistoryLoad(path.ptr);
-    }
-    return self;
+    return .{};
 }
 
 fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callconv(.c) void {
@@ -68,14 +63,11 @@ fn hintsCallback(buf: [*c]const u8, color: [*c]c_int, bold: [*c]c_int) callconv(
     return null;
 }
 
-pub fn readLine(self: *Self, prompt: [*:0]const u8) ?[]const u8 {
+pub fn readLine(_: *Self, prompt: [*:0]const u8) ?[]const u8 {
     const line = c.linenoise(prompt) orelse return null;
     const slice = std.mem.sliceTo(line, 0);
     if (slice.len > 0) {
         _ = c.linenoiseHistoryAdd(line);
-        if (self.history_path) |path| {
-            _ = c.linenoiseHistorySave(path.ptr);
-        }
     }
     return slice;
 }

@@ -247,7 +247,6 @@ pub const Agent = struct {
     model: ?[:0]const u8 = null,
     base_url: ?[:0]const u8 = null,
     system_prompt: ?[:0]const u8 = null,
-    repl: bool = true,
     script_file: ?[]const u8 = null,
     save: bool = false,
     self_heal: bool = false,
@@ -987,11 +986,6 @@ fn parseAgentArgs(
                 return error.InvalidArgument;
             };
             result.base_url = try allocator.dupeZ(u8, str);
-            continue;
-        }
-
-        if (std.mem.eql(u8, "--repl", opt)) {
-            result.repl = true;
             continue;
         }
 

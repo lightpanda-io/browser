@@ -169,25 +169,34 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
         .agent => |opts| {
             log.info(.app, "starting agent", .{});
 
-            var worker_thread = try std.Thread.spawn(.{}, agentThread, .{ allocator, app, opts });
-            defer worker_thread.join();
+            {
+                var worker_thread = try std.Thread.spawn(.{}, agentThread, .{ allocator, app, opts });
+                defer worker_thread.join();
 
-            app.network.run();
+                app.network.run();
+            }
+
+            if (agent_failed.load(.acquire)) return error.AgentFailed;
         },
         else => unreachable,
     }
 }
+
+var agent_failed: std.atomic.Value(bool) = .init(false);
 
 fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) void {
     defer app.network.stop();
 
     var agent_instance = lp.agent.Agent.init(allocator, app, opts) catch |err| {
         log.fatal(.app, "agent init error", .{ .err = err });
+        agent_failed.store(true, .release);
         return;
     };
     defer agent_instance.deinit();
 
-    agent_instance.run();
+    if (!agent_instance.run()) {
+        agent_failed.store(true, .release);
+    }
 }
 
 fn fetchThread(app: *App, url: [:0]const u8, fetch_opts: lp.FetchOpts) void {

@@ -10,11 +10,17 @@ pub const ExtractArgs = struct {
     file: ?[]const u8,
 };
 
+pub const ScrollArgs = struct {
+    x: i32 = 0,
+    y: i32 = 0,
+};
+
 pub const Command = union(enum) {
     goto: []const u8,
     click: []const u8,
     type_cmd: TypeArgs,
     wait: []const u8,
+    scroll: ScrollArgs,
     tree: void,
     markdown: void,
     extract: ExtractArgs,
@@ -27,8 +33,8 @@ pub const Command = union(enum) {
 
     pub fn isRecorded(self: Command) bool {
         return switch (self) {
-            .wait, .tree, .markdown, .comment, .exit => false,
-            .goto, .click, .type_cmd, .extract, .eval_js, .login, .accept_cookies => true,
+            .tree, .markdown, .comment, .exit => false,
+            .goto, .click, .type_cmd, .wait, .scroll, .extract, .eval_js, .login, .accept_cookies => true,
             .natural_language => |text| text.len > 0,
         };
     }
@@ -39,6 +45,7 @@ pub const Command = union(enum) {
             .click => |sel| try writer.print("CLICK '{s}'", .{sel}),
             .type_cmd => |args| try writer.print("TYPE '{s}' '{s}'", .{ args.selector, args.value }),
             .wait => |sel| try writer.print("WAIT '{s}'", .{sel}),
+            .scroll => |args| try writer.print("SCROLL {d} {d}", .{ args.x, args.y }),
             .tree => try writer.writeAll("TREE"),
             .markdown => try writer.writeAll("MARKDOWN"),
             .extract => |args| {
@@ -98,6 +105,23 @@ pub fn parse(line: []const u8) Command {
         const arg = extractQuoted(rest) orelse rest;
         if (arg.len == 0) return .{ .natural_language = trimmed };
         return .{ .wait = arg };
+    }
+
+    if (std.ascii.eqlIgnoreCase(cmd_word, "SCROLL")) {
+        // SCROLL          → scroll to (0, 0)
+        // SCROLL 100      → scroll y=100
+        // SCROLL 50 200   → scroll x=50, y=200
+        if (rest.len == 0) return .{ .scroll = .{} };
+        var it = std.mem.tokenizeAny(u8, rest, &std.ascii.whitespace);
+        const first = it.next() orelse return .{ .scroll = .{} };
+        const second = it.next();
+        if (second) |s| {
+            const x = std.fmt.parseInt(i32, first, 10) catch return .{ .natural_language = trimmed };
+            const y = std.fmt.parseInt(i32, s, 10) catch return .{ .natural_language = trimmed };
+            return .{ .scroll = .{ .x = x, .y = y } };
+        }
+        const y = std.fmt.parseInt(i32, first, 10) catch return .{ .natural_language = trimmed };
+        return .{ .scroll = .{ .x = 0, .y = y } };
     }
 
     if (std.ascii.eqlIgnoreCase(cmd_word, "TREE")) {
@@ -302,6 +326,29 @@ test "parse WAIT" {
     try std.testing.expectEqualStrings(".dashboard", cmd.wait);
 }
 
+test "parse SCROLL bare" {
+    const cmd = parse("SCROLL");
+    try std.testing.expectEqual(@as(i32, 0), cmd.scroll.x);
+    try std.testing.expectEqual(@as(i32, 0), cmd.scroll.y);
+}
+
+test "parse SCROLL single arg is y" {
+    const cmd = parse("SCROLL 500");
+    try std.testing.expectEqual(@as(i32, 0), cmd.scroll.x);
+    try std.testing.expectEqual(@as(i32, 500), cmd.scroll.y);
+}
+
+test "parse SCROLL two args" {
+    const cmd = parse("SCROLL 100 200");
+    try std.testing.expectEqual(@as(i32, 100), cmd.scroll.x);
+    try std.testing.expectEqual(@as(i32, 200), cmd.scroll.y);
+}
+
+test "parse SCROLL invalid falls through" {
+    const cmd = parse("SCROLL down");
+    try std.testing.expect(cmd == .natural_language);
+}
+
 test "parse TREE" {
     const cmd = parse("TREE");
     try std.testing.expect(cmd == .tree);
@@ -367,10 +414,11 @@ test "isRecorded" {
     try std.testing.expect(parse("GOTO https://example.com").isRecorded());
     try std.testing.expect(parse("CLICK \"btn\"").isRecorded());
     try std.testing.expect(parse("TYPE \"sel\" \"val\"").isRecorded());
+    try std.testing.expect(parse("WAIT \".x\"").isRecorded());
+    try std.testing.expect(parse("SCROLL 0 200").isRecorded());
     try std.testing.expect(parse("EXTRACT \".title\"").isRecorded());
     try std.testing.expect(parse("EVAL \"1+1\"").isRecorded());
     try std.testing.expect(!parse("TREE").isRecorded());
-    try std.testing.expect(!parse("WAIT \".x\"").isRecorded());
     try std.testing.expect(!parse("MARKDOWN").isRecorded());
     try std.testing.expect(!parse("md").isRecorded());
 }
