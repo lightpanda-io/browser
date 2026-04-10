@@ -177,6 +177,13 @@ pub fn httpCacheDir(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn cookiesFile(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.common.cookies_file,
+        else => null,
+    };
+}
+
 pub fn cdpTimeout(self: *const Config) usize {
     return switch (self.mode) {
         .serve => |opts| if (opts.timeout > 604_800) 604_800_000 else @as(usize, opts.timeout) * 1000,
@@ -296,6 +303,7 @@ pub const Common = struct {
     user_agent_suffix: ?[]const u8 = null,
     user_agent: ?[]const u8 = null,
     http_cache_dir: ?[]const u8 = null,
+    cookies_file: ?[]const u8 = null,
 
     web_bot_auth_key_file: ?[]const u8 = null,
     web_bot_auth_keyid: ?[]const u8 = null,
@@ -433,6 +441,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Path to a directory to use as a Filesystem Cache for network resources.
         \\                Omitting this will result is no caching.
         \\                Defaults to no caching.
+        \\
+        \\--cookies-file
+        \\                Path to a JSON file for cookie persistence. Cookies are loaded
+        \\                from this file at startup and saved back on exit.
+        \\                Format: [{name, value, domain, path, expires, secure, httpOnly}]
+        \\                Defaults to no persistence.
     ;
 
     //                                                                     MAX_HELP_LEN|
@@ -1142,6 +1156,15 @@ fn parseCommonArg(
             return error.InvalidArgument;
         };
         common.http_cache_dir = try allocator.dupe(u8, str);
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--cookies-file", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--cookies-file" });
+            return error.InvalidArgument;
+        };
+        common.cookies_file = try allocator.dupe(u8, str);
         return true;
     }
 
