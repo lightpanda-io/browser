@@ -55,14 +55,14 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
         .arena_pool = undefined,
     };
 
-    app.network = try Network.init(allocator, app, config);
-    errdefer app.network.deinit();
-
     app.platform = try Platform.init();
     errdefer app.platform.deinit();
 
     app.snapshot = try Snapshot.load();
     errdefer app.snapshot.deinit();
+
+    app.network = try Network.init(allocator, app, config);
+    errdefer app.network.deinit();
 
     app.app_dir_path = getAndMakeAppDir(allocator);
 
