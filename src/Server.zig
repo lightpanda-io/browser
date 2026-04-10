@@ -755,20 +755,16 @@ test "server: 404" {
 }
 
 test "server: get /json/version" {
-    const expected_response =
-        "HTTP/1.1 200 OK\r\n" ++
-        "Content-Length: 48\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-        "{\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"}";
-
     {
         // twice on the same connection
         var c = try createTestClient();
         defer c.deinit();
 
         const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
-        try testing.expectEqual(expected_response, res1);
+        try testing.expect(std.mem.startsWith(u8, res1, "HTTP/1.1 200 OK\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res1, "\"Browser\": \"Lightpanda/") != null);
+        try testing.expect(std.mem.indexOf(u8, res1, "\"Protocol-Version\": \"1.3\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res1, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
     }
 
     {
@@ -777,7 +773,8 @@ test "server: get /json/version" {
         defer c.deinit();
 
         const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
-        try testing.expectEqual(expected_response, res1);
+        try testing.expect(std.mem.startsWith(u8, res1, "HTTP/1.1 200 OK\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res1, "\"Browser\": \"Lightpanda/") != null);
     }
 }
 
