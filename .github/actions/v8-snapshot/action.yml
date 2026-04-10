@@ -1,6 +1,16 @@
 name: "V8 snaphsot"
 description: "Generate v8 snapshot"
 
+inputs:
+  arch:
+    description: 'CPU arch used to select the v8 lib'
+    required: false
+    default: 'x86_64'
+  os:
+    description: 'OS used to select the v8 lib'
+    required: false
+    default: 'linux'
+
 runs:
   using: "composite"
 
@@ -9,7 +19,7 @@ runs:
       # snapshot.
     - name: V8 snapshot cache key
       id: snapshot_cache_key
-      run: echo "hash=v8-snapshot-$(git log -n 1 --pretty=format:%H --
+      run: echo "hash=v8-snapshot-${{ inputs.os }}_${{ inputs.arch }}-$(git log -n 1 --pretty=format:%H --
                  src/browser/js/bridge.zig
                  src/browser/js/Snapshot.zig
                  )" >> "$GITHUB_OUTPUT"
