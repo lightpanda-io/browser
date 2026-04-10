@@ -494,15 +494,14 @@ fn buildJSONVersionResponse(
             .message = "when --host is set to 0.0.0.0 consider setting --advertise-host to a reachable address",
         });
     }
-    const version = lp.build_config.version;
     const body_format =
         "{{" ++
-        "\"Browser\": \"Lightpanda/{s}\", " ++
+        "\"Browser\": \"Lightpanda/1.0\", " ++
         "\"Protocol-Version\": \"1.3\", " ++
-        "\"User-Agent\": \"Lightpanda/{s}\", " ++
+        "\"User-Agent\": \"Lightpanda/1.0\", " ++
         "\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"" ++
         "}}";
-    const body_len = std.fmt.count(body_format, .{ version, version, host, port });
+    const body_len = std.fmt.count(body_format, .{ host, port });
 
     // We send a Connection: Close (and actually close the connection)
     // because chromedp (Go driver) sends a request to /json/version and then
@@ -516,7 +515,7 @@ fn buildJSONVersionResponse(
         "Connection: Close\r\n" ++
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
         body_format;
-    return try std.fmt.allocPrint(app.allocator, response_format, .{ body_len, version, version, host, port });
+    return try std.fmt.allocPrint(app.allocator, response_format, .{ body_len, host, port });
 }
 
 const empty_json_list_response =
