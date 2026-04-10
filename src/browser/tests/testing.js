@@ -37,7 +37,13 @@
 
   function expectError(expected, fn) {
     withError((err) => {
-      expectEqual(true, err.toString().includes(expected));
+      if (!err.toString().includes(expected)) {
+        console.error(`Expecte error to contains: ${expected}, was: ${err.toString()}`);
+        expectEqual(true, false);
+      } else {
+        // to record a successful case
+        expectTrue(true);
+      }
     }, fn);
   }
 

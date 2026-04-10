@@ -220,7 +220,7 @@ fn createTarget(cmd: *CDP.Command) !void {
     }
 
     if (!std.mem.eql(u8, "about:blank", params.url)) {
-        const encoded_url = try URL.ensureEncoded(page.call_arena, params.url);
+        const encoded_url = try URL.ensureEncoded(page.call_arena, params.url, "UTF-8");
         try page.navigate(
             encoded_url,
             .{ .reason = .address_bar, .kind = .{ .push = null } },

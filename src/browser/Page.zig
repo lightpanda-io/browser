@@ -207,6 +207,9 @@ base_url: ?[:0]const u8 = null,
 // referer header cache.
 referer_header: ?[:0]const u8 = null,
 
+// Document charset (canonical name from encoding_rs, static lifetime)
+charset: []const u8 = "UTF-8",
+
 // Arbitrary buffer. Need to temporarily lowercase a value? Use this. No lifetime
 // guarantee - it's valid until someone else uses it.
 buf: [BUF_SIZE]u8 = undefined,
@@ -658,7 +661,7 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
             arena,
             page_base,
             request_url,
-            .{ .always_dupe = true, .encode = true },
+            .{ .always_dupe = true, .encoding = originator.charset },
         );
         break :blk .{ u, false };
     };
@@ -962,9 +965,13 @@ fn pageDataCallback(response: HttpClient.Response, data: []const u8) !void {
 
         switch (mime.content_type) {
             .text_html => {
-                self._parse_state = .{ .html = .{
-                    .mime = mime,
-                } };
+                // Normalize and store the charset using encoding_rs canonical names
+                const charset_str = mime.charsetString();
+                const info = h5e.encoding_for_label(charset_str.ptr, charset_str.len);
+                if (info.isValid()) {
+                    self.charset = info.name();
+                }
+                self._parse_state = .{ .html = .empty };
             },
             .application_json, .text_javascript, .text_css, .text_plain => {
                 var arr: std.ArrayList(u8) = .empty;
@@ -979,7 +986,7 @@ fn pageDataCallback(response: HttpClient.Response, data: []const u8) !void {
     }
 
     switch (self._parse_state) {
-        .html => |*html| try html.buf.appendSlice(self.arena, data),
+        .html => |*html| try html.appendSlice(self.arena, data),
         .text => |*buf| {
             // we have to escape the data...
             var v = data;
@@ -1028,12 +1035,13 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
     var parser = Parser.init(parse_arena, self.document.asNode(), self);
 
     switch (self._parse_state) {
-        .html => |*html_state| {
-            const raw_html = html_state.buf.items;
-            if (html_state.needsEncodingConversion()) {
-                parser.parseWithEncoding(raw_html, html_state.mime.charsetString());
-            } else {
+        .html => |*html_buf| {
+            const raw_html = html_buf.items;
+
+            if (std.mem.eql(u8, self.charset, "UTF-8")) {
                 parser.parse(raw_html);
+            } else {
+                parser.parseWithEncoding(raw_html, self.charset);
             }
             self._script_manager.staticScriptsDone();
             self._parse_state = .complete;
@@ -1188,7 +1196,7 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
             self.call_arena, // ok to use, page.navigate dupes this
             self.base(),
             src,
-            .{ .encode = true },
+            .{ .encoding = self.charset },
         );
     };
 
@@ -3164,21 +3172,11 @@ const ParseState = union(enum) {
     pre,
     complete,
     err: anyerror,
-    html: Html,
+    html: std.ArrayList(u8),
     text: std.ArrayList(u8),
     image: std.ArrayList(u8),
     raw: std.ArrayList(u8),
     raw_done: []const u8,
-
-    const Html = struct {
-        mime: Mime,
-        buf: std.ArrayList(u8) = .empty,
-
-        fn needsEncodingConversion(self: *const Html) bool {
-            const charset = self.mime.charsetString();
-            return !std.ascii.eqlIgnoreCase(charset, "utf-8") and !std.ascii.eqlIgnoreCase(charset, "utf8");
-        }
-    };
 };
 
 const LoadState = enum {
@@ -3628,9 +3626,6 @@ fn asUint(comptime string: anytype) std.meta.Int(
 
 const testing = @import("../testing.zig");
 test "WebApi: Page" {
-    const filter: testing.LogFilter = .init(&.{ .http, .js });
-    defer filter.deinit();
-
     try testing.htmlRunner("page", .{});
 }
 

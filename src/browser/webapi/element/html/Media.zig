@@ -235,8 +235,7 @@ pub fn getSrc(self: *const Media, page: *Page) ![]const u8 {
     if (src.len == 0) {
         return "";
     }
-    const URL = @import("../../URL.zig");
-    return URL.resolve(page.call_arena, page.base(), src, .{ .encode = true });
+    return element.asConstNode().resolveURL(src, page, .{});
 }
 
 pub fn setSrc(self: *Media, value: []const u8, page: *Page) !void {

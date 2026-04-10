@@ -286,7 +286,7 @@ fn navigate(cmd: *CDP.Command) !void {
         page = try session.replacePage();
     }
 
-    const encoded_url = try URL.ensureEncoded(page.call_arena, params.url);
+    const encoded_url = try URL.ensureEncoded(page.call_arena, params.url, "UTF-8");
     try page.navigate(encoded_url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
