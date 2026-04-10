@@ -541,6 +541,13 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\Starts an interactive AI agent that can browse the web
         \\Example: {0s} agent --provider anthropic --model claude-haiku-4-5-20251001
         \\Example: {0s} agent --provider ollama --model gemma4
+        \\Example: {0s} agent script.panda            (replay a recorded script)
+        \\Example: {0s} agent --save script.panda     (record a new script)
+        \\
+        \\Arguments:
+        \\[script_file]   Optional path to a .panda script.
+        \\                Without --save: replays the script (no LLM calls).
+        \\                With --save: records the agent session into this file.
         \\
         \\Options:
         \\--provider      The AI provider: anthropic, openai, gemini, or ollama.
@@ -554,6 +561,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Ollama default: http://localhost:11434/v1
         \\
         \\--system-prompt Override the default system prompt.
+        \\
+        \\--save          Record the session's commands into the given script_file.
+        \\                Requires a positional script_file argument.
+        \\
+        \\--self-heal     On tool errors, ask the model to recover by retrying
+        \\                with fresh page state instead of aborting.
         \\
         \\The API key is read from the environment:
         \\ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
