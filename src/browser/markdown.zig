@@ -594,6 +594,38 @@ test "browser.markdown: block link" {
     );
 }
 
+test "browser.markdown: block link with aria-label" {
+    try testMarkdownHTML(
+        \\<a href="https://example.com" aria-label="Docs">
+        \\  <h3>Title</h3>
+        \\  <p>Description</p>
+        \\</a>
+    ,
+        \\
+        \\### Title
+        \\
+        \\Description
+        \\[Docs](https://example.com)
+        \\
+    );
+}
+
+test "browser.markdown: block link with title" {
+    try testMarkdownHTML(
+        \\<a href="https://example.com" title="Docs">
+        \\  <h3>Title</h3>
+        \\  <p>Description</p>
+        \\</a>
+    ,
+        \\
+        \\### Title
+        \\
+        \\Description
+        \\[Docs](https://example.com)
+        \\
+    );
+}
+
 test "browser.markdown: inline link" {
     try testMarkdownHTML(
         \\<p>Visit <a href="https://example.com">Example</a>.</p>
