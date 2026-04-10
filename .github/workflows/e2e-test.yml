@@ -51,9 +51,12 @@ jobs:
 
       - uses: ./.github/actions/install
 
-      # Use the commit hash of src/browser/js/bridge.zig as cache key for
+      # Use the commit hash of bridge.zig and Snapshot.zig as cache key for
       # snapshot.
-      - run: echo "hash=v8-snapshot-$(git log -n 1 --pretty=format:%H -- src/browser/js/bridge.zig)" >> "$GITHUB_OUTPUT"
+      - run: echo "hash=v8-snapshot-$(git log -n 1 --pretty=format:%H -- \
+                   src/browser/js/bridge.zig \
+                   src/browser/js/Snapshot.zig \
+                   )" >> "$GITHUB_OUTPUT"
         id: snapshot_cache_key
 
       # Fetch the cache for snapshot
