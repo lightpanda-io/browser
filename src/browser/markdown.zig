@@ -300,9 +300,11 @@ const Context = struct {
                     try self.renderChildren(el.asNode());
                     if (href) |h| {
                         if (!self.state.last_char_was_newline) try self.writer.writeByte('\n');
-                        try self.writer.writeAll("([](");
+                        try self.writer.writeByte('[');
+                        try self.writer.writeAll(label orelse h);
+                        try self.writer.writeAll("](");
                         try self.writer.writeAll(h);
-                        try self.writer.writeAll("))\n");
+                        try self.writer.writeAll(")\n");
                         self.state.last_char_was_newline = true;
                     }
                     return;
@@ -589,7 +591,39 @@ test "browser.markdown: block link" {
         \\### Title
         \\
         \\Description
-        \\([](https://example.com))
+        \\[https://example.com](https://example.com)
+        \\
+    );
+}
+
+test "browser.markdown: block link with aria-label" {
+    try testMarkdownHTML(
+        \\<a href="https://example.com" aria-label="Docs">
+        \\  <h3>Title</h3>
+        \\  <p>Description</p>
+        \\</a>
+    ,
+        \\
+        \\### Title
+        \\
+        \\Description
+        \\[Docs](https://example.com)
+        \\
+    );
+}
+
+test "browser.markdown: block link with title" {
+    try testMarkdownHTML(
+        \\<a href="https://example.com" title="Docs">
+        \\  <h3>Title</h3>
+        \\  <p>Description</p>
+        \\</a>
+    ,
+        \\
+        \\### Title
+        \\
+        \\Description
+        \\[Docs](https://example.com)
         \\
     );
 }
