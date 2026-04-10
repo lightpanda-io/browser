@@ -243,6 +243,79 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     try testing.expect(result.isTrue());
 }
 
+test "MCP - Actions by selector: hover, selectOption, setChecked" {
+    defer testing.reset();
+    const aa = testing.arena_allocator;
+
+    var out: std.io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    const page = &server.session.page.?;
+
+    {
+        // Hover by selector
+        const msg =
+            \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hover","arguments":{"selector":"#hoverTarget"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Hovered element") != null);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #hoverTarget") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // SelectOption by selector
+        const msg =
+            \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"selectOption","arguments":{"selector":"#sel2","value":"c"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Selected option") != null);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #sel2") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // SetChecked checkbox by selector
+        const msg =
+            \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"setChecked","arguments":{"selector":"#chk","checked":true}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #chk") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // SetChecked radio by selector
+        const msg =
+            \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"setChecked","arguments":{"selector":"#rad","checked":true}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #rad") != null);
+        out.clearRetainingCapacity();
+    }
+
+    // Verify the underlying actions actually fired their handlers
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const result = try ls.local.exec(
+        \\ window.hovered === true &&
+        \\ window.sel2Changed === 'c' &&
+        \\ window.chkClicked === true && window.chkChanged === true &&
+        \\ window.radClicked === true && window.radChanged === true
+    , null);
+
+    try testing.expect(result.isTrue());
+}
+
 test "MCP - findElement" {
     defer testing.reset();
     const aa = testing.arena_allocator;

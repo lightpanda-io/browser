@@ -15,12 +15,25 @@ pub const ScrollArgs = struct {
     y: i32 = 0,
 };
 
+pub const SelectArgs = struct {
+    selector: []const u8,
+    value: []const u8,
+};
+
+pub const CheckArgs = struct {
+    selector: []const u8,
+    checked: bool,
+};
+
 pub const Command = union(enum) {
     goto: []const u8,
     click: []const u8,
     type_cmd: TypeArgs,
     wait: []const u8,
     scroll: ScrollArgs,
+    hover: []const u8,
+    select: SelectArgs,
+    check: CheckArgs,
     tree: void,
     markdown: void,
     extract: ExtractArgs,
@@ -34,7 +47,7 @@ pub const Command = union(enum) {
     pub fn isRecorded(self: Command) bool {
         return switch (self) {
             .tree, .markdown, .comment, .exit => false,
-            .goto, .click, .type_cmd, .wait, .scroll, .extract, .eval_js, .login, .accept_cookies => true,
+            .goto, .click, .type_cmd, .wait, .scroll, .hover, .select, .check, .extract, .eval_js, .login, .accept_cookies => true,
             .natural_language => |text| text.len > 0,
         };
     }
@@ -46,6 +59,12 @@ pub const Command = union(enum) {
             .type_cmd => |args| try writer.print("TYPE '{s}' '{s}'", .{ args.selector, args.value }),
             .wait => |sel| try writer.print("WAIT '{s}'", .{sel}),
             .scroll => |args| try writer.print("SCROLL {d} {d}", .{ args.x, args.y }),
+            .hover => |sel| try writer.print("HOVER '{s}'", .{sel}),
+            .select => |args| try writer.print("SELECT '{s}' '{s}'", .{ args.selector, args.value }),
+            .check => |args| if (args.checked)
+                try writer.print("CHECK '{s}'", .{args.selector})
+            else
+                try writer.print("CHECK '{s}' false", .{args.selector}),
             .tree => try writer.writeAll("TREE"),
             .markdown => try writer.writeAll("MARKDOWN"),
             .extract => |args| {
@@ -122,6 +141,37 @@ pub fn parse(line: []const u8) Command {
         }
         const y = std.fmt.parseInt(i32, first, 10) catch return .{ .natural_language = trimmed };
         return .{ .scroll = .{ .x = 0, .y = y } };
+    }
+
+    if (std.ascii.eqlIgnoreCase(cmd_word, "HOVER")) {
+        const arg = extractQuoted(rest) orelse rest;
+        if (arg.len == 0) return .{ .natural_language = trimmed };
+        return .{ .hover = arg };
+    }
+
+    if (std.ascii.eqlIgnoreCase(cmd_word, "SELECT")) {
+        const first = extractQuotedWithRemainder(rest) orelse return .{ .natural_language = trimmed };
+        const second_arg = std.mem.trim(u8, first.remainder, &std.ascii.whitespace);
+        const second = extractQuoted(second_arg) orelse return .{ .natural_language = trimmed };
+        return .{ .select = .{ .selector = first.value, .value = second } };
+    }
+
+    if (std.ascii.eqlIgnoreCase(cmd_word, "CHECK")) {
+        // CHECK '<sel>'         → checked = true
+        // CHECK '<sel>' true    → checked = true
+        // CHECK '<sel>' false   → checked = false
+        const first = extractQuotedWithRemainder(rest) orelse return .{ .natural_language = trimmed };
+        const after = std.mem.trim(u8, first.remainder, &std.ascii.whitespace);
+        if (after.len == 0) {
+            return .{ .check = .{ .selector = first.value, .checked = true } };
+        }
+        if (std.ascii.eqlIgnoreCase(after, "true")) {
+            return .{ .check = .{ .selector = first.value, .checked = true } };
+        }
+        if (std.ascii.eqlIgnoreCase(after, "false")) {
+            return .{ .check = .{ .selector = first.value, .checked = false } };
+        }
+        return .{ .natural_language = trimmed };
     }
 
     if (std.ascii.eqlIgnoreCase(cmd_word, "TREE")) {
@@ -349,6 +399,49 @@ test "parse SCROLL invalid falls through" {
     try std.testing.expect(cmd == .natural_language);
 }
 
+test "parse HOVER" {
+    const cmd = parse("HOVER '#menu'");
+    try std.testing.expectEqualStrings("#menu", cmd.hover);
+}
+
+test "parse HOVER missing selector" {
+    const cmd = parse("HOVER");
+    try std.testing.expect(cmd == .natural_language);
+}
+
+test "parse SELECT two args" {
+    const cmd = parse("SELECT '#country' 'France'");
+    try std.testing.expectEqualStrings("#country", cmd.select.selector);
+    try std.testing.expectEqualStrings("France", cmd.select.value);
+}
+
+test "parse SELECT missing value" {
+    const cmd = parse("SELECT '#country'");
+    try std.testing.expect(cmd == .natural_language);
+}
+
+test "parse CHECK default true" {
+    const cmd = parse("CHECK '#agree'");
+    try std.testing.expectEqualStrings("#agree", cmd.check.selector);
+    try std.testing.expectEqual(true, cmd.check.checked);
+}
+
+test "parse CHECK explicit true" {
+    const cmd = parse("CHECK '#agree' true");
+    try std.testing.expectEqual(true, cmd.check.checked);
+}
+
+test "parse CHECK explicit false" {
+    const cmd = parse("CHECK '#newsletter' false");
+    try std.testing.expectEqualStrings("#newsletter", cmd.check.selector);
+    try std.testing.expectEqual(false, cmd.check.checked);
+}
+
+test "parse CHECK invalid bool falls through" {
+    const cmd = parse("CHECK '#x' maybe");
+    try std.testing.expect(cmd == .natural_language);
+}
+
 test "parse TREE" {
     const cmd = parse("TREE");
     try std.testing.expect(cmd == .tree);
@@ -416,6 +509,10 @@ test "isRecorded" {
     try std.testing.expect(parse("TYPE \"sel\" \"val\"").isRecorded());
     try std.testing.expect(parse("WAIT \".x\"").isRecorded());
     try std.testing.expect(parse("SCROLL 0 200").isRecorded());
+    try std.testing.expect(parse("HOVER '#menu'").isRecorded());
+    try std.testing.expect(parse("SELECT '#sel' 'a'").isRecorded());
+    try std.testing.expect(parse("CHECK '#chk'").isRecorded());
+    try std.testing.expect(parse("CHECK '#chk' false").isRecorded());
     try std.testing.expect(parse("EXTRACT \".title\"").isRecorded());
     try std.testing.expect(parse("EVAL \"1+1\"").isRecorded());
     try std.testing.expect(!parse("TREE").isRecorded());

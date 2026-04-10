@@ -67,6 +67,10 @@ test "record writes state-mutating commands" {
     recorder.record(Command.parse("WAIT \".dashboard\""));
     recorder.record(Command.parse("MARKDOWN")); // should be skipped
     recorder.record(Command.parse("SCROLL 0 200"));
+    recorder.record(Command.parse("HOVER '#menu'"));
+    recorder.record(Command.parse("SELECT '#country' 'France'"));
+    recorder.record(Command.parse("CHECK '#agree'"));
+    recorder.record(Command.parse("CHECK '#newsletter' false"));
     recorder.record(Command.parse("EXTRACT \".title\""));
     recorder.recordComment("LOGIN");
 
@@ -80,6 +84,10 @@ test "record writes state-mutating commands" {
     try std.testing.expect(std.mem.indexOf(u8, content, "CLICK 'Login'\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "WAIT '.dashboard'\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "SCROLL 0 200\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "HOVER '#menu'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "SELECT '#country' 'France'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "CHECK '#agree'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "CHECK '#newsletter' false\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "EXTRACT '.title'\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "\n# LOGIN\n") != null);
     // Verify read-only commands are NOT present

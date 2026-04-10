@@ -27,10 +27,19 @@ pub const ExecResult = struct {
 pub fn executeWithResult(self: *Self, a: std.mem.Allocator, cmd: Command.Command) ExecResult {
     return switch (cmd) {
         .goto => |url| self.execGoto(a, url),
-        .click => |target| self.execClick(a, target),
+        .click => |sel| self.callTool(a, "click", buildJson(a, .{ .selector = substituteEnvVars(a, sel) })),
         .type_cmd => |args| self.execType(a, args),
         .wait => |selector| self.callTool(a, "waitForSelector", buildJson(a, .{ .selector = selector })),
         .scroll => |args| self.callTool(a, "scroll", buildJson(a, .{ .x = args.x, .y = args.y })),
+        .hover => |sel| self.callTool(a, "hover", buildJson(a, .{ .selector = substituteEnvVars(a, sel) })),
+        .select => |args| self.callTool(a, "selectOption", buildJson(a, .{
+            .selector = substituteEnvVars(a, args.selector),
+            .value = substituteEnvVars(a, args.value),
+        })),
+        .check => |args| self.callTool(a, "setChecked", buildJson(a, .{
+            .selector = substituteEnvVars(a, args.selector),
+            .checked = args.checked,
+        })),
         .tree => self.callTool(a, "semanticTree", ""),
         .markdown => self.callTool(a, "markdown", ""),
         .extract => |args| self.execExtract(a, args),
@@ -59,26 +68,6 @@ fn callTool(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, argume
 fn execGoto(self: *Self, arena: std.mem.Allocator, raw_url: []const u8) ExecResult {
     const url = substituteEnvVars(arena, raw_url);
     return self.callTool(arena, "goto", buildJson(arena, .{ .url = url }));
-}
-
-fn execClick(self: *Self, arena: std.mem.Allocator, raw_target: []const u8) ExecResult {
-    const target = substituteEnvVars(arena, raw_target);
-
-    // Try as CSS selector first
-    const selector_result = self.callTool(arena, "click", buildJson(arena, .{ .selector = target }));
-    if (!selector_result.failed) return selector_result;
-
-    // Fall back to text search in interactive elements
-    const elements_result = self.tool_executor.call(arena, "interactiveElements", "") catch
-        return .{ .output = "failed to get interactive elements", .failed = true };
-
-    if (findNodeIdByText(arena, elements_result, target)) |node_id| {
-        const args = std.fmt.allocPrint(arena, "{{\"backendNodeId\":{d}}}", .{node_id}) catch
-            return .{ .output = "failed to build click args", .failed = true };
-        return self.callTool(arena, "click", args);
-    }
-
-    return .{ .output = "could not find element matching the target", .failed = true };
 }
 
 fn execType(self: *Self, arena: std.mem.Allocator, args: Command.TypeArgs) ExecResult {
@@ -152,32 +141,6 @@ fn sanitizePath(path: []const u8) ?[]const u8 {
     }
 
     return path;
-}
-
-const ElementMatch = struct {
-    backendNodeId: ?u32 = null,
-    name: ?[]const u8 = null,
-    value: ?[]const u8 = null,
-    elementName: ?[]const u8 = null,
-    placeholder: ?[]const u8 = null,
-};
-
-fn findNodeIdByText(arena: std.mem.Allocator, elements_json: []const u8, target: []const u8) ?u32 {
-    const elements = std.json.parseFromSliceLeaky([]ElementMatch, arena, elements_json, .{
-        .ignore_unknown_fields = true,
-    }) catch return null;
-
-    for (elements) |el| {
-        const fields = [_]?[]const u8{ el.name, el.value, el.elementName, el.placeholder };
-        for (fields) |maybe_field| {
-            if (maybe_field) |field| {
-                if (std.ascii.indexOfIgnoreCase(field, target) != null) {
-                    return el.backendNodeId;
-                }
-            }
-        }
-    }
-    return null;
 }
 
 fn buildJson(arena: std.mem.Allocator, value: anytype) []const u8 {
@@ -256,36 +219,4 @@ test "substituteEnvVars bare dollar" {
 
     const result = substituteEnvVars(arena.allocator(), "price is $ 5");
     try std.testing.expectEqualStrings("price is $ 5", result);
-}
-
-test "findNodeIdByText" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    // matches name field
-    try std.testing.expectEqual(@as(?u32, 42), findNodeIdByText(a,
-        \\[{"backendNodeId":42,"tagName":"button","role":"button","name":"Sign In","type":"native","tabIndex":0}]
-    , "Sign In"));
-
-    // matches case-insensitively
-    try std.testing.expectEqual(@as(?u32, 7), findNodeIdByText(a,
-        \\[{"backendNodeId":7,"tagName":"a","role":"link","name":"Login Here","type":"native","tabIndex":0}]
-    , "login here"));
-
-    // matches elementName
-    try std.testing.expectEqual(@as(?u32, 10), findNodeIdByText(a,
-        \\[{"backendNodeId":10,"tagName":"input","role":null,"name":null,"type":"native","tabIndex":0,"elementName":"username"}]
-    , "username"));
-
-    // returns null on no match
-    try std.testing.expectEqual(@as(?u32, null), findNodeIdByText(a,
-        \\[{"backendNodeId":1,"tagName":"button","role":"button","name":"Submit","type":"native","tabIndex":0}]
-    , "Cancel"));
-
-    // handles empty array
-    try std.testing.expectEqual(@as(?u32, null), findNodeIdByText(a, "[]", "anything"));
-
-    // handles invalid json
-    try std.testing.expectEqual(@as(?u32, null), findNodeIdByText(a, "not json", "test"));
 }

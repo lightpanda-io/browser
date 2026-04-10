@@ -23,8 +23,9 @@ const default_system_prompt =
     \\before clicking or filling forms. Be concise in your responses.
     \\
     \\IMPORTANT RULES:
-    \\- NEVER use backendNodeId with click or fill tools. Always use a CSS selector.
-    \\  Use findElement to resolve a description into a CSS selector if needed.
+    \\- NEVER use backendNodeId with click, fill, hover, selectOption, or setChecked.
+    \\  Always use a CSS selector. Use findElement to resolve a description into a
+    \\  CSS selector if needed.
     \\  Example: click with selector "#login-btn", NOT with backendNodeId 42.
     \\- Use specific CSS selectors that uniquely identify elements. Include
     \\  distinguishing attributes like value, name, or position to avoid ambiguity.
@@ -470,6 +471,35 @@ fn toolCallToCommand(arena: std.mem.Allocator, tool_name: []const u8, arguments:
             else => 0,
         };
         break :blk .{ .scroll = .{ .x = x, .y = y } };
+    } else if (std.mem.eql(u8, tool_name, "hover")) blk: {
+        if (obj.get("selector")) |sel_val| {
+            break :blk switch (sel_val) {
+                .string => |s| .{ .hover = s },
+                else => null,
+            };
+        }
+        // backendNodeId-only path stays unrecordable
+        break :blk null;
+    } else if (std.mem.eql(u8, tool_name, "selectOption")) blk: {
+        const sel = switch (obj.get("selector") orelse break :blk null) {
+            .string => |s| s,
+            else => break :blk null,
+        };
+        const val = switch (obj.get("value") orelse break :blk null) {
+            .string => |s| s,
+            else => break :blk null,
+        };
+        break :blk .{ .select = .{ .selector = sel, .value = val } };
+    } else if (std.mem.eql(u8, tool_name, "setChecked")) blk: {
+        const sel = switch (obj.get("selector") orelse break :blk null) {
+            .string => |s| s,
+            else => break :blk null,
+        };
+        const checked = switch (obj.get("checked") orelse break :blk null) {
+            .bool => |b| b,
+            else => break :blk null,
+        };
+        break :blk .{ .check = .{ .selector = sel, .checked = checked } };
     } else null;
 }
 

@@ -197,14 +197,14 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "hover",
-        .description = "Hover over an element, triggering mouseover and mouseenter events. Useful for menus, tooltips, and hover states.",
+        .description = "Hover over an element, triggering mouseover and mouseenter events. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Useful for menus, tooltips, and hover states.",
         .input_schema = minify(
             \\{
             \\  "type": "object",
             \\  "properties": {
+            \\    "selector": { "type": "string", "description": "CSS selector of the element to hover over. Preferred over backendNodeId." },
             \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to hover over." }
-            \\  },
-            \\  "required": ["backendNodeId"]
+            \\  }
             \\}
         ),
     },
@@ -224,29 +224,31 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "selectOption",
-        .description = "Select an option in a <select> dropdown element by its value. Dispatches input and change events.",
+        .description = "Select an option in a <select> dropdown element by its value. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Dispatches input and change events.",
         .input_schema = minify(
             \\{
             \\  "type": "object",
             \\  "properties": {
+            \\    "selector": { "type": "string", "description": "CSS selector of the <select> element. Preferred over backendNodeId." },
             \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the <select> element." },
             \\    "value": { "type": "string", "description": "The value of the option to select." }
             \\  },
-            \\  "required": ["backendNodeId", "value"]
+            \\  "required": ["value"]
             \\}
         ),
     },
     .{
         .name = "setChecked",
-        .description = "Check or uncheck a checkbox or radio button. Dispatches input, change, and click events.",
+        .description = "Check or uncheck a checkbox or radio button. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Dispatches input, change, and click events.",
         .input_schema = minify(
             \\{
             \\  "type": "object",
             \\  "properties": {
+            \\    "selector": { "type": "string", "description": "CSS selector of the checkbox or radio input element. Preferred over backendNodeId." },
             \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the checkbox or radio input element." },
             \\    "checked": { "type": "boolean", "description": "Whether to check (true) or uncheck (false) the element." }
             \\  },
-            \\  "required": ["backendNodeId", "checked"]
+            \\  "required": ["checked"]
             \\}
         ),
     },
@@ -681,9 +683,17 @@ fn execWaitForSelector(session: *lp.Session, registry: *CDPNode.Registry, arena:
 }
 
 fn execHover(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
-    const Params = struct { backendNodeId: CDPNode.Id };
+    const Params = struct {
+        backendNodeId: ?CDPNode.Id = null,
+        selector: ?[]const u8 = null,
+    };
     const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
-    const resolved = try resolveNodeAndPage(session, registry, args.backendNodeId);
+    const resolved = if (args.selector) |sel|
+        try resolveBySelector(session, sel)
+    else if (args.backendNodeId) |nid|
+        try resolveNodeAndPage(session, registry, nid)
+    else
+        return ToolError.InvalidParams;
 
     lp.actions.hover(resolved.node, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) return ToolError.InvalidParams;
@@ -691,8 +701,13 @@ fn execHover(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
     };
 
     const page_title = resolved.page.getTitle() catch null;
+    if (args.selector) |sel| {
+        return std.fmt.allocPrint(arena, "Hovered element (selector: {s}). Page url: {s}, title: {s}", .{
+            sel, resolved.page.url, page_title orelse "(none)",
+        }) catch return ToolError.InternalError;
+    }
     return std.fmt.allocPrint(arena, "Hovered element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
-        args.backendNodeId,
+        args.backendNodeId.?,
         resolved.page.url,
         page_title orelse "(none)",
     }) catch return ToolError.InternalError;
@@ -735,11 +750,17 @@ fn execPress(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
 
 fn execSelectOption(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
-        backendNodeId: CDPNode.Id,
+        backendNodeId: ?CDPNode.Id = null,
+        selector: ?[]const u8 = null,
         value: []const u8,
     };
     const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
-    const resolved = try resolveNodeAndPage(session, registry, args.backendNodeId);
+    const resolved = if (args.selector) |sel|
+        try resolveBySelector(session, sel)
+    else if (args.backendNodeId) |nid|
+        try resolveNodeAndPage(session, registry, nid)
+    else
+        return ToolError.InvalidParams;
 
     lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) return ToolError.InvalidParams;
@@ -747,9 +768,14 @@ fn execSelectOption(session: *lp.Session, registry: *CDPNode.Registry, arena: st
     };
 
     const page_title = resolved.page.getTitle() catch null;
+    if (args.selector) |sel| {
+        return std.fmt.allocPrint(arena, "Selected option '{s}' (selector: {s}). Page url: {s}, title: {s}", .{
+            args.value, sel, resolved.page.url, page_title orelse "(none)",
+        }) catch return ToolError.InternalError;
+    }
     return std.fmt.allocPrint(arena, "Selected option '{s}' (backendNodeId: {d}). Page url: {s}, title: {s}", .{
         args.value,
-        args.backendNodeId,
+        args.backendNodeId.?,
         resolved.page.url,
         page_title orelse "(none)",
     }) catch return ToolError.InternalError;
@@ -757,11 +783,17 @@ fn execSelectOption(session: *lp.Session, registry: *CDPNode.Registry, arena: st
 
 fn execSetChecked(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
-        backendNodeId: CDPNode.Id,
+        backendNodeId: ?CDPNode.Id = null,
+        selector: ?[]const u8 = null,
         checked: bool,
     };
     const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
-    const resolved = try resolveNodeAndPage(session, registry, args.backendNodeId);
+    const resolved = if (args.selector) |sel|
+        try resolveBySelector(session, sel)
+    else if (args.backendNodeId) |nid|
+        try resolveNodeAndPage(session, registry, nid)
+    else
+        return ToolError.InvalidParams;
 
     lp.actions.setChecked(resolved.node, args.checked, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) return ToolError.InvalidParams;
@@ -770,8 +802,13 @@ fn execSetChecked(session: *lp.Session, registry: *CDPNode.Registry, arena: std.
 
     const state_str = if (args.checked) "checked" else "unchecked";
     const page_title = resolved.page.getTitle() catch null;
+    if (args.selector) |sel| {
+        return std.fmt.allocPrint(arena, "Set element (selector: {s}) to {s}. Page url: {s}, title: {s}", .{
+            sel, state_str, resolved.page.url, page_title orelse "(none)",
+        }) catch return ToolError.InternalError;
+    }
     return std.fmt.allocPrint(arena, "Set element (backendNodeId: {d}) to {s}. Page url: {s}, title: {s}", .{
-        args.backendNodeId,
+        args.backendNodeId.?,
         state_str,
         resolved.page.url,
         page_title orelse "(none)",
