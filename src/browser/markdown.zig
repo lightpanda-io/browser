@@ -589,7 +589,7 @@ test "browser.markdown: block link" {
         \\### Title
         \\
         \\Description
-        \\([](https://example.com))
+        \\[https://example.com](https://example.com)
         \\
     );
 }
