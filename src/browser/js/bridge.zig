@@ -116,7 +116,9 @@ pub const Constructor = struct {
             fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
                 const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
                 var caller: Caller = undefined;
-                caller.init(v8_isolate);
+                if (!caller.init(v8_isolate)) {
+                    return;
+                }
                 defer caller.deinit();
 
                 caller.constructor(T, func, handle.?, .{
@@ -216,7 +218,9 @@ pub const Indexed = struct {
                 fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
                     const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                     var caller: Caller = undefined;
-                    caller.init(v8_isolate);
+                    if (!caller.init(v8_isolate)) {
+                        return 0;
+                    }
                     defer caller.deinit();
 
                     return caller.getIndex(T, getter, idx, handle.?, .{
@@ -232,7 +236,9 @@ pub const Indexed = struct {
                 fn wrap(handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
                     const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                     var caller: Caller = undefined;
-                    caller.init(v8_isolate);
+                    if (!caller.init(v8_isolate)) {
+                        return 0;
+                    }
                     defer caller.deinit();
                     return caller.getEnumerator(T, enumerator, handle.?, .{});
                 }
@@ -258,7 +264,9 @@ pub const NamedIndexed = struct {
             fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
                 const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                 var caller: Caller = undefined;
-                caller.init(v8_isolate);
+                if (!caller.init(v8_isolate)) {
+                    return 0;
+                }
                 defer caller.deinit();
 
                 return caller.getNamedIndex(T, getter, c_name.?, handle.?, .{
@@ -272,7 +280,9 @@ pub const NamedIndexed = struct {
             fn wrap(c_name: ?*const v8.Name, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
                 const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                 var caller: Caller = undefined;
-                caller.init(v8_isolate);
+                if (!caller.init(v8_isolate)) {
+                    return 0;
+                }
                 defer caller.deinit();
 
                 return caller.setNamedIndex(T, setter, c_name.?, c_value.?, handle.?, .{
@@ -286,7 +296,9 @@ pub const NamedIndexed = struct {
             fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
                 const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                 var caller: Caller = undefined;
-                caller.init(v8_isolate);
+                if (!caller.init(v8_isolate)) {
+                    return 0;
+                }
                 defer caller.deinit();
 
                 return caller.deleteNamedIndex(T, deleter, c_name.?, handle.?, .{
@@ -387,7 +399,9 @@ pub const Property = struct {
 pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
     const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
     var caller: Caller = undefined;
-    caller.init(v8_isolate);
+    if (!caller.init(v8_isolate)) {
+        return 0;
+    }
     defer caller.deinit();
 
     const local = &caller.local;
@@ -465,7 +479,9 @@ pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8
             const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
 
             var caller: Caller = undefined;
-            caller.init(v8_isolate);
+            if (!caller.init(v8_isolate)) {
+                return 0;
+            }
             defer caller.deinit();
 
             const local = &caller.local;

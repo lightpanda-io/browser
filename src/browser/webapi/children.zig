@@ -4,7 +4,7 @@ const Node = @import("Node.zig");
 
 const LinkedList = std.DoublyLinkedList;
 
-// Our node._chilren is of type ?*NodeList. The extra (extra) indirection is to
+// Our node._children is of type ?*NodeList. The extra (extra) indirection is to
 // keep memory size down.
 // First, a lot of nodes have no children. For these nodes, `?*NodeList = null`
 // will take 8 bytes and require no allocations (because an optional pointer in

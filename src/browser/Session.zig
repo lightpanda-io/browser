@@ -236,6 +236,8 @@ pub fn releaseOrigin(self: *Session, origin: *js.Origin) void {
 /// Reset page_arena and factory for a clean slate.
 /// Called when root page is removed.
 fn resetPageResources(self: *Session) void {
+    defer self.browser.env.memoryPressureNotification(.moderate);
+
     self.identity.deinit();
     self.identity = .{};
 
@@ -294,7 +296,6 @@ pub fn replacePage(self: *Session) !*Page {
     current.deinit(true);
 
     self.resetPageResources();
-    self.browser.env.memoryPressureNotification(.moderate);
 
     self.page = @as(Page, undefined);
     const page = &self.page.?;

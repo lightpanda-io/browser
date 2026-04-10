@@ -195,7 +195,7 @@ pub const RemoteObject = struct {
 // Combines a v8::InspectorSession and a v8::InspectorChannelImpl. The
 // InspectorSession is for zig -> v8 (sending messages to the inspector). The
 // Channel is for v8 -> zig, getting events from the Inspector (that we'll pass
-// back ot some opaque context, i.e the CDP BrowserContext).
+// back to some opaque context, i.e the CDP BrowserContext).
 // The channel callbacks are defined below, as:
 //   pub export fn v8_inspector__Channel__IMPL__XYZ
 pub const Session = struct {

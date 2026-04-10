@@ -40,7 +40,7 @@ pub const Opts = struct {
         // Skip shadow DOM entirely (innerHTML/outerHTML)
         skip,
 
-        // Dump everyhting (like "view source")
+        // Dump everything (like "view source")
         complete,
 
         // Resolve slot elements (like what actually gets rendered)

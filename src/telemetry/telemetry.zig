@@ -103,16 +103,15 @@ pub const Event = union(enum) {
     run: void,
     navigate: Navigate,
     buffer_overflow: BufferOverflow,
-    flag: []const u8, // used for testing
 
     const Navigate = struct {
         tls: bool,
         proxy: bool,
-        driver: []const u8 = "cdp",
+        driver: enum { cdp } = .cdp,
     };
 
     const BufferOverflow = struct {
-        dropped: usize,
+        dropped: u32,
     };
 };
 
@@ -166,13 +165,13 @@ test "telemetry: sends event to provider" {
     telemetry.disabled = false;
     const mock = telemetry.provider;
 
-    telemetry.record(.{ .flag = "1" });
-    telemetry.record(.{ .flag = "2" });
-    telemetry.record(.{ .flag = "3" });
+    telemetry.record(.{ .buffer_overflow = .{ .dropped = 1 } });
+    telemetry.record(.{ .buffer_overflow = .{ .dropped = 2 } });
+    telemetry.record(.{ .buffer_overflow = .{ .dropped = 3 } });
     try testing.expectEqual(3, mock.events.items.len);
 
     for (mock.events.items, 0..) |event, i| {
-        try testing.expectEqual(i + 1, std.fmt.parseInt(usize, event.flag, 10));
+        try testing.expectEqual(i + 1, event.buffer_overflow.dropped);
     }
 }
 

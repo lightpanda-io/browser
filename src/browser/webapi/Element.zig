@@ -83,7 +83,7 @@ pub const Namespace = enum(u8) {
     pub fn parse(namespace_: ?[]const u8) Namespace {
         const namespace = namespace_ orelse return .null;
         if (namespace.len == "http://www.w3.org/1999/xhtml".len) {
-            // Common case, avoid the string comparion. Recklessly
+            // Common case, avoid the string comparison. Recklessly
             @branchHint(.likely);
             return .html;
         }
@@ -847,7 +847,7 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, page: *Page) 
 
     const parent_is_connected = parent.isConnected();
 
-    // Detect if the ref_node must be removed (byt default) or kept.
+    // Detect if the ref_node must be removed (by default) or kept.
     // We kept it when ref_node is present into the nodes list.
     var rm_ref_node = true;
 

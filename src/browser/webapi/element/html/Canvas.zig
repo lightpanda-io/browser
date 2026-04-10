@@ -63,7 +63,7 @@ pub fn setHeight(self: *Canvas, value: u32, page: *Page) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(str), page);
 }
 
-/// Since there's no base class rendering contextes inherit from,
+/// Since there's no base class rendering contexts inherit from,
 /// we're using tagged union.
 const DrawingContext = union(enum) {
     @"2d": *CanvasRenderingContext2D,

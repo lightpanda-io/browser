@@ -519,7 +519,7 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
     const promise_handle = v8.v8__PromiseRejectMessage__GetPromise(&message_handle).?;
     const v8_isolate = v8.v8__Object__GetIsolate(@ptrCast(promise_handle)).?;
     const isolate = js.Isolate{ .handle = v8_isolate };
-    const ctx, const v8_context = Context.fromIsolate(isolate);
+    const ctx, const v8_context = Context.fromIsolate(isolate) orelse return;
 
     const local = js.Local{
         .ctx = ctx,

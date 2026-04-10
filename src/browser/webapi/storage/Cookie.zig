@@ -58,7 +58,7 @@ pub fn deinit(self: *const Cookie) void {
 //   - any shenanigans with the domain attribute - it has to be the current
 //     domain or one of higher order, excluding TLD.
 // Anything else, will turn into a cookie.
-// Single value? That's a cookie with an emtpy name and a value
+// Single value? That's a cookie with an empty name and a value
 // Key or Values with characters the RFC says aren't allowed? Allowed! (
 //   (as long as the characters are 32...126)
 // Invalid attributes? Ignored.
@@ -384,7 +384,7 @@ pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, 
     {
         if (self.path[self.path.len - 1] == '/') {
             // If our cookie has a trailing slash, we can only match is
-            // the target path is a perfix. I.e., if our path is
+            // the target path is a prefix. I.e., if our path is
             // /doc/  we can only match /doc/*
             if (std.mem.startsWith(u8, url.path, self.path) == false) {
                 return false;

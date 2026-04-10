@@ -31,12 +31,13 @@ pub fn main() !void {
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks
     // - in Release mode we use the c allocator
-    var gpa_instance: std.heap.DebugAllocator(.{ .stack_trace_frames = 10 }) = .init;
-    const gpa = if (builtin.mode == .Debug) gpa_instance.allocator() else std.heap.c_allocator;
+    // var gpa_instance: std.heap.DebugAllocator(.{ .stack_trace_frames = 10 }) = .init;
+    // const gpa = if (builtin.mode == .Debug) gpa_instance.allocator() else std.heap.c_allocator;
+    const gpa = std.heap.c_allocator;
 
-    defer if (builtin.mode == .Debug) {
-        if (gpa_instance.detectLeaks()) std.posix.exit(1);
-    };
+    // defer if (builtin.mode == .Debug) {
+    //     if (gpa_instance.detectLeaks()) std.posix.exit(1);
+    // };
 
     // arena for main-specific allocations
     var main_arena_instance = std.heap.ArenaAllocator.init(gpa);

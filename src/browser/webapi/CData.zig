@@ -171,7 +171,7 @@ pub const RenderOpts = struct {
     trim_left: bool = true,
     trim_right: bool = true,
 };
-// Replace successives whitespaces with one withespace.
+// Replace successives whitespaces with one whitespace.
 // Trims left and right according to the options.
 // Returns true if the string ends with a trimmed whitespace.
 pub fn render(self: *const CData, writer: *std.io.Writer, opts: RenderOpts) !bool {

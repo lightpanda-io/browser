@@ -201,7 +201,7 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
                 const can_be_fragmented = message_type == .text or message_type == .binary;
                 if (self.fragments != null and can_be_fragmented) {
                     // if this isn't a continuation, then we can't have fragments
-                    return error.NestedFragementation;
+                    return error.NestedFragmentation;
                 }
 
                 if (fin == false) {
@@ -446,7 +446,7 @@ pub const WsConnection = struct {
                     error.InvalidMessageType => self.send(&CLOSE_PROTOCOL_ERROR) catch {},
                     error.ControlTooLarge => self.send(&CLOSE_PROTOCOL_ERROR) catch {},
                     error.InvalidContinuation => self.send(&CLOSE_PROTOCOL_ERROR) catch {},
-                    error.NestedFragementation => self.send(&CLOSE_PROTOCOL_ERROR) catch {},
+                    error.NestedFragmentation => self.send(&CLOSE_PROTOCOL_ERROR) catch {},
                     error.OutOfMemory => {}, // don't borther trying to send an error in this case
                 }
                 return err;
@@ -537,7 +537,7 @@ pub const WsConnection = struct {
         const alloc = self.send_arena.allocator();
 
         const response = blk: {
-            // Response to an ugprade request is always this, with
+            // Response to an upgrade request is always this, with
             // the Sec-Websocket-Accept value a spacial sha1 hash of the
             // request "sec-websocket-version" and a magic value.
 

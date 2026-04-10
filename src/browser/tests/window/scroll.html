@@ -41,7 +41,7 @@
     // the above resolve() would stop the test running after "scroll" fires but
     // before "scrollend" fires. That timing is pretty sensitive/fragile. If
     // the browser gets delayed and doesn't figure the scroll event exactly when
-    // schedule, it could easily execute in the same sheduler.run call as the
+    // schedule, it could easily execute in the same scheduler.run call as the
     // scrollend.
     testing.expectEqual(true, scrollendevt === 1 || scrollendevt === 2);
   });

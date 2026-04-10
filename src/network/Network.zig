@@ -28,6 +28,7 @@ const Config = @import("../Config.zig");
 const libcurl = @import("../sys/libcurl.zig");
 
 const http = @import("http.zig");
+const IpFilter = @import("IpFilter.zig");
 const RobotStore = @import("Robots.zig").RobotStore;
 const WebBotAuth = @import("WebBotAuth.zig");
 
@@ -84,6 +85,9 @@ submission_queue: std.DoublyLinkedList = .{},
 callbacks: [MAX_TICK_CALLBACKS]TickCallback = undefined,
 callbacks_len: usize = 0,
 callbacks_mutex: std.Thread.Mutex = .{},
+
+/// Optional IP filter for blocking requests to private/internal networks (--block-private-networks).
+ip_filter: ?*IpFilter = null,
 
 const TickCallback = struct {
     ctx: *anyopaque,
@@ -230,13 +234,31 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
         ca_blob = try loadCerts(allocator);
     }
 
+    // IP filter for blocking requests to private/internal networks.
+    const block_private = config.blockPrivateNetworks();
+    const cidrs: ?IpFilter.Cidrs = blk: {
+        const s = config.blockCidrs() orelse break :blk null;
+        break :blk try IpFilter.parseCidrList(allocator, s);
+    };
+    const has_cidrs = if (cidrs) |c| c.v4.len > 0 or c.v6.len > 0 or c.allow_v4.len > 0 or c.allow_v6.len > 0 else false;
+    const ip_filter: ?*IpFilter = blk: {
+        if (!block_private and !has_cidrs) break :blk null;
+        const f = try allocator.create(IpFilter);
+        f.* = IpFilter.init(block_private, cidrs);
+        break :blk f;
+    };
+    errdefer if (ip_filter) |f| {
+        f.deinit(allocator);
+        allocator.destroy(f);
+    };
+
     const count: usize = config.httpMaxConcurrent();
     const connections = try allocator.alloc(http.Connection, count);
     errdefer allocator.free(connections);
 
     var available: std.DoublyLinkedList = .{};
     for (0..count) |i| {
-        connections[i] = try http.Connection.init(ca_blob, config);
+        connections[i] = try http.Connection.init(ca_blob, config, ip_filter);
         available.append(&connections[i].node);
     }
 
@@ -280,6 +302,8 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 
         .ws_pool = .init(allocator),
         .ws_max = config.wsMaxConcurrent(),
+
+        .ip_filter = ip_filter,
     };
 }
 
@@ -315,6 +339,11 @@ pub fn deinit(self: *Network) void {
     }
 
     if (self.cache) |*cache| cache.deinit();
+
+    if (self.ip_filter) |f| {
+        f.deinit(self.allocator);
+        self.allocator.destroy(f);
+    }
 
     globalDeinit();
 }
@@ -612,7 +641,7 @@ pub fn releaseConnection(self: *Network, conn: *http.Connection) void {
             self.ws_count -= 1;
         },
         else => {
-            conn.reset(self.config, self.ca_blob) catch |err| {
+            conn.reset(self.config, self.ca_blob, self.ip_filter) catch |err| {
                 lp.assert(false, "couldn't reset curl easy", .{ .err = err });
             };
             self.conn_mutex.lock();
@@ -637,7 +666,7 @@ pub fn newConnection(self: *Network) ?*http.Connection {
     };
 
     // don't do this under lock
-    conn.* = http.Connection.init(self.ca_blob, self.config) catch {
+    conn.* = http.Connection.init(self.ca_blob, self.config, self.ip_filter) catch {
         self.ws_mutex.lock();
         defer self.ws_mutex.unlock();
         self.ws_pool.destroy(conn);

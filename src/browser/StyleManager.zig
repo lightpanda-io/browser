@@ -667,7 +667,7 @@ const VisibilityProperties = struct {
     opacity_zero: ?bool = null,
     pointer_events_none: ?bool = null,
 
-    // returne true if any field in VisibilityProperties is not null
+    // return true if any field in VisibilityProperties is not null
     fn isRelevant(self: VisibilityProperties) bool {
         return self.display_none != null or
             self.visibility_hidden != null or

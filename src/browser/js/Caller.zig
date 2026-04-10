@@ -39,9 +39,22 @@ prev_local: ?*const js.Local,
 prev_context: *Context,
 
 // Takes the raw v8 isolate and extracts the context from it.
-pub fn init(self: *Caller, v8_isolate: *v8.Isolate) void {
-    const ctx, const v8_context = Context.fromIsolate(.{ .handle = v8_isolate });
+// Returns false if the context has been destroyed (e.g., navigated-away iframe),
+// in which case a JS exception has been thrown and the caller should return immediately.
+pub fn init(self: *Caller, v8_isolate: *v8.Isolate) bool {
+    const ctx, const v8_context = Context.fromIsolate(.{ .handle = v8_isolate }) orelse {
+        throwDetachedError(v8_isolate);
+        return false;
+    };
     initWithContext(self, ctx, v8_context);
+    return true;
+}
+
+fn throwDetachedError(isolate: *v8.Isolate) void {
+    const message = "Cannot execute in detached context (e.g., navigated-away iframe)";
+    const v8_message = v8.v8__String__NewFromUtf8(isolate, message.ptr, v8.kNormal, @intCast(message.len));
+    const js_exception = v8.v8__Exception__Error(v8_message);
+    _ = v8.v8__Isolate__ThrowException(isolate, js_exception);
 }
 
 fn initWithContext(self: *Caller, ctx: *Context, v8_context: *const v8.Context) void {
@@ -60,9 +73,9 @@ fn initWithContext(self: *Caller, ctx: *Context, v8_context: *const v8.Context) 
     ctx.local = &self.local;
 }
 
-pub fn initFromHandle(self: *Caller, handle: ?*const v8.FunctionCallbackInfo) void {
+pub fn initFromHandle(self: *Caller, handle: ?*const v8.FunctionCallbackInfo) bool {
     const isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
-    self.init(isolate);
+    return self.init(isolate);
 }
 
 pub fn deinit(self: *Caller) void {
@@ -348,7 +361,7 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         error.InvalidArgument => isolate.createTypeError("invalid argument"),
         error.TypeError => isolate.createTypeError(""),
         error.OutOfMemory => isolate.createError("out of memory"),
-        error.IllegalConstructor => isolate.createError("Illegal Contructor"),
+        error.IllegalConstructor => isolate.createError("Illegal Constructor"),
         else => blk: {
             if (comptime opts.dom_exception) {
                 const DOMException = @import("../webapi/DOMException.zig");
@@ -538,7 +551,10 @@ pub const Function = struct {
 
     pub fn call(comptime T: type, info_handle: *const v8.FunctionCallbackInfo, func: anytype, comptime opts: Opts) void {
         const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(info_handle).?;
-        const ctx, const v8_context = Context.fromIsolate(.{ .handle = v8_isolate });
+        const ctx, const v8_context = Context.fromIsolate(.{ .handle = v8_isolate }) orelse {
+            throwDetachedError(v8_isolate);
+            return;
+        };
         const info = FunctionCallbackInfo{ .handle = info_handle };
 
         var hs: js.HandleScope = undefined;
@@ -617,7 +633,7 @@ pub const Function = struct {
                 if (v8.v8__Object__GetInternalField(js_this, idx)) |cached| {
                     // means we can't cache undefined, since we can't tell the
                     // difference between "it isn't in the cache" and  "it's
-                    // in the cache with a valud of undefined"
+                    // in the cache with a value of undefined"
                     if (!v8.v8__Value__IsUndefined(cached)) {
                         return_value.set(cached);
                         return true;
