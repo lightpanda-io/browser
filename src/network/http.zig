@@ -458,6 +458,9 @@ pub const Connection = struct {
             // try libcurl.curl_easy_setopt(easy, .debug_function, debugCallback);
         }
 
+        // default write callback to prevent libcurl from writing to stdout
+        try self.setWriteCallback(discardBody);
+
         // IP filter: block private/internal network addresses
         if (ip_filter) |filter| {
             try libcurl.curl_easy_setopt(self._easy, .opensocket_function, opensocketCallback);

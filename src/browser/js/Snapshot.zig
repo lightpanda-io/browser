@@ -126,6 +126,7 @@ pub fn create() !Snapshot {
 
     var data_start: usize = 0;
     const isolate = v8.v8__SnapshotCreator__getIsolate(snapshot_creator).?;
+    defer v8.v8__Isolate__LowMemoryNotification(isolate);
 
     {
         // CreateBlob, which we'll call once everything is setup, MUST NOT

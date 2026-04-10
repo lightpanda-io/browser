@@ -36,8 +36,10 @@ jobs:
           os: ${{env.OS}}
           arch: ${{env.ARCH}}
 
-      - name: v8 snapshot
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
+      - uses: ./.github/actions/v8-snapshot
+        with:
+          os: ${{env.OS}}
+          arch: ${{env.ARCH}}
 
       - name: zig build release
         run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=generic
@@ -169,6 +171,21 @@ jobs:
       - run: |
           cd ./wptdiff
           CGO_ENABLED=0 go build
+
+      - run: |
+         ./wptdiff/wptdiff --completion |tee completion.log
+
+      - name: Send completion to slack
+        uses: slackapi/slack-github-action@v3.0.1
+        with:
+          errors: true
+          method: files.uploadV2
+          token: ${{ secrets.CI_SLACK_BOT_TOKEN }}
+          payload: |
+            channel_id: ${{ vars.WPT_SLACK_CHANNEL_ID }}
+            initial_comment: "Last WPT completion"
+            file: "./completion.log"
+            filename: "wpt-completion-${{ github.sha }}.txt"
 
       - run: |
          ./wptdiff/wptdiff |tee diff.log
