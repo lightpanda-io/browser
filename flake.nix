@@ -70,7 +70,7 @@
               gcc.cc.lib
               crtFiles
 
-              # Libaries
+              # Libraries
               expat.dev
               glib.dev
               glibc.dev

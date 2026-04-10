@@ -255,7 +255,7 @@ pub const Iterator = struct {
     // is being composed by various types, so it can't reference those types.
     // Using *anyopaque here is "dangerous", in that it requires the composer
     // to pass the right value, which normally would be itself (`*Self`), but
-    // only because (as of now) everyting that uses KeyValueList has no prototype
+    // only because (as of now) everything that uses KeyValueList has no prototype
     list: *anyopaque,
 
     pub const Entry = struct { []const u8, []const u8 };

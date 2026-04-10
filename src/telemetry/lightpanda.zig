@@ -28,7 +28,7 @@ run_mode: Config.RunMode = .serve,
 
 head: std.atomic.Value(usize) = .init(0),
 tail: std.atomic.Value(usize) = .init(0),
-dropped: std.atomic.Value(usize) = .init(0),
+dropped: std.atomic.Value(u32) = .init(0),
 buffer: [BUFFER_SIZE]telemetry.Event = undefined,
 
 pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode) !void {

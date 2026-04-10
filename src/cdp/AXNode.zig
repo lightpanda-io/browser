@@ -28,7 +28,7 @@ const Node = @import("Node.zig");
 const AXNode = @This();
 
 // Need a custom writer, because we can't just serialize the node as-is.
-// Sometimes we want to serializ the node without chidren, sometimes with just
+// Sometimes we want to serializ the node without children, sometimes with just
 // its direct children, and sometimes the entire tree.
 // (For now, we only support direct children)
 pub const Writer = struct {
@@ -1091,7 +1091,7 @@ pub fn getRole(self: AXNode) ![]const u8 {
     return @tagName(role_implicit);
 }
 
-// Replace successives whitespaces with one withespace.
+// Replace successives whitespaces with one whitespace.
 // Trims left and right according to the options.
 // Returns true if the string ends with a trimmed whitespace.
 fn writeString(s: []const u8, w: anytype) !void {

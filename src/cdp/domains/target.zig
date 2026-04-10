@@ -438,7 +438,7 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     // This is a hack. Puppeteer, and probably others, expect the Browser to
     // automatically started creating targets. Things like an empty tab, or
     // a blank page. And they block until this happens. So we send an event
-    // telling them that they've been attached to our Broswer. Hopefully, the
+    // telling them that they've been attached to our Browser. Hopefully, the
     // first thing they'll do is create a real BrowserContext and progress from
     // there.
     // This hack requires the main cdp dispatch handler to special case

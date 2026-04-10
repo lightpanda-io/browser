@@ -146,7 +146,7 @@ fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args
             }
             break :blk values;
         },
-        else => @compileError("JS Function called with invalid paremter type"),
+        else => @compileError("JS Function called with invalid parameter type"),
     };
 
     const c_args = @as(?[*]const ?*v8.Value, @ptrCast(js_args.ptr));

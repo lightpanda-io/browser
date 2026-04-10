@@ -180,6 +180,20 @@ pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
     };
 }
 
+pub fn blockPrivateNetworks(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.common.block_private_networks,
+        else => unreachable,
+    };
+}
+
+pub fn blockCidrs(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.common.block_cidrs,
+        else => unreachable,
+    };
+}
+
 pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
@@ -288,6 +302,9 @@ pub const Common = struct {
     web_bot_auth_key_file: ?[]const u8 = null,
     web_bot_auth_keyid: ?[]const u8 = null,
     web_bot_auth_domain: ?[]const u8 = null,
+
+    block_private_networks: bool = false,
+    block_cidrs: ?[]const u8 = null,
 };
 
 /// Pre-formatted HTTP headers for reuse across Http and Client.
@@ -349,6 +366,21 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Fetches and obeys the robots.txt (if available) of the web pages
         \\                we make requests towards.
         \\                Defaults to false.
+        \\
+        \\--block-private-networks
+        \\                Blocks HTTP requests to private/internal IP addresses
+        \\                after DNS resolution. Useful for sandboxing, multi-tenant
+        \\                deployments, and preventing access to internal infrastructure
+        \\                regardless of what triggers the request (JavaScript, HTML
+        \\                resources, redirects, etc.).
+        \\                Defaults to false.
+        \\
+        \\--block-cidrs
+        \\                Additional CIDR ranges to block, comma-separated.
+        \\                Prefix with '-' to allow (exempt from blocking).
+        \\                e.g. --block-cidrs 169.254.169.254/32,fd00:ec2::254/128
+        \\                e.g. --block-cidrs 10.0.0.0/8,-10.0.0.42/32
+        \\                Can be used standalone or combined with --block-private-networks.
         \\
         \\--http-proxy    The HTTP proxy to use for all HTTP requests.
         \\                A username:password can be included for basic authentication.
@@ -706,7 +738,7 @@ fn parseServeArgs(
         }
 
         log.fatal(.app, "unknown argument", .{ .mode = "serve", .arg = opt });
-        return error.UnkownOption;
+        return error.UnknownOption;
     }
 
     return serve;
@@ -737,7 +769,7 @@ fn parseMcpArgs(
         }
 
         log.fatal(.mcp, "unknown argument", .{ .mode = "mcp", .arg = opt });
-        return error.UnkownOption;
+        return error.UnknownOption;
     }
 
     return result;
@@ -879,7 +911,7 @@ fn parseFetchArgs(
 
         if (std.mem.startsWith(u8, opt, "--")) {
             log.fatal(.app, "unknown argument", .{ .mode = "fetch", .arg = opt });
-            return error.UnkownOption;
+            return error.UnknownOption;
         }
 
         if (url != null) {
@@ -1233,6 +1265,20 @@ fn parseCommonArg(
             return error.InvalidArgument;
         };
         common.http_cache_dir = try allocator.dupe(u8, str);
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--block-private-networks", opt)) {
+        common.block_private_networks = true;
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--block-cidrs", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--block-cidrs" });
+            return error.InvalidArgument;
+        };
+        common.block_cidrs = try allocator.dupe(u8, str);
         return true;
     }
 

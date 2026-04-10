@@ -39,7 +39,7 @@ const CallOpts = Caller.CallOpts;
 // v8::Local<v8::Context>. In V8, you need a Local<v8::Context> or get anything
 // done, but the local only exists for the lifetime of the HandleScope it was
 // created on. When V8 calls into Zig, things are pretty straightforward, since
-// that callback gives us the currenty-entered V8::Local<Context>. But when Zig
+// that callback gives us the currently-entered V8::Local<Context>. But when Zig
 // has to call into V8, it's a bit more messy.
 // As a general rule, think of it this way:
 // 1 - Caller.zig is for V8 -> Zig
@@ -503,7 +503,7 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
         .optional => |o| {
             // If type type is a ?js.Value or a ?js.Object, then we want to pass
             // a js.Object, not null. Consider a function,
-            //    _doSomething(arg: ?Env.JsObjet) void { ... }
+            //    _doSomething(arg: ?Env.JsObject) void { ... }
             //
             // And then these two calls:
             //   doSomething();

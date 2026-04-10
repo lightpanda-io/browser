@@ -824,7 +824,7 @@ test "cdp.page: getFrameTree" {
     }
 
     {
-        // STARTUP sesion is handled when a broweser context and a target id exists.
+        // STARTUP session is handled when a broweser context and a target id exists.
         try ctx.processMessage(.{ .id = 12, .method = "Page.getFrameTree", .session_id = "STARTUP" });
         try ctx.expectSentResult(.{
             .frameTree = .{

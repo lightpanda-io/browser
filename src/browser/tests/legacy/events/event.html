@@ -31,10 +31,10 @@
   testing.expectEqual(true, evt.timeStamp >= Math.floor(startTime));
 </script>
 
-<script id=propogate>
+<script id=propagate>
   nb = 0;
   let para = $('#para');
-  // the stop listener is capturing, so it propogates down
+  // the stop listener is capturing, so it propagates down
   content.addEventListener('stop',function(e) {
     e.stopPropagation();
     nb += 1;
@@ -45,7 +45,7 @@
   });
 
   para.dispatchEvent(new Event('stop'));
-  // didn't propogate down (because of capturing) to para handler
+  // didn't propagate down (because of capturing) to para handler
   testing.expectEqual(1, nb);
 </script>
 

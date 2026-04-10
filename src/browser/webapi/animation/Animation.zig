@@ -183,7 +183,7 @@ pub fn getOnFinish(self: *const Animation) ?js.Function.Temp {
     return self._onFinish;
 }
 
-// callback function transitionning from a state to another
+// callback function transitioning from a state to another
 fn update(ctx: *anyopaque) !?u32 {
     const self: *Animation = @ptrCast(@alignCast(ctx));
 
