@@ -18,6 +18,10 @@
   testing.expectEqual("visible", document.visibilityState);
   testing.expectEqual(false, document.prerendering);
   testing.expectEqual(undefined, Document.prerendering);
+  // characterSet should return canonical encoding name
+  testing.expectEqual("UTF-8", document.characterSet);
+  testing.expectEqual("UTF-8", document.charset);
+  testing.expectEqual("UTF-8", document.inputEncoding);
 </script>
 
 <script id=headAndbody>

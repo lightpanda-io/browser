@@ -11,6 +11,10 @@
     testing.onload(() => {
       // GBK-encoded "中文" should be decoded to UTF-8
       testing.expectEqual('中文', iframe.contentDocument.getElementById('test').textContent);
+      // document.characterSet should return canonical encoding name
+      testing.expectEqual('GBK', iframe.contentDocument.characterSet);
+      testing.expectEqual('GBK', iframe.contentDocument.charset);
+      testing.expectEqual('GBK', iframe.contentDocument.inputEncoding);
     });
   }
 </script>
