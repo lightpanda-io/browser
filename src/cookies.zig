@@ -83,12 +83,12 @@ pub fn saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
     var file = try std.fs.cwd().createFile(path, .{});
     defer file.close();
 
-    var bw = std.io.bufferedWriter(file.writer());
-    const writer = bw.writer();
+    var buf: [8192]u8 = undefined;
+    var writer = file.writer(&buf);
 
-    try writer.writeByte('[');
+    try writer.writeAll("[");
     for (jar.cookies.items, 0..) |c, i| {
-        if (i > 0) try writer.writeByte(',');
+        if (i > 0) try writer.writeAll(",");
         try writer.writeAll("\n  ");
         try std.json.stringify(JsonCookie{
             .name = c.name,
@@ -98,13 +98,13 @@ pub fn saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
             .expires = c.expires,
             .secure = c.secure,
             .httpOnly = c.http_only,
-        }, .{}, writer);
+        }, .{}, &writer);
     }
     if (jar.cookies.items.len > 0) {
-        try writer.writeByte('\n');
+        try writer.writeAll("\n");
     }
     try writer.writeAll("]\n");
-    try bw.flush();
+    try writer.flush();
 
     log.info(.app, "saved cookies to file", .{ .path = path, .count = jar.cookies.items.len });
 }
