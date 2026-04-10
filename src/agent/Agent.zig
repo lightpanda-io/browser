@@ -165,15 +165,11 @@ pub fn run(self: *Self) bool {
 fn runRepl(self: *Self) void {
     self.terminal.printInfo("Lightpanda Agent (type 'quit' to exit)");
     log.debug(.app, "tools loaded", .{ .count = self.tools.len });
-    const info = if (self.ai_client) |ai_client|
-        std.fmt.allocPrint(self.allocator, "Provider: {s}, Model: {s}", .{
-            @tagName(std.meta.activeTag(ai_client)),
-            self.model,
-        }) catch null
-    else
-        null;
-    self.terminal.printInfo(info orelse "Ready.");
-    if (info) |i| self.allocator.free(i);
+    if (self.ai_client) |ai_client| {
+        self.terminal.printInfoFmt("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
+    } else {
+        self.terminal.printInfo("Ready.");
+    }
 
     while (true) {
         const line = self.terminal.readLine("> ") orelse break;
@@ -196,7 +192,6 @@ fn runRepl(self: *Self) void {
                 };
             },
             .natural_language => {
-                // "quit" as a convenience alias
                 if (std.mem.eql(u8, line, "quit")) break;
 
                 self.processUserMessage(line, line) catch |err| {
@@ -214,12 +209,7 @@ fn runRepl(self: *Self) void {
 }
 
 fn printAllocError(self: *Self, comptime fmt: []const u8, args: anytype) void {
-    const msg = std.fmt.allocPrint(self.allocator, fmt, args) catch {
-        self.terminal.printError(fmt);
-        return;
-    };
-    defer self.allocator.free(msg);
-    self.terminal.printError(msg);
+    self.terminal.printErrorFmt(fmt, args);
 }
 
 fn runScript(self: *Self, path: []const u8) bool {
@@ -235,9 +225,7 @@ fn runScript(self: *Self, path: []const u8) bool {
     };
     defer self.allocator.free(content);
 
-    const script_info = std.fmt.allocPrint(self.allocator, "Running script: {s}", .{path}) catch null;
-    self.terminal.printInfo(script_info orelse "Running script...");
-    if (script_info) |i| self.allocator.free(i);
+    self.terminal.printInfoFmt("Running script: {s}", .{path});
 
     var script_arena = std.heap.ArenaAllocator.init(self.allocator);
     defer script_arena.deinit();
@@ -252,7 +240,6 @@ fn runScript(self: *Self, path: []const u8) bool {
                 return true;
             },
             .comment => {
-                // Track # INTENT: comments for self-healing
                 if (std.mem.startsWith(u8, entry.raw_line, "# INTENT:")) {
                     last_intent = std.mem.trim(u8, entry.raw_line["# INTENT:".len..], &std.ascii.whitespace);
                 }
@@ -263,7 +250,6 @@ fn runScript(self: *Self, path: []const u8) bool {
                 return false;
             },
             .login, .accept_cookies => {
-                // High-level commands require LLM
                 if (self.ai_client == null) {
                     self.printAllocError("line {d}: {s} requires an API key for LLM resolution", .{
                         entry.line_num,
@@ -282,11 +268,8 @@ fn runScript(self: *Self, path: []const u8) bool {
                 };
             },
             else => {
-                const line_info = std.fmt.allocPrint(self.allocator, "[{d}] {s}", .{ entry.line_num, entry.raw_line }) catch null;
-                self.terminal.printInfo(line_info orelse entry.raw_line);
-                if (line_info) |li| self.allocator.free(li);
+                self.terminal.printInfoFmt("[{d}] {s}", .{ entry.line_num, entry.raw_line });
 
-                // Execute with result checking for self-healing
                 var cmd_arena = std.heap.ArenaAllocator.init(self.allocator);
                 defer cmd_arena.deinit();
 
@@ -295,7 +278,6 @@ fn runScript(self: *Self, path: []const u8) bool {
                 std.debug.print("\n", .{});
 
                 if (result.failed) {
-                    // Attempt self-healing via LLM (opt-in with --self-heal)
                     if (self.self_heal and self.ai_client != null) {
                         self.terminal.printInfo("Command failed, attempting self-healing...");
                         if (self.attemptSelfHeal(last_intent, entry.raw_line)) {
@@ -318,8 +300,6 @@ fn runScript(self: *Self, path: []const u8) bool {
 
 const self_heal_max_attempts = 3;
 
-/// Attempt to self-heal a failed command by asking the LLM to resolve it.
-/// Retries up to `self_heal_max_attempts` times on transient API errors.
 fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8) bool {
     var heal_arena = std.heap.ArenaAllocator.init(self.allocator);
     defer heal_arena.deinit();
@@ -351,7 +331,6 @@ fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8)
 fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []const u8) !void {
     const ma = self.message_arena.allocator();
 
-    // Add system prompt as first message if this is the first user message
     if (self.messages.items.len == 0) {
         try self.messages.append(self.allocator, .{
             .role = .system,
@@ -359,7 +338,6 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
         });
     }
 
-    // Add user message
     try self.messages.append(self.allocator, .{
         .role = .user,
         .content = try ma.dupe(u8, user_input),
@@ -384,7 +362,6 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
     };
     defer result.deinit();
 
-    // Record tool calls as Pandascript (only if they produce commands)
     var recorded_any = false;
     for (result.tool_calls_made) |tc| {
         if (!std.mem.startsWith(u8, tc.result, "Error:")) {
@@ -417,90 +394,58 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     return tool_result;
 }
 
-/// Convert a tool call (name + JSON arguments) into a Pandascript command.
 fn toolCallToCommand(arena: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) ?Command.Command {
+    const action = std.meta.stringToEnum(lp.tools.Action, tool_name) orelse return null;
     const parsed = std.json.parseFromSlice(std.json.Value, arena, arguments, .{}) catch return null;
     const obj = switch (parsed.value) {
         .object => |o| o,
         else => return null,
     };
 
-    return if (std.mem.eql(u8, tool_name, "goto")) blk: {
-        break :blk switch (obj.get("url") orelse break :blk null) {
-            .string => |s| .{ .goto = s },
-            else => null,
-        };
-    } else if (std.mem.eql(u8, tool_name, "click")) blk: {
-        if (obj.get("selector")) |sel_val| {
-            break :blk switch (sel_val) {
-                .string => |s| .{ .click = s },
+    const getString = struct {
+        fn f(o: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+            return switch (o.get(key) orelse return null) {
+                .string => |s| s,
                 else => null,
             };
         }
-        // Can't meaningfully record a backendNodeId as Pandascript
-        break :blk null;
-    } else if (std.mem.eql(u8, tool_name, "fill")) blk: {
-        const sel = switch (obj.get("selector") orelse break :blk null) {
-            .string => |s| s,
-            else => break :blk null,
-        };
-        const val = switch (obj.get("value") orelse break :blk null) {
-            .string => |s| s,
-            else => break :blk null,
-        };
-        break :blk .{ .type_cmd = .{ .selector = sel, .value = val } };
-    } else if (std.mem.eql(u8, tool_name, "eval")) blk: {
-        break :blk switch (obj.get("script") orelse break :blk null) {
-            .string => |s| .{ .eval_js = s },
-            else => null,
-        };
-    } else if (std.mem.eql(u8, tool_name, "waitForSelector")) blk: {
-        break :blk switch (obj.get("selector") orelse break :blk null) {
-            .string => |s| .{ .wait = s },
-            else => null,
-        };
-    } else if (std.mem.eql(u8, tool_name, "scroll")) blk: {
-        // Only record window scrolls — element scrolls use ephemeral backendNodeId.
-        if (obj.get("backendNodeId") != null) break :blk null;
-        const x: i32 = switch (obj.get("x") orelse std.json.Value{ .integer = 0 }) {
-            .integer => |i| @intCast(i),
-            else => 0,
-        };
-        const y: i32 = switch (obj.get("y") orelse std.json.Value{ .integer = 0 }) {
-            .integer => |i| @intCast(i),
-            else => 0,
-        };
-        break :blk .{ .scroll = .{ .x = x, .y = y } };
-    } else if (std.mem.eql(u8, tool_name, "hover")) blk: {
-        if (obj.get("selector")) |sel_val| {
-            break :blk switch (sel_val) {
-                .string => |s| .{ .hover = s },
-                else => null,
+    }.f;
+
+    return switch (action) {
+        .goto => .{ .goto = getString(obj, "url") orelse return null },
+        .click => .{ .click = getString(obj, "selector") orelse return null },
+        .hover => .{ .hover = getString(obj, "selector") orelse return null },
+        .eval => .{ .eval_js = getString(obj, "script") orelse return null },
+        .waitForSelector => .{ .wait = getString(obj, "selector") orelse return null },
+        .fill => .{ .type_cmd = .{
+            .selector = getString(obj, "selector") orelse return null,
+            .value = getString(obj, "value") orelse return null,
+        } },
+        .selectOption => .{ .select = .{
+            .selector = getString(obj, "selector") orelse return null,
+            .value = getString(obj, "value") orelse return null,
+        } },
+        .setChecked => .{ .check = .{
+            .selector = getString(obj, "selector") orelse return null,
+            .checked = switch (obj.get("checked") orelse return null) {
+                .bool => |b| b,
+                else => return null,
+            },
+        } },
+        .scroll => blk: {
+            if (obj.get("backendNodeId") != null) break :blk null;
+            const x: i32 = switch (obj.get("x") orelse std.json.Value{ .integer = 0 }) {
+                .integer => |i| @intCast(i),
+                else => 0,
             };
-        }
-        // backendNodeId-only path stays unrecordable
-        break :blk null;
-    } else if (std.mem.eql(u8, tool_name, "selectOption")) blk: {
-        const sel = switch (obj.get("selector") orelse break :blk null) {
-            .string => |s| s,
-            else => break :blk null,
-        };
-        const val = switch (obj.get("value") orelse break :blk null) {
-            .string => |s| s,
-            else => break :blk null,
-        };
-        break :blk .{ .select = .{ .selector = sel, .value = val } };
-    } else if (std.mem.eql(u8, tool_name, "setChecked")) blk: {
-        const sel = switch (obj.get("selector") orelse break :blk null) {
-            .string => |s| s,
-            else => break :blk null,
-        };
-        const checked = switch (obj.get("checked") orelse break :blk null) {
-            .bool => |b| b,
-            else => break :blk null,
-        };
-        break :blk .{ .check = .{ .selector = sel, .checked = checked } };
-    } else null;
+            const y: i32 = switch (obj.get("y") orelse std.json.Value{ .integer = 0 }) {
+                .integer => |i| @intCast(i),
+                else => 0,
+            };
+            break :blk .{ .scroll = .{ .x = x, .y = y } };
+        },
+        else => null,
+    };
 }
 
 fn getEnvApiKey(provider_type: Config.AiProvider) ?[:0]const u8 {

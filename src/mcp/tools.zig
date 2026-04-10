@@ -57,8 +57,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         const code: protocol.ErrorCode = switch (err) {
             error.PageNotLoaded => .PageNotLoaded,
             error.NodeNotFound, error.InvalidParams => .InvalidParams,
-            error.NavigationFailed => .InternalError,
-            error.InternalError => .InternalError,
+            error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
         };
         return server.sendError(id, code, @errorName(err));
     };
@@ -128,7 +127,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const inp_id = (try server.node_registry.register(inp)).id;
         var inp_id_buf: [12]u8 = undefined;
         const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
-        const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"text\":\"hello\"}}}" });
+        const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"value\":\"hello\"}}}" });
         try router.handleMessage(server, aa, fill_msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "Filled element") != null);
         try testing.expect(std.mem.indexOf(u8, out.written(), "with \\\"hello\\\"") != null);
@@ -141,7 +140,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const sel_id = (try server.node_registry.register(sel)).id;
         var sel_id_buf: [12]u8 = undefined;
         const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
-        const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"text\":\"opt2\"}}}" });
+        const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"value\":\"opt2\"}}}" });
         try router.handleMessage(server, aa, fill_sel_msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "Filled element") != null);
         try testing.expect(std.mem.indexOf(u8, out.written(), "with \\\"opt2\\\"") != null);

@@ -108,6 +108,14 @@ pub fn printError(_: *Self, msg: []const u8) void {
     std.debug.print("{s}{s}Error: {s}{s}\n", .{ ansi_bold, ansi_red, msg, ansi_reset });
 }
 
+pub fn printErrorFmt(_: *Self, comptime fmt: []const u8, args: anytype) void {
+    std.debug.print("{s}{s}Error: " ++ fmt ++ "{s}\n", .{ ansi_bold, ansi_red } ++ args ++ .{ansi_reset});
+}
+
 pub fn printInfo(_: *Self, msg: []const u8) void {
     std.debug.print("{s}{s}{s}\n", .{ ansi_dim, msg, ansi_reset });
+}
+
+pub fn printInfoFmt(_: *Self, comptime fmt: []const u8, args: anytype) void {
+    std.debug.print("{s}" ++ fmt ++ "{s}\n", .{ansi_dim} ++ args ++ .{ansi_reset});
 }

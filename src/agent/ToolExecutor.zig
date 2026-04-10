@@ -55,7 +55,8 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self);
 }
 
-/// Returns the list of tools in zenai provider.Tool format.
+pub const CallError = browser_tools.ToolError || error{ InvalidJsonArguments, OutOfMemory };
+
 pub fn getTools(self: *Self) ![]const zenai.provider.Tool {
     const arena = self.tool_schema_arena.allocator();
     const tools = try arena.alloc(zenai.provider.Tool, browser_tools.tool_defs.len);
@@ -75,15 +76,12 @@ pub fn getTools(self: *Self) ![]const zenai.provider.Tool {
     return tools;
 }
 
-/// Execute a tool by name with JSON arguments, returning the result as a string.
-pub fn call(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments_json: []const u8) ![]const u8 {
-    const arguments = if (arguments_json.len > 0)
-        (std.json.parseFromSlice(std.json.Value, arena, arguments_json, .{}) catch
-            return "Error: invalid JSON arguments").value
-    else
-        null;
+pub fn call(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments_json: []const u8) CallError![]const u8 {
+    const arguments = if (arguments_json.len > 0) blk: {
+        const parsed = std.json.parseFromSlice(std.json.Value, arena, arguments_json, .{}) catch
+            return error.InvalidJsonArguments;
+        break :blk parsed.value;
+    } else null;
 
-    return browser_tools.call(self.session, &self.node_registry, arena, tool_name, arguments) catch |err| {
-        return std.fmt.allocPrint(arena, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
-    };
+    return browser_tools.call(self.session, &self.node_registry, arena, tool_name, arguments);
 }

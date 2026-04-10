@@ -22,8 +22,6 @@ pub fn deinit(self: *Self) void {
     if (self.file) |f| f.close();
 }
 
-/// Record a successfully executed command to the .panda file.
-/// Skips read-only commands based on `Command.isRecorded()`.
 pub fn record(self: *Self, cmd: Command.Command) void {
     const f = self.file orelse return;
     if (!cmd.isRecorded()) return;
@@ -36,7 +34,6 @@ pub fn record(self: *Self, cmd: Command.Command) void {
     self.needs_separator = true;
 }
 
-/// Record a comment line (e.g. user's natural language input).
 pub fn recordComment(self: *Self, comment: []const u8) void {
     const f = self.file orelse return;
     var buf: [4096]u8 = undefined;
@@ -50,8 +47,6 @@ pub fn recordComment(self: *Self, comment: []const u8) void {
     writer.flush() catch return;
 }
 
-// --- Tests ---
-
 test "record writes state-mutating commands" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -63,9 +58,9 @@ test "record writes state-mutating commands" {
 
     recorder.record(Command.parse("GOTO https://example.com"));
     recorder.record(Command.parse("CLICK \"Login\""));
-    recorder.record(Command.parse("TREE")); // should be skipped
+    recorder.record(Command.parse("TREE"));
     recorder.record(Command.parse("WAIT \".dashboard\""));
-    recorder.record(Command.parse("MARKDOWN")); // should be skipped
+    recorder.record(Command.parse("MARKDOWN"));
     recorder.record(Command.parse("SCROLL 0 200"));
     recorder.record(Command.parse("HOVER '#menu'"));
     recorder.record(Command.parse("SELECT '#country' 'France'"));
@@ -90,7 +85,6 @@ test "record writes state-mutating commands" {
     try std.testing.expect(std.mem.indexOf(u8, content, "CHECK '#newsletter' false\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "EXTRACT '.title'\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "\n# LOGIN\n") != null);
-    // Verify read-only commands are NOT present
     try std.testing.expect(std.mem.indexOf(u8, content, "TREE") == null);
     try std.testing.expect(std.mem.indexOf(u8, content, "MARKDOWN") == null);
 }

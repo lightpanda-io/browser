@@ -23,27 +23,27 @@ pub const ExecResult = struct {
     failed: bool,
 };
 
-/// Execute a command and return the result with success/failure status.
 pub fn executeWithResult(self: *Self, a: std.mem.Allocator, cmd: Command.Command) ExecResult {
+    const Action = browser_tools.Action;
     return switch (cmd) {
         .goto => |url| self.execGoto(a, url),
-        .click => |sel| self.callTool(a, "click", buildJson(a, .{ .selector = substituteEnvVars(a, sel) })),
+        .click => |sel| self.callTool(a, @tagName(Action.click), buildJson(a, .{ .selector = substituteEnvVars(a, sel) })),
         .type_cmd => |args| self.execType(a, args),
-        .wait => |selector| self.callTool(a, "waitForSelector", buildJson(a, .{ .selector = selector })),
-        .scroll => |args| self.callTool(a, "scroll", buildJson(a, .{ .x = args.x, .y = args.y })),
-        .hover => |sel| self.callTool(a, "hover", buildJson(a, .{ .selector = substituteEnvVars(a, sel) })),
-        .select => |args| self.callTool(a, "selectOption", buildJson(a, .{
+        .wait => |selector| self.callTool(a, @tagName(Action.waitForSelector), buildJson(a, .{ .selector = selector })),
+        .scroll => |args| self.callTool(a, @tagName(Action.scroll), buildJson(a, .{ .x = args.x, .y = args.y })),
+        .hover => |sel| self.callTool(a, @tagName(Action.hover), buildJson(a, .{ .selector = substituteEnvVars(a, sel) })),
+        .select => |args| self.callTool(a, @tagName(Action.selectOption), buildJson(a, .{
             .selector = substituteEnvVars(a, args.selector),
             .value = substituteEnvVars(a, args.value),
         })),
-        .check => |args| self.callTool(a, "setChecked", buildJson(a, .{
+        .check => |args| self.callTool(a, @tagName(Action.setChecked), buildJson(a, .{
             .selector = substituteEnvVars(a, args.selector),
             .checked = args.checked,
         })),
-        .tree => self.callTool(a, "semanticTree", ""),
-        .markdown => self.callTool(a, "markdown", ""),
+        .tree => self.callTool(a, @tagName(Action.semanticTree), ""),
+        .markdown => self.callTool(a, @tagName(Action.markdown), ""),
         .extract => |args| self.execExtract(a, args),
-        .eval_js => |script| self.callTool(a, "eval", buildJson(a, .{ .script = script })),
+        .eval_js => |script| self.callTool(a, @tagName(Action.eval), buildJson(a, .{ .script = script })),
         .exit, .natural_language, .comment, .login, .accept_cookies => unreachable,
     };
 }
@@ -67,13 +67,13 @@ fn callTool(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, argume
 
 fn execGoto(self: *Self, arena: std.mem.Allocator, raw_url: []const u8) ExecResult {
     const url = substituteEnvVars(arena, raw_url);
-    return self.callTool(arena, "goto", buildJson(arena, .{ .url = url }));
+    return self.callTool(arena, @tagName(browser_tools.Action.goto), buildJson(arena, .{ .url = url }));
 }
 
 fn execType(self: *Self, arena: std.mem.Allocator, args: Command.TypeArgs) ExecResult {
     const selector = substituteEnvVars(arena, args.selector);
     const value = substituteEnvVars(arena, args.value);
-    return self.callTool(arena, "fill", buildJson(arena, .{ .selector = selector, .value = value }));
+    return self.callTool(arena, @tagName(browser_tools.Action.fill), buildJson(arena, .{ .selector = selector, .value = value }));
 }
 
 fn execExtract(self: *Self, arena: std.mem.Allocator, args: Command.ExtractArgs) ExecResult {
@@ -83,8 +83,8 @@ fn execExtract(self: *Self, arena: std.mem.Allocator, args: Command.ExtractArgs)
         \\JSON.stringify(Array.from(document.querySelectorAll("{s}")).map(el => el.textContent.trim()))
     , .{selector}) catch return .{ .output = "failed to build extract script", .failed = true };
 
-    const result = self.tool_executor.call(arena, "eval", buildJson(arena, .{ .script = script })) catch
-        return .{ .output = "extract failed", .failed = true };
+    const result = self.tool_executor.call(arena, @tagName(browser_tools.Action.eval), buildJson(arena, .{ .script = script })) catch |err|
+        return .{ .output = std.fmt.allocPrint(arena, "extract failed: {s}", .{@errorName(err)}) catch "extract failed", .failed = true };
 
     if (args.file) |raw_file| {
         const file = sanitizePath(raw_file) orelse {
@@ -107,9 +107,7 @@ fn execExtract(self: *Self, arena: std.mem.Allocator, args: Command.ExtractArgs)
 
 const substituteEnvVars = browser_tools.substituteEnvVars;
 
-/// Escape a string for safe interpolation inside a JS double-quoted string literal.
 fn escapeJs(arena: std.mem.Allocator, input: []const u8) []const u8 {
-    // Quick scan: if nothing to escape, return as-is
     const needs_escape = for (input) |ch| {
         if (ch == '"' or ch == '\\' or ch == '\n' or ch == '\r' or ch == '\t') break true;
     } else false;
@@ -129,12 +127,9 @@ fn escapeJs(arena: std.mem.Allocator, input: []const u8) []const u8 {
     return out.toOwnedSlice(arena) catch input;
 }
 
-/// Validate that a file path is safe: relative, no traversal above cwd.
 fn sanitizePath(path: []const u8) ?[]const u8 {
-    // Reject absolute paths
     if (path.len > 0 and path[0] == '/') return null;
 
-    // Reject paths containing ".." components
     var iter = std.mem.splitScalar(u8, path, '/');
     while (iter.next()) |component| {
         if (std.mem.eql(u8, component, "..")) return null;

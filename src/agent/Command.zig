@@ -94,10 +94,8 @@ pub fn parse(line: []const u8) Command {
     const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
     if (trimmed.len == 0) return .{ .natural_language = trimmed };
 
-    // Skip comment lines
     if (trimmed[0] == '#') return .{ .comment = {} };
 
-    // Find the command word (first whitespace-delimited token)
     const cmd_end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
     const cmd_word = trimmed[0..cmd_end];
     const rest = std.mem.trim(u8, trimmed[cmd_end..], &std.ascii.whitespace);
@@ -246,7 +244,6 @@ pub const ScriptIterator = struct {
             const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
             if (trimmed.len == 0) continue;
 
-            // Check for EVAL """ multi-line block
             if (isEvalTripleQuote(trimmed)) {
                 const start_line = self.line_num;
                 if (self.collectEvalBlock()) |js| {

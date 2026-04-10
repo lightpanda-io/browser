@@ -11,7 +11,7 @@ pub const ToolDef = struct {
     input_schema: []const u8,
 };
 
-fn minify(comptime json: []const u8) []const u8 {
+pub fn minify(comptime json: []const u8) []const u8 {
     @setEvalBranchQuota(100000);
     return comptime blk: {
         var res: []const u8 = "";
@@ -307,9 +307,9 @@ pub const ToolError = error{
     NodeNotFound,
     NavigationFailed,
     InternalError,
+    OutOfMemory,
 };
 
-/// Result from eval that may represent a JS error (not a tool failure).
 pub const EvalResult = struct {
     text: []const u8,
     is_error: bool = false,
@@ -329,9 +329,7 @@ pub const UrlParams = struct {
 
 const NodeAndPage = struct { node: *DOMNode, page: *lp.Page };
 
-// --- Tool dispatch ---
-
-const Action = enum {
+pub const Action = enum {
     goto,
     markdown,
     links,
@@ -356,8 +354,6 @@ const Action = enum {
     getCookies,
 };
 
-/// Execute a tool by name. Returns the result text.
-/// For `eval`, use `callEval` to distinguish JS errors from tool errors.
 pub fn call(
     session: *lp.Session,
     registry: *CDPNode.Registry,
@@ -368,32 +364,15 @@ pub fn call(
     const action = std.meta.stringToEnum(Action, tool_name) orelse return ToolError.InvalidParams;
 
     return switch (action) {
-        .goto => execGoto(session, registry, arena, arguments),
-        .markdown => execMarkdown(session, registry, arena, arguments),
-        .links => execLinks(session, registry, arena, arguments),
-        .nodeDetails => execNodeDetails(session, registry, arena, arguments),
-        .interactiveElements => execInteractiveElements(session, registry, arena, arguments),
-        .structuredData => execStructuredData(session, registry, arena, arguments),
-        .detectForms => execDetectForms(session, registry, arena, arguments),
         .eval => execEval(session, registry, arena, arguments).text,
-        .semanticTree => execSemanticTree(session, registry, arena, arguments),
-        .click => execClick(session, registry, arena, arguments),
-        .fill => execFill(session, registry, arena, arguments),
-        .scroll => execScroll(session, registry, arena, arguments),
-        .waitForSelector => execWaitForSelector(session, registry, arena, arguments),
-        .hover => execHover(session, registry, arena, arguments),
-        .press => execPress(session, registry, arena, arguments),
-        .selectOption => execSelectOption(session, registry, arena, arguments),
-        .setChecked => execSetChecked(session, registry, arena, arguments),
-        .findElement => execFindElement(session, registry, arena, arguments),
         .getEnv => execGetEnv(arena, arguments),
         .consoleLogs => execConsoleLogs(session, arena),
         .getUrl => execGetUrl(session),
         .getCookies => execGetCookies(session, arena),
+        inline else => |tag| @field(@This(), "exec" ++ [1]u8{@tagName(tag)[0] - 32} ++ @tagName(tag)[1..])(session, registry, arena, arguments),
     };
 }
 
-/// Like `call`, but for eval returns the full EvalResult with is_error flag.
 pub fn callEval(
     session: *lp.Session,
     registry: *CDPNode.Registry,
@@ -403,21 +382,18 @@ pub fn callEval(
     return execEval(session, registry, arena, arguments);
 }
 
-/// Check if a tool name is recognized.
 pub fn isKnownTool(tool_name: []const u8) bool {
     return std.meta.stringToEnum(Action, tool_name) != null;
 }
 
-// --- Tool implementations ---
-
 fn execGoto(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
-    const args = parseArgsOrErr(GotoParams, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgsOrErr(GotoParams, arena, arguments) orelse return ToolError.InvalidParams;
     try performGoto(session, registry, args.url, args.timeout, args.waitUntil);
     return "Navigated successfully.";
 }
 
 fn execMarkdown(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
-    const args = parseArgsOrDefault(UrlParams, arena, arguments);
+    const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
     var aw: std.Io.Writer.Allocating = .init(arena);
@@ -427,7 +403,7 @@ fn execMarkdown(session: *lp.Session, registry: *CDPNode.Registry, arena: std.me
 }
 
 fn execLinks(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
-    const args = parseArgsOrDefault(UrlParams, arena, arguments);
+    const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
     const links_list = lp.links.collectLinks(arena, page.document.asNode(), page) catch
@@ -449,7 +425,7 @@ fn execSemanticTree(session: *lp.Session, registry: *CDPNode.Registry, arena: st
         timeout: ?u32 = null,
         waitUntil: ?lp.Config.WaitUntil = null,
     };
-    const args = parseArgsOrDefault(TreeParams, arena, arguments);
+    const args = try parseArgsOrDefault(TreeParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
     var root_node = page.document.asNode();
@@ -475,7 +451,7 @@ fn execSemanticTree(session: *lp.Session, registry: *CDPNode.Registry, arena: st
 
 fn execNodeDetails(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct { backendNodeId: CDPNode.Id };
-    const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
 
     const page = session.currentPage() orelse return ToolError.PageNotLoaded;
 
@@ -490,7 +466,7 @@ fn execNodeDetails(session: *lp.Session, registry: *CDPNode.Registry, arena: std
 }
 
 fn execInteractiveElements(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
-    const args = parseArgsOrDefault(UrlParams, arena, arguments);
+    const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
     const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch
@@ -504,7 +480,7 @@ fn execInteractiveElements(session: *lp.Session, registry: *CDPNode.Registry, ar
 }
 
 fn execStructuredData(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
-    const args = parseArgsOrDefault(UrlParams, arena, arguments);
+    const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
     const data = lp.structured_data.collectStructuredData(page.document.asNode(), arena, page) catch
@@ -515,7 +491,7 @@ fn execStructuredData(session: *lp.Session, registry: *CDPNode.Registry, arena: 
 }
 
 fn execDetectForms(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
-    const args = parseArgsOrDefault(UrlParams, arena, arguments);
+    const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
     const forms_data = lp.forms.collectForms(arena, page.document.asNode(), page) catch
@@ -535,7 +511,8 @@ fn execEval(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Al
         timeout: ?u32 = null,
         waitUntil: ?lp.Config.WaitUntil = null,
     };
-    const args = parseArgsOrErr(Params, arena, arguments) orelse return .{ .text = "Error: missing 'script' argument", .is_error = true };
+    const args = (parseArgsOrErr(Params, arena, arguments) catch return .{ .text = "Error: out of memory", .is_error = true }) orelse
+        return .{ .text = "Error: missing 'script' argument", .is_error = true };
     const page = ensurePage(session, registry, args.url, args.timeout, args.waitUntil) catch return .{ .text = "Error: page not loaded", .is_error = true };
 
     var ls: lp.js.Local.Scope = undefined;
@@ -561,7 +538,7 @@ fn execClick(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
         backendNodeId: ?CDPNode.Id = null,
         selector: ?[]const u8 = null,
     };
-    const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
     const resolved = if (args.selector) |sel|
         try resolveBySelector(session, sel)
     else if (args.backendNodeId) |nid|
@@ -599,11 +576,11 @@ fn execFill(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Al
     const Params = struct {
         backendNodeId: ?CDPNode.Id = null,
         selector: ?[]const u8 = null,
-        text: []const u8 = "",
         value: []const u8 = "",
     };
-    const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
-    const raw_text = if (args.text.len > 0) args.text else if (args.value.len > 0) args.value else return ToolError.InvalidParams;
+    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    if (args.value.len == 0) return ToolError.InvalidParams;
+    const raw_text = args.value;
     const text = substituteEnvVars(arena, raw_text);
     const resolved = if (args.selector) |sel|
         try resolveBySelector(session, sel)
@@ -639,7 +616,7 @@ fn execScroll(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.
         x: ?i32 = null,
         y: ?i32 = null,
     };
-    const args = parseArgsOrDefault(Params, arena, arguments);
+    const args = try parseArgsOrDefault(Params, arena, arguments);
     const page = session.currentPage() orelse return ToolError.PageNotLoaded;
 
     var target_node: ?*DOMNode = null;
@@ -667,7 +644,7 @@ fn execWaitForSelector(session: *lp.Session, registry: *CDPNode.Registry, arena:
         selector: [:0]const u8,
         timeout: ?u32 = null,
     };
-    const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
 
     _ = session.currentPage() orelse return ToolError.PageNotLoaded;
 
@@ -687,7 +664,7 @@ fn execHover(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
         backendNodeId: ?CDPNode.Id = null,
         selector: ?[]const u8 = null,
     };
-    const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
     const resolved = if (args.selector) |sel|
         try resolveBySelector(session, sel)
     else if (args.backendNodeId) |nid|
@@ -718,7 +695,7 @@ fn execPress(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
         key: []const u8,
         backendNodeId: ?CDPNode.Id = null,
     };
-    const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
 
     const page = session.currentPage() orelse return ToolError.PageNotLoaded;
 
@@ -754,7 +731,7 @@ fn execSelectOption(session: *lp.Session, registry: *CDPNode.Registry, arena: st
         selector: ?[]const u8 = null,
         value: []const u8,
     };
-    const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
     const resolved = if (args.selector) |sel|
         try resolveBySelector(session, sel)
     else if (args.backendNodeId) |nid|
@@ -787,7 +764,7 @@ fn execSetChecked(session: *lp.Session, registry: *CDPNode.Registry, arena: std.
         selector: ?[]const u8 = null,
         checked: bool,
     };
-    const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
     const resolved = if (args.selector) |sel|
         try resolveBySelector(session, sel)
     else if (args.backendNodeId) |nid|
@@ -820,7 +797,7 @@ fn execFindElement(session: *lp.Session, registry: *CDPNode.Registry, arena: std
         role: ?[]const u8 = null,
         name: ?[]const u8 = null,
     };
-    const args = parseArgsOrDefault(Params, arena, arguments);
+    const args = try parseArgsOrDefault(Params, arena, arguments);
 
     if (args.role == null and args.name == null) return ToolError.InvalidParams;
 
@@ -853,7 +830,7 @@ fn execFindElement(session: *lp.Session, registry: *CDPNode.Registry, arena: std
 
 fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct { name: []const u8 };
-    const args = parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
     const name_z = arena.dupeZ(u8, args.name) catch return ToolError.InternalError;
     const value = std.posix.getenv(name_z) orelse
         return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{args.name}) catch ToolError.InternalError;
@@ -865,7 +842,7 @@ fn execConsoleLogs(
     arena: std.mem.Allocator,
 ) ToolError![]const u8 {
     const page = session.currentPage() orelse return ToolError.PageNotLoaded;
-    const messages = page.console_messages.items;
+    const messages = page._console_messages.items;
     if (messages.len == 0) return "No console messages.";
 
     var aw: std.Io.Writer.Allocating = .init(arena);
@@ -873,7 +850,7 @@ fn execConsoleLogs(
     for (messages) |msg| {
         writer.print("[{s}] {s}\n", .{ @tagName(msg.level), msg.text }) catch return ToolError.InternalError;
     }
-    page.console_messages.clearRetainingCapacity();
+    page._console_messages.clearRetainingCapacity();
     return aw.written();
 }
 
@@ -897,8 +874,6 @@ fn execGetCookies(session: *lp.Session, arena: std.mem.Allocator) ToolError![]co
     }
     return aw.written();
 }
-
-// --- Shared helpers ---
 
 fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!*lp.Page {
     if (url) |u| {
@@ -938,17 +913,22 @@ fn resolveBySelector(session: *lp.Session, selector: []const u8) ToolError!NodeA
     return .{ .node = node, .page = page };
 }
 
-fn parseArgsOrDefault(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) T {
+fn parseArgsOrDefault(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) error{OutOfMemory}!T {
     const args_raw = arguments orelse return .{};
-    return std.json.parseFromValueLeaky(T, arena, args_raw, .{ .ignore_unknown_fields = true }) catch .{};
+    return std.json.parseFromValueLeaky(T, arena, args_raw, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => .{},
+    };
 }
 
-fn parseArgsOrErr(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) ?T {
+fn parseArgsOrErr(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) error{OutOfMemory}!?T {
     const args_raw = arguments orelse return null;
-    return std.json.parseFromValueLeaky(T, arena, args_raw, .{ .ignore_unknown_fields = true }) catch null;
+    return std.json.parseFromValueLeaky(T, arena, args_raw, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => null,
+    };
 }
 
-/// Substitute $VAR_NAME references with values from the environment.
 pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8 {
     if (std.mem.indexOfScalar(u8, input, '$') == null) return input;
 

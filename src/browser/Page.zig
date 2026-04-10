@@ -241,7 +241,7 @@ _parent_notified: bool = false,
 
 _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
-console_messages: std.ArrayListUnmanaged(ConsoleMessage) = .{},
+_console_messages: std.ArrayListUnmanaged(ConsoleMessage) = .{},
 _navigated_options: ?NavigatedOpts = null,
 
 pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void {
@@ -2547,7 +2547,7 @@ pub fn appendConsoleMessage(self: *Page, level: ConsoleMessage.Level, values: []
         value.format(&aw.writer) catch return;
     }
     const text = aw.written();
-    self.console_messages.append(self.arena, .{ .level = level, .text = text }) catch return;
+    self._console_messages.append(self.arena, .{ .level = level, .text = text }) catch return;
 }
 
 pub fn dupeString(self: *Page, value: []const u8) ![]const u8 {
