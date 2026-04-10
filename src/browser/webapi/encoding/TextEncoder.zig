@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -26,12 +26,23 @@ pub fn init() TextEncoder {
     return .{};
 }
 
-pub fn encode(_: *const TextEncoder, v: []const u8) !js.TypedArray(u8) {
-    if (!std.unicode.utf8ValidateSlice(v)) {
+pub fn encode(_: *const TextEncoder, v_: ?js.Value) !js.TypedArray(u8) {
+    const v = v_ orelse return .{ .values = "" };
+
+    if (v.isUndefined()) {
+        return .{ .values = "" };
+    }
+
+    if (v.isNull()) {
+        return .{ .values = "null" };
+    }
+
+    const str = try v.toStringSlice();
+    if (!std.unicode.utf8ValidateSlice(str)) {
         return error.InvalidUtf8;
     }
 
-    return .{ .values = v };
+    return .{ .values = str };
 }
 
 pub const JsApi = struct {

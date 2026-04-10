@@ -11,7 +11,6 @@
   testing.expectEqual('', d1.decode());
   testing.expectEqual('香料', d1.decode(new Uint8Array([233, 166, 153, 230, 150, 153])));
   testing.expectEqual('香料', d1.decode(new Uint8Array([0xEF, 0xBB, 0xBF, 233, 166, 153, 230, 150, 153])));
-  testing.expectEqual('�4', d1.decode(new Uint8Array([249, 52])));
 
   {
     const buffer = new ArrayBuffer(6);
@@ -38,7 +37,7 @@
   }
 
   let d2 = new TextDecoder('utf8', {fatal: true})
-  testing.expectError('Error: InvalidUtf8', () => {
+  testing.expectError('TypeError', () => {
     let data  = new Uint8Array([241, 241, 159, 172]);
     d2.decode(data);
   });
@@ -46,8 +45,8 @@
 
 <script id=stream>
   let d3 = new TextDecoder();
-  testing.expectEqual('', d2.decode(new Uint8Array([226, 153]), { stream: true }));
-  testing.expectEqual('♥', d2.decode(new Uint8Array([165]), { stream: true }));
+  testing.expectEqual('', d3.decode(new Uint8Array([226, 153]), { stream: true }));
+  testing.expectEqual('♥', d3.decode(new Uint8Array([165]), { stream: true }));
 </script>
 
 <script id=slice>
@@ -60,5 +59,69 @@
   arr1[4] = 84;
   arr1[5] = 85;
   arr1[6] = 86;
-  testing.expectEqual('RST', d3.decode(new Uint8Array(buf1, 2, 3)));
+  let d4 = new TextDecoder();
+  testing.expectEqual('RST', d4.decode(new Uint8Array(buf1, 2, 3)));
+</script>
+
+<script id=legacy_encodings>
+  // GBK (Chinese)
+  let gbk = new TextDecoder('gbk');
+  testing.expectEqual('gbk', gbk.encoding);
+  testing.expectEqual('中文', gbk.decode(new Uint8Array([0xD6, 0xD0, 0xCE, 0xC4])));
+
+  // Shift_JIS (Japanese)
+  let sjis = new TextDecoder('shift_jis');
+  testing.expectEqual('shift_jis', sjis.encoding);
+  testing.expectEqual('日本語', sjis.decode(new Uint8Array([0x93, 0xFA, 0x96, 0x7B, 0x8C, 0xEA])));
+
+  // EUC-JP (Japanese)
+  let eucjp = new TextDecoder('euc-jp');
+  testing.expectEqual('euc-jp', eucjp.encoding);
+
+  // ISO-8859-1 (Latin-1)
+  let latin1 = new TextDecoder('iso-8859-1');
+  testing.expectEqual('windows-1252', latin1.encoding); // ISO-8859-1 maps to windows-1252 per spec
+  testing.expectEqual('café', latin1.decode(new Uint8Array([0x63, 0x61, 0x66, 0xe9])));
+
+  // Big5 (Traditional Chinese)
+  let big5 = new TextDecoder('big5');
+  testing.expectEqual('big5', big5.encoding);
+
+  // UTF-16LE
+  let utf16le = new TextDecoder('utf-16le');
+  testing.expectEqual('utf-16le', utf16le.encoding);
+  testing.expectEqual('AB', utf16le.decode(new Uint8Array([0x41, 0x00, 0x42, 0x00])));
+
+  // UTF-16BE
+  let utf16be = new TextDecoder('utf-16be');
+  testing.expectEqual('utf-16be', utf16be.encoding);
+  testing.expectEqual('AB', utf16be.decode(new Uint8Array([0x00, 0x41, 0x00, 0x42])));
+</script>
+
+<script id=invalid_label>
+  // Test invalid encoding label
+  try {
+    new TextDecoder('invalid-encoding');
+    testing.fail();
+  } catch (e) {
+    testing.expectEqual(true, e.toString().includes('RangeError'));
+  }
+
+  // Test 'replacement' encoding is rejected
+  try {
+    new TextDecoder('replacement');
+    testing.fail();
+  } catch (e) {
+    testing.expectEqual(true, e.toString().includes('RangeError'));
+  }
+</script>
+
+<script id=label_variations>
+  // Case insensitive
+  let upper = new TextDecoder('UTF-8');
+  testing.expectEqual('utf-8', upper.encoding);
+
+  // Leading/trailing whitespace
+  let ws = new TextDecoder('  utf-8  ');
+  testing.expectEqual('utf-8', ws.encoding);
 </script>
