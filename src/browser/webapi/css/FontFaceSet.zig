@@ -34,7 +34,7 @@ _proto: *EventTarget,
 _arena: Allocator,
 
 pub fn init(page: *Page) !*FontFaceSet {
-    const arena = try page.getArena(.{ .debug = "FontFaceSet" });
+    const arena = try page.getArena(.tiny, "FontFaceSet");
     errdefer page.releaseArena(arena);
 
     return page._factory.eventTargetWithAllocator(arena, FontFaceSet{

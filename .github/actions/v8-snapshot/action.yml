@@ -1,0 +1,42 @@
+name: "V8 snaphsot"
+description: "Generate v8 snapshot"
+
+inputs:
+  arch:
+    description: 'CPU arch used to select the v8 lib'
+    required: false
+    default: 'x86_64'
+  os:
+    description: 'OS used to select the v8 lib'
+    required: false
+    default: 'linux'
+
+runs:
+  using: "composite"
+
+  steps:
+      # Use the commit hash of bridge.zig and Snapshot.zig as cache key for
+      # snapshot.
+    - name: V8 snapshot cache key
+      id: snapshot_cache_key
+      run: echo "hash=v8-snapshot-${{ inputs.os }}_${{ inputs.arch }}-$(git log -n 1 --pretty=format:%H --
+                 src/browser/js/bridge.zig
+                 src/browser/js/Snapshot.zig
+                 )" >> "$GITHUB_OUTPUT"
+      shell: bash
+
+    # Fetch the cache for snapshot
+    - name: Cache V8 snapshot
+      id: cache-v8-snapshot
+      uses: actions/cache@v5
+      env:
+        cache-name: cache-v8-snapshot
+      with:
+        path: src/snapshot.bin
+        key: ${{ steps.snapshot_cache_key.outputs.hash }}
+
+    # Generate snapshot on cache miss.
+    - name: v8 snapshot
+      shell: bash
+      if: hashFiles('src/snapshot.bin') == ''
+      run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin

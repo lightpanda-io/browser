@@ -69,7 +69,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     app.telemetry = try Telemetry.init(app, config.mode);
     errdefer app.telemetry.deinit(allocator);
 
-    app.arena_pool = ArenaPool.init(allocator, 512, 1024 * 16);
+    app.arena_pool = ArenaPool.init(allocator, .{});
     errdefer app.arena_pool.deinit();
 
     return app;

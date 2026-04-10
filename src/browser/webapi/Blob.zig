@@ -77,7 +77,15 @@ pub fn initWithMimeValidation(
     validate_mime: bool,
     page: *Page,
 ) !*Blob {
-    const arena = try page.getArena(.{ .debug = "Blob" });
+    const data_len = blk: {
+        const parts = maybe_blob_parts orelse break :blk 0;
+        var size: usize = 0;
+        for (parts) |p| {
+            size += p.len;
+        }
+        break :blk size;
+    };
+    const arena = try page.getArena(256 + data_len, "Blob");
     errdefer page.releaseArena(arena);
 
     const options: InitOptions = maybe_options orelse .{};

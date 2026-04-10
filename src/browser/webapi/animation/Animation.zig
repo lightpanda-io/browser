@@ -52,7 +52,7 @@ _playState: PlayState = .idle,
 //
 // TODO add support for effect and timeline
 pub fn init(page: *Page) !*Animation {
-    const arena = try page.getArena(.{ .debug = "Animation" });
+    const arena = try page.getArena(.tiny, "Animation");
     errdefer page.releaseArena(arena);
 
     const self = try arena.create(Animation);

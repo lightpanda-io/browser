@@ -45,14 +45,14 @@ const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, opts: Options, page: *Page) !*NavigationCurrentEntryChangeEvent {
-    const arena = try page.getArena(.{ .debug = "NavigationCurrentEntryChangeEvent" });
+    const arena = try page.getArena(.tiny, "NavigationCurrentEntryChangeEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
     return initWithTrusted(arena, type_string, opts, false, page);
 }
 
 pub fn initTrusted(typ: String, opts: Options, page: *Page) !*NavigationCurrentEntryChangeEvent {
-    const arena = try page.getArena(.{ .debug = "NavigationCurrentEntryChangeEvent.trusted" });
+    const arena = try page.getArena(.tiny, "NavigationCurrentEntryChangeEvent.trusted");
     errdefer page.releaseArena(arena);
     return initWithTrusted(arena, typ, opts, true, page);
 }

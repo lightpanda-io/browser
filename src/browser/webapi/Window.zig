@@ -407,7 +407,7 @@ pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]cons
     const target_page = self._page;
     const source_window = target_page.js.getIncumbent().window;
 
-    const arena = try target_page.getArena(.{ .debug = "Window.postMessage" });
+    const arena = try target_page.getArena(.medium, "Window.postMessage");
     errdefer target_page.releaseArena(arena);
 
     // Origin should be the source window's origin (where the message came from)
@@ -645,7 +645,7 @@ fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: Sc
         return error.TooManyTimeout;
     }
 
-    const arena = try page.getArena(.{ .debug = "Window.schedule" });
+    const arena = try page.getArena(.tiny, "Window.schedule");
     errdefer page.releaseArena(arena);
 
     const timer_id = self._timer_id +% 1;

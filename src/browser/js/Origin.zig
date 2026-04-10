@@ -45,7 +45,7 @@ key: []const u8,
 security_token: v8.Global,
 
 pub fn init(app: *App, isolate: js.Isolate, key: []const u8) !*Origin {
-    const arena = try app.arena_pool.acquire(.{ .debug = "Origin" });
+    const arena = try app.arena_pool.acquire(.tiny, "Origin");
     errdefer app.arena_pool.release(arena);
 
     var hs: js.HandleScope = undefined;

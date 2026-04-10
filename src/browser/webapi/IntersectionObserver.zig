@@ -71,7 +71,7 @@ pub const ObserverInit = struct {
 };
 
 pub fn init(callback: js.Function.Temp, options: ?ObserverInit, page: *Page) !*IntersectionObserver {
-    const arena = try page.getArena(.{ .debug = "IntersectionObserver" });
+    const arena = try page.getArena(.medium, "IntersectionObserver");
     errdefer page.releaseArena(arena);
 
     const opts = options orelse ObserverInit{};
@@ -266,7 +266,7 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, page: *Page)
         (was_intersecting_opt != null and was_intersecting_opt.? != is_now_intersecting);
 
     if (should_report) {
-        const arena = try page.getArena(.{ .debug = "IntersectionObserverEntry" });
+        const arena = try page.getArena(.tiny, "IntersectionObserverEntry");
         errdefer page.releaseArena(arena);
 
         const entry = try arena.create(IntersectionObserverEntry);

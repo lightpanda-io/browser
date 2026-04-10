@@ -11,6 +11,10 @@
     testing.onload(() => {
       // GBK-encoded "中文" should be decoded to UTF-8
       testing.expectEqual('中文', iframe.contentDocument.getElementById('test').textContent);
+      // document.characterSet should return canonical encoding name
+      testing.expectEqual('GBK', iframe.contentDocument.characterSet);
+      testing.expectEqual('GBK', iframe.contentDocument.charset);
+      testing.expectEqual('GBK', iframe.contentDocument.inputEncoding);
     });
   }
 </script>
@@ -70,6 +74,35 @@
       const text = iframe.contentDocument.getElementById('test').textContent;
       // Should contain replacement characters (the exact count depends on how invalid bytes are handled)
       testing.expectTrue(text.includes('\uFFFD'));
+    });
+  }
+</script>
+
+<script id="anchor_href_encoding_with_ncr">
+  {
+    // Test that anchor.href encodes unmappable characters as NCRs in non-UTF-8 documents.
+    // When a character can't be represented in the document's encoding, it should become &#nnnnn;
+    // Per WHATWG URL Standard, query strings use document encoding with NCR fallback.
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    iframe.src = 'encoding/gbk.html';
+
+    testing.onload(() => {
+      testing.expectEqual('GBK', iframe.contentDocument.characterSet);
+
+      // Test 1: U+3D34 (㴴) - a Han character NOT in GBK, should become NCR &#15668;
+      const anchor = iframe.contentDocument.createElement('a');
+      iframe.contentDocument.body.appendChild(anchor);
+      anchor.href = 'http://example.com/?q=\u3D34';
+      // The NCR &#15668; percent-encoded is %26%2315668%3B
+      testing.expectEqual('http://example.com/?q=%26%2315668%3B', anchor.href);
+
+      // Test 2: U+4E2D (中) - IS in GBK, should encode to GBK bytes D6D0 then percent-encode
+      const anchor2 = iframe.contentDocument.createElement('a');
+      iframe.contentDocument.body.appendChild(anchor2);
+      anchor2.href = 'http://example.com/?q=\u4E2D';
+      // GBK encoding of 中 is D6 D0, percent-encoded as %D6%D0
+      testing.expectEqual('http://example.com/?q=%D6%D0', anchor2.href);
     });
   }
 </script>

@@ -37,7 +37,7 @@ const PromiseRejectionEventOptions = struct {
 const Options = Event.inheritOptions(PromiseRejectionEvent, PromiseRejectionEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*PromiseRejectionEvent {
-    const arena = try page.getArena(.{ .debug = "PromiseRejectionEvent" });
+    const arena = try page.getArena(.tiny, "PromiseRejectionEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 
