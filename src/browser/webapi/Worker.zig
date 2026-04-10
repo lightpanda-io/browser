@@ -61,7 +61,7 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
     };
     const session = page._session;
 
-    const arena = try session.getArena(.{ .debug = "Worker" });
+    const arena = try session.getArena(.large, "Worker");
     errdefer session.releaseArena(arena);
 
     const resolved_url = try URL.resolve(arena, exec.url.*, url, .{});
@@ -258,7 +258,7 @@ pub fn receiveMessage(self: *Worker, data: js.Value) !void {
         break :blk cloned.temp();
     };
 
-    const message_arena = try page.getArena(.{ .debug = "Worker.receiveMessage" });
+    const message_arena = try page.getArena(.tiny, "Worker.receiveMessage");
     errdefer page.releaseArena(message_arena);
 
     const callback = try message_arena.create(ReceiveMessageCallback);

@@ -77,7 +77,7 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
     const session = worker._page._session;
     const factory = &session.factory;
 
-    const call_arena = try session.getArena(.{ .debug = "WorkerGlobalScope.call_arena" });
+    const call_arena = try session.getArena(.small, "WorkerGlobalScope.call_arena");
     errdefer session.releaseArena(call_arena);
 
     const self = try factory.eventTargetWithAllocator(arena, WorkerGlobalScope{
@@ -210,7 +210,7 @@ pub fn receiveMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
 
     const session = self._session;
 
-    const message_arena = try session.getArena(.{ .debug = "WorkerGlobalScope.receiveMessage" });
+    const message_arena = try session.getArena(.tiny, "WorkerGlobalScope.receiveMessage");
     errdefer session.releaseArena(message_arena);
 
     const callback = try message_arena.create(ReceiveMessageCallback);
