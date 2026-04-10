@@ -445,7 +445,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--cookies-file
         \\                Path to a JSON file for cookie persistence. Cookies are loaded
         \\                from this file at startup and saved back on exit.
-        \\                Format: [{name, value, domain, path, expires, secure, httpOnly}]
+        \\                Format: [{{name, value, domain, path, expires, secure, httpOnly}}]
         \\                Defaults to no persistence.
     ;
 
