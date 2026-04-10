@@ -85,11 +85,12 @@ pub fn saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
 
     var buf: [8192]u8 = undefined;
     var writer = file.writer(&buf);
+    const w = &writer.interface;
 
-    try writer.writeAll("[");
+    try w.writeAll("[");
     for (jar.cookies.items, 0..) |c, i| {
-        if (i > 0) try writer.writeAll(",");
-        try writer.writeAll("\n  ");
+        if (i > 0) try w.writeAll(",");
+        try w.writeAll("\n  ");
         try std.json.stringify(JsonCookie{
             .name = c.name,
             .value = c.value,
@@ -98,13 +99,13 @@ pub fn saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
             .expires = c.expires,
             .secure = c.secure,
             .httpOnly = c.http_only,
-        }, .{}, &writer);
+        }, .{}, w);
     }
     if (jar.cookies.items.len > 0) {
-        try writer.writeAll("\n");
+        try w.writeAll("\n");
     }
-    try writer.writeAll("]\n");
-    try writer.flush();
+    try w.writeAll("]\n");
+    try writer.end();
 
     log.info(.app, "saved cookies to file", .{ .path = path, .count = jar.cookies.items.len });
 }
