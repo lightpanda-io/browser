@@ -45,24 +45,56 @@ pub fn Builder(comptime commands: anytype) type {
             var fields: [options.len]std.builtin.Type.StructField = undefined;
 
             inline for (options, 0..) |option, j| {
+                // Whether prefer `ArrayList` for the option.
                 const is_multiple = @hasField(@TypeOf(option), "multiple") and option.multiple;
-                const T, const default = type_and_default: {
+                // Whether option has a default value.
+                const has_default = @hasField(@TypeOf(option), "default");
+
+                const T = if (is_multiple) std.ArrayList(option.type) else option.type;
+
+                const default = blk: {
                     if (is_multiple) {
                         // We currently don't allow default values for lists.
-                        if (@hasField(@TypeOf(option), "default")) unreachable;
-                        // If `multiple` provided, prefer `ArrayList`.
-                        const T = std.ArrayList(option.type);
-                        break :type_and_default .{ T, &@as(T, .{}) };
+                        if (has_default) {
+                            @compileError("`default` is not allowed for lists");
+                        }
+                        // Multiples are always initialized the same.
+                        break :blk @as(*const anyopaque, @ptrCast(&@as(T, .{})));
                     }
 
-                    const T = option.type;
-                    break :type_and_default .{ T, &@as(T, option.default) };
+                    switch (@typeInfo(option.type)) {
+                        .optional => |optional| {
+                            if (optional.child == bool) {
+                                @compileError("?bool is not supported, prefer enum");
+                            }
+
+                            // If type is an optional type without default value, prefer null.
+                            if (!has_default) {
+                                break :blk @as(*const anyopaque, @ptrCast(&@as(T, null)));
+                            }
+                            // We have default value for an optional.
+                            break :blk @as(*const anyopaque, @ptrCast(&@as(T, option.default)));
+                        },
+                        .bool => {
+                            if (has_default) {
+                                @compileError("booleans are always `false` by default");
+                            }
+                            // Booleans are always initalized false.
+                            break :blk @as(*const anyopaque, @ptrCast(&@as(T, false)));
+                        },
+                        inline else => {
+                            if (!has_default) {
+                                @compileError("option `" ++ option.name ++ "` is not optional type and has no default value");
+                            }
+                            break :blk @as(*const anyopaque, @ptrCast(&@as(T, option.default)));
+                        },
+                    }
                 };
 
                 fields[j] = .{
                     .name = option.name,
                     .type = T,
-                    .default_value_ptr = @ptrCast(default),
+                    .default_value_ptr = default,
                     .is_comptime = false,
                     .alignment = @alignOf(T),
                 };
@@ -78,26 +110,28 @@ pub fn Builder(comptime commands: anytype) type {
                 const Command = @TypeOf(command);
                 const options = command.options;
 
+                const fields = optionsToStructFields(options) ++
+                    (if (@hasField(Command, "shared_options"))
+                        optionsToStructFields(command.shared_options)
+                    else
+                        .{}) ++
+                    (if (@hasField(Command, "positional"))
+                        [1]std.builtin.Type.StructField{
+                            .{
+                                .name = command.positional.name,
+                                .type = command.positional.type,
+                                .default_value_ptr = @ptrCast(&@as(command.positional.type, null)),
+                                .is_comptime = false,
+                                .alignment = @alignOf(command.positional.type),
+                            },
+                        }
+                    else
+                        .{});
+
                 const T = @Type(.{
                     .@"struct" = .{
                         .decls = &.{},
-                        .fields = &(optionsToStructFields(options) ++
-                            (if (@hasField(Command, "shared_options"))
-                                optionsToStructFields(command.shared_options)
-                            else
-                                .{}) ++
-                            (if (@hasField(Command, "positional"))
-                                [1]std.builtin.Type.StructField{
-                                    .{
-                                        .name = command.positional.name,
-                                        .type = command.positional.type,
-                                        .default_value_ptr = @ptrCast(&@as(command.positional.type, null)),
-                                        .is_comptime = false,
-                                        .alignment = @alignOf(command.positional.type),
-                                    },
-                                }
-                            else
-                                .{})),
+                        .fields = &fields,
                         .is_tuple = false,
                         .layout = .auto,
                     },
@@ -164,19 +198,36 @@ pub fn Builder(comptime commands: anytype) type {
             };
             iter_args: while (args.next()) |option_name| {
                 inline for (options) |option| {
-                    // We allow both `--my-option` and `--my_option` variants;
-                    // assuming given `option` struct prefer snake_case for name.
-                    const kebab_cased = comptime blk: {
-                        var output: [option.name.len]u8 = undefined;
-                        @memcpy(&output, option.name);
-                        std.mem.replaceScalar(u8, &output, '_', '-');
-                        break :blk output;
+                    // Match an option.
+                    const match = blk: {
+                        // We allow both `--my-option` and `--my_option` variants;
+                        // assuming given `option` struct prefer snake_case for `name`.
+                        const kebab_cased = comptime casing: {
+                            var output: [option.name.len]u8 = undefined;
+                            @memcpy(&output, option.name);
+                            std.mem.replaceScalar(u8, &output, '_', '-');
+                            break :casing output;
+                        };
+
+                        const match =
+                            std.mem.eql(u8, option_name, "--" ++ option.name) or
+                            std.mem.eql(u8, option_name, "--" ++ kebab_cased);
+
+                        // Name not matched; try shortcuts if provided.
+                        if (!match) {
+                            if (@hasField(@TypeOf(option), "shortcuts")) {
+                                inline for (option.shortcuts) |shortcut| {
+                                    if (std.mem.eql(u8, option_name, "-" ++ shortcut)) {
+                                        break :blk true;
+                                    }
+                                }
+                            }
+                        }
+
+                        break :blk match;
                     };
 
-                    // Match an option.
-                    if (std.mem.eql(u8, option_name, "--" ++ option.name) or
-                        std.mem.eql(u8, option_name, "--" ++ kebab_cased))
-                    {
+                    if (match) {
                         const T = option.type;
                         const option_info = blk: {
                             const info = @typeInfo(T);
@@ -187,117 +238,129 @@ pub fn Builder(comptime commands: anytype) type {
 
                         // TODO: Support multiples.
                         const is_multiple = @hasField(@TypeOf(option), "multiple") and option.multiple;
+                        const has_validator = @hasField(@TypeOf(option), "validator");
 
-                        switch (option_info) {
-                            .int => |int| {
-                                const Int = std.meta.Int(int.signedness, int.bits);
-                                // TODO: Return correct errors.
-                                const v = try std.fmt.parseInt(Int, args.next().?, 10);
+                        // Prefer custom validator logic instead.
+                        if (has_validator) {
+                            const v = try @call(.auto, option.validator, .{ allocator, args });
 
-                                if (is_multiple) {
-                                    // Push to ArrayList.
-                                    try @field(c, option.name).append(allocator, v);
-                                } else {
-                                    @field(c, option.name) = v;
-                                }
-                            },
-                            .pointer => |pointer| {
-                                const not_u8_slice = pointer.child != u8 or pointer.size != .slice;
-                                if (not_u8_slice) {
-                                    @compileError("Only []u8, []const u8, [:sentinel]u8 and [:sentinel]const u8 pointers are supported");
-                                }
+                            if (is_multiple) {
+                                try @field(c, option.name).append(allocator, v);
+                            } else {
+                                @field(c, option.name) = v;
+                            }
+                        } else {
+                            switch (option_info) {
+                                .int => |int| {
+                                    const Int = std.meta.Int(int.signedness, int.bits);
+                                    // TODO: Return correct errors.
+                                    const v = try std.fmt.parseInt(Int, args.next().?, 10);
 
-                                // TODO: Return error.
-                                const str = args.next().?;
-
-                                const v = blk: {
-                                    // DupeZ branch.
-                                    if (comptime pointer.sentinel()) |sentinel| {
-                                        const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.alignment), str.len + 1);
-                                        @memcpy(buf[0..str.len], str);
-                                        buf[str.len] = sentinel;
-                                        break :blk buf[0..str.len :sentinel];
+                                    if (is_multiple) {
+                                        // Push to ArrayList.
+                                        try @field(c, option.name).append(allocator, v);
+                                    } else {
+                                        @field(c, option.name) = v;
+                                    }
+                                },
+                                .pointer => |pointer| {
+                                    const not_u8_slice = pointer.child != u8 or pointer.size != .slice;
+                                    if (not_u8_slice) {
+                                        @compileError("Only []u8, []const u8, [:sentinel]u8 and [:sentinel]const u8 pointers are supported");
                                     }
 
-                                    // Dupe branch.
-                                    const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.alignment), str.len);
-                                    @memcpy(buf, str);
-                                    break :blk buf;
-                                };
+                                    // TODO: Return error.
+                                    const str = args.next().?;
 
-                                if (is_multiple) {
-                                    try @field(c, option.name).append(allocator, v);
-                                } else {
-                                    @field(c, option.name) = v;
-                                }
-                            },
-                            .@"struct" => |_struct| {
-                                // Don't support multiple for structs for now.
-                                if (is_multiple) {
-                                    @compileError("multiple option is not supported for structs");
-                                }
+                                    const v = blk: {
+                                        // DupeZ branch.
+                                        if (comptime pointer.sentinel()) |sentinel| {
+                                            const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.alignment), str.len + 1);
+                                            @memcpy(buf[0..str.len], str);
+                                            buf[str.len] = sentinel;
+                                            break :blk buf[0..str.len :sentinel];
+                                        }
 
-                                const not_packed = _struct.layout != .@"packed";
-                                if (not_packed) {
-                                    @compileError("only packed structs are allowed");
-                                }
+                                        // Dupe branch.
+                                        const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.alignment), str.len);
+                                        @memcpy(buf, str);
+                                        break :blk buf;
+                                    };
 
-                                // TODO: Return error.
-                                const str = args.next().?;
+                                    if (is_multiple) {
+                                        try @field(c, option.name).append(allocator, v);
+                                    } else {
+                                        @field(c, option.name) = v;
+                                    }
+                                },
+                                .@"struct" => |_struct| {
+                                    // Don't support multiple for structs for now.
+                                    if (is_multiple) {
+                                        @compileError("multiple option is not supported for structs");
+                                    }
 
-                                if (std.mem.eql(u8, str, "all")) {
-                                    // "all" sets all the fields of packed struct.
-                                    const Int = _struct.backing_integer.?;
-                                    @field(c, option.name) = @bitCast(@as(Int, std.math.maxInt(Int)));
-                                } else {
-                                    // Parse given args.
-                                    var it = std.mem.splitScalar(u8, str, ',');
-                                    outer: while (it.next()) |part| {
-                                        const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
+                                    const not_packed = _struct.layout != .@"packed";
+                                    if (not_packed) {
+                                        @compileError("only packed structs are allowed");
+                                    }
 
-                                        inline for (_struct.fields) |f| {
-                                            std.debug.assert(f.type == bool);
+                                    // TODO: Return error.
+                                    const str = args.next().?;
 
-                                            if (std.mem.eql(u8, trimmed, @as([]const u8, f.name))) {
-                                                @field(@field(c, option.name), f.name) = true;
-                                                continue :outer;
+                                    if (std.mem.eql(u8, str, "all")) {
+                                        // "all" sets all the fields of packed struct.
+                                        const Int = _struct.backing_integer.?;
+                                        @field(c, option.name) = @bitCast(@as(Int, std.math.maxInt(Int)));
+                                    } else {
+                                        // Parse given args.
+                                        var it = std.mem.splitScalar(u8, str, ',');
+                                        outer: while (it.next()) |part| {
+                                            const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
+
+                                            inline for (_struct.fields) |f| {
+                                                std.debug.assert(f.type == bool);
+
+                                                if (std.mem.eql(u8, trimmed, @as([]const u8, f.name))) {
+                                                    @field(@field(c, option.name), f.name) = true;
+                                                    continue :outer;
+                                                }
                                             }
                                         }
                                     }
-                                }
-                            },
-                            .@"enum" => {
-                                if (is_multiple) {
-                                    @compileError("multiple option is not supported for enums");
-                                }
+                                },
+                                .@"enum" => {
+                                    if (is_multiple) {
+                                        @compileError("multiple option is not supported for enums");
+                                    }
 
-                                const E = switch (@typeInfo(T)) {
-                                    .optional => |optional| optional.child,
-                                    inline else => T,
-                                };
-
-                                // This type only, we peek ahead to check if there's a following arg.
-                                // If there isn't, the default is set already.
-                                var peek_args = args.*;
-                                if (peek_args.next()) |next_arg| {
-                                    const v = std.meta.stringToEnum(E, next_arg) orelse {
-                                        return error.UnknownArgument;
+                                    const E = switch (@typeInfo(T)) {
+                                        .optional => |optional| optional.child,
+                                        inline else => T,
                                     };
-                                    // Discard.
-                                    _ = args.next();
 
-                                    @field(c, option.name) = v;
-                                }
-                            },
-                            .bool => {
-                                if (is_multiple) {
-                                    @compileError("multiple option is not supported for booleans");
-                                }
+                                    // This type only, we peek ahead to check if there's a following arg.
+                                    // If there isn't, the default is set already.
+                                    var peek_args = args.*;
+                                    if (peek_args.next()) |next_arg| {
+                                        const v = std.meta.stringToEnum(E, next_arg) orelse {
+                                            return error.UnknownArgument;
+                                        };
+                                        // Discard.
+                                        _ = args.next();
 
-                                @field(c, option.name) = true;
-                            },
+                                        @field(c, option.name) = v;
+                                    }
+                                },
+                                .bool => {
+                                    if (is_multiple) {
+                                        @compileError("multiple option is not supported for booleans");
+                                    }
 
-                            else => {},
+                                    @field(c, option.name) = true;
+                                },
+
+                                else => {},
+                            }
                         }
 
                         continue :iter_args;
