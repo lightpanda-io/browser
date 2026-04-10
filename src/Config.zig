@@ -70,6 +70,9 @@ const CommonOptions = .{
     .{ .name = "web_bot_auth_key_file", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_keyid", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_domain", .type = ?[]const u8 },
+    .{ .name = "user_agent", .type = ?[]const u8 },
+    .{ .name = "block_private_networks", .type = bool },
+    .{ .name = "block_cidrs", .type = ?[]const u8 },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -255,7 +258,7 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
 
 pub fn userAgent(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.user_agent,
+        inline .serve, .fetch, .mcp => |opts| opts.user_agent,
         .help, .version => null,
     };
 }
@@ -318,14 +321,14 @@ pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
 
 pub fn blockPrivateNetworks(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.block_private_networks,
+        inline .serve, .fetch, .mcp => |opts| opts.block_private_networks,
         else => unreachable,
     };
 }
 
 pub fn blockCidrs(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.block_cidrs,
+        inline .serve, .fetch, .mcp => |opts| opts.block_cidrs,
         else => unreachable,
     };
 }
