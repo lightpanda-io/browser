@@ -45,7 +45,7 @@ pub fn querySelectorAll(root: *Node, input: []const u8, page: *Page) !*List {
         return error.SyntaxError;
     }
 
-    const arena = try page.getArena(.{ .debug = "querySelectorAll" });
+    const arena = try page.getArena(.small, "querySelectorAll");
     errdefer page.releaseArena(arena);
 
     var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;

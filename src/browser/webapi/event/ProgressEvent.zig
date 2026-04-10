@@ -39,14 +39,14 @@ const ProgressEventOptions = struct {
 const Options = Event.inheritOptions(ProgressEvent, ProgressEventOptions);
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*ProgressEvent {
-    const arena = try page.getArena(.{ .debug = "ProgressEvent" });
+    const arena = try page.getArena(.tiny, "ProgressEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
     return initWithTrusted(arena, type_string, _opts, false, page);
 }
 
 pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*ProgressEvent {
-    const arena = try page.getArena(.{ .debug = "ProgressEvent.trusted" });
+    const arena = try page.getArena(.tiny, "ProgressEvent.trusted");
     errdefer page.releaseArena(arena);
     return initWithTrusted(arena, typ, _opts, true, page);
 }

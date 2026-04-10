@@ -292,7 +292,7 @@ pub fn insertAdjacentHTML(
     });
     const doc_node = doc.asNode();
 
-    const arena = try page.getArena(.{ .debug = "HTML.insertAdjacentHTML" });
+    const arena = try page.getArena(.medium, "HTML.insertAdjacentHTML");
     defer page.releaseArena(arena);
 
     const Parser = @import("../../parser/Parser.zig");

@@ -56,7 +56,7 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*TextDecoder {
         return error.RangeError;
     }
 
-    const arena = try page.getArena(.{ .debug = "TextDecoder" });
+    const arena = try page.getArena(.large, "TextDecoder");
     errdefer page.releaseArena(arena);
 
     const opts = opts_ orelse InitOpts{};

@@ -66,7 +66,7 @@ dirty: bool = false,
 pub fn init(page: *Page) !StyleManager {
     return .{
         .page = page,
-        .arena = try page.getArena(.{ .debug = "StyleManager" }),
+        .arena = try page.getArena(.medium, "StyleManager"),
     };
 }
 

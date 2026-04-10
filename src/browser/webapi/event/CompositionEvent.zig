@@ -35,7 +35,7 @@ const CompositionEventOptions = struct {
 const Options = Event.inheritOptions(CompositionEvent, CompositionEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CompositionEvent {
-    const arena = try page.getArena(.{ .debug = "CompositionEvent" });
+    const arena = try page.getArena(.tiny, "CompositionEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 

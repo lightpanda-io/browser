@@ -186,13 +186,13 @@ const Options = Event.inheritOptions(
 );
 
 pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*KeyboardEvent {
-    const arena = try page.getArena(.{ .debug = "KeyboardEvent.trusted" });
+    const arena = try page.getArena(.tiny, "KeyboardEvent.trusted");
     errdefer page.releaseArena(arena);
     return initWithTrusted(arena, typ, _opts, true, page);
 }
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*KeyboardEvent {
-    const arena = try page.getArena(.{ .debug = "KeyboardEvent" });
+    const arena = try page.getArena(.tiny, "KeyboardEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
     return initWithTrusted(arena, type_string, _opts, false, page);

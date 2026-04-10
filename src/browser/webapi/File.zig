@@ -31,7 +31,7 @@ _proto: *Blob,
 
 // TODO: Implement File API.
 pub fn init(page: *Page) !*File {
-    const arena = try page.getArena(.{ .debug = "File" });
+    const arena = try page.getArena(.tiny, "File");
     errdefer page.releaseArena(arena);
     return page._factory.blob(arena, File{ ._proto = undefined });
 }

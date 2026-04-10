@@ -666,7 +666,7 @@ pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
     page._parse_mode = .document_write;
     defer page._parse_mode = previous_parse_mode;
 
-    const arena = try page.getArena(.{ .debug = "Document.write" });
+    const arena = try page.getArena(.medium, "Document.write");
     defer page.releaseArena(arena);
 
     var parser = Parser.init(arena, fragment_node, page);

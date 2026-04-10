@@ -84,7 +84,7 @@ const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*PointerEvent {
-    const arena = try page.getArena(.{ .debug = "UIEvent" });
+    const arena = try page.getArena(.tiny, "PointerEvent");
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 
