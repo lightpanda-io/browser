@@ -44,6 +44,8 @@ pub fn main() !void {
     const main_arena = main_arena_instance.allocator();
     defer main_arena_instance.deinit();
 
+    try useSqlite3();
+
     run(gpa, main_arena) catch |err| {
         log.fatal(.app, "exit", .{ .err = err });
         std.posix.exit(1);
@@ -191,5 +193,160 @@ fn mcpThread(allocator: std.mem.Allocator, app: *App) void {
     var stdin = std.fs.File.stdin().reader(&stdin_buf);
     lp.mcp.router.processRequests(mcp_server, &stdin.interface) catch |err| {
         log.fatal(.mcp, "mcp error", .{ .err = err });
+    };
+}
+
+fn useSqlite3() !void {
+    const c = @cImport(@cInclude("sqlite3.h"));
+
+    const flags = c.SQLITE_OPEN_READWRITE;
+
+    var conn: ?*c.sqlite3 = null;
+    {
+        const rc = c.sqlite3_open_v2(":memory:", &conn, flags, null);
+        if (rc != c.SQLITE_OK) {
+            return sqlite3Error(rc);
+        }
+    }
+    defer _ = c.sqlite3_close_v2(conn);
+
+    var stmt: ?*c.sqlite3_stmt = null;
+    {
+        const sql = "select sqlite_version()";
+        var tail: [*:0]const u8 = undefined;
+        const rc = c.sqlite3_prepare_v2(conn, sql, @intCast(sql.len), &stmt, @ptrCast(&tail));
+        if (rc != c.SQLITE_OK) {
+            return sqlite3Error(rc);
+        }
+    }
+    defer _ = c.sqlite3_finalize(stmt);
+
+    {
+        const rc = c.sqlite3_step(stmt);
+        if (rc == c.SQLITE_DONE) {
+            return error.NoRow;
+        }
+        if (rc != c.SQLITE_ROW) {
+            return sqlite3Error(rc);
+        }
+
+        const data = c.sqlite3_column_text(stmt, 0);
+        const len = c.sqlite3_column_bytes(stmt, 0);
+        if (len == 0) {
+            return error.EmptyValue;
+        }
+        std.debug.print("sqlite version: {s}\n", .{@as([*c]const u8, @ptrCast(data))[0..@intCast(len)]});
+    }
+}
+
+fn sqlite3Error(result: c_int) !void {
+    const c = @cImport(@cInclude("sqlite3.h"));
+    return switch (result) {
+        c.SQLITE_ABORT => error.Abort,
+        c.SQLITE_AUTH => error.Auth,
+        c.SQLITE_BUSY => error.Busy,
+        c.SQLITE_CANTOPEN => error.CantOpen,
+        c.SQLITE_CONSTRAINT => error.Constraint,
+        c.SQLITE_CORRUPT => error.Corrupt,
+        c.SQLITE_EMPTY => error.Empty,
+        c.SQLITE_ERROR => error.Error,
+        c.SQLITE_FORMAT => error.Format,
+        c.SQLITE_FULL => error.Full,
+        c.SQLITE_INTERNAL => error.Internal,
+        c.SQLITE_INTERRUPT => error.Interrupt,
+        c.SQLITE_IOERR => error.IoErr,
+        c.SQLITE_LOCKED => error.Locked,
+        c.SQLITE_MISMATCH => error.Mismatch,
+        c.SQLITE_MISUSE => error.Misuse,
+        c.SQLITE_NOLFS => error.NoLFS,
+        c.SQLITE_NOMEM => error.NoMem,
+        c.SQLITE_NOTADB => error.NotADB,
+        c.SQLITE_NOTFOUND => error.Notfound,
+        c.SQLITE_NOTICE => error.Notice,
+        c.SQLITE_PERM => error.Perm,
+        c.SQLITE_PROTOCOL => error.Protocol,
+        c.SQLITE_RANGE => error.Range,
+        c.SQLITE_READONLY => error.ReadOnly,
+        c.SQLITE_SCHEMA => error.Schema,
+        c.SQLITE_TOOBIG => error.TooBig,
+        c.SQLITE_WARNING => error.Warning,
+
+        // extended codes:
+        c.SQLITE_ERROR_MISSING_COLLSEQ => error.ErrorMissingCollseq,
+        c.SQLITE_ERROR_RETRY => error.ErrorRetry,
+        c.SQLITE_ERROR_SNAPSHOT => error.ErrorSnapshot,
+        c.SQLITE_IOERR_READ => error.IoerrRead,
+        c.SQLITE_IOERR_SHORT_READ => error.IoerrShortRead,
+        c.SQLITE_IOERR_WRITE => error.IoerrWrite,
+        c.SQLITE_IOERR_FSYNC => error.IoerrFsync,
+        c.SQLITE_IOERR_DIR_FSYNC => error.IoerrDir_fsync,
+        c.SQLITE_IOERR_TRUNCATE => error.IoerrTruncate,
+        c.SQLITE_IOERR_FSTAT => error.IoerrFstat,
+        c.SQLITE_IOERR_UNLOCK => error.IoerrUnlock,
+        c.SQLITE_IOERR_RDLOCK => error.IoerrRdlock,
+        c.SQLITE_IOERR_DELETE => error.IoerrDelete,
+        c.SQLITE_IOERR_BLOCKED => error.IoerrBlocked,
+        c.SQLITE_IOERR_NOMEM => error.IoerrNomem,
+        c.SQLITE_IOERR_ACCESS => error.IoerrAccess,
+        c.SQLITE_IOERR_CHECKRESERVEDLOCK => error.IoerrCheckreservedlock,
+        c.SQLITE_IOERR_LOCK => error.IoerrLock,
+        c.SQLITE_IOERR_CLOSE => error.IoerrClose,
+        c.SQLITE_IOERR_DIR_CLOSE => error.IoerrDirClose,
+        c.SQLITE_IOERR_SHMOPEN => error.IoerrShmopen,
+        c.SQLITE_IOERR_SHMSIZE => error.IoerrShmsize,
+        c.SQLITE_IOERR_SHMLOCK => error.IoerrShmlock,
+        c.SQLITE_IOERR_SHMMAP => error.ioerrshmmap,
+        c.SQLITE_IOERR_SEEK => error.IoerrSeek,
+        c.SQLITE_IOERR_DELETE_NOENT => error.IoerrDeleteNoent,
+        c.SQLITE_IOERR_MMAP => error.IoerrMmap,
+        c.SQLITE_IOERR_GETTEMPPATH => error.IoerrGetTempPath,
+        c.SQLITE_IOERR_CONVPATH => error.IoerrConvPath,
+        c.SQLITE_IOERR_VNODE => error.IoerrVnode,
+        c.SQLITE_IOERR_AUTH => error.IoerrAuth,
+        c.SQLITE_IOERR_BEGIN_ATOMIC => error.IoerrBeginAtomic,
+        c.SQLITE_IOERR_COMMIT_ATOMIC => error.IoerrCommitAtomic,
+        c.SQLITE_IOERR_ROLLBACK_ATOMIC => error.IoerrRollbackAtomic,
+        c.SQLITE_IOERR_DATA => error.IoerrData,
+        c.SQLITE_IOERR_CORRUPTFS => error.IoerrCorruptFS,
+        c.SQLITE_LOCKED_SHAREDCACHE => error.LockedSharedCache,
+        c.SQLITE_LOCKED_VTAB => error.LockedVTab,
+        c.SQLITE_BUSY_RECOVERY => error.BusyRecovery,
+        c.SQLITE_BUSY_SNAPSHOT => error.BusySnapshot,
+        c.SQLITE_BUSY_TIMEOUT => error.BusyTimeout,
+        c.SQLITE_CANTOPEN_NOTEMPDIR => error.CantOpenNoTempDir,
+        c.SQLITE_CANTOPEN_ISDIR => error.CantOpenIsDir,
+        c.SQLITE_CANTOPEN_FULLPATH => error.CantOpenFullPath,
+        c.SQLITE_CANTOPEN_CONVPATH => error.CantOpenConvPath,
+        c.SQLITE_CANTOPEN_DIRTYWAL => error.CantOpenDirtyWal,
+        c.SQLITE_CANTOPEN_SYMLINK => error.CantOpenSymlink,
+        c.SQLITE_CORRUPT_VTAB => error.CorruptVTab,
+        c.SQLITE_CORRUPT_SEQUENCE => error.CorruptSequence,
+        c.SQLITE_CORRUPT_INDEX => error.CorruptIndex,
+        c.SQLITE_READONLY_RECOVERY => error.ReadonlyRecovery,
+        c.SQLITE_READONLY_CANTLOCK => error.ReadonlyCantlock,
+        c.SQLITE_READONLY_ROLLBACK => error.ReadonlyRollback,
+        c.SQLITE_READONLY_DBMOVED => error.ReadonlyDbMoved,
+        c.SQLITE_READONLY_CANTINIT => error.ReadonlyCantInit,
+        c.SQLITE_READONLY_DIRECTORY => error.ReadonlyDirectory,
+        c.SQLITE_ABORT_ROLLBACK => error.AbortRollback,
+        c.SQLITE_CONSTRAINT_CHECK => error.ConstraintCheck,
+        c.SQLITE_CONSTRAINT_COMMITHOOK => error.ConstraintCommithook,
+        c.SQLITE_CONSTRAINT_FOREIGNKEY => error.ConstraintForeignKey,
+        c.SQLITE_CONSTRAINT_FUNCTION => error.ConstraintFunction,
+        c.SQLITE_CONSTRAINT_NOTNULL => error.ConstraintNotNull,
+        c.SQLITE_CONSTRAINT_PRIMARYKEY => error.ConstraintPrimaryKey,
+        c.SQLITE_CONSTRAINT_TRIGGER => error.ConstraintTrigger,
+        c.SQLITE_CONSTRAINT_UNIQUE => error.ConstraintUnique,
+        c.SQLITE_CONSTRAINT_VTAB => error.ConstraintVTab,
+        c.SQLITE_CONSTRAINT_ROWID => error.ConstraintRowId,
+        c.SQLITE_CONSTRAINT_PINNED => error.ConstraintPinned,
+        c.SQLITE_CONSTRAINT_DATATYPE => error.ConstraintDatatype,
+        c.SQLITE_NOTICE_RECOVER_WAL => error.NoticeRecoverWal,
+        c.SQLITE_NOTICE_RECOVER_ROLLBACK => error.NoticeRecoverRollback,
+        c.SQLITE_WARNING_AUTOINDEX => error.WarningAutoIndex,
+        c.SQLITE_AUTH_USER => error.AuthUser,
+        c.SQLITE_OK_LOAD_PERMANENTLY => error.OkLoadPermanently,
+
+        else => std.debug.panic("{s} {d}", .{ c.sqlite3_errstr(result), result }),
     };
 }
