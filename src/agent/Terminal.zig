@@ -29,7 +29,7 @@ const commands = [_]CommandInfo{
     .{ .name = "TREE", .hint = "" },
     .{ .name = "MARKDOWN", .hint = "" },
     .{ .name = "MD", .hint = "" },
-    .{ .name = "EXTRACT", .hint = " '<selector>' [> file]" },
+    .{ .name = "EXTRACT", .hint = " '<selector>'" },
     .{ .name = "EVAL", .hint = " '<script>'" },
     .{ .name = "LOGIN", .hint = "" },
     .{ .name = "ACCEPT_COOKIES", .hint = "" },
@@ -90,6 +90,13 @@ pub fn freeLine(_: *Self, line: []const u8) void {
 pub fn printAssistant(_: *Self, text: []const u8) void {
     const fd = std.posix.STDOUT_FILENO;
     _ = std.posix.write(fd, text) catch {};
+    _ = std.posix.write(fd, "\n") catch {};
+}
+
+/// Print the result of an action command (GOTO, CLICK, ...) to stderr so
+/// stdout stays reserved for data-producing commands.
+pub fn printActionResult(_: *Self, text: []const u8) void {
+    std.debug.print("{s}\n", .{text});
 }
 
 pub fn printToolCall(_: *Self, name: []const u8, args: []const u8) void {

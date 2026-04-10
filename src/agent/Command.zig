@@ -5,11 +5,6 @@ pub const TypeArgs = struct {
     value: []const u8,
 };
 
-pub const ExtractArgs = struct {
-    selector: []const u8,
-    file: ?[]const u8,
-};
-
 pub const ScrollArgs = struct {
     x: i32 = 0,
     y: i32 = 0,
@@ -36,7 +31,7 @@ pub const Command = union(enum) {
     check: CheckArgs,
     tree: void,
     markdown: void,
-    extract: ExtractArgs,
+    extract: []const u8,
     eval_js: []const u8,
     login: void,
     accept_cookies: void,
@@ -49,6 +44,16 @@ pub const Command = union(enum) {
             .tree, .markdown, .comment, .exit => false,
             .goto, .click, .type_cmd, .wait, .scroll, .hover, .select, .check, .extract, .eval_js, .login, .accept_cookies => true,
             .natural_language => |text| text.len > 0,
+        };
+    }
+
+    /// True if running this command produces output the user typically wants to
+    /// capture (and so should land on stdout). False for action commands whose
+    /// only output is an acknowledgment.
+    pub fn producesData(self: Command) bool {
+        return switch (self) {
+            .extract, .eval_js, .markdown, .tree => true,
+            else => false,
         };
     }
 
@@ -67,10 +72,7 @@ pub const Command = union(enum) {
                 try writer.print("CHECK '{s}' false", .{args.selector}),
             .tree => try writer.writeAll("TREE"),
             .markdown => try writer.writeAll("MARKDOWN"),
-            .extract => |args| {
-                try writer.print("EXTRACT '{s}'", .{args.selector});
-                if (args.file) |f| try writer.print(" > {s}", .{f});
-            },
+            .extract => |selector| try writer.print("EXTRACT '{s}'", .{selector}),
             .eval_js => |script| {
                 if (std.mem.indexOfScalar(u8, script, '\n') != null) {
                     try writer.print("EVAL '''\n{s}\n'''", .{script});
@@ -181,18 +183,9 @@ pub fn parse(line: []const u8) Command {
     }
 
     if (std.ascii.eqlIgnoreCase(cmd_word, "EXTRACT")) {
-        const selector = extractQuoted(rest) orelse {
-            if (rest.len == 0) return .{ .natural_language = trimmed };
-            return .{ .extract = .{ .selector = rest, .file = null } };
-        };
-        // Look for > filename after the quoted selector
-        const after_quote = extractQuotedWithRemainder(rest) orelse return .{ .extract = .{ .selector = selector, .file = null } };
-        const after = std.mem.trim(u8, after_quote.remainder, &std.ascii.whitespace);
-        if (after.len > 0 and after[0] == '>') {
-            const file = std.mem.trim(u8, after[1..], &std.ascii.whitespace);
-            return .{ .extract = .{ .selector = selector, .file = if (file.len > 0) file else null } };
-        }
-        return .{ .extract = .{ .selector = selector, .file = null } };
+        if (rest.len == 0) return .{ .natural_language = trimmed };
+        const selector = extractQuoted(rest) orelse rest;
+        return .{ .extract = selector };
     }
 
     if (std.ascii.eqlIgnoreCase(cmd_word, "EVAL")) {
@@ -449,16 +442,9 @@ test "parse MARKDOWN alias MD" {
     try std.testing.expect(parse("md") == .markdown);
 }
 
-test "parse EXTRACT with file" {
-    const cmd = parse("EXTRACT \".title\" > titles.json");
-    try std.testing.expectEqualStrings(".title", cmd.extract.selector);
-    try std.testing.expectEqualStrings("titles.json", cmd.extract.file.?);
-}
-
-test "parse EXTRACT without file" {
+test "parse EXTRACT" {
     const cmd = parse("EXTRACT \".title\"");
-    try std.testing.expectEqualStrings(".title", cmd.extract.selector);
-    try std.testing.expect(cmd.extract.file == null);
+    try std.testing.expectEqualStrings(".title", cmd.extract);
 }
 
 test "parse EVAL single line" {

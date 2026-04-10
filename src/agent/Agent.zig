@@ -274,8 +274,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                 defer cmd_arena.deinit();
 
                 const result = self.cmd_executor.executeWithResult(cmd_arena.allocator(), entry.command);
-                self.terminal.printAssistant(result.output);
-                std.debug.print("\n", .{});
+                self.cmd_executor.printResult(entry.command, result);
 
                 if (result.failed) {
                     if (self.self_heal and self.ai_client != null) {
@@ -378,7 +377,7 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
     if (result.text) |text| {
         std.debug.print("\n", .{});
         self.terminal.printAssistant(text);
-        std.debug.print("\n\n", .{});
+        std.debug.print("\n", .{});
     } else {
         self.terminal.printInfo("(no response from model)");
     }

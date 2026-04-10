@@ -42,7 +42,7 @@ pub fn executeWithResult(self: *Self, a: std.mem.Allocator, cmd: Command.Command
         })),
         .tree => self.callTool(a, @tagName(Action.semanticTree), ""),
         .markdown => self.callTool(a, @tagName(Action.markdown), ""),
-        .extract => |args| self.execExtract(a, args),
+        .extract => |selector| self.execExtract(a, selector),
         .eval_js => |script| self.callTool(a, @tagName(Action.eval), buildJson(a, .{ .script = script })),
         .exit, .natural_language, .comment, .login, .accept_cookies => unreachable,
     };
@@ -53,9 +53,18 @@ pub fn execute(self: *Self, cmd: Command.Command) void {
     defer arena.deinit();
 
     const result = self.executeWithResult(arena.allocator(), cmd);
+    self.printResult(cmd, result);
+}
 
-    self.terminal.printAssistant(result.output);
-    std.debug.print("\n", .{});
+/// Route a command's output to stdout (for data-producing commands like
+/// EXTRACT/EVAL/MARKDOWN/TREE) or stderr (for action commands like
+/// GOTO/CLICK/...) so that shell-redirecting stdout captures only data.
+pub fn printResult(self: *Self, cmd: Command.Command, result: ExecResult) void {
+    if (cmd.producesData()) {
+        self.terminal.printAssistant(result.output);
+    } else {
+        self.terminal.printActionResult(result.output);
+    }
 }
 
 fn callTool(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments_json: []const u8) ExecResult {
@@ -76,33 +85,14 @@ fn execType(self: *Self, arena: std.mem.Allocator, args: Command.TypeArgs) ExecR
     return self.callTool(arena, @tagName(browser_tools.Action.fill), buildJson(arena, .{ .selector = selector, .value = value }));
 }
 
-fn execExtract(self: *Self, arena: std.mem.Allocator, args: Command.ExtractArgs) ExecResult {
-    const selector = escapeJs(arena, substituteEnvVars(arena, args.selector));
+fn execExtract(self: *Self, arena: std.mem.Allocator, raw_selector: []const u8) ExecResult {
+    const selector = escapeJs(arena, substituteEnvVars(arena, raw_selector));
 
     const script = std.fmt.allocPrint(arena,
         \\JSON.stringify(Array.from(document.querySelectorAll("{s}")).map(el => el.textContent.trim()))
     , .{selector}) catch return .{ .output = "failed to build extract script", .failed = true };
 
-    const result = self.tool_executor.call(arena, @tagName(browser_tools.Action.eval), buildJson(arena, .{ .script = script })) catch |err|
-        return .{ .output = std.fmt.allocPrint(arena, "extract failed: {s}", .{@errorName(err)}) catch "extract failed", .failed = true };
-
-    if (args.file) |raw_file| {
-        const file = sanitizePath(raw_file) orelse {
-            self.terminal.printError("Invalid output path: must be relative and not traverse above working directory");
-            return .{ .output = result, .failed = false };
-        };
-        std.fs.cwd().writeFile(.{
-            .sub_path = file,
-            .data = result,
-        }) catch {
-            self.terminal.printError("Failed to write to file");
-            return .{ .output = result, .failed = false };
-        };
-        const msg = std.fmt.allocPrint(arena, "Extracted to {s}", .{file}) catch "Extracted.";
-        return .{ .output = msg, .failed = false };
-    }
-
-    return .{ .output = result, .failed = false };
+    return self.callTool(arena, @tagName(browser_tools.Action.eval), buildJson(arena, .{ .script = script }));
 }
 
 const substituteEnvVars = browser_tools.substituteEnvVars;
@@ -125,17 +115,6 @@ fn escapeJs(arena: std.mem.Allocator, input: []const u8) []const u8 {
         }
     }
     return out.toOwnedSlice(arena) catch input;
-}
-
-fn sanitizePath(path: []const u8) ?[]const u8 {
-    if (path.len > 0 and path[0] == '/') return null;
-
-    var iter = std.mem.splitScalar(u8, path, '/');
-    while (iter.next()) |component| {
-        if (std.mem.eql(u8, component, "..")) return null;
-    }
-
-    return path;
 }
 
 fn buildJson(arena: std.mem.Allocator, value: anytype) []const u8 {
@@ -167,20 +146,6 @@ test "escapeJs injection attempt" {
     const result = escapeJs(std.testing.allocator, "\"; alert(1); //");
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("\\\"; alert(1); //", result);
-}
-
-test "sanitizePath allows relative" {
-    try std.testing.expectEqualStrings("output.json", sanitizePath("output.json").?);
-    try std.testing.expectEqualStrings("dir/file.json", sanitizePath("dir/file.json").?);
-}
-
-test "sanitizePath rejects absolute" {
-    try std.testing.expect(sanitizePath("/etc/passwd") == null);
-}
-
-test "sanitizePath rejects traversal" {
-    try std.testing.expect(sanitizePath("../../../etc/passwd") == null);
-    try std.testing.expect(sanitizePath("foo/../../bar") == null);
 }
 
 test "substituteEnvVars no vars" {
