@@ -248,8 +248,8 @@ pub const Agent = struct {
     base_url: ?[:0]const u8 = null,
     system_prompt: ?[:0]const u8 = null,
     script_file: ?[]const u8 = null,
-    save: bool = false,
     self_heal: bool = false,
+    interactive: bool = false,
 };
 
 pub const DumpFormat = enum {
@@ -541,12 +541,15 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\Example: {0s} agent --provider anthropic --model claude-haiku-4-5-20251001
         \\Example: {0s} agent --provider ollama --model gemma4
         \\Example: {0s} agent script.panda            (replay a recorded script)
-        \\Example: {0s} agent --save script.panda     (record a new script)
+        \\Example: {0s} agent -i script.panda         (replay then drop into REPL,
+        \\                                             appending new commands to the file)
         \\
         \\Arguments:
         \\[script_file]   Optional path to a .panda script.
-        \\                Without --save: replays the script (no LLM calls).
-        \\                With --save: records the agent session into this file.
+        \\                Without -i: replays the script (no LLM calls).
+        \\                With -i: replays if present, then enters the REPL and
+        \\                appends any new commands to the file (creating it if
+        \\                it does not yet exist).
         \\
         \\Options:
         \\--provider      The AI provider: anthropic, openai, gemini, or ollama.
@@ -561,11 +564,14 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--system-prompt Override the default system prompt.
         \\
-        \\--save          Record the session's commands into the given script_file.
-        \\                Requires a positional script_file argument.
-        \\
         \\--self-heal     On tool errors, ask the model to recover by retrying
         \\                with fresh page state instead of aborting.
+        \\
+        \\-i, --interactive
+        \\                After replaying the positional script (if any), drop
+        \\                into the REPL with the browser state preserved. When
+        \\                a positional script is present, any new commands
+        \\                entered in the REPL are appended to that file.
         \\
         \\The API key is read from the environment:
         \\ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
@@ -989,13 +995,13 @@ fn parseAgentArgs(
             continue;
         }
 
-        if (std.mem.eql(u8, "--save", opt)) {
-            result.save = true;
+        if (std.mem.eql(u8, "--self-heal", opt) or std.mem.eql(u8, "--self_heal", opt)) {
+            result.self_heal = true;
             continue;
         }
 
-        if (std.mem.eql(u8, "--self-heal", opt) or std.mem.eql(u8, "--self_heal", opt)) {
-            result.self_heal = true;
+        if (std.mem.eql(u8, "-i", opt) or std.mem.eql(u8, "--interactive", opt)) {
+            result.interactive = true;
             continue;
         }
 

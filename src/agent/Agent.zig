@@ -77,12 +77,14 @@ model: []const u8,
 system_prompt: []const u8,
 script_file: ?[]const u8,
 self_heal: bool,
+interactive: bool,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
-    const is_script_mode = opts.script_file != null and !opts.save;
+    // Pure replay (positional script, no -i) is the only mode that skips the REPL
+    // and therefore doesn't need an API key.
+    const will_repl = opts.interactive or opts.script_file == null;
 
-    // API key is only required for REPL mode and self-healing
-    const api_key: ?[:0]const u8 = getEnvApiKey(opts.provider) orelse if (!is_script_mode) {
+    const api_key: ?[:0]const u8 = getEnvApiKey(opts.provider) orelse if (will_repl) {
         log.fatal(.app, "missing API key", .{
             .hint = "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY",
         });
@@ -114,7 +116,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
 
     // Persist REPL history in a cwd-relative `.lp-history`. Skipped in pure
     // replay mode (no REPL is opened).
-    const history_path: ?[:0]const u8 = if (is_script_mode) null else ".lp-history";
+    const history_path: ?[:0]const u8 = if (will_repl) ".lp-history" else null;
+
+    // Record REPL commands into the positional script file only when both
+    // are present — `-i <file>` means "replay then grow this file".
+    const recorder_path: ?[]const u8 = if (opts.interactive) opts.script_file else null;
 
     self.* = .{
         .allocator = allocator,
@@ -122,14 +128,15 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .tool_executor = tool_executor,
         .terminal = Terminal.init(history_path),
         .cmd_executor = undefined,
-        .recorder = Recorder.init(if (opts.save) opts.script_file else null),
+        .recorder = Recorder.init(recorder_path),
         .messages = .empty,
         .message_arena = std.heap.ArenaAllocator.init(allocator),
         .tools = tools,
         .model = opts.model orelse defaultModel(opts.provider),
         .system_prompt = opts.system_prompt orelse default_system_prompt,
-        .script_file = if (!opts.save) opts.script_file else null,
+        .script_file = opts.script_file,
         .self_heal = opts.self_heal,
+        .interactive = opts.interactive,
     };
 
     self.cmd_executor = CommandExecutor.init(allocator, tool_executor, &self.terminal);
@@ -153,10 +160,13 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self);
 }
 
-/// Returns true on success, false if a script command failed.
+/// Returns true on success. In interactive mode the REPL always runs after
+/// the (optional) replay phase and the function always returns true; in pure
+/// replay mode it returns whatever `runScript` returned.
 pub fn run(self: *Self) bool {
     if (self.script_file) |path| {
-        return self.runScript(path);
+        const script_ok = self.runScript(path);
+        if (!self.interactive) return script_ok;
     }
     self.runRepl();
     return true;

@@ -6,14 +6,24 @@ const Self = @This();
 file: ?std.fs.File,
 needs_separator: bool,
 
+/// Open `path` for append. The file is created if missing; if it already has
+/// content, a leading newline is written so the appended block starts on a
+/// fresh line. A null path disables recording (no-op).
 pub fn init(path: ?[]const u8) Self {
-    const file: ?std.fs.File = if (path) |p|
-        std.fs.cwd().createFile(p, .{}) catch |err| blk: {
+    const file: ?std.fs.File = if (path) |p| blk: {
+        const f = std.fs.cwd().createFile(p, .{ .truncate = false }) catch |err| {
             std.debug.print("Warning: could not open recording file: {s}\n", .{@errorName(err)});
             break :blk null;
-        }
-    else
-        null;
+        };
+        f.seekFromEnd(0) catch |err| {
+            std.debug.print("Warning: could not seek in recording file: {s}\n", .{@errorName(err)});
+            f.close();
+            break :blk null;
+        };
+        const pos = f.getPos() catch 0;
+        if (pos > 0) _ = f.write("\n") catch {};
+        break :blk f;
+    } else null;
 
     return .{ .file = file, .needs_separator = false };
 }
@@ -116,4 +126,58 @@ test "recorder with null file is no-op" {
     recorder.record(Command.parse("GOTO https://example.com"));
     recorder.recordComment("# test");
     recorder.deinit();
+}
+
+test "init appends to an existing file without truncating" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Seed a file with a prior line.
+    {
+        const seed = tmp.dir.createFile("script.panda", .{}) catch unreachable;
+        defer seed.close();
+        _ = seed.writeAll("GOTO https://example.com\n") catch unreachable;
+    }
+
+    // Resolve absolute path for Recorder.init (which uses std.fs.cwd()).
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const abs_path = tmp.dir.realpath("script.panda", &path_buf) catch unreachable;
+
+    var recorder = init(abs_path);
+    defer recorder.deinit();
+    recorder.record(Command.parse("CLICK 'Login'"));
+
+    // Read back.
+    const file = tmp.dir.openFile("script.panda", .{}) catch unreachable;
+    defer file.close();
+    var buf: [256]u8 = undefined;
+    const n = file.readAll(&buf) catch unreachable;
+    const content = buf[0..n];
+
+    try std.testing.expect(std.mem.indexOf(u8, content, "GOTO https://example.com\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "CLICK 'Login'\n") != null);
+    // The prior line must precede the appended line.
+    const prior = std.mem.indexOf(u8, content, "GOTO").?;
+    const appended = std.mem.indexOf(u8, content, "CLICK").?;
+    try std.testing.expect(prior < appended);
+}
+
+test "init creates the file if missing" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_path = tmp.dir.realpath(".", &path_buf) catch unreachable;
+    var full_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const abs_path = std.fmt.bufPrint(&full_buf, "{s}/fresh.panda", .{dir_path}) catch unreachable;
+
+    var recorder = init(abs_path);
+    defer recorder.deinit();
+    recorder.record(Command.parse("GOTO https://example.com"));
+
+    const file = tmp.dir.openFile("fresh.panda", .{}) catch unreachable;
+    defer file.close();
+    var buf: [128]u8 = undefined;
+    const n = file.readAll(&buf) catch unreachable;
+    try std.testing.expectEqualStrings("GOTO https://example.com\n", buf[0..n]);
 }
