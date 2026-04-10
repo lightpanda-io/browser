@@ -55,25 +55,33 @@ pub const CacheControl = struct {
 
         var max_age_set = false;
         var max_s_age_set = false;
-        var is_public = false;
 
         var iter = std.mem.splitScalar(u8, value, ',');
         while (iter.next()) |part| {
-            const directive = std.mem.trim(u8, part, &std.ascii.whitespace);
-            if (std.ascii.eqlIgnoreCase(directive, "no-store")) {
+            const stripped = std.mem.trim(u8, part, &std.ascii.whitespace);
+
+            var buf: [16]u8 = undefined;
+            const len = @min(buf.len, stripped.len);
+            const directive = std.ascii.lowerString(buf[0..len], stripped[0..len]);
+
+            if (std.mem.eql(u8, directive, "no-store")) {
                 return null;
-            } else if (std.ascii.eqlIgnoreCase(directive, "no-cache")) {
+            }
+            if (std.mem.eql(u8, directive, "no-cache")) {
                 return null;
-            } else if (std.ascii.eqlIgnoreCase(directive, "public")) {
-                is_public = true;
-            } else if (std.ascii.startsWithIgnoreCase(directive, "max-age=")) {
+            }
+            if (std.mem.eql(u8, directive, "private")) {
+                return null;
+            }
+
+            if (std.mem.startsWith(u8, directive, "max-age=")) {
                 if (!max_s_age_set) {
                     if (std.fmt.parseInt(u64, directive[8..], 10) catch null) |max_age| {
                         cc.max_age = max_age;
                         max_age_set = true;
                     }
                 }
-            } else if (std.ascii.startsWithIgnoreCase(directive, "s-maxage=")) {
+            } else if (std.mem.startsWith(u8, directive, "s-maxage=")) {
                 if (std.fmt.parseInt(u64, directive[9..], 10) catch null) |max_age| {
                     cc.max_age = max_age;
                     max_age_set = true;
@@ -83,7 +91,6 @@ pub const CacheControl = struct {
         }
 
         if (!max_age_set) return null;
-        if (!is_public) return null;
         if (cc.max_age == 0) return null;
 
         return cc;
@@ -210,4 +217,32 @@ pub fn tryCache(
         .headers = &.{},
         .vary_headers = &.{},
     };
+}
+const testing = @import("../../testing.zig");
+test "Cache: CacheControl.parse" {
+    try testing.expectEqual(300, CacheControl.parse("max-age=300").?.max_age);
+
+    try testing.expectEqual(300, CacheControl.parse("Max-Age=300").?.max_age);
+    try testing.expectEqual(300, CacheControl.parse("MAX-AGE=300").?.max_age);
+
+    try testing.expectEqual(300, CacheControl.parse("public, max-age=300").?.max_age);
+    try testing.expectEqual(300, CacheControl.parse("  max-age=300  ").?.max_age);
+
+    try testing.expectEqual(600, CacheControl.parse("max-age=300, s-maxage=600").?.max_age);
+    try testing.expectEqual(600, CacheControl.parse("s-maxage=600, max-age=300").?.max_age);
+
+    try testing.expectEqual(null, CacheControl.parse("no-store"));
+    try testing.expectEqual(null, CacheControl.parse("no-cache"));
+    try testing.expectEqual(null, CacheControl.parse("private"));
+    try testing.expectEqual(null, CacheControl.parse("max-age=300, no-store"));
+    try testing.expectEqual(null, CacheControl.parse("no-cache, max-age=300"));
+    try testing.expectEqual(null, CacheControl.parse("Private, max-age=300"));
+
+    try testing.expectEqual(null, CacheControl.parse("max-age=0"));
+
+    try testing.expectEqual(null, CacheControl.parse("public"));
+    try testing.expectEqual(null, CacheControl.parse(""));
+
+    try testing.expectEqual(null, CacheControl.parse("max-age=abc"));
+    try testing.expectEqual(null, CacheControl.parse("max-age="));
 }
