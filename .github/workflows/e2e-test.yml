@@ -51,7 +51,24 @@ jobs:
 
       - uses: ./.github/actions/install
 
+      # Use the commit hash of src/browser/js/bridge.zig as cache key for
+      # snapshot.
+      - run: echo "hash=v8-snapshot-$(git log -n 1 --pretty=format:%H -- src/browser/js/bridge.zig)" >> "$GITHUB_OUTPUT"
+        id: snapshot_cache_key
+
+      # Fetch the cache for snapshot
+      - name: Cache V8 snapshot
+        id: cache-v8-snapshot
+        uses: actions/cache@v5
+        env:
+          cache-name: cache-v8-snapshot
+        with:
+          path: src/snapshot.bin
+          key: ${{ steps.snapshot_cache_key.outputs.hash }}
+
+      # Generate snapshot on cache miss.
       - name: v8 snapshot
+        if: ${{ steps.cache-v8-snapshot.outputs.cache-hit != 'true' }}
         run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
 
       - name: zig build release
