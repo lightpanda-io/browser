@@ -72,10 +72,9 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
     if (args.logFormat()) |lf| {
         log.opts.format = lf;
     }
-    // TODO: Fix regression.
-    //if (args.logFilterScopes()) |lfs| {
-    //    log.opts.filter_scopes = lfs;
-    //}
+
+    // Set log filter scopes.
+    log.opts.filter_scopes = args.logFilterScopes().items;
 
     // must be installed before any other threads
     const sighandler = try main_arena.create(SigHandler);
