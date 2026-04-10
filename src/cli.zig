@@ -157,8 +157,7 @@ pub fn Builder(comptime commands: anytype) type {
 
             const exec_name = std.fs.path.basename(args.next().?);
 
-            // TODO: Return error.
-            const cmd_str: []const u8 = args.next().?;
+            const cmd_str: []const u8 = args.next() orelse return error.MissingCommand;
             inline for (commands) |command| {
                 // Command name together with it's aliases.
                 const with_aliases = blk: {
@@ -176,8 +175,7 @@ pub fn Builder(comptime commands: anytype) type {
                 }
             }
 
-            // TODO: Unknown command.
-            @panic("unknown command");
+            return error.UnknownCommand;
         }
 
         /// Parses the command with its options.
@@ -236,7 +234,6 @@ pub fn Builder(comptime commands: anytype) type {
                             break :blk info;
                         };
 
-                        // TODO: Support multiples.
                         const is_multiple = @hasField(@TypeOf(option), "multiple") and option.multiple;
                         const has_validator = @hasField(@TypeOf(option), "validator");
 
@@ -255,8 +252,7 @@ pub fn Builder(comptime commands: anytype) type {
                             switch (option_info) {
                                 .int => |int| {
                                     const Int = std.meta.Int(int.signedness, int.bits);
-                                    // TODO: Return correct errors.
-                                    const v = try std.fmt.parseInt(Int, args.next().?, 10);
+                                    const v = try std.fmt.parseInt(Int, args.next() orelse return error.MissingArgument, 10);
 
                                     if (is_multiple) {
                                         // Push to ArrayList.
@@ -271,10 +267,9 @@ pub fn Builder(comptime commands: anytype) type {
                                         @compileError("Only []u8, []const u8, [:sentinel]u8 and [:sentinel]const u8 pointers are supported");
                                     }
 
-                                    // TODO: Return error.
-                                    const str = args.next().?;
-
                                     const v = blk: {
+                                        const str = args.next() orelse return error.MissingArgument;
+
                                         // DupeZ branch.
                                         if (comptime pointer.sentinel()) |sentinel| {
                                             const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.alignment), str.len + 1);
@@ -306,8 +301,7 @@ pub fn Builder(comptime commands: anytype) type {
                                         @compileError("only packed structs are allowed");
                                     }
 
-                                    // TODO: Return error.
-                                    const str = args.next().?;
+                                    const str = args.next() orelse return error.MissingArgument;
 
                                     if (std.mem.eql(u8, str, "all")) {
                                         // "all" sets all the fields of packed struct.
@@ -336,8 +330,7 @@ pub fn Builder(comptime commands: anytype) type {
                                         inline else => T,
                                     };
 
-                                    // TODO: Return errors.
-                                    const v = std.meta.stringToEnum(E, args.next().?) orelse {
+                                    const v = std.meta.stringToEnum(E, args.next() orelse return error.MissingArgument) orelse {
                                         return error.UnknownArgument;
                                     };
 
@@ -372,7 +365,7 @@ pub fn Builder(comptime commands: anytype) type {
 
                     // Already given one.
                     if (@field(c, positional.name) != null) {
-                        return error.TooManyPositionalArgs;
+                        return error.TooManyPositionalArguments;
                     }
 
                     // The positional must be an optional type.
