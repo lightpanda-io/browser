@@ -76,9 +76,8 @@ pub const ObserveOptions = struct {
 };
 
 pub fn init(callback: js.Function.Temp, page: *Page) !*MutationObserver {
-    const arena = try page.getArena(.medium, "MutationObserver");
+    const arena = try page.getArena(.small, "MutationObserver");
     errdefer page.releaseArena(arena);
-
     const self = try arena.create(MutationObserver);
     self.* = .{
         ._arena = arena,
