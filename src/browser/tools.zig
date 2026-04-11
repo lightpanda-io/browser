@@ -369,7 +369,7 @@ pub fn call(
         .consoleLogs => execConsoleLogs(session, arena),
         .getUrl => execGetUrl(session),
         .getCookies => execGetCookies(session, arena),
-        inline else => |tag| @field(@This(), "exec" ++ [1]u8{@tagName(tag)[0] - 32} ++ @tagName(tag)[1..])(session, registry, arena, arguments),
+        inline else => |tag| @field(@This(), "exec" ++ [1]u8{std.ascii.toUpper(@tagName(tag)[0])} ++ @tagName(tag)[1..])(session, registry, arena, arguments),
     };
 }
 

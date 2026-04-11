@@ -937,9 +937,7 @@ fn validateElementName(name: []const u8) !void {
     }
 
     for (name[1..]) |c| {
-        const is_valid = (c >= 'a' and c <= 'z') or
-            (c >= 'A' and c <= 'Z') or
-            (c >= '0' and c <= '9') or
+        const is_valid = std.ascii.isAlphanumeric(c) or
             c == '_' or c == '-' or c == '.' or c == ':' or
             c >= 128; // Allow non-ASCII UTF-8
 
