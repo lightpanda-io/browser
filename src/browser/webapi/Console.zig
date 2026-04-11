@@ -26,7 +26,6 @@ const Console = @This();
 
 _timers: std.StringHashMapUnmanaged(u64) = .{},
 _counts: std.StringHashMapUnmanaged(u64) = .{},
-_group_depth: u32 = 0,
 
 pub const init: Console = .{};
 
@@ -129,21 +128,15 @@ pub fn timeEnd(self: *Console, label_: ?[]const u8) void {
     logger.info(.js, "console.timeEnd", .{ .label = label, .elapsed = elapsed - kv.value });
 }
 
-pub fn group(self: *Console, values: []js.Value, page: *Page) void {
+pub fn group(_: *const Console, values: []js.Value, page: *Page) void {
     logger.info(.js, "console.group", .{ValueWriter{ .page = page, .values = values }});
-    self._group_depth +|= 1;
 }
 
-pub fn groupCollapsed(self: *Console, values: []js.Value, page: *Page) void {
+pub fn groupCollapsed(_: *const Console, values: []js.Value, page: *Page) void {
     logger.info(.js, "console.groupCollapsed", .{ValueWriter{ .page = page, .values = values }});
-    self._group_depth +|= 1;
 }
 
-pub fn groupEnd(self: *Console) void {
-    if (self._group_depth > 0) {
-        self._group_depth -= 1;
-    }
-}
+pub fn groupEnd(_: *const Console) void {}
 
 fn timestamp() u64 {
     return @import("../../datetime.zig").timestamp(.monotonic);
