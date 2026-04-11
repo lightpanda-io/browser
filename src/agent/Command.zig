@@ -57,6 +57,17 @@ pub const Command = union(enum) {
         };
     }
 
+    /// True if running this command requires an LLM (i.e. an `ai_client` must
+    /// be configured). LOGIN and ACCEPT_COOKIES are canned prompts; natural
+    /// language is forwarded verbatim to the model. All three are unavailable
+    /// in dumb Pandascript-only mode (no `--provider`).
+    pub fn needsLlm(self: Command) bool {
+        return switch (self) {
+            .login, .accept_cookies, .natural_language => true,
+            else => false,
+        };
+    }
+
     pub fn format(self: Command, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
             .goto => |url| try writer.print("GOTO {s}", .{url}),

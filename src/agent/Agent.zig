@@ -80,16 +80,29 @@ self_heal: bool,
 interactive: bool,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
-    // Pure replay (positional script, no -i) is the only mode that skips the REPL
-    // and therefore doesn't need an API key.
+    // Pure replay (positional script, no -i) is the only mode that skips the REPL.
     const will_repl = opts.interactive or opts.script_file == null;
 
-    const api_key: ?[:0]const u8 = getEnvApiKey(opts.provider) orelse if (will_repl) {
-        log.fatal(.app, "missing API key", .{
-            .hint = "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY",
+    // --self-heal is meaningless without a provider to heal through.
+    if (opts.self_heal and opts.provider == null) {
+        log.fatal(.app, "missing --provider", .{
+            .hint = "--self-heal requires --provider; drop one or add the other",
         });
-        return error.MissingApiKey;
-    } else null;
+        return error.SelfHealWithoutProvider;
+    }
+
+    // An API key is only needed when we're going to open the REPL *and* a
+    // provider was selected. Without a provider we run the REPL in "dumb"
+    // Pandascript-only mode.
+    const api_key: ?[:0]const u8 = if (opts.provider) |p|
+        getEnvApiKey(p) orelse if (will_repl) {
+            log.fatal(.app, "missing API key", .{
+                .hint = "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY",
+            });
+            return error.MissingApiKey;
+        } else null
+    else
+        null;
 
     const tool_executor = try ToolExecutor.init(allocator, app);
     errdefer tool_executor.deinit();
@@ -97,7 +110,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
-    const ai_client: ?zenai.provider.Client = if (api_key) |key| switch (opts.provider) {
+    const ai_client: ?zenai.provider.Client = if (api_key) |key| switch (opts.provider.?) {
         inline else => |tag| blk: {
             const ProviderClient = zenai.provider.Client;
             const ClientPtr = @FieldType(ProviderClient, @tagName(tag));
@@ -132,7 +145,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .messages = .empty,
         .message_arena = std.heap.ArenaAllocator.init(allocator),
         .tools = tools,
-        .model = opts.model orelse defaultModel(opts.provider),
+        .model = if (opts.provider) |p| (opts.model orelse defaultModel(p)) else "",
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
         .self_heal = opts.self_heal,
@@ -178,7 +191,7 @@ fn runRepl(self: *Self) void {
     if (self.ai_client) |ai_client| {
         self.terminal.printInfoFmt("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
-        self.terminal.printInfo("Ready.");
+        self.terminal.printInfo("Dumb REPL (no --provider) — Pandascript only. Pass --provider for natural-language, LOGIN, and ACCEPT_COOKIES.");
     }
 
     while (true) {
@@ -188,25 +201,25 @@ fn runRepl(self: *Self) void {
         if (line.len == 0) continue;
 
         const cmd = Command.parse(line);
-        switch (cmd) {
-            .exit => break,
-            .comment => continue,
-            .login => {
-                self.processUserMessage(login_prompt, line) catch |err| {
-                    self.printAllocError("LOGIN failed: {s}", .{@errorName(err)});
-                };
-            },
-            .accept_cookies => {
-                self.processUserMessage(accept_cookies_prompt, line) catch |err| {
-                    self.printAllocError("ACCEPT_COOKIES failed: {s}", .{@errorName(err)});
-                };
-            },
-            .natural_language => {
-                if (std.mem.eql(u8, line, "quit")) break;
 
-                self.processUserMessage(line, line) catch |err| {
-                    self.printAllocError("Request failed: {s}", .{@errorName(err)});
-                };
+        if (cmd == .exit or (cmd == .natural_language and std.mem.eql(u8, line, "quit"))) break;
+        if (cmd == .comment) continue;
+
+        if (cmd.needsLlm() and self.ai_client == null) {
+            self.terminal.printError("This command requires --provider. Pandascript commands (GOTO, CLICK, EXTRACT, ...) work without one.");
+            continue;
+        }
+
+        switch (cmd) {
+            .exit, .comment => unreachable, // handled above
+            .login => self.processUserMessage(login_prompt, line) catch |err| {
+                self.printAllocError("LOGIN failed: {s}", .{@errorName(err)});
+            },
+            .accept_cookies => self.processUserMessage(accept_cookies_prompt, line) catch |err| {
+                self.printAllocError("ACCEPT_COOKIES failed: {s}", .{@errorName(err)});
+            },
+            .natural_language => self.processUserMessage(line, line) catch |err| {
+                self.printAllocError("Request failed: {s}", .{@errorName(err)});
             },
             else => {
                 self.cmd_executor.execute(cmd);
@@ -261,7 +274,7 @@ fn runScript(self: *Self, path: []const u8) bool {
             },
             .login, .accept_cookies => {
                 if (self.ai_client == null) {
-                    self.printAllocError("line {d}: {s} requires an API key for LLM resolution", .{
+                    self.printAllocError("line {d}: {s} requires --provider", .{
                         entry.line_num,
                         entry.raw_line,
                     });

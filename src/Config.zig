@@ -237,7 +237,7 @@ pub const AiProvider = enum {
 
 pub const Agent = struct {
     common: Common = .{},
-    provider: AiProvider = .anthropic,
+    provider: ?AiProvider = null,
     model: ?[:0]const u8 = null,
     base_url: ?[:0]const u8 = null,
     system_prompt: ?[:0]const u8 = null,
@@ -532,6 +532,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\agent command
         \\Starts an interactive AI agent that can browse the web
+        \\Example: {0s} agent                         (dumb Pandascript-only REPL)
         \\Example: {0s} agent --provider anthropic --model claude-haiku-4-5-20251001
         \\Example: {0s} agent --provider ollama --model gemma4
         \\Example: {0s} agent script.panda            (replay a recorded script)
@@ -547,7 +548,10 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\Options:
         \\--provider      The AI provider: anthropic, openai, gemini, or ollama.
-        \\                Defaults to "anthropic".
+        \\                Optional. When omitted, the REPL runs in "dumb mode":
+        \\                Pandascript commands work, but natural-language input,
+        \\                LOGIN / ACCEPT_COOKIES keywords, and --self-heal all
+        \\                require a provider. Dumb mode needs no API key.
         \\
         \\--model         The model name to use.
         \\                Defaults to a sensible default per provider.
