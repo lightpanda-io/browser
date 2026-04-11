@@ -80,10 +80,10 @@ self_heal: bool,
 interactive: bool,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
-    // Pure replay (positional script, no -i) is the only mode that skips the REPL.
+    // Pure replay (positional script, no -i) skips the REPL.
     const will_repl = opts.interactive or opts.script_file == null;
 
-    // --self-heal is meaningless without a provider to heal through.
+    // --self-heal needs a provider to heal through.
     if (opts.self_heal and opts.provider == null) {
         log.fatal(.app, "missing --provider", .{
             .hint = "--self-heal requires --provider; drop one or add the other",
@@ -91,9 +91,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         return error.SelfHealWithoutProvider;
     }
 
-    // An API key is only needed when we're going to open the REPL *and* a
-    // provider was selected. Without a provider we run the REPL in "dumb"
-    // Pandascript-only mode.
+    // An API key is only required when the REPL will run — pure replay with
+    // a provider is fine without one since no AI turn ever executes.
     const api_key: ?[:0]const u8 = if (opts.provider) |p|
         getEnvApiKey(p) orelse if (will_repl) {
             log.fatal(.app, "missing API key", .{
@@ -127,12 +126,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         return error.ToolInitFailed;
     };
 
-    // Persist REPL history in a cwd-relative `.lp-history`. Skipped in pure
-    // replay mode (no REPL is opened).
+    // Persist REPL history in a cwd-relative `.lp-history`; skipped in pure replay.
     const history_path: ?[:0]const u8 = if (will_repl) ".lp-history" else null;
 
-    // Record REPL commands into the positional script file only when both
-    // are present — `-i <file>` means "replay then grow this file".
+    // `-i <file>` means "replay then grow this file"; a script path alone is
+    // pure replay and must not be mutated.
     const recorder_path: ?[]const u8 = if (opts.interactive) opts.script_file else null;
 
     self.* = .{
@@ -173,9 +171,8 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self);
 }
 
-/// Returns true on success. In interactive mode the REPL always runs after
-/// the (optional) replay phase and the function always returns true; in pure
-/// replay mode it returns whatever `runScript` returned.
+/// Returns true on success. Interactive mode always returns true; pure
+/// replay mirrors `runScript`'s result.
 pub fn run(self: *Self) bool {
     if (self.script_file) |path| {
         const script_ok = self.runScript(path);
@@ -194,7 +191,7 @@ fn runRepl(self: *Self) void {
         self.terminal.printInfo("Dumb REPL (no --provider) — Pandascript only. Pass --provider for natural-language, LOGIN, and ACCEPT_COOKIES.");
     }
 
-    while (true) {
+    repl: while (true) {
         const line = self.terminal.readLine("> ") orelse break;
         defer self.terminal.freeLine(line);
 
@@ -202,24 +199,22 @@ fn runRepl(self: *Self) void {
 
         const cmd = Command.parse(line);
 
-        if (cmd == .exit or (cmd == .natural_language and std.mem.eql(u8, line, "quit"))) break;
-        if (cmd == .comment) continue;
-
         if (cmd.needsLlm() and self.ai_client == null) {
             self.terminal.printError("This command requires --provider. Pandascript commands (GOTO, CLICK, EXTRACT, ...) work without one.");
             continue;
         }
 
         switch (cmd) {
-            .exit, .comment => unreachable, // handled above
+            .exit => break :repl,
+            .comment => continue :repl,
             .login => self.processUserMessage(login_prompt, line) catch |err| {
-                self.printAllocError("LOGIN failed: {s}", .{@errorName(err)});
+                self.terminal.printErrorFmt("LOGIN failed: {s}", .{@errorName(err)});
             },
             .accept_cookies => self.processUserMessage(accept_cookies_prompt, line) catch |err| {
-                self.printAllocError("ACCEPT_COOKIES failed: {s}", .{@errorName(err)});
+                self.terminal.printErrorFmt("ACCEPT_COOKIES failed: {s}", .{@errorName(err)});
             },
             .natural_language => self.processUserMessage(line, line) catch |err| {
-                self.printAllocError("Request failed: {s}", .{@errorName(err)});
+                self.terminal.printErrorFmt("Request failed: {s}", .{@errorName(err)});
             },
             else => {
                 self.cmd_executor.execute(cmd);
@@ -231,19 +226,15 @@ fn runRepl(self: *Self) void {
     self.terminal.printInfo("Goodbye!");
 }
 
-fn printAllocError(self: *Self, comptime fmt: []const u8, args: anytype) void {
-    self.terminal.printErrorFmt(fmt, args);
-}
-
 fn runScript(self: *Self, path: []const u8) bool {
     const file = std.fs.cwd().openFile(path, .{}) catch |err| {
-        self.printAllocError("Failed to open script '{s}': {s}", .{ path, @errorName(err) });
+        self.terminal.printErrorFmt("Failed to open script '{s}': {s}", .{ path, @errorName(err) });
         return false;
     };
     defer file.close();
 
     const content = file.readToEndAlloc(self.allocator, 10 * 1024 * 1024) catch |err| {
-        self.printAllocError("Failed to read script: {s}", .{@errorName(err)});
+        self.terminal.printErrorFmt("Failed to read script: {s}", .{@errorName(err)});
         return false;
     };
     defer self.allocator.free(content);
@@ -269,12 +260,12 @@ fn runScript(self: *Self, path: []const u8) bool {
                 continue;
             },
             .natural_language => {
-                self.printAllocError("line {d}: unrecognized command: {s}", .{ entry.line_num, entry.raw_line });
+                self.terminal.printErrorFmt("line {d}: unrecognized command: {s}", .{ entry.line_num, entry.raw_line });
                 return false;
             },
             .login, .accept_cookies => {
                 if (self.ai_client == null) {
-                    self.printAllocError("line {d}: {s} requires --provider", .{
+                    self.terminal.printErrorFmt("line {d}: {s} requires --provider", .{
                         entry.line_num,
                         entry.raw_line,
                     });
@@ -282,7 +273,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                 }
                 const prompt = if (entry.command == .login) login_prompt else accept_cookies_prompt;
                 self.processUserMessage(prompt, "") catch |err| {
-                    self.printAllocError("line {d}: {s} failed: {s}", .{
+                    self.terminal.printErrorFmt("line {d}: {s} failed: {s}", .{
                         entry.line_num,
                         entry.raw_line,
                         @errorName(err),
@@ -306,7 +297,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                             continue;
                         }
                     }
-                    self.printAllocError("line {d}: command failed: {s}", .{
+                    self.terminal.printErrorFmt("line {d}: command failed: {s}", .{
                         entry.line_num,
                         entry.raw_line,
                     });
@@ -338,7 +329,7 @@ fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8)
     var attempt: u8 = 0;
     while (attempt < self_heal_max_attempts) : (attempt += 1) {
         self.processUserMessage(prompt, "") catch |err| {
-            self.printAllocError("self-heal attempt {d}/{d} failed: {s}", .{
+            self.terminal.printErrorFmt("self-heal attempt {d}/{d} failed: {s}", .{
                 attempt + 1,
                 self_heal_max_attempts,
                 @errorName(err),

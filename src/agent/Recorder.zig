@@ -1,4 +1,6 @@
 const std = @import("std");
+const lp = @import("lightpanda");
+const log = lp.log;
 const Command = @import("Command.zig");
 
 const Self = @This();
@@ -6,17 +8,16 @@ const Self = @This();
 file: ?std.fs.File,
 needs_separator: bool,
 
-/// Open `path` for append. The file is created if missing; if it already has
-/// content, a leading newline is written so the appended block starts on a
-/// fresh line. A null path disables recording (no-op).
+/// Append-open `path`, inserting a leading newline if the file is non-empty.
+/// A null path disables recording.
 pub fn init(path: ?[]const u8) Self {
     const file: ?std.fs.File = if (path) |p| blk: {
         const f = std.fs.cwd().createFile(p, .{ .truncate = false }) catch |err| {
-            std.debug.print("Warning: could not open recording file: {s}\n", .{@errorName(err)});
+            log.warn(.app, "could not open recording file", .{ .err = @errorName(err) });
             break :blk null;
         };
         f.seekFromEnd(0) catch |err| {
-            std.debug.print("Warning: could not seek in recording file: {s}\n", .{@errorName(err)});
+            log.warn(.app, "could not seek recording file", .{ .err = @errorName(err) });
             f.close();
             break :blk null;
         };
@@ -36,25 +37,19 @@ pub fn record(self: *Self, cmd: Command.Command) void {
     const f = self.file orelse return;
     if (!cmd.isRecorded()) return;
 
-    var buf: [4096]u8 = undefined;
-    var file_writer = f.writerStreaming(&buf);
-    const writer = &file_writer.interface;
-    writer.print("{f}\n", .{cmd}) catch return;
-    writer.flush() catch return;
+    var buf: [1024]u8 = undefined;
+    const line = std.fmt.bufPrint(&buf, "{f}\n", .{cmd}) catch return;
+    _ = f.write(line) catch return;
     self.needs_separator = true;
 }
 
 pub fn recordComment(self: *Self, comment: []const u8) void {
     const f = self.file orelse return;
-    var buf: [4096]u8 = undefined;
-    var file_writer = f.writerStreaming(&buf);
-    const writer = &file_writer.interface;
-    if (self.needs_separator) writer.writeByte('\n') catch return;
+    var buf: [1024]u8 = undefined;
+    const prefix: []const u8 = if (self.needs_separator) "\n# " else "# ";
+    const line = std.fmt.bufPrint(&buf, "{s}{s}\n", .{ prefix, comment }) catch return;
+    _ = f.write(line) catch return;
     self.needs_separator = true;
-    writer.writeAll("# ") catch return;
-    writer.writeAll(comment) catch return;
-    writer.writeByte('\n') catch return;
-    writer.flush() catch return;
 }
 
 test "record writes state-mutating commands" {

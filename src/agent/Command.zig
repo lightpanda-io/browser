@@ -213,7 +213,7 @@ pub fn parse(line: []const u8) Command {
         return .{ .accept_cookies = {} };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "EXIT")) {
+    if (std.ascii.eqlIgnoreCase(cmd_word, "EXIT") or std.ascii.eqlIgnoreCase(cmd_word, "QUIT")) {
         return .{ .exit = {} };
     }
 
@@ -309,9 +309,9 @@ const QuotedResult = struct {
 
 fn extractQuotedWithRemainder(s: []const u8) ?QuotedResult {
     if (s.len < 2) return null;
-    const quote = s[0];
-    if (quote != '"' and quote != '\'') return null;
-    const end = std.mem.indexOfScalarPos(u8, s, 1, quote) orelse return null;
+    const q = s[0];
+    if (q != '"' and q != '\'') return null;
+    const end = std.mem.indexOfScalarPos(u8, s, 1, q) orelse return null;
     return .{
         .value = s[1..end],
         .remainder = s[end + 1 ..],

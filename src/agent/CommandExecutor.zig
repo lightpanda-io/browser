@@ -26,9 +26,15 @@ pub const ExecResult = struct {
 pub fn executeWithResult(self: *Self, a: std.mem.Allocator, cmd: Command.Command) ExecResult {
     const Action = browser_tools.Action;
     return switch (cmd) {
-        .goto => |url| self.execGoto(a, url),
+        .goto => |url| self.callTool(a, @tagName(Action.goto), buildJson(a, .{ .url = substituteEnvVars(a, url) })),
         .click => |sel| self.callTool(a, @tagName(Action.click), buildJson(a, .{ .selector = substituteEnvVars(a, sel) })),
-        .type_cmd => |args| self.execType(a, args),
+        // execFill in browser/tools.zig substitutes `value` itself so the
+        // displayed result keeps the `$LP_*` reference instead of leaking
+        // the resolved secret back to the terminal.
+        .type_cmd => |args| self.callTool(a, @tagName(Action.fill), buildJson(a, .{
+            .selector = substituteEnvVars(a, args.selector),
+            .value = args.value,
+        })),
         .wait => |selector| self.callTool(a, @tagName(Action.waitForSelector), buildJson(a, .{ .selector = selector })),
         .scroll => |args| self.callTool(a, @tagName(Action.scroll), buildJson(a, .{ .x = args.x, .y = args.y })),
         .hover => |sel| self.callTool(a, @tagName(Action.hover), buildJson(a, .{ .selector = substituteEnvVars(a, sel) })),
@@ -56,9 +62,8 @@ pub fn execute(self: *Self, cmd: Command.Command) void {
     self.printResult(cmd, result);
 }
 
-/// Route a command's output to stdout (for data-producing commands like
-/// EXTRACT/EVAL/MARKDOWN/TREE) or stderr (for action commands like
-/// GOTO/CLICK/...) so that shell-redirecting stdout captures only data.
+/// Data-producing commands (EXTRACT/EVAL/MARKDOWN/TREE) go to stdout so shell
+/// redirection captures only their output; action commands go to stderr.
 pub fn printResult(self: *Self, cmd: Command.Command, result: ExecResult) void {
     if (cmd.producesData()) {
         self.terminal.printAssistant(result.output);
@@ -74,78 +79,32 @@ fn callTool(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, argume
         return .{ .output = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tool_name, @errorName(err) }) catch "tool failed", .failed = true };
 }
 
-fn execGoto(self: *Self, arena: std.mem.Allocator, raw_url: []const u8) ExecResult {
-    const url = substituteEnvVars(arena, raw_url);
-    return self.callTool(arena, @tagName(browser_tools.Action.goto), buildJson(arena, .{ .url = url }));
-}
-
-fn execType(self: *Self, arena: std.mem.Allocator, args: Command.TypeArgs) ExecResult {
-    const selector = substituteEnvVars(arena, args.selector);
-    const value = substituteEnvVars(arena, args.value);
-    return self.callTool(arena, @tagName(browser_tools.Action.fill), buildJson(arena, .{ .selector = selector, .value = value }));
-}
-
 fn execExtract(self: *Self, arena: std.mem.Allocator, raw_selector: []const u8) ExecResult {
-    const selector = escapeJs(arena, substituteEnvVars(arena, raw_selector));
+    const selector = substituteEnvVars(arena, raw_selector);
 
-    const script = std.fmt.allocPrint(arena,
-        \\JSON.stringify(Array.from(document.querySelectorAll("{s}")).map(el => el.textContent.trim()))
-    , .{selector}) catch return .{ .output = "failed to build extract script", .failed = true };
+    // `std.json.Stringify.value` emits a quoted, JS-safe string literal, which
+    // is also a valid JS string literal — reuse it to splice the selector into
+    // the querySelectorAll call.
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    std.json.Stringify.value(selector, .{}, &aw.writer) catch
+        return .{ .output = "failed to encode selector", .failed = true };
+    const encoded = aw.written();
+
+    const script = std.fmt.allocPrint(
+        arena,
+        "JSON.stringify(Array.from(document.querySelectorAll({s})).map(el => el.textContent.trim()))",
+        .{encoded},
+    ) catch return .{ .output = "failed to build extract script", .failed = true };
 
     return self.callTool(arena, @tagName(browser_tools.Action.eval), buildJson(arena, .{ .script = script }));
 }
 
 const substituteEnvVars = browser_tools.substituteEnvVars;
 
-fn escapeJs(arena: std.mem.Allocator, input: []const u8) []const u8 {
-    const needs_escape = for (input) |ch| {
-        if (ch == '"' or ch == '\\' or ch == '\n' or ch == '\r' or ch == '\t') break true;
-    } else false;
-    if (!needs_escape) return input;
-
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    for (input) |ch| {
-        switch (ch) {
-            '\\' => out.appendSlice(arena, "\\\\") catch return input,
-            '"' => out.appendSlice(arena, "\\\"") catch return input,
-            '\n' => out.appendSlice(arena, "\\n") catch return input,
-            '\r' => out.appendSlice(arena, "\\r") catch return input,
-            '\t' => out.appendSlice(arena, "\\t") catch return input,
-            else => out.append(arena, ch) catch return input,
-        }
-    }
-    return out.toOwnedSlice(arena) catch input;
-}
-
 fn buildJson(arena: std.mem.Allocator, value: anytype) []const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     std.json.Stringify.value(value, .{}, &aw.writer) catch return "{}";
     return aw.written();
-}
-
-// --- Tests ---
-
-test "escapeJs no escaping needed" {
-    const result = escapeJs(std.testing.allocator, "hello world");
-    try std.testing.expectEqualStrings("hello world", result);
-}
-
-test "escapeJs quotes and backslashes" {
-    const result = escapeJs(std.testing.allocator, "say \"hello\\world\"");
-    defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("say \\\"hello\\\\world\\\"", result);
-}
-
-test "escapeJs newlines and tabs" {
-    const result = escapeJs(std.testing.allocator, "line1\nline2\ttab");
-    defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("line1\\nline2\\ttab", result);
-}
-
-test "escapeJs injection attempt" {
-    const result = escapeJs(std.testing.allocator, "\"; alert(1); //");
-    defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("\\\"; alert(1); //", result);
 }
 
 test "substituteEnvVars no vars" {
