@@ -68,29 +68,34 @@ pub const Command = union(enum) {
         };
     }
 
+    /// Serializes back to Pandascript. Every string argument is wrapped in
+    /// content-aware quotes so the output round-trips through `parse()` —
+    /// single quotes by default, double quotes if the content contains `'`.
+    ///
+    /// The one case we do NOT round-trip cleanly is a string containing BOTH
+    /// `'` and `"`. There's no escape syntax, so we fall back to `'…'` and
+    /// the resulting line will be ambiguous when replayed. This is rare in
+    /// practice (CSS selectors and form values almost never mix styles).
     pub fn format(self: Command, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
             .goto => |url| try writer.print("GOTO {s}", .{url}),
-            .click => |sel| try writer.print("CLICK '{s}'", .{sel}),
-            .type_cmd => |args| try writer.print("TYPE '{s}' '{s}'", .{ args.selector, args.value }),
-            .wait => |sel| try writer.print("WAIT '{s}'", .{sel}),
+            .click => |sel| try writer.print("CLICK {f}", .{quote(sel)}),
+            .type_cmd => |args| try writer.print("TYPE {f} {f}", .{ quote(args.selector), quote(args.value) }),
+            .wait => |sel| try writer.print("WAIT {f}", .{quote(sel)}),
             .scroll => |args| try writer.print("SCROLL {d} {d}", .{ args.x, args.y }),
-            .hover => |sel| try writer.print("HOVER '{s}'", .{sel}),
-            .select => |args| try writer.print("SELECT '{s}' '{s}'", .{ args.selector, args.value }),
+            .hover => |sel| try writer.print("HOVER {f}", .{quote(sel)}),
+            .select => |args| try writer.print("SELECT {f} {f}", .{ quote(args.selector), quote(args.value) }),
             .check => |args| if (args.checked)
-                try writer.print("CHECK '{s}'", .{args.selector})
+                try writer.print("CHECK {f}", .{quote(args.selector)})
             else
-                try writer.print("CHECK '{s}' false", .{args.selector}),
+                try writer.print("CHECK {f} false", .{quote(args.selector)}),
             .tree => try writer.writeAll("TREE"),
             .markdown => try writer.writeAll("MARKDOWN"),
-            .extract => |selector| try writer.print("EXTRACT '{s}'", .{selector}),
-            .eval_js => |script| {
-                if (std.mem.indexOfScalar(u8, script, '\n') != null) {
-                    try writer.print("EVAL '''\n{s}\n'''", .{script});
-                } else {
-                    try writer.print("EVAL '{s}'", .{script});
-                }
-            },
+            .extract => |sel| try writer.print("EXTRACT {f}", .{quote(sel)}),
+            .eval_js => |script| if (std.mem.indexOfScalar(u8, script, '\n') != null)
+                try writer.print("EVAL '''\n{s}\n'''", .{script})
+            else
+                try writer.print("EVAL {f}", .{quote(script)}),
             .login => try writer.writeAll("LOGIN"),
             .accept_cookies => try writer.writeAll("ACCEPT_COOKIES"),
             .exit => try writer.writeAll("EXIT"),
@@ -119,21 +124,19 @@ pub fn parse(line: []const u8) Command {
     }
 
     if (std.ascii.eqlIgnoreCase(cmd_word, "CLICK")) {
-        const arg = extractQuoted(rest) orelse rest;
-        if (arg.len == 0) return .{ .natural_language = trimmed };
+        const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
         return .{ .click = arg };
     }
 
     if (std.ascii.eqlIgnoreCase(cmd_word, "TYPE")) {
         const first = extractQuotedWithRemainder(rest) orelse return .{ .natural_language = trimmed };
         const second_arg = std.mem.trim(u8, first.remainder, &std.ascii.whitespace);
-        const second = extractQuoted(second_arg) orelse return .{ .natural_language = trimmed };
+        const second = trimMatchingQuotes(second_arg) orelse return .{ .natural_language = trimmed };
         return .{ .type_cmd = .{ .selector = first.value, .value = second } };
     }
 
     if (std.ascii.eqlIgnoreCase(cmd_word, "WAIT")) {
-        const arg = extractQuoted(rest) orelse rest;
-        if (arg.len == 0) return .{ .natural_language = trimmed };
+        const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
         return .{ .wait = arg };
     }
 
@@ -155,15 +158,14 @@ pub fn parse(line: []const u8) Command {
     }
 
     if (std.ascii.eqlIgnoreCase(cmd_word, "HOVER")) {
-        const arg = extractQuoted(rest) orelse rest;
-        if (arg.len == 0) return .{ .natural_language = trimmed };
+        const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
         return .{ .hover = arg };
     }
 
     if (std.ascii.eqlIgnoreCase(cmd_word, "SELECT")) {
         const first = extractQuotedWithRemainder(rest) orelse return .{ .natural_language = trimmed };
         const second_arg = std.mem.trim(u8, first.remainder, &std.ascii.whitespace);
-        const second = extractQuoted(second_arg) orelse return .{ .natural_language = trimmed };
+        const second = trimMatchingQuotes(second_arg) orelse return .{ .natural_language = trimmed };
         return .{ .select = .{ .selector = first.value, .value = second } };
     }
 
@@ -194,14 +196,12 @@ pub fn parse(line: []const u8) Command {
     }
 
     if (std.ascii.eqlIgnoreCase(cmd_word, "EXTRACT")) {
-        if (rest.len == 0) return .{ .natural_language = trimmed };
-        const selector = extractQuoted(rest) orelse rest;
-        return .{ .extract = selector };
+        const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
+        return .{ .extract = arg };
     }
 
     if (std.ascii.eqlIgnoreCase(cmd_word, "EVAL")) {
-        if (rest.len == 0) return .{ .natural_language = trimmed };
-        const arg = extractQuoted(rest) orelse rest;
+        const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
         return .{ .eval_js = arg };
     }
 
@@ -318,9 +318,41 @@ fn extractQuotedWithRemainder(s: []const u8) ?QuotedResult {
     };
 }
 
-fn extractQuoted(s: []const u8) ?[]const u8 {
-    const result = extractQuotedWithRemainder(s) orelse return null;
-    return result.value;
+/// Extract a single string argument from `s`:
+///   - strip one layer of matching outer `'…'` or `"…"` if present
+///   - return `s` unchanged if unquoted
+///   - return null if empty, malformed (starts with quote, no matching close),
+///     or stripped to empty (`''` / `""`)
+fn trimMatchingQuotes(s: []const u8) ?[]const u8 {
+    if (s.len == 0) return null;
+    const q = s[0];
+    if (q == '\'' or q == '"') {
+        if (s.len < 2 or s[s.len - 1] != q) return null;
+        const inner = s[1 .. s.len - 1];
+        return if (inner.len == 0) null else inner;
+    }
+    return s;
+}
+
+/// Wraps a string in outer quotes when formatted via `{f}`, choosing the
+/// quote character so the output round-trips through `parse()`:
+///   - prefer `'…'`
+///   - fall back to `"…"` if the content contains `'` but not `"`
+///   - if it contains both, emit `'…'` anyway (ambiguous — see format docs)
+const Quoted = struct {
+    s: []const u8,
+
+    pub fn format(self: Quoted, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        const has_single = std.mem.indexOfScalar(u8, self.s, '\'') != null;
+        const q: u8 = if (has_single and std.mem.indexOfScalar(u8, self.s, '"') == null) '"' else '\'';
+        try writer.writeByte(q);
+        try writer.writeAll(self.s);
+        try writer.writeByte(q);
+    }
+};
+
+fn quote(s: []const u8) Quoted {
+    return .{ .s = s };
 }
 
 // --- Tests ---
@@ -367,6 +399,47 @@ test "parse CLICK single-quoted" {
     try std.testing.expectEqualStrings("a[href*=\"login\"]", cmd.click);
 }
 
+test "parse CLICK with nested single quotes" {
+    // Input: CLICK 'a[href='login?goto=news']'
+    const cmd = parse("CLICK 'a[href='login?goto=news']'");
+    try std.testing.expectEqualStrings("a[href='login?goto=news']", cmd.click);
+}
+
+test "parse CLICK malformed quotes falls through to natural_language" {
+    try std.testing.expect(parse("CLICK '#foo") == .natural_language);
+    try std.testing.expect(parse("WAIT \".foo") == .natural_language);
+    try std.testing.expect(parse("HOVER '#x\"") == .natural_language);
+}
+
+test "parse EXTRACT with nested quotes" {
+    const cmd = parse("EXTRACT 'a[href*='news']'");
+    try std.testing.expectEqualStrings("a[href*='news']", cmd.extract);
+}
+
+test "parse EVAL with single-quoted inner string" {
+    const cmd = parse("EVAL 'document.querySelector('h1').innerText'");
+    try std.testing.expectEqualStrings("document.querySelector('h1').innerText", cmd.eval_js);
+}
+
+test "parse TYPE nested inner quote in value" {
+    const cmd = parse("TYPE '#comment' 'she said 'hi''");
+    try std.testing.expectEqualStrings("#comment", cmd.type_cmd.selector);
+    try std.testing.expectEqualStrings("she said 'hi'", cmd.type_cmd.value);
+}
+
+test "parse TYPE unquoted value" {
+    const cmd = parse("TYPE '#email' user@example.com");
+    try std.testing.expectEqualStrings("#email", cmd.type_cmd.selector);
+    try std.testing.expectEqualStrings("user@example.com", cmd.type_cmd.value);
+}
+
+test "parse TYPE multi-word unquoted value" {
+    // The whole remainder after the first arg becomes the value — spaces included.
+    const cmd = parse("TYPE '#comment' hello world");
+    try std.testing.expectEqualStrings("#comment", cmd.type_cmd.selector);
+    try std.testing.expectEqualStrings("hello world", cmd.type_cmd.value);
+}
+
 test "parse TYPE missing second arg" {
     const cmd = parse("TYPE \"#email\"");
     try std.testing.expect(cmd == .natural_language);
@@ -377,27 +450,26 @@ test "parse WAIT" {
     try std.testing.expectEqualStrings(".dashboard", cmd.wait);
 }
 
-test "parse SCROLL bare" {
-    const cmd = parse("SCROLL");
-    try std.testing.expectEqual(@as(i32, 0), cmd.scroll.x);
-    try std.testing.expectEqual(@as(i32, 0), cmd.scroll.y);
-}
-
-test "parse SCROLL single arg is y" {
-    const cmd = parse("SCROLL 500");
-    try std.testing.expectEqual(@as(i32, 0), cmd.scroll.x);
-    try std.testing.expectEqual(@as(i32, 500), cmd.scroll.y);
-}
-
-test "parse SCROLL two args" {
-    const cmd = parse("SCROLL 100 200");
-    try std.testing.expectEqual(@as(i32, 100), cmd.scroll.x);
-    try std.testing.expectEqual(@as(i32, 200), cmd.scroll.y);
-}
-
-test "parse SCROLL invalid falls through" {
-    const cmd = parse("SCROLL down");
-    try std.testing.expect(cmd == .natural_language);
+test "parse SCROLL" {
+    const cases = [_]struct {
+        in: []const u8,
+        expected: ?struct { x: i32, y: i32 },
+    }{
+        .{ .in = "SCROLL", .expected = .{ .x = 0, .y = 0 } },
+        .{ .in = "SCROLL 500", .expected = .{ .x = 0, .y = 500 } },
+        .{ .in = "SCROLL 100 200", .expected = .{ .x = 100, .y = 200 } },
+        .{ .in = "SCROLL down", .expected = null },
+    };
+    for (cases, 0..) |c, i| {
+        errdefer std.debug.print("failing case {d}: {s}\n", .{ i, c.in });
+        const cmd = parse(c.in);
+        if (c.expected) |e| {
+            try std.testing.expectEqual(e.x, cmd.scroll.x);
+            try std.testing.expectEqual(e.y, cmd.scroll.y);
+        } else {
+            try std.testing.expect(cmd == .natural_language);
+        }
+    }
 }
 
 test "parse HOVER" {
@@ -421,26 +493,26 @@ test "parse SELECT missing value" {
     try std.testing.expect(cmd == .natural_language);
 }
 
-test "parse CHECK default true" {
-    const cmd = parse("CHECK '#agree'");
-    try std.testing.expectEqualStrings("#agree", cmd.check.selector);
-    try std.testing.expectEqual(true, cmd.check.checked);
-}
-
-test "parse CHECK explicit true" {
-    const cmd = parse("CHECK '#agree' true");
-    try std.testing.expectEqual(true, cmd.check.checked);
-}
-
-test "parse CHECK explicit false" {
-    const cmd = parse("CHECK '#newsletter' false");
-    try std.testing.expectEqualStrings("#newsletter", cmd.check.selector);
-    try std.testing.expectEqual(false, cmd.check.checked);
-}
-
-test "parse CHECK invalid bool falls through" {
-    const cmd = parse("CHECK '#x' maybe");
-    try std.testing.expect(cmd == .natural_language);
+test "parse CHECK" {
+    const cases = [_]struct {
+        in: []const u8,
+        expected: ?struct { selector: []const u8, checked: bool },
+    }{
+        .{ .in = "CHECK '#agree'", .expected = .{ .selector = "#agree", .checked = true } },
+        .{ .in = "CHECK '#agree' true", .expected = .{ .selector = "#agree", .checked = true } },
+        .{ .in = "CHECK '#newsletter' false", .expected = .{ .selector = "#newsletter", .checked = false } },
+        .{ .in = "CHECK '#x' maybe", .expected = null },
+    };
+    for (cases, 0..) |c, i| {
+        errdefer std.debug.print("failing case {d}: {s}\n", .{ i, c.in });
+        const cmd = parse(c.in);
+        if (c.expected) |e| {
+            try std.testing.expectEqualStrings(e.selector, cmd.check.selector);
+            try std.testing.expectEqual(e.checked, cmd.check.checked);
+        } else {
+            try std.testing.expect(cmd == .natural_language);
+        }
+    }
 }
 
 test "parse TREE" {
@@ -597,4 +669,86 @@ test "ScriptIterator unterminated EVAL" {
     const e1 = iter.next().?;
     try std.testing.expect(e1.command == .natural_language);
     try std.testing.expectEqualStrings("unterminated EVAL block", e1.command.natural_language);
+}
+
+test "trimMatchingQuotes" {
+    const cases = [_]struct { in: []const u8, out: ?[]const u8 }{
+        .{ .in = "'hello'", .out = "hello" },
+        .{ .in = "\"hello\"", .out = "hello" },
+        // Nested same-quote — one layer stripped, inner quotes preserved.
+        .{ .in = "'a[href='login']'", .out = "a[href='login']" },
+        // Mismatched outer quote characters → malformed.
+        .{ .in = "'foo\"", .out = null },
+        // Starts with quote but no matching close → malformed.
+        .{ .in = "'foo", .out = null },
+        .{ .in = "'", .out = null },
+        // Not quoted — returned unchanged.
+        .{ .in = "plain", .out = "plain" },
+        // Empty input and empty quoted → null (no usable argument).
+        .{ .in = "", .out = null },
+        .{ .in = "''", .out = null },
+        .{ .in = "\"\"", .out = null },
+        // Never recurse — only one layer is stripped.
+        .{ .in = "'''a'''", .out = "''a''" },
+    };
+    for (cases, 0..) |c, i| {
+        errdefer std.debug.print("failing case {d}: trimMatchingQuotes({s})\n", .{ i, c.in });
+        const got = trimMatchingQuotes(c.in);
+        if (c.out) |expected| {
+            try std.testing.expect(got != null);
+            try std.testing.expectEqualStrings(expected, got.?);
+        } else {
+            try std.testing.expect(got == null);
+        }
+    }
+}
+
+test "format round-trip for quoted selectors" {
+    const cases = [_]struct { input: []const u8, expected_line: []const u8 }{
+        // No inner quotes → single-quote wrap (preferred).
+        .{ .input = "#login", .expected_line = "CLICK '#login'" },
+        // Inner single quotes only → falls back to double-quote wrap.
+        .{ .input = "input[name='acct']", .expected_line = "CLICK \"input[name='acct']\"" },
+        // Inner double quotes only → stays single-quote wrap.
+        .{ .input = "input[name=\"acct\"]", .expected_line = "CLICK 'input[name=\"acct\"]'" },
+    };
+
+    for (cases, 0..) |c, i| {
+        errdefer std.debug.print("failing case {d}: {s}\n", .{ i, c.input });
+        const cmd = Command{ .click = c.input };
+
+        var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer aw.deinit();
+        try cmd.format(&aw.writer);
+        try std.testing.expectEqualStrings(c.expected_line, aw.written());
+
+        const round = parse(aw.written());
+        try std.testing.expectEqualStrings(c.input, round.click);
+    }
+}
+
+test "format TYPE with nested single quotes round-trip" {
+    const cmd = Command{ .type_cmd = .{
+        .selector = "input[name='acct']",
+        .value = "$LP_USERNAME",
+    } };
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try cmd.format(&aw.writer);
+    try std.testing.expectEqualStrings("TYPE \"input[name='acct']\" '$LP_USERNAME'", aw.written());
+
+    const round = parse(aw.written());
+    try std.testing.expectEqualStrings("input[name='acct']", round.type_cmd.selector);
+    try std.testing.expectEqualStrings("$LP_USERNAME", round.type_cmd.value);
+}
+
+test "format with both quote types falls back to single quotes" {
+    const cmd = Command{ .click = "a[x='y'][z=\"w\"]" };
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try cmd.format(&aw.writer);
+    // Fallback — output is ambiguous on parse, but the format is pinned.
+    try std.testing.expectEqualStrings("CLICK 'a[x='y'][z=\"w\"]'", aw.written());
 }
