@@ -142,8 +142,8 @@ pub fn userAgent(self: *const Config) ?[]const u8 {
 
 pub fn httpCacheDir(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.http_cache_dir,
-        else => null,
+        .help, .version => null,
+        else => self.commonOpts().http_cache_dir,
     };
 }
 
@@ -181,17 +181,11 @@ pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
 }
 
 pub fn blockPrivateNetworks(self: *const Config) bool {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.block_private_networks,
-        else => unreachable,
-    };
+    return self.commonOpts().block_private_networks;
 }
 
 pub fn blockCidrs(self: *const Config) ?[]const u8 {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.block_cidrs,
-        else => unreachable,
-    };
+    return self.commonOpts().block_cidrs;
 }
 
 pub fn maxConnections(self: *const Config) u16 {
