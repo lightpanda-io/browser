@@ -99,17 +99,23 @@ pub fn forEach(self: *FormData, cb_: js.Function, js_this_: ?js.Object) !void {
     }
 }
 
-pub fn write(self: *const FormData, encoding_: ?[]const u8, writer: *std.Io.Writer) !void {
-    const encoding = encoding_ orelse {
-        return self._list.urlEncode(.form, writer);
+pub const WriteOpts = struct {
+    enctype: ?[]const u8 = null,
+    charset: []const u8 = "UTF-8",
+    allocator: ?std.mem.Allocator = null,
+};
+
+pub fn write(self: *const FormData, opts: WriteOpts, writer: *std.Io.Writer) !void {
+    const enctype = opts.enctype orelse {
+        return self._list.urlEncode(.form, opts.allocator, opts.charset, writer);
     };
 
-    if (std.ascii.eqlIgnoreCase(encoding, "application/x-www-form-urlencoded")) {
-        return self._list.urlEncode(.form, writer);
+    if (std.ascii.eqlIgnoreCase(enctype, "application/x-www-form-urlencoded")) {
+        return self._list.urlEncode(.form, opts.allocator, opts.charset, writer);
     }
 
     log.warn(.not_implemented, "FormData.encoding", .{
-        .encoding = encoding,
+        .encoding = enctype,
     });
 }
 
