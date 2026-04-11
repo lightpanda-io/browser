@@ -368,6 +368,7 @@ pub const BrowserContext = struct {
     next_script_id: u32 = 1,
 
     http_proxy_changed: bool = false,
+    user_agent_changed: bool = false,
 
     // Extra headers to add to all requests.
     extra_headers: std.ArrayList([*c]const u8) = .empty,
@@ -476,6 +477,9 @@ pub const BrowserContext = struct {
             browser.http_client.changeProxy(null) catch |err| {
                 log.warn(.http, "changeProxy", .{ .err = err });
             };
+        }
+        if (self.user_agent_changed) {
+            browser.http_client.clearUserAgentOverride();
         }
         self.intercept_state.deinit();
     }

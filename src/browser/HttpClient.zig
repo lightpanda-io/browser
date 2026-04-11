@@ -115,6 +115,12 @@ tls_verify: bool = true,
 
 obey_robots: bool,
 
+// User agent override set via CDP Emulation.setUserAgentOverride.
+// When set, takes precedence over the config's http_headers values.
+// Both fields are allocated from self.allocator when set, null otherwise.
+user_agent_override: ?[:0]const u8 = null,
+user_agent_header_override: ?[:0]const u8 = null,
+
 cdp_client: ?CDPClient = null,
 
 max_response_size: usize,
@@ -177,7 +183,31 @@ pub fn deinit(self: *Client) void {
     }
     self.pending_robots_queue.deinit(self.allocator);
 
+    self.clearUserAgentOverride();
     self.allocator.destroy(self);
+}
+
+// Set a user agent override. Both the raw UA string and the pre-formatted
+// "User-Agent: <ua>" header string are allocated from self.allocator.
+pub fn setUserAgentOverride(self: *Client, ua: []const u8) !void {
+    self.clearUserAgentOverride();
+    const override = try self.allocator.dupeZ(u8, ua);
+    errdefer self.allocator.free(override);
+    const header = try std.fmt.allocPrintSentinel(self.allocator, "User-Agent: {s}", .{ua}, 0);
+    self.user_agent_override = override;
+    self.user_agent_header_override = header;
+}
+
+// Clear any user agent override, restoring the default from config.
+pub fn clearUserAgentOverride(self: *Client) void {
+    if (self.user_agent_override) |ua| {
+        self.allocator.free(ua);
+        self.user_agent_override = null;
+    }
+    if (self.user_agent_header_override) |uah| {
+        self.allocator.free(uah);
+        self.user_agent_header_override = null;
+    }
 }
 
 // Enable TLS verification on all connections.
@@ -209,7 +239,12 @@ pub fn changeProxy(self: *Client, proxy: ?[:0]const u8) !void {
 }
 
 pub fn newHeaders(self: *const Client) !http.Headers {
-    return http.Headers.init(self.network.config.http_headers.user_agent_header);
+    const ua_header = self.user_agent_header_override orelse self.network.config.http_headers.user_agent_header;
+    return http.Headers.init(ua_header);
+}
+
+pub fn getUserAgent(self: *const Client) [:0]const u8 {
+    return self.user_agent_override orelse self.network.config.http_headers.user_agent;
 }
 
 pub fn abort(self: *Client) void {
@@ -511,7 +546,7 @@ fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
         200 => {
             if (ctx.buffer.items.len > 0) {
                 const robots: ?Robots = ctx.client.network.robot_store.robotsFromBytes(
-                    ctx.client.network.config.http_headers.user_agent,
+                    ctx.client.getUserAgent(),
                     ctx.buffer.items,
                 ) catch blk: {
                     log.warn(.browser, "failed to parse robots", .{ .robots_url = ctx.robots_url });

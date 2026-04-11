@@ -37,7 +37,7 @@ _storage: StorageManager = .{},
 pub const init: Navigator = .{};
 
 pub fn getUserAgent(_: *const Navigator, page: *Page) []const u8 {
-    return page._session.browser.app.config.http_headers.user_agent;
+    return page._session.browser.http_client.getUserAgent();
 }
 
 pub fn getLanguages(_: *const Navigator) [2][]const u8 {

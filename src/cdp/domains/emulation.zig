@@ -70,6 +70,30 @@ fn setTouchEmulationEnabled(cmd: *CDP.Command) !void {
 }
 
 fn setUserAgentOverride(cmd: *CDP.Command) !void {
-    log.info(.app, "setUserAgentOverride ignored", .{});
+    const params = (try cmd.params(struct {
+        userAgent: []const u8,
+        acceptLanguage: ?[]const u8 = null,
+        platform: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    const ua = params.userAgent;
+
+    // Validate: all characters must be printable ASCII
+    for (ua) |c| {
+        if (!std.ascii.isPrint(c)) {
+            return cmd.sendError(-32602, "User agent contains non-printable characters", .{});
+        }
+    }
+
+    // Reject user agents containing "mozilla" (case-insensitive)
+    if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
+        return cmd.sendError(-32602, "User agent must not contain Mozilla", .{});
+    }
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const http_client = cmd.cdp.browser.http_client;
+    try http_client.setUserAgentOverride(ua);
+    bc.user_agent_changed = true;
+
     return cmd.sendResult(null, .{});
 }
