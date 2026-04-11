@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta charset="UTF-8">
 <script src="../testing.js"></script>
 
 <script>
@@ -85,7 +86,8 @@
   usp2.append('spaces', 'hello world');
   usp2.append('special', '!@#$%^&*()');
   usp2.append('utf8', 'café');
-  testing.expectEqual('spaces=hello+world&special=%21%40%23%24%25%5E%26*%28%29&utf8=caf%C3%83%C2%A9', usp2.toString());
+  // UTF-8 encoding of 'é' (U+00E9) is C3 A9, percent-encoded as %C3%A9
+  testing.expectEqual('spaces=hello+world&special=%21%40%23%24%25%5E%26*%28%29&utf8=caf%C3%A9', usp2.toString());
 }
 </script>
 
@@ -411,5 +413,50 @@
   testing.expectEqual(2, usp.size);
   testing.expectEqual('42', usp.get('count'));
   testing.expectEqual('3.14', usp.get('pi'));
+}
+</script>
+
+<script id=utf8Encoding>
+{
+  // Test that UTF-8 characters are properly percent-encoded (not double-encoded)
+
+  // 2-byte UTF-8: é (U+00E9) -> C3 A9 -> %C3%A9
+  const usp1 = new URLSearchParams();
+  usp1.set('cafe', 'café');
+  testing.expectEqual('cafe=caf%C3%A9', usp1.toString());
+
+  // 3-byte UTF-8: 中 (U+4E2D) -> E4 B8 AD -> %E4%B8%AD
+  const usp2 = new URLSearchParams();
+  usp2.set('chinese', '中文');
+  testing.expectEqual('chinese=%E4%B8%AD%E6%96%87', usp2.toString());
+
+  // 3-byte UTF-8: 日 (U+65E5) -> E6 97 A5 -> %E6%97%A5
+  const usp3 = new URLSearchParams();
+  usp3.set('japanese', '日本語');
+  testing.expectEqual('japanese=%E6%97%A5%E6%9C%AC%E8%AA%9E', usp3.toString());
+
+  // Mixed ASCII and UTF-8
+  const usp4 = new URLSearchParams();
+  usp4.set('mixed', 'hello世界');
+  testing.expectEqual('mixed=hello%E4%B8%96%E7%95%8C', usp4.toString());
+
+  // 4-byte UTF-8: 😀 (U+1F600) -> F0 9F 98 80 -> %F0%9F%98%80
+  const usp5 = new URLSearchParams();
+  usp5.set('emoji', '😀');
+  testing.expectEqual('emoji=%F0%9F%98%80', usp5.toString());
+}
+</script>
+
+<script id=utf8EncodingRoundtrip>
+{
+  // Test that UTF-8 encoding round-trips correctly
+  const original = '日本語テスト café 中文 😀';
+  const usp = new URLSearchParams();
+  usp.set('test', original);
+
+  // Parse the encoded string back
+  const encoded = usp.toString();
+  const usp2 = new URLSearchParams(encoded);
+  testing.expectEqual(original, usp2.get('test'));
 }
 </script>

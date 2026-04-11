@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -22,6 +22,7 @@ const String = @import("../../string.zig").String;
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const h5e = @import("../parser/html5ever.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -177,21 +178,24 @@ const URLEncodeMode = enum {
     query,
 };
 
-pub fn urlEncode(self: *const KeyValueList, comptime mode: URLEncodeMode, writer: *std.Io.Writer) !void {
+// URL-encode the key-value pairs.
+// For UTF-8 charset, does standard percent encoding.
+// For legacy charsets, converts to that encoding with NCR fallback for unmappable chars.
+pub fn urlEncode(self: *const KeyValueList, comptime mode: URLEncodeMode, allocator_: ?Allocator, charset: []const u8, writer: *std.Io.Writer) !void {
     const entries = self._entries.items;
     if (entries.len == 0) {
         return;
     }
 
-    try urlEncodeEntry(entries[0], mode, writer);
+    try urlEncodeEntry(entries[0], mode, allocator_, charset, writer);
     for (entries[1..]) |entry| {
         try writer.writeByte('&');
-        try urlEncodeEntry(entry, mode, writer);
+        try urlEncodeEntry(entry, mode, allocator_, charset, writer);
     }
 }
 
-fn urlEncodeEntry(entry: Entry, comptime mode: URLEncodeMode, writer: *std.Io.Writer) !void {
-    try urlEncodeValue(entry.name.str(), mode, writer);
+fn urlEncodeEntry(entry: Entry, comptime mode: URLEncodeMode, allocator_: ?Allocator, charset: []const u8, writer: *std.Io.Writer) !void {
+    try urlEncodeValue(entry.name.str(), mode, allocator_, charset, writer);
 
     // for a form, for an empty value, we'll do "spice="
     // but for a query, we do "spice"
@@ -200,10 +204,53 @@ fn urlEncodeEntry(entry: Entry, comptime mode: URLEncodeMode, writer: *std.Io.Wr
     }
 
     try writer.writeByte('=');
-    try urlEncodeValue(entry.value.str(), mode, writer);
+    try urlEncodeValue(entry.value.str(), mode, allocator_, charset, writer);
 }
 
-fn urlEncodeValue(value: []const u8, comptime mode: URLEncodeMode, writer: *std.Io.Writer) !void {
+fn urlEncodeValue(value: []const u8, comptime mode: URLEncodeMode, allocator_: ?Allocator, charset: []const u8, writer: *std.Io.Writer) !void {
+    // For UTF-8, do standard percent encoding
+    if (std.mem.eql(u8, charset, "UTF-8")) {
+        return urlEncodeValueUtf8(value, mode, writer);
+    }
+
+    const allocator = allocator_ orelse return urlEncodeValueUtf8(value, mode, writer);
+
+    const enc_info = h5e.encoding_for_label(charset.ptr, charset.len);
+    if (!enc_info.isValid()) {
+        // Unknown encoding, fall back to UTF-8
+        return urlEncodeValueUtf8(value, mode, writer);
+    }
+
+    // Calculate max buffer size for encoded output
+    const max_encoded_len = h5e.encoding_max_encode_buffer_length(enc_info.handle.?, value.len);
+    if (max_encoded_len == 0) {
+        return urlEncodeValueUtf8(value, mode, writer);
+    }
+
+    const encode_buf = try allocator.alloc(u8, max_encoded_len);
+    defer allocator.free(encode_buf);
+
+    // Encode UTF-8 to legacy encoding with NCR fallback
+    const result = h5e.encoding_encode_with_ncr(
+        enc_info.handle.?,
+        value.ptr,
+        value.len,
+        encode_buf.ptr,
+        encode_buf.len,
+    );
+
+    if (!result.isSuccess()) {
+        // Encoding failed, fall back to UTF-8
+        return urlEncodeValueUtf8(value, mode, writer);
+    }
+
+    // Percent-encode the result, preserving NCRs (& and ; must be encoded)
+    const encoded_bytes = encode_buf[0..result.bytes_written];
+    return urlEncodeValueLegacy(encoded_bytes, mode, writer);
+}
+
+/// Percent-encode a UTF-8 value - bytes >= 0x80 are percent-encoded directly.
+fn urlEncodeValueUtf8(value: []const u8, comptime mode: URLEncodeMode, writer: *std.Io.Writer) !void {
     if (!urlEncodeShouldEscape(value, mode)) {
         return writer.writeAll(value);
     }
@@ -213,13 +260,22 @@ fn urlEncodeValue(value: []const u8, comptime mode: URLEncodeMode, writer: *std.
             try writer.writeByte(b);
         } else if (b == ' ') {
             try writer.writeByte('+');
-        } else if (b >= 0x80) {
-            // Double-encode: treat byte as Latin-1 code point, encode to UTF-8, then percent-encode
-            // For bytes 0x80-0xFF (U+0080 to U+00FF), UTF-8 encoding is 2 bytes:
-            // [0xC0 | (b >> 6), 0x80 | (b & 0x3F)]
-            const byte1 = 0xC0 | (b >> 6);
-            const byte2 = 0x80 | (b & 0x3F);
-            try writer.print("%{X:0>2}%{X:0>2}", .{ byte1, byte2 });
+        } else {
+            try writer.print("%{X:0>2}", .{b});
+        }
+    }
+}
+
+/// Percent-encode a legacy-encoded value - must also encode & and ; to preserve NCRs.
+fn urlEncodeValueLegacy(value: []const u8, comptime mode: URLEncodeMode, writer: *std.Io.Writer) !void {
+    for (value) |b| {
+        if (urlEncodeUnreserved(b, mode)) {
+            try writer.writeByte(b);
+        } else if (b == ' ') {
+            try writer.writeByte('+');
+        } else if (b == '&' or b == ';') {
+            // Must encode & and ; to preserve NCRs like &#12345;
+            try writer.print("%{X:0>2}", .{b});
         } else {
             try writer.print("%{X:0>2}", .{b});
         }
@@ -281,3 +337,58 @@ const GenericIterator = @import("collections/iterator.zig").Entry;
 pub const KeyIterator = GenericIterator(Iterator, "0");
 pub const ValueIterator = GenericIterator(Iterator, "1");
 pub const EntryIterator = GenericIterator(Iterator, null);
+
+const testing = @import("../../testing.zig");
+
+test "KeyValueList: urlEncode UTF-8" {
+    // Test that UTF-8 characters are properly percent-encoded (not double-encoded)
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    try list.append(allocator, "cafe", "café"); // é = C3 A9 in UTF-8
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.form, null, "UTF-8", &buf.writer);
+
+    // é (U+00E9) in UTF-8 is C3 A9, percent-encoded as %C3%A9
+    try testing.expectString("cafe=caf%C3%A9", buf.written());
+}
+
+test "KeyValueList: urlEncode UTF-8 CJK" {
+    // Test 3-byte UTF-8 characters (Chinese/Japanese)
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    try list.append(allocator, "text", "中文"); // 中 = E4 B8 AD, 文 = E6 96 87
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.form, null, "UTF-8", &buf.writer);
+
+    try testing.expectString("text=%E4%B8%AD%E6%96%87", buf.written());
+}
+
+test "KeyValueList: urlEncode GBK with NCR fallback" {
+    // Test legacy encoding with NCR fallback for unmappable characters
+    // U+3D34 (㴴) is NOT in GBK, should become &#15668;
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    try list.append(allocator, "q", "\u{3D34}");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.form, allocator, "GBK", &buf.writer);
+
+    // &#15668; percent-encoded is %26%2315668%3B
+    try testing.expectString("q=%26%2315668%3B", buf.written());
+}
+
+test "KeyValueList: urlEncode GBK mappable character" {
+    // Test legacy encoding with a character that IS in GBK
+    // U+4E2D (中) IS in GBK, should encode to GBK bytes D6 D0
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    try list.append(allocator, "q", "中");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.form, allocator, "GBK", &buf.writer);
+
+    // GBK encoding of 中 is D6 D0, percent-encoded as %D6%D0
+    try testing.expectString("q=%D6%D0", buf.written());
+}

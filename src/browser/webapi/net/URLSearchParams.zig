@@ -112,7 +112,8 @@ pub fn entries(self: *URLSearchParams, page: *Page) !*KeyValueList.EntryIterator
 }
 
 pub fn toString(self: *const URLSearchParams, writer: *std.Io.Writer) !void {
-    return self._params.urlEncode(.query, writer);
+    // URLSearchParams always uses UTF-8 per the URL Standard
+    return self._params.urlEncode(.query, null, "UTF-8", writer);
 }
 
 pub fn format(self: *const URLSearchParams, writer: *std.Io.Writer) !void {
@@ -278,34 +279,6 @@ const HEX_DECODE_ARRAY = blk: {
 
 inline fn decodeHex(char: u8) u8 {
     return @as([*]const u8, @ptrFromInt((@intFromPtr(&HEX_DECODE_ARRAY) - @as(usize, '0'))))[char];
-}
-
-fn escape(input: []const u8, writer: *std.Io.Writer) !void {
-    for (input) |c| {
-        if (isUnreserved(c)) {
-            try writer.writeByte(c);
-        } else if (c == ' ') {
-            try writer.writeByte('+');
-        } else if (c == '*') {
-            try writer.writeByte('*');
-        } else if (c >= 0x80) {
-            // Double-encode: treat byte as Latin-1 code point, encode to UTF-8, then percent-encode
-            // For bytes 0x80-0xFF (U+0080 to U+00FF), UTF-8 encoding is 2 bytes:
-            // [0xC0 | (c >> 6), 0x80 | (c & 0x3F)]
-            const byte1 = 0xC0 | (c >> 6);
-            const byte2 = 0x80 | (c & 0x3F);
-            try writer.print("%{X:0>2}%{X:0>2}", .{ byte1, byte2 });
-        } else {
-            try writer.print("%{X:0>2}", .{c});
-        }
-    }
-}
-
-fn isUnreserved(c: u8) bool {
-    return switch (c) {
-        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_' => true,
-        else => false,
-    };
 }
 
 pub const Iterator = struct {
