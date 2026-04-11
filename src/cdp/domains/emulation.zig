@@ -70,6 +70,129 @@ fn setTouchEmulationEnabled(cmd: *CDP.Command) !void {
 }
 
 fn setUserAgentOverride(cmd: *CDP.Command) !void {
-    log.info(.app, "setUserAgentOverride ignored", .{});
+    const params = (try cmd.params(struct {
+        userAgent: []const u8,
+        acceptLanguage: ?[]const u8 = null,
+        platform: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    const ua = params.userAgent;
+
+    // Validate: all characters must be printable ASCII
+    for (ua) |c| {
+        if (!std.ascii.isPrint(c)) {
+            return cmd.sendError(-32602, "User agent contains non-printable characters", .{});
+        }
+    }
+
+    // Reject user agents containing "mozilla" (case-insensitive)
+    if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
+        return cmd.sendError(-32602, "User agent must not contain Mozilla", .{});
+    }
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const http_client = cmd.cdp.browser.http_client;
+    try http_client.setUserAgentOverride(ua);
+    bc.user_agent_changed = true;
+
     return cmd.sendResult(null, .{});
 }
+
+const testing = @import("../testing.zig");
+
+test "cdp.Emulation: setUserAgentOverride with valid user agent" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-UA1" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "CustomBot/1.0" },
+    });
+
+    try ctx.expectSentResult(null, .{ .id = 1 });
+}
+
+test "cdp.Emulation: setUserAgentOverride rejects mozilla" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-UA2" });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "Mozilla/5.0 (Windows NT 10.0)" },
+    });
+
+    try ctx.expectSentError(-32602, "User agent must not contain Mozilla", .{ .id = 2 });
+}
+
+test "cdp.Emulation: setUserAgentOverride rejects mozilla case insensitive" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-UA3" });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "MOZILLA/5.0 test" },
+    });
+
+    try ctx.expectSentError(-32602, "User agent must not contain Mozilla", .{ .id = 3 });
+}
+
+test "cdp.Emulation: setUserAgentOverride rejects non-printable characters" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-UA4" });
+
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "Bot/1.0\x01hidden" },
+    });
+
+    try ctx.expectSentError(-32602, "User agent contains non-printable characters", .{ .id = 4 });
+}
+
+test "cdp.Emulation: setUserAgentOverride with optional params" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-UA5" });
+
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{
+            .userAgent = "CustomBot/2.0",
+            .acceptLanguage = "en-US",
+            .platform = "Linux",
+        },
+    });
+
+    try ctx.expectSentResult(null, .{ .id = 5 });
+}
+
+test "cdp.Emulation: setUserAgentOverride can be called multiple times" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-UA6" });
+
+    try ctx.processMessage(.{
+        .id = 6,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "FirstBot/1.0" },
+    });
+
+    try ctx.expectSentResult(null, .{ .id = 6 });
+
+    try ctx.processMessage(.{
+        .id = 7,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "SecondBot/2.0" },
+    });
+
+    try ctx.expectSentResult(null, .{ .id = 7 });
+}
+
