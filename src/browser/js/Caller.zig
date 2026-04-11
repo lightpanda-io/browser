@@ -360,6 +360,7 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         error.TryCatchRethrow => return,
         error.InvalidArgument => isolate.createTypeError("invalid argument"),
         error.TypeError => isolate.createTypeError(""),
+        error.RangeError => isolate.createRangeError(""),
         error.OutOfMemory => isolate.createError("out of memory"),
         error.IllegalConstructor => isolate.createError("Illegal Constructor"),
         else => blk: {
