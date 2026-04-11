@@ -33,10 +33,8 @@ pub fn main() !void {
     }
     lp.log.opts.level = .warn;
     const config = try lp.Config.init(allocator, "legacy-test", .{ .serve = .{
-        .common = .{
-            .tls_verify_host = false,
-            .user_agent_suffix = "internal-tester",
-        },
+        .insecure_disable_tls_host_verification = true,
+        .user_agent_suffix = "internal-tester",
     } });
     defer config.deinit(allocator);
 
