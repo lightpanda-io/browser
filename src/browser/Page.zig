@@ -3562,6 +3562,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     }
 
     const FormData = @import("webapi/net/FormData.zig");
+
     // The submitter can be an input box (if enter was entered on the box)
     // I don't think this is technically correct, but FormData handles it ok
     const form_data = try FormData.init(form, submitter_, self);
@@ -3569,10 +3570,22 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     const arena = try self._session.getArena(.medium, "submitForm");
     errdefer self._session.releaseArena(arena);
 
-    const encoding = form_element.getAttributeSafe(comptime .wrap("enctype"));
+    const enctype = form_element.getAttributeSafe(comptime .wrap("enctype"));
+
+    // Get charset from accept-charset attribute or fall back to document charset
+    const charset: []const u8 = blk: {
+        if (form_element.getAttributeSafe(.wrap("accept-charset"))) |ac| {
+            // Normalize to canonical encoding name
+            const info = h5e.encoding_for_label(ac.ptr, ac.len);
+            if (info.isValid()) {
+                break :blk info.name();
+            }
+        }
+        break :blk self.charset;
+    };
 
     var buf = std.Io.Writer.Allocating.init(arena);
-    try form_data.write(encoding, &buf.writer);
+    try form_data.write(.{ .enctype = enctype, .charset = charset, .allocator = arena }, &buf.writer);
 
     const method = form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
     var action = form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
