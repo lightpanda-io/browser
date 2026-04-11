@@ -365,9 +365,10 @@ pub fn deinit(self: *Page, abort_http: bool) void {
         }
 
         {
-            var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
-            while (it) |node| : (it = node.next) {
-                const observer: *MutationObserver = @fieldParentPtr("node", node);
+            var node: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
+            while (node) |n| {
+                node = n.next; // capture before we potentially delete observer
+                const observer: *MutationObserver = @fieldParentPtr("node", n);
                 observer.releaseRef(session);
             }
         }
