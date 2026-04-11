@@ -47,7 +47,9 @@ fn sendInspector(cmd: *CDP.Command, action: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     // the result to return is handled directly by the inspector.
-    bc.callInspector(cmd.input.json);
+    // Pass the requesting session id so the response is routed back correctly,
+    // even when an alt_session_id (from Target.attachToTarget) is in use.
+    bc.callInspector(cmd.input.json, cmd.input.session_id);
 }
 
 fn logInspector(cmd: *CDP.Command, action: anytype) !void {

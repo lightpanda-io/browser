@@ -230,6 +230,7 @@ fn close(cmd: *CDP.Command) !void {
         }, .{});
 
         bc.session_id = null;
+        bc.alt_session_id = null;
     }
 
     bc.session.removePage();
