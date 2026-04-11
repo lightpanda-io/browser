@@ -1193,3 +1193,100 @@ fn parseCommonArg(
 
     return false;
 }
+
+test "HttpHeaders: default user agent" {
+    const allocator = std.testing.allocator;
+    var config = Config{
+        .mode = .{ .serve = .{} },
+        .exec_name = "test",
+        .http_headers = undefined,
+    };
+    config.http_headers = try HttpHeaders.init(allocator, &config);
+    defer config.http_headers.deinit(allocator);
+
+    try std.testing.expectEqualStrings("Lightpanda/1.0", config.http_headers.user_agent);
+    try std.testing.expectEqualStrings("User-Agent: Lightpanda/1.0", config.http_headers.user_agent_header);
+    try std.testing.expect(config.http_headers.proxy_bearer_header == null);
+}
+
+test "HttpHeaders: custom user agent override" {
+    const allocator = std.testing.allocator;
+    const ua = try allocator.dupe(u8, "MyBot/2.0");
+    var config = Config{
+        .mode = .{ .serve = .{ .common = .{ .user_agent = ua } } },
+        .exec_name = "test",
+        .http_headers = undefined,
+    };
+    config.http_headers = try HttpHeaders.init(allocator, &config);
+    defer config.http_headers.deinit(allocator);
+    defer allocator.free(ua);
+
+    try std.testing.expectEqualStrings("MyBot/2.0", config.http_headers.user_agent);
+    try std.testing.expectEqualStrings("User-Agent: MyBot/2.0", config.http_headers.user_agent_header);
+}
+
+test "HttpHeaders: user agent suffix" {
+    const allocator = std.testing.allocator;
+    const suffix = try allocator.dupe(u8, "CustomSuffix/3.0");
+    var config = Config{
+        .mode = .{ .serve = .{ .common = .{ .user_agent_suffix = suffix } } },
+        .exec_name = "test",
+        .http_headers = undefined,
+    };
+    config.http_headers = try HttpHeaders.init(allocator, &config);
+    defer config.http_headers.deinit(allocator);
+    defer allocator.free(suffix);
+
+    try std.testing.expectEqualStrings("Lightpanda/1.0 CustomSuffix/3.0", config.http_headers.user_agent);
+    try std.testing.expectEqualStrings("User-Agent: Lightpanda/1.0 CustomSuffix/3.0", config.http_headers.user_agent_header);
+}
+
+test "HttpHeaders: fetch mode default user agent" {
+    const allocator = std.testing.allocator;
+    const url = try allocator.dupeZ(u8, "https://example.com");
+    defer allocator.free(url);
+    var config = Config{
+        .mode = .{ .fetch = .{ .url = url } },
+        .exec_name = "test",
+        .http_headers = undefined,
+    };
+    config.http_headers = try HttpHeaders.init(allocator, &config);
+    defer config.http_headers.deinit(allocator);
+
+    try std.testing.expectEqualStrings("Lightpanda/1.0", config.http_headers.user_agent);
+}
+
+test "HttpHeaders: fetch mode custom user agent" {
+    const allocator = std.testing.allocator;
+    const url = try allocator.dupeZ(u8, "https://example.com");
+    defer allocator.free(url);
+    const ua = try allocator.dupe(u8, "FetchBot/1.0");
+    var config = Config{
+        .mode = .{ .fetch = .{ .url = url, .common = .{ .user_agent = ua } } },
+        .exec_name = "test",
+        .http_headers = undefined,
+    };
+    config.http_headers = try HttpHeaders.init(allocator, &config);
+    defer config.http_headers.deinit(allocator);
+    defer allocator.free(ua);
+
+    try std.testing.expectEqualStrings("FetchBot/1.0", config.http_headers.user_agent);
+    try std.testing.expectEqualStrings("User-Agent: FetchBot/1.0", config.http_headers.user_agent_header);
+}
+
+test "HttpHeaders: proxy bearer header" {
+    const allocator = std.testing.allocator;
+    const token: [:0]const u8 = try allocator.dupeZ(u8, "secret-token");
+    var config = Config{
+        .mode = .{ .serve = .{ .common = .{ .proxy_bearer_token = token } } },
+        .exec_name = "test",
+        .http_headers = undefined,
+    };
+    config.http_headers = try HttpHeaders.init(allocator, &config);
+    defer config.http_headers.deinit(allocator);
+    defer allocator.free(token);
+
+    try std.testing.expectEqualStrings("Lightpanda/1.0", config.http_headers.user_agent);
+    try std.testing.expectEqualStrings("Proxy-Authorization: Bearer secret-token", config.http_headers.proxy_bearer_header.?);
+}
+
