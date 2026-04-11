@@ -640,7 +640,6 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
     std.process.exit(1);
 }
 
-// TODO: Fix mode sniff regression.
 pub fn parseArgs(allocator: Allocator) !Config {
     const exec_name, const command = try Commands.parse(allocator);
     return .init(allocator, exec_name, command);
