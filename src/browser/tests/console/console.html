@@ -26,3 +26,24 @@
 
     testing.expectEqual(true, true);
 </script>
+
+<script id="group">
+    // should not crash
+    console.group();
+    console.groupEnd();
+
+    console.group("outer");
+    console.group("inner");
+    console.log("nested");
+    console.groupEnd();
+    console.groupEnd();
+
+    console.groupCollapsed("collapsed");
+    console.log("inside collapsed");
+    console.groupEnd();
+
+    // groupEnd beyond depth 0 should not crash
+    console.groupEnd();
+
+    testing.expectEqual(true, true);
+</script>

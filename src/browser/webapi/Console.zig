@@ -26,6 +26,7 @@ const Console = @This();
 
 _timers: std.StringHashMapUnmanaged(u64) = .{},
 _counts: std.StringHashMapUnmanaged(u64) = .{},
+_group_depth: u32 = 0,
 
 pub const init: Console = .{};
 
@@ -128,6 +129,22 @@ pub fn timeEnd(self: *Console, label_: ?[]const u8) void {
     logger.info(.js, "console.timeEnd", .{ .label = label, .elapsed = elapsed - kv.value });
 }
 
+pub fn group(self: *Console, values: []js.Value, page: *Page) void {
+    logger.info(.js, "console.group", .{ValueWriter{ .page = page, .values = values }});
+    self._group_depth +|= 1;
+}
+
+pub fn groupCollapsed(self: *Console, values: []js.Value, page: *Page) void {
+    logger.info(.js, "console.groupCollapsed", .{ValueWriter{ .page = page, .values = values }});
+    self._group_depth +|= 1;
+}
+
+pub fn groupEnd(self: *Console) void {
+    if (self._group_depth > 0) {
+        self._group_depth -= 1;
+    }
+}
+
 fn timestamp() u64 {
     return @import("../../datetime.zig").timestamp(.monotonic);
 }
@@ -188,6 +205,9 @@ pub const JsApi = struct {
     pub const time = bridge.function(Console.time, .{});
     pub const timeLog = bridge.function(Console.timeLog, .{});
     pub const timeEnd = bridge.function(Console.timeEnd, .{});
+    pub const group = bridge.function(Console.group, .{});
+    pub const groupCollapsed = bridge.function(Console.groupCollapsed, .{});
+    pub const groupEnd = bridge.function(Console.groupEnd, .{});
 };
 
 const testing = @import("../../testing.zig");
