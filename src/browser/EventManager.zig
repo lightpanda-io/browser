@@ -24,24 +24,23 @@ const String = @import("../string.zig").String;
 
 const js = @import("js/js.zig");
 const Page = @import("Page.zig");
+const EventManagerBase = @import("EventManagerBase.zig");
 
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
 
-const EventManagerBase = @import("EventManagerBase.zig");
-
 const Allocator = std.mem.Allocator;
-
-const IS_DEBUG = builtin.mode == .Debug;
-
-pub const EventManager = @This();
 
 // Re-export types from EventManagerBase for API compatibility
 pub const RegisterOptions = EventManagerBase.RegisterOptions;
 pub const Callback = EventManagerBase.Callback;
 pub const Listener = EventManagerBase.Listener;
+
+const IS_DEBUG = builtin.mode == .Debug;
+
+pub const EventManager = @This();
 
 page: *Page,
 base: EventManagerBase,

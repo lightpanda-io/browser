@@ -27,7 +27,7 @@ const Location = @This();
 _url: *URL,
 
 pub fn init(raw_url: [:0]const u8, page: *Page) !*Location {
-    const url = try URL.init(raw_url, null, page);
+    const url = try URL.init(raw_url, null, &page.js.execution);
     return page._factory.create(Location{
         ._url = url,
     });
@@ -53,12 +53,12 @@ pub fn getPort(self: *const Location) []const u8 {
     return self._url.getPort();
 }
 
-pub fn getOrigin(self: *const Location, page: *const Page) ![]const u8 {
-    return self._url.getOrigin(page);
+pub fn getOrigin(self: *const Location, exec: *const js.Execution) ![]const u8 {
+    return self._url.getOrigin(exec);
 }
 
-pub fn getSearch(self: *const Location, page: *const Page) ![]const u8 {
-    return self._url.getSearch(page);
+pub fn getSearch(self: *const Location, exec: *const js.Execution) ![]const u8 {
+    return self._url.getSearch(exec);
 }
 
 pub fn getHash(self: *const Location) []const u8 {
@@ -98,8 +98,8 @@ pub fn reload(_: *const Location, page: *Page) !void {
     return page.scheduleNavigation(page.url, .{ .reason = .script, .kind = .reload }, .{ .script = page });
 }
 
-pub fn toString(self: *const Location, page: *const Page) ![:0]const u8 {
-    return self._url.toString(page);
+pub fn toString(self: *const Location, exec: *const js.Execution) ![:0]const u8 {
+    return self._url.toString(exec);
 }
 
 pub const JsApi = struct {

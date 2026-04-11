@@ -57,6 +57,7 @@ const PerformanceObserver = @import("webapi/PerformanceObserver.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
+const Worker = @import("webapi/Worker.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const SubmitEvent = @import("webapi/event/SubmitEvent.zig");
@@ -231,6 +232,9 @@ iframe: ?*IFrame = null,
 frames: std.ArrayList(*Page) = .{},
 frames_sorted: bool = true,
 
+// Workers created by this page. Cleaned up when page is destroyed.
+workers: std.ArrayList(*Worker) = .{},
+
 // DOM version used to invalidate cached state of "live" collections
 version: usize = 0,
 
@@ -339,6 +343,10 @@ pub fn deinit(self: *Page, abort_http: bool) void {
         frame.deinit(abort_http);
     }
 
+    for (self.workers.items) |worker| {
+        worker.deinit();
+    }
+
     if (comptime IS_DEBUG) {
         log.debug(.page, "page.deinit", .{ .url = self.url, .type = self._type });
 
@@ -396,6 +404,19 @@ pub fn deinit(self: *Page, abort_http: bool) void {
     self._style_manager.deinit();
 
     session.releaseArena(self.call_arena);
+}
+
+pub fn trackWorker(self: *Page, worker: *Worker) !void {
+    try self.workers.append(self.arena, worker);
+}
+
+pub fn removeWorker(self: *Page, worker: *Worker) void {
+    for (self.workers.items, 0..) |w, i| {
+        if (w == worker) {
+            _ = self.workers.swapRemove(i);
+            break;
+        }
+    }
 }
 
 pub fn base(self: *const Page) [:0]const u8 {
@@ -1535,7 +1556,7 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
             continue;
         };
         const target = slot.asNode().asEventTarget();
-        _ = target.dispatchEvent(event, self) catch |err| {
+        self._event_manager.dispatch(target, event) catch |err| {
             log.err(.page, "deliverSlotchange.dispatch", .{ .err = err, .type = self._type, .url = self.url });
         };
     }

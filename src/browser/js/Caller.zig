@@ -21,6 +21,8 @@ const log = @import("../../log.zig");
 const string = @import("../../string.zig");
 
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
+const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 
 const js = @import("js.zig");
 const Local = @import("Local.zig");
@@ -57,7 +59,7 @@ fn throwDetachedError(isolate: *v8.Isolate) void {
     _ = v8.v8__Isolate__ThrowException(isolate, js_exception);
 }
 
-fn initWithContext(self: *Caller, ctx: *Context, v8_context: *const v8.Context) void {
+pub fn initWithContext(self: *Caller, ctx: *Context, v8_context: *const v8.Context) void {
     ctx.call_depth += 1;
     self.* = Caller{
         .local = .{
@@ -67,9 +69,9 @@ fn initWithContext(self: *Caller, ctx: *Context, v8_context: *const v8.Context) 
             .isolate = ctx.isolate,
         },
         .prev_local = ctx.local,
-        .prev_context = ctx.page.js,
+        .prev_context = ctx.global.getJs(),
     };
-    ctx.page.js = ctx;
+    ctx.global.setJs(ctx);
     ctx.local = &self.local;
 }
 
@@ -100,7 +102,7 @@ pub fn deinit(self: *Caller) void {
 
     ctx.call_depth = call_depth;
     ctx.local = self.prev_local;
-    ctx.page.js = self.prev_context;
+    ctx.global.setJs(self.prev_context);
 }
 
 pub const CallOpts = struct {
@@ -182,7 +184,7 @@ fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, inf
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = idx;
     if (@typeInfo(F).@"fn".params.len == 3) {
-        @field(args, "2") = local.ctx.page;
+        @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
@@ -209,7 +211,7 @@ fn _getNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
     if (@typeInfo(F).@"fn".params.len == 3) {
-        @field(args, "2") = local.ctx.page;
+        @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
@@ -237,7 +239,7 @@ fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
     @field(args, "2") = try local.jsValueToZig(@TypeOf(@field(args, "2")), js_value);
     if (@typeInfo(F).@"fn".params.len == 4) {
-        @field(args, "3") = local.ctx.page;
+        @field(args, "3") = getGlobalArg(@TypeOf(args.@"3"), local.ctx);
     }
     const ret = @call(.auto, func, args);
     return handleIndexedReturn(T, F, false, local, ret, info, opts);
@@ -263,7 +265,7 @@ fn _deleteNamedIndex(comptime T: type, local: *const Local, func: anytype, name:
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
     if (@typeInfo(F).@"fn".params.len == 3) {
-        @field(args, "2") = local.ctx.page;
+        @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
     return handleIndexedReturn(T, F, false, local, ret, info, opts);
@@ -289,7 +291,7 @@ fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: Pr
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     if (@typeInfo(F).@"fn".params.len == 2) {
-        @field(args, "1") = local.ctx.page;
+        @field(args, "1") = getGlobalArg(@TypeOf(args.@"1"), local.ctx);
     }
     const ret = @call(.auto, func, args);
     return handleIndexedReturn(T, F, true, local, ret, info, opts);
@@ -445,6 +447,33 @@ fn tupleFieldName(comptime i: usize) [:0]const u8 {
 
 fn isPage(comptime T: type) bool {
     return T == *Page or T == *const Page;
+}
+
+fn isSession(comptime T: type) bool {
+    return T == *Session or T == *const Session;
+}
+
+fn isExecution(comptime T: type) bool {
+    return T == *js.Execution or T == *const js.Execution;
+}
+
+fn getGlobalArg(comptime T: type, ctx: *Context) T {
+    if (comptime isPage(T)) {
+        return switch (ctx.global) {
+            .page => |page| page,
+            .worker => unreachable,
+        };
+    }
+
+    if (comptime isExecution(T)) {
+        return &ctx.execution;
+    }
+
+    if (comptime isSession(T)) {
+        return ctx.session;
+    }
+
+    @compileError("Unsupported global arg type: " ++ @typeName(T));
 }
 
 // These wrap the raw v8 C API to provide a cleaner interface.
@@ -718,15 +747,16 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             return args;
         }
 
-        // If the last parameter is the Page, set it, and exclude it
+        // If the last parameter is the Page or Worker, set it, and exclude it
         // from our params slice, because we don't want to bind it to
         // a JS argument
-        if (comptime isPage(params[params.len - 1].type.?)) {
-            @field(args, tupleFieldName(params.len - 1 + offset)) = local.ctx.page;
+        const LastParamType = params[params.len - 1].type.?;
+        if (comptime isPage(LastParamType) or isExecution(LastParamType) or isSession(LastParamType)) {
+            @field(args, tupleFieldName(params.len - 1 + offset)) = getGlobalArg(LastParamType, local.ctx);
             break :blk params[0 .. params.len - 1];
         }
 
-        // we have neither a Page nor a JsObject. All params must be
+        // we have neither a Page, Execution, nor a JsObject. All params must be
         // bound to a JavaScript value.
         break :blk params;
     };
@@ -775,7 +805,11 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
         }
 
         if (comptime isPage(param.type.?)) {
-            @compileError("Page must be the last parameter (or 2nd last if there's a JsThis): " ++ @typeName(F));
+            @compileError("Page must be the last parameter: " ++ @typeName(F));
+        } else if (comptime isExecution(param.type.?)) {
+            @compileError("Execution must be the last parameter: " ++ @typeName(F));
+        } else if (comptime isSession(param.type.?)) {
+            @compileError("Session must be the last parameter: " ++ @typeName(F));
         } else if (i >= js_parameter_count) {
             if (@typeInfo(param.type.?) != .optional) {
                 return error.InvalidArgument;

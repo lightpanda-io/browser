@@ -18,6 +18,7 @@
 
 const std = @import("std");
 
+const js = @import("../../js/js.zig");
 const Node = @import("../Node.zig");
 const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
@@ -140,7 +141,7 @@ const Iterator = struct {
 
     const Entry = struct { u32, *Node };
 
-    pub fn next(self: *Iterator, page: *Page) !?Entry {
+    pub fn next(self: *Iterator, page: *const Page) !?Entry {
         const index = self.index;
         const node = try self.list.getAtIndex(index, page) orelse return null;
         self.index = index + 1;

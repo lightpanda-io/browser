@@ -444,7 +444,7 @@ fn dispatchMessageEvent(self: *WebSocket, data: []const u8, frame_type: http.WsF
         const event = try MessageEvent.initTrusted(comptime .wrap("message"), .{
             .data = msg_data,
             .origin = "",
-        }, page);
+        }, page._session);
         try page._event_manager.dispatchDirect(target, event.asEvent(), self._on_message, .{ .context = "WebSocket message" });
     }
 }

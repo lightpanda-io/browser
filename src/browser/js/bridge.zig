@@ -24,6 +24,7 @@ const Session = @import("../Session.zig");
 const v8 = js.v8;
 
 const Caller = @import("Caller.zig");
+const Context = @import("Context.zig");
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -398,10 +399,15 @@ pub const Property = struct {
 
 pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
     const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+
+    // During snapshot creation, there's no Context in embedder data yet.
+    // I hate this check, but there doesn't seem to be a way to add this method
+    // to the global, without triggering it during snapshot creation.
+    const v8_context = v8.v8__Isolate__GetCurrentContext(v8_isolate) orelse return 0;
+    const ctx: *Context = @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(v8_context, 1) orelse return 0));
+
     var caller: Caller = undefined;
-    if (!caller.init(v8_isolate)) {
-        return 0;
-    }
+    caller.initWithContext(ctx, v8_context);
     defer caller.deinit();
 
     const local = &caller.local;
@@ -414,14 +420,18 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
         return 0;
     };
 
-    const page = local.ctx.page;
-    const document = page.document;
-
-    if (document.getElementById(property, page)) |el| {
-        const js_val = local.zigValueToJs(el, .{}) catch return 0;
-        var pc = Caller.PropertyCallbackInfo{ .handle = handle.? };
-        pc.getReturnValue().set(js_val);
-        return 1;
+    // Only Page contexts have document.getElementById lookup
+    switch (local.ctx.global) {
+        .page => |page| {
+            const document = page.document;
+            if (document.getElementById(property, page)) |el| {
+                const js_val = local.zigValueToJs(el, .{}) catch return 0;
+                var pc = Caller.PropertyCallbackInfo{ .handle = handle.? };
+                pc.getReturnValue().set(js_val);
+                return 1;
+            }
+        },
+        .worker => {}, // no global lookup in a worker
     }
 
     if (comptime IS_DEBUG) {
@@ -459,7 +469,8 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
             .{ "ApplePaySession", {} },
         });
         if (!ignored.has(property)) {
-            const key = std.fmt.bufPrint(&local.ctx.page.buf, "Window:{s}", .{property}) catch return 0;
+            var buf: [2048]u8 = undefined;
+            const key = std.fmt.bufPrint(&buf, "Window:{s}", .{property}) catch return 0;
             logUnknownProperty(local, key) catch return 0;
         }
     }
@@ -524,7 +535,8 @@ pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8
 
             const ignored = std.StaticStringMap(void).initComptime(.{});
             if (!ignored.has(property)) {
-                const key = std.fmt.bufPrint(&local.ctx.page.buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return 0;
+                var buf: [2048]u8 = undefined;
+                const key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return 0;
                 logUnknownProperty(local, key) catch return 0;
             }
             // not intercepted
@@ -689,7 +701,8 @@ pub const SubType = enum {
     webassemblymemory,
 };
 
-pub const JsApis = flattenTypes(&.{
+// APIs for Page/Window contexts. Used by Snapshot.zig for Page snapshot creation.
+pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/AbortController.zig"),
     @import("../webapi/AbortSignal.zig"),
     @import("../webapi/CData.zig"),
@@ -831,6 +844,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/event/FormDataEvent.zig"),
     @import("../webapi/MessageChannel.zig"),
     @import("../webapi/MessagePort.zig"),
+    @import("../webapi/Worker.zig"),
     @import("../webapi/media/MediaError.zig"),
     @import("../webapi/media/TextTrackCue.zig"),
     @import("../webapi/media/VTTCue.zig"),
@@ -884,3 +898,33 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/Selection.zig"),
     @import("../webapi/ImageData.zig"),
 });
+
+// APIs available on Worker context globals (constructors like URL, Headers, etc.)
+// This is a subset of PageJsApis plus WorkerGlobalScope.
+// TODO: Expand this list to include all worker-appropriate APIs.
+pub const WorkerJsApis = flattenTypes(&.{
+    @import("../webapi/WorkerGlobalScope.zig"),
+    @import("../webapi/EventTarget.zig"),
+    @import("../webapi/DOMException.zig"),
+    @import("../webapi/net/URLSearchParams.zig"),
+    @import("../webapi/encoding/TextEncoder.zig"),
+    @import("../webapi/encoding/TextDecoder.zig"),
+    @import("../webapi/File.zig"),
+    @import("../webapi/Console.zig"),
+    @import("../webapi/Crypto.zig"),
+    // @import("../webapi/URL.zig"),
+    // @import("../webapi/Blob.zig"),
+    // @import("../webapi/net/FormData.zig"),
+    // @import("../webapi/Performance.zig"),
+    // @import("../webapi/net/Response.zig"),
+    // @import("../webapi/net/Request.zig"),
+    // @import("../webapi/net/Headers.zig"),
+    // @import("../webapi/AbortSignal.zig"),
+    // @import("../webapi/AbortController.zig"),
+});
+
+// Master list of ALL JS APIs across all contexts.
+// Used by Env (class IDs, templates), JsApiLookup, and anywhere that needs
+// to know about all possible types. Individual snapshots use their own
+// subsets (PageJsApis, WorkerSnapshot.JsApis).
+pub const JsApis = PageJsApis ++ [_]type{@import("../webapi/WorkerGlobalScope.zig").JsApi};

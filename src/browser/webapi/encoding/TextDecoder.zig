@@ -21,7 +21,6 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const html5ever = @import("../../parser/html5ever.zig");
 
-const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
 const Allocator = std.mem.Allocator;
 
@@ -42,7 +41,7 @@ const InitOpts = struct {
     ignoreBOM: bool = false,
 };
 
-pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*TextDecoder {
+pub fn init(label_: ?[]const u8, opts_: ?InitOpts, session: *Session) !*TextDecoder {
     const label = label_ orelse "utf-8";
 
     const info = html5ever.encoding_for_label(label.ptr, label.len);
@@ -56,8 +55,8 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*TextDecoder {
         return error.RangeError;
     }
 
-    const arena = try page.getArena(.large, "TextDecoder");
-    errdefer page.releaseArena(arena);
+    const arena = try session.getArena(.large, "TextDecoder");
+    errdefer session.releaseArena(arena);
 
     const opts = opts_ orelse InitOpts{};
     const self = try arena.create(TextDecoder);

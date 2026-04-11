@@ -22,6 +22,7 @@ const String = @import("../../string.zig").String;
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const Execution = js.Execution;
 
 const Allocator = std.mem.Allocator;
 
@@ -33,7 +34,7 @@ pub fn registerTypes() []const type {
     };
 }
 
-const Normalizer = *const fn ([]const u8, *Page) []const u8;
+const Normalizer = *const fn ([]const u8, []u8) []const u8;
 
 pub const Entry = struct {
     name: String,
@@ -61,14 +62,14 @@ pub fn copy(arena: Allocator, original: KeyValueList) !KeyValueList {
     return list;
 }
 
-pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?Normalizer, page: *Page) !KeyValueList {
+pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?Normalizer, buf: []u8) !KeyValueList {
     var it = try js_obj.nameIterator();
     var list = KeyValueList.init();
     try list.ensureTotalCapacity(arena, it.count);
 
     while (try it.next()) |name| {
         const js_value = try js_obj.get(name);
-        const normalized = if (comptime normalizer) |n| n(name, page) else name;
+        const normalized = if (comptime normalizer) |n| n(name, buf) else name;
 
         list._entries.appendAssumeCapacity(.{
             .name = try String.init(arena, normalized, .{}),
@@ -79,12 +80,12 @@ pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?N
     return list;
 }
 
-pub fn fromArray(arena: Allocator, kvs: []const [2][]const u8, comptime normalizer: ?Normalizer, page: *Page) !KeyValueList {
+pub fn fromArray(arena: Allocator, kvs: []const [2][]const u8, comptime normalizer: ?Normalizer, buf: []u8) !KeyValueList {
     var list = KeyValueList.init();
     try list.ensureTotalCapacity(arena, kvs.len);
 
     for (kvs) |pair| {
-        const normalized = if (comptime normalizer) |n| n(pair[0], page) else pair[0];
+        const normalized = if (comptime normalizer) |n| n(pair[0], buf) else pair[0];
 
         list._entries.appendAssumeCapacity(.{
             .name = try String.init(arena, normalized, .{}),
@@ -111,12 +112,11 @@ pub fn get(self: *const KeyValueList, name: []const u8) ?[]const u8 {
     return null;
 }
 
-pub fn getAll(self: *const KeyValueList, name: []const u8, page: *Page) ![]const []const u8 {
-    const arena = page.call_arena;
+pub fn getAll(self: *const KeyValueList, allocator: Allocator, name: []const u8) ![]const []const u8 {
     var arr: std.ArrayList([]const u8) = .empty;
     for (self._entries.items) |*entry| {
         if (entry.name.eqlSlice(name)) {
-            try arr.append(arena, entry.value.str());
+            try arr.append(allocator, entry.value.str());
         }
     }
     return arr.items;
@@ -260,7 +260,7 @@ pub const Iterator = struct {
 
     pub const Entry = struct { []const u8, []const u8 };
 
-    pub fn next(self: *Iterator, _: *const Page) ?Iterator.Entry {
+    pub fn next(self: *Iterator, _: *const Execution) ?Iterator.Entry {
         const index = self.index;
         const entries = self.kv._entries.items;
         if (index >= entries.len) {
