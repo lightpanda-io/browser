@@ -80,11 +80,13 @@ fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
     // Peek next argument.
     var peek_args = args.*;
     if (peek_args.next()) |next_arg| {
-        // Skip the argument we peek if successful.
-        defer _ = args.next();
-        return std.meta.stringToEnum(DumpFormat, next_arg) orelse {
-            return error.UnknownDumpOption;
+        const mode = std.meta.stringToEnum(DumpFormat, next_arg) orelse {
+            return .html;
         };
+
+        // Skip the argument we peek if successful.
+        _ = args.next();
+        return mode;
     }
 
     // Means we couldn't get something like `--dump html` but we do have
