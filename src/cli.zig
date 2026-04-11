@@ -279,6 +279,61 @@ pub fn Builder(comptime commands: anytype) type {
                 }
             }
 
+            // Last resort, try sniffing.
+            const command_enum = try sniffCommand(cmd_str);
+            // "cmd_str" wasn't a command but an option. We can't reset args, but
+            // we can create a new one. Not great, but this fallback is temporary
+            // as we transition to this command mode approach.
+            args.deinit();
+            args = try std.process.argsWithAllocator(allocator);
+            // Skip the `exec_name`.
+            _ = args.skip();
+
+            inline for (commands) |command| {
+                if (std.mem.eql(u8, @tagName(command_enum), command.name)) {
+                    return .{ exec_name, try parseCommand(allocator, command, &args) };
+                }
+            }
+
+            unreachable;
+        }
+
+        /// Try to sniff the command out of given option.
+        /// Only exists for legacy reasons; hence hardcoded.
+        fn sniffCommand(cmd_str: []const u8) error{UnknownCommand}!Enum {
+            if (std.mem.startsWith(u8, cmd_str, "--") == false) {
+                return .fetch;
+            }
+
+            // Fetch heuristics.
+            inline for (.{
+                "--dump",
+                "--strip",
+                "--with-base",
+                "--with_base",
+                "--with-frames",
+                "--with_frames",
+            }) |heuristic| {
+                if (std.mem.eql(u8, cmd_str, heuristic)) {
+                    return .fetch;
+                }
+            }
+
+            // Serve heuristics.
+            inline for (.{
+                "--host",
+                "-h",
+                "-H",
+                "--port",
+                "-p",
+                "-P",
+                "--timeout",
+            }) |heuristic| {
+                if (std.mem.eql(u8, cmd_str, heuristic)) {
+                    return .serve;
+                }
+            }
+
             return error.UnknownCommand;
         }
 
