@@ -41,6 +41,7 @@ pub const Scope = enum {
     mcp,
     cache,
     websocket,
+    storage,
 };
 
 const Opts = struct {

@@ -109,7 +109,6 @@ pub fn build(b: *Build) !void {
             "-DSQLITE_OMIT_SHARED_CACHE",
             "-DSQLITE_OMIT_TRACE=1",
             "-DSQLITE_OMIT_UTF16=1",
-            "-DHAVE_USLEEP=0",
         },
     });
 
