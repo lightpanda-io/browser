@@ -177,9 +177,16 @@ pub fn httpCacheDir(self: *const Config) ?[]const u8 {
     };
 }
 
-pub fn cookiesFile(self: *const Config) ?[]const u8 {
+pub fn cookieFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.cookies_file,
+        inline .serve, .fetch, .mcp => |opts| opts.common.cookie,
+        else => null,
+    };
+}
+
+pub fn cookieJarFile(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .fetch, .mcp => |opts| opts.common.cookie_jar,
         else => null,
     };
 }
@@ -303,7 +310,8 @@ pub const Common = struct {
     user_agent_suffix: ?[]const u8 = null,
     user_agent: ?[]const u8 = null,
     http_cache_dir: ?[]const u8 = null,
-    cookies_file: ?[]const u8 = null,
+    cookie: ?[]const u8 = null,
+    cookie_jar: ?[]const u8 = null,
 
     web_bot_auth_key_file: ?[]const u8 = null,
     web_bot_auth_keyid: ?[]const u8 = null,
@@ -442,11 +450,17 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Omitting this will result is no caching.
         \\                Defaults to no caching.
         \\
-        \\--cookies-file
-        \\                Path to a JSON file for cookie persistence. Cookies are loaded
-        \\                from this file at startup and saved back on exit.
+        \\--cookie
+        \\                Path to a JSON file to load cookies from at startup
+        \\                (read-only).
         \\                Format: [{{name, value, domain, path, expires, secure, httpOnly}}]
-        \\                Defaults to no persistence.
+        \\                Defaults to no cookie loading.
+        \\
+        \\--cookie-jar
+        \\                Path to a JSON file to save cookies to on exit (write-only).
+        \\                Available for fetch and mcp commands.
+        \\                Format: [{{name, value, domain, path, expires, secure, httpOnly}}]
+        \\                Defaults to no cookie saving.
     ;
 
     //                                                                     MAX_HELP_LEN|
@@ -699,6 +713,14 @@ fn parseServeArgs(
                 return error.InvalidArgument;
             };
             continue;
+        }
+
+        if (std.mem.eql(u8, "--cookie-jar", opt)) {
+            log.fatal(.app, "invalid argument value", .{
+                .arg = opt,
+                .detail = "--cookie-jar is only available for fetch and mcp",
+            });
+            return error.InvalidArgument;
         }
 
         if (try parseCommonArg(allocator, opt, args, &serve.common)) {
@@ -1159,12 +1181,21 @@ fn parseCommonArg(
         return true;
     }
 
-    if (std.mem.eql(u8, "--cookies-file", opt)) {
+    if (std.mem.eql(u8, "--cookie", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--cookies-file" });
+            log.fatal(.app, "missing argument value", .{ .arg = "--cookie" });
             return error.InvalidArgument;
         };
-        common.cookies_file = try allocator.dupe(u8, str);
+        common.cookie = try allocator.dupe(u8, str);
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--cookie-jar", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--cookie-jar" });
+            return error.InvalidArgument;
+        };
+        common.cookie_jar = try allocator.dupe(u8, str);
         return true;
     }
 

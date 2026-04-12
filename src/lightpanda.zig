@@ -68,13 +68,15 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
 
     var session = try browser.newSession(notification);
 
-    // Load cookies from file if --cookies-file was specified, save on exit.
-    if (app.config.cookiesFile()) |cookies_path| {
-        cookies.loadFromFile(&session.cookie_jar, cookies_path) catch |err| {
+    if (app.config.cookieFile()) |cookie_path| {
+        cookies.loadFromFile(&session.cookie_jar, cookie_path) catch |err| {
             log.err(.app, "cookie load error", .{ .err = err });
         };
+    }
+
+    if (app.config.cookieJarFile()) |cookie_jar_path| {
         defer {
-            cookies.saveToFile(&session.cookie_jar, cookies_path) catch |err| {
+            cookies.saveToFile(&session.cookie_jar, cookie_jar_path) catch |err| {
                 log.err(.app, "cookie save error", .{ .err = err });
             };
         }
