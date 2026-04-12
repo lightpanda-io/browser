@@ -248,9 +248,9 @@ pub const ScriptIterator = struct {
             const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
             if (trimmed.len == 0) continue;
 
-            if (isEvalTripleQuote(trimmed)) {
+            if (isEvalTripleQuote(trimmed)) |quote_type| {
                 const start_line = self.line_num;
-                if (self.collectEvalBlock()) |js| {
+                if (self.collectEvalBlock(quote_type)) |js| {
                     return .{
                         .line_num = start_line,
                         .raw_line = trimmed,
@@ -274,21 +274,23 @@ pub const ScriptIterator = struct {
         return null;
     }
 
-    fn isEvalTripleQuote(line: []const u8) bool {
+    fn isEvalTripleQuote(line: []const u8) ?[]const u8 {
         const cmd_end = std.mem.indexOfAny(u8, line, &std.ascii.whitespace) orelse line.len;
         const cmd_word = line[0..cmd_end];
-        if (!std.ascii.eqlIgnoreCase(cmd_word, "EVAL")) return false;
+        if (!std.ascii.eqlIgnoreCase(cmd_word, "EVAL")) return null;
         const rest = std.mem.trim(u8, line[cmd_end..], &std.ascii.whitespace);
-        return std.mem.startsWith(u8, rest, "\"\"\"") or std.mem.startsWith(u8, rest, "'''");
+        if (std.mem.startsWith(u8, rest, "\"\"\"")) return "\"\"\"";
+        if (std.mem.startsWith(u8, rest, "'''")) return "'''";
+        return null;
     }
 
-    /// Collect lines until closing triple quote (""" or '''), return the JS content.
-    fn collectEvalBlock(self: *ScriptIterator) ?[]const u8 {
+    /// Collect lines until matching closing triple quote, return the JS content.
+    fn collectEvalBlock(self: *ScriptIterator, quote_type: []const u8) ?[]const u8 {
         var parts: std.ArrayListUnmanaged(u8) = .empty;
         while (self.lines.next()) |line| {
             self.line_num += 1;
             const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-            if (std.mem.eql(u8, trimmed, "\"\"\"") or std.mem.eql(u8, trimmed, "'''")) {
+            if (std.mem.eql(u8, trimmed, quote_type)) {
                 return parts.toOwnedSlice(self.allocator) catch null;
             }
             if (parts.items.len > 0) {
@@ -669,6 +671,21 @@ test "ScriptIterator unterminated EVAL" {
     const e1 = iter.next().?;
     try std.testing.expect(e1.command == .natural_language);
     try std.testing.expectEqualStrings("unterminated EVAL block", e1.command.natural_language);
+}
+
+test "ScriptIterator multi-line EVAL mismatched triple quote" {
+    const script =
+        \\EVAL """
+        \\  const s = " ''' ";
+        \\  console.log(s);
+        \\"""
+    ;
+    var iter: ScriptIterator = .init(script, std.testing.allocator);
+
+    const e1 = iter.next().?;
+    try std.testing.expect(e1.command == .eval_js);
+    try std.testing.expectEqualStrings("  const s = \" ''' \";\n  console.log(s);", e1.command.eval_js);
+    std.testing.allocator.free(e1.command.eval_js);
 }
 
 test "trimMatchingQuotes" {

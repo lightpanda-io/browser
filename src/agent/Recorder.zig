@@ -37,16 +37,22 @@ pub fn record(self: *Self, cmd: Command.Command) void {
     const f = self.file orelse return;
     if (!cmd.isRecorded()) return;
 
-    var buf: [1024]u8 = undefined;
-    const line = std.fmt.bufPrint(&buf, "{f}\n", .{cmd}) catch return;
-    _ = f.write(line) catch return;
+    var buf: [8192]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    var aw: std.Io.Writer.Allocating = .init(fba.allocator());
+
+    cmd.format(&aw.writer) catch return;
+    aw.writer.writeByte('\n') catch return;
+
+    _ = f.write(aw.written()) catch return;
     self.needs_separator = true;
 }
 
 pub fn recordComment(self: *Self, comment: []const u8) void {
     const f = self.file orelse return;
-    var buf: [1024]u8 = undefined;
     const prefix: []const u8 = if (self.needs_separator) "\n# " else "# ";
+
+    var buf: [8192]u8 = undefined;
     const line = std.fmt.bufPrint(&buf, "{s}{s}\n", .{ prefix, comment }) catch return;
     _ = f.write(line) catch return;
     self.needs_separator = true;

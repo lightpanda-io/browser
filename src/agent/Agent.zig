@@ -415,31 +415,22 @@ fn toolCallToCommand(arena: std.mem.Allocator, tool_name: []const u8, arguments:
         else => return null,
     };
 
-    const getString = struct {
-        fn f(o: std.json.ObjectMap, key: []const u8) ?[]const u8 {
-            return switch (o.get(key) orelse return null) {
-                .string => |s| s,
-                else => null,
-            };
-        }
-    }.f;
-
     return switch (action) {
-        .goto => .{ .goto = getString(obj, "url") orelse return null },
-        .click => .{ .click = getString(obj, "selector") orelse return null },
-        .hover => .{ .hover = getString(obj, "selector") orelse return null },
-        .eval => .{ .eval_js = getString(obj, "script") orelse return null },
-        .waitForSelector => .{ .wait = getString(obj, "selector") orelse return null },
+        .goto => .{ .goto = getJsonString(obj, "url") orelse return null },
+        .click => .{ .click = getJsonString(obj, "selector") orelse return null },
+        .hover => .{ .hover = getJsonString(obj, "selector") orelse return null },
+        .eval => .{ .eval_js = getJsonString(obj, "script") orelse return null },
+        .waitForSelector => .{ .wait = getJsonString(obj, "selector") orelse return null },
         .fill => .{ .type_cmd = .{
-            .selector = getString(obj, "selector") orelse return null,
-            .value = getString(obj, "value") orelse return null,
+            .selector = getJsonString(obj, "selector") orelse return null,
+            .value = getJsonString(obj, "value") orelse return null,
         } },
         .selectOption => .{ .select = .{
-            .selector = getString(obj, "selector") orelse return null,
-            .value = getString(obj, "value") orelse return null,
+            .selector = getJsonString(obj, "selector") orelse return null,
+            .value = getJsonString(obj, "value") orelse return null,
         } },
         .setChecked => .{ .check = .{
-            .selector = getString(obj, "selector") orelse return null,
+            .selector = getJsonString(obj, "selector") orelse return null,
             .checked = switch (obj.get("checked") orelse return null) {
                 .bool => |b| b,
                 else => return null,
@@ -457,6 +448,13 @@ fn toolCallToCommand(arena: std.mem.Allocator, tool_name: []const u8, arguments:
             };
             break :blk .{ .scroll = .{ .x = x, .y = y } };
         },
+        else => null,
+    };
+}
+
+fn getJsonString(o: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    return switch (o.get(key) orelse return null) {
+        .string => |s| s,
         else => null,
     };
 }
