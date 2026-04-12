@@ -62,7 +62,7 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
     _ = try page._session.navigation.pushEntry(url, .{ .source = .history, .value = json }, page, true);
 
     page.url = url;
-    page.window._location._url = try URL.init(url, null, page);
+    page.window._location._url = try URL.init(url, null, &page.js.execution);
 }
 
 pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
