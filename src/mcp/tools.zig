@@ -46,7 +46,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         return server.sendError(id, .MethodNotFound, "Tool not found");
     }
 
-    // Special handling for eval: JS errors are returned as isError results, not protocol errors
+    // JS errors are returned as isError tool results, not protocol errors
     if (std.mem.eql(u8, call_params.name, "eval")) {
         const result = browser_tools.callEval(server.session, &server.node_registry, arena, call_params.arguments);
         const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};

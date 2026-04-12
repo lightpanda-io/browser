@@ -96,7 +96,7 @@ pub const tool_defs = [_]ToolDef{
         ),
     },
     .{
-        .name = "semanticTree",
+        .name = "tree",
         .description = "Get the page content as a simplified semantic DOM tree for AI reasoning. If a url is provided, it navigates to that url first.",
         .input_schema = minify(
             \\{
@@ -338,7 +338,7 @@ pub const Action = enum {
     structuredData,
     detectForms,
     eval,
-    semanticTree,
+    tree,
     click,
     fill,
     scroll,
@@ -417,7 +417,7 @@ fn execLinks(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
     return aw.written();
 }
 
-fn execSemanticTree(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execTree(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const TreeParams = struct {
         url: ?[:0]const u8 = null,
         backendNodeId: ?u32 = null,

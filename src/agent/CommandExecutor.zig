@@ -46,7 +46,7 @@ pub fn executeWithResult(self: *Self, a: std.mem.Allocator, cmd: Command.Command
             .selector = substituteEnvVars(a, args.selector),
             .checked = args.checked,
         })),
-        .tree => self.callTool(a, @tagName(Action.semanticTree), ""),
+        .tree => self.callTool(a, @tagName(Action.tree), ""),
         .markdown => self.callTool(a, @tagName(Action.markdown), ""),
         .extract => |selector| self.execExtract(a, selector),
         .eval_js => |script| self.callTool(a, @tagName(Action.eval), buildJson(a, .{ .script = script })),

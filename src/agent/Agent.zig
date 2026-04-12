@@ -19,7 +19,7 @@ const default_system_prompt =
     \\click links, and extract information.
     \\
     \\When helping the user, navigate to relevant pages and extract information.
-    \\Use the semanticTree or interactiveElements tools to understand page structure
+    \\Use the tree or interactiveElements tools to understand page structure
     \\before clicking or filling forms. Be concise in your responses.
     \\
     \\IMPORTANT RULES:
