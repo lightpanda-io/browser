@@ -128,6 +128,16 @@ pub fn timeEnd(self: *Console, label_: ?[]const u8) void {
     logger.info(.js, "console.timeEnd", .{ .label = label, .elapsed = elapsed - kv.value });
 }
 
+pub fn group(_: *const Console, values: []js.Value, page: *Page) void {
+    logger.info(.js, "console.group", .{ValueWriter{ .page = page, .values = values }});
+}
+
+pub fn groupCollapsed(_: *const Console, values: []js.Value, page: *Page) void {
+    logger.info(.js, "console.groupCollapsed", .{ValueWriter{ .page = page, .values = values }});
+}
+
+pub fn groupEnd(_: *const Console) void {}
+
 fn timestamp() u64 {
     return @import("../../datetime.zig").timestamp(.monotonic);
 }
@@ -188,6 +198,9 @@ pub const JsApi = struct {
     pub const time = bridge.function(Console.time, .{});
     pub const timeLog = bridge.function(Console.timeLog, .{});
     pub const timeEnd = bridge.function(Console.timeEnd, .{});
+    pub const group = bridge.function(Console.group, .{});
+    pub const groupCollapsed = bridge.function(Console.groupCollapsed, .{});
+    pub const groupEnd = bridge.function(Console.groupEnd, .{});
 };
 
 const testing = @import("../../testing.zig");
