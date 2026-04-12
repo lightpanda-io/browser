@@ -394,6 +394,11 @@ pub const BrowserContext = struct {
         errdefer notification.deinit();
 
         const session = try cdp.browser.newSession(notification);
+        if (cdp.client.app.config.cookieFile()) |cookie_path| {
+            lp.cookies.loadFromFile(&session.cookie_jar, cookie_path) catch |err| {
+                log.err(.app, "cookie load error", .{ .err = err });
+            };
+        }
 
         const browser = &cdp.browser;
         const inspector_session = browser.env.inspector.?.startSession(self);
