@@ -222,10 +222,15 @@ fn urlEncodeValue(value: []const u8, comptime mode: URLEncodeMode, allocator_: ?
     }
 
     // Calculate max buffer size for encoded output
-    const max_encoded_len = h5e.encoding_max_encode_buffer_length(enc_info.handle.?, value.len);
-    if (max_encoded_len == 0) {
+    // encoding_max_encode_buffer_length doesn't account for NCR expansion,
+    // so we need extra space. Each UTF-8 char (1-4 bytes) can become &#NNNNNNN; (10 bytes)
+    const base_len = h5e.encoding_max_encode_buffer_length(enc_info.handle.?, value.len);
+    if (base_len == 0) {
         return urlEncodeValueUtf8(value, mode, writer);
     }
+    // For NCR encoding, each character could expand significantly
+    // Use 4x the base buffer to be safe (NCRs are ~10 bytes for a 3-byte UTF-8 char)
+    const max_encoded_len = base_len * 4;
 
     const encode_buf = try allocator.alloc(u8, max_encoded_len);
     defer allocator.free(encode_buf);
@@ -391,4 +396,17 @@ test "KeyValueList: urlEncode GBK mappable character" {
 
     // GBK encoding of 中 is D6 D0, percent-encoded as %D6%D0
     try testing.expectString("q=%D6%D0", buf.written());
+}
+
+test "KeyValueList: urlEncode Big5 unmappable character" {
+    // U+70A3 (炣) is NOT in Big5, should become &#28835;
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    try list.append(allocator, "q", "\u{70A3}");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.form, allocator, "Big5", &buf.writer);
+
+    // &#28835; percent-encoded is %26%2328835%3B
+    try testing.expectString("q=%26%2328835%3B", buf.written());
 }

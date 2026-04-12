@@ -504,3 +504,14 @@
   testing.expectEqual(form, capturedSubmitter);
 }
 </script>
+
+<script id="acceptCharset_property">
+{
+  const form = document.createElement('form');
+  testing.expectEqual('', form.acceptCharset);
+
+  form.acceptCharset = 'big5';
+  testing.expectEqual('big5', form.acceptCharset);
+  testing.expectEqual('big5', form.getAttribute('accept-charset'));
+}
+</script>
