@@ -22,6 +22,7 @@ runs:
       run: echo "hash=v8-snapshot-${{ inputs.os }}_${{ inputs.arch }}-$(git log -n 1 --pretty=format:%H --
                  src/browser/js/bridge.zig
                  src/browser/js/Snapshot.zig
+                 src/browser/webapi
                  )" >> "$GITHUB_OUTPUT"
       shell: bash
 
