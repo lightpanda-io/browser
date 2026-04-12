@@ -64,10 +64,10 @@ curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download
 chmod a+x ./lightpanda
 ```
 
-*For Windows + WSL2*
+### Windows (via WSL2)
 
-The Lightpanda browser is compatible to run on windows inside WSL. Follow the Linux instruction for installation from a WSL terminal.
-It is recommended to install clients like Puppeteer on the Windows host.
+Lightpanda runs inside WSL when invoked from a WSL shell; follow the Linux install steps above in that environment.
+Install automation clients such as Puppeteer or Playwright on the Windows host so they can drive Lightpanda through CDP over the mapped ports.
 
 **Install from Docker**
 
