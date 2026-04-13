@@ -393,3 +393,141 @@
     }
   }
 </script>
+
+<script id=eventCounts_exists>
+  {
+    const ec = performance.eventCounts;
+    testing.expectEqual('object', typeof ec);
+    testing.expectEqual(false, ec === null);
+    testing.expectEqual(false, ec === undefined);
+  }
+</script>
+
+<script id=eventCounts_same_object>
+  {
+    // performance.eventCounts should return the same object on each access
+    testing.expectEqual(true, performance.eventCounts === performance.eventCounts);
+  }
+</script>
+
+<script id=eventCounts_size>
+  {
+    // EventCounts tracks 36 event types per Event Timing spec
+    const ec = performance.eventCounts;
+    testing.expectEqual('number', typeof ec.size);
+    testing.expectEqual(36, ec.size);
+  }
+</script>
+
+<script id=eventCounts_has_tracked_events>
+  {
+    const ec = performance.eventCounts;
+    // These should be tracked
+    testing.expectEqual(true, ec.has("click"));
+    testing.expectEqual(true, ec.has("keydown"));
+    testing.expectEqual(true, ec.has("keyup"));
+    testing.expectEqual(true, ec.has("mousedown"));
+    testing.expectEqual(true, ec.has("mouseup"));
+    testing.expectEqual(true, ec.has("pointerdown"));
+    testing.expectEqual(true, ec.has("input"));
+    testing.expectEqual(true, ec.has("touchstart"));
+  }
+</script>
+
+<script id=eventCounts_has_non_tracked_events>
+  {
+    const ec = performance.eventCounts;
+    // These should NOT be tracked
+    testing.expectEqual(false, ec.has("load"));
+    testing.expectEqual(false, ec.has("scroll"));
+    testing.expectEqual(false, ec.has("resize"));
+    testing.expectEqual(false, ec.has("DOMContentLoaded"));
+    testing.expectEqual(false, ec.has("nonexistent"));
+  }
+</script>
+
+<script id=eventCounts_get_returns_number>
+  {
+    const ec = performance.eventCounts;
+    // get() should return a number for tracked events
+    testing.expectEqual('number', typeof ec.get("click"));
+    testing.expectEqual('number', typeof ec.get("keydown"));
+  }
+</script>
+
+<script id=eventCounts_get_returns_zero_for_non_tracked>
+  {
+    const ec = performance.eventCounts;
+    // get() should return 0 for non-tracked events (not undefined)
+    testing.expectEqual(0, ec.get("load"));
+    testing.expectEqual(0, ec.get("nonexistent"));
+  }
+</script>
+
+<script id=eventCounts_keys>
+  {
+    const ec = performance.eventCounts;
+    const keys = Array.from(ec.keys());
+    testing.expectEqual(36, keys.length);
+    testing.expectEqual(true, keys.includes("click"));
+    testing.expectEqual(true, keys.includes("keydown"));
+    testing.expectEqual(true, keys.includes("mousedown"));
+  }
+</script>
+
+<script id=eventCounts_values>
+  {
+    const ec = performance.eventCounts;
+    const values = Array.from(ec.values());
+    testing.expectEqual(36, values.length);
+    // All values should be numbers
+    for (const v of values) {
+      testing.expectEqual('number', typeof v);
+    }
+  }
+</script>
+
+<script id=eventCounts_entries>
+  {
+    const ec = performance.eventCounts;
+    const entries = Array.from(ec.entries());
+    testing.expectEqual(36, entries.length);
+    // Each entry should be [string, number]
+    for (const e of entries) {
+      testing.expectEqual(true, Array.isArray(e));
+      testing.expectEqual(2, e.length);
+      testing.expectEqual('string', typeof e[0]);
+      testing.expectEqual('number', typeof e[1]);
+    }
+  }
+</script>
+
+<script id=eventCounts_forEach>
+  {
+    const ec = performance.eventCounts;
+    let count = 0;
+    let sawClick = false;
+    ec.forEach((value, key, obj) => {
+      count++;
+      testing.expectEqual('number', typeof value);
+      testing.expectEqual('string', typeof key);
+      testing.expectEqual(ec, obj);
+      if (key === "click") sawClick = true;
+    });
+    testing.expectEqual(36, count);
+    testing.expectEqual(true, sawClick);
+  }
+</script>
+
+<script id=eventCounts_iterator>
+  {
+    const ec = performance.eventCounts;
+    let count = 0;
+    for (const [key, value] of ec) {
+      count++;
+      testing.expectEqual('string', typeof key);
+      testing.expectEqual('number', typeof value);
+    }
+    testing.expectEqual(36, count);
+  }
+</script>
