@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<svg><rect id=r x="10" y="20" width="100" height="50"/></svg>
+
+<script id=getAttribute>
+{
+  var r = document.getElementById('r');
+  testing.expectEqual('10', r.getAttribute('x'));
+  testing.expectEqual('100', r.getAttribute('width'));
+}
+</script>

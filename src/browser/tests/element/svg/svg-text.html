@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<svg>
+  <text id=t1>Hello World</text>
+</svg>
+
+<script id=text_content>
+{
+  var t = document.getElementById('t1');
+  testing.expectEqual('Hello World', t.textContent);
+}
+</script>

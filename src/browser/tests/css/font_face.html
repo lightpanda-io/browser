@@ -21,9 +21,17 @@
 }
 </script>
 
-<script id="status_is_loaded">
+<script id="status_initial_unloaded">
 {
     const face = new FontFace("F", "url(f.woff)");
+    testing.expectEqual("unloaded", face.status);
+}
+</script>
+
+<script id="status_loaded_after_load">
+{
+    const face = new FontFace("F", "url(f.woff)");
+    face.load();
     testing.expectEqual("loaded", face.status);
 }
 </script>
