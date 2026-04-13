@@ -106,36 +106,3 @@ fn buildJson(arena: std.mem.Allocator, value: anytype) []const u8 {
     std.json.Stringify.value(value, .{}, &aw.writer) catch return "{}";
     return aw.written();
 }
-
-test "substituteEnvVars no vars" {
-    const result = substituteEnvVars(std.testing.allocator, "hello world");
-    try std.testing.expectEqualStrings("hello world", result);
-}
-
-test "substituteEnvVars with HOME" {
-    // Use arena since substituteEnvVars makes intermediate allocations (dupeZ)
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const result = substituteEnvVars(a, "dir=$HOME/test");
-    // Result should not contain $HOME literally (it got substituted)
-    try std.testing.expect(std.mem.indexOf(u8, result, "$HOME") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "/test") != null);
-}
-
-test "substituteEnvVars missing var kept literal" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const result = substituteEnvVars(arena.allocator(), "$UNLIKELY_VAR_12345");
-    try std.testing.expectEqualStrings("$UNLIKELY_VAR_12345", result);
-}
-
-test "substituteEnvVars bare dollar" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const result = substituteEnvVars(arena.allocator(), "price is $ 5");
-    try std.testing.expectEqualStrings("price is $ 5", result);
-}

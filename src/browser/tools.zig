@@ -959,3 +959,33 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8
     }
     return result.toOwnedSlice(arena) catch input;
 }
+
+test "substituteEnvVars no vars" {
+    const r = substituteEnvVars(std.testing.allocator, "hello world");
+    try std.testing.expectEqualStrings("hello world", r);
+}
+
+test "substituteEnvVars with HOME" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const r = substituteEnvVars(arena.allocator(), "dir=$HOME/test");
+    try std.testing.expect(std.mem.indexOf(u8, r, "$HOME") == null);
+    try std.testing.expect(std.mem.indexOf(u8, r, "/test") != null);
+}
+
+test "substituteEnvVars missing var kept literal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const r = substituteEnvVars(arena.allocator(), "$UNLIKELY_VAR_12345");
+    try std.testing.expectEqualStrings("$UNLIKELY_VAR_12345", r);
+}
+
+test "substituteEnvVars bare dollar" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const r = substituteEnvVars(arena.allocator(), "price is $ 5");
+    try std.testing.expectEqualStrings("price is $ 5", r);
+}

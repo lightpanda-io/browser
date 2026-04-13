@@ -43,15 +43,10 @@ pub fn verify(self: *Self, arena: std.mem.Allocator, cmd: Command.Command, pre: 
 }
 
 fn verifyFill(self: *Self, arena: std.mem.Allocator, selector: []const u8, expected_value: []const u8) VerifyResult {
-    const script = std.fmt.allocPrint(
-        arena,
-        "(function(){{ var el = document.querySelector({s}); return el ? el.value : null; }})()",
-        .{jsonQuote(arena, selector)},
-    ) catch return .{ .result = .inconclusive };
-
-    const actual = self.tool_executor.callEval(arena, script) orelse return .{ .result = .inconclusive };
-
+    // Secret env-var references can't be compared literally — just
+    // verify the field isn't empty after substitution.
     if (std.mem.indexOf(u8, expected_value, "$LP_") != null) {
+        const actual = self.queryElementProperty(arena, selector, "value") orelse return .{ .result = .inconclusive };
         if (actual.len == 0 or std.mem.eql(u8, actual, "null"))
             return .{
                 .result = .failed,
@@ -59,46 +54,36 @@ fn verifyFill(self: *Self, arena: std.mem.Allocator, selector: []const u8, expec
             };
         return .{ .result = .passed };
     }
-
-    if (!std.mem.eql(u8, actual, expected_value))
-        return .{
-            .result = .failed,
-            .reason = std.fmt.allocPrint(arena, "element value is \"{s}\" after fill (expected \"{s}\")", .{ actual, expected_value }) catch null,
-        };
-    return .{ .result = .passed };
+    return self.verifyElementValue(arena, selector, "value", expected_value, "value");
 }
 
 fn verifyCheck(self: *Self, arena: std.mem.Allocator, selector: []const u8, expected: bool) VerifyResult {
-    const script = std.fmt.allocPrint(
-        arena,
-        "(function(){{ var el = document.querySelector({s}); return el ? String(el.checked) : null; }})()",
-        .{jsonQuote(arena, selector)},
-    ) catch return .{ .result = .inconclusive };
-
-    const actual = self.tool_executor.callEval(arena, script) orelse return .{ .result = .inconclusive };
     const expected_str: []const u8 = if (expected) "true" else "false";
-    if (!std.mem.eql(u8, actual, expected_str))
+    return self.verifyElementValue(arena, selector, "String(el.checked)", expected_str, "checked state");
+}
+
+fn verifySelect(self: *Self, arena: std.mem.Allocator, selector: []const u8, expected_value: []const u8) VerifyResult {
+    return self.verifyElementValue(arena, selector, "value", expected_value, "selected value");
+}
+
+/// Shared verification: query a DOM property and compare against an expected value.
+fn verifyElementValue(self: *Self, arena: std.mem.Allocator, selector: []const u8, js_property: []const u8, expected: []const u8, label: []const u8) VerifyResult {
+    const actual = self.queryElementProperty(arena, selector, js_property) orelse return .{ .result = .inconclusive };
+    if (!std.mem.eql(u8, actual, expected))
         return .{
             .result = .failed,
-            .reason = std.fmt.allocPrint(arena, "element checked state is {s} (expected {s})", .{ actual, expected_str }) catch null,
+            .reason = std.fmt.allocPrint(arena, "element {s} is \"{s}\" (expected \"{s}\")", .{ label, actual, expected }) catch null,
         };
     return .{ .result = .passed };
 }
 
-fn verifySelect(self: *Self, arena: std.mem.Allocator, selector: []const u8, expected_value: []const u8) VerifyResult {
+fn queryElementProperty(self: *Self, arena: std.mem.Allocator, selector: []const u8, js_property: []const u8) ?[]const u8 {
     const script = std.fmt.allocPrint(
         arena,
-        "(function(){{ var el = document.querySelector({s}); return el ? el.value : null; }})()",
-        .{jsonQuote(arena, selector)},
-    ) catch return .{ .result = .inconclusive };
-
-    const actual = self.tool_executor.callEval(arena, script) orelse return .{ .result = .inconclusive };
-    if (!std.mem.eql(u8, actual, expected_value))
-        return .{
-            .result = .failed,
-            .reason = std.fmt.allocPrint(arena, "element selected value is \"{s}\" (expected \"{s}\")", .{ actual, expected_value }) catch null,
-        };
-    return .{ .result = .passed };
+        "(function(){{ var el = document.querySelector({s}); return el ? {s} : null; }})()",
+        .{ jsonQuote(arena, selector), js_property },
+    ) catch return null;
+    return self.tool_executor.callEval(arena, script);
 }
 
 fn verifyClick(self: *Self, arena: std.mem.Allocator, pre: PreState) VerifyResult {

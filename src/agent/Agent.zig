@@ -588,9 +588,7 @@ fn runHealTurn(self: *Self, prompt: []const u8, arena: std.mem.Allocator) ![]Com
     }
 
     if (result.text) |text| {
-        std.debug.print("\n", .{});
         self.terminal.printAssistant(text);
-        std.debug.print("\n", .{});
     }
 
     return cmds.toOwnedSlice(arena) catch &.{};
@@ -686,9 +684,7 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
     }
 
     if (result.text) |text| {
-        std.debug.print("\n", .{});
         self.terminal.printAssistant(text);
-        std.debug.print("\n", .{});
     } else {
         self.terminal.printInfo("(no response from model)");
     }
