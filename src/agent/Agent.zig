@@ -479,6 +479,7 @@ fn runHealTurn(self: *Self, prompt: []const u8, arena: std.mem.Allocator) ![]Com
         .{ .context = @ptrCast(self), .callFn = &handleToolCall },
         .{
             .tools = self.tools,
+            .max_tool_calls = 4,
             .max_tokens = 4096,
             .tool_choice = .auto,
         },
