@@ -77,6 +77,13 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
         platform: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
+    if (params.acceptLanguage) |v| {
+        log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "acceptLanguage", .value = v });
+    }
+    if (params.platform) |v| {
+        log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "platform", .value = v });
+    }
+
     const ua = params.userAgent;
 
     // Validate: all characters must be printable ASCII
