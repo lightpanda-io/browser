@@ -168,33 +168,32 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
         .agent => |opts| {
             log.info(.app, "starting agent", .{});
 
+            var failed: bool = false;
             {
-                var worker_thread = try std.Thread.spawn(.{}, agentThread, .{ allocator, app, opts });
+                var worker_thread = try std.Thread.spawn(.{}, agentThread, .{ allocator, app, opts, &failed });
                 defer worker_thread.join();
 
                 app.network.run();
             }
 
-            if (agent_failed.load(.acquire)) return error.AgentFailed;
+            if (failed) return error.AgentFailed;
         },
         else => unreachable,
     }
 }
 
-var agent_failed: std.atomic.Value(bool) = .init(false);
-
-fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) void {
+fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent, failed: *bool) void {
     defer app.network.stop();
 
     var agent_instance = lp.agent.Agent.init(allocator, app, opts) catch |err| {
         log.fatal(.app, "agent init error", .{ .err = err });
-        agent_failed.store(true, .release);
+        failed.* = true;
         return;
     };
     defer agent_instance.deinit();
 
     if (!agent_instance.run()) {
-        agent_failed.store(true, .release);
+        failed.* = true;
     }
 }
 

@@ -14,6 +14,8 @@ const Verifier = @import("Verifier.zig");
 
 const Self = @This();
 
+const intent_prefix = "# INTENT:";
+
 const default_system_prompt =
     \\You are a web browsing assistant powered by the Lightpanda browser.
     \\You can navigate to websites, read their content, interact with forms,
@@ -84,6 +86,10 @@ cmd_executor: CommandExecutor,
 verifier: Verifier,
 recorder: Recorder,
 messages: std.ArrayList(zenai.provider.Message),
+// TODO: message_arena grows without bound during long sessions. Every LLM
+// turn accumulates messages (user + assistant + tool results) that are only
+// freed at deinit. Consider a sliding window that preserves the system
+// prompt but drops older turns.
 message_arena: std.heap.ArenaAllocator,
 tools: []const zenai.provider.Tool,
 model: []const u8,
@@ -153,7 +159,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .terminal = Terminal.init(history_path),
         .cmd_executor = undefined,
         .verifier = .{ .tool_executor = tool_executor },
-        .recorder = Recorder.init(recorder_path),
+        .recorder = .init(allocator, recorder_path),
         .messages = .empty,
         .message_arena = std.heap.ArenaAllocator.init(allocator),
         .tools = tools,
@@ -277,8 +283,8 @@ fn runScript(self: *Self, path: []const u8) bool {
                 break;
             },
             .comment => {
-                if (std.mem.startsWith(u8, entry.raw_line, "# INTENT:")) {
-                    last_intent = std.mem.trim(u8, entry.raw_line["# INTENT:".len..], &std.ascii.whitespace);
+                if (std.mem.startsWith(u8, entry.raw_line, intent_prefix)) {
+                    last_intent = std.mem.trim(u8, entry.raw_line[intent_prefix.len..], &std.ascii.whitespace);
                 }
                 continue;
             },
@@ -410,6 +416,9 @@ fn flushReplacements(self: *Self, path: []const u8, content: []const u8, replace
     } else |_| {}
 
     // Build new content by applying replacements.
+    // Invariant: each replacement's `original_span` must alias into `content`
+    // (i.e. point within the same allocation). The pointer arithmetic below
+    // relies on this to compute byte offsets.
     const content_base = @intFromPtr(content.ptr);
     var new_content: std.ArrayList(u8) = .empty;
     var pos: usize = 0;

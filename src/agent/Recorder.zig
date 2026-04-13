@@ -5,12 +5,13 @@ const Command = @import("Command.zig");
 
 const Self = @This();
 
+allocator: std.mem.Allocator,
 file: ?std.fs.File,
 needs_separator: bool,
 
 /// Append-open `path`, inserting a leading newline if the file is non-empty.
 /// A null path disables recording.
-pub fn init(path: ?[]const u8) Self {
+pub fn init(allocator: std.mem.Allocator, path: ?[]const u8) Self {
     const file: ?std.fs.File = if (path) |p| blk: {
         const f = std.fs.cwd().createFile(p, .{ .truncate = false }) catch |err| {
             log.warn(.app, "could not open recording file", .{ .err = @errorName(err) });
@@ -26,7 +27,7 @@ pub fn init(path: ?[]const u8) Self {
         break :blk f;
     } else null;
 
-    return .{ .file = file, .needs_separator = false };
+    return .{ .allocator = allocator, .file = file, .needs_separator = false };
 }
 
 pub fn deinit(self: *Self) void {
@@ -41,7 +42,17 @@ pub fn record(self: *Self, cmd: Command.Command) void {
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     var aw: std.Io.Writer.Allocating = .init(fba.allocator());
 
-    cmd.format(&aw.writer) catch return;
+    cmd.format(&aw.writer) catch {
+        // Fixed buffer overflow — fall back to heap allocation.
+        var fallback_arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer fallback_arena.deinit();
+        var dyn_aw: std.Io.Writer.Allocating = .init(fallback_arena.allocator());
+        cmd.format(&dyn_aw.writer) catch return;
+        dyn_aw.writer.writeByte('\n') catch return;
+        _ = f.write(dyn_aw.written()) catch return;
+        self.needs_separator = true;
+        return;
+    };
     aw.writer.writeByte('\n') catch return;
 
     _ = f.write(aw.written()) catch return;
@@ -53,7 +64,12 @@ pub fn recordComment(self: *Self, comment: []const u8) void {
     const prefix: []const u8 = if (self.needs_separator) "\n# " else "# ";
 
     var buf: [8192]u8 = undefined;
-    const line = std.fmt.bufPrint(&buf, "{s}{s}\n", .{ prefix, comment }) catch return;
+    const line = std.fmt.bufPrint(&buf, "{s}{s}\n", .{ prefix, comment }) catch blk: {
+        // Fixed buffer overflow — fall back to heap allocation.
+        var fallback_arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer fallback_arena.deinit();
+        break :blk std.fmt.allocPrint(fallback_arena.allocator(), "{s}{s}\n", .{ prefix, comment }) catch return;
+    };
     _ = f.write(line) catch return;
     self.needs_separator = true;
 }
@@ -64,7 +80,7 @@ test "record writes state-mutating commands" {
 
     const file = tmp.dir.createFile("test.panda", .{ .read = true }) catch unreachable;
 
-    var recorder = Self{ .file = file, .needs_separator = false };
+    var recorder: Self = .{ .allocator = std.testing.allocator, .file = file, .needs_separator = false };
     defer recorder.deinit();
 
     recorder.record(Command.parse("GOTO https://example.com"));
@@ -106,7 +122,7 @@ test "record skips empty and comment lines" {
 
     const file = tmp.dir.createFile("test2.panda", .{ .read = true }) catch unreachable;
 
-    var recorder = Self{ .file = file, .needs_separator = false };
+    var recorder: Self = .{ .allocator = std.testing.allocator, .file = file, .needs_separator = false };
     defer recorder.deinit();
 
     recorder.record(Command.parse(""));
@@ -123,7 +139,7 @@ test "record skips empty and comment lines" {
 }
 
 test "recorder with null file is no-op" {
-    var recorder = Self{ .file = null, .needs_separator = false };
+    var recorder: Self = .{ .allocator = std.testing.allocator, .file = null, .needs_separator = false };
     recorder.record(Command.parse("GOTO https://example.com"));
     recorder.recordComment("# test");
     recorder.deinit();
@@ -144,7 +160,7 @@ test "init appends to an existing file without truncating" {
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_path = tmp.dir.realpath("script.panda", &path_buf) catch unreachable;
 
-    var recorder = init(abs_path);
+    var recorder = init(std.testing.allocator, abs_path);
     defer recorder.deinit();
     recorder.record(Command.parse("CLICK 'Login'"));
 
@@ -172,7 +188,7 @@ test "init creates the file if missing" {
     var full_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_path = std.fmt.bufPrint(&full_buf, "{s}/fresh.panda", .{dir_path}) catch unreachable;
 
-    var recorder = init(abs_path);
+    var recorder = init(std.testing.allocator, abs_path);
     defer recorder.deinit();
     recorder.record(Command.parse("GOTO https://example.com"));
 

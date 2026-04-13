@@ -125,3 +125,13 @@ fn jsonQuote(arena: std.mem.Allocator, s: []const u8) []const u8 {
     std.json.Stringify.value(s, .{}, &aw.writer) catch return "\"\"";
     return aw.written();
 }
+
+test "jsonQuote produces valid JSON string" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    try std.testing.expectEqualStrings("\"hello\"", jsonQuote(a, "hello"));
+    try std.testing.expectEqualStrings("\"a\\\"b\"", jsonQuote(a, "a\"b"));
+    try std.testing.expectEqualStrings("\"\"", jsonQuote(a, ""));
+}

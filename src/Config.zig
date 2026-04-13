@@ -1022,7 +1022,7 @@ fn parseAgentArgs(
         }
 
         log.fatal(.app, "unknown argument", .{ .mode = "agent", .arg = opt });
-        return error.UnkownOption;
+        return error.UnknownOption;
     }
 
     return result;
