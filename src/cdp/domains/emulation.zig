@@ -69,7 +69,8 @@ fn setTouchEmulationEnabled(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn setUserAgentOverride(cmd: *CDP.Command) !void {
+// Emulation.setUserAgentOverride is also called by Network.setUserAgentOverride
+pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         userAgent: []const u8,
         acceptLanguage: ?[]const u8 = null,
@@ -195,4 +196,3 @@ test "cdp.Emulation: setUserAgentOverride can be called multiple times" {
 
     try ctx.expectSentResult(null, .{ .id = 7 });
 }
-
