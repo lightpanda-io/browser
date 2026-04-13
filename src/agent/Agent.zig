@@ -334,8 +334,8 @@ fn runScript(self: *Self, path: []const u8) bool {
                         // verification failures (not hard failures).
                         if (!result.failed and isRetryable(entry.command)) {
                             var retried = false;
-                            for (0..2) |_| {
-                                std.Thread.sleep(500 * std.time.ns_per_ms);
+                            for (0..3) |i| {
+                                std.Thread.sleep((500 + i * 250) * std.time.ns_per_ms);
                                 self.terminal.printInfo("Retrying command...");
                                 const retry_pre = self.verifier.capturePreState(cmd_arena.allocator(), entry.command);
                                 const retry_result = self.cmd_executor.executeWithResult(cmd_arena.allocator(), entry.command);
@@ -441,7 +441,7 @@ fn flushReplacements(self: *Self, path: []const u8, content: []const u8, replace
 
 fn isRetryable(cmd: Command.Command) bool {
     return switch (cmd) {
-        .type_cmd, .check, .click => true,
+        .type_cmd, .check, .click, .select => true,
         else => false,
     };
 }
