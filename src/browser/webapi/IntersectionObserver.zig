@@ -71,7 +71,7 @@ pub const ObserverInit = struct {
 };
 
 pub fn init(callback: js.Function.Temp, options: ?ObserverInit, page: *Page) !*IntersectionObserver {
-    const arena = try page.getArena(.medium, "IntersectionObserver");
+    const arena = try page.getArena(.small, "IntersectionObserver");
     errdefer page.releaseArena(arena);
 
     const opts = options orelse ObserverInit{};
