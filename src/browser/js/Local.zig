@@ -777,11 +777,12 @@ fn jsValueToTypedArray(comptime T: type, js_val: js.Value) !?[]T {
         byte_len = v8.v8__ArrayBuffer__ByteLength(array_buffer);
         byte_offset = 0;
     }
+
+    const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer orelse return null);
     if (byte_len == 0) {
         return &[_]T{};
     }
 
-    const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer orelse return null);
     const backing_store_handle = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr).?;
     const data = v8.v8__BackingStore__Data(backing_store_handle);
     const base = @as([*]u8, @ptrCast(data)) + byte_offset;
