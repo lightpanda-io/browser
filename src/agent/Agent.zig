@@ -10,6 +10,7 @@ const Terminal = @import("Terminal.zig");
 const Command = @import("Command.zig");
 const CommandExecutor = @import("CommandExecutor.zig");
 const Recorder = @import("Recorder.zig");
+const Verifier = @import("Verifier.zig");
 
 const Self = @This();
 
@@ -80,6 +81,7 @@ ai_client: ?zenai.provider.Client,
 tool_executor: *ToolExecutor,
 terminal: Terminal,
 cmd_executor: CommandExecutor,
+verifier: Verifier,
 recorder: Recorder,
 messages: std.ArrayList(zenai.provider.Message),
 message_arena: std.heap.ArenaAllocator,
@@ -150,6 +152,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .tool_executor = tool_executor,
         .terminal = Terminal.init(history_path),
         .cmd_executor = undefined,
+        .verifier = .{ .tool_executor = tool_executor },
         .recorder = Recorder.init(recorder_path),
         .messages = .empty,
         .message_arena = std.heap.ArenaAllocator.init(allocator),
@@ -310,13 +313,46 @@ fn runScript(self: *Self, path: []const u8) bool {
                 var cmd_arena = std.heap.ArenaAllocator.init(self.allocator);
                 defer cmd_arena.deinit();
 
+                const pre_state = if (self.self_heal) self.verifier.capturePreState(cmd_arena.allocator()) else undefined;
                 const result = self.cmd_executor.executeWithResult(cmd_arena.allocator(), entry.command);
                 self.cmd_executor.printResult(entry.command, result);
 
-                if (result.failed) {
+                const effective_failed = result.failed or
+                    (self.self_heal and !result.failed and
+                        self.verifier.verify(cmd_arena.allocator(), entry.command, pre_state, last_intent) == .failed);
+
+                if (effective_failed) {
                     if (self.self_heal and self.ai_client != null) {
-                        self.terminal.printInfo("Command failed, attempting self-healing...");
-                        if (self.attemptSelfHeal(last_intent, entry.raw_line, sa)) |healed_cmds| {
+                        // Phase 4: retry with wait before LLM escalation for
+                        // verification failures (not hard failures).
+                        if (!result.failed and isRetryable(entry.command)) {
+                            var retried = false;
+                            for (0..2) |retry_i| {
+                                _ = retry_i;
+                                std.Thread.sleep(500 * std.time.ns_per_ms);
+                                self.terminal.printInfo("Retrying command...");
+                                const retry_result = self.cmd_executor.executeWithResult(cmd_arena.allocator(), entry.command);
+                                if (!retry_result.failed) {
+                                    const retry_pre = self.verifier.capturePreState(cmd_arena.allocator());
+                                    _ = retry_pre;
+                                    if (self.verifier.verify(cmd_arena.allocator(), entry.command, pre_state, last_intent) != .failed) {
+                                        self.cmd_executor.printResult(entry.command, retry_result);
+                                        retried = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (retried) continue;
+                        }
+
+                        // Phase 5: include verification context in self-heal prompt.
+                        const verify_context: ?[]const u8 = if (!result.failed)
+                            self.verifier.failureReason(cmd_arena.allocator(), entry.command, pre_state, last_intent)
+                        else
+                            null;
+
+                        self.terminal.printInfo(if (result.failed) "Command failed, attempting self-healing..." else "Command succeeded but verification failed, attempting self-healing...");
+                        if (self.attemptSelfHeal(last_intent, entry.raw_line, verify_context, sa)) |healed_cmds| {
                             if (self.formatReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds)) |replacement| {
                                 replacements.append(sa, replacement) catch {};
                             }
@@ -400,6 +436,13 @@ fn flushReplacements(self: *Self, path: []const u8, content: []const u8, replace
     self.terminal.printInfoFmt("Script updated with {d} healed command(s).", .{replacements.len});
 }
 
+fn isRetryable(cmd: Command.Command) bool {
+    return switch (cmd) {
+        .type_cmd, .check, .click => true,
+        else => false,
+    };
+}
+
 const self_heal_max_attempts = 3;
 
 /// Runs a single LLM turn and returns the commands it executed, without
@@ -457,16 +500,22 @@ fn runHealTurn(self: *Self, prompt: []const u8, arena: std.mem.Allocator) ![]Com
     return cmds.toOwnedSlice(arena) catch &.{};
 }
 
-fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8, arena: std.mem.Allocator) ?[]Command.Command {
+fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8, verify_context: ?[]const u8, arena: std.mem.Allocator) ?[]Command.Command {
     const ha = self.message_arena.allocator();
 
-    const prompt = std.fmt.allocPrint(ha, "{s}{s}{s}{s}{s}{s}{s}", .{
+    const verify_section = if (verify_context) |ctx|
+        std.fmt.allocPrint(ha, "\n\nVerification detected a problem:\n{s}", .{ctx}) catch ""
+    else
+        "";
+
+    const prompt = std.fmt.allocPrint(ha, "{s}{s}{s}{s}{s}{s}{s}{s}", .{
         self_heal_prompt_prefix,
         intent orelse "(no recorded intent)",
         self_heal_prompt_suffix,
         failed_command,
         self_heal_prompt_page_state,
         self.tool_executor.getCurrentUrl(),
+        verify_section,
         self_heal_prompt_instructions,
     }) catch return null;
 
