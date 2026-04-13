@@ -260,6 +260,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         .url = self._url,
         .method = self._method,
         .headers = headers,
+        .page_id = page.id,
         .frame_id = page._frame_id,
         .body = self._request_body,
         .cookie_jar = if (cookie_support) &page._session.cookie_jar else null,

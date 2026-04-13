@@ -204,7 +204,7 @@ pub fn requestIntercept(bc: *CDP.BrowserContext, intercept: *const Notification.
             .document => "Document",
             .fetch => "Fetch",
         },
-        .networkId = &id.toRequestId(transfer.id), // matches the Network REQ-ID
+        .networkId = &id.toRequestId(transfer), // matches the Network REQ-ID
     }, .{ .session_id = session_id });
 
     log.debug(.cdp, "request intercept", .{
@@ -414,7 +414,7 @@ pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notificati
             .scheme = if (challenge.scheme) |s| (if (s == .digest) "digest" else "basic") else "",
             .realm = challenge.realm orelse "",
         },
-        .networkId = &id.toRequestId(transfer.id),
+        .networkId = &id.toRequestId(transfer),
     }, .{ .session_id = session_id });
 
     log.debug(.cdp, "request auth required", .{
