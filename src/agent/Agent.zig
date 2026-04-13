@@ -380,13 +380,16 @@ fn runScript(self: *Self, path: []const u8) bool {
 }
 
 fn formatReplacement(arena: std.mem.Allocator, original_span: []const u8, raw_line: []const u8, cmds: []const Command.Command) ?Replacement {
+    if (cmds.len == 0) return null;
     var aw: std.Io.Writer.Allocating = .init(arena);
 
+    // Only take the first command — the original was a single command,
+    // so the replacement should be too. Extra commands from the LLM
+    // (e.g., clicking submit after fixing a selector) would break the
+    // script sequence since subsequent commands haven't been skipped.
     aw.writer.print("# [Auto-healed] Original: {s}\n", .{raw_line}) catch return null;
-    for (cmds) |cmd| {
-        cmd.format(&aw.writer) catch return null;
-        aw.writer.writeAll("\n") catch return null;
-    }
+    cmds[0].format(&aw.writer) catch return null;
+    aw.writer.writeAll("\n") catch return null;
 
     return .{
         .original_span = original_span,
