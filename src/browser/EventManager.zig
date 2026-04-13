@@ -107,6 +107,9 @@ pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, co
     event.acquireRef();
     defer _ = event.releaseRef(self.page._session);
 
+    // Increment event count for Event Timing API
+    self.page.window._performance._event_counts.increment(event._type_string.str());
+
     if (comptime IS_DEBUG) {
         log.debug(.event, "eventManager.dispatch", .{ .type = event._type_string.str(), .bubbles = event._bubbles });
     }

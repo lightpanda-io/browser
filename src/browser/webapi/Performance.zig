@@ -2,6 +2,8 @@ const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const datetime = @import("../../datetime.zig");
 
+const EventCounts = @import("EventCounts.zig");
+
 pub fn registerTypes() []const type {
     return &.{ Performance, Entry, Mark, Measure, PerformanceTiming, PerformanceNavigation };
 }
@@ -14,6 +16,7 @@ _time_origin: u64,
 _entries: std.ArrayList(*Entry) = .{},
 _timing: PerformanceTiming = .{},
 _navigation: PerformanceNavigation = .{},
+_event_counts: EventCounts = .{},
 
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
@@ -52,6 +55,10 @@ pub fn getTimeOrigin(self: *const Performance) f64 {
 
 pub fn getNavigation(self: *Performance) *PerformanceNavigation {
     return &self._navigation;
+}
+
+pub fn getEventCounts(self: *Performance) *EventCounts {
+    return &self._event_counts;
 }
 
 pub fn mark(
@@ -277,6 +284,7 @@ pub const JsApi = struct {
     pub const timeOrigin = bridge.accessor(Performance.getTimeOrigin, null, .{});
     pub const timing = bridge.accessor(Performance.getTiming, null, .{});
     pub const navigation = bridge.accessor(Performance.getNavigation, null, .{});
+    pub const eventCounts = bridge.accessor(Performance.getEventCounts, null, .{});
 };
 
 pub const Entry = struct {
