@@ -313,29 +313,34 @@ fn runScript(self: *Self, path: []const u8) bool {
                 var cmd_arena = std.heap.ArenaAllocator.init(self.allocator);
                 defer cmd_arena.deinit();
 
-                const pre_state = if (self.self_heal) self.verifier.capturePreState(cmd_arena.allocator()) else undefined;
+                const pre_state: ?Verifier.PreState = if (self.self_heal)
+                    self.verifier.capturePreState(cmd_arena.allocator(), entry.command)
+                else
+                    null;
+
                 const result = self.cmd_executor.executeWithResult(cmd_arena.allocator(), entry.command);
                 self.cmd_executor.printResult(entry.command, result);
 
-                const effective_failed = result.failed or
-                    (self.self_heal and !result.failed and
-                        self.verifier.verify(cmd_arena.allocator(), entry.command, pre_state, last_intent) == .failed);
+                const verification = if (!result.failed and pre_state != null)
+                    self.verifier.verify(cmd_arena.allocator(), entry.command, pre_state.?, last_intent)
+                else
+                    Verifier.VerifyResult{ .result = .passed };
+
+                const effective_failed = result.failed or verification.result == .failed;
 
                 if (effective_failed) {
                     if (self.self_heal and self.ai_client != null) {
-                        // Phase 4: retry with wait before LLM escalation for
+                        // Retry with wait before LLM escalation for
                         // verification failures (not hard failures).
                         if (!result.failed and isRetryable(entry.command)) {
                             var retried = false;
-                            for (0..2) |retry_i| {
-                                _ = retry_i;
+                            for (0..2) |_| {
                                 std.Thread.sleep(500 * std.time.ns_per_ms);
                                 self.terminal.printInfo("Retrying command...");
+                                const retry_pre = self.verifier.capturePreState(cmd_arena.allocator(), entry.command);
                                 const retry_result = self.cmd_executor.executeWithResult(cmd_arena.allocator(), entry.command);
                                 if (!retry_result.failed) {
-                                    const retry_pre = self.verifier.capturePreState(cmd_arena.allocator());
-                                    _ = retry_pre;
-                                    if (self.verifier.verify(cmd_arena.allocator(), entry.command, pre_state, last_intent) != .failed) {
+                                    if (self.verifier.verify(cmd_arena.allocator(), entry.command, retry_pre, last_intent).result != .failed) {
                                         self.cmd_executor.printResult(entry.command, retry_result);
                                         retried = true;
                                         break;
@@ -345,15 +350,14 @@ fn runScript(self: *Self, path: []const u8) bool {
                             if (retried) continue;
                         }
 
-                        // Phase 5: include verification context in self-heal prompt.
-                        const verify_context: ?[]const u8 = if (!result.failed)
-                            self.verifier.failureReason(cmd_arena.allocator(), entry.command, pre_state, last_intent)
+                        const msg = if (result.failed)
+                            "Command failed, attempting self-healing..."
                         else
-                            null;
+                            "Command succeeded but verification failed, attempting self-healing...";
+                        self.terminal.printInfo(msg);
 
-                        self.terminal.printInfo(if (result.failed) "Command failed, attempting self-healing..." else "Command succeeded but verification failed, attempting self-healing...");
-                        if (self.attemptSelfHeal(last_intent, entry.raw_line, verify_context, sa)) |healed_cmds| {
-                            if (self.formatReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds)) |replacement| {
+                        if (self.attemptSelfHeal(last_intent, entry.raw_line, verification.reason, sa)) |healed_cmds| {
+                            if (formatReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds)) |replacement| {
                                 replacements.append(sa, replacement) catch {};
                             }
                             continue;
@@ -375,8 +379,7 @@ fn runScript(self: *Self, path: []const u8) bool {
     return true;
 }
 
-fn formatReplacement(self: *Self, arena: std.mem.Allocator, original_span: []const u8, raw_line: []const u8, cmds: []const Command.Command) ?Replacement {
-    _ = self;
+fn formatReplacement(arena: std.mem.Allocator, original_span: []const u8, raw_line: []const u8, cmds: []const Command.Command) ?Replacement {
     var aw: std.Io.Writer.Allocating = .init(arena);
 
     aw.writer.print("# [Auto-healed] Original: {s}\n", .{raw_line}) catch return null;

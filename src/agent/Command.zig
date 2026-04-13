@@ -256,24 +256,17 @@ pub const ScriptIterator = struct {
 
             if (isEvalTripleQuote(trimmed)) |quote_type| {
                 const start_line = self.line_num;
-                const span_end = blk: {
-                    const js_or_null: ?[]const u8 = self.collectEvalBlock(quote_type);
-                    const end = self.lines.index orelse self.lines.buffer.len;
-                    if (js_or_null) |js| {
-                        return .{
-                            .line_num = start_line,
-                            .raw_line = trimmed,
-                            .raw_span = self.lines.buffer[line_start..end],
-                            .command = .{ .eval_js = js },
-                        };
-                    }
-                    break :blk end;
-                };
+                const js_or_null = self.collectEvalBlock(quote_type);
+                const span_end = self.lines.index orelse self.lines.buffer.len;
+                const cmd: Command = if (js_or_null) |js|
+                    .{ .eval_js = js }
+                else
+                    .{ .natural_language = "unterminated EVAL block" };
                 return .{
                     .line_num = start_line,
                     .raw_line = trimmed,
                     .raw_span = self.lines.buffer[line_start..span_end],
-                    .command = .{ .natural_language = "unterminated EVAL block" },
+                    .command = cmd,
                 };
             }
 
