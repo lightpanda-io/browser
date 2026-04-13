@@ -31,27 +31,35 @@ pub fn toPageId(comptime id_type: enum { frame_id, loader_id }, input: []const u
     return std.fmt.parseInt(u32, input[4..], 10) catch err;
 }
 
-pub fn toFrameId(page_id: u32) [14]u8 {
+pub fn toFrameId(id: u32) [14]u8 {
     var buf: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&buf, "FID-{d:0>10}", .{page_id}) catch unreachable;
+    _ = std.fmt.bufPrint(&buf, "FID-{d:0>10}", .{id}) catch unreachable;
     return buf;
 }
 
-pub fn toLoaderId(page_id: u32) [14]u8 {
+pub fn toLoaderId(id: u32) [14]u8 {
     var buf: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&buf, "LID-{d:0>10}", .{page_id}) catch unreachable;
+    _ = std.fmt.bufPrint(&buf, "LID-{d:0>10}", .{id}) catch unreachable;
     return buf;
 }
 
-pub fn toRequestId(page_id: u32) [14]u8 {
+// requestId has special requirements. If it's the main document navigation,
+// then it should match the loader id.
+const Transfer = @import("../browser/HttpClient.zig").Transfer;
+pub fn toRequestId(transfer: *const Transfer) [14]u8 {
+    const req = transfer.req;
+    if (req.resource_type == .document) {
+        return toLoaderId(req.page_id);
+    }
+
     var buf: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&buf, "REQ-{d:0>10}", .{page_id}) catch unreachable;
+    _ = std.fmt.bufPrint(&buf, "REQ-{d:0>10}", .{transfer.id}) catch unreachable;
     return buf;
 }
 
-pub fn toInterceptId(page_id: u32) [14]u8 {
+pub fn toInterceptId(id: u32) [14]u8 {
     var buf: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&buf, "INT-{d:0>10}", .{page_id}) catch unreachable;
+    _ = std.fmt.bufPrint(&buf, "INT-{d:0>10}", .{id}) catch unreachable;
     return buf;
 }
 
@@ -170,11 +178,6 @@ test "id: toFrameId" {
 test "id: toLoaderId" {
     try testing.expectEqual("LID-0000000000", toLoaderId(0));
     try testing.expectEqual("LID-4294967295", toLoaderId(4294967295));
-}
-
-test "id: toRequestId" {
-    try testing.expectEqual("REQ-0000000000", toRequestId(0));
-    try testing.expectEqual("REQ-4294967295", toRequestId(4294967295));
 }
 
 test "id: toInterceptId" {

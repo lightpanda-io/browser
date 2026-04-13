@@ -242,7 +242,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
-        .requestId = &id.toRequestId(msg.transfer.id),
+        .requestId = &id.toRequestId(msg.transfer),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
         .errorText = msg.err,
@@ -265,10 +265,10 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
         try req.headers.add(extra);
     }
 
-    // We're missing a bunch of fields, but, for now, this seems like enough
+    // We're missing a bunch of fields, but, for now, this eems like enough
     try bc.cdp.sendEvent("Network.requestWillBeSent", .{
-        .loaderId = &id.toLoaderId(transfer.id),
-        .requestId = &id.toRequestId(transfer.id),
+        .loaderId = &id.toLoaderId(req.page_id),
+        .requestId = &id.toRequestId(transfer),
         .frameId = &id.toFrameId(frame_id),
         .type = req.resource_type.string(),
         .documentURL = page.url,
@@ -285,13 +285,14 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
     const session_id = bc.session_id orelse return;
 
     const transfer = msg.transfer;
+    const req = &transfer.req;
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
-        .loaderId = &id.toLoaderId(transfer.id),
-        .requestId = &id.toRequestId(transfer.id),
-        .frameId = &id.toFrameId(transfer.req.frame_id),
-        .response = TransferAsResponseWriter.init(arena, msg.transfer),
+        .loaderId = &id.toLoaderId(req.page_id),
+        .requestId = &id.toRequestId(transfer),
+        .frameId = &id.toFrameId(req.frame_id),
+        .response = TransferAsResponseWriter.init(arena, transfer),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
 }
@@ -302,7 +303,7 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     const session_id = bc.session_id orelse return;
     const transfer = msg.transfer;
     try bc.cdp.sendEvent("Network.loadingFinished", .{
-        .requestId = &id.toRequestId(transfer.id),
+        .requestId = &id.toRequestId(transfer),
         .encodedDataLength = transfer.bytes_received,
     }, .{ .session_id = session_id });
 }

@@ -90,6 +90,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         .ctx = fetch,
         .url = request._url,
         .method = request._method,
+        .page_id = page.id,
         .frame_id = page._frame_id,
         .body = request._body,
         .headers = headers,
