@@ -31,7 +31,16 @@ const SingleFlightLayer = @This();
 
 next: Layer = undefined,
 allocator: std.mem.Allocator,
-flights: std.StringHashMapUnmanaged(std.ArrayList(Request)) = .empty,
+flights: std.StringHashMapUnmanaged(Flight) = .empty,
+
+pub const Flight = struct {
+    arena: std.mem.Allocator,
+    waiters: std.ArrayList(Request) = .empty,
+
+    pub fn append(self: *Flight, req: Request) !void {
+        try self.waiters.append(self.arena, req);
+    }
+};
 
 pub fn layer(self: *SingleFlightLayer) Layer {
     return .{
@@ -42,40 +51,47 @@ pub fn layer(self: *SingleFlightLayer) Layer {
     };
 }
 
-pub fn deinit(self: *SingleFlightLayer, allocator: std.mem.Allocator) void {
-    _ = self;
-    _ = allocator;
+pub fn deinit(self: *SingleFlightLayer, _: std.mem.Allocator) void {
+    self.flights.deinit(self.allocator);
 }
 
 fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
     const self: *SingleFlightLayer = @ptrCast(@alignCast(ptr));
 
-    if (req.method != .GET) {
+    // only single flight idempotent reqursts.
+    if (!req.method.idempotent()) {
         return self.next.request(ctx, req);
     }
 
-    const arena = try ctx.network.app.arena_pool.acquire(.{ .debug = "SingleFlightLayer" });
+    const arena = try ctx.network.app.arena_pool.acquire(.small, "SingleFlightLayer");
     errdefer ctx.network.app.arena_pool.release(arena);
 
-    const key = req.url;
+    const key = try arena.dupeZ(u8, req.url);
+    var gop = try self.flights.getOrPut(self.allocator, key);
 
-    var gop = try self.flights.getOrPut(arena, key);
+    // if we already have this flight, just add it to the list.
     if (gop.found_existing) {
-        try gop.value_ptr.append(arena, req);
+        log.debug(.browser, "single flight join", .{ .url = key });
+        try gop.value_ptr.append(req);
+        ctx.network.app.arena_pool.release(arena);
         return;
     }
 
-    gop.value_ptr.* = .empty;
+    // create a new flight
+    log.debug(.browser, "single flight start", .{ .url = key });
+    gop.value_ptr.* = .{ .arena = arena, .waiters = .empty };
 
-    const flight_ctx = try self.allocator.create(FlightContext);
+    const flight_ctx = try arena.create(FlightContext);
     flight_ctx.* = .{
         .layer = self,
         .ctx = ctx,
-        .url = req.url,
+        .url = key,
         .forward = Forward.fromRequest(req),
     };
 
     const wrapped = flight_ctx.forward.wrapRequest(req, flight_ctx, "forward", .{
+        .header = FlightContext.headerCallback,
+        .data = FlightContext.dataCallback,
         .done = FlightContext.doneCallback,
         .err = FlightContext.errorCallback,
         .shutdown = FlightContext.shutdownCallback,
@@ -90,62 +106,101 @@ const FlightContext = struct {
     url: [:0]const u8,
     forward: Forward,
 
-    fn deinit(self: *FlightContext) void {
-        self.layer.allocator.destroy(self);
+    pub fn headerCallback(resp: Response) !bool {
+        const self: *FlightContext = @ptrCast(@alignCast(resp.ctx));
+        const flight: *Flight = self.layer.flights.getPtr(self.url).?;
+
+        for (flight.waiters.items) |waiter| {
+            var sub_resp = resp;
+            sub_resp.ctx = waiter.ctx;
+            const proceed = try waiter.header_callback(sub_resp);
+            if (!proceed) return false;
+        }
+
+        return self.forward.forwardHeader(resp);
     }
 
-    fn fanout(self: *FlightContext) std.ArrayListUnmanaged(Request) {
-        const kv = self.layer.flights.fetchRemove(self.url) orelse
-            @panic("SingleFlightLayer.fanout: missing flight");
-        return kv.value;
+    pub fn dataCallback(resp: Response, chunk: []const u8) !void {
+        const self: *FlightContext = @ptrCast(@alignCast(resp.ctx));
+        const flight: *Flight = self.layer.flights.getPtr(self.url).?;
+
+        log.debug(.browser, "single flight data", .{
+            .url = self.url,
+            .count = flight.waiters.items.len,
+        });
+
+        for (flight.waiters.items) |waiter| {
+            var sub_resp = resp;
+            sub_resp.ctx = waiter.ctx;
+            try waiter.data_callback(sub_resp, chunk);
+        }
+
+        try self.forward.forwardData(resp, chunk);
     }
 
-    fn doneCallback(ctx_ptr: *anyopaque) anyerror!void {
-        const self: *FlightContext = @ptrCast(@alignCast(ctx_ptr));
-        var waiters = self.fanout();
+    pub fn doneCallback(ctx: *anyopaque) !void {
+        const self: *FlightContext = @ptrCast(@alignCast(ctx));
+        const flight: *Flight = self.layer.flights.getPtr(self.url).?;
+
+        const arena = flight.arena;
         defer {
-            waiters.deinit(self.layer.allocator);
-            self.deinit();
+            std.debug.assert(self.layer.flights.remove(self.url));
+            self.ctx.network.app.arena_pool.release(arena);
+        }
+
+        log.debug(.browser, "single flight done", .{
+            .url = self.url,
+            .count = flight.waiters.items.len,
+        });
+
+        for (flight.waiters.items) |waiter| {
+            try waiter.done_callback(waiter.ctx);
         }
 
         try self.forward.forwardDone();
-
-        // replay to waiters - they missed the header/data callbacks so we
-        // can only signal done; callers that need the body should use CacheLayer
-        for (waiters.items) |waiter| {
-            waiter.done_callback(waiter.ctx) catch |err| {
-                waiter.error_callback(waiter.ctx, err);
-            };
-        }
     }
 
-    fn errorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
-        const self: *FlightContext = @ptrCast(@alignCast(ctx_ptr));
-        var waiters = self.fanout();
+    pub fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+        const self: *FlightContext = @ptrCast(@alignCast(ctx));
+        const flight: *Flight = self.layer.flights.getPtr(self.url).?;
+
+        const arena = flight.arena;
         defer {
-            waiters.deinit(self.layer.allocator);
-            self.deinit();
+            std.debug.assert(self.layer.flights.remove(self.url));
+            self.ctx.network.app.arena_pool.release(arena);
+        }
+
+        log.debug(.browser, "single flight error", .{
+            .url = self.url,
+            .count = flight.waiters.items.len,
+        });
+
+        for (flight.waiters.items) |waiter| {
+            waiter.error_callback(waiter.ctx, err);
         }
 
         self.forward.forwardErr(err);
-
-        for (waiters.items) |waiter| {
-            waiter.error_callback(waiter.ctx, err);
-        }
     }
 
-    fn shutdownCallback(ctx_ptr: *anyopaque) void {
-        const self: *FlightContext = @ptrCast(@alignCast(ctx_ptr));
-        var waiters = self.fanout();
+    pub fn shutdownCallback(ctx: *anyopaque) void {
+        const self: *FlightContext = @ptrCast(@alignCast(ctx));
+        const flight: *Flight = self.layer.flights.getPtr(self.url).?;
+
+        const arena = flight.arena;
         defer {
-            waiters.deinit(self.layer.allocator);
-            self.deinit();
+            std.debug.assert(self.layer.flights.remove(self.url));
+            self.ctx.network.app.arena_pool.release(arena);
+        }
+
+        log.debug(.browser, "single flight shutdown", .{
+            .url = self.url,
+            .count = flight.waiters.items.len,
+        });
+
+        for (flight.waiters.items) |waiter| {
+            if (waiter.shutdown_callback) |cb| cb(waiter.ctx);
         }
 
         self.forward.forwardShutdown();
-
-        for (waiters.items) |waiter| {
-            if (waiter.shutdown_callback) |cb| cb(waiter.ctx);
-        }
     }
 };

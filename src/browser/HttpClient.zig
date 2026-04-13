@@ -44,10 +44,6 @@ pub const Headers = http.Headers;
 pub const ResponseHead = http.ResponseHead;
 pub const HeaderIterator = http.HeaderIterator;
 
-pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
-pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
-pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
-
 pub const PerformStatus = enum { cdp_socket, normal };
 
 pub const Transport = struct {
@@ -708,7 +704,12 @@ pub fn LayerStack(comptime layer_types: anytype) type {
     };
 }
 
-pub const Layers = LayerStack(.{ RobotsLayer, WebBotAuthLayer, CacheLayer });
+pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
+pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
+pub const SingleFlightLayer = @import("../network/layer/SingleFlightLayer.zig");
+pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
+
+pub const Layers = LayerStack(.{ RobotsLayer, WebBotAuthLayer, SingleFlightLayer, CacheLayer });
 
 const Client = @This();
 
@@ -723,9 +724,9 @@ pub fn init(allocator: Allocator, net: *Network) !*Client {
         RobotsLayer{
             .obey_robots = net.config.obeyRobots(),
             .allocator = allocator,
-            .pending = .empty,
         },
         WebBotAuthLayer{},
+        SingleFlightLayer{ .allocator = allocator },
         CacheLayer{},
     });
     errdefer layers.deinit(allocator);
