@@ -421,6 +421,7 @@ fn flushReplacements(self: *Self, path: []const u8, content: []const u8, replace
     // relies on this to compute byte offsets.
     const content_base = @intFromPtr(content.ptr);
     var new_content: std.ArrayList(u8) = .empty;
+    new_content.ensureTotalCapacity(self.allocator, content.len) catch {};
     var pos: usize = 0;
     for (replacements) |r| {
         const r_start = @intFromPtr(r.original_span.ptr) - content_base;
@@ -463,15 +464,19 @@ const self_heal_max_attempts = 3;
 /// Runs a single LLM turn and returns the commands it executed, without
 /// recording them to the Recorder.  Used by attemptSelfHeal so that the
 /// caller can capture healed commands for script rewriting.
-fn runHealTurn(self: *Self, prompt: []const u8, arena: std.mem.Allocator) ![]Command.Command {
-    const ma = self.message_arena.allocator();
-
+fn ensureSystemPrompt(self: *Self) !void {
     if (self.messages.items.len == 0) {
         try self.messages.append(self.allocator, .{
             .role = .system,
             .content = self.system_prompt,
         });
     }
+}
+
+fn runHealTurn(self: *Self, prompt: []const u8, arena: std.mem.Allocator) ![]Command.Command {
+    const ma = self.message_arena.allocator();
+
+    try self.ensureSystemPrompt();
 
     try self.messages.append(self.allocator, .{
         .role = .user,
@@ -535,6 +540,10 @@ fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8,
         self_heal_prompt_instructions,
     }) catch return null;
 
+    // Save message count so we can roll back between attempts — each failed
+    // heal turn would otherwise accumulate in context, confusing the next try.
+    const msg_baseline = self.messages.items.len;
+
     var attempt: u8 = 0;
     while (attempt < self_heal_max_attempts) : (attempt += 1) {
         const cmds = self.runHealTurn(prompt, arena) catch |err| {
@@ -543,9 +552,11 @@ fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8,
                 self_heal_max_attempts,
                 @errorName(err),
             });
+            self.messages.shrinkRetainingCapacity(msg_baseline);
             continue;
         };
         if (cmds.len > 0) return cmds;
+        self.messages.shrinkRetainingCapacity(msg_baseline);
     }
     return null;
 }
@@ -553,12 +564,7 @@ fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8,
 fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []const u8) !void {
     const ma = self.message_arena.allocator();
 
-    if (self.messages.items.len == 0) {
-        try self.messages.append(self.allocator, .{
-            .role = .system,
-            .content = self.system_prompt,
-        });
-    }
+    try self.ensureSystemPrompt();
 
     try self.messages.append(self.allocator, .{
         .role = .user,

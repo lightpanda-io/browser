@@ -842,7 +842,7 @@ fn execConsoleLogs(
     arena: std.mem.Allocator,
 ) ToolError![]const u8 {
     const page = session.currentPage() orelse return ToolError.PageNotLoaded;
-    const messages = page._console_messages.items;
+    const messages = page.drainConsoleMessages();
     if (messages.len == 0) return "No console messages.";
 
     var aw: std.Io.Writer.Allocating = .init(arena);
@@ -850,7 +850,6 @@ fn execConsoleLogs(
     for (messages) |msg| {
         writer.print("[{s}] {s}\n", .{ @tagName(msg.level), msg.text }) catch return ToolError.InternalError;
     }
-    page._console_messages.clearRetainingCapacity();
     return aw.written();
 }
 
