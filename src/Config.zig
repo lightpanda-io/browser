@@ -1289,4 +1289,3 @@ test "HttpHeaders: proxy bearer header" {
     try std.testing.expectEqualStrings("Lightpanda/1.0", config.http_headers.user_agent);
     try std.testing.expectEqualStrings("Proxy-Authorization: Bearer secret-token", config.http_headers.proxy_bearer_header.?);
 }
-
