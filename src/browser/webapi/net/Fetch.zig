@@ -86,6 +86,24 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         log.debug(.http, "fetch", .{ .url = request._url });
     }
 
+    const cookie_jar = switch (request._credentials) {
+        .omit => null,
+        .include => &page._session.cookie_jar,
+        .@"same-origin" => blk: {
+            const page_origin = URL.getOrigin(page.arena, page.url) catch break :blk null;
+            const req_origin = URL.getOrigin(page.arena, request._url) catch break :blk null;
+
+            const is_same_origin = page_origin != null and req_origin != null and
+                std.mem.eql(u8, page_origin.?, req_origin.?);
+
+            if (is_same_origin) {
+                break :blk &page._session.cookie_jar;
+            }
+
+            break :blk null;
+        },
+    };
+
     try http_client.request(.{
         .ctx = fetch,
         .url = request._url,
@@ -95,7 +113,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         .body = request._body,
         .headers = headers,
         .resource_type = .fetch,
-        .cookie_jar = &page._session.cookie_jar,
+        .cookie_jar = cookie_jar,
         .cookie_origin = page.url,
         .notification = page._session.notification,
         .start_callback = httpStartCallback,
