@@ -95,7 +95,11 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
 
     // Reject user agents containing "mozilla" (case-insensitive)
     if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
-        return cmd.sendError(-32602, "User agent must not contain Mozilla", .{});
+        // go-rod client automatically set a Mozilla/ user agent.
+        // Since we don't want to stop this client to work, let's ignore the
+        // new user-agent and add a log instead.
+        log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla" });
+        return cmd.sendResult(null, .{});
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
@@ -122,7 +126,7 @@ test "cdp.Emulation: setUserAgentOverride with valid user agent" {
     try ctx.expectSentResult(null, .{ .id = 1 });
 }
 
-test "cdp.Emulation: setUserAgentOverride rejects mozilla" {
+test "cdp.Emulation: setUserAgentOverride ignores mozilla" {
     var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-UA2" });
@@ -133,10 +137,11 @@ test "cdp.Emulation: setUserAgentOverride rejects mozilla" {
         .params = .{ .userAgent = "Mozilla/5.0 (Windows NT 10.0)" },
     });
 
-    try ctx.expectSentError(-32602, "User agent must not contain Mozilla", .{ .id = 2 });
+    try ctx.expectSentResult(null, .{});
+    try testing.expect(ctx.cdp().browser_context.?.user_agent_changed == false);
 }
 
-test "cdp.Emulation: setUserAgentOverride rejects mozilla case insensitive" {
+test "cdp.Emulation: setUserAgentOverride ignores mozilla case insensitive" {
     var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-UA3" });
@@ -147,7 +152,8 @@ test "cdp.Emulation: setUserAgentOverride rejects mozilla case insensitive" {
         .params = .{ .userAgent = "MOZILLA/5.0 test" },
     });
 
-    try ctx.expectSentError(-32602, "User agent must not contain Mozilla", .{ .id = 3 });
+    try ctx.expectSentResult(null, .{});
+    try testing.expect(ctx.cdp().browser_context.?.user_agent_changed == false);
 }
 
 test "cdp.Emulation: setUserAgentOverride rejects non-printable characters" {
