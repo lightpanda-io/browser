@@ -237,6 +237,10 @@ pub const ScriptIterator = struct {
     pub const Entry = struct {
         line_num: u32,
         raw_line: []const u8,
+        /// The full slice of the original content buffer covering this entry,
+        /// including trailing newline(s). For multi-line EVAL blocks this spans
+        /// from the EVAL keyword through the closing triple-quote line.
+        raw_span: []const u8,
         command: Command,
     };
 
@@ -248,26 +252,36 @@ pub const ScriptIterator = struct {
             const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
             if (trimmed.len == 0) continue;
 
+            const line_start = @intFromPtr(line.ptr) - @intFromPtr(self.lines.buffer.ptr);
+
             if (isEvalTripleQuote(trimmed)) |quote_type| {
                 const start_line = self.line_num;
-                if (self.collectEvalBlock(quote_type)) |js| {
-                    return .{
-                        .line_num = start_line,
-                        .raw_line = trimmed,
-                        .command = .{ .eval_js = js },
-                    };
-                } else {
-                    return .{
-                        .line_num = start_line,
-                        .raw_line = trimmed,
-                        .command = .{ .natural_language = "unterminated EVAL block" },
-                    };
-                }
+                const span_end = blk: {
+                    const js_or_null: ?[]const u8 = self.collectEvalBlock(quote_type);
+                    const end = self.lines.index orelse self.lines.buffer.len;
+                    if (js_or_null) |js| {
+                        return .{
+                            .line_num = start_line,
+                            .raw_line = trimmed,
+                            .raw_span = self.lines.buffer[line_start..end],
+                            .command = .{ .eval_js = js },
+                        };
+                    }
+                    break :blk end;
+                };
+                return .{
+                    .line_num = start_line,
+                    .raw_line = trimmed,
+                    .raw_span = self.lines.buffer[line_start..span_end],
+                    .command = .{ .natural_language = "unterminated EVAL block" },
+                };
             }
 
+            const span_end = self.lines.index orelse self.lines.buffer.len;
             return .{
                 .line_num = self.line_num,
                 .raw_line = trimmed,
+                .raw_span = self.lines.buffer[line_start..span_end],
                 .command = parse(trimmed),
             };
         }
@@ -286,7 +300,7 @@ pub const ScriptIterator = struct {
 
     /// Collect lines until matching closing triple quote, return the JS content.
     fn collectEvalBlock(self: *ScriptIterator, quote_type: []const u8) ?[]const u8 {
-        var parts: std.ArrayListUnmanaged(u8) = .empty;
+        var parts: std.ArrayList(u8) = .empty;
         while (self.lines.next()) |line| {
             self.line_num += 1;
             const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);

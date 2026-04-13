@@ -70,7 +70,7 @@ tool_executor: *ToolExecutor,
 terminal: Terminal,
 cmd_executor: CommandExecutor,
 recorder: Recorder,
-messages: std.ArrayListUnmanaged(zenai.provider.Message),
+messages: std.ArrayList(zenai.provider.Message),
 message_arena: std.heap.ArenaAllocator,
 tools: []const zenai.provider.Tool,
 model: []const u8,
@@ -226,6 +226,13 @@ fn runRepl(self: *Self) void {
     self.terminal.printInfo("Goodbye!");
 }
 
+const Replacement = struct {
+    /// Slice into the original content buffer that should be replaced.
+    original_span: []const u8,
+    /// New text to substitute (includes trailing newline).
+    new_text: []const u8,
+};
+
 fn runScript(self: *Self, path: []const u8) bool {
     const file = std.fs.cwd().openFile(path, .{}) catch |err| {
         self.terminal.printErrorFmt("Failed to open script '{s}': {s}", .{ path, @errorName(err) });
@@ -243,15 +250,17 @@ fn runScript(self: *Self, path: []const u8) bool {
 
     var script_arena = std.heap.ArenaAllocator.init(self.allocator);
     defer script_arena.deinit();
+    const sa = script_arena.allocator();
 
-    var iter = Command.ScriptIterator.init(content, script_arena.allocator());
+    var iter: Command.ScriptIterator = .init(content, sa);
     var last_intent: ?[]const u8 = null;
+    var replacements: std.ArrayList(Replacement) = .empty;
 
     while (iter.next()) |entry| {
         switch (entry.command) {
             .exit => {
                 self.terminal.printInfo("EXIT — stopping script.");
-                return true;
+                break;
             },
             .comment => {
                 if (std.mem.startsWith(u8, entry.raw_line, "# INTENT:")) {
@@ -261,6 +270,7 @@ fn runScript(self: *Self, path: []const u8) bool {
             },
             .natural_language => {
                 self.terminal.printErrorFmt("line {d}: unrecognized command: {s}", .{ entry.line_num, entry.raw_line });
+                self.flushReplacements(path, content, replacements.items);
                 return false;
             },
             .login, .accept_cookies => {
@@ -269,6 +279,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                         entry.line_num,
                         entry.raw_line,
                     });
+                    self.flushReplacements(path, content, replacements.items);
                     return false;
                 }
                 const prompt = if (entry.command == .login) login_prompt else accept_cookies_prompt;
@@ -278,6 +289,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                         entry.raw_line,
                         @errorName(err),
                     });
+                    self.flushReplacements(path, content, replacements.items);
                     return false;
                 };
             },
@@ -293,7 +305,10 @@ fn runScript(self: *Self, path: []const u8) bool {
                 if (result.failed) {
                     if (self.self_heal and self.ai_client != null) {
                         self.terminal.printInfo("Command failed, attempting self-healing...");
-                        if (self.attemptSelfHeal(last_intent, entry.raw_line)) {
+                        if (self.attemptSelfHeal(last_intent, entry.raw_line, sa)) |healed_cmds| {
+                            if (self.formatReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds)) |replacement| {
+                                replacements.append(sa, replacement) catch {};
+                            }
                             continue;
                         }
                     }
@@ -301,22 +316,138 @@ fn runScript(self: *Self, path: []const u8) bool {
                         entry.line_num,
                         entry.raw_line,
                     });
+                    self.flushReplacements(path, content, replacements.items);
                     return false;
                 }
             },
         }
     }
 
+    self.flushReplacements(path, content, replacements.items);
     self.terminal.printInfo("Script completed.");
     return true;
 }
 
+fn formatReplacement(self: *Self, arena: std.mem.Allocator, original_span: []const u8, raw_line: []const u8, cmds: []const Command.Command) ?Replacement {
+    _ = self;
+    var aw: std.Io.Writer.Allocating = .init(arena);
+
+    aw.writer.print("# [Auto-healed] Original: {s}\n", .{raw_line}) catch return null;
+    for (cmds) |cmd| {
+        cmd.format(&aw.writer) catch return null;
+        aw.writer.writeAll("\n") catch return null;
+    }
+
+    return .{
+        .original_span = original_span,
+        .new_text = aw.written(),
+    };
+}
+
+fn flushReplacements(self: *Self, path: []const u8, content: []const u8, replacements: []const Replacement) void {
+    if (replacements.len == 0) return;
+
+    // Write .bak backup of the original script.
+    const bak_path = std.fmt.allocPrint(self.allocator, "{s}.bak", .{path}) catch return;
+    defer self.allocator.free(bak_path);
+    if (std.fs.cwd().createFile(bak_path, .{})) |bak_file| {
+        defer bak_file.close();
+        bak_file.writeAll(content) catch {};
+        self.terminal.printInfoFmt("Backup saved to {s}", .{bak_path});
+    } else |_| {}
+
+    // Build new content by applying replacements.
+    const content_base = @intFromPtr(content.ptr);
+    var new_content: std.ArrayList(u8) = .empty;
+    var pos: usize = 0;
+    for (replacements) |r| {
+        const r_start = @intFromPtr(r.original_span.ptr) - content_base;
+        const r_end = r_start + r.original_span.len;
+        new_content.appendSlice(self.allocator, content[pos..r_start]) catch return;
+        new_content.appendSlice(self.allocator, r.new_text) catch return;
+        pos = r_end;
+    }
+    new_content.appendSlice(self.allocator, content[pos..]) catch return;
+    defer new_content.deinit(self.allocator);
+
+    // Atomic write: tmp file then rename.
+    const tmp_path = std.fmt.allocPrint(self.allocator, "{s}.tmp", .{path}) catch return;
+    defer self.allocator.free(tmp_path);
+
+    const tmp_file = std.fs.cwd().createFile(tmp_path, .{}) catch return;
+    tmp_file.writeAll(new_content.items) catch {
+        tmp_file.close();
+        return;
+    };
+    tmp_file.close();
+
+    std.fs.cwd().rename(tmp_path, path) catch |err| {
+        self.terminal.printErrorFmt("Failed to update script: {s}", .{@errorName(err)});
+        return;
+    };
+
+    self.terminal.printInfoFmt("Script updated with {d} healed command(s).", .{replacements.len});
+}
+
 const self_heal_max_attempts = 3;
 
-fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8) bool {
-    var heal_arena = std.heap.ArenaAllocator.init(self.allocator);
-    defer heal_arena.deinit();
-    const ha = heal_arena.allocator();
+/// Runs a single LLM turn and returns the commands it executed, without
+/// recording them to the Recorder.  Used by attemptSelfHeal so that the
+/// caller can capture healed commands for script rewriting.
+fn runHealTurn(self: *Self, prompt: []const u8, arena: std.mem.Allocator) ![]Command.Command {
+    const ma = self.message_arena.allocator();
+
+    if (self.messages.items.len == 0) {
+        try self.messages.append(self.allocator, .{
+            .role = .system,
+            .content = self.system_prompt,
+        });
+    }
+
+    try self.messages.append(self.allocator, .{
+        .role = .user,
+        .content = try ma.dupe(u8, prompt),
+    });
+
+    const provider_client = self.ai_client orelse return error.NoAiClient;
+
+    var result = provider_client.runTools(
+        self.model,
+        &self.messages,
+        self.allocator,
+        ma,
+        .{ .context = @ptrCast(self), .callFn = &handleToolCall },
+        .{
+            .tools = self.tools,
+            .max_tokens = 4096,
+            .tool_choice = .auto,
+        },
+    ) catch |err| {
+        log.err(.app, "AI API error", .{ .err = err });
+        return error.ApiError;
+    };
+    defer result.deinit();
+
+    var cmds: std.ArrayList(Command.Command) = .empty;
+    for (result.tool_calls_made) |tc| {
+        if (!std.mem.startsWith(u8, tc.result, "Error:")) {
+            if (toolCallToCommand(ma, tc.name, tc.arguments)) |cmd| {
+                cmds.append(arena, cmd) catch {};
+            }
+        }
+    }
+
+    if (result.text) |text| {
+        std.debug.print("\n", .{});
+        self.terminal.printAssistant(text);
+        std.debug.print("\n", .{});
+    }
+
+    return cmds.toOwnedSlice(arena) catch &.{};
+}
+
+fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8, arena: std.mem.Allocator) ?[]Command.Command {
+    const ha = self.message_arena.allocator();
 
     const prompt = std.fmt.allocPrint(ha, "{s}{s}{s}{s}{s}", .{
         self_heal_prompt_prefix,
@@ -324,11 +455,11 @@ fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8)
         self_heal_prompt_suffix,
         failed_command,
         self_heal_prompt_page_state,
-    }) catch return false;
+    }) catch return null;
 
     var attempt: u8 = 0;
     while (attempt < self_heal_max_attempts) : (attempt += 1) {
-        self.processUserMessage(prompt, "") catch |err| {
+        const cmds = self.runHealTurn(prompt, arena) catch |err| {
             self.terminal.printErrorFmt("self-heal attempt {d}/{d} failed: {s}", .{
                 attempt + 1,
                 self_heal_max_attempts,
@@ -336,9 +467,9 @@ fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8)
             });
             continue;
         };
-        return true;
+        if (cmds.len > 0) return cmds;
     }
-    return false;
+    return null;
 }
 
 fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []const u8) !void {
