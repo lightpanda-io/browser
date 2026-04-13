@@ -366,9 +366,10 @@ pub fn deinit(self: *Page, abort_http: bool) void {
         }
 
         {
-            var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
-            while (it) |node| : (it = node.next) {
-                const observer: *MutationObserver = @fieldParentPtr("node", node);
+            var node: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
+            while (node) |n| {
+                node = n.next; // capture before we potentially delete observer
+                const observer: *MutationObserver = @fieldParentPtr("node", n);
                 observer.releaseRef(session);
             }
         }
@@ -526,9 +527,10 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         }
 
         session.notification.dispatch(.page_navigate, &.{
-            .frame_id = self._frame_id,
-            .req_id = req_id,
             .opts = opts,
+            .req_id = req_id,
+            .page_id = self.id,
+            .frame_id = self._frame_id,
             .url = request_url,
             .timestamp = timestamp(.monotonic),
         });
@@ -542,8 +544,9 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         });
 
         session.notification.dispatch(.page_navigated, &.{
-            .frame_id = self._frame_id,
             .req_id = req_id,
+            .page_id = self.id,
+            .frame_id = self._frame_id,
             .opts = .{
                 .cdp_id = opts.cdp_id,
                 .reason = opts.reason,
@@ -579,10 +582,11 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     // We dispatch page_navigate event before sending the request.
     // It ensures the event page_navigated is not dispatched before this one.
     session.notification.dispatch(.page_navigate, &.{
-        .frame_id = self._frame_id,
-        .req_id = req_id,
         .opts = opts,
         .url = self.url,
+        .req_id = req_id,
+        .page_id = self.id,
+        .frame_id = self._frame_id,
         .timestamp = timestamp(.monotonic),
     });
 
@@ -597,6 +601,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     http_client.request(.{
         .ctx = self,
         .url = self.url,
+        .page_id = self.id,
         .frame_id = self._frame_id,
         .method = opts.method,
         .headers = headers,
@@ -778,8 +783,9 @@ pub fn _documentIsLoaded(self: *Page) !void {
     );
 
     self._session.notification.dispatch(.page_dom_content_loaded, &.{
-        .frame_id = self._frame_id,
+        .page_id = self.id,
         .req_id = self._req_id,
+        .frame_id = self._frame_id,
         .timestamp = timestamp(.monotonic),
     });
 }
@@ -859,8 +865,9 @@ fn _documentIsComplete(self: *Page) !void {
     }
 
     self._session.notification.dispatch(.page_loaded, &.{
-        .frame_id = self._frame_id,
+        .page_id = self.id,
         .req_id = self._req_id,
+        .frame_id = self._frame_id,
         .timestamp = timestamp(.monotonic),
     });
 
@@ -919,10 +926,11 @@ fn pageHeaderDoneCallback(response: HttpClient.Response) !bool {
         // "navigating" to about:blank, in which case this notification has
         // already been sent
         self._session.notification.dispatch(.page_navigated, &.{
-            .frame_id = self._frame_id,
-            .req_id = self._req_id,
             .opts = no,
             .url = self.url,
+            .page_id = self.id,
+            .req_id = self._req_id,
+            .frame_id = self._frame_id,
             .timestamp = timestamp(.monotonic),
         });
     }
@@ -1184,6 +1192,7 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
 
     // on first load, dispatch frame_created event
     self._session.notification.dispatch(.page_frame_created, &.{
+        .page_id = self.id,
         .frame_id = frame_id,
         .parent_id = self._frame_id,
         .timestamp = timestamp(.monotonic),
@@ -1545,6 +1554,7 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
 pub fn notifyNetworkIdle(self: *Page) void {
     lp.assert(self._notified_network_idle == .done, "Page.notifyNetworkIdle", .{});
     self._session.notification.dispatch(.page_network_idle, &.{
+        .page_id = self.id,
         .req_id = self._req_id,
         .frame_id = self._frame_id,
         .timestamp = timestamp(.monotonic),
@@ -1554,6 +1564,7 @@ pub fn notifyNetworkIdle(self: *Page) void {
 pub fn notifyNetworkAlmostIdle(self: *Page) void {
     lp.assert(self._notified_network_almost_idle == .done, "Page.notifyNetworkAlmostIdle", .{});
     self._session.notification.dispatch(.page_network_almost_idle, &.{
+        .page_id = self.id,
         .req_id = self._req_id,
         .frame_id = self._frame_id,
         .timestamp = timestamp(.monotonic),
@@ -3580,6 +3591,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     }
 
     const FormData = @import("webapi/net/FormData.zig");
+
     // The submitter can be an input box (if enter was entered on the box)
     // I don't think this is technically correct, but FormData handles it ok
     const form_data = try FormData.init(form, submitter_, self);
@@ -3587,10 +3599,22 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     const arena = try self._session.getArena(.medium, "submitForm");
     errdefer self._session.releaseArena(arena);
 
-    const encoding = form_element.getAttributeSafe(comptime .wrap("enctype"));
+    const enctype = form_element.getAttributeSafe(comptime .wrap("enctype"));
+
+    // Get charset from accept-charset attribute or fall back to document charset
+    const charset: []const u8 = blk: {
+        if (form_element.getAttributeSafe(.wrap("accept-charset"))) |ac| {
+            // Normalize to canonical encoding name
+            const info = h5e.encoding_for_label(ac.ptr, ac.len);
+            if (info.isValid()) {
+                break :blk info.name();
+            }
+        }
+        break :blk self.charset;
+    };
 
     var buf = std.Io.Writer.Allocating.init(arena);
-    try form_data.write(encoding, &buf.writer);
+    try form_data.write(.{ .enctype = enctype, .charset = charset, .allocator = arena }, &buf.writer);
 
     const method = form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
     var action = form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;

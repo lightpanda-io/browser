@@ -460,6 +460,7 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
             .method = .GET,
             .headers = headers,
             .blocking = false,
+            .page_id = req.page_id,
             .frame_id = req.frame_id,
             .cookie_jar = req.cookie_jar,
             .cookie_origin = req.cookie_origin,
@@ -917,17 +918,15 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // Transfer is done (success or error). Caller (processMessages) owns deinit.
     // Return true = done (caller will deinit), false = continues (redirect/auth).
 
-    // When the server sends "Connection: close" and closes the TLS
-    // connection without a close_notify alert, BoringSSL reports
-    // RecvError. If we already received valid HTTP headers, this is
-    // a normal end-of-body (the connection closure signals the end
+    // When the server closes the TLS onnection without a close_notify alert,
+    // BoringSSL reports RecvError. If we already received valid HTTP headers,
+    // this is a normal end-of-body (the connection closure signals the end
     // of the response per HTTP/1.1 when there is no Content-Length).
-    // We must check this before endTransfer, which may reset the
-    // easy handle.
+    // We must check this before endTransfer, which may reset the easy handle.
     const is_conn_close_recv = blk: {
         const err = msg.err orelse break :blk false;
         if (err != error.RecvError) break :blk false;
-        const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk false;
+        const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk true;
         break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
     };
 
@@ -1069,6 +1068,7 @@ fn ensureNoActiveConnection(self: *const Client) !void {
 }
 
 pub const Request = struct {
+    page_id: u32,
     frame_id: u32,
     method: Method,
     url: [:0]const u8,

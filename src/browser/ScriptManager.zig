@@ -295,6 +295,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 .url = url,
                 .ctx = script,
                 .method = .GET,
+                .page_id = page.id,
                 .frame_id = page._frame_id,
                 .headers = try self.getHeaders(),
                 .blocking = is_blocking,
@@ -410,6 +411,7 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .url = url,
         .ctx = script,
         .method = .GET,
+        .page_id = page.id,
         .frame_id = page._frame_id,
         .headers = try self.getHeaders(),
         .cookie_jar = &page._session.cookie_jar,
@@ -514,6 +516,7 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
     self.client.request(.{
         .url = url,
         .method = .GET,
+        .page_id = page.id,
         .frame_id = page._frame_id,
         .headers = try self.getHeaders(),
         .ctx = script,
