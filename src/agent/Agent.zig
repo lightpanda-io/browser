@@ -48,8 +48,19 @@ const self_heal_prompt_suffix =
 
 const self_heal_prompt_page_state =
     \\
-    \\Please analyze the current page state and execute the equivalent action.
-    \\Use the available tools to accomplish the original intent.
+    \\The current page URL is:
+    \\
+;
+
+const self_heal_prompt_instructions =
+    \\
+    \\IMPORTANT:
+    \\- Do NOT navigate away from the current page. The page is already loaded and
+    \\  contains the element you need — the selector just needs to be fixed.
+    \\- Use the tree or interactiveElements tools WITHOUT a url parameter to inspect
+    \\  the current page, find the correct selector, and execute the equivalent action.
+    \\- ONLY fix the failed command. Do NOT perform any additional actions beyond it.
+    \\  The script will continue executing the remaining commands after the heal.
 ;
 
 const login_prompt =
@@ -449,12 +460,14 @@ fn runHealTurn(self: *Self, prompt: []const u8, arena: std.mem.Allocator) ![]Com
 fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8, arena: std.mem.Allocator) ?[]Command.Command {
     const ha = self.message_arena.allocator();
 
-    const prompt = std.fmt.allocPrint(ha, "{s}{s}{s}{s}{s}", .{
+    const prompt = std.fmt.allocPrint(ha, "{s}{s}{s}{s}{s}{s}{s}", .{
         self_heal_prompt_prefix,
         intent orelse "(no recorded intent)",
         self_heal_prompt_suffix,
         failed_command,
         self_heal_prompt_page_state,
+        self.tool_executor.getCurrentUrl(),
+        self_heal_prompt_instructions,
     }) catch return null;
 
     var attempt: u8 = 0;

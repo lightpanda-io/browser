@@ -76,6 +76,11 @@ pub fn getTools(self: *Self) ![]const zenai.provider.Tool {
     return tools;
 }
 
+pub fn getCurrentUrl(self: *Self) []const u8 {
+    const page = self.session.currentPage() orelse return "(no page loaded)";
+    return page.url;
+}
+
 pub fn call(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments_json: []const u8) CallError![]const u8 {
     const arguments = if (arguments_json.len > 0) blk: {
         const parsed = std.json.parseFromSlice(std.json.Value, arena, arguments_json, .{}) catch
