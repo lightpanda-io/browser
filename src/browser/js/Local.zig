@@ -779,64 +779,66 @@ fn jsValueToTypedArray(comptime T: type, js_val: js.Value) !?[]T {
     }
 
     const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer orelse return null);
+    if (byte_len == 0) {
+        return &[_]T{};
+    }
+
     const backing_store_handle = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr).?;
     const data = v8.v8__BackingStore__Data(backing_store_handle);
+    const base = @as([*]u8, @ptrCast(data)) + byte_offset;
+
+    // 2. Validate alignment
+    if (@intFromPtr(base) % @alignOf(T) != 0) {
+        return error.InvalidAlignment;
+    }
+    const num_elements = byte_len / @sizeOf(T);
 
     switch (T) {
         u8 => {
             if (force_u8 or js_val.isUint8Array() or js_val.isUint8ClampedArray()) {
-                if (byte_len == 0) return &[_]u8{};
-                const arr_ptr = @as([*]u8, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len];
+                return base[0..num_elements];
             }
         },
         i8 => {
             if (js_val.isInt8Array()) {
-                if (byte_len == 0) return &[_]i8{};
-                const arr_ptr = @as([*]i8, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len];
+                const ptr = @as([*]i8, @ptrCast(@alignCast(base)));
+                return ptr[0..num_elements];
             }
         },
         u16 => {
             if (js_val.isUint16Array()) {
-                if (byte_len == 0) return &[_]u16{};
-                const arr_ptr = @as([*]u16, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len / 2];
+                const ptr = @as([*]u16, @ptrCast(@alignCast(base)));
+                return ptr[0..num_elements];
             }
         },
         i16 => {
             if (js_val.isInt16Array()) {
-                if (byte_len == 0) return &[_]i16{};
-                const arr_ptr = @as([*]i16, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len / 2];
+                const ptr = @as([*]i16, @ptrCast(@alignCast(base)));
+                return ptr[0..num_elements];
             }
         },
         u32 => {
             if (js_val.isUint32Array()) {
-                if (byte_len == 0) return &[_]u32{};
-                const arr_ptr = @as([*]u32, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len / 4];
+                const ptr = @as([*]u32, @ptrCast(@alignCast(base)));
+                return ptr[0..num_elements];
             }
         },
         i32 => {
             if (js_val.isInt32Array()) {
-                if (byte_len == 0) return &[_]i32{};
-                const arr_ptr = @as([*]i32, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len / 4];
+                const ptr = @as([*]i32, @ptrCast(@alignCast(base)));
+                return ptr[0..num_elements];
             }
         },
         u64 => {
             if (js_val.isBigUint64Array()) {
-                if (byte_len == 0) return &[_]u64{};
-                const arr_ptr = @as([*]u64, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len / 8];
+                const ptr = @as([*]u64, @ptrCast(@alignCast(base)));
+                return ptr[0..num_elements];
             }
         },
         i64 => {
             if (js_val.isBigInt64Array()) {
-                if (byte_len == 0) return &[_]i64{};
-                const arr_ptr = @as([*]i64, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len / 8];
+                const ptr = @as([*]i64, @ptrCast(@alignCast(base)));
+                return ptr[0..num_elements];
             }
         },
         else => {},

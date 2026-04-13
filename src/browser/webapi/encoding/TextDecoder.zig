@@ -115,32 +115,39 @@ pub fn decode(self: *TextDecoder, input_: ?[]const u8, opts_: ?DecodeOpts) ![]co
     const opts: DecodeOpts = opts_ orelse .{};
     const input = input_ orelse "";
 
-    // For non-streaming calls, we don't need a persistent decoder
-    if (!opts.stream) {
-        // Reset decoder state if we had one
-        if (self._decoder) |decoder| {
+    if (opts.stream) {
+        // Streaming mode: create decoder if needed, keep it alive
+        if (self._decoder == null) {
+            self._decoder = html5ever.encoding_decoder_new(self._encoding_handle);
+            if (self._decoder == null) {
+                return error.OutOfMemory;
+            }
+        }
+        return self._decode(input, self._decoder, false);
+    }
+
+    if (self._decoder) |decoder| {
+        // Non-streaming with existing decoder: flush with is_last=true, then free
+        defer {
             html5ever.encoding_decoder_free(decoder);
             self._decoder = null;
         }
-    } else if (self._decoder == null) {
-        self._decoder = html5ever.encoding_decoder_new(self._encoding_handle);
-        if (self._decoder == null) {
-            return error.OutOfMemory;
-        }
+        return self._decode(input, decoder, true);
     }
 
-    return self._decode(input, self._decoder);
+    // non-streaming, no existing decoder
+    return self._decode(input, null, true);
 }
 
-fn _decode(self: *TextDecoder, input: []const u8, streaming_decoder: ?*anyopaque) ![]const u8 {
-    if (input.len == 0) {
+fn _decode(self: *TextDecoder, input: []const u8, streaming_decoder: ?*anyopaque, is_last: bool) ![]const u8 {
+    if (input.len == 0 and !is_last) {
         return "";
     }
 
-    // Calculate max output size
+    // Calculate max output size (add extra for potential buffered bytes when finishing)
     const max_out = html5ever.encoding_max_utf8_buffer_length(
         self._encoding_handle,
-        input.len,
+        if (input.len == 0) 4 else input.len,
     );
 
     if (max_out == 0) {
@@ -158,7 +165,7 @@ fn _decode(self: *TextDecoder, input: []const u8, streaming_decoder: ?*anyopaque
             input.len,
             output.ptr,
             output.len,
-            0, // is_last = false for streaming
+            @intFromBool(is_last),
         )
     else
         html5ever.encoding_decode(
