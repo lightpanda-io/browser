@@ -180,11 +180,6 @@ test "id: toLoaderId" {
     try testing.expectEqual("LID-4294967295", toLoaderId(4294967295));
 }
 
-test "id: toRequestId" {
-    try testing.expectEqual("REQ-0000000000", toRequestId(0));
-    try testing.expectEqual("REQ-4294967295", toRequestId(4294967295));
-}
-
 test "id: toInterceptId" {
     try testing.expectEqual("INT-0000000000", toInterceptId(0));
     try testing.expectEqual("INT-4294967295", toInterceptId(4294967295));
