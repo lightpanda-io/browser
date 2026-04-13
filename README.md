@@ -64,7 +64,7 @@ curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download
 chmod a+x ./lightpanda
 ```
 
-### Windows (via WSL2)
+*For Windows + WSL2*
 
 Lightpanda runs inside WSL when invoked from a WSL shell; follow the Linux install steps above in that environment.
 Install automation clients such as Puppeteer or Playwright on the Windows host so they can drive Lightpanda through CDP over the mapped ports.
