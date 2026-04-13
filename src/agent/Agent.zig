@@ -78,10 +78,6 @@ cmd_executor: CommandExecutor,
 verifier: Verifier,
 recorder: Recorder,
 messages: std.ArrayList(zenai.provider.Message),
-// TODO: message_arena grows without bound during long sessions. Every LLM
-// turn accumulates messages (user + assistant + tool results) that are only
-// freed at deinit. Consider a sliding window that preserves the system
-// prompt but drops older turns.
 message_arena: std.heap.ArenaAllocator,
 tools: []const zenai.provider.Tool,
 model: []const u8,
@@ -466,6 +462,89 @@ fn ensureSystemPrompt(self: *Self) !void {
     }
 }
 
+/// When the message list exceeds `prune_high`, drop older turns (keeping
+/// the system prompt) so only the last `prune_keep` messages remain.
+/// All string data is deep-copied into a fresh arena and the old one freed.
+const prune_high = 30;
+const prune_keep = 20;
+
+fn pruneMessages(self: *Self) void {
+    const msgs = self.messages.items;
+    if (msgs.len <= prune_high) return;
+
+    // Keep system prompt (index 0) + the last `prune_keep` messages.
+    const tail_start = msgs.len - prune_keep;
+
+    var new_arena = std.heap.ArenaAllocator.init(self.allocator);
+    const na = new_arena.allocator();
+
+    // The system prompt's content points into system_prompt (not the arena),
+    // so only the tail messages need deep-copying.
+    var i: usize = 0;
+    for (msgs[tail_start..]) |msg| {
+        msgs[1 + i] = dupeMessage(na, msg) orelse {
+            // On OOM, abandon the prune — the old arena stays intact.
+            new_arena.deinit();
+            return;
+        };
+        i += 1;
+    }
+
+    self.messages.shrinkRetainingCapacity(1 + i); // system prompt + copied tail
+    self.message_arena.deinit();
+    self.message_arena = new_arena;
+}
+
+fn dupeMessage(alloc: std.mem.Allocator, msg: zenai.provider.Message) ?zenai.provider.Message {
+    return .{
+        .role = msg.role,
+        .content = if (msg.content) |c| alloc.dupe(u8, c) catch return null else null,
+        .tool_calls = if (msg.tool_calls) |tcs| dupeToolCalls(alloc, tcs) catch return null else null,
+        .tool_results = if (msg.tool_results) |trs| dupeToolResults(alloc, trs) catch return null else null,
+        .parts = if (msg.parts) |ps| dupeParts(alloc, ps) catch return null else null,
+    };
+}
+
+fn dupeToolCalls(alloc: std.mem.Allocator, calls: []const zenai.provider.ToolCall) ![]const zenai.provider.ToolCall {
+    const out = try alloc.alloc(zenai.provider.ToolCall, calls.len);
+    for (calls, 0..) |tc, i| {
+        out[i] = .{
+            .id = try alloc.dupe(u8, tc.id),
+            .name = try alloc.dupe(u8, tc.name),
+            .arguments = try alloc.dupe(u8, tc.arguments),
+            .thought_signature = if (tc.thought_signature) |ts| try alloc.dupe(u8, ts) else null,
+        };
+    }
+    return out;
+}
+
+fn dupeToolResults(alloc: std.mem.Allocator, results: []const zenai.provider.ToolResult) ![]const zenai.provider.ToolResult {
+    const out = try alloc.alloc(zenai.provider.ToolResult, results.len);
+    for (results, 0..) |tr, i| {
+        out[i] = .{
+            .id = try alloc.dupe(u8, tr.id),
+            .name = try alloc.dupe(u8, tr.name),
+            .content = try alloc.dupe(u8, tr.content),
+            .thought_signature = if (tr.thought_signature) |ts| try alloc.dupe(u8, ts) else null,
+        };
+    }
+    return out;
+}
+
+fn dupeParts(alloc: std.mem.Allocator, parts: []const zenai.provider.ContentPart) ![]const zenai.provider.ContentPart {
+    const out = try alloc.alloc(zenai.provider.ContentPart, parts.len);
+    for (parts, 0..) |p, i| {
+        out[i] = switch (p) {
+            .text => |t| .{ .text = try alloc.dupe(u8, t) },
+            .image => |img| .{ .image = .{
+                .data = try alloc.dupe(u8, img.data),
+                .mime_type = try alloc.dupe(u8, img.mime_type),
+            } },
+        };
+    }
+    return out;
+}
+
 /// Runs a single LLM turn and returns the commands it executed, without
 /// recording them to the Recorder.  Used by attemptSelfHeal so that the
 /// caller can capture healed commands for script rewriting.
@@ -555,7 +634,10 @@ fn attemptSelfHeal(self: *Self, failed_command: []const u8, verify_context: ?[]c
             self.messages.shrinkRetainingCapacity(msg_baseline);
             continue;
         };
-        if (cmds.len > 0) return cmds;
+        if (cmds.len > 0) {
+            self.pruneMessages();
+            return cmds;
+        }
         self.messages.shrinkRetainingCapacity(msg_baseline);
     }
     return null;
@@ -610,6 +692,8 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
     } else {
         self.terminal.printInfo("(no response from model)");
     }
+
+    self.pruneMessages();
 }
 
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) []const u8 {
