@@ -32,12 +32,12 @@ pub fn capturePreState(self: *Self, arena: std.mem.Allocator, cmd: Command.Comma
 /// Verify that a command achieved its intent after execution and return
 /// both the verdict and a human-readable failure reason (if applicable).
 /// Only called when the command did not hard-fail (ExecResult.failed == false).
-pub fn verify(self: *Self, arena: std.mem.Allocator, cmd: Command.Command, pre: PreState, intent: ?[]const u8) VerifyResult {
+pub fn verify(self: *Self, arena: std.mem.Allocator, cmd: Command.Command, pre: PreState) VerifyResult {
     return switch (cmd) {
         .type_cmd => |args| self.verifyFill(arena, args.selector, args.value),
         .check => |args| self.verifyCheck(arena, args.selector, args.checked),
         .select => |args| self.verifySelect(arena, args.selector, args.value),
-        .click => self.verifyClick(arena, pre, intent),
+        .click => self.verifyClick(arena, pre),
         else => .{ .result = .passed },
     };
 }
@@ -101,8 +101,7 @@ fn verifySelect(self: *Self, arena: std.mem.Allocator, selector: []const u8, exp
     return .{ .result = .passed };
 }
 
-fn verifyClick(self: *Self, arena: std.mem.Allocator, pre: PreState, intent: ?[]const u8) VerifyResult {
-    _ = intent;
+fn verifyClick(self: *Self, arena: std.mem.Allocator, pre: PreState) VerifyResult {
     const current_url = self.tool_executor.getCurrentUrl();
     if (!std.mem.eql(u8, pre.url, current_url)) return .{ .result = .passed };
 

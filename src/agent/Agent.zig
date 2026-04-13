@@ -14,8 +14,6 @@ const Verifier = @import("Verifier.zig");
 
 const Self = @This();
 
-const intent_prefix = "# INTENT:";
-
 const default_system_prompt =
     \\You are a web browsing assistant powered by the Lightpanda browser.
     \\You can navigate to websites, read their content, interact with forms,
@@ -39,13 +37,7 @@ const default_system_prompt =
 ;
 
 const self_heal_prompt_prefix =
-    \\A Pandascript command failed during replay. The original intent was:
-    \\
-;
-
-const self_heal_prompt_suffix =
-    \\
-    \\The command that failed was:
+    \\A Pandascript command failed during replay. The command that failed was:
     \\
 ;
 
@@ -273,7 +265,7 @@ fn runScript(self: *Self, path: []const u8) bool {
     const sa = script_arena.allocator();
 
     var iter: Command.ScriptIterator = .init(content, sa);
-    var last_intent: ?[]const u8 = null;
+    var last_comment: ?[]const u8 = null;
     var replacements: std.ArrayList(Replacement) = .empty;
 
     while (iter.next()) |entry| {
@@ -283,8 +275,12 @@ fn runScript(self: *Self, path: []const u8) bool {
                 break;
             },
             .comment => {
-                if (std.mem.startsWith(u8, entry.raw_line, intent_prefix)) {
-                    last_intent = std.mem.trim(u8, entry.raw_line[intent_prefix.len..], &std.ascii.whitespace);
+                // Track the most recent comment — recorded scripts
+                // prefix LLM-generated commands with the natural
+                // language prompt that produced them, which provides
+                // useful context for self-healing.
+                if (entry.raw_line.len > 2 and entry.raw_line[0] == '#') {
+                    last_comment = std.mem.trim(u8, entry.raw_line[1..], &std.ascii.whitespace);
                 }
                 continue;
             },
@@ -328,7 +324,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                 self.cmd_executor.printResult(entry.command, result);
 
                 const verification = if (!result.failed and pre_state != null)
-                    self.verifier.verify(cmd_arena.allocator(), entry.command, pre_state.?, last_intent)
+                    self.verifier.verify(cmd_arena.allocator(), entry.command, pre_state.?)
                 else
                     Verifier.VerifyResult{ .result = .passed };
 
@@ -346,7 +342,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                                 const retry_pre = self.verifier.capturePreState(cmd_arena.allocator(), entry.command);
                                 const retry_result = self.cmd_executor.executeWithResult(cmd_arena.allocator(), entry.command);
                                 if (!retry_result.failed) {
-                                    if (self.verifier.verify(cmd_arena.allocator(), entry.command, retry_pre, last_intent).result != .failed) {
+                                    if (self.verifier.verify(cmd_arena.allocator(), entry.command, retry_pre).result != .failed) {
                                         self.cmd_executor.printResult(entry.command, retry_result);
                                         retried = true;
                                         break;
@@ -362,7 +358,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                             "Command succeeded but verification failed, attempting self-healing...";
                         self.terminal.printInfo(msg);
 
-                        if (self.attemptSelfHeal(last_intent, entry.raw_line, verification.reason, sa)) |healed_cmds| {
+                        if (self.attemptSelfHeal(entry.raw_line, verification.reason, last_comment, sa)) |healed_cmds| {
                             if (formatReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds)) |replacement| {
                                 replacements.append(sa, replacement) catch {};
                             }
@@ -461,9 +457,6 @@ fn isRetryable(cmd: Command.Command) bool {
 
 const self_heal_max_attempts = 3;
 
-/// Runs a single LLM turn and returns the commands it executed, without
-/// recording them to the Recorder.  Used by attemptSelfHeal so that the
-/// caller can capture healed commands for script rewriting.
 fn ensureSystemPrompt(self: *Self) !void {
     if (self.messages.items.len == 0) {
         try self.messages.append(self.allocator, .{
@@ -473,6 +466,9 @@ fn ensureSystemPrompt(self: *Self) !void {
     }
 }
 
+/// Runs a single LLM turn and returns the commands it executed, without
+/// recording them to the Recorder.  Used by attemptSelfHeal so that the
+/// caller can capture healed commands for script rewriting.
 fn runHealTurn(self: *Self, prompt: []const u8, arena: std.mem.Allocator) ![]Command.Command {
     const ma = self.message_arena.allocator();
 
@@ -521,7 +517,7 @@ fn runHealTurn(self: *Self, prompt: []const u8, arena: std.mem.Allocator) ![]Com
     return cmds.toOwnedSlice(arena) catch &.{};
 }
 
-fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8, verify_context: ?[]const u8, arena: std.mem.Allocator) ?[]Command.Command {
+fn attemptSelfHeal(self: *Self, failed_command: []const u8, verify_context: ?[]const u8, context_comment: ?[]const u8, arena: std.mem.Allocator) ?[]Command.Command {
     const ha = self.message_arena.allocator();
 
     const verify_section = if (verify_context) |ctx|
@@ -529,13 +525,17 @@ fn attemptSelfHeal(self: *Self, intent: ?[]const u8, failed_command: []const u8,
     else
         "";
 
-    const prompt = std.fmt.allocPrint(ha, "{s}{s}{s}{s}{s}{s}{s}{s}", .{
+    const comment_section = if (context_comment) |c|
+        std.fmt.allocPrint(ha, "\n\nThe original user request that generated this command was:\n{s}", .{c}) catch ""
+    else
+        "";
+
+    const prompt = std.fmt.allocPrint(ha, "{s}{s}{s}{s}{s}{s}{s}", .{
         self_heal_prompt_prefix,
-        intent orelse "(no recorded intent)",
-        self_heal_prompt_suffix,
         failed_command,
         self_heal_prompt_page_state,
         self.tool_executor.getCurrentUrl(),
+        comment_section,
         verify_section,
         self_heal_prompt_instructions,
     }) catch return null;
