@@ -153,7 +153,7 @@ pub const Transport = struct {
                 const conn: *http.Connection = @fieldParentPtr("node", node);
                 switch (conn.transport) {
                     .http => |transfer| {
-                        if ((comptime abort_all) or transfer.req.frame_id == frame_id) {
+                        if ((comptime abort_all) or transfer.req.params.frame_id == frame_id) {
                             transfer.kill();
                         }
                     },
@@ -175,7 +175,7 @@ pub const Transport = struct {
                 const transfer: *Transfer = @fieldParentPtr("_node", node);
                 if (comptime abort_all) {
                     transfer.kill();
-                } else if (transfer.req.frame_id == frame_id) {
+                } else if (transfer.req.params.frame_id == frame_id) {
                     q.remove(node);
                     transfer.kill();
                 }
@@ -220,10 +220,10 @@ pub const Transport = struct {
         const self: *Transport = @ptrCast(@alignCast(ptr));
         const transfer = try self.makeTransfer(req);
 
-        transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
+        transfer.req.params.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
 
         var wait_for_interception = false;
-        transfer.req.notification.dispatch(.http_request_intercept, &.{
+        transfer.req.params.notification.dispatch(.http_request_intercept, &.{
             .transfer = transfer,
             .wait_for_interception = &wait_for_interception,
         });
@@ -237,7 +237,7 @@ pub const Transport = struct {
         }
         transfer._intercept_state = .pending;
 
-        if (req.blocking == false) {
+        if (req.params.blocking == false) {
             return;
         }
         if (try self.waitForInterceptedResponse(transfer)) {
@@ -289,7 +289,7 @@ pub const Transport = struct {
             log.debug(.http, "continue transfer", .{ .intercepted = self.intercepted });
         }
         self.intercepted -= 1;
-        if (!transfer.req.blocking) {
+        if (!transfer.req.params.blocking) {
             return self.process(transfer);
         }
         transfer._intercept_state = .@"continue";
@@ -301,7 +301,7 @@ pub const Transport = struct {
             log.debug(.http, "abort transfer", .{ .intercepted = self.intercepted });
         }
         self.intercepted -= 1;
-        if (!transfer.req.blocking) {
+        if (!transfer.req.params.blocking) {
             transfer.abort(error.Abort);
         }
         transfer._intercept_state = .{ .abort = error.Abort };
@@ -314,7 +314,7 @@ pub const Transport = struct {
         }
         self.intercepted -= 1;
         try transfer.fulfill(status, headers, body);
-        if (!transfer.req.blocking) {
+        if (!transfer.req.params.blocking) {
             transfer.deinit();
             return;
         }
@@ -332,7 +332,7 @@ pub const Transport = struct {
     }
 
     fn makeTransfer(self: *Transport, req: Request) !*Transfer {
-        errdefer req.headers.deinit();
+        errdefer req.params.headers.deinit();
 
         const transfer = try self.transfer_pool.create();
         errdefer self.transfer_pool.destroy(transfer);
@@ -341,7 +341,7 @@ pub const Transport = struct {
         transfer.* = .{
             .arena = ArenaAllocator.init(self.allocator),
             .id = id,
-            .url = req.url,
+            .url = req.params.url,
             .req = req,
             .client = self,
         };
@@ -428,7 +428,7 @@ pub const Transport = struct {
         // TODO give a way to configure the number of auth retries.
         if (transfer._auth_challenge != null and transfer._tries < 10) {
             var wait_for_interception = false;
-            transfer.req.notification.dispatch(
+            transfer.req.params.notification.dispatch(
                 .http_request_auth_required,
                 &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception },
             );
@@ -444,7 +444,7 @@ pub const Transport = struct {
                 // release the easy handle back into the pool. The transfer
                 // is still valid/alive (just has no handle).
                 transfer.releaseConn();
-                if (!transfer.req.blocking) {
+                if (!transfer.req.params.blocking) {
                     // In the case of an async request, we can just "forget"
                     // about this transfer until it gets updated asynchronously
                     // from some CDP command.
@@ -534,7 +534,7 @@ pub const Transport = struct {
         if (transfer._stream_buffer.items.len > 0) {
             try transfer.req.data_callback(Response.fromTransfer(transfer), body);
 
-            transfer.req.notification.dispatch(.http_response_data, &.{
+            transfer.req.params.notification.dispatch(.http_response_data, &.{
                 .data = body,
                 .transfer = transfer,
             });
@@ -551,7 +551,7 @@ pub const Transport = struct {
 
         try transfer.req.done_callback(transfer.req.ctx);
 
-        transfer.req.notification.dispatch(.http_request_done, &.{
+        transfer.req.params.notification.dispatch(.http_request_done, &.{
             .transfer = transfer,
         });
 
@@ -839,7 +839,7 @@ pub const CDPClient = struct {
     blocking_read_end: *const fn (*anyopaque) bool,
 };
 
-pub const Request = struct {
+pub const RequestParams = struct {
     page_id: u32,
     frame_id: u32,
     method: Method,
@@ -853,21 +853,6 @@ pub const Request = struct {
     notification: *Notification,
     timeout_ms: u32 = 0,
     blocking: bool = false,
-    ctx: *anyopaque = undefined,
-
-    start_callback: ?StartCallback = null,
-    header_callback: HeaderCallback,
-    data_callback: DataCallback,
-    done_callback: DoneCallback,
-    error_callback: ErrorCallback,
-    shutdown_callback: ?ShutdownCallback = null,
-
-    pub const StartCallback = *const fn (response: Response) anyerror!void;
-    pub const HeaderCallback = *const fn (response: Response) anyerror!bool;
-    pub const DataCallback = *const fn (response: Response, data: []const u8) anyerror!void;
-    pub const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
-    pub const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
-    pub const ShutdownCallback = *const fn (ctx: *anyopaque) void;
 
     const ResourceType = enum {
         document,
@@ -884,6 +869,25 @@ pub const Request = struct {
             };
         }
     };
+};
+
+pub const Request = struct {
+    params: RequestParams,
+    ctx: *anyopaque = undefined,
+
+    start_callback: ?StartCallback = null,
+    header_callback: HeaderCallback,
+    data_callback: DataCallback,
+    done_callback: DoneCallback,
+    error_callback: ErrorCallback,
+    shutdown_callback: ?ShutdownCallback = null,
+
+    pub const StartCallback = *const fn (response: Response) anyerror!void;
+    pub const HeaderCallback = *const fn (response: Response) anyerror!bool;
+    pub const DataCallback = *const fn (response: Response, data: []const u8) anyerror!void;
+    pub const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
+    pub const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
+    pub const ShutdownCallback = *const fn (ctx: *anyopaque) void;
 };
 
 pub const Response = struct {
@@ -1005,7 +1009,7 @@ pub const Transfer = struct {
             self.client.removeConn(conn);
             self._conn = null;
         }
-        self.req.headers.deinit();
+        self.req.params.headers.deinit();
         self.arena.deinit();
         self.client.transfer_pool.destroy(self);
     }
@@ -1042,7 +1046,7 @@ pub const Transfer = struct {
     fn requestFailed(self: *Transfer, err: anyerror, comptime execute_callback: bool) void {
         if (self._notified_fail) return;
         self._notified_fail = true;
-        self.req.notification.dispatch(.http_request_fail, &.{
+        self.req.params.notification.dispatch(.http_request_fail, &.{
             .transfer = self,
             .err = err,
         });
@@ -1062,16 +1066,16 @@ pub const Transfer = struct {
         try conn.setFollowLocation(false);
         try conn.setProxy(client.http_proxy);
         try conn.setTlsVerify(client.tls_verify, client.use_proxy);
-        try conn.setURL(req.url);
-        try conn.setMethod(req.method);
+        try conn.setURL(req.params.url);
+        try conn.setMethod(req.params.method);
 
-        if (req.body) |b| {
+        if (req.params.body) |b| {
             try conn.setBody(b);
         } else {
             try conn.setGetMode();
         }
 
-        var header_list = req.headers;
+        var header_list = req.params.headers;
         try conn.secretHeaders(&header_list, &client.network.config.http_headers);
         try conn.setHeaders(&header_list);
 
@@ -1082,11 +1086,11 @@ pub const Transfer = struct {
         conn.transport = .{ .http = self };
 
         // Per-request timeout override (e.g. XHR timeout)
-        if (req.timeout_ms > 0) {
-            try conn.setTimeout(req.timeout_ms);
+        if (req.params.timeout_ms > 0) {
+            try conn.setTimeout(req.params.timeout_ms);
         }
 
-        if (req.credentials) |creds| {
+        if (req.params.credentials) |creds| {
             if (self._auth_challenge != null and self._auth_challenge.?.source == .proxy) {
                 try conn.setProxyCredentials(creds);
             } else {
@@ -1132,12 +1136,12 @@ pub const Transfer = struct {
     }
 
     pub fn getCookieString(self: *Transfer) !?[:0]const u8 {
-        const jar = self.req.cookie_jar orelse return null;
+        const jar = self.req.params.cookie_jar orelse return null;
         var aw: std.Io.Writer.Allocating = .init(self.arena.allocator());
-        try jar.forRequest(self.req.url, &aw.writer, .{
+        try jar.forRequest(self.req.params.url, &aw.writer, .{
             .is_http = true,
-            .origin_url = self.req.cookie_origin,
-            .is_navigation = self.req.resource_type == .document,
+            .origin_url = self.req.params.cookie_origin,
+            .is_navigation = self.req.params.resource_type == .document,
         });
         const written = aw.written();
         if (written.len == 0) return null;
@@ -1146,12 +1150,12 @@ pub const Transfer = struct {
     }
 
     pub fn format(self: *Transfer, writer: *std.Io.Writer) !void {
-        return writer.print("{s} {s}", .{ @tagName(self.req.method), self.req.url });
+        return writer.print("{s} {s}", .{ @tagName(self.req.params.method), self.req.params.url });
     }
 
     pub fn updateURL(self: *Transfer, url: [:0]const u8) !void {
         self.url = url;
-        self.req.url = url;
+        self.req.params.url = url;
     }
 
     fn handleRedirect(transfer: *Transfer) !void {
@@ -1164,7 +1168,7 @@ pub const Transfer = struct {
             return error.TooManyRedirects;
         }
 
-        if (req.cookie_jar) |jar| {
+        if (req.params.cookie_jar) |jar| {
             var i: usize = 0;
             while (conn.getResponseHeader("set-cookie", i)) |ct| : (i += 1) {
                 try jar.populateFromResponse(transfer.url, ct.value);
@@ -1181,8 +1185,8 @@ pub const Transfer = struct {
         // 307, 308 → keep method and body.
         const status = try conn.getResponseCode();
         if (status == 301 or status == 302 or status == 303) {
-            req.method = .GET;
-            req.body = null;
+            req.params.method = .GET;
+            req.params.body = null;
         }
     }
 
@@ -1209,11 +1213,11 @@ pub const Transfer = struct {
     }
 
     pub fn updateCredentials(self: *Transfer, userpwd: [:0]const u8) void {
-        self.req.credentials = userpwd;
+        self.req.params.credentials = userpwd;
     }
 
     pub fn replaceRequestHeaders(self: *Transfer, allocator: Allocator, headers: []const http.Header) !void {
-        self.req.headers.deinit();
+        self.req.params.headers.deinit();
         var buf: std.ArrayList(u8) = .empty;
         var new_headers = try self.client.newHeaders();
         for (headers) |hdr| {
@@ -1222,7 +1226,7 @@ pub const Transfer = struct {
             try buf.append(allocator, 0);
             try new_headers.add(buf.items[0 .. buf.items.len - 1 :0]);
         }
-        self.req.headers = new_headers;
+        self.req.params.headers = new_headers;
     }
 
     pub fn abortAuthChallenge(self: *Transfer) void {
@@ -1231,7 +1235,7 @@ pub const Transfer = struct {
             log.debug(.http, "abort auth transfer", .{ .intercepted = self.client.intercepted });
         }
         self.client.intercepted -= 1;
-        if (!self.req.blocking) {
+        if (!self.req.params.blocking) {
             self.abort(error.AbortAuthChallenge);
             return;
         }
@@ -1244,7 +1248,7 @@ pub const Transfer = struct {
 
         try transfer.buildResponseHeader(conn);
 
-        if (transfer.req.cookie_jar) |jar| {
+        if (transfer.req.params.cookie_jar) |jar| {
             var i: usize = 0;
             while (true) {
                 const ct = conn.getResponseHeader("set-cookie", i);
@@ -1264,7 +1268,7 @@ pub const Transfer = struct {
             }
         }
 
-        transfer.req.notification.dispatch(.http_response_header_done, &.{
+        transfer.req.params.notification.dispatch(.http_response_header_done, &.{
             .transfer = transfer,
         });
 
@@ -1348,7 +1352,7 @@ pub const Transfer = struct {
         }
         transfer.response_header = .{
             .status = status,
-            .url = req.url,
+            .url = req.params.url,
             .redirect_count = 0,
             ._injected_headers = headers,
         };

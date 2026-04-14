@@ -46,8 +46,8 @@ fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
         const arena = try ctx.network.app.arena_pool.acquire(.small, "WebBotAuthLayer");
         defer ctx.network.app.arena_pool.release(arena);
 
-        const authority = URL.getHost(req.url);
-        try wba.signRequest(arena, &our_req.headers, authority);
+        const authority = URL.getHost(req.params.url);
+        try wba.signRequest(arena, &our_req.params.headers, authority);
     }
 
     return self.next.request(ctx, our_req);

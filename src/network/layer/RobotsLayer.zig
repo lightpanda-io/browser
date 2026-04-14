@@ -55,17 +55,17 @@ fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
     const arena = try ctx.network.app.arena_pool.acquire(.small, "RobotsLayer");
     errdefer ctx.network.app.arena_pool.release(arena);
 
-    const robots_url = try URL.getRobotsUrl(arena, req.url);
+    const robots_url = try URL.getRobotsUrl(arena, req.params.url);
 
     if (ctx.network.robot_store.get(robots_url)) |robot_entry| {
         defer ctx.network.app.arena_pool.release(arena);
 
         switch (robot_entry) {
             .present => |robots| {
-                const path = URL.getPathname(req.url);
+                const path = URL.getPathname(req.params.url);
 
                 if (!robots.isAllowed(path)) {
-                    log.warn(.http, "blocked by robots", .{ .url = req.url });
+                    log.warn(.http, "blocked by robots", .{ .url = req.params.url });
                     req.error_callback(req.ctx, error.RobotsBlocked);
                     return;
                 }
@@ -90,18 +90,16 @@ fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
     const headers = try ctx.newHeaders();
     log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
 
+    var new_params = req.params;
+    new_params.url = robots_ctx.robots_url;
+    new_params.method = .GET;
+    new_params.headers = headers;
+    new_params.blocking = false;
+    new_params.resource_type = .fetch;
+
     try self.next.request(ctx, .{
+        .params = new_params,
         .ctx = robots_ctx,
-        .url = robots_ctx.robots_url,
-        .method = .GET,
-        .page_id = req.page_id,
-        .headers = headers,
-        .blocking = false,
-        .frame_id = req.frame_id,
-        .cookie_jar = req.cookie_jar,
-        .cookie_origin = req.cookie_origin,
-        .notification = req.notification,
-        .resource_type = .fetch,
         .header_callback = RobotsContext.headerCallback,
         .data_callback = RobotsContext.dataCallback,
         .done_callback = RobotsContext.doneCallback,
@@ -164,9 +162,9 @@ const RobotsContext = struct {
                     };
                     if (robots) |r| {
                         try network.robot_store.put(self.robots_url, r);
-                        const path = URL.getPathname(req.url);
+                        const path = URL.getPathname(req.params.url);
                         if (!r.isAllowed(path)) {
-                            log.warn(.http, "blocked by robots", .{ .url = req.url });
+                            log.warn(.http, "blocked by robots", .{ .url = req.params.url });
                             req.error_callback(req.ctx, error.RobotsBlocked);
                             return;
                         }

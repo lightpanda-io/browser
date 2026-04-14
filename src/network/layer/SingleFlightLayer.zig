@@ -59,14 +59,14 @@ fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
     const self: *SingleFlightLayer = @ptrCast(@alignCast(ptr));
 
     // only single flight idempotent reqursts.
-    if (!req.method.idempotent()) {
+    if (!req.params.method.idempotent()) {
         return self.next.request(ctx, req);
     }
 
     const arena = try ctx.network.app.arena_pool.acquire(.small, "SingleFlightLayer");
     errdefer ctx.network.app.arena_pool.release(arena);
 
-    const key = try arena.dupeZ(u8, req.url);
+    const key = try arena.dupeZ(u8, req.params.url);
     var gop = try self.flights.getOrPut(self.allocator, key);
 
     // if we already have this flight, just add it to the list.

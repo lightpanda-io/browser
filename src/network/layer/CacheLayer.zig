@@ -48,22 +48,22 @@ fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
     const self: *CacheLayer = @ptrCast(@alignCast(ptr));
     const network = ctx.network;
 
-    if (network.cache == null or req.method != .GET) {
+    if (network.cache == null or req.params.method != .GET) {
         return self.next.request(ctx, req);
     }
 
     const arena = try network.app.arena_pool.acquire(.small, "CacheLayer");
     errdefer network.app.arena_pool.release(arena);
 
-    var iter = req.headers.iterator();
+    var iter = req.params.headers.iterator();
     const req_header_list = try iter.collect(arena);
 
     if (network.cache.?.get(arena, .{
-        .url = req.url,
+        .url = req.params.url,
         .timestamp = std.time.timestamp(),
         .request_headers = req_header_list.items,
     })) |cached| {
-        defer req.headers.deinit();
+        defer req.params.headers.deinit();
         defer network.app.arena_pool.release(arena);
         return serveFromCache(req, &cached);
     }
@@ -73,8 +73,8 @@ fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
         .arena = arena,
         .context = ctx,
         .forward = Forward.fromRequest(req),
-        .req_url = req.url,
-        .req_headers = req.headers,
+        .req_url = req.params.url,
+        .req_headers = req.params.headers,
     };
 
     const wrapped = cache_ctx.forward.wrapRequest(
