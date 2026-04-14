@@ -32,6 +32,7 @@ pub const expectError = base.expectError;
 pub const expectEqualSlices = base.expectEqualSlices;
 pub const pageTest = base.pageTest;
 pub const newString = base.newString;
+pub const LogFilter = base.LogFilter;
 
 const TestContext = struct {
     read_at: usize = 0,

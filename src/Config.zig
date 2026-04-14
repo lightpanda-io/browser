@@ -1098,20 +1098,14 @@ fn parseCommonArg(
             return error.InvalidArgument;
         };
 
-        for (str) |c| {
-            if (!std.ascii.isPrint(c)) {
-                log.fatal(.app, "not printable character", .{ .arg = opt });
-                return error.InvalidArgument;
-            }
-        }
-
-        if (std.ascii.indexOfIgnoreCase(str, "mozilla") != null) {
+        validateUserAgent(str) catch |err| {
             log.fatal(.app, "invalid value", .{
-                .detail = "user-agent can't contain Mozilla",
+                .detail = "invalid user agent",
                 .arg = opt,
+                .err = err,
             });
             return error.InvalidArgument;
-        }
+        };
 
         common.user_agent = try allocator.dupe(u8, str);
         return true;
@@ -1192,4 +1186,62 @@ fn parseCommonArg(
     }
 
     return false;
+}
+
+pub fn validateUserAgent(ua: []const u8) !void {
+    for (ua) |c| {
+        if (!std.ascii.isPrint(c)) {
+            return error.NonPrintable;
+        }
+    }
+
+    if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
+        return error.Reserved;
+    }
+}
+
+const testing = @import("testing.zig");
+test "Config: HttpHeaders - default user agent" {
+    var config = try Config.init(testing.allocator, "", .{ .serve = .{} });
+    defer config.deinit(testing.allocator);
+
+    try testing.expectEqual("Lightpanda/1.0", config.http_headers.user_agent);
+    try testing.expectEqual("User-Agent: Lightpanda/1.0", config.http_headers.user_agent_header);
+    try testing.expect(config.http_headers.proxy_bearer_header == null);
+}
+
+test "Config: HttpHeaders - custom user agent override" {
+    var config = try Config.init(testing.allocator, "", .{ .serve = .{ .common = .{ .user_agent = "MyBot/2.0" } } });
+    defer config.deinit(testing.allocator);
+
+    try testing.expectEqual("MyBot/2.0", config.http_headers.user_agent);
+    try testing.expectEqual("User-Agent: MyBot/2.0", config.http_headers.user_agent_header);
+}
+
+test "Config: HttpHeaders - user agent suffix" {
+    var config = try Config.init(testing.allocator, "", .{ .serve = .{ .common = .{ .user_agent_suffix = "CustomSuffix/3.0" } } });
+    defer config.deinit(testing.allocator);
+
+    try testing.expectEqual("Lightpanda/1.0 CustomSuffix/3.0", config.http_headers.user_agent);
+    try testing.expectEqual("User-Agent: Lightpanda/1.0 CustomSuffix/3.0", config.http_headers.user_agent_header);
+}
+
+test "Config: HttpHeaders - fetch mode default user agent" {
+    var config = try Config.init(testing.allocator, "", .{ .fetch = .{ .url = "https://example.com" } });
+    defer config.deinit(testing.allocator);
+    try testing.expectEqual("Lightpanda/1.0", config.http_headers.user_agent);
+}
+
+test "Config: HttpHeaders - fetch mode custom user agent" {
+    var config = try Config.init(testing.allocator, "", .{ .fetch = .{ .url = "https://example.com", .common = .{ .user_agent = "FetchBot/1.0" } } });
+    defer config.deinit(testing.allocator);
+    try testing.expectEqual("FetchBot/1.0", config.http_headers.user_agent);
+    try testing.expectEqual("User-Agent: FetchBot/1.0", config.http_headers.user_agent_header);
+}
+
+test "Config: HttpHeaders - proxy bearer header" {
+    var config = try Config.init(testing.allocator, "", .{ .serve = .{ .common = .{ .proxy_bearer_token = "secret-token" } } });
+    defer config.deinit(testing.allocator);
+    try testing.expectEqual("Lightpanda/1.0", config.http_headers.user_agent);
+    try testing.expectEqual("Proxy-Authorization: Bearer secret-token", config.http_headers.proxy_bearer_header.?);
 }
