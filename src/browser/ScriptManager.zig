@@ -266,13 +266,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     }
 
     if (remote_url) |url| {
-        errdefer {
-            if (is_blocking == false) {
-                self.scriptList(script).remove(&script.node);
-            }
-            // Let the outer errdefer handle releasing the arena if client.request fails
-        }
-
         if (comptime IS_DEBUG) {
             var ls: js.Local.Scope = undefined;
             page.js.localScope(&ls);
@@ -286,11 +279,29 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             });
         }
 
-        {
-            const was_evaluating = self.is_evaluating;
-            self.is_evaluating = true;
-            defer self.is_evaluating = was_evaluating;
+        const was_evaluating = self.is_evaluating;
+        self.is_evaluating = true;
+        defer self.is_evaluating = was_evaluating;
 
+        if (is_blocking) {
+            const response = try self.client.syncRequest(arena, .{
+                .url = url,
+                .method = .GET,
+                .page_id = page.id,
+                .frame_id = page._frame_id,
+                .headers = try self.getHeaders(),
+                .blocking = true,
+                .cookie_jar = &page._session.cookie_jar,
+                .cookie_origin = page.url,
+                .resource_type = .script,
+                .notification = page._session.notification,
+            });
+
+            script.source = .{ .remote = response.body };
+            script.status = response.status;
+            script.complete = true;
+            handover = true;
+        } else {
             try self.client.request(.{
                 .params = .{
                     .url = url,
@@ -298,7 +309,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                     .page_id = page.id,
                     .frame_id = page._frame_id,
                     .headers = try self.getHeaders(),
-                    .blocking = is_blocking,
+                    .blocking = false,
                     .cookie_jar = &page._session.cookie_jar,
                     .cookie_origin = page.url,
                     .resource_type = .script,
@@ -311,38 +322,27 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 .done_callback = Script.doneCallback,
                 .error_callback = Script.errorCallback,
             });
+            handover = true;
         }
-
-        handover = true;
     }
 
     if (is_blocking == false) {
         return;
     }
 
-    // this is <script src="..."></script>, it needs to block the caller
-    // until it's evaluated
-    var client = self.client;
-    while (true) {
-        if (!script.complete) {
-            _ = try client.tick(200);
-            continue;
-        }
-        if (script.status == 0) {
-            // an error (that we already logged)
-            script.deinit();
-            return;
-        }
-
-        // could have already been evaluating if this is dynamically added
-        const was_evaluating = self.is_evaluating;
-        self.is_evaluating = true;
-        defer {
-            self.is_evaluating = was_evaluating;
-            script.deinit();
-        }
-        return script.eval(page);
+    // status 0 means error was already logged
+    if (script.status == 0) {
+        script.deinit();
+        return;
     }
+
+    const was_evaluating = self.is_evaluating;
+    self.is_evaluating = true;
+    defer {
+        self.is_evaluating = was_evaluating;
+        script.deinit();
+    }
+    script.eval(page);
 }
 
 fn scriptList(self: *ScriptManager, script: *const Script) *std.DoublyLinkedList {
@@ -822,14 +822,6 @@ pub const Script = struct {
             .kind = self.kind,
             .status = self.status,
         });
-
-        if (self.mode == .normal) {
-            // This is blocked in a loop at the end of addFromElement, setting
-            // it to complete with a status of 0 will signal the error.
-            self.status = 0;
-            self.complete = true;
-            return;
-        }
 
         const manager = self.manager;
         manager.scriptList(self).remove(&self.node);
