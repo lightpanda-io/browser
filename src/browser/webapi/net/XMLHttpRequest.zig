@@ -242,7 +242,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
     }
 
     const session = exec.context.page.session;
-    const http_client = session.browser.http_client;
+    const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
 
     // Only add cookies for same-origin or when withCredentials is true

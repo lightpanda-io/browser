@@ -130,7 +130,7 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
 
     self._script_manager = ScriptManagerBase.init(
         arena,
-        session.browser.http_client,
+        &session.browser.http_client,
         .{ .worker = self },
     );
 
@@ -361,7 +361,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
 
     const resolved_url = try URL.resolve(arena, self.url, url, .{});
 
-    const http_client = session.browser.http_client;
+    const http_client = &session.browser.http_client;
 
     var headers = try http_client.newHeaders();
     try self.headersForRequest(&headers);

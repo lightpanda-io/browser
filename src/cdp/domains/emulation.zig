@@ -98,7 +98,7 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     };
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const http_client = cmd.cdp.browser.http_client;
+    const http_client = &cmd.cdp.browser.http_client;
     try http_client.setUserAgentOverride(ua);
     bc.user_agent_changed = true;
 
