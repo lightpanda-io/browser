@@ -25,10 +25,12 @@ const bridge = @import("bridge.zig");
 const Env = @import("Env.zig");
 const Origin = @import("Origin.zig");
 const Scheduler = @import("Scheduler.zig");
+const Execution = @import("Execution.zig");
 
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
 const ScriptManager = @import("../ScriptManager.zig");
+const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 
 const v8 = js.v8;
 const Caller = js.Caller;
@@ -37,12 +39,38 @@ const Allocator = std.mem.Allocator;
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
-// Loosely maps to a Browser Page.
+// Loosely maps to a Browser Page or Worker.
 const Context = @This();
+
+pub const GlobalScope = union(enum) {
+    page: *Page,
+    worker: *WorkerGlobalScope,
+
+    pub fn base(self: GlobalScope) [:0]const u8 {
+        return switch (self) {
+            .page => |page| page.base(),
+            .worker => |worker| worker.base(),
+        };
+    }
+
+    pub fn getJs(self: GlobalScope) *Context {
+        return switch (self) {
+            .page => |page| page.js,
+            .worker => |worker| worker.js,
+        };
+    }
+
+    pub fn setJs(self: GlobalScope, ctx: *Context) void {
+        switch (self) {
+            .page => |page| page.js = ctx,
+            .worker => |worker| worker.js = ctx,
+        }
+    }
+};
 
 id: usize,
 env: *Env,
-page: *Page,
+global: GlobalScope,
 session: *Session,
 isolate: js.Isolate,
 
@@ -110,6 +138,10 @@ script_manager: ?*ScriptManager,
 
 // Our macrotasks
 scheduler: Scheduler,
+
+// Execution context for worker-compatible APIs. This provides a common
+// interface that works in both Page and Worker contexts.
+execution: Execution,
 
 unknown_properties: (if (IS_DEBUG) std.StringHashMapUnmanaged(UnknownPropertyStat) else void) = if (IS_DEBUG) .{} else {},
 
@@ -259,7 +291,11 @@ pub fn toLocal(self: *Context, global: anytype) js.Local.ToLocalReturnType(@Type
 }
 
 pub fn getIncumbent(self: *Context) *Page {
-    return fromC(v8.v8__Isolate__GetIncumbentContext(self.env.isolate.handle).?).?.page;
+    const ctx = fromC(v8.v8__Isolate__GetIncumbentContext(self.env.isolate.handle).?).?;
+    return switch (ctx.global) {
+        .page => |page| page,
+        .worker => unreachable,
+    };
 }
 
 pub fn stringToPersistedFunction(
@@ -529,7 +565,7 @@ pub fn dynamicModuleCallback(
         if (resource_value.isNullOrUndefined()) {
             // will only be null / undefined in extreme cases (e.g. WPT tests)
             // where you're
-            break :blk self.page.base();
+            break :blk self.global.base();
         }
 
         break :blk js.String.toSliceZ(.{ .local = &local, .handle = resource_name.? }) catch |err| {
@@ -871,17 +907,16 @@ pub fn enter(self: *Context, hs: *js.HandleScope) Entered {
     const isolate = self.isolate;
     js.HandleScope.init(hs, isolate);
 
-    const page = self.page;
-    const original = page.js;
-    page.js = self;
+    const original = self.global.getJs();
+    self.global.setJs(self);
 
     const handle: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.handle, isolate.handle));
     v8.v8__Context__Enter(handle);
-    return .{ .original = original, .handle = handle, .handle_scope = hs };
+    return .{ .original = original, .handle = handle, .handle_scope = hs, .global = self.global };
 }
 
 const Entered = struct {
-    // the context we should restore on the page
+    // the context we should restore on the page/worker
     original: *Context,
 
     // the handle of the entered context
@@ -889,8 +924,10 @@ const Entered = struct {
 
     handle_scope: *js.HandleScope,
 
+    global: GlobalScope,
+
     pub fn exit(self: Entered) void {
-        self.original.page.js = self.original;
+        self.global.setJs(self.original);
         v8.v8__Context__Exit(self.handle);
         self.handle_scope.deinit();
     }
@@ -899,7 +936,10 @@ const Entered = struct {
 pub fn queueMutationDelivery(self: *Context) !void {
     self.enqueueMicrotask(struct {
         fn run(ctx: *Context) void {
-            ctx.page.deliverMutations();
+            switch (ctx.global) {
+                .page => |page| page.deliverMutations(),
+                .worker => unreachable,
+            }
         }
     }.run);
 }
@@ -907,7 +947,10 @@ pub fn queueMutationDelivery(self: *Context) !void {
 pub fn queueIntersectionChecks(self: *Context) !void {
     self.enqueueMicrotask(struct {
         fn run(ctx: *Context) void {
-            ctx.page.performScheduledIntersectionChecks();
+            switch (ctx.global) {
+                .page => |page| page.performScheduledIntersectionChecks(),
+                .worker => unreachable,
+            }
         }
     }.run);
 }
@@ -915,7 +958,10 @@ pub fn queueIntersectionChecks(self: *Context) !void {
 pub fn queueIntersectionDelivery(self: *Context) !void {
     self.enqueueMicrotask(struct {
         fn run(ctx: *Context) void {
-            ctx.page.deliverIntersections();
+            switch (ctx.global) {
+                .page => |page| page.deliverIntersections(),
+                .worker => unreachable,
+            }
         }
     }.run);
 }
@@ -923,7 +969,10 @@ pub fn queueIntersectionDelivery(self: *Context) !void {
 pub fn queueSlotchangeDelivery(self: *Context) !void {
     self.enqueueMicrotask(struct {
         fn run(ctx: *Context) void {
-            ctx.page.deliverSlotchangeEvents();
+            switch (ctx.global) {
+                .page => |page| page.deliverSlotchangeEvents(),
+                .worker => unreachable,
+            }
         }
     }.run);
 }

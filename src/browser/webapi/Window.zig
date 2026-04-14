@@ -335,7 +335,7 @@ pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
         .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
-    }, page);
+    }, page._session);
 
     // Invoke window.onerror callback if set (per WHATWG spec, this is called
     // with 5 arguments: message, source, lineno, colno, error)
@@ -411,7 +411,7 @@ pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]cons
     errdefer target_page.releaseArena(arena);
 
     // Origin should be the source window's origin (where the message came from)
-    const origin = try source_window._location.getOrigin(page);
+    const origin = try source_window._location.getOrigin(&page.js.execution);
     const callback = try arena.create(PostMessageCallback);
     callback.* = .{
         .arena = arena,
@@ -429,27 +429,11 @@ pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]cons
 }
 
 pub fn btoa(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
-    const encoded_len = std.base64.standard.Encoder.calcSize(input.len);
-    const encoded = try page.call_arena.alloc(u8, encoded_len);
-    return std.base64.standard.Encoder.encode(encoded, input);
+    return @import("encoding/base64.zig").encode(page.call_arena, input);
 }
 
 pub fn atob(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
-    const trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
-    // Forgiving base64 decode per WHATWG spec:
-    // https://infra.spec.whatwg.org/#forgiving-base64-decode
-    // Remove trailing padding to use standard_no_pad decoder
-    const unpadded = std.mem.trimRight(u8, trimmed, "=");
-
-    // Length % 4 == 1 is invalid (can't represent valid base64)
-    if (unpadded.len % 4 == 1) {
-        return error.InvalidCharacterError;
-    }
-
-    const decoded_len = std.base64.standard_no_pad.Decoder.calcSizeForSlice(unpadded) catch return error.InvalidCharacterError;
-    const decoded = try page.call_arena.alloc(u8, decoded_len);
-    std.base64.standard_no_pad.Decoder.decode(decoded, unpadded) catch return error.InvalidCharacterError;
-    return decoded;
+    return @import("encoding/base64.zig").decode(page.call_arena, input);
 }
 
 pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {
@@ -590,6 +574,7 @@ pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
 pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.PromiseRejection, page: *Page) !void {
     if (comptime IS_DEBUG) {
         log.debug(.js, "unhandled rejection", .{
+            .target = "window",
             .value = rejection.reason(),
             .stack = rejection.local.stackTrace() catch |err| @errorName(err) orelse "???",
         });
@@ -607,7 +592,7 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.
         const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
             .reason = if (rejection.reason()) |r| try r.temp() else null,
             .promise = try rejection.promise().temp(),
-        }, page)).asEvent();
+        }, page._session)).asEvent();
         try page._event_manager.dispatchDirect(target, event, attribute_callback, .{ .context = "window.unhandledrejection" });
     }
 }
@@ -796,7 +781,7 @@ const PostMessageCallback = struct {
                 .source = self.source,
                 .bubbles = false,
                 .cancelable = false,
-            }, page)).asEvent();
+            }, page._session)).asEvent();
             try page._event_manager.dispatchDirect(event_target, event, window._on_message, .{ .context = "window.postMessage" });
         }
 

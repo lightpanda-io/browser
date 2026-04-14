@@ -34,6 +34,7 @@ const Inspector = @import("Inspector.zig");
 
 const Page = @import("../Page.zig");
 const Window = @import("../webapi/Window.zig");
+const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 
 const JsApis = bridge.JsApis;
 const Allocator = std.mem.Allocator;
@@ -82,9 +83,6 @@ eternal_function_templates: []v8.Eternal,
 
 // Dynamic slice to avoid circular dependency on JsApis.len at comptime
 templates: []*const v8.FunctionTemplate,
-
-// Global template created once per isolate and reused across all contexts
-global_template: v8.Eternal,
 
 // Inspector associated with the Isolate. Exists when CDP is being used.
 inspector: ?*Inspector,
@@ -146,7 +144,6 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     const templates = try allocator.alloc(*const v8.FunctionTemplate, JsApis.len);
     errdefer allocator.free(templates);
 
-    var global_eternal: v8.Eternal = undefined;
     var private_symbols: PrivateSymbols = undefined;
     {
         var temp_scope: js.HandleScope = undefined;
@@ -164,44 +161,6 @@ pub fn init(app: *App, opts: InitOpts) !Env {
             templates[i] = @ptrCast(@alignCast(eternal_ptr.?));
         }
 
-        // Create global template once per isolate
-        const js_global = v8.v8__FunctionTemplate__New__DEFAULT(isolate_handle);
-        const window_name = v8.v8__String__NewFromUtf8(isolate_handle, "Window", v8.kNormal, 6);
-        v8.v8__FunctionTemplate__SetClassName(js_global, window_name);
-
-        // Find Window in JsApis by name (avoids circular import)
-        const window_index = comptime bridge.JsApiLookup.getId(Window.JsApi);
-        v8.v8__FunctionTemplate__Inherit(js_global, templates[window_index]);
-
-        const global_template_local = v8.v8__FunctionTemplate__InstanceTemplate(js_global).?;
-        v8.v8__ObjectTemplate__SetNamedHandler(global_template_local, &.{
-            .getter = bridge.unknownWindowPropertyCallback,
-            .setter = null,
-            .query = null,
-            .deleter = null,
-            .enumerator = null,
-            .definer = null,
-            .descriptor = null,
-            .data = null,
-            .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
-        });
-        // I don't 100% understand this. We actually set this up in the snapshot,
-        // but for the global instance, it doesn't work. SetIndexedHandler and
-        // SetNamedHandler are set on the Instance template, and that's the key
-        // difference. The context has its own global instance, so we need to set
-        // these back up directly on it. There might be a better way to do this.
-        v8.v8__ObjectTemplate__SetIndexedHandler(global_template_local, &.{
-            .getter = Window.JsApi.index.getter,
-            .setter = null,
-            .query = null,
-            .deleter = null,
-            .enumerator = null,
-            .definer = null,
-            .descriptor = null,
-            .data = null,
-            .flags = 0,
-        });
-        v8.v8__Eternal__New(isolate_handle, @ptrCast(global_template_local), &global_eternal);
         private_symbols = PrivateSymbols.init(isolate_handle);
     }
 
@@ -221,7 +180,6 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         .templates = templates,
         .isolate_params = params,
         .inspector = inspector,
-        .global_template = global_eternal,
         .private_symbols = private_symbols,
         .microtask_queues_are_running = false,
         .eternal_function_templates = eternal_function_templates,
@@ -261,7 +219,18 @@ pub const ContextParams = struct {
 };
 
 pub fn createContext(self: *Env, page: *Page, params: ContextParams) !*Context {
-    const context_arena = try self.app.arena_pool.acquire(.large, params.debug_name);
+    return self._createContext(page, params);
+}
+
+pub fn createWorkerContext(self: *Env, worker: *WorkerGlobalScope, params: ContextParams) !*Context {
+    return self._createContext(worker, params);
+}
+
+fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context {
+    const T = @TypeOf(global);
+    const is_page = T == *Page;
+
+    const context_arena = try self.app.arena_pool.acquire(.medium, params.debug_name);
     errdefer self.app.arena_pool.release(context_arena);
 
     const isolate = self.isolate;
@@ -273,12 +242,10 @@ pub fn createContext(self: *Env, page: *Page, params: ContextParams) !*Context {
     const microtask_queue = v8.v8__MicrotaskQueue__New(isolate.handle, v8.kExplicit).?;
     errdefer v8.v8__MicrotaskQueue__DELETE(microtask_queue);
 
-    // Get the global template that was created once per isolate
-    const global_template: *const v8.ObjectTemplate = @ptrCast(@alignCast(v8.v8__Eternal__Get(&self.global_template, isolate.handle).?));
-    v8.v8__ObjectTemplate__SetInternalFieldCount(global_template, comptime Snapshot.countInternalFields(Window.JsApi));
-
-    const v8_context = v8.v8__Context__New__Config(isolate.handle, &.{
-        .global_template = global_template,
+    // Restore the context from the snapshot (0 = Page, 1 = Worker)
+    const snapshot_index: u32 = if (comptime is_page) 0 else 1;
+    const v8_context = v8.v8__Context__FromSnapshot__Config(isolate.handle, snapshot_index, &.{
+        .global_template = null,
         .global_object = null,
         .microtask_queue = microtask_queue,
     }).?;
@@ -287,36 +254,36 @@ pub fn createContext(self: *Env, page: *Page, params: ContextParams) !*Context {
     var context_global: v8.Global = undefined;
     v8.v8__Global__New(isolate.handle, v8_context, &context_global);
 
-    // get the global object for the context, this maps to our Window
+    // Get the global object for the context
     const global_obj = v8.v8__Context__Global(v8_context).?;
 
-    {
-        // Store our TAO inside the internal field of the global object. This
-        // maps the v8::Object -> Zig instance. Almost all objects have this, and
-        // it gets setup automatically as objects are created, but the Window
-        // object already exists in v8 (it's the global) so we manually create
-        // the mapping here.
-        const tao = try params.identity_arena.create(@import("TaggedOpaque.zig"));
-        tao.* = .{
-            .value = @ptrCast(page.window),
-            .prototype_chain = (&Window.JsApi.Meta.prototype_chain).ptr,
-            .prototype_len = @intCast(Window.JsApi.Meta.prototype_chain.len),
-            .subtype = .node, // this probably isn't right, but it's what we've been doing all along
-        };
-        v8.v8__Object__SetAlignedPointerInInternalField(global_obj, 0, tao);
-    }
+    // Store our TAO inside the internal field of the global object. This
+    // maps the v8::Object -> Zig instance.
+    const tao = try params.identity_arena.create(@import("TaggedOpaque.zig"));
+    tao.* = if (comptime is_page) .{
+        .value = @ptrCast(global.window),
+        .prototype_chain = (&Window.JsApi.Meta.prototype_chain).ptr,
+        .prototype_len = @intCast(Window.JsApi.Meta.prototype_chain.len),
+        .subtype = .node,
+    } else .{
+        .value = @ptrCast(global),
+        .prototype_chain = (&WorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
+        .prototype_len = @intCast(WorkerGlobalScope.JsApi.Meta.prototype_chain.len),
+        .subtype = null,
+    };
+    v8.v8__Object__SetAlignedPointerInInternalField(global_obj, 0, tao);
 
     const context_id = self.context_id;
     self.context_id = context_id + 1;
 
-    const session = page._session;
+    const session = global._session;
     const origin = try session.getOrCreateOrigin(null);
     errdefer session.releaseOrigin(origin);
 
     const context = try context_arena.create(Context);
     context.* = .{
         .env = self,
-        .page = page,
+        .global = if (comptime is_page) .{ .page = global } else .{ .worker = global },
         .origin = origin,
         .id = context_id,
         .session = session,
@@ -326,22 +293,31 @@ pub fn createContext(self: *Env, page: *Page, params: ContextParams) !*Context {
         .templates = self.templates,
         .call_arena = params.call_arena,
         .microtask_queue = microtask_queue,
-        .script_manager = &page._script_manager,
+        .script_manager = if (comptime is_page) &global._script_manager else null,
         .scheduler = .init(context_arena),
         .identity = params.identity,
         .identity_arena = params.identity_arena,
+        .execution = undefined,
     };
 
-    {
-        // Multiple contexts can be created for the same Window (via CDP). We only
-        // need to register the first one.
-        const gop = try params.identity.identity_map.getOrPut(params.identity_arena, @intFromPtr(page.window));
-        if (gop.found_existing == false) {
-            // our window wrapped in a v8::Global
-            var global_global: v8.Global = undefined;
-            v8.v8__Global__New(isolate.handle, global_obj, &global_global);
-            gop.value_ptr.* = global_global;
-        }
+    context.execution = .{
+        .url = &global.url,
+        .buf = &global.buf,
+        .context = context,
+        .arena = global.arena,
+        .call_arena = params.call_arena,
+        ._factory = global._factory,
+        ._scheduler = &context.scheduler,
+    };
+
+    // Register in the identity map. Multiple contexts can be created for the
+    // same global (via CDP), so we only register the first one.
+    const identity_ptr = if (comptime is_page) @intFromPtr(global.window) else @intFromPtr(global);
+    const gop = try params.identity.identity_map.getOrPut(params.identity_arena, identity_ptr);
+    if (gop.found_existing == false) {
+        var global_global: v8.Global = undefined;
+        v8.v8__Global__New(isolate.handle, global_obj, &global_global);
+        gop.value_ptr.* = global_global;
     }
 
     // Store a pointer to our context inside the v8 context so that, given
@@ -528,13 +504,25 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
         .call_arena = ctx.call_arena,
     };
 
-    const page = ctx.page;
-    page.window.unhandledPromiseRejection(promise_event == v8.kPromiseRejectWithNoHandler, .{
-        .local = &local,
-        .handle = &message_handle,
-    }, page) catch |err| {
-        log.warn(.browser, "unhandled rejection handler", .{ .err = err });
-    };
+    const no_handler = promise_event == v8.kPromiseRejectWithNoHandler;
+    switch (ctx.global) {
+        .page => |page| {
+            page.window.unhandledPromiseRejection(no_handler, .{
+                .local = &local,
+                .handle = &message_handle,
+            }, page) catch |err| {
+                log.warn(.browser, "unhandled rejection handler", .{ .err = err, .target = "window" });
+            };
+        },
+        .worker => |wsg| {
+            wsg.unhandledPromiseRejection(no_handler, .{
+                .local = &local,
+                .handle = &message_handle,
+            }) catch |err| {
+                log.warn(.browser, "unhandled rejection handler", .{ .err = err, .target = "worker" });
+            };
+        },
+    }
 }
 
 fn fatalCallback(c_location: [*c]const u8, c_message: [*c]const u8) callconv(.c) void {
@@ -566,3 +554,35 @@ const PrivateSymbols = struct {
         self.child_nodes.deinit();
     }
 };
+
+const testing = @import("../../testing.zig");
+test "Env: Worker context " {
+    const session = testing.test_session;
+    const page = try session.createPage();
+    defer session.removePage();
+
+    const worker = try @import("../webapi/Worker.zig").init("about:blank", &page.js.execution);
+
+    var ls: js.Local.Scope = undefined;
+    worker._worker_scope.js.localScope(&ls);
+    defer ls.deinit();
+
+    try testing.expectEqual(true, (try ls.local.exec("typeof Node === 'undefined'", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("typeof WorkerGlobalScope !== 'undefined'", null)).isTrue());
+}
+
+test "Env: Page context" {
+    const session = testing.test_session;
+    const page = try session.createPage();
+    defer session.removePage();
+
+    // Page already has a context created, use it directly
+    const ctx = page.js;
+
+    var ls: js.Local.Scope = undefined;
+    ctx.localScope(&ls);
+    defer ls.deinit();
+
+    try testing.expectEqual(true, (try ls.local.exec("typeof Node !== 'undefined'", null)).isTrue());
+    try testing.expectEqual(true, (try ls.local.exec("typeof WorkerGlobalScope === 'undefined'", null)).isTrue());
+}

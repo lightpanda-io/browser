@@ -128,7 +128,7 @@ const PostMessageCallback = struct {
                 .data = .{ .value = self.message },
                 .origin = "",
                 .source = null,
-            }, page) catch |err| {
+            }, page._session) catch |err| {
                 log.err(.dom, "MessagePort.postMessage", .{ .err = err });
                 return null;
             }).asEvent();

@@ -20,7 +20,6 @@ const std = @import("std");
 const String = @import("../../../string.zig").String;
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
 
 const Event = @import("../Event.zig");
@@ -46,23 +45,23 @@ pub const ErrorEventOptions = struct {
 
 const Options = Event.inheritOptions(ErrorEvent, ErrorEventOptions);
 
-pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*ErrorEvent {
-    const arena = try page.getArena(.small, "ErrorEvent");
-    errdefer page.releaseArena(arena);
+pub fn init(typ: []const u8, opts_: ?Options, session: *Session) !*ErrorEvent {
+    const arena = try session.getArena(.small, "ErrorEvent");
+    errdefer session.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
-    return initWithTrusted(arena, type_string, opts_, false, page);
+    return initWithTrusted(arena, type_string, opts_, false, session);
 }
 
-pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*ErrorEvent {
-    const arena = try page.getArena(.small, "ErrorEvent.trusted");
-    errdefer page.releaseArena(arena);
-    return initWithTrusted(arena, typ, opts_, true, page);
+pub fn initTrusted(typ: String, opts_: ?Options, session: *Session) !*ErrorEvent {
+    const arena = try session.getArena(.small, "ErrorEvent.trusted");
+    errdefer session.releaseArena(arena);
+    return initWithTrusted(arena, typ, opts_, true, session);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, page: *Page) !*ErrorEvent {
+fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, session: *Session) !*ErrorEvent {
     const opts = opts_ orelse Options{};
 
-    const event = try page._factory.event(
+    const event = try session.factory.event(
         arena,
         typ,
         ErrorEvent{

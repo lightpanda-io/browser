@@ -29,61 +29,61 @@ _counts: std.StringHashMapUnmanaged(u64) = .{},
 
 pub const init: Console = .{};
 
-pub fn trace(_: *const Console, values: []js.Value, page: *Page) !void {
+pub fn trace(_: *const Console, values: []js.Value, exec: *js.Execution) !void {
     logger.debug(.js, "console.trace", .{
-        .stack = page.js.local.?.stackTrace() catch "???",
-        .args = ValueWriter{ .page = page, .values = values },
+        .stack = exec.context.local.?.stackTrace() catch "???",
+        .args = ValueWriter{ .values = values },
     });
 }
 
-pub fn debug(_: *const Console, values: []js.Value, page: *Page) void {
-    logger.debug(.js, "console.debug", .{ValueWriter{ .page = page, .values = values }});
-    page.appendConsoleMessage(.debug, values);
+pub fn debug(_: *const Console, values: []js.Value, exec: *js.Execution) void {
+    logger.debug(.js, "console.debug", .{ValueWriter{ .values = values }});
+    appendMessage(exec, .debug, values);
 }
 
-pub fn info(_: *const Console, values: []js.Value, page: *Page) void {
-    logger.info(.js, "console.info", .{ValueWriter{ .page = page, .values = values }});
-    page.appendConsoleMessage(.info, values);
+pub fn info(_: *const Console, values: []js.Value, exec: *js.Execution) void {
+    logger.info(.js, "console.info", .{ValueWriter{ .values = values }});
+    appendMessage(exec, .info, values);
 }
 
-pub fn log(_: *const Console, values: []js.Value, page: *Page) void {
-    logger.info(.js, "console.log", .{ValueWriter{ .page = page, .values = values }});
-    page.appendConsoleMessage(.log, values);
+pub fn log(_: *const Console, values: []js.Value, exec: *js.Execution) void {
+    logger.info(.js, "console.log", .{ValueWriter{ .values = values }});
+    appendMessage(exec, .log, values);
 }
 
-pub fn warn(_: *const Console, values: []js.Value, page: *Page) void {
-    logger.warn(.js, "console.warn", .{ValueWriter{ .page = page, .values = values }});
-    page.appendConsoleMessage(.warn, values);
+pub fn warn(_: *const Console, values: []js.Value, exec: *js.Execution) void {
+    logger.warn(.js, "console.warn", .{ValueWriter{ .values = values }});
+    appendMessage(exec, .warn, values);
 }
 
 pub fn clear(_: *const Console) void {}
 
-pub fn assert(_: *const Console, assertion: js.Value, values: []js.Value, page: *Page) void {
+pub fn assert(_: *const Console, assertion: js.Value, values: []js.Value, exec: *js.Execution) void {
     if (assertion.toBool()) {
         return;
     }
-    logger.warn(.js, "console.assert", .{ValueWriter{ .page = page, .values = values }});
-    page.appendConsoleMessage(.warn, values);
+    logger.warn(.js, "console.assert", .{ValueWriter{ .values = values }});
+    appendMessage(exec, .warn, values);
 }
 
-pub fn @"error"(_: *const Console, values: []js.Value, page: *Page) void {
-    logger.warn(.js, "console.error", .{ValueWriter{ .page = page, .values = values, .include_stack = true }});
-    page.appendConsoleMessage(.@"error", values);
+pub fn @"error"(_: *const Console, values: []js.Value, exec: *js.Execution) void {
+    logger.warn(.js, "console.error", .{ValueWriter{ .values = values, .stack = exec.context.local.?.stackTrace() catch |err| @errorName(err) orelse "???" }});
+    appendMessage(exec, .@"error", values);
 }
 
 pub fn table(_: *const Console, data: js.Value, columns: ?js.Value) void {
     logger.info(.js, "console.table", .{ .data = data, .columns = columns });
 }
 
-pub fn count(self: *Console, label_: ?[]const u8, page: *Page) !void {
+pub fn count(self: *Console, label_: ?[]const u8, exec: *js.Execution) !void {
     const label = label_ orelse "default";
-    const gop = try self._counts.getOrPut(page.arena, label);
+    const gop = try self._counts.getOrPut(exec.arena, label);
 
     var current: u64 = 0;
     if (gop.found_existing) {
         current = gop.value_ptr.*;
     } else {
-        gop.key_ptr.* = try page.dupeString(label);
+        gop.key_ptr.* = try exec.arena.dupe(u8, label);
     }
 
     const c = current + 1;
@@ -101,15 +101,15 @@ pub fn countReset(self: *Console, label_: ?[]const u8) !void {
     logger.info(.js, "console.countReset", .{ .label = label, .count = kv.value });
 }
 
-pub fn time(self: *Console, label_: ?[]const u8, page: *Page) !void {
+pub fn time(self: *Console, label_: ?[]const u8, exec: *js.Execution) !void {
     const label = label_ orelse "default";
-    const gop = try self._timers.getOrPut(page.arena, label);
+    const gop = try self._timers.getOrPut(exec.arena, label);
 
     if (gop.found_existing) {
         logger.info(.js, "console.time", .{ .label = label, .err = "duplicate timer" });
         return;
     }
-    gop.key_ptr.* = try page.dupeString(label);
+    gop.key_ptr.* = try exec.arena.dupe(u8, label);
     gop.value_ptr.* = timestamp();
 }
 
@@ -134,12 +134,12 @@ pub fn timeEnd(self: *Console, label_: ?[]const u8) void {
     logger.info(.js, "console.timeEnd", .{ .label = label, .elapsed = elapsed - kv.value });
 }
 
-pub fn group(_: *const Console, values: []js.Value, page: *Page) void {
-    logger.info(.js, "console.group", .{ValueWriter{ .page = page, .values = values }});
+pub fn group(_: *const Console, values: []js.Value) void {
+    logger.info(.js, "console.group", .{ValueWriter{ .values = values }});
 }
 
-pub fn groupCollapsed(_: *const Console, values: []js.Value, page: *Page) void {
-    logger.info(.js, "console.groupCollapsed", .{ValueWriter{ .page = page, .values = values }});
+pub fn groupCollapsed(_: *const Console, values: []js.Value) void {
+    logger.info(.js, "console.groupCollapsed", .{ValueWriter{ .values = values }});
 }
 
 pub fn groupEnd(_: *const Console) void {}
@@ -148,17 +148,26 @@ fn timestamp() u64 {
     return @import("../../datetime.zig").timestamp(.monotonic);
 }
 
+// Forwards page-context console output to the Page's message buffer (read by
+// the `consoleLogs` tool / CDP Runtime.consoleAPICalled). Worker contexts are
+// dropped — no buffer is attached there.
+fn appendMessage(exec: *js.Execution, level: Page.ConsoleMessage.Level, values: []js.Value) void {
+    switch (exec.context.global) {
+        .page => |p| p.appendConsoleMessage(level, values),
+        .worker => {},
+    }
+}
+
 const ValueWriter = struct {
-    page: *Page,
     values: []js.Value,
-    include_stack: bool = false,
+    stack: ?[]const u8 = null,
 
     pub fn format(self: ValueWriter, writer: *std.io.Writer) !void {
         for (self.values, 1..) |value, i| {
             try writer.print("\n  arg({d}): {f}", .{ i, value });
         }
-        if (self.include_stack) {
-            try writer.print("\n stack: {s}", .{self.page.js.local.?.stackTrace() catch |err| @errorName(err) orelse "???"});
+        if (self.stack) |s| {
+            try writer.print("\n stack: {s}", .{s});
         }
     }
 

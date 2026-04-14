@@ -206,7 +206,7 @@ fn getCookies(cmd: *CDP.Command) !void {
 
 fn getResponseBody(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
-        requestId: []const u8, // "REQ-{d}"
+        requestId: []const u8, // "REQ-{d}" or "LID-{d}"
     })) orelse return error.InvalidParams;
 
     const request_id = try idFromRequestId(params.requestId);
@@ -439,7 +439,8 @@ const TransferAsResponseWriter = struct {
 };
 
 fn idFromRequestId(request_id: []const u8) !u64 {
-    if (!std.mem.startsWith(u8, request_id, "REQ-")) {
+    // The requesIid for the original document is its loaderId.
+    if (!std.mem.startsWith(u8, request_id, "REQ-") and !std.mem.startsWith(u8, request_id, "LID-")) {
         return error.InvalidParams;
     }
     return std.fmt.parseInt(u64, request_id[4..], 10) catch return error.InvalidParams;
