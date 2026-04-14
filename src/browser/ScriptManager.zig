@@ -73,7 +73,7 @@ allocator: Allocator,
 // The type is confusing (too confusing? move to a union). Starts of as `null`
 // then transitions to either an error (from errorCallback) or the completed
 // buffer from doneCallback
-imported_modules: std.StringHashMapUnmanaged(ImportedModule),
+imported_modules: std.StringHashMapUnmanaged(std.DoublyLinkedList),
 
 // Mapping between module specifier and resolution.
 // see https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/script/type/importmap
@@ -111,10 +111,15 @@ pub fn deinit(self: *ScriptManager) void {
 
 pub fn reset(self: *ScriptManager) void {
     var it = self.imported_modules.valueIterator();
-    while (it.next()) |value_ptr| {
-        switch (value_ptr.state) {
-            .done => |script| script.deinit(),
-            else => {},
+    while (it.next()) |list| {
+        var node = list.first;
+        while (node) |n| {
+            node = n.next;
+            const module = ImportedModule.fromNode(n);
+            switch (module.state) {
+                .done => |script| script.deinit(),
+                else => {},
+            }
         }
     }
     self.imported_modules.clearRetainingCapacity();
@@ -364,16 +369,12 @@ pub fn resolveSpecifier(self: *ScriptManager, arena: Allocator, base: [:0]const 
 }
 
 pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const u8) !void {
-    const gop = try self.imported_modules.getOrPut(self.allocator, url);
-    if (gop.found_existing) {
-        gop.value_ptr.waiters += 1;
-        return;
-    }
-    errdefer _ = self.imported_modules.remove(url);
-
     const page = self.page;
     const arena = try page.getArena(.large, "SM.preloadImport");
     errdefer page.releaseArena(arena);
+
+    const module = try arena.create(ImportedModule);
+    module.* = .{};
 
     const script = try arena.create(Script);
     script.* = .{
@@ -385,10 +386,14 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .complete = false,
         .script_element = null,
         .source = .{ .remote = .{} },
-        .mode = .import,
+        .mode = .{ .import = module },
     };
 
-    gop.value_ptr.* = ImportedModule{};
+    const gop = try self.imported_modules.getOrPut(self.allocator, url);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{};
+    }
+    gop.value_ptr.append(&module.node);
 
     if (comptime IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
@@ -434,11 +439,13 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
 }
 
 pub fn waitForImport(self: *ScriptManager, url: [:0]const u8) !ModuleSource {
-    const entry = self.imported_modules.getEntry(url) orelse {
-        // It shouldn't be possible for v8 to ask for a module that we didn't
-        // `preloadImport` above.
-        return error.UnknownModule;
-    };
+    const list = self.imported_modules.getPtr(url) orelse return error.UnknownModule;
+    const node = list.popFirst() orelse return error.UnknownModule;
+    const module = ImportedModule.fromNode(node);
+
+    if (list.first == null) {
+        std.debug.assert(self.imported_modules.remove(url));
+    }
 
     const was_evaluating = self.is_evaluating;
     self.is_evaluating = true;
@@ -446,27 +453,14 @@ pub fn waitForImport(self: *ScriptManager, url: [:0]const u8) !ModuleSource {
 
     var client = self.client;
     while (true) {
-        switch (entry.value_ptr.state) {
+        switch (module.state) {
             .loading => {
                 _ = try client.tick(200);
                 continue;
             },
-            .done => |script| {
-                var shared = false;
-                const buffer = entry.value_ptr.buffer;
-                const waiters = entry.value_ptr.waiters;
-
-                if (waiters == 1) {
-                    self.imported_modules.removeByPtr(entry.key_ptr);
-                } else {
-                    shared = true;
-                    entry.value_ptr.waiters = waiters - 1;
-                }
-                return .{
-                    .buffer = buffer,
-                    .shared = shared,
-                    .script = script,
-                };
+            .done => |script| return .{
+                .script = script,
+                .buffer = script.source.remote,
             },
             .err => return error.Failed,
         }
@@ -572,7 +566,6 @@ fn evaluate(self: *ScriptManager) void {
                     ia.callback(ia.data, error.FailedToLoad);
                 } else {
                     ia.callback(ia.data, .{
-                        .shared = false,
                         .script = script,
                         .buffer = script.source.remote,
                     });
@@ -702,7 +695,7 @@ pub const Script = struct {
         normal,
         @"defer",
         async,
-        import,
+        import: *ImportedModule,
         import_async: ImportAsync,
     };
 
@@ -806,9 +799,9 @@ pub const Script = struct {
             manager.ready_scripts.append(&self.node);
         } else if (self.mode == .import) {
             manager.async_scripts.remove(&self.node);
-            const entry = manager.imported_modules.getPtr(self.url).?;
-            entry.state = .{ .done = self };
-            entry.buffer = self.source.remote;
+            const module = self.mode.import;
+            module.state = .{ .done = self };
+            module.buffer = self.source.remote;
         }
         manager.evaluate();
     }
@@ -832,10 +825,7 @@ pub const Script = struct {
 
         switch (self.mode) {
             .import_async => |ia| ia.callback(ia.data, error.FailedToLoad),
-            .import => {
-                const entry = manager.imported_modules.getPtr(self.url).?;
-                entry.state = .err;
-            },
+            .import => |module| module.state = .err,
             else => {},
         }
         self.deinit();
@@ -974,14 +964,11 @@ const ImportAsync = struct {
 };
 
 pub const ModuleSource = struct {
-    shared: bool,
     script: *Script,
     buffer: std.ArrayList(u8),
 
     pub fn deinit(self: *ModuleSource) void {
-        if (self.shared == false) {
-            self.script.deinit();
-        }
+        self.script.deinit();
     }
 
     pub fn src(self: *const ModuleSource) []const u8 {
@@ -990,15 +977,19 @@ pub const ModuleSource = struct {
 };
 
 const ImportedModule = struct {
-    waiters: u16 = 1,
     state: State = .loading,
     buffer: std.ArrayList(u8) = .{},
+    node: std.DoublyLinkedList.Node = .{},
 
     const State = union(enum) {
         err,
         loading,
         done: *Script,
     };
+
+    fn fromNode(node: *std.DoublyLinkedList.Node) *ImportedModule {
+        return @fieldParentPtr("node", node);
+    }
 };
 
 // Parses data:[<media-type>][;base64],<data>
