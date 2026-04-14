@@ -39,6 +39,11 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Worker = @This();
 
+// used by HttpClient when generating notification
+// Ultimately used by CDP to generate request/loader ids.
+id: u32,
+_pseudo_frame_id: u32,
+
 _proto: *EventTarget,
 _page: *Page,
 _arena: Allocator,
@@ -66,6 +71,8 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
 
     const resolved_url = try URL.resolve(arena, exec.url.*, url, .{});
     const self = try session.factory.eventTargetWithAllocator(arena, Worker{
+        .id = session.nextPageId(),
+        ._pseudo_frame_id = session.nextFrameId(),
         ._arena = arena,
         ._proto = undefined,
         ._page = page,
@@ -92,7 +99,8 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
         .url = resolved_url,
         .method = .GET,
         .headers = try http_client.newHeaders(),
-        .frame_id = 0, // Workers don't belong to frames
+        .page_id = self.id,
+        .frame_id = self._pseudo_frame_id,
         .resource_type = .script,
         .cookie_jar = &session.cookie_jar,
         .cookie_origin = resolved_url,

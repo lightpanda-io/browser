@@ -127,12 +127,12 @@ pub fn timeEnd(self: *Console, label_: ?[]const u8) void {
     logger.info(.js, "console.timeEnd", .{ .label = label, .elapsed = elapsed - kv.value });
 }
 
-pub fn group(_: *const Console, values: []js.Value, page: *Page) void {
-    logger.info(.js, "console.group", .{ValueWriter{ .page = page, .values = values }});
+pub fn group(_: *const Console, values: []js.Value) void {
+    logger.info(.js, "console.group", .{ValueWriter{ .values = values }});
 }
 
-pub fn groupCollapsed(_: *const Console, values: []js.Value, page: *Page) void {
-    logger.info(.js, "console.groupCollapsed", .{ValueWriter{ .page = page, .values = values }});
+pub fn groupCollapsed(_: *const Console, values: []js.Value) void {
+    logger.info(.js, "console.groupCollapsed", .{ValueWriter{ .values = values }});
 }
 
 pub fn groupEnd(_: *const Console) void {}
