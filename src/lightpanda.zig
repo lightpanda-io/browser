@@ -74,8 +74,8 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
         };
     }
 
-    if (app.config.cookieJarFile()) |cookie_jar_path| {
-        defer {
+    defer {
+        if (app.config.cookieJarFile()) |cookie_jar_path| {
             cookies.saveToFile(&session.cookie_jar, cookie_jar_path) catch |err| {
                 log.err(.app, "cookie save error", .{ .err = err });
             };
