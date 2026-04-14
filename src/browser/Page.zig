@@ -462,7 +462,7 @@ pub fn releaseArena(self: *Page, allocator: Allocator) void {
     return self._session.releaseArena(allocator);
 }
 
-pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
+pub fn isSameOrigin(self: *const Page, url: [:0]const u8) bool {
     const current_origin = self.origin orelse return false;
 
     // fastpath

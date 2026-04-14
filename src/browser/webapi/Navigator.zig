@@ -139,7 +139,7 @@ fn validateProtocolHandlerURL(url: [:0]const u8, page: *const Page) !void {
     if (std.mem.indexOf(u8, url, "%s") == null) {
         return error.SyntaxError;
     }
-    if (try page.isSameOrigin(url) == false) {
+    if (page.isSameOrigin(url) == false) {
         return error.SyntaxError;
     }
 }
