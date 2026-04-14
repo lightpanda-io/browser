@@ -1,4 +1,5 @@
 const std = @import("std");
+const lp = @import("lightpanda");
 
 pub const TypeArgs = struct {
     selector: []const u8,
@@ -362,6 +363,120 @@ const Quoted = struct {
 
 fn quote(s: []const u8) Quoted {
     return .{ .s = s };
+}
+
+/// A serialized LLM tool call: tool name plus JSON arguments.
+/// `args_json` is empty for no-arg tools (e.g. tree, markdown).
+pub const ToolCall = struct {
+    name: []const u8,
+    args_json: []const u8,
+};
+
+/// Callback for resolving placeholder strings (typically `$LP_*` env vars)
+/// inside selector-like fields before serialization. Pass `noSubstitute`
+/// when raw output is desired (e.g. in tests).
+pub const SubstituteFn = *const fn (arena: std.mem.Allocator, input: []const u8) []const u8;
+
+pub fn noSubstitute(_: std.mem.Allocator, input: []const u8) []const u8 {
+    return input;
+}
+
+/// Map a Command to its (tool_name, JSON args) representation. Returns
+/// null for variants without a 1:1 tool mapping (login, accept_cookies,
+/// natural_language, comment, exit, extract — extract is rendered as a
+/// custom `eval` script by the caller).
+///
+/// `substitute` is applied to selector-like fields. The `value` field of
+/// `type_cmd` is intentionally NOT substituted: `execFill` in
+/// `browser/tools.zig` substitutes it itself so the secret never appears
+/// in the result text echoed back to the LLM/terminal.
+pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: SubstituteFn) ?ToolCall {
+    const Action = lp.tools.Action;
+    return switch (cmd) {
+        .goto => |url| .{ .name = @tagName(Action.goto), .args_json = buildJson(arena, .{ .url = substitute(arena, url) }) },
+        .click => |sel| .{ .name = @tagName(Action.click), .args_json = buildJson(arena, .{ .selector = substitute(arena, sel) }) },
+        .type_cmd => |args| .{ .name = @tagName(Action.fill), .args_json = buildJson(arena, .{
+            .selector = substitute(arena, args.selector),
+            .value = args.value,
+        }) },
+        .wait => |sel| .{ .name = @tagName(Action.waitForSelector), .args_json = buildJson(arena, .{ .selector = sel }) },
+        .scroll => |args| .{ .name = @tagName(Action.scroll), .args_json = buildJson(arena, .{ .x = args.x, .y = args.y }) },
+        .hover => |sel| .{ .name = @tagName(Action.hover), .args_json = buildJson(arena, .{ .selector = substitute(arena, sel) }) },
+        .select => |args| .{ .name = @tagName(Action.selectOption), .args_json = buildJson(arena, .{
+            .selector = substitute(arena, args.selector),
+            .value = substitute(arena, args.value),
+        }) },
+        .check => |args| .{ .name = @tagName(Action.setChecked), .args_json = buildJson(arena, .{
+            .selector = substitute(arena, args.selector),
+            .checked = args.checked,
+        }) },
+        .tree => .{ .name = @tagName(Action.tree), .args_json = "" },
+        .markdown => .{ .name = @tagName(Action.markdown), .args_json = "" },
+        .eval_js => |script| .{ .name = @tagName(Action.eval), .args_json = buildJson(arena, .{ .script = script }) },
+        .extract, .exit, .natural_language, .comment, .login, .accept_cookies => null,
+    };
+}
+
+/// Inverse of `toToolCall`: parse an LLM tool call into a Command, or
+/// return null if the tool name doesn't correspond to a Pandascript
+/// command. Variants emitted by `toToolCall` round-trip through this.
+pub fn fromToolCall(arena: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) ?Command {
+    const Action = lp.tools.Action;
+    const action = std.meta.stringToEnum(Action, tool_name) orelse return null;
+    const parsed = std.json.parseFromSlice(std.json.Value, arena, arguments, .{}) catch return null;
+    const obj = switch (parsed.value) {
+        .object => |o| o,
+        else => return null,
+    };
+
+    return switch (action) {
+        .goto => .{ .goto = getJsonString(obj, "url") orelse return null },
+        .click => .{ .click = getJsonString(obj, "selector") orelse return null },
+        .hover => .{ .hover = getJsonString(obj, "selector") orelse return null },
+        .eval => .{ .eval_js = getJsonString(obj, "script") orelse return null },
+        .waitForSelector => .{ .wait = getJsonString(obj, "selector") orelse return null },
+        .fill => .{ .type_cmd = .{
+            .selector = getJsonString(obj, "selector") orelse return null,
+            .value = getJsonString(obj, "value") orelse return null,
+        } },
+        .selectOption => .{ .select = .{
+            .selector = getJsonString(obj, "selector") orelse return null,
+            .value = getJsonString(obj, "value") orelse return null,
+        } },
+        .setChecked => .{ .check = .{
+            .selector = getJsonString(obj, "selector") orelse return null,
+            .checked = switch (obj.get("checked") orelse return null) {
+                .bool => |b| b,
+                else => return null,
+            },
+        } },
+        .scroll => blk: {
+            if (obj.get("backendNodeId") != null) break :blk null;
+            const x: i32 = switch (obj.get("x") orelse std.json.Value{ .integer = 0 }) {
+                .integer => |i| @intCast(i),
+                else => 0,
+            };
+            const y: i32 = switch (obj.get("y") orelse std.json.Value{ .integer = 0 }) {
+                .integer => |i| @intCast(i),
+                else => 0,
+            };
+            break :blk .{ .scroll = .{ .x = x, .y = y } };
+        },
+        else => null,
+    };
+}
+
+fn getJsonString(o: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    return switch (o.get(key) orelse return null) {
+        .string => |s| s,
+        else => null,
+    };
+}
+
+fn buildJson(arena: std.mem.Allocator, value: anytype) []const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    std.json.Stringify.value(value, .{}, &aw.writer) catch return "{}";
+    return aw.written();
 }
 
 // --- Tests ---
@@ -775,4 +890,117 @@ test "format with both quote types falls back to single quotes" {
     try cmd.format(&aw.writer);
     // Fallback — output is ambiguous on parse, but the format is pinned.
     try std.testing.expectEqualStrings("CLICK 'a[x='y'][z=\"w\"]'", aw.written());
+}
+
+// --- Tool-call round-trip tests ---
+//
+// These lock the (Action ↔ Command) mapping table. If you add a new Command
+// variant, extend both `toToolCall` and `fromToolCall` and add a case here.
+
+fn expectRoundTrip(cmd: Command) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const tc = toToolCall(a, cmd, noSubstitute) orelse return error.NoToolMapping;
+    const back = fromToolCall(a, tc.name, if (tc.args_json.len == 0) "{}" else tc.args_json) orelse
+        return error.RoundTripFailed;
+    try std.testing.expectEqualDeep(cmd, back);
+}
+
+test "toToolCall/fromToolCall round-trip: goto" {
+    try expectRoundTrip(.{ .goto = "https://example.com" });
+}
+
+test "toToolCall/fromToolCall round-trip: click" {
+    try expectRoundTrip(.{ .click = "#login-btn" });
+}
+
+test "toToolCall/fromToolCall round-trip: type_cmd" {
+    try expectRoundTrip(.{ .type_cmd = .{ .selector = "#email", .value = "x@y.z" } });
+}
+
+test "toToolCall/fromToolCall round-trip: wait" {
+    try expectRoundTrip(.{ .wait = ".loaded" });
+}
+
+test "toToolCall/fromToolCall round-trip: scroll" {
+    try expectRoundTrip(.{ .scroll = .{ .x = 0, .y = 500 } });
+}
+
+test "toToolCall/fromToolCall round-trip: hover" {
+    try expectRoundTrip(.{ .hover = ".menu-item" });
+}
+
+test "toToolCall/fromToolCall round-trip: select" {
+    try expectRoundTrip(.{ .select = .{ .selector = "#country", .value = "US" } });
+}
+
+test "toToolCall/fromToolCall round-trip: check true and false" {
+    try expectRoundTrip(.{ .check = .{ .selector = "#tos", .checked = true } });
+    try expectRoundTrip(.{ .check = .{ .selector = "#tos", .checked = false } });
+}
+
+test "toToolCall/fromToolCall round-trip: eval_js" {
+    try expectRoundTrip(.{ .eval_js = "document.title" });
+}
+
+test "toToolCall: variants without tool mapping return null" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expect(toToolCall(a, .{ .extract = ".x" }, noSubstitute) == null);
+    try std.testing.expect(toToolCall(a, .login, noSubstitute) == null);
+    try std.testing.expect(toToolCall(a, .accept_cookies, noSubstitute) == null);
+    try std.testing.expect(toToolCall(a, .exit, noSubstitute) == null);
+    try std.testing.expect(toToolCall(a, .comment, noSubstitute) == null);
+    try std.testing.expect(toToolCall(a, .{ .natural_language = "hi" }, noSubstitute) == null);
+}
+
+test "fromToolCall: unknown tool returns null" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expect(fromToolCall(arena.allocator(), "no_such_tool", "{}") == null);
+}
+
+test "fromToolCall: missing required field returns null" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expect(fromToolCall(arena.allocator(), "click", "{}") == null);
+}
+
+test "toToolCall: substitute callback applied to selector fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const upcase = struct {
+        fn f(ar: std.mem.Allocator, input: []const u8) []const u8 {
+            const out = ar.alloc(u8, input.len) catch return input;
+            for (input, 0..) |c, i| out[i] = std.ascii.toUpper(c);
+            return out;
+        }
+    }.f;
+
+    const tc = toToolCall(a, .{ .click = "abc" }, upcase).?;
+    try std.testing.expectEqualStrings("click", tc.name);
+    try std.testing.expectEqualStrings("{\"selector\":\"ABC\"}", tc.args_json);
+}
+
+test "toToolCall: type_cmd value is NOT substituted" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const upcase = struct {
+        fn f(ar: std.mem.Allocator, input: []const u8) []const u8 {
+            const out = ar.alloc(u8, input.len) catch return input;
+            for (input, 0..) |c, i| out[i] = std.ascii.toUpper(c);
+            return out;
+        }
+    }.f;
+
+    const tc = toToolCall(a, .{ .type_cmd = .{ .selector = "abc", .value = "$LP_PASSWORD" } }, upcase).?;
+    try std.testing.expectEqualStrings("fill", tc.name);
+    // selector substituted, value preserved as $LP_* reference
+    try std.testing.expectEqualStrings("{\"selector\":\"ABC\",\"value\":\"$LP_PASSWORD\"}", tc.args_json);
 }

@@ -593,7 +593,7 @@ fn runHealTurn(self: *Self, prompt: []const u8, arena: std.mem.Allocator) ![]Com
     var cmds: std.ArrayList(Command.Command) = .empty;
     for (result.tool_calls_made) |tc| {
         if (!std.mem.startsWith(u8, tc.result, "Error:")) {
-            if (toolCallToCommand(ma, tc.name, tc.arguments)) |cmd| {
+            if (Command.fromToolCall(ma, tc.name, tc.arguments)) |cmd| {
                 cmds.append(arena, cmd) catch {};
             }
         }
@@ -685,7 +685,7 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
     var recorded_any = false;
     for (result.tool_calls_made) |tc| {
         if (!std.mem.startsWith(u8, tc.result, "Error:")) {
-            if (toolCallToCommand(ma, tc.name, tc.arguments)) |cmd| {
+            if (Command.fromToolCall(ma, tc.name, tc.arguments)) |cmd| {
                 if (!recorded_any) {
                     if (record_comment.len > 0) self.recorder.recordComment(record_comment);
                     recorded_any = true;
@@ -712,58 +712,6 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     };
     self.terminal.printToolResult(tool_name, tool_result);
     return tool_result;
-}
-
-fn toolCallToCommand(arena: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) ?Command.Command {
-    const action = std.meta.stringToEnum(lp.tools.Action, tool_name) orelse return null;
-    const parsed = std.json.parseFromSlice(std.json.Value, arena, arguments, .{}) catch return null;
-    const obj = switch (parsed.value) {
-        .object => |o| o,
-        else => return null,
-    };
-
-    return switch (action) {
-        .goto => .{ .goto = getJsonString(obj, "url") orelse return null },
-        .click => .{ .click = getJsonString(obj, "selector") orelse return null },
-        .hover => .{ .hover = getJsonString(obj, "selector") orelse return null },
-        .eval => .{ .eval_js = getJsonString(obj, "script") orelse return null },
-        .waitForSelector => .{ .wait = getJsonString(obj, "selector") orelse return null },
-        .fill => .{ .type_cmd = .{
-            .selector = getJsonString(obj, "selector") orelse return null,
-            .value = getJsonString(obj, "value") orelse return null,
-        } },
-        .selectOption => .{ .select = .{
-            .selector = getJsonString(obj, "selector") orelse return null,
-            .value = getJsonString(obj, "value") orelse return null,
-        } },
-        .setChecked => .{ .check = .{
-            .selector = getJsonString(obj, "selector") orelse return null,
-            .checked = switch (obj.get("checked") orelse return null) {
-                .bool => |b| b,
-                else => return null,
-            },
-        } },
-        .scroll => blk: {
-            if (obj.get("backendNodeId") != null) break :blk null;
-            const x: i32 = switch (obj.get("x") orelse std.json.Value{ .integer = 0 }) {
-                .integer => |i| @intCast(i),
-                else => 0,
-            };
-            const y: i32 = switch (obj.get("y") orelse std.json.Value{ .integer = 0 }) {
-                .integer => |i| @intCast(i),
-                else => 0,
-            };
-            break :blk .{ .scroll = .{ .x = x, .y = y } };
-        },
-        else => null,
-    };
-}
-
-fn getJsonString(o: std.json.ObjectMap, key: []const u8) ?[]const u8 {
-    return switch (o.get(key) orelse return null) {
-        .string => |s| s,
-        else => null,
-    };
 }
 
 fn getEnvApiKey(provider_type: Config.AiProvider) ?[:0]const u8 {
