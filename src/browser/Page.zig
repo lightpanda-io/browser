@@ -385,7 +385,12 @@ pub fn deinit(self: *Page, abort_http: bool) void {
             observer.releaseRef(session);
         }
 
-        self.window._document._selection.releaseRef(session);
+        var document = self.window._document;
+        document._selection.releaseRef(session);
+
+        if (document._fonts) |f| {
+            f.releaseRef(session);
+        }
     }
 
     session.browser.env.destroyContext(self.js);

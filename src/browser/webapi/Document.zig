@@ -454,6 +454,7 @@ pub fn getFonts(self: *Document, page: *Page) !*FontFaceSet {
         return fonts;
     }
     const fonts = try FontFaceSet.init(page);
+    fonts.acquireRef();
     self._fonts = fonts;
     return fonts;
 }
