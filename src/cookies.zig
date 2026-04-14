@@ -91,7 +91,7 @@ pub fn saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
     for (jar.cookies.items, 0..) |c, i| {
         if (i > 0) try w.writeAll(",");
         try w.writeAll("\n  ");
-        try std.json.stringify(JsonCookie{
+        try std.json.Stringify.value(JsonCookie{
             .name = c.name,
             .value = c.value,
             .domain = c.domain,
