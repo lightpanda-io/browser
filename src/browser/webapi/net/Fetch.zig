@@ -89,19 +89,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     const cookie_jar = switch (request._credentials) {
         .omit => null,
         .include => &page._session.cookie_jar,
-        .@"same-origin" => blk: {
-            const page_origin = URL.getOrigin(page.arena, page.url) catch break :blk null;
-            const req_origin = URL.getOrigin(page.arena, request._url) catch break :blk null;
-
-            const is_same_origin = page_origin != null and req_origin != null and
-                std.mem.eql(u8, page_origin.?, req_origin.?);
-
-            if (is_same_origin) {
-                break :blk &page._session.cookie_jar;
-            }
-
-            break :blk null;
-        },
+        .@"same-origin" => if (page.isSameOrigin(request._url)) &page._session.cookie_jar else null,
     };
 
     try http_client.request(.{
