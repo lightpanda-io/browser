@@ -325,7 +325,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
     errdefer self._style_manager.deinit();
 
     const browser = session.browser;
-    self._script_manager = ScriptManager.init(browser.allocator, browser.http_client, self);
+    self._script_manager = ScriptManager.init(browser.allocator, &browser.http_client, self);
     errdefer self._script_manager.deinit();
 
     self.js = try browser.env.createContext(self, .{
@@ -606,7 +606,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         return;
     }
 
-    var http_client = session.browser.http_client;
+    const http_client = &session.browser.http_client;
 
     self.url = try self.arena.dupeZ(u8, request_url);
     self.origin = try URL.getOrigin(self.arena, self.url);

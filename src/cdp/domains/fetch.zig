@@ -286,7 +286,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
     }
 
     // todo: replace.
-    const client = bc.cdp.browser.http_client;
+    const client = &bc.cdp.browser.http_client;
     try client.interception_layer.continueRequest(client, request);
     return cmd.sendResult(null, .{});
 }
@@ -321,7 +321,7 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
         .response = params.authChallengeResponse.response,
     });
 
-    const client = bc.cdp.browser.http_client;
+    const client = &bc.cdp.browser.http_client;
 
     if (params.authChallengeResponse.response != .ProvideCredentials) {
         transfer.abortAuthChallenge();
@@ -385,7 +385,7 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
         body = buf;
     }
 
-    const client = bc.cdp.browser.http_client;
+    const client = &bc.cdp.browser.http_client;
     try client.interception_layer.fulfillRequest(client, request, params.responseCode, params.responseHeaders orelse &.{}, body);
     return cmd.sendResult(null, .{});
 }
@@ -403,7 +403,7 @@ fn failRequest(cmd: *CDP.Command) !void {
     const pending = intercept_state.remove(request_id) orelse return error.RequestNotFound;
     const request = pending.request;
 
-    const client = bc.cdp.browser.http_client;
+    const client = &bc.cdp.browser.http_client;
     defer client.interception_layer.abortRequest(client, request);
 
     log.info(.cdp, "request intercept", .{

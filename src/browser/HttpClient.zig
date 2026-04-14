@@ -166,23 +166,21 @@ pub const CDPClient = struct {
     blocking_read_end: *const fn (*anyopaque) bool,
 };
 
-pub fn init(allocator: Allocator, network: *Network) !*Client {
+pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: ?CDPClient) !void {
     var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
     errdefer transfer_pool.deinit();
-
-    const client = try allocator.create(Client);
-    errdefer allocator.destroy(client);
 
     var handles = try http.Handles.init(network.config);
     errdefer handles.deinit();
 
     const http_proxy = network.config.httpProxy();
 
-    client.* = .{
+    self.* = Client{
         .handles = handles,
         .network = network,
         .allocator = allocator,
         .transfer_pool = transfer_pool,
+        .cdp_client = cdp_client,
 
         .use_proxy = http_proxy != null,
         .http_proxy = http_proxy,
@@ -197,25 +195,23 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
         .entry_layer = undefined,
     };
 
-    var next = client.layer();
+    var next = self.layer();
 
     if (network.config.obeyRobots()) {
-        next = layerWith(&client.robots_layer, next);
+        next = layerWith(&self.robots_layer, next);
     }
 
     if (network.config.httpCacheDir() != null) {
-        next = layerWith(&client.cache_layer, next);
+        next = layerWith(&self.cache_layer, next);
     }
 
-    next = layerWith(&client.interception_layer, next);
+    next = layerWith(&self.interception_layer, next);
 
     if (network.config.webBotAuth() != null) {
-        next = layerWith(&client.web_bot_auth_layer, next);
+        next = layerWith(&self.web_bot_auth_layer, next);
     }
 
-    client.entry_layer = next;
-
-    return client;
+    self.entry_layer = next;
 }
 
 pub fn deinit(self: *Client) void {
@@ -226,8 +222,6 @@ pub fn deinit(self: *Client) void {
     self.clearUserAgentOverride();
 
     self.robots_layer.deinit(self.allocator);
-
-    self.allocator.destroy(self);
 }
 
 pub fn layer(self: *Client) Layer {
