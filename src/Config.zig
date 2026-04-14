@@ -130,7 +130,7 @@ pub fn httpMaxResponseSize(self: *const Config) ?usize {
 
 pub fn wsMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.ws_max_concurrent orelse 8,
+        inline .serve, .fetch, .mcp => |opts| opts.common.ws_max_concurrent orelse 64,
         else => unreachable,
     };
 }

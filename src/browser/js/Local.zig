@@ -857,6 +857,18 @@ fn jsValueToTypedArray(comptime T: type, js_val: js.Value) !?[]T {
                 return ptr[0..num_elements];
             }
         },
+        f32 => {
+            if (js_val.isFloat32Array()) {
+                const ptr = @as([*]f32, @ptrCast(@alignCast(base)));
+                return ptr[0..num_elements];
+            }
+        },
+        f64 => {
+            if (js_val.isFloat64Array()) {
+                const ptr = @as([*]f64, @ptrCast(@alignCast(base)));
+                return ptr[0..num_elements];
+            }
+        },
         else => {},
     }
     return error.InvalidArgument;
@@ -983,6 +995,12 @@ fn probeJsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !Pr
                             return .{ .ok = {} };
                         },
                         i64 => if (js_val.isBigInt64Array()) {
+                            return .{ .ok = {} };
+                        },
+                        f32 => if (js_val.isFloat32Array()) {
+                            return .{ .ok = {} };
+                        },
+                        f64 => if (js_val.isFloat64Array()) {
                             return .{ .ok = {} };
                         },
                         else => {},
