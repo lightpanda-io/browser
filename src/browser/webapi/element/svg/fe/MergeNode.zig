@@ -12,10 +12,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../../../../js/js.zig");
 const Node = @import("../../../Node.zig");
 const Element = @import("../../../Element.zig");
 const Svg = @import("../../Svg.zig");
+const String = @import("../../../../../string.zig").String;
 
 const MergeNode = @This();
 _proto: *Svg,
@@ -27,6 +29,10 @@ pub fn asNode(self: *MergeNode) *Node {
     return self.asElement().asNode();
 }
 
+pub fn get_in(self: *MergeNode) []const u8 {
+    return self.asElement().getAttributeSafe(comptime String.wrap("in")) orelse "";
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(MergeNode);
     pub const Meta = struct {
@@ -34,4 +40,5 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+    pub const @"in" = bridge.accessor(MergeNode.get_in, null, .{});
 };

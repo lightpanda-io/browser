@@ -12,10 +12,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../../../../js/js.zig");
 const Node = @import("../../../Node.zig");
 const Element = @import("../../../Element.zig");
 const Svg = @import("../../Svg.zig");
+const String = @import("../../../../../string.zig").String;
 
 const FuncA = @This();
 _proto: *Svg,
@@ -27,6 +29,28 @@ pub fn asNode(self: *FuncA) *Node {
     return self.asElement().asNode();
 }
 
+pub fn get_type(self: *FuncA) []const u8 {
+    return self.asElement().getAttributeSafe(comptime String.wrap("type")) orelse "";
+}
+pub fn get_tableValues(self: *FuncA) []const u8 {
+    return self.asElement().getAttributeSafe(comptime String.wrap("tableValues")) orelse "";
+}
+pub fn get_slope(self: *FuncA) []const u8 {
+    return self.asElement().getAttributeSafe(comptime String.wrap("slope")) orelse "";
+}
+pub fn get_intercept(self: *FuncA) []const u8 {
+    return self.asElement().getAttributeSafe(comptime String.wrap("intercept")) orelse "";
+}
+pub fn get_amplitude(self: *FuncA) []const u8 {
+    return self.asElement().getAttributeSafe(comptime String.wrap("amplitude")) orelse "";
+}
+pub fn get_exponent(self: *FuncA) []const u8 {
+    return self.asElement().getAttributeSafe(comptime String.wrap("exponent")) orelse "";
+}
+pub fn get_offset(self: *FuncA) []const u8 {
+    return self.asElement().getAttributeSafe(comptime String.wrap("offset")) orelse "";
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(FuncA);
     pub const Meta = struct {
@@ -34,4 +58,11 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+    pub const @"type" = bridge.accessor(FuncA.get_type, null, .{});
+    pub const tableValues = bridge.accessor(FuncA.get_tableValues, null, .{});
+    pub const slope = bridge.accessor(FuncA.get_slope, null, .{});
+    pub const intercept = bridge.accessor(FuncA.get_intercept, null, .{});
+    pub const amplitude = bridge.accessor(FuncA.get_amplitude, null, .{});
+    pub const exponent = bridge.accessor(FuncA.get_exponent, null, .{});
+    pub const offset = bridge.accessor(FuncA.get_offset, null, .{});
 };
