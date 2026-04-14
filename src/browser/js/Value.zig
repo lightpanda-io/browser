@@ -248,9 +248,15 @@ pub fn toJson(self: Value, allocator: Allocator) ![]u8 {
 // Throws a DataCloneError for host objects (Blob, File, etc.) that cannot be serialized.
 // Does not support transferables which require additional delegate callbacks.
 pub fn structuredClone(self: Value) !Value {
-    const local = self.local;
-    const v8_context = local.handle;
-    const v8_isolate = local.isolate.handle;
+    return self.structuredCloneTo(self.local);
+}
+
+// Clone a value to a different context (within the same isolate).
+// Used for cross-context messaging (e.g., Worker <-> Page).
+pub fn structuredCloneTo(self: Value, target: *const js.Local) !Value {
+    const source_context = self.local.handle;
+    const target_context = target.handle;
+    const v8_isolate = target.isolate.handle;
 
     const SerializerDelegate = struct {
         // Called when V8 encounters a host object it doesn't know how to serialize.
@@ -280,7 +286,7 @@ pub fn structuredClone(self: Value) !Value {
 
         var write_result: v8.MaybeBool = undefined;
         v8.v8__ValueSerializer__WriteHeader(serializer);
-        v8.v8__ValueSerializer__WriteValue(serializer, v8_context, self.handle, &write_result);
+        v8.v8__ValueSerializer__WriteValue(serializer, source_context, self.handle, &write_result);
         if (!write_result.has_value or !write_result.value) {
             return error.JsException;
         }
@@ -297,14 +303,14 @@ pub fn structuredClone(self: Value) !Value {
         defer v8.v8__ValueDeserializer__DELETE(deserializer);
 
         var read_header_result: v8.MaybeBool = undefined;
-        v8.v8__ValueDeserializer__ReadHeader(deserializer, v8_context, &read_header_result);
+        v8.v8__ValueDeserializer__ReadHeader(deserializer, target_context, &read_header_result);
         if (!read_header_result.has_value or !read_header_result.value) {
             return error.JsException;
         }
-        break :blk v8.v8__ValueDeserializer__ReadValue(deserializer, v8_context) orelse return error.JsException;
+        break :blk v8.v8__ValueDeserializer__ReadValue(deserializer, target_context) orelse return error.JsException;
     };
 
-    return .{ .local = local, .handle = cloned_handle };
+    return .{ .local = target, .handle = cloned_handle };
 }
 
 pub fn persist(self: Value) !Global {

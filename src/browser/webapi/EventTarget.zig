@@ -19,11 +19,13 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
-const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const EventManager = @import("../EventManager.zig");
-const RegisterOptions = EventManager.RegisterOptions;
 
 const Event = @import("Event.zig");
+const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
+
+const RegisterOptions = EventManager.RegisterOptions;
 
 const EventTarget = @This();
 
@@ -34,6 +36,8 @@ pub const Type = union(enum) {
     generic: void,
     node: *@import("Node.zig"),
     window: *@import("Window.zig"),
+    worker: *@import("Worker.zig"),
+    worker_global_scope: *@import("WorkerGlobalScope.zig"),
     xhr: *@import("net/XMLHttpRequestEventTarget.zig"),
     abort_signal: *@import("AbortSignal.zig"),
     media_query_list: *@import("css/MediaQueryList.zig"),
@@ -48,21 +52,26 @@ pub const Type = union(enum) {
     websocket: *@import("net/WebSocket.zig"),
 };
 
-pub fn init(page: *Page) !*EventTarget {
-    return page._factory.create(EventTarget{
+pub fn init(session: *Session) !*EventTarget {
+    return session.factory.create(EventTarget{
         ._type = .generic,
     });
 }
 
-pub fn dispatchEvent(self: *EventTarget, event: *Event, page: *Page) !bool {
+pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bool {
     if (event._event_phase != .none) {
         return error.InvalidStateError;
     }
     event._is_trusted = false;
 
-    event.acquireRef();
-    defer _ = event.releaseRef(page._session);
-    try page._event_manager.dispatch(self, event);
+    switch (exec.context.global) {
+        .page => |page| {
+            event.acquireRef();
+            defer _ = event.releaseRef(page._session);
+            try page._event_manager.dispatch(self, event);
+        },
+        .worker => |wgs| try wgs.dispatch(self, event, null),
+    }
     return !event._cancelable or !event._prevent_default;
 }
 
@@ -75,12 +84,12 @@ pub const EventListenerCallback = union(enum) {
     function: js.Function,
     object: js.Object,
 };
-pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?AddEventListenerOptions, page: *Page) !void {
+pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?AddEventListenerOptions, exec: *js.Execution) !void {
     const callback = callback_ orelse return;
 
-    const em_callback = switch (callback) {
-        .object => |obj| EventManager.Callback{ .object = obj },
-        .function => |func| EventManager.Callback{ .function = func },
+    const em_callback: EventManager.Callback = switch (callback) {
+        .object => |obj| .{ .object = obj },
+        .function => |func| .{ .function = func },
     };
 
     const options = blk: {
@@ -90,7 +99,11 @@ pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventLi
             .capture => |capture| RegisterOptions{ .capture = capture },
         };
     };
-    return page._event_manager.register(self, typ, em_callback, options);
+
+    switch (exec.context.global) {
+        .page => |page| _ = try page._event_manager.register(self, typ, em_callback, options),
+        .worker => |wgs| _ = try wgs._event_manager.register(self, typ, em_callback, options),
+    }
 }
 
 const RemoveEventListenerOptions = union(enum) {
@@ -101,7 +114,7 @@ const RemoveEventListenerOptions = union(enum) {
         capture: bool = false,
     };
 };
-pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?RemoveEventListenerOptions, page: *Page) !void {
+pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?RemoveEventListenerOptions, exec: *js.Execution) !void {
     const callback = callback_ orelse return;
 
     // For object callbacks, check if handleEvent exists
@@ -111,9 +124,9 @@ pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: ?Even
         }
     }
 
-    const em_callback = switch (callback) {
-        .function => |func| EventManager.Callback{ .function = func },
-        .object => |obj| EventManager.Callback{ .object = obj },
+    const em_callback: EventManager.Callback = switch (callback) {
+        .function => |func| .{ .function = func },
+        .object => |obj| .{ .object = obj },
     };
 
     const use_capture = blk: {
@@ -123,7 +136,11 @@ pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: ?Even
             .options => |opts| opts.capture,
         };
     };
-    return page._event_manager.remove(self, typ, em_callback, use_capture);
+
+    switch (exec.context.global) {
+        .page => |page| page._event_manager.remove(self, typ, em_callback, use_capture),
+        .worker => |wgs| wgs._event_manager.remove(self, typ, em_callback, use_capture),
+    }
 }
 
 pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
@@ -131,6 +148,8 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .node => |n| n.format(writer),
         .generic => writer.writeAll("<EventTarget>"),
         .window => writer.writeAll("<Window>"),
+        .worker => writer.writeAll("<Worker>"),
+        .worker_global_scope => writer.writeAll("<WorkerGlobalScope>"),
         .xhr => writer.writeAll("<XMLHttpRequestEventTarget>"),
         .abort_signal => writer.writeAll("<AbortSignal>"),
         .media_query_list => writer.writeAll("<MediaQueryList>"),
@@ -151,6 +170,8 @@ pub fn toString(self: *EventTarget) []const u8 {
         .node => return "[object Node]",
         .generic => return "[object EventTarget]",
         .window => return "[object Window]",
+        .worker => return "[object Worker]",
+        .worker_global_scope => return "[object WorkerGlobalScope]",
         .xhr => return "[object XMLHttpRequestEventTarget]",
         .abort_signal => return "[object AbortSignal]",
         .media_query_list => return "[object MediaQueryList]",
