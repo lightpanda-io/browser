@@ -779,6 +779,85 @@ pub fn request(self: *Client, req: Request) !void {
     return self.layers.top().request(ctx, req);
 }
 
+pub const SyncResponse = struct {
+    status: u16,
+    body: std.ArrayList(u8),
+
+    pub fn deinit(self: *SyncResponse, allocator: std.mem.Allocator) void {
+        self.body.deinit(allocator);
+    }
+};
+
+const SyncContext = struct {
+    allocator: std.mem.Allocator,
+    completion: union(enum) {
+        in_progress: void,
+        done: void,
+        err: anyerror,
+        shutdown: void,
+    } = .in_progress,
+
+    status: u16 = 0,
+    body: std.ArrayList(u8),
+
+    fn headerCallback(response: Response) anyerror!bool {
+        const self: *SyncContext = @ptrCast(@alignCast(response.ctx));
+        self.status = response.status().?;
+        if (response.contentLength()) |cl| {
+            try self.body.ensureTotalCapacity(self.allocator, cl);
+        }
+        return true;
+    }
+
+    fn dataCallback(response: Response, data: []const u8) anyerror!void {
+        const self: *SyncContext = @ptrCast(@alignCast(response.ctx));
+        try self.body.appendSlice(self.allocator, data);
+    }
+
+    fn doneCallback(ctx: *anyopaque) anyerror!void {
+        const self: *SyncContext = @ptrCast(@alignCast(ctx));
+        self.completion = .done;
+    }
+
+    fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+        const self: *SyncContext = @ptrCast(@alignCast(ctx));
+        self.completion = .{ .err = err };
+    }
+
+    fn shutdownCallback(ctx: *anyopaque) void {
+        const self: *SyncContext = @ptrCast(@alignCast(ctx));
+        self.completion = .shutdown;
+    }
+};
+
+pub fn syncRequest(self: *Client, allocator: std.mem.Allocator, params: RequestParams) !SyncResponse {
+    var sync_ctx = SyncContext{ .allocator = allocator, .body = .empty };
+
+    try self.request(.{
+        .params = params,
+        .ctx = &sync_ctx,
+        .header_callback = SyncContext.headerCallback,
+        .data_callback = SyncContext.dataCallback,
+        .done_callback = SyncContext.doneCallback,
+        .error_callback = SyncContext.errorCallback,
+        .shutdown_callback = SyncContext.shutdownCallback,
+    });
+    errdefer sync_ctx.body.deinit(allocator);
+
+    while (sync_ctx.completion == .in_progress) {
+        _ = try self.tick(200);
+    }
+
+    switch (sync_ctx.completion) {
+        .in_progress => @panic("Impossible to be in progress here."),
+        .done, .shutdown => return .{
+            .status = sync_ctx.status,
+            .body = sync_ctx.body,
+        },
+        .err => |e| return e,
+    }
+}
+
 pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
     return self.transport.continueTransfer(transfer);
 }
