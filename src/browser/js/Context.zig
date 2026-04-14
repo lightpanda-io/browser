@@ -228,7 +228,13 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
     const env = self.env;
     const isolate = env.isolate;
 
-    lp.assert(self.origin.rc == 1, "Ref opaque origin", .{ .rc = self.origin.rc });
+    if (comptime IS_DEBUG) {
+        // A page starts off with an opaque origin. After navigation, setOrigin
+        // is called. This is the only time setOrigin should be called for that
+        // page. Therefore, when setOrigin is called, the previous origin should
+        // have been opaque and its rc should have been 1.
+        lp.assert(self.origin.rc == 1, "Ref opaque origin", .{ .rc = self.origin.rc });
+    }
 
     const origin = try self.session.getOrCreateOrigin(key);
 

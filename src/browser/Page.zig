@@ -142,7 +142,11 @@ _blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
 
 /// `load` events that'll be fired before window's `load` event.
 /// A call to `documentIsComplete` (which calls `_documentIsComplete`) resets it.
-_to_load: std.ArrayList(*Element.Html) = .{},
+/// Double-buffered so that dispatching load events (which may trigger JS that
+/// creates new elements) doesn't invalidate the list while iterating.
+_to_load_1: std.ArrayList(*Element.Html) = .{},
+_to_load_2: std.ArrayList(*Element.Html) = .{},
+_to_load: *std.ArrayList(*Element.Html) = undefined,
 
 _style_manager: StyleManager,
 _script_manager: ScriptManager,
@@ -280,6 +284,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         ._script_manager = undefined,
         ._event_manager = EventManager.init(session.page_arena, self),
     };
+    self._to_load = &self._to_load_1;
 
     var screen: *Screen = undefined;
     var visual_viewport: *VisualViewport = undefined;
@@ -320,7 +325,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         .identity_arena = session.page_arena,
         .call_arena = self.call_arena,
     });
-    errdefer self.js.deinit();
+    errdefer browser.env.destroyContext(self.js);
 
     document._page = self;
 
@@ -1452,14 +1457,22 @@ pub fn checkIntersections(self: *Page) !void {
 
 pub fn dispatchLoad(self: *Page) !void {
     const has_dom_load_listener = self._event_manager.has_dom_load_listener;
-    for (self._to_load.items) |html_element| {
+
+    // Swap buffers - new additions during dispatch go to the other buffer
+    const to_process = self._to_load;
+    self._to_load = if (self._to_load == &self._to_load_1)
+        &self._to_load_2
+    else
+        &self._to_load_1;
+
+    for (to_process.items) |html_element| {
         if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, self)) {
             const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
             try self._event_manager.dispatch(html_element.asEventTarget(), event);
         }
     }
-    // We drained everything.
-    self._to_load.clearRetainingCapacity();
+
+    to_process.clearRetainingCapacity();
 }
 
 pub fn scheduleMutationDelivery(self: *Page) !void {

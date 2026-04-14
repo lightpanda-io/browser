@@ -244,8 +244,6 @@ pub fn terminate(self: *Worker) void {
         resp.abort(error.Abort);
         self._http_response = null;
     }
-
-    self._page.removeWorker(self);
 }
 
 // Posts a message from the page to the worker.
