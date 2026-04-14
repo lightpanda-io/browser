@@ -81,7 +81,7 @@ fn queryElementProperty(self: *Self, arena: std.mem.Allocator, selector: []const
     const script = std.fmt.allocPrint(
         arena,
         "(function(){{ var el = document.querySelector({s}); return el ? {s} : null; }})()",
-        .{ jsonQuote(arena, selector), js_property },
+        .{ quoteJson(arena, selector), js_property },
     ) catch return null;
     return self.tool_executor.callEval(arena, script);
 }
@@ -104,18 +104,18 @@ fn getDomElementCount(self: *Self, arena: std.mem.Allocator) ?u32 {
     return std.fmt.parseInt(u32, result, 10) catch null;
 }
 
-fn jsonQuote(arena: std.mem.Allocator, s: []const u8) []const u8 {
+fn quoteJson(arena: std.mem.Allocator, s: []const u8) []const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     std.json.Stringify.value(s, .{}, &aw.writer) catch return "\"\"";
     return aw.written();
 }
 
-test "jsonQuote produces valid JSON string" {
+test "quoteJson produces valid JSON string" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
-    try std.testing.expectEqualStrings("\"hello\"", jsonQuote(a, "hello"));
-    try std.testing.expectEqualStrings("\"a\\\"b\"", jsonQuote(a, "a\"b"));
-    try std.testing.expectEqualStrings("\"\"", jsonQuote(a, ""));
+    try std.testing.expectEqualStrings("\"hello\"", quoteJson(a, "hello"));
+    try std.testing.expectEqualStrings("\"a\\\"b\"", quoteJson(a, "a\"b"));
+    try std.testing.expectEqualStrings("\"\"", quoteJson(a, ""));
 }
