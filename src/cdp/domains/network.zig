@@ -257,20 +257,20 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
 
     const transfer = msg.transfer;
     const req = &transfer.req;
-    const frame_id = req.frame_id;
+    const frame_id = req.params.frame_id;
     const page = bc.session.findPageByFrameId(frame_id) orelse return;
 
     // Modify request with extra CDP headers
     for (bc.extra_headers.items) |extra| {
-        try req.headers.add(extra);
+        try req.params.headers.add(extra);
     }
 
     // We're missing a bunch of fields, but, for now, this eems like enough
     try bc.cdp.sendEvent("Network.requestWillBeSent", .{
-        .loaderId = &id.toLoaderId(req.page_id),
+        .loaderId = &id.toLoaderId(req.params.page_id),
         .requestId = &id.toRequestId(transfer),
         .frameId = &id.toFrameId(frame_id),
-        .type = req.resource_type.string(),
+        .type = req.params.resource_type.string(),
         .documentURL = page.url,
         .request = TransferAsRequestWriter.init(transfer),
         .initiator = .{ .type = "other" },
@@ -289,9 +289,9 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
-        .loaderId = &id.toLoaderId(req.page_id),
+        .loaderId = &id.toLoaderId(req.params.page_id),
         .requestId = &id.toRequestId(transfer),
-        .frameId = &id.toFrameId(req.frame_id),
+        .frameId = &id.toFrameId(req.params.frame_id),
         .response = TransferAsResponseWriter.init(arena, transfer),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
@@ -339,18 +339,18 @@ pub const TransferAsRequestWriter = struct {
 
         {
             try jws.objectField("method");
-            try jws.write(@tagName(transfer.req.method));
+            try jws.write(@tagName(transfer.req.params.method));
         }
 
         {
             try jws.objectField("hasPostData");
-            try jws.write(transfer.req.body != null);
+            try jws.write(transfer.req.params.body != null);
         }
 
         {
             try jws.objectField("headers");
             try jws.beginObject();
-            var it = transfer.req.headers.iterator();
+            var it = transfer.req.params.headers.iterator();
             while (it.next()) |hdr| {
                 try jws.objectField(hdr.name);
                 try jws.write(hdr.value);

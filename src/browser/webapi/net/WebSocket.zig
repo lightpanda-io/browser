@@ -128,11 +128,11 @@ pub fn init(url: []const u8, protocols: [][]const u8, page: *Page) !*WebSocket {
     const resolved_url = try URL.resolve(arena, page.base(), url, .{ .always_dupe = true, .encoding = page.charset });
 
     const http_client = page._session.browser.http_client;
-    const conn = http_client.network.newConnection() orelse {
+    const conn = http_client.network().newConnection() orelse {
         return error.NoFreeConnection;
     };
 
-    errdefer http_client.network.releaseConnection(conn);
+    errdefer http_client.network().releaseConnection(conn);
 
     try conn.setURL(resolved_url);
     try conn.setConnectOnly(false);
@@ -611,7 +611,7 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
         }
         // Start of new frame. Pre-allocate buffer
         self._recv_buffer.clearRetainingCapacity();
-        if (meta.len > self._http_client.max_response_size) {
+        if (meta.len > self._http_client.maxResponseSize()) {
             return error.MessageTooLarge;
         }
         try self._recv_buffer.ensureTotalCapacity(self._arena, meta.len);

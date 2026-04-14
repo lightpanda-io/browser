@@ -49,6 +49,18 @@ pub const Method = enum(u8) {
     OPTIONS = 5,
     PATCH = 6,
     PROPFIND = 7,
+
+    pub fn idempotent(self: Method) bool {
+        return switch (self) {
+            .GET,
+            .HEAD,
+            .PUT,
+            .DELETE,
+            .OPTIONS,
+            => true,
+            else => false,
+        };
+    }
 };
 
 pub const Header = struct {

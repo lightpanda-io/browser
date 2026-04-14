@@ -196,9 +196,9 @@ pub fn requestIntercept(bc: *CDP.BrowserContext, intercept: *const Notification.
 
     try bc.cdp.sendEvent("Fetch.requestPaused", .{
         .requestId = &id.toInterceptId(transfer.id),
-        .frameId = &id.toFrameId(transfer.req.frame_id),
+        .frameId = &id.toFrameId(transfer.req.params.frame_id),
         .request = network.TransferAsRequestWriter.init(transfer),
-        .resourceType = switch (transfer.req.resource_type) {
+        .resourceType = switch (transfer.req.params.resource_type) {
             .script => "Script",
             .xhr => "XHR",
             .document => "Document",
@@ -249,7 +249,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
         try transfer.updateURL(try arena.dupeZ(u8, url));
     }
     if (params.method) |method| {
-        transfer.req.method = std.meta.stringToEnum(http.Method, method) orelse return error.InvalidParams;
+        transfer.req.params.method = std.meta.stringToEnum(http.Method, method) orelse return error.InvalidParams;
     }
 
     if (params.headers) |headers| {
@@ -263,7 +263,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
         const decoder = std.base64.standard.Decoder;
         const body = try arena.alloc(u8, try decoder.calcSizeForSlice(b));
         try decoder.decode(body, b);
-        transfer.req.body = body;
+        transfer.req.params.body = body;
     }
 
     try bc.cdp.browser.http_client.continueTransfer(transfer);
@@ -400,9 +400,9 @@ pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notificati
 
     try bc.cdp.sendEvent("Fetch.authRequired", .{
         .requestId = &id.toInterceptId(transfer.id),
-        .frameId = &id.toFrameId(transfer.req.frame_id),
+        .frameId = &id.toFrameId(transfer.req.params.frame_id),
         .request = network.TransferAsRequestWriter.init(transfer),
-        .resourceType = switch (transfer.req.resource_type) {
+        .resourceType = switch (transfer.req.params.resource_type) {
             .script => "Script",
             .xhr => "XHR",
             .document => "Document",

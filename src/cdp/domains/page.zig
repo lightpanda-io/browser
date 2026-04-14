@@ -141,8 +141,8 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
         try sendPageLifecycle(bc, "load", now, frame_id, loader_id);
 
         const http_client = page._session.browser.http_client;
-        const http_active = http_client.active;
-        const total_network_activity = http_active + http_client.intercepted;
+        const http_active = http_client.active();
+        const total_network_activity = http_active + http_client.intercepted();
         if (page._notified_network_almost_idle.check(total_network_activity <= 2)) {
             try sendPageLifecycle(bc, "networkAlmostIdle", now, frame_id, loader_id);
         }

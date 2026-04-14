@@ -48,8 +48,8 @@ pub fn toLoaderId(id: u32) [14]u8 {
 const Transfer = @import("../browser/HttpClient.zig").Transfer;
 pub fn toRequestId(transfer: *const Transfer) [14]u8 {
     const req = transfer.req;
-    if (req.resource_type == .document) {
-        return toLoaderId(req.page_id);
+    if (req.params.resource_type == .document) {
+        return toLoaderId(req.params.page_id);
     }
 
     var buf: [14]u8 = undefined;
