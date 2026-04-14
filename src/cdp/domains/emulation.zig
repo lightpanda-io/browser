@@ -19,6 +19,7 @@
 const std = @import("std");
 const CDP = @import("../CDP.zig");
 const log = @import("../../log.zig");
+const Config = @import("../../Config.zig");
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
@@ -85,22 +86,13 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     }
 
     const ua = params.userAgent;
-
-    // Validate: all characters must be printable ASCII
-    for (ua) |c| {
-        if (!std.ascii.isPrint(c)) {
-            return cmd.sendError(-32602, "User agent contains non-printable characters", .{});
-        }
-    }
-
-    // Reject user agents containing "mozilla" (case-insensitive)
-    if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
-        // go-rod client automatically set a Mozilla/ user agent.
-        // Since we don't want to stop this client to work, let's ignore the
-        // new user-agent and add a log instead.
-        log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla" });
-        return cmd.sendResult(null, .{});
-    }
+    Config.validateUserAgent(ua) catch |err| switch (err) {
+        error.NonPrintable => return cmd.sendError(-32602, "User agent contains non-printable characters", .{}),
+        error.Reserved => {
+            log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla" });
+            return cmd.sendResult(null, .{});
+        },
+    };
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const http_client = cmd.cdp.browser.http_client;
@@ -127,6 +119,9 @@ test "cdp.Emulation: setUserAgentOverride with valid user agent" {
 }
 
 test "cdp.Emulation: setUserAgentOverride ignores mozilla" {
+    const filter: testing.LogFilter = .init(&.{.not_implemented});
+    defer filter.deinit();
+
     var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-UA2" });
@@ -138,10 +133,13 @@ test "cdp.Emulation: setUserAgentOverride ignores mozilla" {
     });
 
     try ctx.expectSentResult(null, .{});
-    try testing.expect(ctx.cdp().browser_context.?.user_agent_changed == false);
+    try testing.expectEqual(false, ctx.cdp().browser_context.?.user_agent_changed);
 }
 
 test "cdp.Emulation: setUserAgentOverride ignores mozilla case insensitive" {
+    const filter: testing.LogFilter = .init(&.{.not_implemented});
+    defer filter.deinit();
+
     var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-UA3" });
@@ -153,10 +151,13 @@ test "cdp.Emulation: setUserAgentOverride ignores mozilla case insensitive" {
     });
 
     try ctx.expectSentResult(null, .{});
-    try testing.expect(ctx.cdp().browser_context.?.user_agent_changed == false);
+    try testing.expectEqual(false, ctx.cdp().browser_context.?.user_agent_changed);
 }
 
 test "cdp.Emulation: setUserAgentOverride rejects non-printable characters" {
+    const filter: testing.LogFilter = .init(&.{.not_implemented});
+    defer filter.deinit();
+
     var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-UA4" });
@@ -171,6 +172,9 @@ test "cdp.Emulation: setUserAgentOverride rejects non-printable characters" {
 }
 
 test "cdp.Emulation: setUserAgentOverride with optional params" {
+    const filter: testing.LogFilter = .init(&.{.not_implemented});
+    defer filter.deinit();
+
     var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-UA5" });
