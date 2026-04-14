@@ -242,7 +242,6 @@ fn httpErrorCallback(ctx: *anyopaque, _: anyerror) void {
 
     defer if (self._owns_response) {
         response.deinit(self._page._session);
-        self._owns_response = false;
     };
 
     var ls: js.Local.Scope = undefined;
