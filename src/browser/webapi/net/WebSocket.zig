@@ -88,20 +88,6 @@ pub const BinaryType = enum {
     arraybuffer,
 };
 
-fn isValidProtocol(protocol: []const u8) bool {
-    if (protocol.len == 0) return false;
-    for (protocol) |c| {
-        // Control characters
-        if (c <= 31 or c == 127) return false;
-        // Separators per RFC 2616
-        switch (c) {
-            '(', ')', '<', '>', '@', ',', ';', ':', '\\', '"', '/', '[', ']', '?', '=', '{', '}', ' ', '\t' => return false,
-            else => {},
-        }
-    }
-    return true;
-}
-
 pub fn init(url: []const u8, protocols: [][]const u8, page: *Page) !*WebSocket {
     {
         if (url.len < 6) {
@@ -196,6 +182,18 @@ pub fn deinit(self: *WebSocket, session: *Session) void {
     session.releaseArena(self._arena);
 }
 
+pub fn releaseRef(self: *WebSocket, session: *Session) void {
+    self._rc.release(self, session);
+}
+
+pub fn acquireRef(self: *WebSocket) void {
+    self._rc.acquire();
+}
+
+fn asEventTarget(self: *WebSocket) *EventTarget {
+    return self._proto;
+}
+
 // we're being aborted internally (e.g. page shutting down)
 pub fn kill(self: *WebSocket) void {
     self.cleanup();
@@ -211,13 +209,15 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
         log.info(.websocket, "disconnected", .{ .url = self._url, .reason = "closed" });
     }
 
-    self.cleanup();
+    defer self.cleanup();
 
     // Use 1006 (abnormal closure) if connection wasn't cleanly closed
     const code = if (was_clean) self._close_code else 1006;
     const reason = if (was_clean) self._close_reason else "";
 
-    // Spec requires error event before close on abnormal closure
+    // Spec requires error event before close on abnormal closure.
+    // Dispatch events before cleanup since cleanup releases the ref count
+    // which may free our event handler references.
     if (!was_clean) {
         self.dispatchErrorEvent() catch |err| {
             log.err(.websocket, "error event dispatch failed", .{ .err = err });
@@ -239,18 +239,6 @@ fn cleanup(self: *WebSocket) void {
     }
 }
 
-pub fn releaseRef(self: *WebSocket, session: *Session) void {
-    self._rc.release(self, session);
-}
-
-pub fn acquireRef(self: *WebSocket) void {
-    self._rc.acquire();
-}
-
-fn asEventTarget(self: *WebSocket) *EventTarget {
-    return self._proto;
-}
-
 fn queueMessage(self: *WebSocket, msg: Message) !void {
     const was_empty = self._send_queue.items.len == 0;
     try self._send_queue.append(self._arena, msg);
@@ -261,6 +249,20 @@ fn queueMessage(self: *WebSocket, msg: Message) !void {
             try conn.pause(.{ .cont = true });
         }
     }
+}
+
+fn isValidProtocol(protocol: []const u8) bool {
+    if (protocol.len == 0) return false;
+    for (protocol) |c| {
+        // Control characters and non-ASCII
+        if (c <= 31 or c >= 127) return false;
+        // Separators per RFC 2616
+        switch (c) {
+            '(', ')', '<', '>', '@', ',', ';', ':', '\\', '"', '/', '[', ']', '?', '=', '{', '}', ' ', '\t' => return false,
+            else => {},
+        }
+    }
+    return true;
 }
 
 /// WebSocket send() accepts string, Blob, ArrayBuffer, or TypedArray
@@ -279,17 +281,16 @@ const BinaryData = union(enum) {
     uint32: []u32,
     int64: []i64,
     uint64: []u64,
+    float32: []f32,
+    float64: []f64,
 
     fn asBuffer(self: BinaryData) []u8 {
         return switch (self) {
             .int8 => |b| @as([*]u8, @ptrCast(b.ptr))[0..b.len],
             .uint8 => |b| b,
-            .int16 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 2],
-            .uint16 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 2],
-            .int32 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 4],
-            .uint32 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 4],
-            .int64 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 8],
-            .uint64 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 8],
+            inline .int16, .uint16 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 2],
+            inline .int32, .uint32, .float32 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 4],
+            inline .int64, .uint64, .float64 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 8],
         };
     }
 };
@@ -754,7 +755,7 @@ pub const JsApi = struct {
     pub const onclose = bridge.accessor(WebSocket.getOnClose, WebSocket.setOnClose, .{});
 
     pub const send = bridge.function(WebSocket.send, .{ .dom_exception = true });
-    pub const close = bridge.function(WebSocket.close, .{});
+    pub const close = bridge.function(WebSocket.close, .{ .dom_exception = true });
 };
 
 const testing = @import("../../../testing.zig");

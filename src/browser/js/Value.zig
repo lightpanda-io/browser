@@ -155,6 +155,14 @@ pub fn isBigInt64Array(self: Value) bool {
     return v8.v8__Value__IsBigInt64Array(self.handle);
 }
 
+pub fn isFloat32Array(self: Value) bool {
+    return v8.v8__Value__IsFloat32Array(self.handle);
+}
+
+pub fn isFloat64Array(self: Value) bool {
+    return v8.v8__Value__IsFloat64Array(self.handle);
+}
+
 pub fn isPromise(self: Value) bool {
     return v8.v8__Value__IsPromise(self.handle);
 }
