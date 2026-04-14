@@ -407,30 +407,15 @@ fn flushReplacements(self: *Self, path: []const u8, content: []const u8, replace
         self.terminal.printInfoFmt("Backup saved to {s}", .{bak_path});
     } else |_| {}
 
-    // Build new content by applying replacements.
-    // Invariant: each replacement's `original_span` must alias into `content`
-    // (i.e. point within the same allocation). The pointer arithmetic below
-    // relies on this to compute byte offsets.
-    const content_base = @intFromPtr(content.ptr);
-    var new_content: std.ArrayList(u8) = .empty;
-    new_content.ensureTotalCapacity(self.allocator, content.len) catch {};
-    var pos: usize = 0;
-    for (replacements) |r| {
-        const r_start = @intFromPtr(r.original_span.ptr) - content_base;
-        const r_end = r_start + r.original_span.len;
-        new_content.appendSlice(self.allocator, content[pos..r_start]) catch return;
-        new_content.appendSlice(self.allocator, r.new_text) catch return;
-        pos = r_end;
-    }
-    new_content.appendSlice(self.allocator, content[pos..]) catch return;
-    defer new_content.deinit(self.allocator);
+    const new_content = applyReplacements(self.allocator, content, replacements) catch return;
+    defer self.allocator.free(new_content);
 
     // Atomic write: tmp file then rename.
     const tmp_path = std.fmt.allocPrint(self.allocator, "{s}.tmp", .{path}) catch return;
     defer self.allocator.free(tmp_path);
 
     const tmp_file = std.fs.cwd().createFile(tmp_path, .{}) catch return;
-    tmp_file.writeAll(new_content.items) catch {
+    tmp_file.writeAll(new_content) catch {
         tmp_file.close();
         return;
     };
@@ -442,6 +427,33 @@ fn flushReplacements(self: *Self, path: []const u8, content: []const u8, replace
     };
 
     self.terminal.printInfoFmt("Script updated with {d} healed command(s).", .{replacements.len});
+}
+
+/// Build a new buffer by splicing `replacements` into `content`.
+///
+/// Invariant: each replacement's `original_span` must alias into `content`
+/// (i.e. point within the same allocation) and spans must be in order and
+/// non-overlapping. The pointer arithmetic below relies on this to compute
+/// byte offsets.
+fn applyReplacements(
+    allocator: std.mem.Allocator,
+    content: []const u8,
+    replacements: []const Replacement,
+) error{OutOfMemory}![]u8 {
+    const content_base = @intFromPtr(content.ptr);
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.ensureTotalCapacity(allocator, content.len);
+    var pos: usize = 0;
+    for (replacements) |r| {
+        const r_start = @intFromPtr(r.original_span.ptr) - content_base;
+        const r_end = r_start + r.original_span.len;
+        try out.appendSlice(allocator, content[pos..r_start]);
+        try out.appendSlice(allocator, r.new_text);
+        pos = r_end;
+    }
+    try out.appendSlice(allocator, content[pos..]);
+    return out.toOwnedSlice(allocator);
 }
 
 fn isRetryable(cmd: Command.Command) bool {
@@ -770,4 +782,68 @@ fn defaultModel(provider_type: Config.AiProvider) []const u8 {
         .gemini => "gemini-3.1-flash-lite-preview",
         .ollama => "gemma3",
     };
+}
+
+// --- Tests ---
+
+test "applyReplacements: empty list returns copy" {
+    const content = "CLICK 'a'\nCLICK 'b'\n";
+    const out = try applyReplacements(std.testing.allocator, content, &.{});
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings(content, out);
+}
+
+test "applyReplacements: single span in the middle" {
+    const content = "GOTO https://x\nCLICK 'old'\nCLICK 'tail'\n";
+    const span_start = std.mem.indexOf(u8, content, "CLICK 'old'\n").?;
+    const span = content[span_start .. span_start + "CLICK 'old'\n".len];
+    const replacements = [_]Replacement{
+        .{ .original_span = span, .new_text = "CLICK 'new'\n" },
+    };
+    const out = try applyReplacements(std.testing.allocator, content, &replacements);
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings(
+        "GOTO https://x\nCLICK 'new'\nCLICK 'tail'\n",
+        out,
+    );
+}
+
+test "applyReplacements: multiple non-contiguous spans" {
+    const content = "A\nB\nC\nD\nE\n";
+    const b_span = content[std.mem.indexOf(u8, content, "B\n").?..][0..2];
+    const d_span = content[std.mem.indexOf(u8, content, "D\n").?..][0..2];
+    const replacements = [_]Replacement{
+        .{ .original_span = b_span, .new_text = "bb\n" },
+        .{ .original_span = d_span, .new_text = "dd\n" },
+    };
+    const out = try applyReplacements(std.testing.allocator, content, &replacements);
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("A\nbb\nC\ndd\nE\n", out);
+}
+
+test "applyReplacements: replacement at start and end" {
+    const content = "first\nmiddle\nlast\n";
+    const first_span = content[0..6];
+    const last_span = content[std.mem.indexOf(u8, content, "last\n").?..][0..5];
+    const replacements = [_]Replacement{
+        .{ .original_span = first_span, .new_text = "FIRST\n" },
+        .{ .original_span = last_span, .new_text = "LAST\n" },
+    };
+    const out = try applyReplacements(std.testing.allocator, content, &replacements);
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("FIRST\nmiddle\nLAST\n", out);
+}
+
+test "applyReplacements: new_text longer and shorter than span" {
+    const content = "X\nshort\nY\n";
+    const span = content[std.mem.indexOf(u8, content, "short\n").?..][0..6];
+    const replacements = [_]Replacement{
+        .{ .original_span = span, .new_text = "a much longer replacement line\n" },
+    };
+    const out = try applyReplacements(std.testing.allocator, content, &replacements);
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings(
+        "X\na much longer replacement line\nY\n",
+        out,
+    );
 }

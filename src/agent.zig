@@ -7,6 +7,7 @@ pub const Recorder = @import("agent/Recorder.zig");
 pub const Verifier = @import("agent/Verifier.zig");
 
 test {
+    _ = Agent;
     _ = Command;
     _ = CommandExecutor;
     _ = Recorder;
