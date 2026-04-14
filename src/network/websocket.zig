@@ -24,7 +24,8 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 const log = @import("lightpanda").log;
 const assert = @import("lightpanda").assert;
-const CDP_MAX_MESSAGE_SIZE = @import("../Config.zig").CDP_MAX_MESSAGE_SIZE;
+const Config = @import("../Config.zig");
+const CDP_MAX_MESSAGE_SIZE = Config.CDP_MAX_MESSAGE_SIZE;
 
 const Fragments = struct {
     type: Message.Type,
@@ -427,11 +428,134 @@ pub const WsConnection = struct {
         return self.send(framed);
     }
 
+    pub const HttpResult = enum { more, upgraded, close };
+
+    pub fn handshake(self: *WsConnection) !bool {
+        // Liveness is enforced by TCP keepalive configured in
+        // Server.setTcpKeepalive; a dead peer surfaces as a poll error or
+        // EOF from read(). The poll blocks for ~24 days rather than tracking
+        // an app-level timeout. Capped at i32-max because posix.poll narrows
+        // to c_int.
+        const wait_ms: i32 = std.math.maxInt(i32);
+        while (true) {
+            var pfds = [_]posix.pollfd{.{
+                .fd = self.socket,
+                .events = posix.POLL.IN,
+                .revents = 0,
+            }};
+            const n = try posix.poll(&pfds, wait_ms);
+            if (n == 0) {
+                log.info(.app, "CDP timeout", .{});
+                return false;
+            }
+            const read_bytes = self.read() catch |err| {
+                log.warn(.app, "CDP read", .{ .err = err });
+                return false;
+            };
+            if (read_bytes == 0) {
+                log.info(.app, "CDP disconnect", .{});
+                return false;
+            }
+            const result = self.processHttpRequest() catch return false;
+            switch (result) {
+                .more => continue,
+                .upgraded => return true,
+                .close => return false,
+            }
+        }
+    }
+
     pub fn read(self: *WsConnection) !usize {
         const n = try posix.read(self.socket, self.reader.readBuf());
         self.reader.len += n;
         return n;
     }
+
+    fn processHttpRequest(self: *WsConnection) !HttpResult {
+        assert(self.reader.pos == 0, "WsConnection.HTTP pos", .{ .pos = self.reader.pos });
+        const request = self.reader.buf[0..self.reader.len];
+
+        if (request.len > Config.CDP_MAX_HTTP_REQUEST_SIZE) {
+            self.sendHttpError(413, "Request too large");
+            return error.RequestTooLarge;
+        }
+
+        // we're only expecting [body-less] GET requests.
+        if (std.mem.endsWith(u8, request, "\r\n\r\n") == false) {
+            // we need more data, put any more data here
+            return .more;
+        }
+
+        // the next incoming data can go to the front of our buffer
+        defer self.reader.len = 0;
+        return self.handleHttpRequest(request) catch |err| {
+            switch (err) {
+                error.NotFound => self.sendHttpError(404, "Not found"),
+                error.InvalidRequest => self.sendHttpError(400, "Invalid request"),
+                error.InvalidProtocol => self.sendHttpError(400, "Invalid HTTP protocol"),
+                error.MissingHeaders => self.sendHttpError(400, "Missing required header"),
+                error.InvalidUpgradeHeader => self.sendHttpError(400, "Unsupported upgrade type"),
+                error.InvalidVersionHeader => self.sendHttpError(400, "Invalid websocket version"),
+                error.InvalidConnectionHeader => self.sendHttpError(400, "Invalid connection header"),
+                else => {
+                    log.err(.app, "server 500", .{ .err = err, .req = request[0..@min(100, request.len)] });
+                    self.sendHttpError(500, "Internal Server Error");
+                },
+            }
+            return err;
+        };
+    }
+
+    fn handleHttpRequest(self: *WsConnection, request: []u8) !HttpResult {
+        if (request.len < 18) {
+            // 18 is [generously] the smallest acceptable HTTP request
+            return error.InvalidRequest;
+        }
+
+        if (std.mem.eql(u8, request[0..4], "GET ") == false) {
+            return error.NotFound;
+        }
+
+        const url_end = std.mem.indexOfScalarPos(u8, request, 4, ' ') orelse {
+            return error.InvalidRequest;
+        };
+
+        const url = request[4..url_end];
+
+        if (std.mem.eql(u8, url, "/")) {
+            try self.upgrade(request);
+            return .upgraded;
+        }
+
+        if (std.mem.eql(u8, url, "/json/version") or std.mem.eql(u8, url, "/json/version/")) {
+            try self.send(self.json_version_response);
+            // Chromedp (a Go driver) does an http request to /json/version
+            // then to / (websocket upgrade) using a different connection.
+            // Since we only allow 1 connection at a time, the 2nd one (the
+            // websocket upgrade) blocks until the first one times out.
+            // We can avoid that by closing the connection. json_version_response
+            // has a Connection: Close header too.
+            self.shutdown();
+            return .close;
+        }
+
+        if (std.mem.eql(u8, url, "/json/list") or std.mem.eql(u8, url, "/json/list/") or
+            std.mem.eql(u8, url, "/json") or std.mem.eql(u8, url, "/json/"))
+        {
+            try self.send(empty_json_list_response);
+            self.shutdown();
+            return .close;
+        }
+
+        return error.NotFound;
+    }
+
+    const empty_json_list_response =
+        "HTTP/1.1 200 OK\r\n" ++
+        "Content-Length: 2\r\n" ++
+        "Connection: Close\r\n" ++
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+        "[]";
 
     pub fn processMessages(self: *WsConnection, handler: anytype) !bool {
         var reader = &self.reader;

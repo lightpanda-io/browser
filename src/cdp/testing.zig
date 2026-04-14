@@ -22,6 +22,8 @@ const posix = std.posix;
 
 const CDP = @import("CDP.zig");
 const Server = @import("../Server.zig");
+const Net = @import("../network/websocket.zig");
+const HttpClient = @import("../browser/HttpClient.zig");
 
 const base = @import("../testing.zig");
 pub const allocator = base.allocator;
@@ -315,7 +317,9 @@ pub fn context() !TestContext {
     try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.RCVBUF, &std.mem.toBytes(@as(c_int, 32_768)));
     try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.SNDBUF, &std.mem.toBytes(@as(c_int, 32_768)));
 
-    const client = try Server.Client.init(pair[1], base.arena_allocator, base.test_app, "json-version");
+    const ws = try Net.WsConnection.init(pair[1], base.arena_allocator, "json-version");
+    const http = try HttpClient.init(base.arena_allocator, &base.test_app.network);
+    const client = Server.Client.init(base.arena_allocator, base.test_app, ws, http);
 
     return .{
         .client = client,
