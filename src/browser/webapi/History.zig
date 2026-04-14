@@ -92,7 +92,7 @@ fn goInner(delta: i32, page: *Page) !void {
     const entry = page._session.navigation._entries.items[index];
 
     if (entry._url) |url| {
-        if (try page.isSameOrigin(url)) {
+        if (page.isSameOrigin(url)) {
             const target = page.window.asEventTarget();
             if (page._event_manager.hasDirectListeners(target, "popstate", page.window._on_popstate)) {
                 const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, page)).asEvent();
