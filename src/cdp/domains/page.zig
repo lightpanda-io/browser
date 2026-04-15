@@ -283,6 +283,12 @@ fn navigate(cmd: *CDP.Command) !void {
     var page = session.currentPage() orelse return error.PageNotLoaded;
 
     if (page._load_state != .waiting) {
+        // Reset isolated world identities to disable V8 weak callbacks before
+        // resetPageResources releases refs. Prevents double-release crashes.
+        for (bc.isolated_worlds.items) |isolated_world| {
+            isolated_world.identity.deinit();
+            isolated_world.identity = .{};
+        }
         page = try session.replacePage();
     }
 
@@ -313,6 +319,12 @@ fn doReload(cmd: *CDP.Command) !void {
     const reload_url = try cmd.arena.dupeZ(u8, page.url);
 
     if (page._load_state != .waiting) {
+        // Reset isolated world identities to disable V8 weak callbacks before
+        // resetPageResources releases refs. Prevents double-release crashes.
+        for (bc.isolated_worlds.items) |isolated_world| {
+            isolated_world.identity.deinit();
+            isolated_world.identity = .{};
+        }
         page = try session.replacePage();
     }
 
