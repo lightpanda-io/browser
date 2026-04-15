@@ -481,18 +481,6 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Path to a directory to use as a Filesystem Cache for network resources.
         \\                Omitting this will result is no caching.
         \\                Defaults to no caching.
-        \\
-        \\--cookie
-        \\                Path to a JSON file to load cookies from at startup
-        \\                (read-only).
-        \\                Format: [{{name, value, domain, path, expires, secure, httpOnly}}]
-        \\                Defaults to no cookie loading.
-        \\
-        \\--cookie-jar
-        \\                Path to a JSON file to save cookies to on exit (write-only).
-        \\                Available for fetch and mcp commands.
-        \\                Format: [{{name, value, domain, path, expires, secure, httpOnly}}]
-        \\                Defaults to no cookie saving.
     ;
 
     //                                                                     MAX_HELP_LEN|
@@ -540,6 +528,13 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--wait-script-file
         \\                Like --wait-script, but reads the script from a file.
         \\
+        \\--cookie        Path to a JSON file to load cookies from (read-only).
+        \\                Defaults to no cookie loading.
+        \\
+        \\--cookie-jar    Path to a JSON file to save cookies to on exit (write-only).
+        \\                Available for fetch and mcp commands.
+        \\                Defaults to no cookie saving.
+        \\
     ++ common_options ++
         \\
         \\serve command
@@ -569,11 +564,21 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Maximum pending connections in the accept queue.
         \\                Defaults to 128.
         \\
+        \\--cookie        Path to a JSON file to load cookies from (read-only).
+        \\                Defaults to no cookie loading.
+        \\
     ++ common_options ++
         \\
         \\mcp command
         \\Starts an MCP (Model Context Protocol) server over stdio
         \\Example: {0s} mcp
+        \\
+        \\--cookie        Path to a JSON file to load cookies from (read-only).
+        \\                Defaults to no cookie loading.
+        \\
+        \\--cookie-jar    Path to a JSON file to save cookies to on exit (write-only).
+        \\                Available for fetch and mcp commands.
+        \\                Defaults to no cookie saving.
         \\
     ++ common_options ++
         \\
