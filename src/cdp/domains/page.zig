@@ -257,7 +257,6 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
     const js_context = try world.createContext(page);
-
     const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
 
     var ls: js.Local.Scope = undefined;
@@ -266,7 +265,7 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
 
     bc.inspector_session.inspector.contextCreated(
         &ls.local,
-        "",
+        params.worldName,
         page.origin orelse "",
         aux_data,
         false,
