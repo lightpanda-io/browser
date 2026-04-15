@@ -287,7 +287,9 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                     .identity = ctx.identity,
                     .finalizer_ptr_id = finalizer_ptr_id,
                     .resolved_ptr_id = resolved_ptr_id,
+                    .next = fc.identities,
                 };
+                fc.identities = identity_finalizer;
                 fc.identity_count += 1;
 
                 v8.v8__Global__SetWeakFinalizer(gop.value_ptr, identity_finalizer, finalizer.release_ref, v8.kParameter);
@@ -1222,7 +1224,6 @@ fn resolveT(comptime T: type, value: *T) Resolved {
 
                     // Identity is allocated from pool, so it's valid even after page reset.
                     const session = identity_finalizer.session;
-                    const finalizer_ptr_id = identity_finalizer.finalizer_ptr_id;
                     const resolved_ptr_id = identity_finalizer.resolved_ptr_id;
                     defer session.fc_identity_pool.destroy(identity_finalizer);
 
@@ -1232,17 +1233,18 @@ fn resolveT(comptime T: type, value: *T) Resolved {
                         v8.v8__Global__Reset(&global);
                     }
 
-                    // Validate FC before dereferencing - it may have been cleaned up during page reset
+                    // If done, FC was already cleaned up during page reset. The
+                    // finalizer_ptr_id may have been reused for a new object, so
+                    // we must not look it up in the map.
+                    if (identity_finalizer.done) return;
+
+                    const finalizer_ptr_id = identity_finalizer.finalizer_ptr_id;
                     const fc = session.finalizer_callbacks.get(finalizer_ptr_id) orelse return;
 
                     const identity_count = fc.identity_count;
                     if (identity_count == 1) {
-                        // All IsolatedWorlds that reference this object have
-                        // released it. Release the instance ref, remove the
-                        // FinalizerCallback and free it.
-                        //
-                        // Remove from finalizer_callbacks before releaseRef. releaseRef
-                        // could cause a new object at the same address.
+                        // Last identity - clean up the FC.
+                        // Remove from map before releaseRef to prevent address reuse issues.
                         _ = session.finalizer_callbacks.remove(finalizer_ptr_id);
                         FT.releaseRef(@ptrFromInt(finalizer_ptr_id), session);
                         session.releaseArena(fc.arena);
