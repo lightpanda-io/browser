@@ -31,7 +31,8 @@
             .hash = "N-V-__8AALp9QAGn6CCHZ6fK_FfMyGtG824LSHYHHasM3w-y",
         },
         .zenai = .{
-            .path = "../zenai",
+            .url = "git+https://github.com/lightpanda-io/zenai.git#66bb22df1f939ddcc2b02832a8ac3099f6eda4ed",
+            .hash = "zenai-0.0.0-iOY_VAsCAwCvfKOMfi1zyEj3SADUahQi4BhNBKAfx4GO",
         },
         .linenoise = .{
             .url = "https://github.com/antirez/linenoise/archive/refs/tags/2.0.tar.gz",
