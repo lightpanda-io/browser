@@ -561,7 +561,7 @@ test "Env: Worker context " {
     const page = try session.createPage();
     defer session.removePage();
 
-    const worker = try @import("../webapi/Worker.zig").init("about:blank", &page.js.execution);
+    const worker = try @import("../webapi/Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", &page.js.execution);
 
     var ls: js.Local.Scope = undefined;
     worker._worker_scope.js.localScope(&ls);
