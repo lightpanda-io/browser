@@ -660,6 +660,17 @@ pub const Function = struct {
 
         switch (cache) {
             .internal => |idx| {
+                // Defensive check: verify object has enough internal fields.
+                // This guards against edge cases where signature check passes but
+                // the receiver doesn't have expected internal fields (e.g., global
+                // proxy vs global object, cross-context scenarios).
+                if (v8.v8__Object__InternalFieldCount(js_this) <= idx) {
+                    if (comptime IS_DEBUG) {
+                        std.debug.assert(false);
+                    }
+                    return false;
+                }
+
                 if (v8.v8__Object__GetInternalField(js_this, idx)) |cached| {
                     // means we can't cache undefined, since we can't tell the
                     // difference between "it isn't in the cache" and  "it's
