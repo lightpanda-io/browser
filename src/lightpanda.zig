@@ -69,7 +69,7 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     var session = try browser.newSession(notification);
 
     if (app.config.cookieFile()) |cookie_path| {
-        cookies.loadFromFile(&session.cookie_jar, cookie_path) catch |err| {
+        cookies.loadFromFile(session, cookie_path) catch |err| {
             log.err(.app, "cookie load error", .{ .err = err });
         };
     }

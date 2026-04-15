@@ -16,6 +16,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const Session = @import("browser/Session.zig");
 const Cookie = @import("browser/webapi/storage/Cookie.zig");
 const log = @import("log.zig");
 
@@ -23,7 +24,7 @@ const log = @import("log.zig");
 /// The file format is an array of objects with: name, value, domain, path,
 /// expires (optional, float), secure (optional, bool), httpOnly (optional, bool).
 /// This matches the CDP Network.Cookie format used by Puppeteer and Playwright.
-pub fn loadFromFile(jar: *Cookie.Jar, path: []const u8) !void {
+pub fn loadFromFile(session: *Session, path: []const u8) !void {
     const file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
         error.FileNotFound => return, // No file yet, nothing to load
         else => {
@@ -33,13 +34,15 @@ pub fn loadFromFile(jar: *Cookie.Jar, path: []const u8) !void {
     };
     defer file.close();
 
-    const content = file.readToEndAlloc(jar.allocator, 1024 * 1024) catch |err| {
+    const call_arena = try session.getArena(.medium, "cookies.jar.allocatorloadFromFile");
+    defer session.releaseArena(call_arena);
+
+    const content = file.readToEndAlloc(call_arena, 1024 * 1024) catch |err| {
         log.err(.app, "failed to read cookies file", .{ .path = path, .err = err });
         return err;
     };
-    defer jar.allocator.free(content);
 
-    const parsed = std.json.parseFromSlice([]const JsonCookie, jar.allocator, content, .{
+    const parsed = std.json.parseFromSlice([]const JsonCookie, call_arena, content, .{
         .ignore_unknown_fields = true,
     }) catch |err| {
         log.err(.app, "failed to parse cookies JSON", .{ .path = path, .err = err });
@@ -47,6 +50,7 @@ pub fn loadFromFile(jar: *Cookie.Jar, path: []const u8) !void {
     };
     defer parsed.deinit();
 
+    const jar = &session.cookie_jar;
     var loaded: usize = 0;
     for (parsed.value) |jc| {
         var arena = std.heap.ArenaAllocator.init(jar.allocator);
