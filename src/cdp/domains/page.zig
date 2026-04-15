@@ -257,7 +257,23 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
     const js_context = try world.createContext(page);
-    return cmd.sendResult(.{ .executionContextId = js_context.id }, .{});
+
+    const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
+
+    var ls: js.Local.Scope = undefined;
+    js_context.localScope(&ls);
+    defer ls.deinit();
+
+    bc.inspector_session.inspector.contextCreated(
+        &ls.local,
+        "",
+        page.origin orelse "",
+        aux_data,
+        true,
+    );
+
+    const context_id = bc.inspector_session.inspector.getContextId(&ls.local);
+    return cmd.sendResult(.{ .executionContextId = context_id }, .{});
 }
 
 fn navigate(cmd: *CDP.Command) !void {
