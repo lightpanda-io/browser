@@ -412,6 +412,9 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                 js.Promise.Temp,
                 js.PromiseResolver.Global,
                 js.Module.Global => return .{ .local = self, .handle = @ptrCast(value.local(self).handle) },
+
+                js.Undefined => return .{.local = self, .handle = isolate.initUndefined() },
+
                 else => {}
             }
             // zig fmt: on

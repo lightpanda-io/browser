@@ -137,7 +137,7 @@ fn isMaybeSupported(mime_type: []const u8) bool {
     return false;
 }
 
-pub fn play(self: *Media, page: *Page) !void {
+pub fn play(self: *Media, page: *Page) !js.Promise {
     const was_paused = self._paused;
     self._paused = false;
     self._ready_state = .HAVE_ENOUGH_DATA;
@@ -146,6 +146,7 @@ pub fn play(self: *Media, page: *Page) !void {
         try self.dispatchEvent("play", page);
         try self.dispatchEvent("playing", page);
     }
+    return page.js.local.?.resolvePromise(js.Undefined{});
 }
 
 pub fn pause(self: *Media, page: *Page) !void {

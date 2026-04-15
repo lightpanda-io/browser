@@ -319,6 +319,9 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
     return null;
 }
 
+// marker interface
+pub const Undefined = struct {};
+
 // These are here, and not in Inspector.zig, because Inspector.zig isn't always
 // included (e.g. in the wpt build).
 
