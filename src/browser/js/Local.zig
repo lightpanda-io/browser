@@ -281,10 +281,12 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                     finalizer_gop.value_ptr.* = try self.createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.release_ref_from_zig);
                 }
                 const fc = finalizer_gop.value_ptr.*;
-                const identity_finalizer = try fc.arena.create(Session.FinalizerCallback.Identity);
+                const identity_finalizer = try session.fc_identity_pool.create();
                 identity_finalizer.* = .{
-                    .fc = fc,
+                    .session = session,
                     .identity = ctx.identity,
+                    .finalizer_ptr_id = finalizer_ptr_id,
+                    .resolved_ptr_id = resolved_ptr_id,
                 };
                 fc.identity_count += 1;
 
@@ -1218,26 +1220,31 @@ fn resolveT(comptime T: type, value: *T) Resolved {
                     const ptr = v8.v8__WeakCallbackInfo__GetParameter(handle.?).?;
                     const identity_finalizer: *Session.FinalizerCallback.Identity = @ptrCast(@alignCast(ptr));
 
-                    const fc = identity_finalizer.fc;
-                    const session = fc.session;
-                    const finalizer_ptr_id = fc.finalizer_ptr_id;
+                    // Identity is allocated from pool, so it's valid even after page reset.
+                    const session = identity_finalizer.session;
+                    const finalizer_ptr_id = identity_finalizer.finalizer_ptr_id;
+                    const resolved_ptr_id = identity_finalizer.resolved_ptr_id;
+                    defer session.fc_identity_pool.destroy(identity_finalizer);
 
-                    // Remove from this identity's map
-                    if (identity_finalizer.identity.identity_map.fetchRemove(fc.resolved_ptr_id)) |kv| {
+                    // Always clean up the identity map entry
+                    if (identity_finalizer.identity.identity_map.fetchRemove(resolved_ptr_id)) |kv| {
                         var global = kv.value;
                         v8.v8__Global__Reset(&global);
                     }
+
+                    // Validate FC before dereferencing - it may have been cleaned up during page reset
+                    const fc = session.finalizer_callbacks.get(finalizer_ptr_id) orelse return;
 
                     const identity_count = fc.identity_count;
                     if (identity_count == 1) {
                         // All IsolatedWorlds that reference this object have
                         // released it. Release the instance ref, remove the
                         // FinalizerCallback and free it.
+                        //
+                        // Remove from finalizer_callbacks before releaseRef. releaseRef
+                        // could cause a new object at the same address.
+                        _ = session.finalizer_callbacks.remove(finalizer_ptr_id);
                         FT.releaseRef(@ptrFromInt(finalizer_ptr_id), session);
-                        const removed = session.finalizer_callbacks.remove(finalizer_ptr_id);
-                        if (comptime IS_DEBUG) {
-                            std.debug.assert(removed);
-                        }
                         session.releaseArena(fc.arena);
                     } else {
                         fc.identity_count = identity_count - 1;

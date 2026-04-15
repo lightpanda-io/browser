@@ -75,6 +75,10 @@ identity: js.Identity = .{},
 // This ensures objects are only freed when ALL v8 wrappers are gone.
 finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *FinalizerCallback) = .empty,
 
+// Pool for FinalizerCallback.Identity structs. These must survive page resets
+// so V8 weak callbacks can validate the FC before dereferencing it.
+fc_identity_pool: std.heap.MemoryPool(FinalizerCallback.Identity),
+
 // Tracked global v8 objects that need to be released on cleanup.
 // Lives at Session level so objects can outlive individual Identities.
 globals: std.ArrayList(v8.Global) = .empty,
@@ -133,6 +137,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .queued_queued_navigation = .{},
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
+        .fc_identity_pool = .init(allocator),
     };
     self.queued_navigation = &self.queued_navigation_1;
 }
@@ -142,6 +147,7 @@ pub fn deinit(self: *Session) void {
         self.removePage();
     }
     self.cookie_jar.deinit();
+    self.fc_identity_pool.deinit();
 
     self.storage_shed.deinit(self.browser.app.allocator);
     self.arena_pool.release(self.page_arena);
@@ -506,9 +512,13 @@ pub const FinalizerCallback = struct {
 
     // For every FinalizerCallback we'll have 1+ FinalizerCallback.Identity: one
     // for every identity that gets the instance. In most cases, that'l be 1.
+    // Allocated from Session.fc_identity_pool so it survives page resets and
+    // allows the weak callback to validate the FC before dereferencing it.
     pub const Identity = struct {
+        session: *Session,
         identity: *js.Identity,
-        fc: *Session.FinalizerCallback,
+        finalizer_ptr_id: usize,
+        resolved_ptr_id: usize,
     };
 
     // Called during page reset to force cleanup regardless of identity_count.

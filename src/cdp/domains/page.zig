@@ -376,14 +376,14 @@ pub fn pageNavigate(bc: *CDP.BrowserContext, event: *const Notification.PageNavi
     }, .{ .session_id = session_id });
 }
 
-pub fn pageRemove(bc: *CDP.BrowserContext) !void {
+pub fn pageRemove(bc: *CDP.BrowserContext) void {
     // Clear all remote object mappings to prevent stale objectIds from being used
     // after the context is destroy
     bc.inspector_session.inspector.resetContextGroup();
 
     // The main page is going to be removed, we need to remove contexts from other worlds first.
     for (bc.isolated_worlds.items) |isolated_world| {
-        try isolated_world.removeContext();
+        isolated_world.removeContext();
     }
 }
 
