@@ -38,6 +38,7 @@ const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const WebSocket = @This();
+
 _rc: lp.RC(u8) = .{},
 _page: *Page,
 _proto: *EventTarget,

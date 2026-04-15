@@ -587,7 +587,7 @@ pub const BrowserContext = struct {
 
     pub fn onPageRemove(ctx: *anyopaque, _: Notification.PageRemove) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        try @import("domains/page.zig").pageRemove(self);
+        @import("domains/page.zig").pageRemove(self);
     }
 
     pub fn onPageCreated(ctx: *anyopaque, page: *Page) !void {
@@ -808,16 +808,18 @@ const IsolatedWorld = struct {
     identity: js.Identity = .{},
 
     pub fn deinit(self: *IsolatedWorld) void {
-        self.removeContext() catch {};
-        self.identity.deinit();
+        self.removeContext();
         self.browser.arena_pool.release(self.call_arena);
         self.browser.arena_pool.release(self.arena);
     }
 
-    pub fn removeContext(self: *IsolatedWorld) !void {
-        const ctx = self.context orelse return error.NoIsolatedContextToRemove;
-        self.browser.env.destroyContext(ctx);
-        self.context = null;
+    pub fn removeContext(self: *IsolatedWorld) void {
+        if (self.context) |ctx| {
+            self.browser.env.destroyContext(ctx);
+            self.context = null;
+        }
+        // I don't think it's possible to have any identity without a context,
+        // but there's no harm in being safe.
         self.identity.deinit();
         self.identity = .{};
     }
