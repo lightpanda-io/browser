@@ -85,10 +85,15 @@ system_prompt: []const u8,
 script_file: ?[]const u8,
 self_heal: bool,
 interactive: bool,
+one_shot_task: ?[]const u8,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
+    // `--task` is one-shot and bypasses both REPL and script replay.
+    const is_one_shot = opts.task != null;
     // Pure replay (positional script, no -i) skips the REPL.
-    const will_repl = opts.interactive or opts.script_file == null;
+    const will_repl = !is_one_shot and (opts.interactive or opts.script_file == null);
+    // REPL or one-shot both drive the LLM and require a provider + API key.
+    const needs_llm = will_repl or is_one_shot;
 
     // --self-heal needs a provider to heal through.
     if (opts.self_heal and opts.provider == null) {
@@ -98,10 +103,16 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         return error.SelfHealWithoutProvider;
     }
 
-    // An API key is only required when the REPL will run — pure replay with
-    // a provider is fine without one since no AI turn ever executes.
+    if (is_one_shot and opts.provider == null) {
+        log.fatal(.app, "missing --provider", .{
+            .hint = "--task requires --provider",
+        });
+        return error.TaskWithoutProvider;
+    }
+
+    // An API key is only required when an LLM turn will actually run.
     const api_key: ?[:0]const u8 = if (opts.provider) |p|
-        getEnvApiKey(p) orelse if (will_repl) {
+        getEnvApiKey(p) orelse if (needs_llm) {
             log.fatal(.app, "missing API key", .{
                 .hint = "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY",
             });
@@ -156,6 +167,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .script_file = opts.script_file,
         .self_heal = opts.self_heal,
         .interactive = opts.interactive,
+        .one_shot_task = opts.task,
     };
 
     self.cmd_executor = CommandExecutor.init(allocator, tool_executor, &self.terminal);
@@ -180,13 +192,26 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Returns true on success. Interactive mode always returns true; pure
-/// replay mirrors `runScript`'s result.
+/// replay mirrors `runScript`'s result; one-shot mirrors `runOneShot`'s.
 pub fn run(self: *Self) bool {
+    if (self.one_shot_task) |task| return self.runOneShot(task);
     if (self.script_file) |path| {
         const script_ok = self.runScript(path);
         if (!self.interactive) return script_ok;
     }
     self.runRepl();
+    return true;
+}
+
+/// Drive a single natural-language turn and exit. The final assistant text
+/// lands on stdout via `Terminal.printAssistant`; tool calls, errors, and
+/// info go to stderr via `std.debug.print`, so callers can capture stdout
+/// as the clean answer.
+fn runOneShot(self: *Self, task: []const u8) bool {
+    self.processUserMessage(task, "") catch |err| {
+        self.terminal.printErrorFmt("Request failed: {s}", .{@errorName(err)});
+        return false;
+    };
     return true;
 }
 
@@ -673,6 +698,7 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
         .{ .context = @ptrCast(self), .callFn = &handleToolCall },
         .{
             .tools = self.tools,
+            .max_turns = 30,
             .max_tokens = 4096,
             .tool_choice = .auto,
         },

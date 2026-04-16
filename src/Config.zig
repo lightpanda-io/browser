@@ -244,6 +244,7 @@ pub const Agent = struct {
     script_file: ?[]const u8 = null,
     self_heal: bool = false,
     interactive: bool = false,
+    task: ?[]const u8 = null,
 };
 
 pub const DumpFormat = enum {
@@ -1009,6 +1010,15 @@ fn parseAgentArgs(
                 return error.InvalidArgument;
             };
             result.system_prompt = try allocator.dupeZ(u8, str);
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--task", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            result.task = try allocator.dupe(u8, str);
             continue;
         }
 
