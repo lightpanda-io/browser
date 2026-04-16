@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -43,12 +43,18 @@ _rc: lp.RC(u8) = .{},
 _status: u16,
 _arena: Allocator,
 _headers: *Headers,
-_body: ?[]const u8,
+_body: Body = .empty,
 _type: Type,
 _status_text: []const u8,
 _url: [:0]const u8,
 _is_redirected: bool,
 _http_response: ?HttpClient.Response = null,
+
+const Body = union(enum) {
+    empty,
+    bytes: []const u8,
+    stream: *ReadableStream,
+};
 
 const InitOpts = struct {
     status: u16 = 200,
@@ -56,15 +62,54 @@ const InitOpts = struct {
     statusText: ?[]const u8 = null,
 };
 
-pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
+/// Body can be: null, string ([]const u8), ReadableStream, Blob, ArrayBuffer
+pub const BodyInit = union(enum) {
+    stream: *ReadableStream,
+    bytes: []const u8,
+    js_val: js.Value,
+};
+
+pub fn init(body_: ?BodyInit, opts_: ?InitOpts, page: *Page) !*Response {
     const arena = try page.getArena(.large, "Response");
     errdefer page.releaseArena(arena);
 
     const opts = opts_ orelse InitOpts{};
-
-    // Store empty string as empty string, not null
-    const body = if (body_) |b| try arena.dupe(u8, b) else null;
     const status_text = if (opts.statusText) |st| try arena.dupe(u8, st) else "";
+
+    // Parse body from the union
+    const body: Body = blk: {
+        const b = body_ orelse break :blk .empty;
+        switch (b) {
+            .bytes => |body_bytes| break :blk .{ .bytes = try arena.dupe(u8, body_bytes) },
+            .stream => |stream| break :blk .{ .stream = stream },
+            .js_val => |js_val| {
+                const local = page.js.local.?;
+
+                if (local.jsValueToZig(*ReadableStream, js_val)) |stream| {
+                    break :blk .{ .stream = stream };
+                } else |_| {}
+
+                if (js_val.isString()) |js_str| {
+                    break :blk .{ .bytes = try js_str.toSliceWithAlloc(arena) };
+                }
+
+                if (js_val.isArrayBuffer() or js_val.isTypedArray() or js_val.isArrayBufferView()) {
+                    if (local.jsValueToZig([]u8, js_val)) |data| {
+                        break :blk .{ .bytes = try arena.dupe(u8, data) };
+                    } else |_| {}
+                }
+
+                if (local.jsValueToZig(*Blob, js_val)) |blob_obj| {
+                    break :blk .{ .bytes = try arena.dupe(u8, blob_obj._slice) };
+                } else |_| {}
+
+                if (js_val.isNullOrUndefined() == false) {
+                    break :blk .{ .bytes = try js_val.toStringSliceWithAlloc(arena) };
+                }
+            },
+        }
+        break :blk .empty;
+    };
 
     const self = try arena.create(Response);
     self.* = .{
@@ -120,17 +165,19 @@ pub fn getType(self: *const Response) []const u8 {
     return @tagName(self._type);
 }
 
-pub fn getBody(self: *const Response, page: *Page) !?*ReadableStream {
-    const body = self._body orelse return null;
-
-    // Empty string should create a closed stream with no data
-    if (body.len == 0) {
-        const stream = try ReadableStream.init(null, null, page);
-        try stream._controller.close();
-        return stream;
-    }
-
-    return ReadableStream.initWithData(body, page);
+pub fn getBody(self: *Response, page: *Page) !?*ReadableStream {
+    return switch (self._body) {
+        .empty => null,
+        .stream => |stream| stream,
+        .bytes => |body| {
+            if (body.len == 0) {
+                const stream = try ReadableStream.init(null, null, page);
+                try stream._controller.close();
+                return stream;
+            }
+            return ReadableStream.initWithData(body, page);
+        },
+    };
 }
 
 pub fn isOK(self: *const Response) bool {
@@ -138,25 +185,155 @@ pub fn isOK(self: *const Response) bool {
 }
 
 pub fn getText(self: *const Response, page: *Page) !js.Promise {
-    const body = self._body orelse "";
+    const body = switch (self._body) {
+        .bytes => |b| b,
+        .empty => "",
+        .stream => return page.js.local.?.rejectPromise(.{ .type_error = "Cannot read text from stream body" }),
+    };
     return page.js.local.?.resolvePromise(body);
 }
 
 pub fn getJson(self: *Response, page: *Page) !js.Promise {
-    const body = self._body orelse "";
     const local = page.js.local.?;
+    const body = switch (self._body) {
+        .bytes => |b| b,
+        .empty => "",
+        .stream => return local.rejectPromise(.{ .type_error = "Cannot read JSON from stream body" }),
+    };
     const value = local.parseJSON(body) catch {
         return local.rejectPromise(.{ .syntax_error = "failed to parse" });
     };
     return local.resolvePromise(try value.persist());
 }
 
-pub fn arrayBuffer(self: *const Response, page: *Page) !js.Promise {
-    return page.js.local.?.resolvePromise(js.ArrayBuffer{ .values = self._body orelse "" });
+pub fn arrayBuffer(self: *Response, page: *Page) !js.Promise {
+    return switch (self._body) {
+        .bytes => |body| page.js.local.?.resolvePromise(js.ArrayBuffer{ .values = body }),
+        .empty => page.js.local.?.resolvePromise(js.ArrayBuffer{ .values = "" }),
+        .stream => |stream| StreamConsumer.start(stream, page),
+    };
 }
 
+/// Async consumer for reading all data from a ReadableStream
+const StreamConsumer = struct {
+    const ReadableStreamDefaultReader = @import("../streams/ReadableStreamDefaultReader.zig");
+
+    page: *Page,
+    total_len: usize,
+    arena: Allocator,
+    reader: *ReadableStreamDefaultReader,
+    chunks: std.ArrayList([]const u8),
+    resolver: js.PromiseResolver.Global,
+
+    fn start(stream: *ReadableStream, page: *Page) !js.Promise {
+        const local = page.js.local.?;
+        var resolver = local.createPromiseResolver();
+        const promise = resolver.promise();
+
+        const reader = try stream.getReader(page);
+
+        const state = try page.arena.create(StreamConsumer);
+        state.* = .{
+            .page = page,
+            .reader = reader,
+            .chunks = .empty,
+            .total_len = 0,
+            .arena = page.arena,
+            .resolver = try resolver.persist(),
+        };
+
+        try state.pumpRead();
+        return promise;
+    }
+
+    fn pumpRead(self: *StreamConsumer) !void {
+        const local = self.page.js.local.?;
+        const read_promise = try self.reader.read(self.page);
+
+        const then_fn = local.newCallback(onReadFulfilled, self);
+        const catch_fn = local.newCallback(onReadRejected, self);
+
+        _ = read_promise.thenAndCatch(then_fn, catch_fn) catch {
+            self.finish(local, null);
+        };
+    }
+
+    const ReadData = struct {
+        done: bool,
+        value: js.Value,
+    };
+
+    fn onReadFulfilled(self: *StreamConsumer, data_: ?ReadData) void {
+        const page = self.page;
+
+        const data = data_ orelse {
+            return self.finish(page.js.local.?, null);
+        };
+
+        self._onReadFulfilled(data) catch {
+            self.finish(page.js.local.?, null);
+        };
+    }
+
+    fn _onReadFulfilled(self: *StreamConsumer, data: ReadData) !void {
+        const page = self.page;
+        const local = page.js.local.?;
+
+        if (data.done) {
+            // Stream is finished, concatenate all chunks and resolve
+            self.reader.releaseLock();
+            const result = try self.concatenateChunks(page.call_arena);
+            local.toLocal(self.resolver).resolve("arrayBuffer complete", js.ArrayBuffer{ .values = result });
+            return;
+        }
+
+        // Collect the chunk data
+        const value = data.value;
+        if (!value.isUndefined()) {
+            // Try to get bytes from the value (could be Uint8Array or string)
+            if (value.isTypedArray() or value.isArrayBufferView() or value.isArrayBuffer()) {
+                if (local.jsValueToZig([]u8, value)) |typed_data| {
+                    const chunk_copy = try self.arena.dupe(u8, typed_data);
+                    try self.chunks.append(self.arena, chunk_copy);
+                    self.total_len += chunk_copy.len;
+                } else |_| {}
+            } else if (value.isString()) |str| {
+                const slice = try str.toSlice();
+                const chunk_copy = try self.arena.dupe(u8, slice);
+                try self.chunks.append(self.arena, chunk_copy);
+                self.total_len += chunk_copy.len;
+            }
+        }
+        try self.pumpRead();
+    }
+
+    fn onReadRejected(self: *StreamConsumer) void {
+        self.finish(self.page.js.local.?, null);
+    }
+
+    fn concatenateChunks(self: *StreamConsumer, allocator: Allocator) ![]const u8 {
+        if (self.chunks.items.len == 0) {
+            return "";
+        }
+        if (self.chunks.items.len == 1) {
+            return self.chunks.items[0];
+        }
+        return std.mem.join(allocator, "", self.chunks.items);
+    }
+
+    fn finish(self: *StreamConsumer, local: *const js.Local, err: ?[]const u8) void {
+        self.reader.releaseLock();
+        local.toLocal(self.resolver).rejectError("arrayBuffer error", .{ .type_error = err orelse "Failed to read stream" });
+    }
+};
+
 pub fn blob(self: *const Response, page: *Page) !js.Promise {
-    const body = self._body orelse "";
+    const local = page.js.local.?;
+    const body = switch (self._body) {
+        .bytes => |b| b,
+        .empty => "",
+        .stream => return local.rejectPromise(.{ .type_error = "Cannot read blob from stream body" }),
+    };
     const content_type = try self._headers.get("content-type", page) orelse "";
 
     const b = try Blob.initWithMimeValidation(
@@ -166,18 +343,33 @@ pub fn blob(self: *const Response, page: *Page) !js.Promise {
         page,
     );
 
-    return page.js.local.?.resolvePromise(b);
+    return local.resolvePromise(b);
 }
 
 pub fn bytes(self: *const Response, page: *Page) !js.Promise {
-    return page.js.local.?.resolvePromise(js.TypedArray(u8){ .values = self._body orelse "" });
+    const local = page.js.local.?;
+    const body = switch (self._body) {
+        .bytes => |b| b,
+        .empty => "",
+        .stream => return local.rejectPromise(.{ .type_error = "Cannot read bytes from stream body" }),
+    };
+    return local.resolvePromise(js.TypedArray(u8){ .values = body });
 }
 
 pub fn clone(self: *const Response, page: *Page) !*Response {
-    const arena = try page.getArena((self._body orelse "").len + self._url.len + 256, "Response.clone");
+    const body_len = switch (self._body) {
+        .bytes => |b| b.len,
+        .empty => 0,
+        .stream => 0,
+    };
+    const arena = try page.getArena(body_len + self._url.len + 256, "Response.clone");
     errdefer page.releaseArena(arena);
 
-    const body = if (self._body) |b| try arena.dupe(u8, b) else null;
+    const body: Body = switch (self._body) {
+        .bytes => |b| .{ .bytes = try arena.dupe(u8, b) },
+        .empty => .empty,
+        .stream => .empty, // TODO: implement stream tee for proper cloning
+    };
     const status_text = try arena.dupe(u8, self._status_text);
     const url = try arena.dupeZ(u8, self._url);
 
