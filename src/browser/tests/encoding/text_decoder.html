@@ -125,3 +125,17 @@
   let ws = new TextDecoder('  utf-8  ');
   testing.expectEqual('utf-8', ws.encoding);
 </script>
+
+<script id=stream_fatal_error>
+  {
+    let d = new TextDecoder('utf-8', {fatal: true});
+
+    d.decode(new Uint8Array([65]), { stream: true }); // 'A'
+    testing.expectError('TypeError', () => {
+      d.decode(new Uint8Array([0xFF, 0xFE])); // invalid UTF-8
+    });
+
+    // Verify decoder still works after error recovery
+    testing.expectEqual('B', d.decode(new Uint8Array([66])));
+  }
+</script>
