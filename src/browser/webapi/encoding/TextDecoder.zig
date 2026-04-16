@@ -127,11 +127,12 @@ pub fn decode(self: *TextDecoder, input_: ?[]const u8, opts_: ?DecodeOpts) ![]co
 
     if (self._decoder) |decoder| {
         // Non-streaming with existing decoder: flush with is_last=true, then free
-        defer {
-            html5ever.encoding_decoder_free(decoder);
-            self._decoder = null;
-        }
-        return self._decode(input, decoder, true);
+        const result = try self._decode(input, decoder, true);
+
+        // on error, _decode will free the decoder. So we only free it on non-error
+        html5ever.encoding_decoder_free(decoder);
+        self._decoder = null;
+        return result;
     }
 
     // non-streaming, no existing decoder
