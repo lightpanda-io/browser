@@ -872,7 +872,9 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, page: *Page) 
         );
     }
 
-    if (rm_ref_node) {
+    // Re-check parent after insertNodeRelative since callbacks (e.g. connectedCallback)
+    // could have already removed ref_node from parent.
+    if (rm_ref_node and ref_node._parent == parent) {
         page.removeNode(parent, ref_node, .{ .will_be_reconnected = false });
     }
 }

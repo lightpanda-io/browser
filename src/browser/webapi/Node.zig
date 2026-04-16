@@ -624,7 +624,9 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, page: *Page
 
     // Special case: if we replace a node by itself, we don't remove it.
     // insertBefore is an noop in this case.
-    if (new_child != old_child) {
+    // Re-check parent after insertBefore since callbacks (e.g. connectedCallback)
+    // could have already removed old_child from self.
+    if (new_child != old_child and old_child._parent == self) {
         page.removeNode(self, old_child, .{ .will_be_reconnected = false });
     }
 

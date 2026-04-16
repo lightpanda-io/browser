@@ -332,3 +332,34 @@
   testing.expectEqual(new13, document.getElementById('new13'));
   testing.expectEqual(l4, new13.parentElement);
 </script>
+
+<!-- Test 14: Callback removes ref_node during replaceWith -->
+<script id=test14-callback-removes-ref-node>
+  // Custom element whose connectedCallback removes the ref_node
+  // This tests that replaceWith handles mid-operation DOM mutations
+  class RefRemover extends HTMLElement {
+    connectedCallback() {
+      // Remove the next sibling (which is the ref_node being replaced)
+      const sibling = this.nextSibling;
+      if (sibling) {
+        sibling.remove();
+      }
+    }
+  }
+  customElements.define('ref-remover', RefRemover);
+
+  const parent14 = document.createElement('div');
+  const oldChild14 = document.createElement('div');
+  parent14.appendChild(oldChild14);
+  document.body.appendChild(parent14);
+
+  const newChild14 = document.createElement('ref-remover');
+
+  // replaceWith inserts newChild14 before oldChild14, then connectedCallback
+  // fires and removes oldChild14. replaceWith should not crash when it
+  // tries to remove the already-removed oldChild14.
+  oldChild14.replaceWith(newChild14);
+
+  testing.expectEqual(newChild14, parent14.firstChild);
+  testing.expectEqual(null, oldChild14.parentNode);
+</script>
