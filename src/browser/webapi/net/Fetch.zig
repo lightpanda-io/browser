@@ -121,7 +121,7 @@ fn handleBlobUrl(url: []const u8, resolver: js.PromiseResolver, page: *Page) !js
     };
 
     const response = try Response.init(null, .{ .status = 200 }, page);
-    response._body = try response._arena.dupe(u8, blob._slice);
+    response._body = .{ .bytes = try response._arena.dupe(u8, blob._slice) };
     response._url = try response._arena.dupeZ(u8, url);
     response._type = .basic;
 
@@ -214,7 +214,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
     var response = self._response;
     response._http_response = null;
-    response._body = self._buf.items;
+    response._body = .{ .bytes = self._buf.items };
 
     log.info(.http, "request complete", .{
         .source = "fetch",

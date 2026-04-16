@@ -112,3 +112,90 @@
     testing.expectEqual('cloned body', text2);
   });
 </script>
+
+<script id=body_types>
+  // Test Response with ArrayBuffer body
+  testing.async(async () => {
+    const data = new Uint8Array([72, 101, 108, 108, 111]); // "Hello"
+    const arrayBuffer = data.buffer;
+    const response = new Response(arrayBuffer);
+
+    const result = await response.arrayBuffer();
+    testing.expectEqual(true, result instanceof ArrayBuffer);
+    testing.expectEqual(5, result.byteLength);
+
+    const view = new Uint8Array(result);
+    testing.expectEqual(72, view[0]);  // 'H'
+    testing.expectEqual(111, view[4]); // 'o'
+  });
+
+  // Test Response with Uint8Array body
+  testing.async(async () => {
+    const data = new Uint8Array([87, 111, 114, 108, 100]); // "World"
+    const response = new Response(data);
+
+    const result = await response.arrayBuffer();
+    testing.expectEqual(true, result instanceof ArrayBuffer);
+    testing.expectEqual(5, result.byteLength);
+
+    const view = new Uint8Array(result);
+    testing.expectEqual(87, view[0]);  // 'W'
+    testing.expectEqual(100, view[4]); // 'd'
+  });
+
+  // Test Response with Blob body
+  testing.async(async () => {
+    const blob = new Blob(['Test', 'Data'], { type: 'text/plain' });
+    const response = new Response(blob);
+
+    const text = await response.text();
+    testing.expectEqual('TestData', text);
+  });
+
+  // Test Response with ReadableStream body
+  testing.async(async () => {
+    const chunks = [
+      new Uint8Array([65, 66, 67]), // "ABC"
+      new Uint8Array([68, 69, 70])  // "DEF"
+    ];
+    let chunkIndex = 0;
+
+    const stream = new ReadableStream({
+      pull(controller) {
+        if (chunkIndex < chunks.length) {
+          controller.enqueue(chunks[chunkIndex++]);
+        } else {
+          controller.close();
+        }
+      }
+    });
+
+    const response = new Response(stream);
+
+    const result = await response.arrayBuffer();
+    testing.expectEqual(true, result instanceof ArrayBuffer);
+    testing.expectEqual(6, result.byteLength);
+
+    const view = new Uint8Array(result);
+    testing.expectEqual(65, view[0]); // 'A'
+    testing.expectEqual(66, view[1]); // 'B'
+    testing.expectEqual(67, view[2]); // 'C'
+    testing.expectEqual(68, view[3]); // 'D'
+    testing.expectEqual(69, view[4]); // 'E'
+    testing.expectEqual(70, view[5]); // 'F'
+  });
+
+  // Test Response.body returns ReadableStream
+  testing.async(async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.close();
+      }
+    });
+
+    const response = new Response(stream);
+    const body = response.body;
+    testing.expectEqual(true, body instanceof ReadableStream);
+  });
+</script>
