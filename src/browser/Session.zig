@@ -75,6 +75,10 @@ identity: js.Identity = .{},
 // This ensures objects are only freed when ALL v8 wrappers are gone.
 finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *FinalizerCallback) = .empty,
 
+// Pool for FinalizerCallback.Identity structs. These must survive page resets
+// so V8 weak callbacks can validate the FC before dereferencing it.
+fc_identity_pool: std.heap.MemoryPool(FinalizerCallback.Identity),
+
 // Tracked global v8 objects that need to be released on cleanup.
 // Lives at Session level so objects can outlive individual Identities.
 globals: std.ArrayList(v8.Global) = .empty,
@@ -133,6 +137,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .queued_queued_navigation = .{},
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
+        .fc_identity_pool = .init(allocator),
     };
     self.queued_navigation = &self.queued_navigation_1;
 }
@@ -142,6 +147,7 @@ pub fn deinit(self: *Session) void {
         self.removePage();
     }
     self.cookie_jar.deinit();
+    self.fc_identity_pool.deinit();
 
     self.storage_shed.deinit(self.browser.app.allocator);
     self.arena_pool.release(self.page_arena);
@@ -506,19 +512,33 @@ pub const FinalizerCallback = struct {
     finalizer_ptr_id: usize,
     release_ref: *const fn (ptr_id: usize, session: *Session) void,
 
-    // Track how many identities (JS worlds) reference this FC.
-    // Only cleanup when all identities have finalized.
+    // Linked list of Identities referencing this FC.
+    identities: ?*Identity = null,
+    // Count of active identities (for knowing when to clean up FC).
     identity_count: u8 = 0,
 
     // For every FinalizerCallback we'll have 1+ FinalizerCallback.Identity: one
-    // for every identity that gets the instance. In most cases, that'l be 1.
+    // for every identity that gets the instance. In most cases, that'll be 1.
+    // Allocated from Session.fc_identity_pool so it survives page resets and
+    // allows the weak callback to safely check the done flag.
     pub const Identity = struct {
+        session: *Session,
         identity: *js.Identity,
-        fc: *Session.FinalizerCallback,
+        finalizer_ptr_id: usize,
+        resolved_ptr_id: usize,
+        next: ?*Identity = null,
+        done: bool = false,
     };
 
-    // Called during page reset to force cleanup regardless of identity_count.
+    // Called during page reset to force cleanup regardless of identities.
     fn deinit(self: *FinalizerCallback, session: *Session) void {
+        // Mark all identities as done so stale V8 weak callbacks
+        // won't find the wrong FC if resolved_ptr_id is reused.
+        var id = self.identities;
+        while (id) |identity| {
+            identity.done = true;
+            id = identity.next;
+        }
         self.release_ref(self.finalizer_ptr_id, session);
         session.releaseArena(self.arena);
     }

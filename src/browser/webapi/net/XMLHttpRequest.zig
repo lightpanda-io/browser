@@ -245,7 +245,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
     var headers = try http_client.newHeaders();
 
     // Only add cookies for same-origin or when withCredentials is true
-    const cookie_support = self._with_credentials or try page.isSameOrigin(self._url);
+    const cookie_support = self._with_credentials or page.isSameOrigin(self._url);
 
     try self._request_headers.populateHttpHeader(page.call_arena, &headers);
     if (cookie_support) {

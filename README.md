@@ -62,8 +62,12 @@ chmod a+x ./lightpanda
 
 *For Windows + WSL2*
 
-The Lightpanda browser is compatible to run on windows inside WSL. Follow the Linux instruction for installation from a WSL terminal.
-It is recommended to install clients like Puppeteer on the Windows host.
+Lightpanda has no native Windows binary. Install it inside WSL following the Linux steps above.
+
+WSL not installed? Run `wsl --install` from an administrator shell, restart, then open `wsl`.
+See [Microsoft's WSL install guide](https://learn.microsoft.com/en-us/windows/wsl/install) for details.
+
+Your automation client (Puppeteer, Playwright, etc.) can run either inside WSL or on the Windows host. WSL forwards `localhost:9222` automatically.
 
 **Install from Docker**
 

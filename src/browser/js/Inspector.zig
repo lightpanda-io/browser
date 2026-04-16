@@ -128,6 +128,10 @@ pub fn contextCreated(
     }
 }
 
+pub fn getContextId(_: *const Inspector, local: *const js.Local) i32 {
+    return v8.v8__inspector__executionContextId(local.handle);
+}
+
 pub fn contextDestroyed(self: *Inspector, context: *const v8.Context) void {
     v8.v8_inspector__Inspector__ContextDestroyed(self.handle, context);
 

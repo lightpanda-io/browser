@@ -257,7 +257,22 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
     const js_context = try world.createContext(page);
-    return cmd.sendResult(.{ .executionContextId = js_context.id }, .{});
+    const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
+
+    var ls: js.Local.Scope = undefined;
+    js_context.localScope(&ls);
+    defer ls.deinit();
+
+    bc.inspector_session.inspector.contextCreated(
+        &ls.local,
+        params.worldName,
+        page.origin orelse "",
+        aux_data,
+        false,
+    );
+
+    const context_id = bc.inspector_session.inspector.getContextId(&ls.local);
+    return cmd.sendResult(.{ .executionContextId = context_id }, .{});
 }
 
 fn navigate(cmd: *CDP.Command) !void {
@@ -283,6 +298,12 @@ fn navigate(cmd: *CDP.Command) !void {
     var page = session.currentPage() orelse return error.PageNotLoaded;
 
     if (page._load_state != .waiting) {
+        // Reset isolated world identities to disable V8 weak callbacks before
+        // resetPageResources releases refs. Prevents double-release crashes.
+        for (bc.isolated_worlds.items) |isolated_world| {
+            isolated_world.identity.deinit();
+            isolated_world.identity = .{};
+        }
         page = try session.replacePage();
     }
 
@@ -313,6 +334,12 @@ fn doReload(cmd: *CDP.Command) !void {
     const reload_url = try cmd.arena.dupeZ(u8, page.url);
 
     if (page._load_state != .waiting) {
+        // Reset isolated world identities to disable V8 weak callbacks before
+        // resetPageResources releases refs. Prevents double-release crashes.
+        for (bc.isolated_worlds.items) |isolated_world| {
+            isolated_world.identity.deinit();
+            isolated_world.identity = .{};
+        }
         page = try session.replacePage();
     }
 
@@ -376,14 +403,14 @@ pub fn pageNavigate(bc: *CDP.BrowserContext, event: *const Notification.PageNavi
     }, .{ .session_id = session_id });
 }
 
-pub fn pageRemove(bc: *CDP.BrowserContext) !void {
+pub fn pageRemove(bc: *CDP.BrowserContext) void {
     // Clear all remote object mappings to prevent stale objectIds from being used
     // after the context is destroy
     bc.inspector_session.inspector.resetContextGroup();
 
     // The main page is going to be removed, we need to remove contexts from other worlds first.
     for (bc.isolated_worlds.items) |isolated_world| {
-        try isolated_world.removeContext();
+        isolated_world.removeContext();
     }
 }
 

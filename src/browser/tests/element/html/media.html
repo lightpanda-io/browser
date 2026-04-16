@@ -42,11 +42,17 @@
     const audio = document.getElementById('audio1');
     testing.expectEqual(true, audio.paused);
 
-    audio.play();
+    var resolved = false;
+    audio.play().then(() => {
+      resolved = true;
+    });
     testing.expectEqual(false, audio.paused);
 
     audio.pause();
     testing.expectEqual(true, audio.paused);
+    testing.onload(() => {
+      testing.expectEqual(true, resolved);
+    })
   }
 </script>
 

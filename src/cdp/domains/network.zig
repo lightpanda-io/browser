@@ -51,7 +51,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .enable => return enable(cmd),
         .disable => return disable(cmd),
         .setCacheDisabled => return cmd.sendResult(null, .{}),
-        .setUserAgentOverride => return cmd.sendResult(null, .{}),
+        .setUserAgentOverride => return @import("emulation.zig").setUserAgentOverride(cmd),
         .setExtraHTTPHeaders => return setExtraHTTPHeaders(cmd),
         .deleteCookies => return deleteCookies(cmd),
         .clearBrowserCookies => return clearBrowserCookies(cmd),
