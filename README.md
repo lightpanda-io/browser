@@ -50,6 +50,11 @@ curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download
 chmod a+x ./lightpanda
 ```
 
+Verify the binary before running anything:
+```console
+./lightpanda version
+```
+
 [Linux aarch64 is also available](https://github.com/lightpanda-io/browser/releases/tag/nightly)
 
 *For MacOS*
