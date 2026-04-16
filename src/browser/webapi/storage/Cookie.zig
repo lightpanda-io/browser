@@ -41,7 +41,7 @@ secure: bool = false,
 http_only: bool = false,
 same_site: SameSite = .none,
 
-const SameSite = enum {
+pub const SameSite = enum {
     strict,
     lax,
     none,

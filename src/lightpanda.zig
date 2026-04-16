@@ -40,6 +40,7 @@ pub const forms = @import("browser/forms.zig");
 pub const actions = @import("browser/actions.zig");
 pub const structured_data = @import("browser/structured_data.zig");
 pub const mcp = @import("mcp.zig");
+pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 
@@ -66,6 +67,17 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     defer browser.deinit();
 
     var session = try browser.newSession(notification);
+
+    if (app.config.cookieFile()) |cookie_path| {
+        cookies.loadFromFile(session, cookie_path);
+    }
+
+    defer {
+        if (app.config.cookieJarFile()) |cookie_jar_path| {
+            cookies.saveToFile(&session.cookie_jar, cookie_jar_path);
+        }
+    }
+
     const page = try session.createPage();
 
     // // Comment this out to get a profile of the JS code in v8/profile.json.
