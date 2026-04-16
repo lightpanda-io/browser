@@ -14,74 +14,87 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+const log = @import("log.zig");
 
 const Session = @import("browser/Session.zig");
 const Cookie = @import("browser/webapi/storage/Cookie.zig");
-const log = @import("log.zig");
+
+const Allocator = std.mem.Allocator;
 
 /// Load cookies from a JSON file into the cookie jar.
 /// The file format is an array of objects with: name, value, domain, path,
 /// expires (optional, float), secure (optional, bool), httpOnly (optional, bool).
 /// This matches the CDP Network.Cookie format used by Puppeteer and Playwright.
-pub fn loadFromFile(session: *Session, path: []const u8) !void {
-    const file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return, // No file yet, nothing to load
-        else => {
-            log.err(.app, "failed to open cookies file", .{ .path = path, .err = err });
-            return err;
-        },
+pub fn loadFromFile(session: *Session, path: []const u8) void {
+    _loadFromFile(session, path) catch |err| {
+        log.err(.app, "Cookie.loadFromFile", .{ .err = err, .path = path });
     };
-    defer file.close();
+}
 
-    const call_arena = try session.getArena(.medium, "cookies.jar.allocatorloadFromFile");
-    defer session.releaseArena(call_arena);
+fn _loadFromFile(session: *Session, path: []const u8) !void {
+    const arena = try session.getArena(.medium, "Cookies.loadFromFile");
+    defer session.releaseArena(arena);
 
-    const content = file.readToEndAlloc(call_arena, 1024 * 1024) catch |err| {
-        log.err(.app, "failed to read cookies file", .{ .path = path, .err = err });
-        return err;
+    const content = std.fs.cwd().readFileAlloc(arena, path, 1024 * 1024) catch |err| {
+        switch (err) {
+            error.FileNotFound => log.debug(.app, "Cookie.readFile", .{ .path = path, .note = "file not found" }),
+            else => log.err(.app, "Cookie.readFile", .{ .path = path, .err = err }),
+        }
+        return;
     };
 
-    const parsed = std.json.parseFromSlice([]const JsonCookie, call_arena, content, .{
+    const json_cookies = std.json.parseFromSliceLeaky([]const JsonCookie, arena, content, .{
         .ignore_unknown_fields = true,
     }) catch |err| {
-        log.err(.app, "failed to parse cookies JSON", .{ .path = path, .err = err });
-        return err;
+        log.err(.app, "Cookie.parseFile", .{ .path = path, .err = err });
+        return;
     };
-    defer parsed.deinit();
 
     const jar = &session.cookie_jar;
+    const now = std.time.timestamp();
+
     var loaded: usize = 0;
-    for (parsed.value) |jc| {
-        var arena = std.heap.ArenaAllocator.init(jar.allocator);
-        errdefer arena.deinit();
-        const a = arena.allocator();
+    for (json_cookies) |jc| {
+        var cookie_arena = std.heap.ArenaAllocator.init(jar.allocator);
+        errdefer cookie_arena.deinit();
+
+        const a = cookie_arena.allocator();
+        const name = try a.dupe(u8, jc.name);
+        const value = try a.dupe(u8, jc.value);
+        const domain = try a.dupe(u8, jc.domain);
+        const cookie_path = if (jc.path) |p| try a.dupe(u8, p) else "/";
 
         const cookie = Cookie{
-            .arena = arena,
-            .name = try a.dupe(u8, jc.name),
-            .value = try a.dupe(u8, jc.value),
-            .domain = try a.dupe(u8, jc.domain),
-            .path = try a.dupe(u8, jc.path orelse "/"),
+            .arena = cookie_arena,
+            .name = name,
+            .value = value,
+            .domain = domain,
+            .path = cookie_path,
             .expires = jc.expires,
             .secure = jc.secure orelse false,
             .http_only = jc.httpOnly orelse false,
-            .same_site = .none,
+            .same_site = jc.sameSite,
         };
 
-        jar.add(cookie, std.time.timestamp()) catch |err| {
+        jar.add(cookie, now) catch |err| {
             cookie.deinit();
-            log.warn(.app, "skipping cookie", .{ .name = jc.name, .err = err });
+            log.warn(.app, "invalid cookie", .{ .name = jc.name, .err = err });
             continue;
         };
         loaded += 1;
     }
 
-    log.info(.app, "loaded cookies from file", .{ .path = path, .count = loaded });
+    log.info(.app, "Cookie.loadFromFile", .{ .path = path, .count = loaded });
 }
 
 /// Save all cookies from the jar to a JSON file.
-pub fn saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
+pub fn saveToFile(jar: *Cookie.Jar, path: []const u8) void {
+    _saveToFile(jar, path) catch |err| {
+        log.err(.app, "Cookie.saveToFile", .{ .path = path, .err = err });
+    };
+}
+
+fn _saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
     jar.removeExpired(null);
 
     var file = try std.fs.cwd().createFile(path, .{});
@@ -91,9 +104,12 @@ pub fn saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
     var writer = file.writer(&buf);
     const w = &writer.interface;
 
-    try w.writeAll("[");
+    try w.writeByte('[');
     for (jar.cookies.items, 0..) |c, i| {
-        if (i > 0) try w.writeAll(",");
+        if (i > 0) {
+            try w.writeByte(',');
+        }
+
         try w.writeAll("\n  ");
         try std.json.Stringify.value(JsonCookie{
             .name = c.name,
@@ -103,15 +119,17 @@ pub fn saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
             .expires = c.expires,
             .secure = c.secure,
             .httpOnly = c.http_only,
+            .sameSite = c.same_site,
         }, .{}, w);
     }
+
     if (jar.cookies.items.len > 0) {
-        try w.writeAll("\n");
+        try w.writeByte('\n');
     }
     try w.writeAll("]\n");
     try writer.end();
 
-    log.info(.app, "saved cookies to file", .{ .path = path, .count = jar.cookies.items.len });
+    log.info(.app, "Cookie.saveToFile", .{ .path = path, .count = jar.cookies.items.len });
 }
 
 const JsonCookie = struct {
@@ -122,4 +140,5 @@ const JsonCookie = struct {
     expires: ?f64 = null,
     secure: ?bool = null,
     httpOnly: ?bool = null,
+    sameSite: Cookie.SameSite = .none,
 };

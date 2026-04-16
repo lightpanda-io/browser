@@ -52,9 +52,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
     self.session = try self.browser.newSession(self.notification);
 
     if (app.config.cookieFile()) |cookie_path| {
-        lp.cookies.loadFromFile(self.session, cookie_path) catch |err| {
-            lp.log.err(.mcp, "cookie load error", .{ .err = err });
-        };
+        lp.cookies.loadFromFile(self.session, cookie_path);
     }
 
     return self;
@@ -62,9 +60,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
 
 pub fn deinit(self: *Self) void {
     if (self.app.config.cookieJarFile()) |cookie_jar_path| {
-        lp.cookies.saveToFile(&self.session.cookie_jar, cookie_jar_path) catch |err| {
-            lp.log.err(.mcp, "cookie save error", .{ .err = err });
-        };
+        lp.cookies.saveToFile(&self.session.cookie_jar, cookie_jar_path);
     }
 
     self.node_registry.deinit();
