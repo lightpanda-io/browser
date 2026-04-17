@@ -263,19 +263,9 @@ pub fn Builder(comptime commands: anytype) type {
 
             const cmd_str: []const u8 = args.next() orelse return error.MissingCommand;
             inline for (commands) |command| {
-                // Command name together with it's aliases.
-                const with_aliases = blk: {
-                    if (@hasField(@TypeOf(command), "aliases")) {
-                        break :blk command.aliases ++ .{command.name};
-                    }
-
-                    break :blk .{command.name};
-                };
-
-                inline for (with_aliases) |name| {
-                    if (std.mem.eql(u8, cmd_str, name)) {
-                        return .{ exec_name, try parseCommand(allocator, command, &args) };
-                    }
+                // Match a command.
+                if (std.mem.eql(u8, cmd_str, command.name)) {
+                    return .{ exec_name, try parseCommand(allocator, command, &args) };
                 }
             }
 
@@ -369,18 +359,6 @@ pub fn Builder(comptime commands: anytype) type {
                         const match =
                             std.mem.eql(u8, option_name, "--" ++ option.name) or
                             std.mem.eql(u8, option_name, "--" ++ kebab_cased);
-
-                        // Name not matched; try shortcuts if provided.
-                        if (!match) {
-                            if (@hasField(@TypeOf(option), "shortcuts")) {
-                                inline for (option.shortcuts) |shortcut| {
-                                    if (std.mem.eql(u8, option_name, "-" ++ shortcut)) {
-                                        break :blk true;
-                                    }
-                                }
-                            }
-                        }
-
                         break :blk match;
                     };
 

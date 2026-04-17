@@ -100,8 +100,8 @@ const Commands = cli.Builder(.{
     .{
         .name = "serve",
         .options = .{
-            .{ .name = "host", .shortcuts = .{ "h", "H" }, .type = []const u8, .default = "127.0.0.1" },
-            .{ .name = "port", .shortcuts = .{ "p", "P" }, .type = u16, .default = 9222 },
+            .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
+            .{ .name = "port", .type = u16, .default = 9222 },
             .{ .name = "advertise_host", .type = ?[]const u8 },
             .{ .name = "timeout", .type = u31, .default = 10 },
             .{ .name = "cdp_max_connections", .type = u16, .default = 16 },
@@ -111,11 +111,10 @@ const Commands = cli.Builder(.{
     },
     .{
         .name = "fetch",
-        .aliases = .{ "f", "get" },
         // This argument can be given out of order.
         .positional = .{ .name = "url", .type = ?[:0]const u8 },
         .options = .{
-            .{ .name = "dump", .shortcuts = .{ "d", "D" }, .type = ?DumpFormat, .validator = dumpValidator },
+            .{ .name = "dump", .type = ?DumpFormat, .validator = dumpValidator },
             .{ .name = "with_base", .type = bool },
             .{ .name = "with_frames", .type = bool },
             .{ .name = "strip", .type = dump.Opts.Strip, .default = dump.Opts.Strip{} },
@@ -133,8 +132,8 @@ const Commands = cli.Builder(.{
         },
         .shared_options = CommonOptions,
     },
-    .{ .name = "version", .aliases = .{"v"}, .options = .{} },
-    .{ .name = "help", .aliases = .{ "h", "?" }, .options = .{} },
+    .{ .name = "version", .options = .{} },
+    .{ .name = "help", .options = .{} },
 });
 
 pub const RunMode = Commands.Enum;
