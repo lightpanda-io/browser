@@ -37,6 +37,7 @@ pub const Writer = struct {
     registry: *Node.Registry,
     page: *Page,
     visibility_cache: *DOMNode.Element.VisibilityCache,
+    label_index: *Label.LabelByForIndex,
 
     pub const Opts = struct {};
 
@@ -493,7 +494,7 @@ pub const Writer = struct {
             try w.objectField("type");
             try w.write(@tagName(.computedString));
             try w.objectField("value");
-            const source = try axn.writeName(w, self.page);
+            const source = try axn.writeName(w, self.page, self.label_index);
             if (source) |s| {
                 try self.writeAXSource(s, w);
             }
@@ -809,7 +810,7 @@ pub fn getName(self: AXNode, page: *Page, allocator: std.mem.Allocator) !?[]cons
 
     const w: TextCaptureWriter = .{ .aw = &aw, .writer = &aw.writer };
 
-    const source = try self.writeName(w, page);
+    const source = try self.writeName(w, page, null);
     if (source != null) {
         // Remove literal quotes inserted by writeString.
         var raw_text = std.mem.trim(u8, aw.written(), "\"");
@@ -820,7 +821,7 @@ pub fn getName(self: AXNode, page: *Page, allocator: std.mem.Allocator) !?[]cons
     return null;
 }
 
-fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
+fn writeName(axnode: AXNode, w: anytype, page: *Page, label_index: ?*Label.LabelByForIndex) !?AXSource {
     const node = axnode.dom;
 
     return switch (node._type) {
@@ -873,7 +874,7 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
             }
 
             if (isLabellableTag(el.getTag())) {
-                if (try writeLabelName(node, el, page, w)) |source| {
+                if (try writeLabelName(node, el, page, label_index, w)) |source| {
                     return source;
                 }
             }
@@ -1001,11 +1002,21 @@ fn isLabellableTag(tag: DOMNode.Element.Tag) bool {
     };
 }
 
-fn writeLabelName(node: *DOMNode, el: *DOMNode.Element, page: *Page, w: anytype) !?AXSource {
+fn writeLabelName(
+    node: *DOMNode,
+    el: *DOMNode.Element,
+    page: *Page,
+    label_index: ?*Label.LabelByForIndex,
+    w: anytype,
+) !?AXSource {
     if (el.getAttributeSafe(comptime .wrap("id"))) |id_value| {
         if (id_value.len > 0) {
             if (node.ownerDocument(page)) |doc| {
-                if (Label.findLabelByFor(doc.asNode(), id_value)) |label_el| {
+                const match: ?*DOMNode.Element = if (label_index) |idx|
+                    try idx.lookup(doc.asNode(), id_value, page.call_arena)
+                else
+                    Label.findLabelByFor(doc.asNode(), id_value);
+                if (match) |label_el| {
                     if (try writeLabelInnerText(label_el, page, w)) return .label_element;
                 }
             }
@@ -1271,14 +1282,16 @@ test "AXNode: writer" {
     var doc = page.window._document;
 
     const node = try registry.register(doc.asNode());
-    // Cache inserts go through page.call_arena, so give the cache the same
-    // allocator and let the page arena clean it up.
+    // Cache inserts go through page.call_arena, so give the caches the same
+    // allocator and let the page arena clean them up.
     var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
+    var label_index: Label.LabelByForIndex = .{};
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
         .root = node,
         .registry = &registry,
         .page = page,
         .visibility_cache = &visibility_cache,
+        .label_index = &label_index,
     }, .{});
     defer testing.allocator.free(json);
 
@@ -1343,11 +1356,13 @@ test "AXNode: writer prunes hidden and resolves labels" {
 
     const node = try registry.register(doc.asNode());
     var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
+    var label_index: Label.LabelByForIndex = .{};
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
         .root = node,
         .registry = &registry,
         .page = page,
         .visibility_cache = &visibility_cache,
+        .label_index = &label_index,
     }, .{});
     defer testing.allocator.free(json);
 

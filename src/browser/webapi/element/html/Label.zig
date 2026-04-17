@@ -73,6 +73,30 @@ pub fn findLabelByFor(root: *Node, id: []const u8) ?*Element {
     return null;
 }
 
+/// Lazy `for`-attribute → `<label>` index. Built in one tree walk on first
+/// lookup; subsequent lookups are O(1). Use when the same document is queried
+/// multiple times (e.g. one AX tree walk resolves names for every labellable
+/// control).
+pub const LabelByForIndex = struct {
+    map: std.StringHashMapUnmanaged(*Element) = .empty,
+    populated: bool = false,
+
+    pub fn lookup(self: *LabelByForIndex, root: *Node, id: []const u8, allocator: std.mem.Allocator) !?*Element {
+        if (!self.populated) {
+            var it = TreeWalker.Full.Elements.init(root, .{});
+            while (it.next()) |el| {
+                if (el.getTag() != .label) continue;
+                const for_attr = el.getAttributeSafe(comptime .wrap("for")) orelse continue;
+                if (for_attr.len == 0) continue;
+                const gop = try self.map.getOrPut(allocator, for_attr);
+                if (!gop.found_existing) gop.value_ptr.* = el;
+            }
+            self.populated = true;
+        }
+        return self.map.get(id);
+    }
+};
+
 /// Collects the `<label>` elements associated with a labellable form control.
 /// Matches HTMLInputElement.labels (and the equivalent on button/select/etc).
 /// Includes every `<label for="id">` reference plus the nearest ancestor
