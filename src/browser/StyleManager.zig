@@ -231,6 +231,31 @@ pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, opt
     return false;
 }
 
+/// Computed display:none for a single element (own property, no ancestor walk).
+/// Also honors the HTML `hidden` attribute, matching the UA stylesheet rule
+/// `[hidden] { display: none }`.
+pub fn hasDisplayNone(self: *StyleManager, el: *Element) bool {
+    self.rebuildIfDirty() catch return false;
+    if (el.hasAttributeSafe(comptime .wrap("hidden"))) return true;
+    return self.isElementHidden(el, .{});
+}
+
+/// Computed visibility:hidden for an element, considering only the `visibility`
+/// chain (walks ancestors since `visibility` inherits by default). Ignores
+/// display:none: an ancestor with display:none means the element isn't
+/// rendered, but its computed `visibility` still reflects inherited visibility.
+pub fn hasVisibilityHiddenInherited(self: *StyleManager, el: *Element) bool {
+    self.rebuildIfDirty() catch return false;
+    var current: ?*Element = el;
+    while (current) |elem| {
+        if (self.isElementHidden(elem, .{ .check_display = false, .check_visibility = true })) {
+            return true;
+        }
+        current = elem.parentElement();
+    }
+    return false;
+}
+
 /// Check if a single element (not ancestors) is hidden.
 fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions) bool {
     // Track best match per property (value + priority)
@@ -246,11 +271,16 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     var opacity_priority: u64 = 0;
 
     // Check inline styles FIRST - they use INLINE_PRIORITY so no stylesheet can beat them
-    if (getInlineStyleProperty(el, comptime .wrap("display"), self.page)) |property| {
-        if (property._value.eql(comptime .wrap("none"))) {
-            return true; // Early exit for hiding value
+    if (options.check_display) {
+        if (getInlineStyleProperty(el, comptime .wrap("display"), self.page)) |property| {
+            if (property._value.eql(comptime .wrap("none"))) {
+                return true; // Early exit for hiding value
+            }
+            display_none = false;
+            display_priority = INLINE_PRIORITY;
         }
-        display_none = false;
+    } else {
+        // Pin to INLINE_PRIORITY so rule-matching skips display entirely.
         display_priority = INLINE_PRIORITY;
     }
 
@@ -685,8 +715,9 @@ const VisibilityRule = struct {
 };
 
 const CheckVisibilityOptions = struct {
-    check_opacity: bool = false,
+    check_display: bool = true,
     check_visibility: bool = false,
+    check_opacity: bool = false,
 };
 
 // Inline styles always win over stylesheets - use max u64 as sentinel
