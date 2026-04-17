@@ -231,6 +231,33 @@ pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, opt
     return false;
 }
 
+/// Computed display:none for a single element (own property, no ancestor walk).
+/// Also honors the HTML `hidden` attribute, matching the UA stylesheet rule
+/// `[hidden] { display: none }`.
+pub fn hasDisplayNone(self: *StyleManager, el: *Element) bool {
+    self.rebuildIfDirty() catch return false;
+    if (el.hasAttributeSafe(comptime .wrap("hidden"))) return true;
+    return self.isElementHidden(el, .{});
+}
+
+/// Computed visibility:hidden for an element, walking ancestors since `visibility`
+/// inherits by default. Only considers visibility-level hidden (not display:none)
+/// — display:none on an ancestor means the element isn't rendered, but its
+/// computed `visibility` still reflects inherited visibility chain.
+pub fn hasVisibilityHiddenInherited(self: *StyleManager, el: *Element) bool {
+    self.rebuildIfDirty() catch return false;
+    var current: ?*Element = el;
+    while (current) |elem| {
+        const combined = self.isElementHidden(elem, .{ .check_visibility = true });
+        if (combined) {
+            const display_only = self.isElementHidden(elem, .{});
+            if (!display_only) return true;
+        }
+        current = elem.parentElement();
+    }
+    return false;
+}
+
 /// Check if a single element (not ancestors) is hidden.
 fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions) bool {
     // Track best match per property (value + priority)

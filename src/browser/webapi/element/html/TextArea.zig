@@ -280,6 +280,10 @@ pub fn getForm(self: *TextArea, page: *Page) ?*Form {
     return null;
 }
 
+pub fn getLabels(self: *TextArea, page: *Page) !js.Array {
+    return @import("Label.zig").getControlLabels(self.asElement(), page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(TextArea);
 
@@ -289,6 +293,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const labels = bridge.accessor(TextArea.getLabels, null, .{});
     pub const onselectionchange = bridge.accessor(TextArea.getOnSelectionChange, TextArea.setOnSelectionChange, .{});
     pub const value = bridge.accessor(TextArea.getValue, TextArea.setValue, .{});
     pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, TextArea.setDefaultValue, .{});

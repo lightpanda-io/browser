@@ -1,4 +1,5 @@
 const js = @import("../../../js/js.zig");
+const Page = @import("../../../Page.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -14,6 +15,10 @@ pub fn asNode(self: *Output) *Node {
     return self.asElement().asNode();
 }
 
+pub fn getLabels(self: *Output, page: *Page) !js.Array {
+    return @import("Label.zig").getControlLabels(self.asElement(), page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Output);
 
@@ -22,4 +27,6 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const labels = bridge.accessor(Output.getLabels, null, .{});
 };

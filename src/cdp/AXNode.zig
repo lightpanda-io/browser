@@ -22,6 +22,7 @@ const jsonStringify = std.json.Stringify;
 const log = @import("../log.zig");
 const Page = @import("../browser/Page.zig");
 const DOMNode = @import("../browser/webapi/Node.zig");
+const Label = @import("../browser/webapi/element/html/Label.zig");
 
 const Node = @import("Node.zig");
 
@@ -35,6 +36,7 @@ pub const Writer = struct {
     root: *const Node,
     registry: *Node.Registry,
     page: *Page,
+    visibility_cache: *DOMNode.Element.VisibilityCache,
 
     pub const Opts = struct {};
 
@@ -51,19 +53,24 @@ pub const Writer = struct {
     fn toJSON(self: *const Writer, node: *const Node, w: anytype) !void {
         try w.beginArray();
         const root = AXNode.fromNode(node.dom);
-        if (try self.writeNode(node.id, root, w)) {
-            try self.writeNodeChildren(root, w);
+        if (try self.writeNode(node.id, root, false, w)) {
+            try self.writeNodeChildren(root, false, w);
         }
         return w.endArray();
     }
 
-    fn writeNodeChildren(self: *const Writer, parent: AXNode, w: anytype) !void {
+    fn writeNodeChildren(self: *const Writer, parent: AXNode, in_aria_hidden: bool, w: anytype) !void {
         // Add ListMarker for listitem elements
         if (parent.dom.is(DOMNode.Element)) |parent_el| {
             if (parent_el.getTag() == .li) {
                 try self.writeListMarker(parent.dom, w);
             }
         }
+
+        const child_in_aria_hidden = in_aria_hidden or blk: {
+            const parent_el = parent.dom.is(DOMNode.Element) orelse break :blk false;
+            break :blk hasAriaHiddenTrue(parent_el);
+        };
 
         var it = parent.dom.childrenIterator();
         const ignore_text = ignoreText(parent.dom);
@@ -77,14 +84,22 @@ pub const Writer = struct {
                         continue;
                     }
                 },
-                .element => {},
+                .element => {
+                    // Prune hidden subtrees entirely (display:none,
+                    // visibility:hidden, aria-hidden, hidden, inert). Matches
+                    // Chromium: these elements aren't exposed to the AX tree.
+                    const child_el = dom_node.as(DOMNode.Element);
+                    if (child_in_aria_hidden or isHidden(child_el, self.page, self.visibility_cache)) {
+                        continue;
+                    }
+                },
                 else => continue,
             }
 
             const node = try self.registry.register(dom_node);
             const axn = AXNode.fromNode(node.dom);
-            if (try self.writeNode(node.id, axn, w)) {
-                try self.writeNodeChildren(axn, w);
+            if (try self.writeNode(node.id, axn, child_in_aria_hidden, w)) {
+                try self.writeNodeChildren(axn, child_in_aria_hidden, w);
             }
         }
     }
@@ -212,7 +227,12 @@ pub const Writer = struct {
             // w.objectField("value");
             // self.writeAXValue(.{ .type = .computedString, .value = value.value }, w);
             .contents => "contents",
-            .label_element, .label_wrap => "TODO", // TODO
+            .label_element => blk: {
+                try w.objectField("attribute");
+                try w.write("for");
+                break :blk "relatedElement";
+            },
+            .label_wrap => "relatedElement",
         };
         try w.objectField("type");
         try w.write(source_type);
@@ -438,7 +458,7 @@ pub const Writer = struct {
     }
 
     // write a node. returns true if children must be written.
-    fn writeNode(self: *const Writer, id: u32, axn: AXNode, w: anytype) !bool {
+    fn writeNode(self: *const Writer, id: u32, axn: AXNode, in_aria_hidden: bool, w: anytype) !bool {
         // ignore empty texts
         try w.beginObject();
 
@@ -451,7 +471,7 @@ pub const Writer = struct {
         try w.objectField("role");
         try self.writeAXValue(.{ .role = try axn.getRole() }, w);
 
-        const ignore = axn.isIgnore(self.page);
+        const ignore = axn.isIgnore(self.page, self.visibility_cache, in_aria_hidden);
         try w.objectField("ignored");
         try w.write(ignore);
 
@@ -502,6 +522,11 @@ pub const Writer = struct {
         const write_children = axn.ignoreChildren() == false;
         const skip_text = ignoreText(axn.dom);
 
+        const child_in_aria_hidden = in_aria_hidden or blk: {
+            const self_el = n.is(DOMNode.Element) orelse break :blk false;
+            break :blk hasAriaHiddenTrue(self_el);
+        };
+
         try w.objectField("childIds");
         try w.beginArray();
         if (write_children) {
@@ -511,6 +536,14 @@ pub const Writer = struct {
                 // ignore non-elements or text.
                 if (child.is(DOMNode.Element.Html) == null and (child.is(DOMNode.CData.Text) == null or skip_text)) {
                     continue;
+                }
+
+                // Skip hidden element children so childIds matches the
+                // subtree-pruning done in writeNodeChildren.
+                if (child.is(DOMNode.Element)) |child_el| {
+                    if (child_in_aria_hidden or isHidden(child_el, self.page, self.visibility_cache)) {
+                        continue;
+                    }
                 }
 
                 const child_node = try registry.register(child);
@@ -839,6 +872,12 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
                 return .aria_label;
             }
 
+            if (isLabellableTag(el.getTag())) {
+                if (try writeLabelName(node, el, page, w)) |source| {
+                    return source;
+                }
+            }
+
             if (el.getAttributeSafe(comptime .wrap("alt"))) |alt| {
                 try w.write(alt);
                 return .alt;
@@ -948,7 +987,48 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, page: *Pa
     }
 }
 
-fn isHidden(elt: *DOMNode.Element) bool {
+fn hasAriaHiddenTrue(elt: *DOMNode.Element) bool {
+    if (elt.getAttributeSafe(comptime .wrap("aria-hidden"))) |value| {
+        return std.mem.eql(u8, value, "true");
+    }
+    return false;
+}
+
+fn isLabellableTag(tag: DOMNode.Element.Tag) bool {
+    return switch (tag) {
+        .button, .meter, .output, .progress, .select, .textarea, .input => true,
+        else => false,
+    };
+}
+
+fn writeLabelName(node: *DOMNode, el: *DOMNode.Element, page: *Page, w: anytype) !?AXSource {
+    if (el.getAttributeSafe(comptime .wrap("id"))) |id_value| {
+        if (id_value.len > 0) {
+            if (node.ownerDocument(page)) |doc| {
+                if (Label.findLabelByFor(doc.asNode(), id_value)) |label_el| {
+                    if (try writeLabelInnerText(label_el, page, w)) return .label_element;
+                }
+            }
+        }
+    }
+
+    if (Label.findWrappingLabel(el)) |wrap_label| {
+        if (try writeLabelInnerText(wrap_label, page, w)) return .label_wrap;
+    }
+
+    return null;
+}
+
+fn writeLabelInnerText(label_el: *DOMNode.Element, page: *Page, w: anytype) !bool {
+    var buf: std.Io.Writer.Allocating = .init(page.call_arena);
+    try label_el.getInnerText(&buf.writer);
+    const text = std.mem.trim(u8, buf.written(), &std.ascii.whitespace);
+    if (text.len == 0) return false;
+    try writeString(text, w);
+    return true;
+}
+
+fn isHidden(elt: *DOMNode.Element, page: *Page, cache: *DOMNode.Element.VisibilityCache) bool {
     if (elt.getAttributeSafe(comptime .wrap("aria-hidden"))) |value| {
         if (std.mem.eql(u8, value, "true")) {
             return true;
@@ -963,8 +1043,11 @@ fn isHidden(elt: *DOMNode.Element) bool {
         return true;
     }
 
-    // TODO Check if aria-hidden ancestor exists
-    // TODO Check CSS visibility (if you have access to computed styles)
+    // CSS display:none and visibility:hidden (both inherited from ancestors via
+    // style computation). Matches Chromium's AX tree which prunes both.
+    if (page._style_manager.isHidden(elt, cache, .{ .check_visibility = true })) {
+        return true;
+    }
 
     return false;
 }
@@ -1011,12 +1094,12 @@ fn ignoreChildren(self: AXNode) bool {
     };
 }
 
-fn isIgnore(self: AXNode, page: *Page) bool {
+fn isIgnore(self: AXNode, page: *Page, cache: *DOMNode.Element.VisibilityCache, in_aria_hidden: bool) bool {
     const node = self.dom;
     const role_attr = self.role_attr;
 
     // Don't ignore non-Element node: CData, Document...
-    const elt = node.is(DOMNode.Element) orelse return false;
+    const elt = node.is(DOMNode.Element) orelse return in_aria_hidden;
     // Ignore non-HTML elements: svg...
     if (elt._type != .html) {
         return true;
@@ -1053,7 +1136,11 @@ fn isIgnore(self: AXNode, page: *Page) bool {
         }
     }
 
-    if (isHidden(elt)) {
+    if (in_aria_hidden) {
+        return true;
+    }
+
+    if (isHidden(elt, page, cache)) {
         return true;
     }
 
@@ -1068,7 +1155,7 @@ fn isIgnore(self: AXNode, page: *Page) bool {
             var it = node.childrenIterator();
             while (it.next()) |child| {
                 const axn = AXNode.fromNode(child);
-                if (!axn.isIgnore(page)) {
+                if (!axn.isIgnore(page, cache, false)) {
                     return false;
                 }
             }
@@ -1184,10 +1271,14 @@ test "AXNode: writer" {
     var doc = page.window._document;
 
     const node = try registry.register(doc.asNode());
+    // Cache inserts go through page.call_arena, so give the cache the same
+    // allocator and let the page arena clean it up.
+    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
         .root = node,
         .registry = &registry,
         .page = page,
+        .visibility_cache = &visibility_cache,
     }, .{});
     defer testing.allocator.free(json);
 
@@ -1240,4 +1331,85 @@ test "AXNode: writer" {
         }
     }
     return error.HeadingNodeNotFound;
+}
+
+test "AXNode: writer prunes hidden and resolves labels" {
+    var registry = Node.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer page._session.removePage();
+    var doc = page.window._document;
+
+    const node = try registry.register(doc.asNode());
+    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = node,
+        .registry = &registry,
+        .page = page,
+        .visibility_cache = &visibility_cache,
+    }, .{});
+    defer testing.allocator.free(json);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+    const nodes = parsed.value.array.items;
+
+    // No hidden-subtree text should have leaked into the tree.
+    const hidden_texts = [_][]const u8{
+        "under-display-none",
+        "under-visibility-hidden",
+        "under-hidden-attr",
+        "under-aria-hidden",
+    };
+    for (nodes) |node_val| {
+        const obj = node_val.object;
+        const name_obj = obj.get("name") orelse continue;
+        const value = name_obj.object.get("value") orelse continue;
+        if (value != .string) continue;
+        for (hidden_texts) |bad| {
+            try testing.expect(std.mem.indexOf(u8, value.string, bad) == null);
+        }
+    }
+
+    // The visible paragraph's text leaks into the tree as a StaticText child.
+    var found_visible = false;
+    for (nodes) |node_val| {
+        const obj = node_val.object;
+        const name_obj = obj.get("name") orelse continue;
+        const value = name_obj.object.get("value") orelse continue;
+        if (value == .string and std.mem.indexOf(u8, value.string, "visible-para") != null) {
+            found_visible = true;
+            break;
+        }
+    }
+    try testing.expect(found_visible);
+
+    // The search input gets its name from <label for=search-input>.
+    var search_named = false;
+    for (nodes) |node_val| {
+        const obj = node_val.object;
+        const role_obj = obj.get("role") orelse continue;
+        const role_val = role_obj.object.get("value") orelse continue;
+        if (!std.mem.eql(u8, role_val.string, "searchbox")) continue;
+        const name_val = obj.get("name").?.object.get("value").?;
+        if (name_val == .string and std.mem.indexOf(u8, name_val.string, "Search") != null) {
+            search_named = true;
+        }
+    }
+    try testing.expect(search_named);
+
+    // The wrapped input gets its name from its ancestor <label>.
+    var wrapped_named = false;
+    for (nodes) |node_val| {
+        const obj = node_val.object;
+        const role_obj = obj.get("role") orelse continue;
+        const role_val = role_obj.object.get("value") orelse continue;
+        if (!std.mem.eql(u8, role_val.string, "textbox")) continue;
+        const name_val = obj.get("name").?.object.get("value").?;
+        if (name_val == .string and std.mem.indexOf(u8, name_val.string, "Wrap") != null) {
+            wrapped_named = true;
+        }
+    }
+    try testing.expect(wrapped_named);
 }

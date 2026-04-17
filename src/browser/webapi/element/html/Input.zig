@@ -498,6 +498,13 @@ pub fn setSelectionRange(
     try self.dispatchSelectionChangeEvent(page);
 }
 
+pub fn getLabels(self: *Input, page: *Page) !js.Array {
+    if (self._input_type == .hidden) {
+        return page.js.local.?.newArray(0);
+    }
+    return @import("Label.zig").getControlLabels(self.asElement(), page);
+}
+
 pub fn getForm(self: *Input, page: *Page) ?*Form {
     const element = self.asElement();
 
@@ -897,6 +904,7 @@ pub const JsApi = struct {
     pub const size = bridge.accessor(Input.getSize, Input.setSize, .{});
     pub const src = bridge.accessor(Input.getSrc, Input.setSrc, .{});
     pub const form = bridge.accessor(Input.getForm, null, .{});
+    pub const labels = bridge.accessor(Input.getLabels, null, .{});
     pub const indeterminate = bridge.accessor(Input.getIndeterminate, Input.setIndeterminate, .{});
     pub const placeholder = bridge.accessor(Input.getPlaceholder, Input.setPlaceholder, .{});
     pub const min = bridge.accessor(Input.getMin, Input.setMin, .{});
