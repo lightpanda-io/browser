@@ -571,6 +571,11 @@ pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
     return self.scrollTo(.{ .x = absx }, absy, page);
 }
 
+// only exposed when the binary is built with the -Dwpt_extensions flag
+pub fn getWebDriver(_: *const Window) @import("WebDriver.zig") {
+    return .{};
+}
+
 pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.PromiseRejection, page: *Page) !void {
     if (comptime IS_DEBUG) {
         log.debug(.js, "unhandled rejection", .{
@@ -916,6 +921,8 @@ pub const JsApi = struct {
             return null;
         }
     }.prompt, .{});
+
+    pub const webdriver = bridge.accessor(Window.getWebDriver, null, .{ .wpt_only = true });
 };
 
 const CrossOriginWindow = struct {
