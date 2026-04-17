@@ -74,6 +74,8 @@ const CommonOptions = .{
     .{ .name = "user_agent", .type = ?[]const u8 },
     .{ .name = "block_private_networks", .type = bool },
     .{ .name = "block_cidrs", .type = ?[]const u8 },
+    .{ .name = "cookie", .type = ?[]const u8 },
+    .{ .name = "cookie_jar", .type = ?[]const u8 },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -275,14 +277,14 @@ pub fn httpCacheDir(self: *const Config) ?[]const u8 {
 
 pub fn cookieFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.cookie,
+        inline .serve, .fetch, .mcp => |opts| opts.cookie,
         else => null,
     };
 }
 
 pub fn cookieJarFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .fetch, .mcp => |opts| opts.common.cookie_jar,
+        inline .fetch, .mcp => |opts| opts.cookie_jar,
         else => null,
     };
 }
