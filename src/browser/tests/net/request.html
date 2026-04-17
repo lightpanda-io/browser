@@ -22,6 +22,9 @@
   const req = new Request('/path');
   testing.expectEqual(true, req.url.includes('/path'));
 }
+
+  const req = new Request('https://example.com/api/hello world');
+  testing.expectEqual('https://example.com/api/hello%20world', req.url);
 </script>
 
 <script id=headers>
