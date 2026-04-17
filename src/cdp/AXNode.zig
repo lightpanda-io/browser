@@ -28,6 +28,10 @@ const Node = @import("Node.zig");
 
 const AXNode = @This();
 
+// Max bytes retained in the name-resolution scratch arena across resets.
+// Anything beyond is freed back to the backing allocator.
+const scratch_retain_limit = 64 * 1024;
+
 // Need a custom writer, because we can't just serialize the node as-is.
 // Sometimes we want to serializ the node without children, sometimes with just
 // its direct children, and sometimes the entire tree.
@@ -829,6 +833,8 @@ fn writeName(
     label_index: ?*Label.LabelByForIndex,
     temp_arena: ?*std.heap.ArenaAllocator,
 ) !?AXSource {
+    defer resetScratch(temp_arena);
+
     const node = axnode.dom;
 
     return switch (node._type) {
@@ -856,9 +862,6 @@ fn writeName(
                 var it = std.mem.splitScalar(u8, labelledby, ' ');
                 var has_content = false;
 
-                defer if (temp_arena) |a| {
-                    _ = a.reset(.{ .retain_with_limit = 64 * 1024 });
-                };
                 var buf = std.Io.Writer.Allocating.init(scratchAllocator(temp_arena, page));
                 while (it.next()) |id| {
                     const trimmed_id = std.mem.trim(u8, id, &std.ascii.whitespace);
@@ -927,9 +930,6 @@ fn writeName(
                 => {},
                 else => {
                     // write text content if exists.
-                    defer if (temp_arena) |a| {
-                        _ = a.reset(.{ .retain_with_limit = 64 * 1024 });
-                    };
                     var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, page));
                     try writeAccessibleNameFallback(node, &buf.writer, page);
                     if (buf.written().len > 0) {
@@ -1050,9 +1050,6 @@ fn writeLabelInnerText(
     temp_arena: ?*std.heap.ArenaAllocator,
     w: anytype,
 ) !bool {
-    defer if (temp_arena) |a| {
-        _ = a.reset(.{ .retain_with_limit = 64 * 1024 });
-    };
     var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, page));
     try label_el.getInnerText(&buf.writer);
     const text = std.mem.trim(u8, buf.written(), &std.ascii.whitespace);
@@ -1061,8 +1058,17 @@ fn writeLabelInnerText(
     return true;
 }
 
+/// Allocator for throwaway name-resolution buffers: prefers the writer's
+/// temp arena so multiple calls reuse its retained page; falls back to
+/// `page.call_arena` on the non-Writer `getName` path.
 fn scratchAllocator(temp_arena: ?*std.heap.ArenaAllocator, page: *Page) std.mem.Allocator {
     return if (temp_arena) |a| a.allocator() else page.call_arena;
+}
+
+fn resetScratch(temp_arena: ?*std.heap.ArenaAllocator) void {
+    if (temp_arena) |a| {
+        _ = a.reset(.{ .retain_with_limit = scratch_retain_limit });
+    }
 }
 
 fn isHidden(elt: *DOMNode.Element, page: *Page, cache: *DOMNode.Element.VisibilityCache) bool {
