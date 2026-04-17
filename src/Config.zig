@@ -351,21 +351,6 @@ pub fn maxPendingConnections(self: *const Config) u31 {
     };
 }
 
-//pub const Serve = struct {
-//    host: []const u8 = "127.0.0.1",
-//    port: u16 = 9222,
-//    advertise_host: ?[]const u8 = null,
-//    timeout: u31 = 10,
-//    cdp_max_connections: u16 = 16,
-//    cdp_max_pending_connections: u16 = 128,
-//    common: Common = .{},
-//};
-
-//pub const Mcp = struct {
-//    common: Common = .{},
-//    cdp_port: ?u16 = null,
-//};
-
 pub const DumpFormat = enum {
     html,
     markdown,
