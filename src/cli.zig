@@ -440,8 +440,8 @@ pub fn Builder(comptime commands: anytype) type {
 
                                     const str = args.next() orelse return error.MissingArgument;
 
-                                    if (std.mem.eql(u8, str, "all")) {
-                                        // "all" sets all the fields of packed struct.
+                                    if (std.mem.eql(u8, str, "full")) {
+                                        // "full" sets all the fields of packed struct.
                                         const Int = _struct.backing_integer.?;
                                         @field(c, option.name) = @bitCast(@as(Int, std.math.maxInt(Int)));
                                     } else {
