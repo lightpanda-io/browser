@@ -118,7 +118,7 @@ const Commands = cli.Builder(.{
             .{ .name = "dump", .type = ?DumpFormat, .validator = dumpValidator },
             .{ .name = "with_base", .type = bool },
             .{ .name = "with_frames", .type = bool },
-            .{ .name = "strip", .type = dump.Opts.Strip, .default = dump.Opts.Strip{} },
+            .{ .name = "strip_mode", .type = dump.Opts.Strip, .default = dump.Opts.Strip{} },
             .{ .name = "wait_ms", .type = u32, .default = 5_000 },
             .{ .name = "wait_until", .type = ?WaitUntil },
             .{ .name = "wait_script", .type = ?[:0]const u8 },
@@ -552,12 +552,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Argument must be 'html', 'markdown', 'semantic_tree', or 'semantic_tree_text'.
         \\                Defaults to no dump.
         \\
-        \\--strip         Comma separated list of tag groups to remove from dump
-        \\                the dump. e.g. --strip js,css
+        \\--strip-mode    Comma separated list of tag groups to remove from dump
+        \\                the dump. e.g. --strip-mode js,css
         \\                  - "js" script and link[as=script, rel=preload]
         \\                  - "ui" includes img, picture, video, css and svg
         \\                  - "css" includes style and link[rel=stylesheet]
-        \\                  - "all" includes js, ui and css
+        \\                  - "full" includes js, ui and css
         \\
         \\--with-base     Add a <base> tag in dump. Defaults to false.
         \\

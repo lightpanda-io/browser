@@ -127,7 +127,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                 .wait_selector = opts.wait_selector,
                 .dump_mode = opts.dump,
                 .dump = .{
-                    .strip = opts.strip,
+                    .strip = opts.strip_mode,
                     .with_base = opts.with_base,
                     .with_frames = opts.with_frames,
                 },
