@@ -1151,11 +1151,11 @@ fn isIgnore(self: AXNode, page: *Page, cache: *DOMNode.Element.VisibilityCache, 
         const has_aria_labelledby = elt.hasAttributeSafe(.wrap("aria-labelledby"));
 
         if (!has_role and !has_aria_label and !has_aria_labelledby) {
-            // Check if it has any non-ignored children
+            // Check if it has any non-ignored children.
             var it = node.childrenIterator();
             while (it.next()) |child| {
                 const axn = AXNode.fromNode(child);
-                if (!axn.isIgnore(page, cache, false)) {
+                if (!axn.isIgnore(page, cache, in_aria_hidden)) {
                     return false;
                 }
             }
