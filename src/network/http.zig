@@ -262,6 +262,7 @@ fn opensocketCallback(
 
 pub const Connection = struct {
     _easy: *libcurl.Curl,
+    in_use: bool,
     transport: Transport,
     node: std.DoublyLinkedList.Node = .{},
 
@@ -278,7 +279,7 @@ pub const Connection = struct {
     ) !Connection {
         const easy = libcurl.curl_easy_init() orelse return error.FailedToInitializeEasy;
 
-        var self = Connection{ ._easy = easy, .transport = .none };
+        var self = Connection{ ._easy = easy, .in_use = false, .transport = .none };
         errdefer self.deinit();
 
         try self.reset(config, ca_blob, ip_filter);

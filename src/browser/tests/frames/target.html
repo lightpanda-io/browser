@@ -3,9 +3,13 @@
 
 <iframe name=f1 id=frame1></iframe>
 <a id=l1 target=f1 href=support/page.html></a>
-<script id=anchor>
+<script id=anchor type=module>
+  const state = await testing.async();
   $('#l1').click();
-  testing.onload(() => {
+
+  $('#frame1').onload = () => { state.resolve(); }
+
+  state.done(() => {
     testing.expectEqual('<html><head></head><body>a-page\n</body></html>', $('#frame1').contentDocument.documentElement.outerHTML);
   });
 </script>

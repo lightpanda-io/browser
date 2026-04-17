@@ -3,11 +3,13 @@
 
 <iframe id="receiver"></iframe>
 
-<script id="messages">
+<script id="messages" type=module>
 {
+  const state = await testing.async();
   let reply = null;
   window.addEventListener('message', (e) => {
     reply = e.data;
+    state.resolve();
   });
 
   const iframe = $('#receiver');
@@ -16,7 +18,7 @@
     iframe.contentWindow.postMessage('ping', '*');
   });
 
-  testing.onload(() => {
+  await state.done(() => {
     testing.expectEqual('pong', reply.data);
     testing.expectEqual(testing.ORIGIN, reply.origin);
   });

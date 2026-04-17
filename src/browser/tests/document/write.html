@@ -121,7 +121,9 @@
 
 <div id="will_be_removed">This will be removed by document.open()</div>
 
-<script id=test_open_close_async>
+<script id=test_open_close_async type=module>
+  const state = await testing.async();
+
   // Mark that we saw the element before
   const sawBefore = document.getElementById('will_be_removed') !== null;
   testing.expectEqual(true, sawBefore);
@@ -131,7 +133,15 @@
     document.open();
   }, 5);
 
-  testing.onload(() => {
+  // doing this after test_open_close_async used to crash, so we keep it
+  // to make sure it doesn't
+  setTimeout(() => {
+    document.open();
+    document.close();
+    state.resolve();
+  }, 20);
+
+  await state.done(() => {
     // The element should be gone now
     const afterOpen = document.getElementById('will_be_removed');
     testing.expectEqual(null, afterOpen);
@@ -148,14 +158,5 @@
     const newContent = document.getElementById('new_content');
     testing.expectEqual('Replaced', newContent.textContent);
   })
-</script>
-
-<script>
-  // doing this after test_open_close_async used to crash, so we keep it
-  // to make sure it doesn't
-  setTimeout(() => {
-    document.open();
-    document.close();
-  }, 20);
 </script>
 </body>

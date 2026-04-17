@@ -1,35 +1,47 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
-<script id=setInterval>
-  let set_interval1 = false
-  let timer1 = window.setInterval(function() {
-    set_interval1 = true;
-    testing.expectEqual(window, this);
-  }, 1);
+<script id=setInterval type=module>
+  {
+    const state = await testing.async();
 
-  let set_interval2 = false
-  let timer2 = window.setInterval(function() {
-    set_interval2 = true;
-  }, 1)
-  window.clearInterval(timer2);
+    let set_interval1 = false
+    let timer1 = window.setInterval(function() {
+      set_interval1 = true;
+      testing.expectEqual(window, this);
+    }, 1);
 
-  testing.expectEqual(true, timer1 != timer2);
+    let set_interval2 = false
+    let timer2 = window.setInterval(function() {
+      set_interval2 = true;
+    }, 1)
+    window.clearInterval(timer2);
 
+    testing.expectEqual(true, timer1 != timer2);
 
-  testing.onload(() => {
-    testing.expectEqual(true, set_interval1);
-    testing.expectEqual(false, set_interval2);
-  });
+    window.setTimeout(() => {
+      state.resolve()
+    }, 5);
+
+    await state.done(() => {
+      testing.expectEqual(true, set_interval1);
+      testing.expectEqual(false, set_interval2);
+    });
+  }
 </script>
 
-<script id=setTimeout>
+<script id=setTimeout type=module>
+  const state = await testing.async();
+
   testing.expectEqual(1, window.setTimeout.length);
   let wst2 = 1;
+
   window.setTimeout((a, b) => {
     wst2 = a + b;
+    state.resolve();
   }, 1, 2, 3);
-  testing.onload(() => testing.expectEqual(5, wst2));
+
+  await state.done(() => testing.expectEqual(5, wst2));
 </script>
 
 <script id=invalid-timer-clear>

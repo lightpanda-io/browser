@@ -81,10 +81,10 @@
         resolve: resolve,
         capture: {script_id: document.currentScript.id, stack: new Error().stack},
         done: async function(cb) {
-          await this.promise;
+          const res = await this.promise;
           async_pending -= 1;
           async_capture = this.capture;
-          cb();
+          cb(res);
           async_capture = false;
         }
       };

@@ -1,7 +1,9 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
-<script id=animation>
+<script id=animation type=module>
+  const state = await testing.async();
+
   let a1 = document.createElement('div').animate(null, null);
   testing.expectEqual('idle', a1.playState);
 
@@ -9,13 +11,18 @@
   a1.finished.then((x) => {
     cb.push(a1.playState);
     cb.push(x == a1);
+    state.resolve();
   });
+
   a1.ready.then(() => {
     cb.push(a1.playState);
     a1.play();
     cb.push(a1.playState);
   });
-  testing.onload(() => testing.expectEqual(['idle', 'running', 'finished', true], cb));
+
+  await state.done(() => {
+    testing.expectEqual(['idle', 'running', 'finished', true], cb);
+  });
 </script>
 
 <!-- <script id=startTime>

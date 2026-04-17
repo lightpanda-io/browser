@@ -419,7 +419,7 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     }
 
     var runner = try test_session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try runner.wait(.{ .ms = 2000, .until = .load });
 
     var wait_ms: u32 = 2000;
     var timer = try std.time.Timer.start();

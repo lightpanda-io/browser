@@ -135,7 +135,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
         .pre, .raw, .text, .image => {
             // The main page hasn't started/finished navigating.
             // There's no JS to run, and no reason to run the scheduler.
-            if (http_client.active == 0 and (comptime is_cdp) == false) {
+            if (http_client.http_active == 0 and (comptime is_cdp) == false) {
                 // haven't started navigating, I guess.
                 return .done;
             }
@@ -162,14 +162,14 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
             // download, or scheduled tasks to execute, or both.
 
             // scheduler.run could trigger new http transfers, so do not
-            // store http_client.active BEFORE this call and then use
+            // store http_client.http_active BEFORE this call and then use
             // it AFTER.
             try browser.runMacrotasks();
 
             // Each call to this runs scheduled load events.
             try page.dispatchLoad();
 
-            const http_active = http_client.active;
+            const http_active = http_client.http_active;
             const total_network_activity = http_active + http_client.intercepted;
             if (page._notified_network_almost_idle.check(total_network_activity <= 2)) {
                 page.notifyNetworkAlmostIdle();
@@ -178,9 +178,22 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
                 page.notifyNetworkIdle();
             }
 
-            if (http_active == 0 and (comptime is_cdp == false)) {
+            switch (opts.until) {
+                .done => {},
+                .domcontentloaded => if (page._load_state == .load or page._load_state == .complete) {
+                    return .done;
+                },
+                .load => if (page._load_state == .complete) {
+                    return .done;
+                },
+                .networkidle => if (page._notified_network_idle == .done) {
+                    return .done;
+                },
+            }
+
+            if (http_active == 0 and http_client.ws_active == 0 and (comptime is_cdp == false)) {
                 // we don't need to consider http_client.intercepted here
-                // because is_cdp is true, and that can only be
+                // because is_cdp is false, and that can only be
                 // the case when interception isn't possible.
                 if (comptime IS_DEBUG) {
                     std.debug.assert(http_client.intercepted == 0);
@@ -190,19 +203,6 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
                     // _we_ have nothing to run, but v8 is working on
                     // background tasks. We'll wait for them.
                     browser.waitForBackgroundTasks();
-                }
-
-                switch (opts.until) {
-                    .done => {},
-                    .domcontentloaded => if (page._load_state == .load or page._load_state == .complete) {
-                        return .done;
-                    },
-                    .load => if (page._load_state == .complete) {
-                        return .done;
-                    },
-                    .networkidle => if (page._notified_network_idle == .done) {
-                        return .done;
-                    },
                 }
 
                 // We never advertise a wait time of more than 20, there can
