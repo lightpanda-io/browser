@@ -443,6 +443,7 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
 
         const ms_elapsed = timer.lap() / 1_000_000;
         if (ms_elapsed >= wait_ms) {
+            ls.local.eval("testing.printTimeoutState()", "testing.printTimeoutState()") catch {};
             return error.TestTimedOut;
         }
         wait_ms -= @intCast(ms_elapsed);

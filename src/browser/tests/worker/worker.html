@@ -23,7 +23,7 @@
       // Give the script time to load before posting
     setTimeout(() => {
       worker.postMessage({ greeting: 'hello' });
-    }, 10);
+    }, 100);
 
     await state.done((response) => {
       testing.expectEqual('hello', response.echo.greeting);
@@ -44,7 +44,7 @@
 
     setTimeout(() => {
       worker.postMessage({ date: testDate });
-    }, 10);
+    }, 100);
 
     await state.done((response) => {
       testing.expectTrue(response.echo.date instanceof Date);
@@ -68,7 +68,7 @@
     };
     setTimeout(() => {
       worker.postMessage({ buffer: buffer });
-    }, 10);
+    }, 100);
 
     await state.done((response) => {
       testing.expectTrue(response.echo.buffer instanceof ArrayBuffer);
@@ -92,7 +92,7 @@
     };
     setTimeout(() => {
       worker.postMessage({ arr: arr });
-    }, 10);
+    }, 100);
 
     await state.done((response) => {
       testing.expectTrue(response.echo.arr instanceof Float64Array);
@@ -115,7 +115,7 @@
     };
     setTimeout(() => {
       worker.postMessage({ map: map });
-    }, 10);
+    }, 100);
 
     await state.done((response) => {
       testing.expectTrue(response.echo.map instanceof Map);
@@ -161,7 +161,7 @@
     };
     setTimeout(() => {
       worker.postMessage({ regex: regex });
-    }, 10);
+    }, 100);
 
     await state.done((response) => {
       testing.expectTrue(response.echo.regex instanceof RegExp);
@@ -192,7 +192,7 @@
     };
     setTimeout(() => {
       worker.postMessage(complex);
-    }, 10);
+    }, 100);
 
     await state.done((response) => {
       testing.expectEqual('hello', response.echo.string);
