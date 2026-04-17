@@ -365,12 +365,6 @@ pub fn storageSqlitePath(self: *const Config) ?[:0]const u8 {
         else => unreachable,
     };
 }
-
-//pub const Mcp = struct {
-//    common: Common = .{},
-//    cdp_port: ?u16 = null,
-//};
-
 pub const DumpFormat = enum {
     html,
     markdown,
