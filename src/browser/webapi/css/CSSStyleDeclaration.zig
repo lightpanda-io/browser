@@ -78,6 +78,20 @@ pub fn item(self: *const CSSStyleDeclaration, index: u32) []const u8 {
 pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const u8, page: *Page) []const u8 {
     const normalized = normalizePropertyName(property_name, &page.buf);
     const wrapped = String.wrap(normalized);
+
+    // Computed styles must reflect stylesheet rules, not just the element's
+    // inline `style=` attribute. Limited to display/visibility — what aria
+    // tree builders (Playwright ariaSnapshot) consult on every element.
+    if (self._is_computed) {
+        if (self._element) |element| {
+            if (wrapped.eql(comptime .wrap("display"))) {
+                if (page._style_manager.hasDisplayNone(element)) return "none";
+            } else if (wrapped.eql(comptime .wrap("visibility"))) {
+                if (page._style_manager.hasVisibilityHiddenInherited(element)) return "hidden";
+            }
+        }
+    }
+
     const prop = self.findProperty(wrapped) orelse {
         // Only return default values for computed styles
         if (self._is_computed) {

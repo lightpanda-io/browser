@@ -318,19 +318,18 @@ fn consumeWhiteSpace(self: *Tokenizer, newline: bool) Token {
     } else {
         self.advance(1);
     }
+    self.skipWhitespace();
+    return .{ .white_space = self.sliceFrom(start_position) };
+}
+
+fn skipWhitespace(self: *Tokenizer) void {
     while (!self.isEof()) {
-        const b = self.nextByteUnchecked();
-        switch (b) {
-            ' ', '\t' => {
-                self.advance(1);
-            },
-            '\n', '\x0C', '\r' => {
-                self.consumeNewline();
-            },
+        switch (self.nextByteUnchecked()) {
+            ' ', '\t' => self.advance(1),
+            '\n', '\r', '\x0C' => self.consumeNewline(),
             else => break,
         }
     }
-    return .{ .white_space = self.sliceFrom(start_position) };
 }
 
 fn consumeComment(self: *Tokenizer) []const u8 {
@@ -642,13 +641,74 @@ fn consumeNumeric(self: *Tokenizer) Token {
     } };
 }
 
+// Consume a url token per CSS Syntax Level 3 §4.3.6, called after `url(`.
+// Returns null if the value is quoted so the caller emits <function-token>
+// ("url") and the string is tokenized by the main loop as its own token.
 fn consumeUnquotedUrl(self: *Tokenizer) ?Token {
-    // TODO: true url parser
-    if (self.nextByte()) |it| {
-        return self.consumeString(it == '\'');
+    self.skipWhitespace();
+    if (self.isEof()) return .{ .url = "" };
+
+    switch (self.nextByteUnchecked()) {
+        '"', '\'' => return null,
+        else => {},
     }
 
-    return null;
+    const start_pos = self.position;
+    while (!self.isEof()) {
+        switch (self.nextByteUnchecked()) {
+            ')' => {
+                const value = self.sliceFrom(start_pos);
+                self.advance(1);
+                return .{ .url = value };
+            },
+            ' ', '\t', '\n', '\r', '\x0C' => {
+                const value_end = self.position;
+                self.skipWhitespace();
+                if (self.isEof()) return .{ .url = self.slice(start_pos, value_end) };
+                if (self.nextByteUnchecked() == ')') {
+                    self.advance(1);
+                    return .{ .url = self.slice(start_pos, value_end) };
+                }
+                self.consumeBadUrlRemnants();
+                return .{ .bad_url = self.sliceFrom(start_pos) };
+            },
+            '"', '\'', '(' => {
+                self.consumeBadUrlRemnants();
+                return .{ .bad_url = self.sliceFrom(start_pos) };
+            },
+            '\\' => {
+                if (self.hasNewlineAt(1)) {
+                    self.consumeBadUrlRemnants();
+                    return .{ .bad_url = self.sliceFrom(start_pos) };
+                }
+                self.advance(1);
+                self.consumeEscape();
+            },
+            else => self.consumeChar(),
+        }
+    }
+    return .{ .url = self.sliceFrom(start_pos) };
+}
+
+fn consumeBadUrlRemnants(self: *Tokenizer) void {
+    while (!self.isEof()) {
+        switch (self.nextByteUnchecked()) {
+            ')' => {
+                self.advance(1);
+                return;
+            },
+            '\n', '\r', '\x0C' => self.consumeNewline(),
+            '\\' => {
+                if (self.hasNewlineAt(1)) {
+                    self.advance(1);
+                } else {
+                    self.advance(1);
+                    self.consumeEscape();
+                }
+            },
+            else => self.consumeChar(),
+        }
+    }
 }
 
 fn consumeIdentLike(self: *Tokenizer) Token {
@@ -821,5 +881,71 @@ test "smoke" {
         .{ .ident = "red" },
         .semicolon,
         .close_curly_bracket,
+    });
+}
+
+test "url: unquoted" {
+    try expectTokensEqual("url(foo.png)", &.{.{ .url = "foo.png" }});
+}
+
+test "url: unquoted with surrounding whitespace" {
+    try expectTokensEqual("url( foo.png )", &.{.{ .url = "foo.png" }});
+}
+
+test "url: empty" {
+    try expectTokensEqual("url()", &.{.{ .url = "" }});
+}
+
+test "url: quoted double emits function + string" {
+    try expectTokensEqual("url(\"foo.png\")", &.{
+        .{ .function = "url" },
+        .{ .string = "foo.png" },
+        .close_parenthesis,
+    });
+}
+
+test "url: quoted single emits function + string" {
+    try expectTokensEqual("url('foo.png')", &.{
+        .{ .function = "url" },
+        .{ .string = "foo.png" },
+        .close_parenthesis,
+    });
+}
+
+test "url: unquoted token bounds the next rule" {
+    try expectTokensEqual(".a{background:url(x.png)}.b{color:red}", &.{
+        .{ .delim = '.' },
+        .{ .ident = "a" },
+        .curly_bracket_block,
+        .{ .ident = "background" },
+        .colon,
+        .{ .url = "x.png" },
+        .close_curly_bracket,
+        .{ .delim = '.' },
+        .{ .ident = "b" },
+        .curly_bracket_block,
+        .{ .ident = "color" },
+        .colon,
+        .{ .ident = "red" },
+        .close_curly_bracket,
+    });
+}
+
+test "url: bad url with internal whitespace" {
+    try expectTokensEqual("url(foo bar)", &.{.{ .bad_url = "foo bar)" }});
+}
+
+test "url: EOF mid-token emits url" {
+    try expectTokensEqual("url(foo", &.{.{ .url = "foo" }});
+}
+
+test "url: escape inside unquoted value" {
+    try expectTokensEqual("url(foo\\20 bar)", &.{.{ .url = "foo\\20 bar" }});
+}
+
+test "url: bad-url swallows through escape but stops at )" {
+    try expectTokensEqual("url(foo\"\\)bar)x", &.{
+        .{ .bad_url = "foo\"\\)bar)" },
+        .{ .ident = "x" },
     });
 }

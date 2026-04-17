@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AX Tree Fixture</title>
+    <style>
+      .display-none { display: none; }
+      .visibility-hidden { visibility: hidden; }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>Visible</h1>
+
+        <div id="d-none" class="display-none">
+            <p id="p-under-display-none">under-display-none</p>
+        </div>
+
+        <div id="v-hidden" class="visibility-hidden">
+            <p id="p-under-visibility">under-visibility-hidden</p>
+        </div>
+
+        <div id="has-hidden-attr" hidden>
+            <p id="p-under-hidden-attr">under-hidden-attr</p>
+        </div>
+
+        <div id="has-aria-hidden" aria-hidden="true">
+            <p id="p-under-aria-hidden">under-aria-hidden</p>
+        </div>
+
+        <p id="visible-para">visible-para</p>
+
+        <label for="search-input">Search</label>
+        <input type="search" id="search-input">
+
+        <label id="wrap-label">
+            Wrap
+            <input type="text" id="wrapped-input">
+        </label>
+    </main>
+</body>
+</html>

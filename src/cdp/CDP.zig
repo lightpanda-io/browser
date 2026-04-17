@@ -34,6 +34,8 @@ const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
 const Page = @import("../browser/Page.zig");
 const Mime = @import("../browser/Mime.zig");
+const Element = @import("../browser/webapi/Element.zig");
+const Label = @import("../browser/webapi/element/html/Label.zig");
 
 const InterceptState = @import("domains/fetch.zig").InterceptState;
 
@@ -527,10 +529,16 @@ pub const BrowserContext = struct {
     pub fn axnodeWriter(self: *BrowserContext, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
         const page = self.session.currentPage() orelse return error.PageNotLoaded;
         _ = opts;
+        const cache = try page.call_arena.create(Element.VisibilityCache);
+        cache.* = .empty;
+        const label_index = try page.call_arena.create(Label.LabelByForIndex);
+        label_index.* = .{};
         return .{
             .page = page,
             .root = root,
             .registry = &self.node_registry,
+            .visibility_cache = cache,
+            .label_index = label_index,
         };
     }
 

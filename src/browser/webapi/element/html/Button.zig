@@ -110,6 +110,10 @@ pub fn getForm(self: *Button, page: *Page) ?*Form {
     return null;
 }
 
+pub fn getLabels(self: *Button, page: *Page) !js.Array {
+    return @import("Label.zig").getControlLabels(self.asElement(), page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Button);
 
@@ -125,6 +129,7 @@ pub const JsApi = struct {
     pub const form = bridge.accessor(Button.getForm, null, .{});
     pub const value = bridge.accessor(Button.getValue, Button.setValue, .{});
     pub const @"type" = bridge.accessor(Button.getType, Button.setType, .{});
+    pub const labels = bridge.accessor(Button.getLabels, null, .{});
 };
 
 pub const Build = struct {

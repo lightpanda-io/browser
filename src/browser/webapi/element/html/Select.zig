@@ -238,6 +238,10 @@ pub fn getForm(self: *Select, page: *Page) ?*Form {
     return null;
 }
 
+pub fn getLabels(self: *Select, page: *Page) !js.Array {
+    return @import("Label.zig").getControlLabels(self.asElement(), page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Select);
 
@@ -258,6 +262,7 @@ pub const JsApi = struct {
     pub const form = bridge.accessor(Select.getForm, null, .{});
     pub const size = bridge.accessor(Select.getSize, Select.setSize, .{});
     pub const length = bridge.accessor(Select.getLength, null, .{});
+    pub const labels = bridge.accessor(Select.getLabels, null, .{});
 };
 
 pub const Build = struct {
