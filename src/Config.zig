@@ -653,3 +653,15 @@ pub fn parseArgs(allocator: Allocator) !Config {
     const exec_name, const command = try Commands.parse(allocator);
     return .init(allocator, exec_name, command);
 }
+
+pub fn validateUserAgent(ua: []const u8) !void {
+    for (ua) |c| {
+        if (!std.ascii.isPrint(c)) {
+            return error.NonPrintable;
+        }
+    }
+
+    if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
+        return error.Reserved;
+    }
+}
