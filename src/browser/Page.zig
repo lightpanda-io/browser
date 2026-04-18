@@ -2375,18 +2375,80 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
         },
         .svg => {
             const tag_name = try String.init(self.arena, name, .{});
-            if (std.ascii.eqlIgnoreCase(name, "svg")) {
-                return self.createSvgElementT(Element.Svg, name, attribute_iterator, .{
-                    ._proto = undefined,
-                    ._type = .svg,
-                    ._tag_name = tag_name,
-                });
-            }
-
-            // Other SVG elements (rect, circle, text, g, etc.)
             const lower = std.ascii.lowerString(&self.buf, name);
-            const tag = std.meta.stringToEnum(Element.Tag, lower) orelse .unknown;
-            return self.createSvgElementT(Element.Svg.Generic, name, attribute_iterator, .{ ._proto = undefined, ._tag = tag });
+            const tag = blk: {
+                const t = std.meta.stringToEnum(Element.Tag, lower) orelse .unknown;
+                // "a" maps to .anchor in the Tag enum (HTML), but in SVG context it's SVGAElement
+                if (t == .unknown and std.mem.eql(u8, lower, "a")) break :blk Element.Tag.svg_a;
+                break :blk t;
+            };
+
+            return switch (tag) {
+                .svg => self.createSvgElementT(Element.Svg.SvgSvg, name, attribute_iterator, .{ ._proto = undefined }),
+                .rect => self.createSvgElementT(Element.Svg.Rect, name, attribute_iterator, .{ ._proto = undefined }),
+                .circle => self.createSvgElementT(Element.Svg.Circle, name, attribute_iterator, .{ ._proto = undefined }),
+                .ellipse => self.createSvgElementT(Element.Svg.Ellipse, name, attribute_iterator, .{ ._proto = undefined }),
+                .line => self.createSvgElementT(Element.Svg.Line, name, attribute_iterator, .{ ._proto = undefined }),
+                .polyline => self.createSvgElementT(Element.Svg.Polyline, name, attribute_iterator, .{ ._proto = undefined }),
+                .polygon => self.createSvgElementT(Element.Svg.Polygon, name, attribute_iterator, .{ ._proto = undefined }),
+                .path => self.createSvgElementT(Element.Svg.Path, name, attribute_iterator, .{ ._proto = undefined }),
+                .g => self.createSvgElementT(Element.Svg.G, name, attribute_iterator, .{ ._proto = undefined }),
+                .defs => self.createSvgElementT(Element.Svg.Defs, name, attribute_iterator, .{ ._proto = undefined }),
+                .symbol => self.createSvgElementT(Element.Svg.Symbol, name, attribute_iterator, .{ ._proto = undefined }),
+                .use => self.createSvgElementT(Element.Svg.Use, name, attribute_iterator, .{ ._proto = undefined }),
+                .@"switch" => self.createSvgElementT(Element.Svg.Switch, name, attribute_iterator, .{ ._proto = undefined }),
+                .foreignobject => self.createSvgElementT(Element.Svg.ForeignObject, name, attribute_iterator, .{ ._proto = undefined }),
+                .image => self.createSvgElementT(Element.Svg.Image, name, attribute_iterator, .{ ._proto = undefined }),
+                .desc => self.createSvgElementT(Element.Svg.Desc, name, attribute_iterator, .{ ._proto = undefined }),
+                .title => self.createSvgElementT(Element.Svg.Title, name, attribute_iterator, .{ ._proto = undefined }),
+                .metadata => self.createSvgElementT(Element.Svg.Metadata, name, attribute_iterator, .{ ._proto = undefined }),
+                .text => self.createSvgElementT(Element.Svg.Text, name, attribute_iterator, .{ ._proto = undefined }),
+                .tspan => self.createSvgElementT(Element.Svg.TSpan, name, attribute_iterator, .{ ._proto = undefined }),
+                .textpath => self.createSvgElementT(Element.Svg.TextPath, name, attribute_iterator, .{ ._proto = undefined }),
+                .svg_a => self.createSvgElementT(Element.Svg.A, name, attribute_iterator, .{ ._proto = undefined }),
+                .view => self.createSvgElementT(Element.Svg.View, name, attribute_iterator, .{ ._proto = undefined }),
+                .script => self.createSvgElementT(Element.Svg.SvgScript, name, attribute_iterator, .{ ._proto = undefined }),
+                .style => self.createSvgElementT(Element.Svg.SvgStyle, name, attribute_iterator, .{ ._proto = undefined }),
+                .lineargradient => self.createSvgElementT(Element.Svg.LinearGradient, name, attribute_iterator, .{ ._proto = undefined }),
+                .radialgradient => self.createSvgElementT(Element.Svg.RadialGradient, name, attribute_iterator, .{ ._proto = undefined }),
+                .stop => self.createSvgElementT(Element.Svg.Stop, name, attribute_iterator, .{ ._proto = undefined }),
+                .pattern => self.createSvgElementT(Element.Svg.Pattern, name, attribute_iterator, .{ ._proto = undefined }),
+                .clippath => self.createSvgElementT(Element.Svg.ClipPath, name, attribute_iterator, .{ ._proto = undefined }),
+                .mask => self.createSvgElementT(Element.Svg.Mask, name, attribute_iterator, .{ ._proto = undefined }),
+                .marker => self.createSvgElementT(Element.Svg.Marker, name, attribute_iterator, .{ ._proto = undefined }),
+                .filter => self.createSvgElementT(Element.Svg.Filter, name, attribute_iterator, .{ ._proto = undefined }),
+                .feblend => self.createSvgElementT(Element.Svg.FEBlend, name, attribute_iterator, .{ ._proto = undefined }),
+                .fecolormatrix => self.createSvgElementT(Element.Svg.FEColorMatrix, name, attribute_iterator, .{ ._proto = undefined }),
+                .fecomponenttransfer => self.createSvgElementT(Element.Svg.FEComponentTransfer, name, attribute_iterator, .{ ._proto = undefined }),
+                .fecomposite => self.createSvgElementT(Element.Svg.FEComposite, name, attribute_iterator, .{ ._proto = undefined }),
+                .feconvolvematrix => self.createSvgElementT(Element.Svg.FEConvolveMatrix, name, attribute_iterator, .{ ._proto = undefined }),
+                .fediffuselighting => self.createSvgElementT(Element.Svg.FEDiffuseLighting, name, attribute_iterator, .{ ._proto = undefined }),
+                .fedisplacementmap => self.createSvgElementT(Element.Svg.FEDisplacementMap, name, attribute_iterator, .{ ._proto = undefined }),
+                .fedistantlight => self.createSvgElementT(Element.Svg.FEDistantLight, name, attribute_iterator, .{ ._proto = undefined }),
+                .fedropshadow => self.createSvgElementT(Element.Svg.FEDropShadow, name, attribute_iterator, .{ ._proto = undefined }),
+                .feflood => self.createSvgElementT(Element.Svg.FEFlood, name, attribute_iterator, .{ ._proto = undefined }),
+                .fefuncr => self.createSvgElementT(Element.Svg.FEFuncR, name, attribute_iterator, .{ ._proto = undefined }),
+                .fefuncg => self.createSvgElementT(Element.Svg.FEFuncG, name, attribute_iterator, .{ ._proto = undefined }),
+                .fefuncb => self.createSvgElementT(Element.Svg.FEFuncB, name, attribute_iterator, .{ ._proto = undefined }),
+                .fefunca => self.createSvgElementT(Element.Svg.FEFuncA, name, attribute_iterator, .{ ._proto = undefined }),
+                .fegaussianblur => self.createSvgElementT(Element.Svg.FEGaussianBlur, name, attribute_iterator, .{ ._proto = undefined }),
+                .feimage => self.createSvgElementT(Element.Svg.FEImage, name, attribute_iterator, .{ ._proto = undefined }),
+                .femerge => self.createSvgElementT(Element.Svg.FEMerge, name, attribute_iterator, .{ ._proto = undefined }),
+                .femergenode => self.createSvgElementT(Element.Svg.FEMergeNode, name, attribute_iterator, .{ ._proto = undefined }),
+                .femorphology => self.createSvgElementT(Element.Svg.FEMorphology, name, attribute_iterator, .{ ._proto = undefined }),
+                .feoffset => self.createSvgElementT(Element.Svg.FEOffset, name, attribute_iterator, .{ ._proto = undefined }),
+                .fepointlight => self.createSvgElementT(Element.Svg.FEPointLight, name, attribute_iterator, .{ ._proto = undefined }),
+                .fespecularlighting => self.createSvgElementT(Element.Svg.FESpecularLighting, name, attribute_iterator, .{ ._proto = undefined }),
+                .fespotlight => self.createSvgElementT(Element.Svg.FESpotLight, name, attribute_iterator, .{ ._proto = undefined }),
+                .fetile => self.createSvgElementT(Element.Svg.FETile, name, attribute_iterator, .{ ._proto = undefined }),
+                .feturbulence => self.createSvgElementT(Element.Svg.FETurbulence, name, attribute_iterator, .{ ._proto = undefined }),
+                .animate => self.createSvgElementT(Element.Svg.Animate, name, attribute_iterator, .{ ._proto = undefined }),
+                .set => self.createSvgElementT(Element.Svg.AnimateSet, name, attribute_iterator, .{ ._proto = undefined }),
+                .animatemotion => self.createSvgElementT(Element.Svg.AnimateMotion, name, attribute_iterator, .{ ._proto = undefined }),
+                .animatetransform => self.createSvgElementT(Element.Svg.AnimateTransform, name, attribute_iterator, .{ ._proto = undefined }),
+                .mpath => self.createSvgElementT(Element.Svg.MPath, name, attribute_iterator, .{ ._proto = undefined }),
+                else => self.createSvgElementT(Element.Svg.Unknown, name, attribute_iterator, .{ ._proto = undefined, ._tag_name = tag_name }),
+            };
         },
         else => {
             const tag_name = try String.init(self.arena, name, .{});

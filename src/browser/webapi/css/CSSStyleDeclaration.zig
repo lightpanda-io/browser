@@ -131,6 +131,12 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
 
     const normalized = normalizePropertyName(property_name, &page.buf);
 
+    // Expand the `font` shorthand into individual longhand properties.
+    if (std.mem.eql(u8, normalized, "font")) {
+        try expandFontShorthand(self, value, important, page);
+        return;
+    }
+
     // Normalize the value for canonical serialization
     const normalized_value = try normalizePropertyValue(page.call_arena, normalized, value);
 
@@ -241,6 +247,78 @@ fn normalizePropertyName(name: []const u8, buf: []u8) []const u8 {
         return name;
     }
     return std.ascii.lowerString(buf, name);
+}
+
+// Expand the CSS `font` shorthand into individual longhand properties.
+// Handles: [font-style] [font-weight] font-size [/ line-height] font-family
+fn expandFontShorthand(self: *CSSStyleDeclaration, value: []const u8, important: bool, page: *Page) !void {
+    var font_style: []const u8 = "";
+    var font_weight: []const u8 = "";
+    var font_size: []const u8 = "";
+    var line_height: []const u8 = "";
+    var font_family: []const u8 = "";
+
+    var it = std.mem.tokenizeAny(u8, value, " \t");
+    while (it.next()) |token| {
+        // font-style keywords
+        if (font_size.len == 0 and (std.mem.eql(u8, token, "italic") or std.mem.eql(u8, token, "oblique"))) {
+            font_style = token;
+            continue;
+        }
+        // font-weight keywords or numeric
+        if (font_size.len == 0 and (std.mem.eql(u8, token, "bold") or std.mem.eql(u8, token, "bolder") or
+            std.mem.eql(u8, token, "lighter") or (token.len > 0 and std.ascii.isDigit(token[0]) and
+            std.mem.indexOfAny(u8, token, "pxemr%") == null)))
+        {
+            font_weight = token;
+            continue;
+        }
+        // Skip "normal" before font-size is found (could be style, weight, or variant)
+        if (font_size.len == 0 and std.mem.eql(u8, token, "normal")) {
+            continue;
+        }
+        // font-size (possibly with /line-height)
+        if (font_size.len == 0 and token.len > 0 and (std.ascii.isDigit(token[0]) or token[0] == '.')) {
+            if (std.mem.indexOfScalar(u8, token, '/')) |slash| {
+                font_size = token[0..slash];
+                line_height = token[slash + 1 ..];
+            } else {
+                font_size = token;
+            }
+            // Everything remaining is font-family
+            font_family = std.mem.trimLeft(u8, it.rest(), " \t");
+            break;
+        }
+        // If we haven't matched anything else and no font-size yet, skip (e.g. "small-caps")
+    }
+
+    if (font_style.len > 0) try self.setPropertyImplDirect("font-style", font_style, important, page);
+    if (font_weight.len > 0) try self.setPropertyImplDirect("font-weight", font_weight, important, page);
+    if (font_size.len > 0) try self.setPropertyImplDirect("font-size", font_size, important, page);
+    if (line_height.len > 0) try self.setPropertyImplDirect("line-height", line_height, important, page);
+    if (font_family.len > 0) try self.setPropertyImplDirect("font-family", font_family, important, page);
+}
+
+// Like setPropertyImpl but skips shorthand expansion (used by shorthand expanders).
+fn setPropertyImplDirect(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, important: bool, page: *Page) !void {
+    if (value.len == 0) return;
+
+    const normalized = normalizePropertyName(property_name, &page.buf);
+    const normalized_value = try normalizePropertyValue(page.call_arena, normalized, value);
+
+    if (self.findProperty(.wrap(normalized))) |existing| {
+        existing._value = try String.init(page.arena, normalized_value, .{});
+        existing._important = important;
+        return;
+    }
+
+    const prop = try page._factory.create(Property{
+        ._node = .{},
+        ._name = try String.init(page.arena, normalized, .{}),
+        ._value = try String.init(page.arena, normalized_value, .{}),
+        ._important = important,
+    });
+    self._properties.append(&prop._node);
 }
 
 // Normalize CSS property values for canonical serialization
@@ -684,6 +762,13 @@ fn isLengthProperty(name: []const u8) bool {
 }
 
 fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, name: String) []const u8 {
+    // For inherited CSS properties, walk up the DOM tree first.
+    if (isInheritedProperty(name)) {
+        if (self._element) |element| {
+            if (getInheritedValue(element, name)) |v| return v;
+        }
+    }
+
     switch (name.len) {
         5 => {
             if (name.eql(comptime .wrap("color"))) {
@@ -700,6 +785,11 @@ fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, name: String) []con
                 return getDefaultDisplay(element);
             }
         },
+        9 => {
+            if (name.eql(comptime .wrap("font-size"))) {
+                return "16px";
+            }
+        },
         10 => {
             if (name.eql(comptime .wrap("visibility"))) {
                 return "visible";
@@ -714,6 +804,62 @@ fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, name: String) []con
         else => {},
     }
     return "";
+}
+
+fn isInheritedProperty(name: String) bool {
+    const inherited = std.StaticStringMap(void).initComptime(.{
+        .{ "font-size", {} },
+        .{ "font-family", {} },
+        .{ "font-style", {} },
+        .{ "font-weight", {} },
+        .{ "font-variant", {} },
+        .{ "line-height", {} },
+        .{ "color", {} },
+    });
+    return inherited.has(name.str());
+}
+
+// Walk up the DOM tree looking for an ancestor with the given CSS property set inline.
+fn getInheritedValue(element: *Element, name: String) ?[]const u8 {
+    var current: ?*Element = element.asNode().parentElement();
+    while (current) |parent| {
+        if (parent.getAttributeSafe(comptime .wrap("style"))) |style_str| {
+            if (findPropertyInStyle(style_str, name.str())) |val| return val;
+        }
+        current = parent.asNode().parentElement();
+    }
+    return null;
+}
+
+// Extract a property value from a raw style attribute string.
+fn findPropertyInStyle(style: []const u8, prop_name: []const u8) ?[]const u8 {
+    var pos: usize = 0;
+    while (pos < style.len) {
+        if (std.mem.indexOfPos(u8, style, pos, prop_name)) |idx| {
+            // Ensure it's at start or preceded by ';' / whitespace
+            if (idx > 0 and style[idx - 1] != ';' and style[idx - 1] != ' ' and style[idx - 1] != '\t') {
+                pos = idx + prop_name.len;
+                continue;
+            }
+            const after = idx + prop_name.len;
+            if (after >= style.len) return null;
+            // Skip whitespace then expect ':'
+            var i = after;
+            while (i < style.len and (style[i] == ' ' or style[i] == '\t')) : (i += 1) {}
+            if (i >= style.len or style[i] != ':') {
+                pos = i;
+                continue;
+            }
+            i += 1;
+            while (i < style.len and (style[i] == ' ' or style[i] == '\t')) : (i += 1) {}
+            const val_start = i;
+            while (i < style.len and style[i] != ';' and style[i] != '!') : (i += 1) {}
+            const val = std.mem.trimRight(u8, style[val_start..i], " \t");
+            if (val.len > 0) return val;
+            return null;
+        } else break;
+    }
+    return null;
 }
 
 fn getDefaultDisplay(element: *const Element) []const u8 {

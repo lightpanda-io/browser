@@ -21,6 +21,7 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const Svg = @import("../Svg.zig");
 
+// NOTE: This type is retained for backward compatibility but is not instantiated by the parser.
 const Generic = @This();
 _proto: *Svg,
 _tag: Element.Tag,

@@ -25,6 +25,7 @@ const Page = @import("../../Page.zig");
 
 const Canvas = @import("../element/html/Canvas.zig");
 const ImageData = @import("../ImageData.zig");
+const TextMetrics = @import("TextMetrics.zig");
 
 /// This class doesn't implement a `constructor`.
 /// It can be obtained with a call to `HTMLCanvasElement#getContext`.
@@ -36,6 +37,8 @@ _canvas: *Canvas,
 /// Fill color.
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
 _fill_style: color.RGBA = color.RGBA.Named.black,
+_font_size: f64 = 10,
+_font_str: []const u8 = "10px sans-serif",
 
 pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
     return self._canvas;
@@ -123,6 +126,49 @@ pub fn clip(_: *CanvasRenderingContext2D) void {}
 pub fn fillText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
 pub fn strokeText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
 
+pub fn measureText(self: *CanvasRenderingContext2D, text: []const u8, page: *Page) !*TextMetrics {
+    const char_width = self._font_size * 0.6;
+    const count = std.unicode.utf8CountCodepoints(text) catch text.len;
+    const width = @as(f64, @floatFromInt(count)) * char_width;
+    return TextMetrics.init(width, self._font_size, page);
+}
+
+pub fn getFont(self: *const CanvasRenderingContext2D) []const u8 {
+    return self._font_str;
+}
+
+pub fn setFont(self: *CanvasRenderingContext2D, value: []const u8) void {
+    self._font_str = value;
+    var i: usize = 0;
+    while (i < value.len) : (i += 1) {
+        if (value[i] >= '0' and value[i] <= '9') {
+            const start = i;
+            while (i < value.len and (value[i] >= '0' and value[i] <= '9' or value[i] == '.')) : (i += 1) {}
+            const num = std.fmt.parseFloat(f64, value[start..i]) catch 10;
+            if (i + 2 <= value.len and value[i] == 'p' and value[i + 1] == 'x') {
+                self._font_size = num;
+                return;
+            }
+            if (i + 2 <= value.len and value[i] == 'p' and value[i + 1] == 't') {
+                self._font_size = num * 4.0 / 3.0;
+                return;
+            }
+            if (i + 2 <= value.len and value[i] == 'e' and value[i + 1] == 'm') {
+                self._font_size = num * 16.0;
+                return;
+            }
+            if (i + 3 <= value.len and value[i] == 'r' and value[i + 1] == 'e' and value[i + 2] == 'm') {
+                self._font_size = num * 16.0;
+                return;
+            }
+            if (i < value.len and value[i] == '%') {
+                self._font_size = num * 16.0 / 100.0;
+                return;
+            }
+        }
+    }
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CanvasRenderingContext2D);
 
@@ -134,7 +180,7 @@ pub const JsApi = struct {
     };
 
     pub const canvas = bridge.accessor(CanvasRenderingContext2D.getCanvas, null, .{});
-    pub const font = bridge.property("10px sans-serif", .{ .template = false, .readonly = false });
+    pub const font = bridge.accessor(CanvasRenderingContext2D.getFont, CanvasRenderingContext2D.setFont, .{});
     pub const globalAlpha = bridge.property(1.0, .{ .template = false, .readonly = false });
     pub const globalCompositeOperation = bridge.property("source-over", .{ .template = false, .readonly = false });
     pub const strokeStyle = bridge.property("#000000", .{ .template = false, .readonly = false });
@@ -175,6 +221,7 @@ pub const JsApi = struct {
     pub const clip = bridge.function(CanvasRenderingContext2D.clip, .{ .noop = true });
     pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{ .noop = true });
     pub const strokeText = bridge.function(CanvasRenderingContext2D.strokeText, .{ .noop = true });
+    pub const measureText = bridge.function(CanvasRenderingContext2D.measureText, .{});
 };
 
 const testing = @import("../../../testing.zig");

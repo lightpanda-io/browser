@@ -4,3 +4,5 @@ zig-out
 lightpanda.id
 /src/html5ever/target/
 src/snapshot.bin
+src/fonts/*.ttf
+test_utf8iter

@@ -85,6 +85,7 @@ pub fn build(b: *Build) !void {
         try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
         try linkCurl(b, mod, enable_tsan);
         try linkHtml5Ever(b, mod);
+        linkFonts(b, mod);
 
         break :blk mod;
     };
@@ -292,6 +293,183 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) !void {
         else => {},
     }
 }
+
+fn linkFonts(b: *Build, mod: *Build.Module) void {
+    const target = mod.resolved_target.?;
+    const optimize = mod.optimize.?;
+
+    const freetype = buildFreetype(b, target, optimize);
+    mod.linkLibrary(freetype);
+
+    const harfbuzz = buildHarfbuzz(b, target, optimize, freetype);
+    mod.linkLibrary(harfbuzz);
+
+    // Font discovery: platform-specific
+    switch (target.result.os.tag) {
+        .linux => {
+            mod.linkSystemLibrary("fontconfig", .{});
+        },
+        .macos => {
+            mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
+            mod.linkFramework("CoreText", .{});
+            mod.linkFramework("CoreFoundation", .{});
+            mod.linkFramework("CoreGraphics", .{});
+        },
+        else => {},
+    }
+}
+
+fn buildFreetype(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step.Compile {
+    const dep = b.dependency("freetype", .{});
+
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    mod.addIncludePath(dep.path("include"));
+
+    var flags: std.ArrayList([]const u8) = .empty;
+    defer flags.deinit(b.allocator);
+    flags.appendSlice(b.allocator, &.{
+        "-DFT2_BUILD_LIBRARY",
+        "-DFT_CONFIG_OPTION_SYSTEM_ZLIB=1",
+        "-fno-sanitize=undefined",
+    }) catch @panic("OOM");
+    if (target.result.os.tag != .windows) {
+        flags.appendSlice(b.allocator, &.{
+            "-DHAVE_UNISTD_H",
+            "-DHAVE_FCNTL_H",
+        }) catch @panic("OOM");
+    }
+
+    const lib = b.addLibrary(.{ .name = "freetype", .root_module = mod });
+
+    // Link zlib (already a project dependency)
+    const zlib = buildZlib(b, target, optimize, false);
+    lib.root_module.linkLibrary(zlib);
+
+    lib.addCSourceFiles(.{
+        .root = dep.path(""),
+        .files = &freetype_srcs,
+        .flags = flags.items,
+    });
+
+    // Platform-specific system/debug sources
+    switch (target.result.os.tag) {
+        .linux => lib.addCSourceFile(.{
+            .file = dep.path("builds/unix/ftsystem.c"),
+            .flags = flags.items,
+        }),
+        .windows => lib.addCSourceFile(.{
+            .file = dep.path("builds/windows/ftsystem.c"),
+            .flags = flags.items,
+        }),
+        else => lib.addCSourceFile(.{
+            .file = dep.path("src/base/ftsystem.c"),
+            .flags = flags.items,
+        }),
+    }
+    switch (target.result.os.tag) {
+        .windows => lib.addCSourceFile(.{
+            .file = dep.path("builds/windows/ftdebug.c"),
+            .flags = flags.items,
+        }),
+        else => lib.addCSourceFile(.{
+            .file = dep.path("src/base/ftdebug.c"),
+            .flags = flags.items,
+        }),
+    }
+
+    lib.installHeadersDirectory(dep.path("include"), "", .{ .include_extensions = &.{".h"} });
+
+    return lib;
+}
+
+fn buildHarfbuzz(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, freetype: *Build.Step.Compile) *Build.Step.Compile {
+    const dep = b.dependency("harfbuzz", .{});
+
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .link_libcpp = true,
+    });
+    mod.addIncludePath(dep.path("src"));
+
+    var flags: std.ArrayList([]const u8) = .empty;
+    defer flags.deinit(b.allocator);
+    flags.appendSlice(b.allocator, &.{
+        "-DHAVE_STDBOOL_H",
+        "-DHAVE_FREETYPE=1",
+        "-DHAVE_FT_GET_VAR_BLEND_COORDINATES=1",
+        "-DHAVE_FT_SET_VAR_BLEND_COORDINATES=1",
+        "-DHAVE_FT_DONE_MM_VAR=1",
+        "-DHAVE_FT_GET_TRANSFORM=1",
+    }) catch @panic("OOM");
+    if (target.result.os.tag != .windows) {
+        flags.appendSlice(b.allocator, &.{
+            "-DHAVE_UNISTD_H",
+            "-DHAVE_SYS_MMAN_H",
+            "-DHAVE_PTHREAD=1",
+        }) catch @panic("OOM");
+    }
+
+    const lib = b.addLibrary(.{ .name = "harfbuzz", .root_module = mod });
+    lib.root_module.linkLibrary(freetype);
+
+    lib.addCSourceFile(.{
+        .file = dep.path("src/harfbuzz.cc"),
+        .flags = flags.items,
+    });
+
+    lib.installHeadersDirectory(dep.path("src"), "", .{ .include_extensions = &.{".h"} });
+
+    return lib;
+}
+
+const freetype_srcs = [_][]const u8{
+    "src/autofit/autofit.c",
+    "src/base/ftbase.c",
+    "src/base/ftbbox.c",
+    "src/base/ftbdf.c",
+    "src/base/ftbitmap.c",
+    "src/base/ftcid.c",
+    "src/base/ftfstype.c",
+    "src/base/ftgasp.c",
+    "src/base/ftglyph.c",
+    "src/base/ftgxval.c",
+    "src/base/ftinit.c",
+    "src/base/ftmm.c",
+    "src/base/ftotval.c",
+    "src/base/ftpatent.c",
+    "src/base/ftpfr.c",
+    "src/base/ftstroke.c",
+    "src/base/ftsynth.c",
+    "src/base/fttype1.c",
+    "src/base/ftwinfnt.c",
+    "src/bdf/bdf.c",
+    "src/bzip2/ftbzip2.c",
+    "src/cache/ftcache.c",
+    "src/cff/cff.c",
+    "src/cid/type1cid.c",
+    "src/gzip/ftgzip.c",
+    "src/lzw/ftlzw.c",
+    "src/pcf/pcf.c",
+    "src/pfr/pfr.c",
+    "src/psaux/psaux.c",
+    "src/pshinter/pshinter.c",
+    "src/psnames/psnames.c",
+    "src/raster/raster.c",
+    "src/sdf/sdf.c",
+    "src/sfnt/sfnt.c",
+    "src/smooth/smooth.c",
+    "src/svg/svg.c",
+    "src/truetype/truetype.c",
+    "src/type1/type1.c",
+    "src/type42/type42.c",
+    "src/winfonts/winfnt.c",
+};
 
 fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) *Build.Step.Compile {
     const dep = b.dependency("zlib", .{});
