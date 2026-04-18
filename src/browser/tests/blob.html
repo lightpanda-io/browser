@@ -79,6 +79,100 @@
   }
 </script>
 
+<script id=parts>
+  // Blob as a blob part - contents are copied in, not stringified.
+  {
+    const inner = new Blob(["hello "], { type: "text/plain" });
+    const blob = new Blob([inner, "world"]);
+    testing.expectEqual(11, blob.size);
+    testing.async(async () => {
+      testing.expectEqual("hello world", await blob.text());
+    });
+  }
+
+  // Uint8Array as a blob part.
+  {
+    const bytes = new Uint8Array([104, 101, 108, 108, 111]); // "hello"
+    const blob = new Blob([bytes, " ", "world"]);
+    testing.expectEqual(11, blob.size);
+    testing.async(async () => {
+      testing.expectEqual("hello world", await blob.text());
+    });
+  }
+
+  // Non-byte TypedArrays contribute their raw backing bytes.
+  {
+    // Uint16Array of one element (0x0041 = 'A' little-endian) produces 2 bytes.
+    const u16 = new Uint16Array([0x0041]);
+    const blob = new Blob([u16]);
+    testing.expectEqual(2, blob.size);
+  }
+
+  {
+    // Float32Array: 4 bytes per element.
+    const f32 = new Float32Array([1.0, 2.0, 3.0]);
+    const blob = new Blob([f32]);
+    testing.expectEqual(12, blob.size);
+  }
+
+  // ArrayBuffer as a blob part.
+  {
+    const buf = new Uint8Array([1, 2, 3, 4]).buffer;
+    const blob = new Blob([buf]);
+    testing.expectEqual(4, blob.size);
+    testing.async(async () => {
+      const result = await blob.bytes();
+      testing.expectEqual(new Uint8Array([1, 2, 3, 4]), result);
+    });
+  }
+
+  // DataView (ArrayBufferView) as a blob part.
+  {
+    const buf = new Uint8Array([10, 20, 30, 40, 50]).buffer;
+    const view = new DataView(buf, 1, 3); // bytes [20, 30, 40]
+    const blob = new Blob([view]);
+    testing.expectEqual(3, blob.size);
+    testing.async(async () => {
+      const result = await blob.bytes();
+      testing.expectEqual(new Uint8Array([20, 30, 40]), result);
+    });
+  }
+
+  // Mixed types in a single parts array.
+  {
+    const inner = new Blob(["bb"]);
+    const bytes = new Uint8Array([99, 99]); // "cc"
+    const buf = new Uint8Array([100, 100]).buffer; // "dd"
+    const blob = new Blob(["aa", inner, bytes, buf, "ee"]);
+    testing.expectEqual(10, blob.size);
+    testing.async(async () => {
+      testing.expectEqual("aabbccddee", await blob.text());
+    });
+  }
+
+  // Number coerces to string.
+  {
+    const blob = new Blob([42]);
+    testing.expectEqual(2, blob.size);
+    testing.async(async () => {
+      testing.expectEqual("42", await blob.text());
+    });
+  }
+
+  // Empty parts array.
+  {
+    const blob = new Blob([]);
+    testing.expectEqual(0, blob.size);
+    testing.expectEqual("", blob.type);
+  }
+
+  // No arguments.
+  {
+    const blob = new Blob();
+    testing.expectEqual(0, blob.size);
+  }
+</script>
+
 <script id=stream>
   {
     const parts = ["may", "thy", "knife", "chip", "and", "shatter"];

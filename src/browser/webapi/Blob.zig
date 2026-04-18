@@ -59,69 +59,23 @@ const InitOptions = struct {
     endings: []const u8 = "transparent",
 };
 
-/// Creates a new Blob (JS constructor).
-pub fn init(
-    maybe_blob_parts: ?[]const []const u8,
-    maybe_options: ?InitOptions,
-    page: *Page,
-) !*Blob {
-    return initWithMimeValidation(maybe_blob_parts, maybe_options, false, page);
-}
-
-/// Creates a new Blob with optional MIME validation.
-/// When validate_mime is true, uses full MIME parsing (for Response/Request).
-/// When false, uses simple ASCII validation per FileAPI spec (for Blob constructor).
-pub fn initWithMimeValidation(
-    maybe_blob_parts: ?[]const []const u8,
-    maybe_options: ?InitOptions,
-    validate_mime: bool,
-    page: *Page,
-) !*Blob {
-    const data_len = blk: {
-        const parts = maybe_blob_parts orelse break :blk 0;
-        var size: usize = 0;
-        for (parts) |p| {
-            size += p.len;
-        }
-        break :blk size;
-    };
-    const arena = try page.getArena(256 + data_len, "Blob");
+/// Creates a new Blob from JS values with optional MIME validation.
+/// This is the JS Constructor
+pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob {
+    const arena = try page.getArena(.large, "Blob");
     errdefer page.releaseArena(arena);
 
-    const options: InitOptions = maybe_options orelse .{};
-
-    const mime: []const u8 = blk: {
-        const t = options.type;
-        if (t.len == 0) {
-            break :blk "";
-        }
-
-        const buf = try arena.dupe(u8, t);
-
-        if (validate_mime) {
-            // Full MIME parsing per MIME sniff spec (for Content-Type headers)
-            _ = Mime.parse(buf) catch break :blk "";
-        } else {
-            // Simple validation per FileAPI spec (for Blob constructor):
-            // - If any char is outside U+0020-U+007E, return empty string
-            // - Otherwise lowercase
-            for (t) |c| {
-                if (c < 0x20 or c > 0x7E) {
-                    break :blk "";
-                }
-            }
-            _ = std.ascii.lowerString(buf, buf);
-        }
-
-        break :blk buf;
-    };
+    const opts: InitOptions = opts_ orelse .{};
+    const mime = try validateMimeType(arena, opts.type, false);
 
     const data = blk: {
-        if (maybe_blob_parts) |blob_parts| {
+        if (parts_) |blob_parts| {
+            const use_native_endings = std.mem.eql(u8, opts.endings, "native");
             var w: Writer.Allocating = .init(arena);
-            const use_native_endings = std.mem.eql(u8, options.endings, "native");
-            try writeBlobParts(&w.writer, blob_parts, use_native_endings);
-
+            for (blob_parts) |js_val| {
+                const part = try js_val.toStringSmart();
+                try writePartWithEndings(part, use_native_endings, &w.writer);
+            }
             break :blk w.written();
         }
 
@@ -137,6 +91,50 @@ pub fn initWithMimeValidation(
         ._mime = mime,
     };
     return self;
+}
+
+/// Creates a new Blob from raw byte slices (for internal Zig use).
+pub fn initFromBytes(data: []const u8, content_type: []const u8, validate_mime: bool, page: *Page) !*Blob {
+    const arena = try page.getArena(.large, "Blob");
+    errdefer page.releaseArena(arena);
+
+    const mime = try validateMimeType(arena, content_type, validate_mime);
+
+    const self = try arena.create(Blob);
+    self.* = .{
+        ._rc = .{},
+        ._arena = arena,
+        ._type = .generic,
+        ._slice = try arena.dupe(u8, data),
+        ._mime = mime,
+    };
+    return self;
+}
+
+/// Validates and normalizes MIME type according to spec.
+fn validateMimeType(arena: Allocator, mime_type: []const u8, full_validation: bool) ![]const u8 {
+    if (mime_type.len == 0) {
+        return "";
+    }
+
+    const buf = try arena.dupe(u8, mime_type);
+
+    if (full_validation) {
+        // Full MIME parsing per MIME sniff spec (for Content-Type headers)
+        _ = Mime.parse(buf) catch return "";
+    } else {
+        // Simple validation per FileAPI spec (for Blob constructor):
+        // - If any char is outside U+0020-U+007E, return empty string
+        // - Otherwise lowercase
+        for (mime_type) |c| {
+            if (c < 0x20 or c > 0x7E) {
+                return "";
+            }
+        }
+        _ = std.ascii.lowerString(buf, buf);
+    }
+
+    return buf;
 }
 
 pub fn deinit(self: *Blob, session: *Session) void {
@@ -171,18 +169,11 @@ const vector_sizes = blk: {
     break :blk items;
 };
 
-/// Writes blob parts to given `Writer` with desired endings.
-fn writeBlobParts(
-    writer: *Writer,
-    blob_parts: []const []const u8,
-    use_native_endings: bool,
-) !void {
-    // Transparent.
+/// Writes a single part with optional line ending normalization.
+fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: *Writer) !void {
+    // Transparent - no conversion needed.
     if (!use_native_endings) {
-        for (blob_parts) |part| {
-            try writer.writeAll(part);
-        }
-
+        try writer.writeAll(part);
         return;
     }
 
@@ -204,68 +195,66 @@ fn writeBlobParts(
     // ```
     // "the quick\n\nbrown fox"
     // ```
-    scan_parts: for (blob_parts) |part| {
-        var end: usize = 0;
+    var end: usize = 0;
 
-        inline for (vector_sizes) |vector_len| {
-            const Vec = @Vector(vector_len, u8);
+    inline for (vector_sizes) |vector_len| {
+        const Vec = @Vector(vector_len, u8);
 
-            while (end + vector_len <= part.len) : (end += vector_len) {
-                const cr: Vec = @splat('\r');
-                // Load chunk as vectors.
-                const data = part[end..][0..vector_len];
-                const chunk: Vec = data.*;
-                // Look for CR.
-                const match = chunk == cr;
+        while (end + vector_len <= part.len) : (end += vector_len) {
+            const cr: Vec = @splat('\r');
+            // Load chunk as vectors.
+            const data = part[end..][0..vector_len];
+            const chunk: Vec = data.*;
+            // Look for CR.
+            const match = chunk == cr;
 
-                // Create a bitset out of match vector.
-                const bitset = std.bit_set.IntegerBitSet(vector_len){
-                    .mask = @bitCast(@intFromBool(match)),
-                };
+            // Create a bitset out of match vector.
+            const bitset = std.bit_set.IntegerBitSet(vector_len){
+                .mask = @bitCast(@intFromBool(match)),
+            };
 
-                var iter = bitset.iterator(.{});
-                var relative_start: usize = 0;
-                while (iter.next()) |index| {
-                    _ = try writer.writeVec(&.{ data[relative_start..index], "\n" });
+            var iter = bitset.iterator(.{});
+            var relative_start: usize = 0;
+            while (iter.next()) |index| {
+                _ = try writer.writeVec(&.{ data[relative_start..index], "\n" });
 
-                    if (index + 1 != data.len and data[index + 1] == '\n') {
-                        relative_start = index + 2;
-                    } else {
-                        relative_start = index + 1;
-                    }
-                }
-
-                _ = try writer.writeVec(&.{data[relative_start..]});
-            }
-        }
-
-        // Scalar scan fallback.
-        var relative_start: usize = end;
-        while (end < part.len) {
-            if (part[end] == '\r') {
-                _ = try writer.writeVec(&.{ part[relative_start..end], "\n" });
-
-                // Part ends with CR. We can continue to next part.
-                if (end + 1 == part.len) {
-                    continue :scan_parts;
-                }
-
-                // If next char is LF, skip it too.
-                if (part[end + 1] == '\n') {
-                    relative_start = end + 2;
+                if (index + 1 != data.len and data[index + 1] == '\n') {
+                    relative_start = index + 2;
                 } else {
-                    relative_start = end + 1;
+                    relative_start = index + 1;
                 }
             }
 
-            end += 1;
+            _ = try writer.writeVec(&.{data[relative_start..]});
+        }
+    }
+
+    // Scalar scan fallback.
+    var relative_start: usize = end;
+    while (end < part.len) {
+        if (part[end] == '\r') {
+            _ = try writer.writeVec(&.{ part[relative_start..end], "\n" });
+
+            // Part ends with CR. We need to remember this for next part.
+            if (end + 1 == part.len) {
+                return;
+            }
+
+            // If next char is LF, skip it too.
+            if (part[end + 1] == '\n') {
+                relative_start = end + 2;
+            } else {
+                relative_start = end + 1;
+            }
         }
 
-        // Write the remaining. We get this in such situations:
-        // `the quick brown\rfox`
-        // `the quick brown\r\nfox`
-        try writer.writeAll(part[relative_start..end]);
+        end += 1;
     }
+
+    // Write the remaining. We get this in such situations:
+    // `the quick brown\rfox`
+    // `the quick brown\r\nfox`
+    try writer.writeAll(part[relative_start..end]);
 }
 
 /// Returns a Promise that resolves with the contents of the blob
@@ -323,7 +312,7 @@ pub fn slice(
         break :blk @min(data.len, @max(start, @as(u31, @intCast(requested_end))));
     };
 
-    return Blob.init(&.{data[start..end]}, .{ .type = content_type_ orelse "" }, page);
+    return Blob.initFromBytes(data[start..end], content_type_ orelse "", false, page);
 }
 
 /// Returns the size of the Blob in bytes.

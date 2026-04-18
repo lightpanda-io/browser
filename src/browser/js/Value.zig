@@ -163,6 +163,53 @@ pub fn isFloat64Array(self: Value) bool {
     return v8.v8__Value__IsFloat64Array(self.handle);
 }
 
+// A few places in the code take various types, but want a string. This is a
+// type-aware version of toString(). If you do:
+//    (new ArrayBuffer(100)).toString()
+// You'll get "[object ArrayBuffer]". But this `toStringSmart()` knows about
+// buffers, and Blobs, etc and will try to return the real underlying string
+// value. It _does_ ultimately fallback to toString() - callers should check
+// for types they _don't_ want before calling this. For example, `Response`
+// checks for null or undefined before calling this to apply specific handling
+// to those cases.
+pub fn toStringSmart(self: Value) ![]const u8 {
+    if (self.isString()) |js_str| {
+        return try js_str.toSlice();
+    }
+
+    const Blob = @import("../webapi/Blob.zig");
+    if (self.local.jsValueToZig(*Blob, self)) |blob_obj| {
+        return blob_obj._slice;
+    } else |_| {}
+
+    var byte_offset: usize = 0;
+    var byte_len: usize = undefined;
+    var array_buffer: ?*const v8.ArrayBuffer = null;
+
+    if (self.isTypedArray() or self.isArrayBufferView()) {
+        const buffer_handle: *const v8.ArrayBufferView = @ptrCast(self.handle);
+        byte_len = v8.v8__ArrayBufferView__ByteLength(buffer_handle);
+        byte_offset = v8.v8__ArrayBufferView__ByteOffset(buffer_handle);
+        array_buffer = v8.v8__ArrayBufferView__Buffer(buffer_handle);
+    } else if (self.isArrayBuffer()) {
+        array_buffer = @ptrCast(self.handle);
+        byte_len = v8.v8__ArrayBuffer__ByteLength(array_buffer);
+    } else {
+        return self.toStringSlice();
+    }
+
+    const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer orelse return "");
+    if (byte_len == 0) {
+        return &[_]u8{};
+    }
+
+    const backing_store_handle = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr) orelse return "";
+    const data = v8.v8__BackingStore__Data(backing_store_handle) orelse return "";
+    const base = @as([*]const u8, @ptrCast(data)) + byte_offset;
+
+    return base[0..byte_len];
+}
+
 pub fn isPromise(self: Value) bool {
     return v8.v8__Value__IsPromise(self.handle);
 }

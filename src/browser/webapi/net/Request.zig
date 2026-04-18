@@ -174,12 +174,7 @@ pub fn blob(self: *Request, page: *Page) !js.Promise {
     const headers = try self.getHeaders(page);
     const content_type = try headers.get("content-type", page) orelse "";
 
-    const b = try Blob.initWithMimeValidation(
-        &.{body},
-        .{ .type = content_type },
-        true,
-        page,
-    );
+    const b = try Blob.initFromBytes(body, content_type, true, page);
 
     return page.js.local.?.resolvePromise(b);
 }
