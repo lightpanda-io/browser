@@ -76,6 +76,13 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         return error.InvalidNameValue;
     };
 
+    if (cookie_name.len == 0 and (std.ascii.startsWithIgnoreCase(cookie_value, "__Host-") or std.ascii.startsWithIgnoreCase(cookie_value, "__Secure-"))) {
+        // A nameless cookie whose value begins with __Host- or __Secure-
+        // (case-insensitive) would otherwise impersonate a cookie with that
+        // prefix. Reject per the cookie-name-prefix rules.
+        return error.InvalidNameValue;
+    }
+
     var scrap: [8]u8 = undefined;
 
     var path: ?[]const u8 = null;
@@ -125,6 +132,34 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
 
     if (same_site == .none and secure == null) {
         return error.InsecureSameSite;
+    }
+
+    // Enforce cookie-name-prefix rules. Match is case-insensitive to
+    // cover impersonation attempts (e.g. "__HoSt-").
+    // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-cookie-name-prefixes
+    if (std.ascii.startsWithIgnoreCase(cookie_name, "__Host-")) {
+        if (secure == null) {
+            return error.InvalidPrefixedCookie;
+        }
+
+        if (!std.mem.startsWith(u8, url, "https://")) {
+            return error.InvalidPrefixedCookie;
+        }
+
+        if (domain != null and domain.?.len > 0) {
+            return error.InvalidPrefixedCookie;
+        }
+
+        if (path == null or !std.mem.eql(u8, path.?, "/")) {
+            return error.InvalidPrefixedCookie;
+        }
+    } else if (std.ascii.startsWithIgnoreCase(cookie_name, "__Secure-")) {
+        if (secure == null) {
+            return error.InvalidPrefixedCookie;
+        }
+        if (!std.mem.startsWith(u8, url, "https://")) {
+            return error.InvalidPrefixedCookie;
+        }
     }
 
     if (cookie_value.len > max_cookie_size) {
@@ -183,6 +218,7 @@ const ValidateCookieError = error{ Empty, InvalidByteSequence };
 
 /// Returns an error if cookie str length is 0
 /// or contains characters outside of the ascii range 32...126.
+/// Tab (0x09) is also allowed, matching browser behavior and WPT.
 fn validateCookieString(str: []const u8) ValidateCookieError!void {
     if (str.len == 0) {
         return error.Empty;
@@ -195,17 +231,16 @@ fn validateCookieString(str: []const u8) ValidateCookieError!void {
     if (comptime vec_size_suggestion) |size| {
         while (str.len - offset >= size) : (offset += size) {
             const Vec = @Vector(size, u8);
+            const tab: Vec = @splat(9);
             const space: Vec = @splat(32);
             const tilde: Vec = @splat(126);
             const chunk: Vec = str[offset..][0..size].*;
 
-            // This creates a mask where invalid characters represented
-            // as ones and valid characters as zeros. We then bitCast this
-            // into an unsigned integer. If the integer is not equal to 0,
-            // we know that we've invalid characters in this chunk.
-            // @popCount can also be used but using integers are simpler.
-            const mask = (@intFromBool(chunk < space) | @intFromBool(chunk > tilde));
-            const reduced: std.meta.Int(.unsigned, size) = @bitCast(mask);
+            // Invalid if (c < 32 AND c != 9) OR c > 126. Tab is the one
+            // sub-space byte we allow through (per browser/WPT behavior).
+            const below = @intFromBool(chunk < space) & @intFromBool(chunk != tab);
+            const above = @intFromBool(chunk > tilde);
+            const reduced: std.meta.Int(.unsigned, size) = @bitCast(below | above);
 
             // Got match.
             if (reduced != 0) {
@@ -221,11 +256,10 @@ fn validateCookieString(str: []const u8) ValidateCookieError!void {
     }
 
     // Either remaining slice or the original if fast path not taken.
-    const slice = str[offset..];
-    // Slow path.
-    const min, const max = std.mem.minMax(u8, slice);
-    if (min < 32 or max > 126) {
-        return error.InvalidByteSequence;
+    for (str[offset..]) |c| {
+        if ((c < 32 and c != 9) or c > 126) {
+            return error.InvalidByteSequence;
+        }
     }
 }
 
@@ -871,6 +905,52 @@ test "Cookie: parse key=value" {
     try expectError(error.InvalidByteSequence, null, &.{ 'a', 127, '=', 'b' });
     try expectError(error.InvalidByteSequence, null, &.{ 'a', '=', 'b', 20 });
     try expectError(error.InvalidByteSequence, null, &.{ 'a', '=', 'b', 128 });
+
+    // Tab (0x09) is allowed in name and value, matching browser/WPT behavior.
+    try expectAttribute(.{ .name = "a\tb", .value = "c" }, null, "a\tb=c");
+    try expectAttribute(.{ .name = "a", .value = "b\tc" }, null, "a=b\tc");
+    // Other control characters remain rejected.
+    try expectError(error.InvalidByteSequence, null, "a\nb=c");
+    try expectError(error.InvalidByteSequence, null, "a\rb=c");
+    try expectError(error.InvalidByteSequence, null, &.{ 'a', '=', 'b', 0 });
+
+    // Nameless cookies whose value begins with __Host- or __Secure-
+    // (case-insensitive) are rejected so they can't impersonate prefixed cookies.
+    try expectError(error.InvalidNameValue, null, "=__Host-abc=1");
+    try expectError(error.InvalidNameValue, null, "=__Secure-abc=1");
+    try expectError(error.InvalidNameValue, null, "=__HoSt-abc");
+    try expectError(error.InvalidNameValue, null, "__Secure-abc");
+
+    // __Host- cookie-name-prefix rules:
+    //   - must be Secure
+    //   - must be set from an https origin
+    //   - must not have a Domain attribute
+    //   - must have Path=/
+    try expectAttribute(.{ .name = "__Host-abc", .value = "1" }, "https://lightpanda.io/", "__Host-abc=1; Secure; Path=/");
+    try expectAttribute(.{ .name = "__HoSt-abc", .value = "1" }, "https://lightpanda.io/", "__HoSt-abc=1; Secure; Path=/");
+    try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Host-abc=1; Path=/");
+    try expectError(error.InvalidPrefixedCookie, null, "__Host-abc=1; Secure; Path=/");
+    try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Host-abc=1; Secure");
+    try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Host-abc=1; Secure; Path=/foo");
+    try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Host-abc=1; Secure; Path=/; Domain=lightpanda.io");
+
+    // __Secure- cookie-name-prefix rules: must be Secure and from https.
+    try expectAttribute(.{ .name = "__Secure-abc", .value = "1" }, "https://lightpanda.io/", "__Secure-abc=1; Secure");
+    try expectAttribute(.{ .name = "__SeCuRe-abc", .value = "1" }, "https://lightpanda.io/", "__SeCuRe-abc=1; Secure; Domain=lightpanda.io");
+    try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Secure-abc=1");
+    try expectError(error.InvalidPrefixedCookie, null, "__Secure-abc=1; Secure");
+
+    // Empty Domain= is treated as no Domain and accepted on __Host-.
+    try expectAttribute(.{ .name = "__Host-abc", .value = "1" }, "https://lightpanda.io/", "__Host-abc=1; Secure; Path=/; Domain=");
+
+    // __Host- with additional unrelated attributes remains valid.
+    try expectAttribute(.{ .name = "__Host-abc", .value = "1" }, "https://lightpanda.io/", "__Host-abc=1; Secure; Path=/; Max-Age=60; HttpOnly");
+
+    // Near-misses are not subject to the prefix rules.
+    try expectAttribute(.{ .name = "__Host", .value = "1" }, null, "__Host=1");
+    try expectAttribute(.{ .name = "_Host-abc", .value = "1" }, null, "_Host-abc=1");
+    try expectAttribute(.{ .name = "__Hos-abc", .value = "1" }, null, "__Hos-abc=1");
+    try expectAttribute(.{ .name = "__Secure", .value = "1" }, null, "__Secure=1");
 
     try expectAttribute(.{ .name = "", .value = "a" }, null, "a");
     try expectAttribute(.{ .name = "", .value = "a" }, null, "a;");

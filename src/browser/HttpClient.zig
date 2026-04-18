@@ -57,8 +57,11 @@ pub const HeaderIterator = http.HeaderIterator;
 // those other http requests.
 pub const Client = @This();
 
-// Count of active requests
-active: usize = 0,
+// Count of active ws requests
+ws_active: usize = 0,
+
+// Count of active http requests
+http_active: usize = 0,
 
 // Count of intercepted requests. This is to help deal with intercepted requests.
 // The client doesn't track intercepted transfers. If a request is intercepted,
@@ -86,6 +89,13 @@ next_request_id: u32 = 0,
 
 // When handles has no more available easys, requests get queued.
 queue: std.DoublyLinkedList = .{},
+
+// Queue is for Transfers that have no connection. ready_queue is for connections
+// that were initiated when performing == true and thus need to wait until
+// performing == false before being added. I'm hoping this is temporary and that
+// we can unify the two queues. But HTTP is being changed a lot right now, and
+// I'm trying to minimize the surface area.
+ready_queue: std.DoublyLinkedList = .{},
 
 // The main app allocator
 allocator: Allocator,
@@ -220,6 +230,13 @@ pub fn setTlsVerify(self: *Client, verify: bool) !void {
         const conn: *http.Connection = @fieldParentPtr("node", node);
         try conn.setTlsVerify(verify, self.use_proxy);
     }
+
+    it = self.ready_queue.first;
+    while (it) |node| : (it = node.next) {
+        const conn: *http.Connection = @fieldParentPtr("node", node);
+        try conn.setTlsVerify(verify, self.use_proxy);
+    }
+
     self.tls_verify = verify;
 }
 
@@ -258,26 +275,8 @@ pub fn abortFrame(self: *Client, frame_id: u32) void {
 // Written this way so that both abort and abortFrame can share the same code
 // but abort can avoid the frame_id check at comptime.
 fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
-    {
-        var n = self.in_use.first;
-        while (n) |node| {
-            n = node.next;
-            const conn: *http.Connection = @fieldParentPtr("node", node);
-            switch (conn.transport) {
-                .http => |transfer| {
-                    if ((comptime abort_all) or transfer.req.frame_id == frame_id) {
-                        transfer.kill();
-                    }
-                },
-                .websocket => |ws| {
-                    if ((comptime abort_all) or ws._page._frame_id == frame_id) {
-                        ws.kill();
-                    }
-                },
-                .none => unreachable,
-            }
-        }
-    }
+    abortConnections(self.in_use, abort_all, frame_id);
+    abortConnections(self.ready_queue, abort_all, frame_id);
 
     {
         var q = &self.queue;
@@ -296,6 +295,7 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
 
     if (comptime abort_all) {
         self.queue = .{};
+        self.ready_queue = .{};
     }
 
     if (comptime IS_DEBUG and abort_all) {
@@ -312,7 +312,28 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
             }
             leftover += 1;
         }
-        std.debug.assert(self.active == leftover);
+        std.debug.assert(self.http_active == leftover);
+    }
+}
+
+fn abortConnections(list: std.DoublyLinkedList, comptime abort_all: bool, frame_id: u32) void {
+    var n = list.first;
+    while (n) |node| {
+        n = node.next;
+        const conn: *http.Connection = @fieldParentPtr("node", node);
+        switch (conn.transport) {
+            .http => |transfer| {
+                if ((comptime abort_all) or transfer.req.frame_id == frame_id) {
+                    transfer.kill();
+                }
+            },
+            .websocket => |ws| {
+                if ((comptime abort_all) or ws._page._frame_id == frame_id) {
+                    ws.kill();
+                }
+            },
+            .none => unreachable,
+        }
     }
 }
 
@@ -848,6 +869,11 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
         self.releaseConn(conn);
     }
 
+    while (self.ready_queue.popFirst()) |node| {
+        const conn: *http.Connection = @fieldParentPtr("node", node);
+        try self.trackConn(conn);
+    }
+
     // We're potentially going to block for a while until we get data. Process
     // whatever messages we have waiting ahead of time.
     if (try self.processMessages()) {
@@ -1034,7 +1060,7 @@ fn processMessages(self: *Client) !bool {
                         // Conn was removed from handles during redirect reconfiguration
                         // but not re-added. Release it directly to avoid double-remove.
                         self.in_use.remove(&c.node);
-                        self.active -= 1;
+                        self.http_active -= 1;
                         self.releaseConn(c);
                         transfer._detached_conn = null;
                     }
@@ -1046,6 +1072,7 @@ fn processMessages(self: *Client) !bool {
                 }
             },
             .websocket => |ws| {
+                // ws_active will be decremented through the call to disconnected
                 if (msg.err) |err| switch (err) {
                     error.GotNothing => ws.disconnected(null),
                     else => ws.disconnected(err),
@@ -1063,26 +1090,51 @@ fn processMessages(self: *Client) !bool {
 }
 
 pub fn trackConn(self: *Client, conn: *http.Connection) !void {
+    if (self.performing) {
+        conn.in_use = false;
+        self.ready_queue.append(&conn.node);
+        return;
+    }
+
     self.in_use.append(&conn.node);
+    conn.in_use = true;
     // Set private pointer so readMessage can find the Connection.
     // Must be done each time since curl_easy_reset clears it when
     // connections are returned to pool.
     conn.setPrivate(conn) catch |err| {
         self.in_use.remove(&conn.node);
+        conn.in_use = false;
         self.releaseConn(conn);
         return err;
     };
     self.handles.add(conn) catch |err| {
         self.in_use.remove(&conn.node);
+        conn.in_use = false;
         self.releaseConn(conn);
         return err;
     };
-    self.active += 1;
+
+    switch (conn.transport) {
+        .http => self.http_active += 1,
+        .websocket => self.ws_active += 1,
+        else => unreachable,
+    }
 }
 
 pub fn removeConn(self: *Client, conn: *http.Connection) void {
+    if (conn.in_use == false) {
+        self.ready_queue.remove(&conn.node);
+        self.releaseConn(conn);
+        return;
+    }
+
     self.in_use.remove(&conn.node);
-    self.active -= 1;
+    conn.in_use = false;
+    switch (conn.transport) {
+        .http => self.http_active -= 1,
+        .websocket => self.ws_active -= 1,
+        else => unreachable,
+    }
     if (self.handles.remove(conn)) {
         self.releaseConn(conn);
     } else |_| {
@@ -1097,7 +1149,7 @@ fn releaseConn(self: *Client, conn: *http.Connection) void {
 }
 
 fn ensureNoActiveConnection(self: *const Client) !void {
-    if (self.active > 0) {
+    if (self.http_active > 0 or self.ws_active > 0) {
         return error.InflightConnection;
     }
 }

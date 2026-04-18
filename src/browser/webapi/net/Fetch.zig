@@ -232,8 +232,15 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     return ls.toLocal(self._resolver).resolve("fetch done", js_val);
 }
 
-fn httpErrorCallback(ctx: *anyopaque, _: anyerror) void {
+fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
+
+    log.info(.http, "request error", .{
+        .source = "fetch",
+        .url = self._url,
+        .status = self._response._status,
+        .err = err,
+    });
 
     var response = self._response;
     response._http_response = null;

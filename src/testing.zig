@@ -419,7 +419,7 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     }
 
     var runner = try test_session.runner(.{});
-    try runner.wait(.{ .ms = 2000 });
+    try runner.wait(.{ .ms = 2000, .until = .load });
 
     var wait_ms: u32 = 2000;
     var timer = try std.time.Timer.start();
@@ -443,6 +443,7 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
 
         const ms_elapsed = timer.lap() / 1_000_000;
         if (ms_elapsed >= wait_ms) {
+            ls.local.eval("testing.printTimeoutState()", "testing.printTimeoutState()") catch {};
             return error.TestTimedOut;
         }
         wait_ms -= @intCast(ms_elapsed);

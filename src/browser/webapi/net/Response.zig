@@ -83,29 +83,10 @@ pub fn init(body_: ?BodyInit, opts_: ?InitOpts, page: *Page) !*Response {
             .bytes => |body_bytes| break :blk .{ .bytes = try arena.dupe(u8, body_bytes) },
             .stream => |stream| break :blk .{ .stream = stream },
             .js_val => |js_val| {
-                const local = page.js.local.?;
-
-                if (local.jsValueToZig(*ReadableStream, js_val)) |stream| {
-                    break :blk .{ .stream = stream };
-                } else |_| {}
-
-                if (js_val.isString()) |js_str| {
-                    break :blk .{ .bytes = try js_str.toSliceWithAlloc(arena) };
+                if (js_val.isNullOrUndefined()) {
+                    break :blk .empty;
                 }
-
-                if (js_val.isArrayBuffer() or js_val.isTypedArray() or js_val.isArrayBufferView()) {
-                    if (local.jsValueToZig([]u8, js_val)) |data| {
-                        break :blk .{ .bytes = try arena.dupe(u8, data) };
-                    } else |_| {}
-                }
-
-                if (local.jsValueToZig(*Blob, js_val)) |blob_obj| {
-                    break :blk .{ .bytes = try arena.dupe(u8, blob_obj._slice) };
-                } else |_| {}
-
-                if (js_val.isNullOrUndefined() == false) {
-                    break :blk .{ .bytes = try js_val.toStringSliceWithAlloc(arena) };
-                }
+                break :blk .{ .bytes = try arena.dupe(u8, try js_val.toStringSmart()) };
             },
         }
         break :blk .empty;
@@ -335,14 +316,7 @@ pub fn blob(self: *const Response, page: *Page) !js.Promise {
         .stream => return local.rejectPromise(.{ .type_error = "Cannot read blob from stream body" }),
     };
     const content_type = try self._headers.get("content-type", page) orelse "";
-
-    const b = try Blob.initWithMimeValidation(
-        &.{body},
-        .{ .type = content_type },
-        true,
-        page,
-    );
-
+    const b = try Blob.initFromBytes(body, content_type, true, page);
     return local.resolvePromise(b);
 }
 

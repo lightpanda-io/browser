@@ -11,48 +11,51 @@
   }
 </script>
 
-<script id="worker_message">
-  testing.async(async (capture) => {
+<script id="worker_message" type=module>
+  {
+    const state = await testing.async();
     const worker = new Worker('./echo-worker.js');
 
-    const response = await new Promise((resolve) => {
-      worker.onmessage = function(event) {
-        resolve(event.data);
-      };
-      // Give the script time to load before posting
-      setTimeout(() => {
-        worker.postMessage({ greeting: 'hello' });
-      }, 100);
-    });
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
 
-    capture();
-    testing.expectEqual('hello', response.echo.greeting);
-    testing.expectEqual('worker', response.from);
-  });
+      // Give the script time to load before posting
+    setTimeout(() => {
+      worker.postMessage({ greeting: 'hello' });
+    }, 100);
+
+    await state.done((response) => {
+      testing.expectEqual('hello', response.echo.greeting);
+      testing.expectEqual('worker', response.from);
+    });
+  }
 </script>
 
-<script id="worker_structured_clone_date">
-  testing.async(async (capture) => {
+<script id="worker_structured_clone_date" type=module>
+  {
+    const state = await testing.async();
     const worker = new Worker('./echo-worker.js');
 
     const testDate = new Date('2024-06-15T12:30:00Z');
-    const response = await new Promise((resolve) => {
-      worker.onmessage = function(event) {
-        resolve(event.data);
-      };
-      setTimeout(() => {
-        worker.postMessage({ date: testDate });
-      }, 100);
-    });
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
 
-    capture();
-    testing.expectTrue(response.echo.date instanceof Date);
-    testing.expectEqual(testDate.getTime(), response.echo.date.getTime());
-  });
+    setTimeout(() => {
+      worker.postMessage({ date: testDate });
+    }, 100);
+
+    await state.done((response) => {
+      testing.expectTrue(response.echo.date instanceof Date);
+      testing.expectEqual(testDate.getTime(), response.echo.date.getTime());
+    });
+  }
 </script>
 
-<script id="worker_structured_clone_arraybuffer">
-  testing.async(async (capture) => {
+<script id="worker_structured_clone_arraybuffer" type=module>
+  {
+    const state = await testing.async();
     const worker = new Worker('./echo-worker.js');
 
     const buffer = new ArrayBuffer(8);
@@ -60,118 +63,118 @@
     view[0] = 1; view[1] = 2; view[2] = 3; view[3] = 4;
     view[4] = 5; view[5] = 6; view[6] = 7; view[7] = 8;
 
-    const response = await new Promise((resolve) => {
-      worker.onmessage = function(event) {
-        resolve(event.data);
-      };
-      setTimeout(() => {
-        worker.postMessage({ buffer: buffer });
-      }, 100);
-    });
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+    setTimeout(() => {
+      worker.postMessage({ buffer: buffer });
+    }, 100);
 
-    capture();
-    testing.expectTrue(response.echo.buffer instanceof ArrayBuffer);
-    testing.expectEqual(8, response.echo.buffer.byteLength);
-    const resultView = new Uint8Array(response.echo.buffer);
-    testing.expectEqual(1, resultView[0]);
-    testing.expectEqual(8, resultView[7]);
-  });
+    await state.done((response) => {
+      testing.expectTrue(response.echo.buffer instanceof ArrayBuffer);
+      testing.expectEqual(8, response.echo.buffer.byteLength);
+      const resultView = new Uint8Array(response.echo.buffer);
+      testing.expectEqual(1, resultView[0]);
+      testing.expectEqual(8, resultView[7]);
+    });
+  }
 </script>
 
-<script id="worker_structured_clone_typedarray">
-  testing.async(async (capture) => {
+<script id="worker_structured_clone_typedarray" type=module>
+  {
+    const state = await testing.async();
     const worker = new Worker('./echo-worker.js');
 
     const arr = new Float64Array([1.5, 2.5, 3.5, 4.5]);
 
-    const response = await new Promise((resolve) => {
-      worker.onmessage = function(event) {
-        resolve(event.data);
-      };
-      setTimeout(() => {
-        worker.postMessage({ arr: arr });
-      }, 100);
-    });
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+    setTimeout(() => {
+      worker.postMessage({ arr: arr });
+    }, 100);
 
-    capture();
-    testing.expectTrue(response.echo.arr instanceof Float64Array);
-    testing.expectEqual(4, response.echo.arr.length);
-    testing.expectEqual(1.5, response.echo.arr[0]);
-    testing.expectEqual(4.5, response.echo.arr[3]);
-  });
+    await state.done((response) => {
+      testing.expectTrue(response.echo.arr instanceof Float64Array);
+      testing.expectEqual(4, response.echo.arr.length);
+      testing.expectEqual(1.5, response.echo.arr[0]);
+      testing.expectEqual(4.5, response.echo.arr[3]);
+    });
+  }
 </script>
 
-<script id="worker_structured_clone_map">
-  testing.async(async (capture) => {
+<script id="worker_structured_clone_map" type=module>
+  {
+    const state = await testing.async();
     const worker = new Worker('./echo-worker.js');
 
     const map = new Map([['a', 1], ['b', 2], ['c', 3]]);
 
-    const response = await new Promise((resolve) => {
-      worker.onmessage = function(event) {
-        resolve(event.data);
-      };
-      setTimeout(() => {
-        worker.postMessage({ map: map });
-      }, 100);
-    });
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+    setTimeout(() => {
+      worker.postMessage({ map: map });
+    }, 100);
 
-    capture();
-    testing.expectTrue(response.echo.map instanceof Map);
-    testing.expectEqual(3, response.echo.map.size);
-    testing.expectEqual(1, response.echo.map.get('a'));
-    testing.expectEqual(3, response.echo.map.get('c'));
-  });
+    await state.done((response) => {
+      testing.expectTrue(response.echo.map instanceof Map);
+      testing.expectEqual(3, response.echo.map.size);
+      testing.expectEqual(1, response.echo.map.get('a'));
+      testing.expectEqual(3, response.echo.map.get('c'));
+    });
+  }
 </script>
 
-<script id="worker_structured_clone_set">
-  testing.async(async (capture) => {
+<script id="worker_structured_clone_set" type=module>
+  {
+    const state = await testing.async();
     const worker = new Worker('./echo-worker.js');
 
     const set = new Set([1, 2, 3, 'four', 'five']);
 
-    const response = await new Promise((resolve) => {
-      worker.onmessage = function(event) {
-        resolve(event.data);
-      };
-      setTimeout(() => {
-        worker.postMessage({ set: set });
-      }, 100);
-    });
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+    setTimeout(() => {
+      worker.postMessage({ set: set });
+    }, 100);
 
-    capture();
-    testing.expectTrue(response.echo.set instanceof Set);
-    testing.expectEqual(5, response.echo.set.size);
-    testing.expectTrue(response.echo.set.has(1));
-    testing.expectTrue(response.echo.set.has('four'));
-  });
+    await state.done((response) => {
+      testing.expectTrue(response.echo.set instanceof Set);
+      testing.expectEqual(5, response.echo.set.size);
+      testing.expectTrue(response.echo.set.has(1));
+      testing.expectTrue(response.echo.set.has('four'));
+    });
+  }
 </script>
 
-<script id="worker_structured_clone_regexp">
-  testing.async(async (capture) => {
+<script id="worker_structured_clone_regexp" type=module>
+  {
+    const state = await testing.async();
     const worker = new Worker('./echo-worker.js');
 
     const regex = /hello.*world/gi;
 
-    const response = await new Promise((resolve) => {
-      worker.onmessage = function(event) {
-        resolve(event.data);
-      };
-      setTimeout(() => {
-        worker.postMessage({ regex: regex });
-      }, 100);
-    });
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+    setTimeout(() => {
+      worker.postMessage({ regex: regex });
+    }, 100);
 
-    capture();
-    testing.expectTrue(response.echo.regex instanceof RegExp);
-    testing.expectEqual('hello.*world', response.echo.regex.source);
-    testing.expectTrue(response.echo.regex.global);
-    testing.expectTrue(response.echo.regex.ignoreCase);
-  });
+    await state.done((response) => {
+      testing.expectTrue(response.echo.regex instanceof RegExp);
+      testing.expectEqual('hello.*world', response.echo.regex.source);
+      testing.expectTrue(response.echo.regex.global);
+      testing.expectTrue(response.echo.regex.ignoreCase);
+    });
+  }
 </script>
 
-<script id="worker_structured_clone_nested">
-  testing.async(async (capture) => {
+<script id="worker_structured_clone_nested" type=module>
+  {
+    const state = await testing.async();
     const worker = new Worker('./echo-worker.js');
 
     const complex = {
@@ -184,23 +187,22 @@
       buffer: new Uint8Array([10, 20, 30]).buffer
     };
 
-    const response = await new Promise((resolve) => {
-      worker.onmessage = function(event) {
-        resolve(event.data);
-      };
-      setTimeout(() => {
-        worker.postMessage(complex);
-      }, 100);
-    });
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+    setTimeout(() => {
+      worker.postMessage(complex);
+    }, 100);
 
-    capture();
-    testing.expectEqual('hello', response.echo.string);
-    testing.expectEqual(42, response.echo.number);
-    testing.expectEqual(true, response.echo.boolean);
-    testing.expectEqual(null, response.echo.null);
-    testing.expectEqual(3, response.echo.array.length);
-    testing.expectEqual('value', response.echo.array[2].nested);
-    testing.expectTrue(response.echo.date instanceof Date);
-    testing.expectTrue(response.echo.buffer instanceof ArrayBuffer);
-  });
+    await state.done((response) => {
+      testing.expectEqual('hello', response.echo.string);
+      testing.expectEqual(42, response.echo.number);
+      testing.expectEqual(true, response.echo.boolean);
+      testing.expectEqual(null, response.echo.null);
+      testing.expectEqual(3, response.echo.array.length);
+      testing.expectEqual('value', response.echo.array[2].nested);
+      testing.expectTrue(response.echo.date instanceof Date);
+      testing.expectTrue(response.echo.buffer instanceof ArrayBuffer);
+    });
+  }
 </script>

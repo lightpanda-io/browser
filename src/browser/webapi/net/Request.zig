@@ -73,7 +73,7 @@ const Cache = enum {
 pub fn init(input: Input, opts_: ?InitOpts, page: *Page) !*Request {
     const arena = page.arena;
     const url = switch (input) {
-        .url => |u| try URL.resolve(arena, page.base(), u, .{ .always_dupe = true }),
+        .url => |u| try URL.resolve(arena, page.base(), u, .{ .always_dupe = true, .encoding = page.charset }),
         .request => |r| try arena.dupeZ(u8, r._url),
     };
 
@@ -174,12 +174,7 @@ pub fn blob(self: *Request, page: *Page) !js.Promise {
     const headers = try self.getHeaders(page);
     const content_type = try headers.get("content-type", page) orelse "";
 
-    const b = try Blob.initWithMimeValidation(
-        &.{body},
-        .{ .type = content_type },
-        true,
-        page,
-    );
+    const b = try Blob.initFromBytes(body, content_type, true, page);
 
     return page.js.local.?.resolvePromise(b);
 }

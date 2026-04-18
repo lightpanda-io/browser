@@ -220,7 +220,7 @@ fn dumpWPT(page: *Page, writer: *std.Io.Writer) !void {
         \\       notrun: cases.filter(c => c.status === 'Not Run').length,
         \\       unsupported: cases.filter(c => c.status === 'Optional Feature Unsupported').length
         \\     },
-        \\     cases
+        \\     not_passed: cases.filter(c => c.status !== 'Pass')
         \\   };
         \\ })(), null, 2)
     ;
