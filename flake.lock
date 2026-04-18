@@ -37,6 +37,43 @@
         "type": "github"
       }
     },
+    "flake-compat_2": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1696426674,
+        "narHash": "sha256-kvjfFW7WAETZlt09AgDn1MrtKzP7t90Vf7vypd3OL1U=",
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "rev": "0f9255e01c2351cc7d116c072cb317785dd33b33",
+        "type": "github"
+      },
+      "original": {
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "type": "github"
+      }
+    },
+    "flake-parts": {
+      "inputs": {
+        "nixpkgs-lib": [
+          "zon2nix",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1741352980,
+        "narHash": "sha256-+u2UunDA4Cl5Fci3m7S643HzKmIDAe+fiXrLqYsR2fs=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "f4330d22f1c5d2ba72d3d22df5597d123fdb60a9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -58,6 +95,24 @@
     "flake-utils_2": {
       "inputs": {
         "systems": "systems_2"
+      },
+      "locked": {
+        "lastModified": 1705309234,
+        "narHash": "sha256-uNRRNRKmJyCRC/8y1RqBkqWBLM034y4qN7EprSdmgyA=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "1ef2e671c3b0c19053962c07dbda38332dcebf26",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    },
+    "flake-utils_3": {
+      "inputs": {
+        "systems": "systems_3"
       },
       "locked": {
         "lastModified": 1705309234,
@@ -110,13 +165,30 @@
         "type": "github"
       }
     },
+    "nixpkgs_2": {
+      "locked": {
+        "lastModified": 1742288794,
+        "narHash": "sha256-Txwa5uO+qpQXrNG4eumPSD+hHzzYi/CdaM80M9XRLCo=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "b6eaf97c6960d97350c584de1b6dcff03c9daf42",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "fenix": "fenix",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs",
         "zigPkgs": "zigPkgs",
-        "zlsPkg": "zlsPkg"
+        "zlsPkg": "zlsPkg",
+        "zon2nix": "zon2nix"
       }
     },
     "rust-analyzer-src": {
@@ -166,6 +238,44 @@
         "type": "github"
       }
     },
+    "systems_3": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    },
+    "zig-overlay": {
+      "inputs": {
+        "flake-compat": "flake-compat_2",
+        "flake-utils": "flake-utils_3",
+        "nixpkgs": [
+          "zon2nix",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1770165742,
+        "narHash": "sha256-q7nu9F2ZtmIU9BMarY8BLIEfiwPwrjXGXLvOdFSvQP4=",
+        "owner": "mitchellh",
+        "repo": "zig-overlay",
+        "rev": "364ec9318bc70fc1ec084cb41e80e90d6770dd2b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "mitchellh",
+        "repo": "zig-overlay",
+        "type": "github"
+      }
+    },
     "zigPkgs": {
       "inputs": {
         "flake-compat": "flake-compat",
@@ -210,6 +320,26 @@
         "owner": "zigtools",
         "ref": "0.15.0",
         "repo": "zls",
+        "type": "github"
+      }
+    },
+    "zon2nix": {
+      "inputs": {
+        "flake-parts": "flake-parts",
+        "nixpkgs": "nixpkgs_2",
+        "zig-overlay": "zig-overlay"
+      },
+      "locked": {
+        "lastModified": 1770337306,
+        "narHash": "sha256-Nxe1MvrNNc9LN34NJeAQ91SDE6mW710G2xRSmI0hq4M=",
+        "owner": "nix-community",
+        "repo": "zon2nix",
+        "rev": "8c2ef6d376727cd5dc768a851ccded47161e65fb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "zon2nix",
         "type": "github"
       }
     }
