@@ -165,6 +165,10 @@ pub fn getSessionStorage(self: *Window) *storage.Lookup {
     return &self._storage_bucket.session;
 }
 
+pub fn getOrigin(self: *const Window) []const u8 {
+    return self._page.origin orelse "null";
+}
+
 pub fn getLocation(self: *const Window) *Location {
     return self._location;
 }
@@ -827,6 +831,7 @@ pub const JsApi = struct {
     pub const performance = bridge.accessor(Window.getPerformance, null, .{});
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{});
+    pub const origin = bridge.accessor(Window.getOrigin, null, .{});
     pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{ .deletable = false });
     pub const history = bridge.accessor(Window.getHistory, null, .{});
     pub const navigation = bridge.accessor(Window.getNavigation, null, .{});
