@@ -41,6 +41,7 @@ pub fn build(b: *Build) !void {
 
     const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
+    const wpt_extensions = b.option(bool, "wpt_extensions", "Extend WebAPI with WPT driver behavior") orelse false;
 
     const version = resolveVersion(b);
     var stdout = std.fs.File.stdout().writer(&.{});
@@ -53,6 +54,7 @@ pub fn build(b: *Build) !void {
     opts.addOption([]const u8, "version", version_string);
     opts.addOption([]const u8, "version_encoded", version_encoded);
     opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
+    opts.addOption(bool, "wpt_extensions", wpt_extensions);
 
     const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer") orelse false;
     const enable_asan = b.option(bool, "asan", "Enable Address Sanitizer") orelse false;
