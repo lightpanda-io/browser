@@ -533,12 +533,15 @@ pub const BrowserContext = struct {
         cache.* = .empty;
         const label_index = try page.call_arena.create(Label.LabelByForIndex);
         label_index.* = .{};
+        const temp_arena = try page.call_arena.create(std.heap.ArenaAllocator);
+        temp_arena.* = std.heap.ArenaAllocator.init(page.call_arena);
         return .{
             .page = page,
             .root = root,
             .registry = &self.node_registry,
             .visibility_cache = cache,
             .label_index = label_index,
+            .temp_arena = temp_arena,
         };
     }
 
