@@ -561,3 +561,21 @@
   });
 }
 </script>
+
+<script id=ws_within_callback type=module>
+{
+  const state = await testing.async();
+  let nested = false;
+  let ws1 = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws1.addEventListener('open', () => {
+    let ws2 = new WebSocket('ws://127.0.0.1:9584/');
+    ws2.addEventListener('open', state.resolve);
+  });
+
+  await state.done(() => {
+    // this case used to fail, so just reaching here is a success!
+    testing.expectTrue(true);
+  });
+}
+</script>

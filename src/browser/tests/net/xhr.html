@@ -1,332 +1,335 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
-<script id=xhr>
+<script id=xhr type=module>
   testing.expectEqual(0, XMLHttpRequest.UNSENT);
   testing.expectEqual(1, XMLHttpRequest.OPENED);
   testing.expectEqual(2, XMLHttpRequest.HEADERS_RECEIVED);
   testing.expectEqual(3, XMLHttpRequest.LOADING);
   testing.expectEqual(4, XMLHttpRequest.DONE);
-
-  testing.async(async (restore) => {
+  {
+    const state = await testing.async();
     const req = new XMLHttpRequest();
-    const event = await new Promise((resolve) => {
-      function cbk(event) {
-        resolve(event)
-      }
 
-      req.onload = cbk;
-      testing.expectEqual(cbk, req.onload);
-      req.onload = cbk;
+    function cbk(event) {
+      state.resolve(event)
+    }
 
-      req.open('GET', 'http://127.0.0.1:9582/xhr');
-      testing.expectEqual(0, req.status);
-      testing.expectEqual('', req.statusText);
-      testing.expectEqual('', req.getAllResponseHeaders());
-      testing.expectEqual(null, req.getResponseHeader('Content-Type'));
-      testing.expectEqual('', req.responseText);
-      testing.expectEqual('', req.responseURL);
-      req.send();
+    req.onload = cbk;
+    testing.expectEqual(cbk, req.onload);
+    req.onload = cbk;
+
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    testing.expectEqual(0, req.status);
+    testing.expectEqual('', req.statusText);
+    testing.expectEqual('', req.getAllResponseHeaders());
+    testing.expectEqual(null, req.getResponseHeader('Content-Type'));
+    testing.expectEqual('', req.responseText);
+    testing.expectEqual('', req.responseURL);
+    req.send();
+
+
+    await state.done((event) => {
+      testing.expectEqual('load', event.type);
+      testing.expectEqual(true, event.loaded > 0);
+      testing.expectEqual(true, event instanceof ProgressEvent);
+      testing.expectEqual(200, req.status);
+      testing.expectEqual('OK', req.statusText);
+      testing.expectEqual('text/html; charset=utf-8', req.getResponseHeader('Content-Type'));
+      testing.expectEqual('content-length: 100\r\nContent-Type: text/html; charset=utf-8\r\n', req.getAllResponseHeaders());
+      testing.expectEqual(100, req.responseText.length);
+      testing.expectEqual(req.responseText.length, req.response.length);
+      testing.expectEqual('http://127.0.0.1:9582/xhr', req.responseURL);
     });
-
-    restore();
-    testing.expectEqual('load', event.type);
-    testing.expectEqual(true, event.loaded > 0);
-    testing.expectEqual(true, event instanceof ProgressEvent);
-    testing.expectEqual(200, req.status);
-    testing.expectEqual('OK', req.statusText);
-    testing.expectEqual('text/html; charset=utf-8', req.getResponseHeader('Content-Type'));
-    testing.expectEqual('content-length: 100\r\nContent-Type: text/html; charset=utf-8\r\n', req.getAllResponseHeaders());
-    testing.expectEqual(100, req.responseText.length);
-    testing.expectEqual(req.responseText.length, req.response.length);
-    testing.expectEqual('http://127.0.0.1:9582/xhr', req.responseURL);
-  });
+  }
 </script>
 
-<script id=xhr2>
-  const req2 = new XMLHttpRequest()
-  testing.async(async (restore) => {
-    await new Promise((resolve) => {
-      req2.onload = resolve;
-      req2.open('GET', 'http://127.0.0.1:9582/xhr')
-      req2.responseType = 'document';
-      req2.send()
-    });
+<script id=xhr2 type=module type=module>
+  {
+    const state = await testing.async();
 
-    restore();
-    testing.expectEqual(200, req2.status);
-    testing.expectEqual('OK', req2.statusText);
-    testing.expectEqual(true, req2.response instanceof Document);
-    testing.expectEqual(true, req2.responseXML instanceof Document);
-  });
+    const req2 = new XMLHttpRequest()
+    req2.onload = () => { state.resolve() };
+    req2.open('GET', 'http://127.0.0.1:9582/xhr')
+    req2.responseType = 'document';
+    req2.send()
+
+    await state.done(() => {
+      testing.expectEqual(200, req2.status);
+      testing.expectEqual('OK', req2.statusText);
+      testing.expectEqual(true, req2.response instanceof Document);
+      testing.expectEqual(true, req2.responseXML instanceof Document);
+    });
+  }
 </script>
 
-<script id=xhr3>
-  const req3 = new XMLHttpRequest()
-  testing.async(async (restore) => {
-    await new Promise((resolve) => {
-      req3.onload = resolve;
-      req3.open('GET', 'http://127.0.0.1:9582/xhr/json')
-      req3.responseType = 'json';
-      req3.send()
-    });
+<script id=xhr3 type=module type=module>
+  {
+    const state = await testing.async();
 
-    restore();
-    testing.expectEqual(200, req3.status);
-    testing.expectEqual('OK', req3.statusText);
-    testing.expectEqual('9000!!!', req3.response.over);
-    testing.expectEqual("number", typeof json.updated_at);
-    testing.expectEqual(1765867200000, json.updated_at);
-    testing.expectEqual({over: '9000!!!',updated_at:1765867200000}, json);
-  });
+    const req3 = new XMLHttpRequest()
+    req3.onload = () => { state.resolve() };
+    req3.open('GET', 'http://127.0.0.1:9582/xhr/json')
+    req3.responseType = 'json';
+    req3.send();
+
+    await state.done(() => {
+      testing.expectEqual(200, req3.status);
+      testing.expectEqual('OK', req3.statusText);
+      testing.expectEqual('9000!!!', req3.response.over);
+      testing.expectEqual("number", typeof json.updated_at);
+      testing.expectEqual(1765867200000, json.updated_at);
+      testing.expectEqual({over: '9000!!!',updated_at:1765867200000}, json);
+    });
+  }
 </script>
 
-<script id=xhr4>
-  const req4 = new XMLHttpRequest()
-  testing.async(async (restore) => {
-    await new Promise((resolve) => {
-      req4.onload = resolve;
-      req4.open('POST', 'http://127.0.0.1:9582/xhr')
-      req4.send('foo')
-    });
+<script id=xhr4 type=module>
+  {
+    const state = await testing.async();
 
-    restore();
-    testing.expectEqual(200, req4.status);
-    testing.expectEqual('OK', req4.statusText);
-    testing.expectEqual(true, req4.responseText.length > 64);
-  });
+    const req4 = new XMLHttpRequest();
+    req4.onload = () => { state.resolve() };
+    req4.open('POST', 'http://127.0.0.1:9582/xhr')
+    req4.send('foo');
+
+
+    await state.done(() => {
+      testing.expectEqual(200, req4.status);
+      testing.expectEqual('OK', req4.statusText);
+      testing.expectEqual(true, req4.responseText.length > 64);
+    });
+  }
 </script>
 
-<script id=xhr5>
-  testing.async(async (restore) => {
-    let state = [];
+<script id=xhr5 type=module>
+  {
+    const state = await testing.async();
+    let records = [];
     const req5 = new XMLHttpRequest();
-
-    const result = await new Promise((resolve) => {
-      req5.onreadystatechange = (e) => {
-        state.push(req5.readyState);
-        if (req5.readyState === XMLHttpRequest.DONE) {
-          resolve({states: state, target: e.currentTarget});
-        }
+    req5.onreadystatechange = (e) => {
+      records.push(req5.readyState);
+      if (req5.readyState === XMLHttpRequest.DONE) {
+        state.resolve({records: records, target: e.currentTarget});
       }
+    }
+    req5.open('GET', 'http://127.0.0.1:9582/xhr');
+    req5.send();
 
-      req5.open('GET', 'http://127.0.0.1:9582/xhr');
-      req5.send();
+    await state.done((result) => {
+      const {records: records, target: target} = result;
+      testing.expectEqual(4, records.length)
+      testing.expectEqual(XMLHttpRequest.OPENED, records[0]);
+      testing.expectEqual(XMLHttpRequest.HEADERS_RECEIVED, records[1]);
+      testing.expectEqual(XMLHttpRequest.LOADING, records[2]);
+      testing.expectEqual(XMLHttpRequest.DONE, records[3]);
+      testing.expectEqual(req5, target);
     });
-
-    restore();
-    const {states: states, target: target} = result;
-    testing.expectEqual(4, states.length)
-    testing.expectEqual(XMLHttpRequest.OPENED, states[0]);
-    testing.expectEqual(XMLHttpRequest.HEADERS_RECEIVED, states[1]);
-    testing.expectEqual(XMLHttpRequest.LOADING, states[2]);
-    testing.expectEqual(XMLHttpRequest.DONE, states[3]);
-    testing.expectEqual(req5, target);
-  })
+  }
 </script>
 
-<script id=xhr6>
-  const req6 = new XMLHttpRequest()
-  testing.async(async (restore) => {
-    await new Promise((resolve) => {
-      req6.onload = resolve;
-      req6.open('GET', 'http://127.0.0.1:9582/xhr/binary')
-      req6.responseType ='arraybuffer'
-      req6.send()
-    });
+<script id=xhr6 type=module>
+  {
+    const state = await testing.async();
 
-    restore();
-    testing.expectEqual(200, req6.status);
-    testing.expectEqual('OK', req6.statusText);
-    testing.expectEqual(7, req6.response.byteLength);
-    testing.expectEqual([0, 0, 1, 2, 0, 0, 9], new Int32Array(req6.response));
-    testing.expectEqual('', typeof req6.response);
-    testing.expectEqual('arraybuffer', req6.responseType);
-  });
+    const req6 = new XMLHttpRequest();
+    req6.onload = () => { state.resolve() };
+    req6.open('GET', 'http://127.0.0.1:9582/xhr/binary')
+    req6.responseType ='arraybuffer';
+    req6.send();
+
+    await state.done(() => {
+      testing.expectEqual(200, req6.status);
+      testing.expectEqual('OK', req6.statusText);
+      testing.expectEqual(7, req6.response.byteLength);
+      testing.expectEqual([0, 0, 1, 2, 0, 0, 9], new Int32Array(req6.response));
+      testing.expectEqual('', typeof req6.response);
+      testing.expectEqual('arraybuffer', req6.responseType);
+    });
+  }
 </script>
 
-<script id=xhr_redirect>
-  testing.async(async (restore) => {
+<script id=xhr_redirect type=module>
+  {
+    const state = await testing.async();
     const req = new XMLHttpRequest();
-    await new Promise((resolve) => {
-      req.onload = resolve;
-      req.open('GET', 'http://127.0.0.1:9582/xhr/redirect');
-      req.send();
-    });
+    req.onload = () => { state.resolve() };
+    req.open('GET', 'http://127.0.0.1:9582/xhr/redirect');
+    req.send();
 
-    restore();
-    testing.expectEqual(200, req.status);
-    testing.expectEqual('OK', req.statusText);
-    testing.expectEqual('http://127.0.0.1:9582/xhr', req.responseURL);
-    testing.expectEqual(100, req.responseText.length);
-  });
+    await state.done(() => {
+      testing.expectEqual(200, req.status);
+      testing.expectEqual('OK', req.statusText);
+      testing.expectEqual('http://127.0.0.1:9582/xhr', req.responseURL);
+      testing.expectEqual(100, req.responseText.length);
+    });
+  }
 </script>
 
-<script id=xhr_404>
-  testing.async(async (restore) => {
-
+<script id=xhr_404 type=module>
+  {
+    const state = await testing.async();
     const req = new XMLHttpRequest();
-    await new Promise((resolve) => {
-      req.onload = resolve;
-      req.open('GET', 'http://127.0.0.1:9582/xhr/404');
-      req.send();
-    });
+    req.onload = () => { state.resolve() };
+    req.open('GET', 'http://127.0.0.1:9582/xhr/404');
+    req.send();
 
-    restore();
-    testing.expectEqual(404, req.status);
-    testing.expectEqual('Not Found', req.statusText);
-    testing.expectEqual('Not Found', req.responseText);
-  });
+    await state.done(() => {
+      testing.expectEqual(404, req.status);
+      testing.expectEqual('Not Found', req.statusText);
+      testing.expectEqual('Not Found', req.responseText);
+    });
+  }
 </script>
 
-<script id=xhr_500>
-  testing.async(async (restore) => {
+<script id=xhr_500 type=module>
+  {
+    const state = await testing.async();
     const req = new XMLHttpRequest();
-    await new Promise((resolve) => {
-      req.onload = resolve;
-      req.open('GET', 'http://127.0.0.1:9582/xhr/500');
-      req.send();
-    });
+    req.onload = () => { state.resolve() };
+    req.open('GET', 'http://127.0.0.1:9582/xhr/500');
+    req.send();
 
-    restore();
-    testing.expectEqual(500, req.status);
-    testing.expectEqual('Internal Server Error', req.statusText);
-    testing.expectEqual('Internal Server Error', req.responseText);
-  });
+    await state.done(() => {
+      testing.expectEqual(500, req.status);
+      testing.expectEqual('Internal Server Error', req.statusText);
+      testing.expectEqual('Internal Server Error', req.responseText);
+    });
+  }
 </script>
 
-<script id=xhr_abort>
-  testing.async(async (restore) => {
+<script id=xhr_abort type=module>
+  {
+    const state = await testing.async();
     const req = new XMLHttpRequest();
     let abortFired = false;
     let errorFired = false;
     let loadEndFired = false;
 
-    await new Promise((resolve) => {
-      req.onabort = () => { abortFired = true; };
-      req.onerror = () => { errorFired = true; };
-      req.onloadend = () => {
-        loadEndFired = true;
-        resolve();
-      };
+    req.onabort = () => { abortFired = true; };
+    req.onerror = () => { errorFired = true; };
+    req.onloadend = () => {
+      loadEndFired = true;
+      state.resolve();
+    };
 
-      req.open('GET', 'http://127.0.0.1:9582/xhr');
-      req.send();
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.send();
+    req.abort();
+
+    await state.done(() => {
+      testing.expectEqual(true, abortFired);
+      testing.expectEqual(true, errorFired);
+      testing.expectEqual(true, loadEndFired);
+      testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
+    });
+  }
+</script>
+
+<script id=xhr_abort_callback type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    let abortFired = false;
+    let errorFired = false;
+    let loadEndFired = false;
+
+    req.onabort = () => { abortFired = true; };
+    req.onerror = () => { errorFired = true; };
+    req.onloadend = () => {
+      loadEndFired = true;
+      state.resolve();
+    };
+
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.onreadystatechange = (e) => {
       req.abort();
-    });
+    }
+    req.send();
 
-    restore();
-    testing.expectEqual(true, abortFired);
-    testing.expectEqual(true, errorFired);
-    testing.expectEqual(true, loadEndFired);
-    testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
-  });
+    await state.done(() => {
+      testing.expectEqual(true, abortFired);
+      testing.expectEqual(true, errorFired);
+      testing.expectEqual(true, loadEndFired);
+      testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
+    });
+  }
 </script>
 
-<script id=xhr_abort_callback>
-  testing.async(async (restore) => {
+<script id=xhr_abort_callback_nobody type=module>
+  {
+    const state = await testing.async();
     const req = new XMLHttpRequest();
     let abortFired = false;
     let errorFired = false;
     let loadEndFired = false;
 
-    await new Promise((resolve) => {
-      req.onabort = () => { abortFired = true; };
-      req.onerror = () => { errorFired = true; };
-      req.onloadend = () => {
-        loadEndFired = true;
-        resolve();
-      };
+    req.onabort = () => { abortFired = true; };
+    req.onerror = () => { errorFired = true; };
+    req.onloadend = () => {
+      loadEndFired = true;
+      state.resolve();
+    };
 
-      req.open('GET', 'http://127.0.0.1:9582/xhr');
-      req.onreadystatechange = (e) => {
-        req.abort();
-      }
-      req.send();
+    req.open('GET', 'http://127.0.0.1:9582/xhr_empty');
+    req.onreadystatechange = (e) => {
+      req.abort();
+    }
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(true, abortFired);
+      testing.expectEqual(true, errorFired);
+      testing.expectEqual(true, loadEndFired);
+      testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
     });
-
-    restore();
-    testing.expectEqual(true, abortFired);
-    testing.expectEqual(true, errorFired);
-    testing.expectEqual(true, loadEndFired);
-    testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
-  });
+  }
 </script>
 
+<script id=xhr_blob_url type=module>
+  {
+    const state = await testing.async();
 
-<script id=xhr_abort_callback_nobody>
-  testing.async(async (restore) => {
-    const req = new XMLHttpRequest();
-    let abortFired = false;
-    let errorFired = false;
-    let loadEndFired = false;
-
-    await new Promise((resolve) => {
-      req.onabort = () => { abortFired = true; };
-      req.onerror = () => { errorFired = true; };
-      req.onloadend = () => {
-        loadEndFired = true;
-        resolve();
-      };
-
-      req.open('GET', 'http://127.0.0.1:9582/xhr_empty');
-      req.onreadystatechange = (e) => {
-        req.abort();
-      }
-      req.send();
-    });
-
-    restore();
-    testing.expectEqual(true, abortFired);
-    testing.expectEqual(true, errorFired);
-    testing.expectEqual(true, loadEndFired);
-    testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
-  });
-</script>
-
-<script id=xhr_blob_url>
-  testing.async(async (restore) => {
     // Create a blob and get its URL
     const blob = new Blob(['Hello from blob!'], { type: 'text/plain' });
     const blobUrl = URL.createObjectURL(blob);
 
     const req = new XMLHttpRequest();
-    await new Promise((resolve) => {
-      req.onload = resolve;
-      req.open('GET', blobUrl);
-      req.send();
+    req.onload = () => { state.resolve() };
+    req.open('GET', blobUrl);
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(200, req.status);
+      testing.expectEqual('Hello from blob!', req.responseText);
+      testing.expectEqual(blobUrl, req.responseURL);
+
+      // Clean up
+      URL.revokeObjectURL(blobUrl);
     });
-
-    restore();
-    testing.expectEqual(200, req.status);
-    testing.expectEqual('Hello from blob!', req.responseText);
-    testing.expectEqual(blobUrl, req.responseURL);
-
-    // Clean up
-    URL.revokeObjectURL(blobUrl);
-  });
+  }
 </script>
 
-<script id=xhr_timeout>
-  // timeout property: default is 0
-  const req = new XMLHttpRequest();
-  testing.expectEqual(0, req.timeout);
+<script id=xhr_timeout type=module>
+  {
+    // timeout property: default is 0
+    const req = new XMLHttpRequest();
+    testing.expectEqual(0, req.timeout);
 
-  // timeout can be set and read back
-  req.timeout = 5000;
-  testing.expectEqual(5000, req.timeout);
-
-  // request with timeout set succeeds normally when server responds in time
-  testing.async(async (restore) => {
-    const event = await new Promise((resolve) => {
-      req.onload = resolve;
-      req.open('GET', 'http://127.0.0.1:9582/xhr');
-      req.send();
-    });
-
-    restore();
-    testing.expectEqual('load', event.type);
-    testing.expectEqual(200, req.status);
+    // timeout can be set and read back
+    req.timeout = 5000;
     testing.expectEqual(5000, req.timeout);
-  });
+
+    // request with timeout set succeeds normally when server responds in time
+    const state = await testing.async();
+    req.onload = (e) => { state.resolve(e) };
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.send();
+
+    await state.done((event) => {
+      testing.expectEqual('load', event.type);
+      testing.expectEqual(200, req.status);
+      testing.expectEqual(5000, req.timeout);
+    });
+  }
 </script>

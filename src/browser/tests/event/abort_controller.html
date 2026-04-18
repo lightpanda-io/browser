@@ -240,13 +240,20 @@
   testing.expectEqual('AbortError', AbortSignal.abort().reason);
 </script>
 
-<script id=abortsignal_timeout>
-  var s3 = AbortSignal.timeout(10);
-  testing.onload(() => {
-    testing.expectEqual(true, s3.aborted);
-    testing.expectEqual('TimeoutError', s3.reason);
-    testing.expectError('Error: TimeoutError', () => {
-      s3.throwIfAborted()
+<script id=abortsignal_timeout type=module>
+  {
+    const state = await testing.async();
+    var s3 = AbortSignal.timeout(10);
+    window.setTimeout(() => {
+      state.resolve()
+    }, 11);
+
+    await state.done(() => {
+      testing.expectEqual(true, s3.aborted);
+      testing.expectEqual('TimeoutError', s3.reason);
+      testing.expectError('Error: TimeoutError', () => {
+        s3.throwIfAborted()
+      });
     });
-  });
+  }
 </script>

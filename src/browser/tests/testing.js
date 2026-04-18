@@ -4,7 +4,7 @@
   let eventuallies = [];
   let async_capture = null;
   let current_script_id = null;
-  let async_pending = 0;
+  let async_pending = new Set();
 
   function expectTrue(actual) {
      expectEqual(true, actual);
@@ -71,26 +71,29 @@
   }
 
   async function async(cb) {
+    const script_id = document.currentScript.id;
+
     if (cb == undefined) {
       let resolve = null
       const promise = new Promise((r) => { resolve = r});
-      async_pending += 1;
+      async_pending.add(script_id);
+
 
       return {
         promise: promise,
         resolve: resolve,
-        capture: {script_id: document.currentScript.id, stack: new Error().stack},
+        capture: {script_id: script_id, stack: new Error().stack},
         done: async function(cb) {
-          await this.promise;
-          async_pending -= 1;
+          const res = await this.promise;
+          async_pending.delete(script_id);
           async_capture = this.capture;
-          cb();
+          cb(res);
           async_capture = false;
         }
       };
     }
 
-    let capture = {script_id: document.currentScript.id, stack: new Error().stack};
+    let capture = {script_id: script_id, stack: new Error().stack};
     await cb(() => { async_capture = capture; });
     async_capture = null;
   }
@@ -100,7 +103,7 @@
       throw new Error('Failed');
     }
 
-    if (async_pending > 0) {
+    if (async_pending.size > 0) {
       return false;
     }
 
@@ -131,6 +134,10 @@
     return true;
   }
 
+  function printTimeoutState() {
+  	console.warn('Pending count:', Array.from(async_pending));
+  }
+
   const IS_TEST_RUNNER = window.navigator.userAgent.startsWith("Lightpanda/");
 
   window.testing = {
@@ -142,6 +149,7 @@
     expectEqual: expectEqual,
     expectError: expectError,
     withError: withError,
+    printTimeoutState: printTimeoutState,
     onload: onload,
     IS_TEST_RUNNER: IS_TEST_RUNNER,
     HOST: '127.0.0.1',
