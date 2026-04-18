@@ -70,13 +70,14 @@ pub const Command = union(enum) {
     }
 
     /// Serializes back to Pandascript. Every string argument is wrapped in
-    /// content-aware quotes so the output round-trips through `parse()` —
-    /// single quotes by default, double quotes if the content contains `'`.
+    /// content-aware quotes so the output round-trips through `parse()`:
+    ///   - single quotes by default,
+    ///   - double quotes if the content contains `'` but not `"`,
+    ///   - triple single quotes (`'''…'''`) if the content contains both.
     ///
-    /// The one case we do NOT round-trip cleanly is a string containing BOTH
-    /// `'` and `"`. There's no escape syntax, so we fall back to `'…'` and
-    /// the resulting line will be ambiguous when replayed. This is rare in
-    /// practice (CSS selectors and form values almost never mix styles).
+    /// There is no escape syntax, so a value that literally contains `'''`
+    /// still cannot round-trip. This is much rarer than the mixed-quote case
+    /// (CSS selectors and form values almost never contain `'''`).
     pub fn format(self: Command, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
             .goto => |url| try writer.print("GOTO {s}", .{url}),
@@ -287,8 +288,11 @@ pub const ScriptIterator = struct {
         const cmd_word = line[0..cmd_end];
         if (!std.ascii.eqlIgnoreCase(cmd_word, "EVAL")) return null;
         const rest = std.mem.trim(u8, line[cmd_end..], &std.ascii.whitespace);
-        if (std.mem.startsWith(u8, rest, "\"\"\"")) return "\"\"\"";
-        if (std.mem.startsWith(u8, rest, "'''")) return "'''";
+        // Multi-line mode requires the opening triple-quote to stand alone —
+        // inline forms like `EVAL '''a"b'c'''` fall through to single-line parse().
+        if (rest.len != 3) return null;
+        if (std.mem.eql(u8, rest, "\"\"\"")) return "\"\"\"";
+        if (std.mem.eql(u8, rest, "'''")) return "'''";
         return null;
     }
 
@@ -317,8 +321,24 @@ const QuotedResult = struct {
     remainder: []const u8,
 };
 
+/// Returns the opening `'''` or `"""` delimiter if `s` starts with one, else null.
+fn tripleQuotePrefix(s: []const u8) ?[]const u8 {
+    if (std.mem.startsWith(u8, s, "'''")) return "'''";
+    if (std.mem.startsWith(u8, s, "\"\"\"")) return "\"\"\"";
+    return null;
+}
+
 fn extractQuotedWithRemainder(s: []const u8) ?QuotedResult {
     if (s.len < 2) return null;
+
+    if (tripleQuotePrefix(s)) |tq| {
+        const end = std.mem.indexOf(u8, s[3..], tq) orelse return null;
+        return .{
+            .value = s[3 .. 3 + end],
+            .remainder = s[3 + end + 3 ..],
+        };
+    }
+
     const q = s[0];
     if (q != '"' and q != '\'') return null;
     const end = std.mem.indexOfScalarPos(u8, s, 1, q) orelse return null;
@@ -329,12 +349,19 @@ fn extractQuotedWithRemainder(s: []const u8) ?QuotedResult {
 }
 
 /// Extract a single string argument from `s`:
-///   - strip one layer of matching outer `'…'` or `"…"` if present
+///   - strip one layer of matching outer `'…'`, `"…"`, `'''…'''`, or `"""…"""` if present
 ///   - return `s` unchanged if unquoted
 ///   - return null if empty, malformed (starts with quote, no matching close),
-///     or stripped to empty (`''` / `""`)
+///     or stripped to empty (`''` / `""` / `''''''` / `""""""`)
 fn trimMatchingQuotes(s: []const u8) ?[]const u8 {
     if (s.len == 0) return null;
+
+    if (tripleQuotePrefix(s)) |tq| {
+        if (s.len < 6 or !std.mem.endsWith(u8, s, tq)) return null;
+        const inner = s[3 .. s.len - 3];
+        return if (inner.len == 0) null else inner;
+    }
+
     const q = s[0];
     if (q == '\'' or q == '"') {
         if (s.len < 2 or s[s.len - 1] != q) return null;
@@ -347,17 +374,25 @@ fn trimMatchingQuotes(s: []const u8) ?[]const u8 {
 /// Wraps a string in outer quotes when formatted via `{f}`, choosing the
 /// quote character so the output round-trips through `parse()`:
 ///   - prefer `'…'`
-///   - fall back to `"…"` if the content contains `'` but not `"`
-///   - if it contains both, emit `'…'` anyway (ambiguous — see format docs)
+///   - use `"…"` if the content contains `'` but not `"`
+///   - use `'''…'''` if it contains both
 const Quoted = struct {
     s: []const u8,
 
     pub fn format(self: Quoted, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         const has_single = std.mem.indexOfScalar(u8, self.s, '\'') != null;
-        const q: u8 = if (has_single and std.mem.indexOfScalar(u8, self.s, '"') == null) '"' else '\'';
-        try writer.writeByte(q);
-        try writer.writeAll(self.s);
-        try writer.writeByte(q);
+        const has_double = std.mem.indexOfScalar(u8, self.s, '"') != null;
+
+        if (has_single and has_double) {
+            try writer.writeAll("'''");
+            try writer.writeAll(self.s);
+            try writer.writeAll("'''");
+        } else {
+            const q: u8 = if (has_single) '"' else '\'';
+            try writer.writeByte(q);
+            try writer.writeAll(self.s);
+            try writer.writeByte(q);
+        }
     }
 };
 
@@ -510,6 +545,12 @@ test "parse TYPE two quoted args" {
     const cmd = parse("TYPE \"#email\" \"user@test.com\"");
     try std.testing.expectEqualStrings("#email", cmd.type_cmd.selector);
     try std.testing.expectEqualStrings("user@test.com", cmd.type_cmd.value);
+}
+
+test "parse TYPE with triple-quoted selector" {
+    const cmd = parse("TYPE '''a[x='y'][z=\"w\"]''' 'value'");
+    try std.testing.expectEqualStrings("a[x='y'][z=\"w\"]", cmd.type_cmd.selector);
+    try std.testing.expectEqualStrings("value", cmd.type_cmd.value);
 }
 
 test "parse TYPE single-quoted with inner double quotes" {
@@ -795,6 +836,26 @@ test "ScriptIterator unterminated EVAL" {
     try std.testing.expectEqualStrings("unterminated EVAL block", e1.command.natural_language);
 }
 
+test "ScriptIterator inline triple-quoted EVAL stays single-line" {
+    // The opening ''' has content on the same line, so this is NOT a
+    // multi-line block — trimMatchingQuotes handles it via parse().
+    const script =
+        \\EVAL '''console.log("x")'''
+        \\CLICK '.btn'
+    ;
+    var iter: ScriptIterator = .init(script, std.testing.allocator);
+
+    const e1 = iter.next().?;
+    try std.testing.expect(e1.command == .eval_js);
+    try std.testing.expectEqualStrings("console.log(\"x\")", e1.command.eval_js);
+
+    const e2 = iter.next().?;
+    try std.testing.expect(e2.command == .click);
+    try std.testing.expectEqualStrings(".btn", e2.command.click);
+
+    try std.testing.expect(iter.next() == null);
+}
+
 test "ScriptIterator multi-line EVAL mismatched triple quote" {
     const script =
         \\EVAL """
@@ -827,8 +888,19 @@ test "trimMatchingQuotes" {
         .{ .in = "", .out = null },
         .{ .in = "''", .out = null },
         .{ .in = "\"\"", .out = null },
+        // Triple quotes are stripped as a single layer.
+        .{ .in = "'''a'''", .out = "a" },
+        .{ .in = "\"\"\"a\"\"\"", .out = "a" },
+        .{ .in = "'''a'b\"c'''", .out = "a'b\"c" },
+        // Empty triple-quoted → null, matching '' / "" rejection.
+        .{ .in = "''''''", .out = null },
+        .{ .in = "\"\"\"\"\"\"", .out = null },
+        // Unterminated triple quote → malformed.
+        .{ .in = "'''abc", .out = null },
+        // Too short to close a triple quote → malformed.
+        .{ .in = "'''abc''", .out = null },
         // Never recurse — only one layer is stripped.
-        .{ .in = "'''a'''", .out = "''a''" },
+        .{ .in = "''a''", .out = "'a'" },
     };
     for (cases, 0..) |c, i| {
         errdefer std.debug.print("failing case {d}: trimMatchingQuotes({s})\n", .{ i, c.in });
@@ -882,14 +954,32 @@ test "format TYPE with nested single quotes round-trip" {
     try std.testing.expectEqualStrings("$LP_USERNAME", round.type_cmd.value);
 }
 
-test "format with both quote types falls back to single quotes" {
+test "format with both quote types uses triple quotes" {
     const cmd = Command{ .click = "a[x='y'][z=\"w\"]" };
 
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
     try cmd.format(&aw.writer);
-    // Fallback — output is ambiguous on parse, but the format is pinned.
-    try std.testing.expectEqualStrings("CLICK 'a[x='y'][z=\"w\"]'", aw.written());
+    try std.testing.expectEqualStrings("CLICK '''a[x='y'][z=\"w\"]'''", aw.written());
+
+    const round = parse(aw.written());
+    try std.testing.expectEqualStrings("a[x='y'][z=\"w\"]", round.click);
+}
+
+test "format TYPE with both quote types round-trip" {
+    const cmd = Command{ .type_cmd = .{
+        .selector = "a[x='y'][z=\"w\"]",
+        .value = "some 'value' with \"quotes\"",
+    } };
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try cmd.format(&aw.writer);
+    try std.testing.expectEqualStrings("TYPE '''a[x='y'][z=\"w\"]''' '''some 'value' with \"quotes\"'''", aw.written());
+
+    const round = parse(aw.written());
+    try std.testing.expectEqualStrings("a[x='y'][z=\"w\"]", round.type_cmd.selector);
+    try std.testing.expectEqualStrings("some 'value' with \"quotes\"", round.type_cmd.value);
 }
 
 // --- Tool-call round-trip tests ---
