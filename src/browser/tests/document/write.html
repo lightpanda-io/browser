@@ -115,7 +115,41 @@
   testing.expectEqual('function', typeof document.open);
   testing.expectEqual('function', typeof document.close);
   testing.expectEqual('function', typeof document.write);
+  testing.expectEqual('function', typeof document.writeln);
 </script>
+
+<!-- Phase 4 Tests: document.writeln -->
+
+<script id=basic_writeln>
+  document.writeln('<p id="writeln_basic">Line</p>');
+  testing.expectEqual(true, true);
+</script>
+
+<script id=verify_writeln_basic>
+  const el = document.getElementById('writeln_basic');
+  testing.expectEqual('Line', el.textContent);
+  // writeln should append a newline after the written text; that newline
+  // becomes a text node sibling of the element.
+  const next = el.nextSibling;
+  testing.expectEqual(true, next !== null);
+  testing.expectEqual('#text', next.nodeName);
+  testing.expectEqual('\n', next.nodeValue);
+</script>
+
+<script id=writeln_multiple_args>
+  // writeln joins all arguments, then appends a single U+000A.
+  document.writeln('<span id="wln_a">A</span>', '<span id="wln_b">B</span>');
+  testing.expectEqual(true, true);
+</script>
+
+<script id=verify_writeln_multiple_args>
+  const a = document.getElementById('wln_a');
+  const b = document.getElementById('wln_b');
+  testing.expectEqual('A', a.textContent);
+  testing.expectEqual('B', b.textContent);
+  testing.expectEqual(b, a.nextElementSibling);
+</script>
+
 
 <!-- Phase 3 Tests: document.open/close (post-parsing with setTimeout) -->
 

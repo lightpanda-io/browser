@@ -621,6 +621,17 @@ fn looksLikeNewDocument(html: []const u8) bool {
 }
 
 pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
+    return self.writeInternal(text, false, page);
+}
+
+// https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#dom-document-writeln
+// `writeln(...text)` runs the document write steps with `text` followed by a
+// U+000A LINE FEED character.
+pub fn writeln(self: *Document, text: []const []const u8, page: *Page) !void {
+    return self.writeInternal(text, true, page);
+}
+
+fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool, page: *Page) !void {
     if (self._type == .xml) {
         return error.InvalidStateError;
     }
@@ -633,6 +644,9 @@ pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
         var joined: std.ArrayList(u8) = .empty;
         for (text) |str| {
             try joined.appendSlice(page.call_arena, str);
+        }
+        if (append_newline) {
+            try joined.append(page.call_arena, '\n');
         }
         break :blk joined.items;
     };
@@ -1052,6 +1066,7 @@ pub const JsApi = struct {
     pub const elementFromPoint = bridge.function(Document.elementFromPoint, .{});
     pub const elementsFromPoint = bridge.function(Document.elementsFromPoint, .{});
     pub const write = bridge.function(Document.write, .{ .dom_exception = true });
+    pub const writeln = bridge.function(Document.writeln, .{ .dom_exception = true });
     pub const open = bridge.function(Document.open, .{ .dom_exception = true });
     pub const close = bridge.function(Document.close, .{ .dom_exception = true });
     pub const doctype = bridge.accessor(Document.getDocType, null, .{});
