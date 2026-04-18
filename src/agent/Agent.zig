@@ -54,7 +54,10 @@ const self_heal_prompt_instructions =
     \\  contains the element you need — the selector just needs to be fixed.
     \\- Use the tree or interactiveElements tools WITHOUT a url parameter to inspect
     \\  the current page, find the correct selector, and execute the equivalent action.
-    \\- ONLY fix the failed command. Do NOT perform any additional actions beyond it.
+    \\- If the action is blocked by a popup, cookie banner, or surprise modal,
+    \\  handle it first (e.g., click "Accept") before executing the fixed command.
+    \\- ONLY fix the failed command and handle immediate blockers. STOP immediately
+    \\  once the intent of the original command is achieved.
     \\  The script will continue executing the remaining commands after the heal.
 ;
 
@@ -406,13 +409,14 @@ fn formatReplacement(arena: std.mem.Allocator, original_span: []const u8, raw_li
     if (cmds.len == 0) return null;
     var aw: std.Io.Writer.Allocating = .init(arena);
 
-    // Only take the first command — the original was a single command,
-    // so the replacement should be too. Extra commands from the LLM
-    // (e.g., clicking submit after fixing a selector) would break the
-    // script sequence since subsequent commands haven't been skipped.
+    // Emit every command from the heal turn, not just the first: a heal
+    // may need to dismiss a popup or modal before retrying the original
+    // action, and both steps must be preserved for replay.
     aw.writer.print("# [Auto-healed] Original: {s}\n", .{raw_line}) catch return null;
-    cmds[0].format(&aw.writer) catch return null;
-    aw.writer.writeAll("\n") catch return null;
+    for (cmds) |cmd| {
+        cmd.format(&aw.writer) catch return null;
+        aw.writer.writeAll("\n") catch return null;
+    }
 
     return .{
         .original_span = original_span,
@@ -819,5 +823,70 @@ test "applyReplacements: new_text longer and shorter than span" {
     try std.testing.expectEqualStrings(
         "X\na much longer replacement line\nY\n",
         out,
+    );
+}
+
+test "applyReplacements: single-line span replaced with multi-line content" {
+    const content = "GOTO https://x\nCLICK '#submit'\nWAIT '.thanks'\n";
+    const span_start = std.mem.indexOf(u8, content, "CLICK '#submit'\n").?;
+    const span = content[span_start .. span_start + "CLICK '#submit'\n".len];
+    const replacements = [_]Replacement{
+        .{
+            .original_span = span,
+            .new_text = "# [Auto-healed] Original: CLICK '#submit'\nCLICK '.cookie-accept'\nCLICK '#submit-v2'\n",
+        },
+    };
+    const out = try applyReplacements(std.testing.allocator, content, &replacements);
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings(
+        "GOTO https://x\n# [Auto-healed] Original: CLICK '#submit'\nCLICK '.cookie-accept'\nCLICK '#submit-v2'\nWAIT '.thanks'\n",
+        out,
+    );
+}
+
+test "formatReplacement: empty cmds returns null" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    try std.testing.expect(formatReplacement(arena.allocator(), "CLICK '#x'\n", "CLICK '#x'", &.{}) == null);
+}
+
+test "formatReplacement: single command produces one-line replacement" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const cmds = [_]Command.Command{.{ .click = "#submit-v2" }};
+    const replacement = formatReplacement(
+        arena.allocator(),
+        "CLICK '#submit'\n",
+        "CLICK '#submit'",
+        &cmds,
+    ).?;
+
+    try std.testing.expectEqualStrings("CLICK '#submit'\n", replacement.original_span);
+    try std.testing.expectEqualStrings(
+        "# [Auto-healed] Original: CLICK '#submit'\nCLICK '#submit-v2'\n",
+        replacement.new_text,
+    );
+}
+
+test "formatReplacement: multiple commands produce multi-line replacement" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const cmds = [_]Command.Command{
+        .{ .click = ".cookie-accept" },
+        .{ .click = "#submit-v2" },
+    };
+    const replacement = formatReplacement(
+        arena.allocator(),
+        "CLICK '#submit'\n",
+        "CLICK '#submit'",
+        &cmds,
+    ).?;
+
+    try std.testing.expectEqualStrings(
+        "# [Auto-healed] Original: CLICK '#submit'\nCLICK '.cookie-accept'\nCLICK '#submit-v2'\n",
+        replacement.new_text,
     );
 }
