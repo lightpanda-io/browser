@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("js.zig");
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
@@ -134,6 +136,7 @@ pub const Function = struct {
     static: bool,
     arity: usize,
     noop: bool = false,
+    wpt_only: bool = false,
     cache: ?Caller.Function.Opts.Caching = null,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
@@ -141,6 +144,7 @@ pub const Function = struct {
         return .{
             .cache = opts.cache,
             .static = opts.static,
+            .wpt_only = opts.wpt_only,
             .arity = getArity(@TypeOf(func)),
             .func = if (opts.noop) noopFunction else struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
@@ -172,6 +176,7 @@ pub const Function = struct {
 pub const Accessor = struct {
     static: bool = false,
     deletable: bool = true,
+    wpt_only: bool = false,
     cache: ?Caller.Function.Opts.Caching = null,
     getter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
     setter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
@@ -180,6 +185,7 @@ pub const Accessor = struct {
         var accessor = Accessor{
             .cache = opts.cache,
             .static = opts.static,
+            .wpt_only = opts.wpt_only,
             .deletable = opts.deletable,
         };
 
@@ -928,4 +934,10 @@ pub const WorkerJsApis = flattenTypes(&.{
 // Used by Env (class IDs, templates), JsApiLookup, and anywhere that needs
 // to know about all possible types. Individual snapshots use their own
 // subsets (PageJsApis, WorkerSnapshot.JsApis).
-pub const JsApis = PageJsApis ++ [_]type{@import("../webapi/WorkerGlobalScope.zig").JsApi};
+pub const JsApis = blk: {
+    const base = PageJsApis ++ [_]type{@import("../webapi/WorkerGlobalScope.zig").JsApi};
+    if (lp.build_config.wpt_extensions == false) {
+        break :blk base;
+    }
+    break :blk base ++ [_]type{@import("../webapi/WebDriver.zig").JsApi};
+};

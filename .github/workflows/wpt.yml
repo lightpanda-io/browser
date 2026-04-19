@@ -17,7 +17,7 @@ on:
 
 jobs:
   wpt-build-release:
-    name: zig build release
+    name: zig build -Dwpt_extensions release
 
     env:
       ARCH: aarch64

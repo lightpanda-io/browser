@@ -548,6 +548,7 @@ pub const Function = struct {
     pub const Opts = struct {
         noop: bool = false,
         static: bool = false,
+        wpt_only: bool = false,
         deletable: bool = true,
         dom_exception: bool = false,
         as_typed_array: bool = false,
