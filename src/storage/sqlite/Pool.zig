@@ -117,6 +117,11 @@ test "Sqlite: Pool" {
         // because the tests might be run on really slow hardware and we
         // want to avoid having a busy timeout.
         try conn.exec("pragma synchronous=off", .{});
+
+        // Also not safe, but we're trying to avoid busy timeouts without using
+        // WAL mode, which can trigger false positives in thread-sanitizer
+        try conn.exec("pragma journal_mode=memory", .{});
+
         try conn.exec("create table pool_test (cnt int not null)", .{});
         try conn.exec("insert into pool_test (cnt) values (0)", .{});
     }
