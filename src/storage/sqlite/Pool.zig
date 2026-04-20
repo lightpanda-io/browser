@@ -113,8 +113,6 @@ test "Sqlite: Pool" {
         const conn = try pool.acquire();
         defer pool.release(conn);
 
-        try conn.exec("pragma journal_mode=wal", .{});
-
         // This is not safe and can result in corruption. This is only set
         // because the tests might be run on really slow hardware and we
         // want to avoid having a busy timeout.
