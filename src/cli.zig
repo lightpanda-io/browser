@@ -440,7 +440,7 @@ pub fn Builder(comptime commands: anytype) type {
                                         @field(c, option.name) = @bitCast(@as(Int, std.math.maxInt(Int)));
                                     } else {
                                         // Parse given args.
-                                        var it = std.mem.splitScalar(u8, str, ',');
+                                        var it = std.mem.tokenizeScalar(u8, str, ',');
                                         outer: while (it.next()) |part| {
                                             const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
 
