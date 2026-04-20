@@ -17,8 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
-const String = @import("../../../string.zig").String;
+const lp = @import("lightpanda");
 
 const Node = @import("../Node.zig");
 const Page = @import("../../Page.zig");
@@ -26,6 +25,7 @@ const Page = @import("../../Page.zig");
 const Parser = @import("Parser.zig");
 pub const List = @import("List.zig");
 
+const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 pub fn parseLeaky(arena: Allocator, input: []const u8) !Parsed {

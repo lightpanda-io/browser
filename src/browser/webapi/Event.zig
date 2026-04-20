@@ -20,13 +20,13 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
-const EventTarget = @import("EventTarget.zig");
-const Node = @import("Node.zig");
-const String = @import("../../string.zig").String;
 
+const Node = @import("Node.zig");
+const EventTarget = @import("EventTarget.zig");
+
+const String = lp.String;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 

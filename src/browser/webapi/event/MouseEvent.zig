@@ -17,10 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const String = @import("../../../string.zig").String;
-const Page = @import("../../Page.zig");
-const Session = @import("../../Session.zig");
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
@@ -28,6 +28,7 @@ const EventTarget = @import("../EventTarget.zig");
 const UIEvent = @import("UIEvent.zig");
 const PointerEvent = @import("PointerEvent.zig");
 
+const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 const MouseEvent = @This();

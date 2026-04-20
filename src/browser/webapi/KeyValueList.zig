@@ -17,13 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
-const String = @import("../../string.zig").String;
+const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const h5e = @import("../parser/html5ever.zig");
 
+const String = lp.String;
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 

@@ -17,16 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
-const String = @import("../../../string.zig").String;
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
-const Factory = @import("../../Factory.zig");
 const Session = @import("../../Session.zig");
 
 const Event = @import("../Event.zig");
 const Window = @import("../Window.zig");
 
+const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 const MessageEvent = @This();
@@ -51,23 +50,23 @@ pub const Data = union(enum) {
 
 const Options = Event.inheritOptions(MessageEvent, MessageEventOptions);
 
-pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*MessageEvent {
-    const arena = try page.getArena(.small, "MessageEvent");
-    errdefer page.releaseArena(arena);
+pub fn init(typ: []const u8, opts_: ?Options, session: *Session) !*MessageEvent {
+    const arena = try session.getArena(.small, "MessageEvent");
+    errdefer session.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
-    return initWithTrusted(arena, type_string, opts_, false, page._factory);
+    return initWithTrusted(arena, type_string, opts_, false, session);
 }
 
 pub fn initTrusted(typ: String, opts_: ?Options, session: *Session) !*MessageEvent {
     const arena = try session.getArena(.small, "MessageEvent.trusted");
     errdefer session.releaseArena(arena);
-    return initWithTrusted(arena, typ, opts_, true, &session.factory);
+    return initWithTrusted(arena, typ, opts_, true, session);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, factory: *Factory) !*MessageEvent {
+fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, session: *Session) !*MessageEvent {
     const opts = opts_ orelse Options{};
 
-    const event = try factory.event(
+    const event = try session.factory.event(
         arena,
         typ,
         MessageEvent{

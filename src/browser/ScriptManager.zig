@@ -22,7 +22,6 @@ const builtin = @import("builtin");
 
 const HttpClient = @import("HttpClient.zig");
 const http = @import("../network/http.zig");
-const String = @import("../string.zig").String;
 
 const js = @import("js/js.zig");
 const URL = @import("URL.zig");
@@ -31,6 +30,7 @@ const Page = @import("Page.zig");
 const Element = @import("webapi/Element.zig");
 
 const log = lp.log;
+const String = lp.String;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
 

@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const String = @import("../../../../string.zig").String;
 
 const js = @import("../../../js/js.zig");
 const Page = @import("../../../Page.zig");
@@ -29,6 +28,7 @@ const HtmlElement = @import("../Html.zig");
 const CustomElementDefinition = @import("../../CustomElementDefinition.zig");
 
 const log = lp.log;
+const String = lp.String;
 
 const Custom = @This();
 _proto: *HtmlElement,

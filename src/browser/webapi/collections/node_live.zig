@@ -19,8 +19,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const String = @import("../../../string.zig").String;
-
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 
@@ -29,6 +27,8 @@ const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
 const Selector = @import("../selector/Selector.zig");
 const Form = @import("../element/html/Form.zig");
+
+const String = lp.String;
 
 const Mode = enum {
     tag,

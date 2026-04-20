@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const String = @import("../string.zig").String;
 
 const Page = @import("Page.zig");
 
@@ -35,6 +34,7 @@ const CSSStyleProperties = @import("webapi/css/CSSStyleProperties.zig");
 const CSSStyleProperty = @import("webapi/css/CSSStyleDeclaration.zig").Property;
 
 const log = lp.log;
+const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 pub const VisibilityCache = std.AutoHashMapUnmanaged(*Element, bool);

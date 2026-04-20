@@ -20,8 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const String = @import("../string.zig").String;
-
 const js = @import("js/js.zig");
 const Page = @import("Page.zig");
 const EventManagerBase = @import("EventManagerBase.zig");
@@ -32,6 +30,7 @@ const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
 
 const log = lp.log;
+const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 // Re-export types from EventManagerBase for API compatibility

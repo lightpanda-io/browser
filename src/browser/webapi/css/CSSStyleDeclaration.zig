@@ -19,8 +19,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const String = @import("../../../string.zig").String;
-
 const CssParser = @import("../../css/Parser.zig");
 
 const js = @import("../../js/js.zig");
@@ -28,6 +26,7 @@ const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 
 const log = lp.log;
+const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 const CSSStyleDeclaration = @This();

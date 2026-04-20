@@ -16,13 +16,15 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const String = @import("../../../string.zig").String;
-const Page = @import("../../Page.zig");
-const Session = @import("../../Session.zig");
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 
 const Event = @import("../Event.zig");
 const Window = @import("../Window.zig");
+
+const String = lp.String;
 
 const UIEvent = @This();
 
