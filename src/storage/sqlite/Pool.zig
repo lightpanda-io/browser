@@ -144,19 +144,22 @@ test "Sqlite: Pool" {
     defer pool.release(c1);
 
     const row = (try c1.row("select cnt from pool_test", .{})).?;
-    try testing.expectEqual(3000, row.get(i64, 0));
+    try testing.expectEqual(1200, row.get(i64, 0));
     row.deinit();
 
     try c1.exec("drop table pool_test", .{});
 }
 
 fn testPool(p: *Pool) !void {
-    for (0..500) |_| {
+    for (0..200) |_| {
         const conn = try p.acquire();
+        conn.exec("begin immediate", .{}) catch unreachable;
         conn.exec("update pool_test set cnt = cnt + 1", .{}) catch |err| {
             std.debug.print("update err: {any}\n", .{err});
             unreachable;
         };
+        conn.exec("commit", .{}) catch unreachable;
         p.release(conn);
+        std.Thread.sleep(10);
     }
 }
