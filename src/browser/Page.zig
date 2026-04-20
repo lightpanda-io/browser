@@ -17,18 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const JS = @import("js/js.zig");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const Allocator = std.mem.Allocator;
-
-const IS_DEBUG = builtin.mode == .Debug;
-
-const log = @import("../log.zig");
-
 const String = @import("../string.zig").String;
 
+const JS = @import("js/js.zig");
 const Mime = @import("Mime.zig");
 const Factory = @import("Factory.zig");
 const Session = @import("Session.zig");
@@ -70,9 +64,13 @@ const HttpClient = @import("HttpClient.zig");
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
-const IFrame = Element.Html.IFrame;
 const WebApiURL = @import("webapi/URL.zig");
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
+
+const log = lp.log;
+const IFrame = Element.Html.IFrame;
+const Allocator = std.mem.Allocator;
+const IS_DEBUG = builtin.mode == .Debug;
 
 var default_url = WebApiURL{ ._raw = "about:blank" };
 pub var default_location: Location = Location{ ._url = &default_url };

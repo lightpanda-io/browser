@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const log = @import("../log.zig");
 const App = @import("../App.zig");
 
 const js = @import("js/js.zig");
@@ -36,8 +35,9 @@ const Factory = @import("Factory.zig");
 const Notification = @import("../Notification.zig");
 const QueuedNavigation = Page.QueuedNavigation;
 
-const Allocator = std.mem.Allocator;
+const log = lp.log;
 const ArenaPool = App.ArenaPool;
+const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
 
 // You can create successively multiple pages for a session, but you must

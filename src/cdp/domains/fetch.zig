@@ -17,16 +17,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
-const id = @import("../id.zig");
-const CDP = @import("../CDP.zig");
-const log = @import("../../log.zig");
+const lp = @import("lightpanda");
 
 const HttpClient = @import("../../browser/HttpClient.zig");
 const http = @import("../../network/http.zig");
 const Notification = @import("../../Notification.zig");
 
+const id = @import("../id.zig");
+const CDP = @import("../CDP.zig");
+
 const network = @import("network.zig");
+
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 pub fn processMessage(cmd: *CDP.Command) !void {

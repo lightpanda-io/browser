@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const log = @import("../log.zig");
 const HttpClient = @import("HttpClient.zig");
 const http = @import("../network/http.zig");
 const String = @import("../string.zig").String;
@@ -31,8 +30,8 @@ const Page = @import("Page.zig");
 
 const Element = @import("webapi/Element.zig");
 
+const log = lp.log;
 const Allocator = std.mem.Allocator;
-
 const IS_DEBUG = builtin.mode == .Debug;
 
 const ScriptManager = @This();

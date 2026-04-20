@@ -21,15 +21,14 @@ const lp = @import("lightpanda");
 
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
-const log = @import("../../log.zig");
 const WebDriver = @import("../webapi/WebDriver.zig");
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 const v8 = js.v8;
+const log = lp.log;
 const JsApis = bridge.JsApis;
 const PageJsApis = bridge.PageJsApis;
 const WorkerJsApis = bridge.WorkerJsApis;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Snapshot = @This();
 

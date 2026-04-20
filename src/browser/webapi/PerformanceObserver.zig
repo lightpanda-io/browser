@@ -17,12 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const log = @import("../../log.zig");
-
 const Page = @import("../Page.zig");
 const Performance = @import("Performance.zig");
+
+const log = lp.log;
 
 pub fn registerTypes() []const type {
     return &.{ PerformanceObserver, EntryList };

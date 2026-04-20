@@ -17,12 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("js.zig");
+
 const v8 = js.v8;
-
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const TryCatch = @This();
 
@@ -121,7 +122,7 @@ pub const Caught = struct {
     exception: ?[]const u8 = null,
 
     pub fn format(self: Caught, writer: *std.Io.Writer) !void {
-        const separator = @import("../../log.zig").separator();
+        const separator = lp.log.separator();
         try writer.print("{s}exception: {?s}", .{ separator, self.exception });
         try writer.print("{s}stack: {?s}", .{ separator, self.stack });
         try writer.print("{s}line: {?d}", .{ separator, self.line });

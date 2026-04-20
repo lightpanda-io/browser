@@ -17,16 +17,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const String = @import("../../../../string.zig").String;
 
 const js = @import("../../../js/js.zig");
-const log = @import("../../../../log.zig");
 const Page = @import("../../../Page.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 const CustomElementDefinition = @import("../../CustomElementDefinition.zig");
+
+const log = lp.log;
 
 const Custom = @This();
 _proto: *HtmlElement,

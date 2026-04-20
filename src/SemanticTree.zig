@@ -17,11 +17,9 @@
 // along with this program.  See <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
 const lp = @import("lightpanda");
-const log = @import("log.zig");
+
 const isAllWhitespace = @import("string.zig").isAllWhitespace;
-const Page = lp.Page;
 const interactive = @import("browser/interactive.zig");
 
 const CData = @import("browser/webapi/CData.zig");
@@ -29,6 +27,9 @@ const Element = @import("browser/webapi/Element.zig");
 const Node = @import("browser/webapi/Node.zig");
 const AXNode = @import("cdp/AXNode.zig");
 const CDPNode = @import("cdp/Node.zig");
+
+const log = lp.log;
+const Page = lp.Page;
 
 const Self = @This();
 

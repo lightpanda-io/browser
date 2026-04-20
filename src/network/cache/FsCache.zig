@@ -17,9 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const log = @import("../../log.zig");
+const lp = @import("lightpanda");
+
 const Cache = @import("Cache.zig");
 const Http = @import("../http.zig");
+
+const log = lp.log;
 const CacheRequest = Cache.CacheRequest;
 const CachedMetadata = Cache.CachedMetadata;
 const CachedResponse = Cache.CachedResponse;

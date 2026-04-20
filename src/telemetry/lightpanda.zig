@@ -1,18 +1,19 @@
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
 const build_config = @import("build_config");
 
-const Allocator = std.mem.Allocator;
-
-const log = @import("../log.zig");
 const App = @import("../App.zig");
 const Config = @import("../Config.zig");
 const telemetry = @import("telemetry.zig");
 const Network = @import("../network/Network.zig");
 
-const URL = "https://telemetry.lightpanda.io";
+const log = lp.log;
+const Allocator = std.mem.Allocator;
+
 const BUFFER_SIZE = 1024;
 const MAX_BODY_SIZE = 500 * 1024; // 500KB server limit
+const URL = "https://telemetry.lightpanda.io";
 
 const LightPanda = @This();
 

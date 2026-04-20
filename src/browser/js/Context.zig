@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const log = @import("../../log.zig");
 
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
@@ -33,10 +32,9 @@ const ScriptManager = @import("../ScriptManager.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 
 const v8 = js.v8;
+const log = lp.log;
 const Caller = js.Caller;
-
 const Allocator = std.mem.Allocator;
-
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 // Loosely maps to a Browser Page or Worker.

@@ -17,13 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
-
-const log = @import("../../log.zig");
 const URL = @import("../../browser/URL.zig");
 const Cookie = @import("../../browser/webapi/storage/storage.zig").Cookie;
 
+const log = lp.log;
 const CookieJar = Cookie.Jar;
 pub const PreparedUri = Cookie.PreparedUri;
 

@@ -17,11 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+const lp = @import("lightpanda");
 
-const log = @import("../log.zig");
 const Page = @import("../browser/Page.zig");
 const DOMNode = @import("../browser/webapi/Node.zig");
+
+const log = lp.log;
+const Allocator = std.mem.Allocator;
 
 pub const Id = u32;
 

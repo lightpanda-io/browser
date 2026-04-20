@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+
+pub const log = @import("log.zig");
 pub const App = @import("App.zig");
 pub const Network = @import("network/Network.zig");
 pub const Server = @import("Server.zig");
@@ -28,7 +30,6 @@ pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
 pub const Notification = @import("Notification.zig");
 
-pub const log = @import("log.zig");
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
@@ -47,6 +48,7 @@ pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 
 pub const HttpClient = @import("browser/HttpClient.zig");
+
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const FetchOpts = struct {

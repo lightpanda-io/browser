@@ -17,8 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
-const log = @import("../../../log.zig");
+const lp = @import("lightpanda");
 const HttpClient = @import("../../HttpClient.zig");
 
 const js = @import("../../js/js.zig");
@@ -31,6 +30,7 @@ const Response = @import("Response.zig");
 const AbortSignal = @import("../AbortSignal.zig");
 const DOMException = @import("../DOMException.zig");
 
+const log = lp.log;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Fetch = @This();

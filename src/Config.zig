@@ -17,14 +17,16 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
-const Allocator = std.mem.Allocator;
 
-const log = @import("log.zig");
 const dump = @import("browser/dump.zig");
 
-const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
 const mcp = @import("mcp.zig");
+const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
+
+const log = lp.log;
+const Allocator = std.mem.Allocator;
 
 pub const RunMode = enum {
     help,

@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const log = @import("../../../log.zig");
 const URL = @import("../URL.zig");
 
 const js = @import("../../js/js.zig");
@@ -26,6 +25,8 @@ const Page = @import("../../Page.zig");
 
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
+
+const log = lp.log;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Navigation
 const Navigation = @This();
