@@ -1130,6 +1130,11 @@ test "Cookie: parse domain" {
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.lightpanda.com");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.example.com");
 
+    try expectError(error.InvalidDomain, "http://attackerexample.com/", "b;domain=example.com");
+    try expectError(error.InvalidDomain, "http://attackerexample.com/", "b;domain=.example.com");
+    try expectError(error.InvalidDomain, "http://xyzlightpanda.io/", "b;domain=lightpanda.io");
+    try expectError(error.InvalidDomain, "http://notlocalhost/", "b;domain=localhost");
+
     // Public suffixes should be rejected (test PSL entries: "gov.uk", "api.gov.uk")
     try expectError(error.InvalidDomain, "http://example.gov.uk/", "b;domain=gov.uk");
     try expectError(error.InvalidDomain, "http://example.gov.uk/", "b;domain=.gov.uk");
