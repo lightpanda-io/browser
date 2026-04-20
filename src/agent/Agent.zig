@@ -89,6 +89,7 @@ script_file: ?[]const u8,
 self_heal: bool,
 interactive: bool,
 one_shot_task: ?[]const u8,
+one_shot_attachments: ?[]const []const u8,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
     // `--task` is one-shot and bypasses both REPL and script replay.
@@ -171,6 +172,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .self_heal = opts.self_heal,
         .interactive = opts.interactive,
         .one_shot_task = opts.task,
+        .one_shot_attachments = opts.task_attachments,
     };
 
     self.cmd_executor = CommandExecutor.init(allocator, tool_executor, &self.terminal);
@@ -211,9 +213,15 @@ pub fn run(self: *Self) bool {
 /// info go to stderr via `std.debug.print`, so callers can capture stdout
 /// as the clean answer.
 fn runOneShot(self: *Self, task: []const u8) bool {
-    self.processUserMessage(task, "") catch |err| {
-        self.terminal.printErrorFmt("Request failed: {s}", .{@errorName(err)});
-        return false;
+    self.processUserMessage(task, "") catch |err| switch (err) {
+        error.UnsupportedAttachment, error.AttachmentReadFailed => {
+            // Already logged in buildUserMessageParts with detail.
+            return false;
+        },
+        else => {
+            self.terminal.printErrorFmt("Request failed: {s}", .{@errorName(err)});
+            return false;
+        },
     };
     return true;
 }
@@ -687,10 +695,25 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
 
     try self.ensureSystemPrompt();
 
-    try self.messages.append(self.allocator, .{
-        .role = .user,
-        .content = try ma.dupe(u8, user_input),
-    });
+    // First user turn of a one-shot run may bring attached files along.
+    // `ensureSystemPrompt` already appended the system message, so "first
+    // user turn" means `messages.items.len == 1`. Those attachments are
+    // wired into the message's rich `parts` (text + inline data).
+    const attachments: ?[]const []const u8 =
+        if (self.messages.items.len == 1) self.one_shot_attachments else null;
+
+    if (attachments) |paths| {
+        const parts = try buildUserMessageParts(self, ma, user_input, paths);
+        try self.messages.append(self.allocator, .{
+            .role = .user,
+            .parts = parts,
+        });
+    } else {
+        try self.messages.append(self.allocator, .{
+            .role = .user,
+            .content = try ma.dupe(u8, user_input),
+        });
+    }
 
     const provider_client = self.ai_client orelse return error.NoAiClient;
 
@@ -778,6 +801,65 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
     }
 
     self.pruneMessages();
+}
+
+/// Build a `parts`-based user message when `--task-attachment` was given.
+/// Text-ish files are inlined into the text prefix (surrounded by clear
+/// markers); binary files (image/audio/pdf) are base64-encoded and sent as
+/// provider inline-data parts. Unknown extensions error out so the caller
+/// fails loudly instead of silently dropping the attachment.
+fn buildUserMessageParts(
+    self: *Self,
+    ma: std.mem.Allocator,
+    user_input: []const u8,
+    paths: []const []const u8,
+) ![]const zenai.provider.ContentPart {
+    var text_prefix: std.ArrayList(u8) = .empty;
+    var inline_parts: std.ArrayList(zenai.provider.ContentPart) = .empty;
+
+    for (paths) |path| {
+        const mime = zenai.provider.inferInlineMimeType(path) orelse {
+            log.err(.app, "unsupported attachment", .{ .path = path });
+            self.terminal.printErrorFmt("unsupported attachment type: {s}", .{path});
+            return error.UnsupportedAttachment;
+        };
+
+        const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+            log.err(.app, "open attachment failed", .{ .path = path, .err = err });
+            self.terminal.printErrorFmt("could not open attachment: {s}", .{path});
+            return error.AttachmentReadFailed;
+        };
+        defer file.close();
+
+        if (std.mem.startsWith(u8, mime, "text/")) {
+            const bytes = file.readToEndAlloc(ma, 512 * 1024) catch |err| {
+                log.err(.app, "read attachment failed", .{ .path = path, .err = err });
+                return error.AttachmentReadFailed;
+            };
+            try text_prefix.writer(ma).print(
+                "[Attached file: {s}]\n{s}\n[End of attachment]\n\n",
+                .{ path, bytes },
+            );
+        } else {
+            const raw = file.readToEndAlloc(ma, 20 * 1024 * 1024) catch |err| {
+                log.err(.app, "read attachment failed", .{ .path = path, .err = err });
+                return error.AttachmentReadFailed;
+            };
+            const b64_len = std.base64.standard.Encoder.calcSize(raw.len);
+            const b64 = try ma.alloc(u8, b64_len);
+            _ = std.base64.standard.Encoder.encode(b64, raw);
+            try inline_parts.append(ma, .{ .image = .{
+                .data = b64,
+                .mime_type = try ma.dupe(u8, mime),
+            } });
+        }
+    }
+
+    var parts: std.ArrayList(zenai.provider.ContentPart) = .empty;
+    const combined = try std.fmt.allocPrint(ma, "{s}{s}", .{ text_prefix.items, user_input });
+    try parts.append(ma, .{ .text = combined });
+    for (inline_parts.items) |p| try parts.append(ma, p);
+    return parts.toOwnedSlice(ma);
 }
 
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) []const u8 {

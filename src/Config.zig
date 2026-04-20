@@ -261,6 +261,10 @@ pub const Agent = struct {
     self_heal: bool = false,
     interactive: bool = false,
     task: ?[]const u8 = null,
+    /// Local file paths attached to `--task`. Used only in one-shot mode.
+    /// Small text files are inlined as text; binary files (images, audio,
+    /// PDF) are sent as provider `inlineData` parts when supported.
+    task_attachments: ?[]const []const u8 = null,
 };
 
 pub const DumpFormat = enum {
@@ -1062,6 +1066,21 @@ fn parseAgentArgs(
                 return error.InvalidArgument;
             };
             result.task = try allocator.dupe(u8, str);
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--task-attachment", opt) or std.mem.eql(u8, "--task_attachment", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            const path = try allocator.dupe(u8, str);
+            const existing = result.task_attachments orelse &[_][]const u8{};
+            var list = try allocator.alloc([]const u8, existing.len + 1);
+            @memcpy(list[0..existing.len], existing);
+            list[existing.len] = path;
+            if (existing.len > 0) allocator.free(@as([]const []const u8, existing));
+            result.task_attachments = list;
             continue;
         }
 
