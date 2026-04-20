@@ -464,6 +464,9 @@ pub fn Builder(comptime commands: anytype) type {
                                                     continue :outer;
                                                 }
                                             }
+
+                                            // Not equal to any of the fields.
+                                            return error.UnknownArgument;
                                         }
                                     }
                                 },
