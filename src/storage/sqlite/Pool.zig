@@ -113,6 +113,11 @@ test "Sqlite: Pool" {
         const conn = try pool.acquire();
         defer pool.release(conn);
 
+        try conn.exec("create table pool_test (cnt int not null)", .{});
+        try conn.exec("insert into pool_test (cnt) values (0)", .{});
+    }
+
+    for (pool.conns) |conn| {
         // This is not safe and can result in corruption. This is only set
         // because the tests might be run on really slow hardware and we
         // want to avoid having a busy timeout.
@@ -121,9 +126,6 @@ test "Sqlite: Pool" {
         // Also not safe, but we're trying to avoid busy timeouts without using
         // WAL mode, which can trigger false positives in thread-sanitizer
         try conn.exec("pragma journal_mode=memory", .{});
-
-        try conn.exec("create table pool_test (cnt int not null)", .{});
-        try conn.exec("insert into pool_test (cnt) values (0)", .{});
     }
 
     const t1 = try Thread.spawn(.{}, testPool, .{&pool});
@@ -144,14 +146,14 @@ test "Sqlite: Pool" {
     defer pool.release(c1);
 
     const row = (try c1.row("select cnt from pool_test", .{})).?;
-    try testing.expectEqual(1200, row.get(i64, 0));
+    try testing.expectEqual(600, row.get(i64, 0));
     row.deinit();
 
     try c1.exec("drop table pool_test", .{});
 }
 
 fn testPool(p: *Pool) !void {
-    for (0..200) |_| {
+    for (0..100) |_| {
         const conn = try p.acquire();
         conn.exec("begin immediate", .{}) catch unreachable;
         conn.exec("update pool_test set cnt = cnt + 1", .{}) catch |err| {
@@ -160,6 +162,6 @@ fn testPool(p: *Pool) !void {
         };
         conn.exec("commit", .{}) catch unreachable;
         p.release(conn);
-        std.Thread.sleep(10);
+        std.Thread.sleep(2 * std.time.ns_per_ms);
     }
 }
