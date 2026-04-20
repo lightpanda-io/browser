@@ -180,11 +180,9 @@ pub fn Builder(comptime commands: anytype) type {
                             break :blk @as(*const anyopaque, @ptrCast(&@as(T, option.default)));
                         },
                         .bool => {
-                            if (has_default) {
-                                @compileError("booleans are always `false` by default");
-                            }
-                            // Booleans are always initalized false.
-                            break :blk @as(*const anyopaque, @ptrCast(&@as(T, false)));
+                            // Prefer `false` if no default.
+                            const default = if (has_default) option.default else false;
+                            break :blk @as(*const anyopaque, @ptrCast(&@as(T, default)));
                         },
                         inline else => {
                             if (!has_default) {
@@ -482,7 +480,15 @@ pub fn Builder(comptime commands: anytype) type {
                                         @compileError("multiple option is not supported for booleans");
                                     }
 
-                                    @field(c, option.name) = true;
+                                    const default = blk: {
+                                        if (@hasField(@TypeOf(option), "default")) {
+                                            break :blk option.default;
+                                        }
+                                        break :blk false;
+                                    };
+
+                                    // Set opposite of the default.
+                                    @field(c, option.name) = !default;
                                 },
 
                                 else => {},
