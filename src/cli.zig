@@ -26,13 +26,14 @@ const Allocator = std.mem.Allocator;
 /// ## Command descriptor fields
 ///
 ///   - `name: []const u8` — canonical command name on the command line.
-///   - `options: tuple` — tuple of option descriptors (see below). Use `.{}` for none.
-///   - `aliases: tuple` (optional) — alternative names for the command.
+///   - `options: tuple` — tuple of option descriptors (see below). Use `.{}`
+///     for none.
 ///   - `shared_options: tuple` (optional) — extra options merged into this
 ///     command. Useful for common flags shared across commands.
 ///   - `positional: struct` (optional) — a single positional argument with
 ///     `.name` and `.type`. Type must be an optional pointer-to-u8 slice
-///     (e.g. `?[:0]const u8`). Positionals can appear anywhere in argv.
+///     (e.g. `?[:0]const u8`). Positionals can appear anywhere in argv and
+///     must be provided; a missing positional returns `error.MissingArgument`.
 ///
 /// ## Option descriptor fields
 ///
@@ -41,38 +42,41 @@ const Allocator = std.mem.Allocator;
 ///   - `type` — the Zig type of the parsed value (see supported types below).
 ///   - `default` (optional) — compile-time default when the flag is absent.
 ///     Rules vary by type; see the defaults section below.
-///   - `shortcuts: tuple` (optional) — single-character short flags. Each
-///     shortcut is matched as `-X` on the command line.
 ///   - `multiple: bool` (optional) — when `true`, the field becomes a
-///     `std.ArrayList(type)` and each occurrence appends.
+///     `std.ArrayList(type)` and each occurrence appends. Not supported for
+///     `bool` or packed-struct options.
 ///   - `validator: fn` (optional) — custom parse function that replaces the
 ///     built-in type switch. See the validator section below.
 ///
 /// ## Supported types and their defaults
 ///
-///   - `bool` — presence sets `true`; always defaults to `false`.
-///     Specifying `default` is a compile error. `?bool` is not allowed.
+///   - `bool` — presence flips the field to the opposite of its `default`
+///     (so a flag with `default = true` acts as a disable switch). Defaults
+///     to `false` when no `default` is given. `?bool` is not allowed.
 ///   - Integers (`u8`, `u16`, `u31`, `usize`, etc.) — parsed with
 ///     `std.fmt.parseInt`. Requires `default` unless wrapped in `?`.
-///   - `[]const u8`, `[:0]const u8` (and mutable variants) — string slices,
+///   - `[]const u8`, `[:0]const u8` (and mutable variants) — string slices
 ///     duped from argv. Sentinel is preserved. Requires `default` unless `?`.
-///   - Enums — parsed via `std.meta.stringToEnum`. Requires `default` unless `?`.
+///   - Enums — parsed via `std.meta.stringToEnum`. Returns
+///     `error.UnknownArgument` on a bad value. Requires `default` unless `?`.
 ///   - Packed structs of `bool` fields — parsed from a comma-separated list
-///     (e.g. `--strip js,css`). The literal `"all"` sets every field.
-///     Requires `default`.
+///     (e.g. `--strip js,css`). The literal `"full"` sets every field.
+///     Unknown names return `error.UnknownArgument`. Requires `default`.
+///     `multiple` is not supported.
 ///   - Optional types default to `null` when `default` is omitted.
 ///
 /// ## Validators
 ///
 /// A `validator` is a custom parse function that takes over argument
-/// consumption for an option. The expected signature depends on whether
-/// `multiple` is set:
+/// consumption for an option. Its signature depends on whether `multiple`
+/// is set:
 ///
 ///   - Single: `fn (Allocator, *ArgIterator) !T` — returns the parsed value.
 ///   - Multiple: `fn (Allocator, *ArgIterator, *std.ArrayList(T)) !void` —
 ///     appends directly into the list.
 ///
 /// When a validator is present, the built-in type switch is skipped entirely.
+/// The validator owns advancing the iterator and is free to peek ahead.
 ///
 /// ## Example
 ///
@@ -93,10 +97,9 @@ const Allocator = std.mem.Allocator;
 /// const Cli = cli.Builder(.{
 ///     .{
 ///         .name = "serve",
-///         .aliases = .{"s"},
 ///         .options = .{
-///             .{ .name = "host", .shortcuts = .{"h"}, .type = []const u8, .default = "127.0.0.1" },
-///             .{ .name = "port", .shortcuts = .{"p"}, .type = u16, .default = 9222 },
+///             .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
+///             .{ .name = "port", .type = u16, .default = 9222 },
 ///         },
 ///         .shared_options = CommonOptions,
 ///     },
@@ -105,14 +108,14 @@ const Allocator = std.mem.Allocator;
 ///         .positional = .{ .name = "url", .type = ?[:0]const u8 },
 ///         .options = .{
 ///             .{ .name = "dump", .type = ?DumpFormat, .validator = dumpValidator },
-///             .{ .name = "strip", .type = StripMode, .default = .{} },
+///             .{ .name = "strip_mode", .type = StripMode, .default = .{} },
 ///             .{ .name = "wait_until", .type = ?WaitUntil },
 ///             .{ .name = "extra_header", .type = []const u8, .multiple = true },
 ///         },
 ///         .shared_options = CommonOptions,
 ///     },
 ///     .{ .name = "version", .options = .{} },
-///     .{ .name = "help", .aliases = .{ "h", "?" }, .options = .{} },
+///     .{ .name = "help", .options = .{} },
 /// });
 ///
 /// const _, const cmd = try Cli.parse(arena);
