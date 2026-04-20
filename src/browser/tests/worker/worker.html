@@ -172,6 +172,47 @@
   }
 </script>
 
+<script id="worker_webapi_net" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./api-worker.js');
+
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker api error: ' + data.err);
+      const r = data.results;
+
+      // Headers
+      testing.expectEqual('hello, world', r.headers_get);
+      testing.expectEqual(true, r.headers_has);
+      testing.expectEqual(false, r.headers_has_missing);
+
+      // FormData
+      testing.expectEqual('first', r.formdata_get);
+      testing.expectEqual(2, r.formdata_getall.length);
+      testing.expectEqual('first', r.formdata_getall[0]);
+      testing.expectEqual('second', r.formdata_getall[1]);
+
+      // Request
+      testing.expectEqual('https://example.com/path', r.request_url);
+      testing.expectEqual('POST', r.request_method);
+      testing.expectEqual('header', r.request_headers_custom);
+      testing.expectEqual('request body', r.request_body_text);
+
+      // Response
+      testing.expectEqual(201, r.response_status);
+      testing.expectEqual('Created', r.response_status_text);
+      testing.expectEqual(true, r.response_ok);
+      testing.expectEqual('text/plain', r.response_headers_content_type);
+      testing.expectEqual('response body', r.response_body_text);
+      testing.expectEqual('response body', r.response_clone_text);
+    });
+  }
+</script>
+
 <script id="worker_structured_clone_nested" type=module>
   {
     const state = await testing.async();

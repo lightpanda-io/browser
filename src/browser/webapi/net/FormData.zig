@@ -26,6 +26,7 @@ const Element = @import("../Element.zig");
 const KeyValueList = @import("../KeyValueList.zig");
 
 const log = lp.log;
+const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
 const FormData = @This();
@@ -33,21 +34,30 @@ const FormData = @This();
 _arena: Allocator,
 _list: KeyValueList,
 
-pub fn init(form: ?*Form, submitter: ?*Element, page: *Page) !*FormData {
-    const form_data = try page._factory.create(FormData{
-        ._arena = page.arena,
+pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormData {
+    const form = form_ orelse {
+        return try exec._factory.create(FormData{
+            ._arena = exec.arena,
+            ._list = KeyValueList.init(),
+        });
+    };
+
+    const page = switch (exec.context.global) {
+        .page => |p| p,
+        .worker => lp.assert(false, "FormData worker form", .{}),
+    };
+
+    const form_data = try exec._factory.create(FormData{
+        ._arena = exec.arena,
         ._list = try collectForm(page.arena, form, submitter, page),
     });
 
-    // Dispatch `formdata` event if form provided.
-    if (form) |_form| {
-        const form_data_event = try (@import("../event/FormDataEvent.zig")).initTrusted(
-            comptime .wrap("formdata"),
-            .{ .bubbles = true, .cancelable = false, .formData = form_data },
-            page,
-        );
-        try page._event_manager.dispatch(_form.asNode().asEventTarget(), form_data_event.asEvent());
-    }
+    const form_data_event = try (@import("../event/FormDataEvent.zig")).initTrusted(
+        comptime .wrap("formdata"),
+        .{ .bubbles = true, .cancelable = false, .formData = form_data },
+        page,
+    );
+    try page._event_manager.dispatch(form.asNode().asEventTarget(), form_data_event.asEvent());
 
     return form_data;
 }
@@ -56,8 +66,8 @@ pub fn get(self: *const FormData, name: []const u8) ?[]const u8 {
     return self._list.get(name);
 }
 
-pub fn getAll(self: *const FormData, name: []const u8, page: *Page) ![]const []const u8 {
-    return self._list.getAll(page.call_arena, name);
+pub fn getAll(self: *const FormData, name: []const u8, exec: *const Execution) ![]const []const u8 {
+    return self._list.getAll(exec.call_arena, name);
 }
 
 pub fn has(self: *const FormData, name: []const u8) bool {

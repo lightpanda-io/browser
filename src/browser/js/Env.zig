@@ -302,6 +302,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     context.execution = .{
         .url = &global.url,
         .buf = &global.buf,
+        .charset = &global.charset,
         .context = context,
         .arena = global.arena,
         .call_arena = params.call_arena,

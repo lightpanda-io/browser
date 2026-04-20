@@ -45,3 +45,11 @@ _scheduler: *Scheduler,
 
 // Pointer to the url field (Page or WorkerGlobalScope) - allows access to current url even after navigation
 url: *[:0]const u8,
+
+// Pointer to the charset field of the global (Page or WorkerGlobalScope).
+charset: *[]const u8,
+
+// Returns the current base URL of the global scope.
+pub fn base(self: *const Execution) [:0]const u8 {
+    return self.context.global.base();
+}
