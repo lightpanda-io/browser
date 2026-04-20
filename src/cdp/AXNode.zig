@@ -28,6 +28,10 @@ const Node = @import("Node.zig");
 
 const AXNode = @This();
 
+// Max bytes retained in the name-resolution scratch arena across resets.
+// Anything beyond is freed back to the backing allocator.
+const scratch_retain_limit = 64 * 1024;
+
 // Need a custom writer, because we can't just serialize the node as-is.
 // Sometimes we want to serializ the node without children, sometimes with just
 // its direct children, and sometimes the entire tree.
@@ -38,6 +42,7 @@ pub const Writer = struct {
     page: *Page,
     visibility_cache: *DOMNode.Element.VisibilityCache,
     label_index: *Label.LabelByForIndex,
+    temp_arena: std.mem.Allocator,
 
     pub const Opts = struct {};
 
@@ -494,7 +499,7 @@ pub const Writer = struct {
             try w.objectField("type");
             try w.write(@tagName(.computedString));
             try w.objectField("value");
-            const source = try axn.writeName(w, self.page, self.label_index);
+            const source = try axn.writeName(self.temp_arena, w, self.page, self.label_index);
             if (source) |s| {
                 try self.writeAXSource(s, w);
             }
@@ -810,7 +815,7 @@ pub fn getName(self: AXNode, page: *Page, allocator: std.mem.Allocator) !?[]cons
 
     const w: TextCaptureWriter = .{ .aw = &aw, .writer = &aw.writer };
 
-    const source = try self.writeName(w, page, null);
+    const source = try self.writeName(null, w, page, null);
     if (source != null) {
         // Remove literal quotes inserted by writeString.
         var raw_text = std.mem.trim(u8, aw.written(), "\"");
@@ -821,7 +826,15 @@ pub fn getName(self: AXNode, page: *Page, allocator: std.mem.Allocator) !?[]cons
     return null;
 }
 
-fn writeName(axnode: AXNode, w: anytype, page: *Page, label_index: ?*Label.LabelByForIndex) !?AXSource {
+fn writeName(
+    axnode: AXNode,
+    temp_arena: ?std.mem.Allocator,
+    w: anytype,
+    page: *Page,
+    label_index: ?*Label.LabelByForIndex,
+) !?AXSource {
+    defer if (temp_arena) |a| page._session.arena_pool.reset(a, scratch_retain_limit);
+
     const node = axnode.dom;
 
     return switch (node._type) {
@@ -849,7 +862,7 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page, label_index: ?*Label.Label
                 var it = std.mem.splitScalar(u8, labelledby, ' ');
                 var has_content = false;
 
-                var buf = std.Io.Writer.Allocating.init(page.call_arena);
+                var buf = std.Io.Writer.Allocating.init(scratchAllocator(temp_arena, page));
                 while (it.next()) |id| {
                     const trimmed_id = std.mem.trim(u8, id, &std.ascii.whitespace);
                     if (trimmed_id.len == 0) continue;
@@ -874,7 +887,7 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page, label_index: ?*Label.Label
             }
 
             if (isLabellableTag(el.getTag())) {
-                if (try writeLabelName(node, el, page, label_index, w)) |source| {
+                if (try writeLabelName(temp_arena, node, el, page, label_index, w)) |source| {
                     return source;
                 }
             }
@@ -917,7 +930,7 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page, label_index: ?*Label.Label
                 => {},
                 else => {
                     // write text content if exists.
-                    var buf: std.Io.Writer.Allocating = .init(page.call_arena);
+                    var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, page));
                     try writeAccessibleNameFallback(node, &buf.writer, page);
                     if (buf.written().len > 0) {
                         try writeString(buf.written(), w);
@@ -1003,6 +1016,7 @@ fn isLabellableTag(tag: DOMNode.Element.Tag) bool {
 }
 
 fn writeLabelName(
+    temp_arena: ?std.mem.Allocator,
     node: *DOMNode,
     el: *DOMNode.Element,
     page: *Page,
@@ -1017,26 +1031,38 @@ fn writeLabelName(
                 else
                     Label.findLabelByFor(doc.asNode(), id_value);
                 if (match) |label_el| {
-                    if (try writeLabelInnerText(label_el, page, w)) return .label_element;
+                    if (try writeLabelInnerText(temp_arena, label_el, page, w)) return .label_element;
                 }
             }
         }
     }
 
     if (Label.findWrappingLabel(el)) |wrap_label| {
-        if (try writeLabelInnerText(wrap_label, page, w)) return .label_wrap;
+        if (try writeLabelInnerText(temp_arena, wrap_label, page, w)) return .label_wrap;
     }
 
     return null;
 }
 
-fn writeLabelInnerText(label_el: *DOMNode.Element, page: *Page, w: anytype) !bool {
-    var buf: std.Io.Writer.Allocating = .init(page.call_arena);
+fn writeLabelInnerText(
+    temp_arena: ?std.mem.Allocator,
+    label_el: *DOMNode.Element,
+    page: *Page,
+    w: anytype,
+) !bool {
+    var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, page));
     try label_el.getInnerText(&buf.writer);
     const text = std.mem.trim(u8, buf.written(), &std.ascii.whitespace);
     if (text.len == 0) return false;
     try writeString(text, w);
     return true;
+}
+
+/// Allocator for throwaway name-resolution buffers: prefers the writer's
+/// temp arena so multiple calls reuse its retained page; falls back to
+/// `page.call_arena` on the non-Writer `getName` path.
+fn scratchAllocator(temp_arena: ?std.mem.Allocator, page: *Page) std.mem.Allocator {
+    return temp_arena orelse page.call_arena;
 }
 
 fn isHidden(elt: *DOMNode.Element, page: *Page, cache: *DOMNode.Element.VisibilityCache) bool {
@@ -1282,16 +1308,17 @@ test "AXNode: writer" {
     var doc = page.window._document;
 
     const node = try registry.register(doc.asNode());
-    // Cache inserts go through page.call_arena, so give the caches the same
-    // allocator and let the page arena clean them up.
     var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try page.getArena(.medium, "AXNode");
+    defer page.releaseArena(temp_arena);
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
         .root = node,
         .registry = &registry,
         .page = page,
         .visibility_cache = &visibility_cache,
         .label_index = &label_index,
+        .temp_arena = temp_arena,
     }, .{});
     defer testing.allocator.free(json);
 
@@ -1357,12 +1384,15 @@ test "AXNode: writer prunes hidden and resolves labels" {
     const node = try registry.register(doc.asNode());
     var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try page.getArena(.medium, "AXNode");
+    defer page.releaseArena(temp_arena);
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
         .root = node,
         .registry = &registry,
         .page = page,
         .visibility_cache = &visibility_cache,
         .label_index = &label_index,
+        .temp_arena = temp_arena,
     }, .{});
     defer testing.allocator.free(json);
 
