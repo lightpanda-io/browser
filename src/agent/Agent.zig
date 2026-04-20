@@ -725,10 +725,56 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
         }
     }
 
-    if (result.text) |text| {
-        self.terminal.printAssistant(text);
-    } else {
-        self.terminal.printInfo("(no response from model)");
+    printed: {
+        if (result.text) |text| {
+            self.terminal.printAssistant(text);
+            break :printed;
+        }
+
+        // The tool-use loop exhausted max_turns or returned an empty turn
+        // with no final text. Ask the model for a synthesis answer without
+        // letting it call more tools — using what it has gathered plus its
+        // own prior knowledge. This rescues benchmark tasks where the
+        // exploration was fine but the model never committed to a reply.
+        log.info(.app, "synthesizing final answer", .{});
+        try self.messages.append(self.allocator, .{
+            .role = .user,
+            .content = try ma.dupe(
+                u8,
+                "You have used your tool budget or cannot finish the exploration. " ++
+                    "Based on what you have already gathered (and your own prior knowledge as a fallback), " ++
+                    "give your best final answer NOW. Do not call any more tools. " ++
+                    "Respond with ONLY the answer — one word, one number, or one short phrase. " ++
+                    "No sentence, no explanation, no prose, no prefix, no markdown. " ++
+                    "If the answer is a name, output only the name. " ++
+                    "If the answer is a title, output only the title, complete and verbatim.",
+            ),
+        });
+
+        var synth = provider_client.runTools(
+            self.model,
+            &self.messages,
+            self.allocator,
+            ma,
+            .{ .context = @ptrCast(self), .callFn = &handleToolCall },
+            .{
+                .tools = self.tools,
+                .max_turns = 1,
+                .max_tokens = 4096,
+                .tool_choice = .none,
+            },
+        ) catch |err| {
+            log.err(.app, "AI synthesis error", .{ .err = err });
+            self.terminal.printInfo("(no response from model)");
+            break :printed;
+        };
+        defer synth.deinit();
+
+        if (synth.text) |text| {
+            self.terminal.printAssistant(text);
+        } else {
+            self.terminal.printInfo("(no response from model)");
+        }
     }
 
     self.pruneMessages();
