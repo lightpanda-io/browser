@@ -71,7 +71,7 @@
   }
 
   async function async(cb) {
-    const script_id = document.currentScript.id;
+    const script_id = (IS_TEST_RUNNER) ? document.currentScript.id : 'cannot track module id in FF/Chrome';
 
     if (cb == undefined) {
       let resolve = null

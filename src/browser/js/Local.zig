@@ -120,14 +120,14 @@ pub fn exec(self: *const Local, src: []const u8, name: ?[]const u8) !js.Value {
 /// https://v8.github.io/api/head/classv8_1_1ScriptCompiler.html#a3a15bb5a7dfc3f998e6ac789e6b4646a
 pub fn compileFunction(
     self: *const Local,
-    function_body: []const u8,
+    src: anytype,
     /// We tend to know how many params we'll pass; can remove the comptime if necessary.
     comptime parameter_names: []const []const u8,
     extensions: []const v8.Object,
 ) !js.Function {
     // TODO: Make configurable.
     const script_name = self.isolate.initStringHandle("anonymous");
-    const script_source = self.isolate.initStringHandle(function_body);
+    const script_source = if (@TypeOf(src) == js.String) src.handle else self.isolate.initStringHandle(src);
 
     var parameter_list: [parameter_names.len]*const v8.String = undefined;
     inline for (0..parameter_names.len) |i| {
@@ -742,6 +742,7 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
                 else => unreachable,
             };
         },
+        js.String => return js_val.isString(),
         string.String => {
             const js_str = js_val.isString() orelse return null;
             return try js_str.toSSO(false);

@@ -3,46 +3,47 @@
 <!-- Chrome don't scroll if the body isn't big enough. -->
 <body style=height:4000px;width:4000px></body>
 
-<script id=scroll_evt>
-  testing.async(async (restore) => {
+<script id=scroll_evt type=module>
+  {
+    const state = await testing.async();
+
     let scrollevt = 0;
     let scrollendevt = 0;
-    await new Promise((resolve) => {
-      document.addEventListener("scroll", (event) => {
-        scrollevt++;
-      });
-      document.addEventListener("scrollend", (event) => {
-        scrollendevt++;
-      });
-
-      window.scrollTo(10, 20);
-      testing.expectEqual(0, scrollevt);
-      testing.expectEqual(0, scrollendevt);
-
-      // scroll immediately: the scroll event must be throttled.
-      window.scrollTo(20, 40);
-      testing.expectEqual(0, scrollevt);
-      testing.expectEqual(0, scrollendevt);
-
-      // wait 10ms and scroll again: we should have a 2nd scroll, but no scrollend.
-      window.setTimeout(() => {
-        window.scrollTo(30, 40);
-      }, 10);
-
-      // wait until scrollend happens.
-      window.setTimeout(() => {
-        resolve();
-      }, 100);
+    document.addEventListener("scroll", (event) => {
+      scrollevt++;
+    });
+    document.addEventListener("scrollend", (event) => {
+      scrollendevt++;
     });
 
-    restore();
-    testing.expectEqual(2, scrollevt);
-    // This test used to assert that scrollendevt == 1. The idea being that
-    // the above resolve() would stop the test running after "scroll" fires but
-    // before "scrollend" fires. That timing is pretty sensitive/fragile. If
-    // the browser gets delayed and doesn't figure the scroll event exactly when
-    // schedule, it could easily execute in the same scheduler.run call as the
-    // scrollend.
-    testing.expectEqual(true, scrollendevt === 1 || scrollendevt === 2);
-  });
+    window.scrollTo(10, 20);
+    testing.expectEqual(0, scrollevt);
+    testing.expectEqual(0, scrollendevt);
+
+    // scroll immediately: the scroll event must be throttled.
+    window.scrollTo(20, 40);
+    testing.expectEqual(0, scrollevt);
+    testing.expectEqual(0, scrollendevt);
+
+    // wait 10ms and scroll again: we should have a 2nd scroll, but no scrollend.
+    window.setTimeout(() => {
+      window.scrollTo(30, 40);
+    }, 10);
+
+    // wait until scrollend happens.
+    window.setTimeout(() => {
+      state.resolve();
+    }, 100);
+
+    await state.done(() => {
+      testing.expectEqual(2, scrollevt);
+      // This test used to assert that scrollendevt == 1. The idea being that
+      // the above resolve() would stop the test running after "scroll" fires but
+      // before "scrollend" fires. That timing is pretty sensitive/fragile. If
+      // the browser gets delayed and doesn't figure the scroll event exactly when
+      // schedule, it could easily execute in the same scheduler.run call as the
+      // scrollend.
+      testing.expectEqual(true, scrollendevt === 1 || scrollendevt === 2);
+    });
+  }
 </script>

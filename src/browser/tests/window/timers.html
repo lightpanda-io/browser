@@ -51,3 +51,33 @@
   clearImmediate(-3);
   testing.expectEqual(true, true);
 </script>
+
+<script id=setTimeout-string-handler>
+  // Per HTML spec, TimerHandler = Function or DOMString. The string form
+  // is legacy but still required by the spec, and many sites (especially
+  // legacy or server-rendered pages) rely on it.
+  window.__st_string_ran = 0;
+  const st_id = window.setTimeout("window.__st_string_ran = 42;", 1);
+  testing.expectEqual('number', typeof st_id);
+  testing.onload(() => testing.expectEqual(42, window.__st_string_ran));
+</script>
+
+<script id=setInterval-string-handler>
+  window.__si_string_ran = 0;
+  const si_id = window.setInterval("window.__si_string_ran += 1;", 1);
+  testing.expectEqual('number', typeof si_id);
+  window.setTimeout(() => window.clearInterval(si_id), 5);
+  testing.onload(() => testing.expectEqual(true, window.__si_string_ran >= 1));
+</script>
+
+<script id=setTimeout-invalid-handler>
+  // Non-function, non-string handlers must throw a TypeError.
+  let threw = false;
+  try {
+    window.setTimeout(123, 1);
+  } catch (e) {
+    threw = true;
+  }
+  testing.expectEqual(true, threw);
+</script>
+

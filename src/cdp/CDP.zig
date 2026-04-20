@@ -526,7 +526,7 @@ pub const BrowserContext = struct {
         };
     }
 
-    pub fn axnodeWriter(self: *BrowserContext, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
+    pub fn axnodeWriter(self: *BrowserContext, temp_arena: Allocator, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
         const page = self.session.currentPage() orelse return error.PageNotLoaded;
         _ = opts;
         const cache = try page.call_arena.create(Element.VisibilityCache);
@@ -539,6 +539,7 @@ pub const BrowserContext = struct {
             .registry = &self.node_registry,
             .visibility_cache = cache,
             .label_index = label_index,
+            .temp_arena = temp_arena,
         };
     }
 
