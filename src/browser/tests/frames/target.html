@@ -7,9 +7,14 @@
   const state = await testing.async();
   $('#l1').click();
 
-  $('#frame1').onload = () => { state.resolve(); }
+  $('#frame1').onload = () => {
+    // awful! this test is flaky in CI. Not sure why. Let's see if this helps.
+    setTimeout(() => {
+      state.resolve();
+    }, 10);
+  }
 
-  state.done(() => {
+  await state.done(() => {
     testing.expectEqual('<html><head></head><body>a-page\n</body></html>', $('#frame1').contentDocument.documentElement.outerHTML);
   });
 </script>
