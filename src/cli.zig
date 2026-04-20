@@ -310,11 +310,7 @@ pub fn Builder(comptime commands: anytype) type {
             // Serve heuristics.
             inline for (.{
                 "--host",
-                "-h",
-                "-H",
                 "--port",
-                "-p",
-                "-P",
                 "--timeout",
             }) |heuristic| {
                 if (std.mem.eql(u8, cmd_str, heuristic)) {
