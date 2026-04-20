@@ -2,30 +2,32 @@
 <script src="../testing.js"></script>
 
 <script id=animation type=module>
-  const state = await testing.async();
+  {
+    const state = await testing.async();
 
-  let a1 = document.createElement('div').animate(null, null);
-  testing.expectEqual('idle', a1.playState);
+    let a1 = document.createElement('div').animate(null, null);
+    testing.expectEqual('idle', a1.playState);
 
-  let cb = [];
-  a1.finished.then((x) => {
-    cb.push(a1.playState);
-    cb.push(x == a1);
-    state.resolve();
-  });
+    let cb = [];
+    a1.finished.then((x) => {
+      cb.push(a1.playState);
+      cb.push(x == a1);
+      state.resolve();
+    });
 
-  a1.ready.then(() => {
-    cb.push(a1.playState);
-    a1.play();
-    cb.push(a1.playState);
-  });
+    a1.ready.then(() => {
+      cb.push(a1.playState);
+      a1.play();
+      cb.push(a1.playState);
+    });
 
-  await state.done(() => {
-    testing.expectEqual(['idle', 'running', 'finished', true], cb);
-  });
+    await state.done(() => {
+      testing.expectEqual(['idle', 'running', 'finished', true], cb);
+    });
+  }
 </script>
 
-<!-- <script id=startTime>
+<script id=startTime>
   let a2 = document.createElement('div').animate(null, null);
   // startTime defaults to null
   testing.expectEqual(null, a2.startTime);
@@ -37,41 +39,73 @@
   testing.expectEqual(null, a2.startTime);
 </script>
 
-<script id=onfinish>
-  let a3 = document.createElement('div').animate(null, null);
-  // onfinish defaults to null
-  testing.expectEqual(null, a3.onfinish);
+<script id=onfinish type=module>
+  {
+    const state = await testing.async();
+    let a3 = document.createElement('div').animate(null, null);
+    // onfinish defaults to null
+    testing.expectEqual(null, a3.onfinish);
 
-  let calls = [];
-  // onfinish callback should be scheduled and called asynchronously
-  a3.onfinish = function() { calls.push('finish'); };
-  a3.play();
-  testing.onload(() => testing.expectEqual(['finish'], calls));
+    let calls = [];
+    // onfinish callback should be scheduled and called asynchronously
+    a3.onfinish = function() {
+      calls.push('finish');
+      state.resolve();
+    };
+    a3.play();
+
+    await state.done(() => {
+      testing.expectEqual(['finish'], calls);
+    });
+  }
 </script>
 
-<script id=pause>
-  let a4 = document.createElement('div').animate(null, null);
-  let cb4 = [];
-  a4.finished.then((x) => { cb4.push(a4.playState) });
-  a4.ready.then(() => {
-    a4.play();
-    cb4.push(a4.playState)
-    a4.pause();
-    cb4.push(a4.playState)
-  });
-  testing.onload(() => testing.expectEqual(['running', 'paused'], cb4));
+<script id=pause type=module>
+  {
+    const state = await testing.async();
+
+    let a4 = document.createElement('div').animate(null, null);
+    let cb4 = [];
+    a4.finished.then((x) => {
+      cb4.push(a4.playState)
+      state.resolve();
+    });
+
+    a4.ready.then(() => {
+      a4.play();
+      cb4.push(a4.playState)
+      a4.pause();
+      cb4.push(a4.playState)
+      // should not called finished! Let's wait a bit to see
+      setTimeout(() => {
+        state.resolve();
+      }, 10)
+    });
+    await state.done(() => {
+      testing.expectEqual(['running', 'paused'], cb4);
+    });
+  }
 </script>
 
-<script id=finish>
-  let a5 = document.createElement('div').animate(null, null);
-  testing.expectEqual('idle', a5.playState);
+<script id=finish type=module>
+  {
+    const state = await testing.async();
+    let a5 = document.createElement('div').animate(null, null);
+    testing.expectEqual('idle', a5.playState);
 
-  let cb5 = [];
-  a5.finished.then((x) => { cb5.push(a5.playState) });
-  a5.ready.then(() => {
-    cb5.push(a5.playState);
-    a5.play();
-  });
-  testing.onload(() => testing.expectEqual(['idle', 'finished'], cb5));
+    let cb5 = [];
+    a5.finished.then((x) => {
+      cb5.push(a5.playState)
+      state.resolve();
+    });
+
+    a5.ready.then(() => {
+      cb5.push(a5.playState);
+      a5.play();
+    });
+
+    await state.done(() => {
+      testing.expectEqual(['idle', 'finished'], cb5)
+    });
+  }
 </script>
- -->
