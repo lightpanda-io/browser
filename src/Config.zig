@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const log = lp.log;
 const builtin = @import("builtin");
 
 const cli = @import("cli.zig");
@@ -27,7 +28,8 @@ const mcp = @import("mcp.zig");
 const Storage = @import("storage/Storage.zig");
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
 
-const log = lp.log;
+const Allocator = std.mem.Allocator;
+
 pub const CDP_MAX_HTTP_REQUEST_SIZE = 4096;
 
 // max message size
