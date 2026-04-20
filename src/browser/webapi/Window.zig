@@ -249,7 +249,12 @@ pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, pag
     return Fetch.init(input, options, page);
 }
 
-pub fn setTimeout(self: *Window, handler: js.Value.Temp, delay_ms: ?u32, params: []js.Value.Temp, page: *Page) !u32 {
+const LegacyHandler = union(enum) {
+    function: js.Function.Temp,
+    string: js.String,
+};
+
+pub fn setTimeout(self: *Window, handler: LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, page: *Page) !u32 {
     const cb = try resolveTimerHandler(handler, page);
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = false,
@@ -259,7 +264,7 @@ pub fn setTimeout(self: *Window, handler: js.Value.Temp, delay_ms: ?u32, params:
     }, page);
 }
 
-pub fn setInterval(self: *Window, handler: js.Value.Temp, delay_ms: ?u32, params: []js.Value.Temp, page: *Page) !u32 {
+pub fn setInterval(self: *Window, handler: LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, page: *Page) !u32 {
     const cb = try resolveTimerHandler(handler, page);
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = true,
@@ -274,22 +279,14 @@ pub fn setInterval(self: *Window, handler: js.Value.Temp, delay_ms: ?u32, params
 // TimerHandler = Function or DOMString. When a string is passed, it is
 // compiled into an anonymous function body, matching how legacy browsers
 // (and all current UAs) interpret `setTimeout("foo()", 100)`.
-fn resolveTimerHandler(handler: js.Value.Temp, page: *Page) !js.Function.Temp {
-    var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
-    defer ls.deinit();
-
-    const value = handler.local(&ls.local);
-    if (value.isFunction()) {
-        const js_func = js.Function{ .local = &ls.local, .handle = @ptrCast(value.handle) };
-        return try js_func.temp();
+fn resolveTimerHandler(handler: LegacyHandler, page: *Page) !js.Function.Temp {
+    switch (handler) {
+        .function => |fun| return fun,
+        .string => |str| {
+            const fun = try page.js.local.?.compileFunction(str, &.{}, &.{});
+            return fun.temp();
+        },
     }
-    if (value.isString()) |js_str| {
-        const body = try js_str.toSliceWithAlloc(page.call_arena);
-        const fun = try ls.local.compileFunction(body, &.{}, &.{});
-        return try fun.temp();
-    }
-    return error.InvalidArgument;
 }
 
 pub fn setImmediate(self: *Window, cb: js.Function.Temp, params: []js.Value.Temp, page: *Page) !u32 {
