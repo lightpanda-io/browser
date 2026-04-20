@@ -60,7 +60,7 @@ const Allocator = std.mem.Allocator;
 ///   - Enums — parsed via `std.meta.stringToEnum`. Returns
 ///     `error.UnknownArgument` on a bad value. Requires `default` unless `?`.
 ///   - Packed structs of `bool` fields — parsed from a comma-separated list
-///     (e.g. `--strip js,css`). The literal `"full"` sets every field.
+///     (e.g. `--strip-mode js,css`). The literal `"full"` sets every field.
 ///     Unknown names return `error.UnknownArgument`. Requires `default`.
 ///     `multiple` is not supported.
 ///   - Optional types default to `null` when `default` is omitted.
@@ -306,7 +306,8 @@ pub fn Builder(comptime commands: anytype) type {
             // Fetch heuristics.
             inline for (.{
                 "--dump",
-                "--strip",
+                "--strip-mode",
+                "--strip_mode",
                 "--with-base",
                 "--with_base",
                 "--with-frames",
