@@ -17,7 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const log = @import("../../../log.zig");
+const lp = @import("lightpanda");
+
 const String = @import("../../../string.zig").String;
 
 const CssParser = @import("../../css/Parser.zig");
@@ -26,6 +27,7 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 const CSSStyleDeclaration = @This();

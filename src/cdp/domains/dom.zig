@@ -17,16 +17,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 const Node = @import("../Node.zig");
 
-const log = @import("../../log.zig");
 const dump = @import("../../browser/dump.zig");
 const js = @import("../../browser/js/js.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
 const Selector = @import("../../browser/webapi/selector/Selector.zig");
 
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 pub fn processMessage(cmd: *CDP.Command) !void {

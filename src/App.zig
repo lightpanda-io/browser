@@ -17,10 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
-const Allocator = std.mem.Allocator;
-
-const log = @import("log.zig");
 const Config = @import("Config.zig");
 const Snapshot = @import("browser/js/Snapshot.zig");
 const Platform = @import("browser/js/Platform.zig");
@@ -28,6 +26,9 @@ const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 
 const Network = @import("network/Network.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
+
+const log = lp.log;
+const Allocator = std.mem.Allocator;
 
 const App = @This();
 

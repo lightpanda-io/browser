@@ -17,10 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
-const reflect = @import("reflect.zig");
 
-const log = @import("../log.zig");
+const reflect = @import("reflect.zig");
 const String = @import("../string.zig").String;
 
 const SlabAllocator = @import("../slab.zig").SlabAllocator;
@@ -37,10 +37,10 @@ const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.
 const Blob = @import("webapi/Blob.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 
-const Allocator = std.mem.Allocator;
-
-const IS_DEBUG = builtin.mode == .Debug;
+const log = lp.log;
 const assert = std.debug.assert;
+const Allocator = std.mem.Allocator;
+const IS_DEBUG = builtin.mode == .Debug;
 
 // Shared across all frames of a Page.
 const Factory = @This();

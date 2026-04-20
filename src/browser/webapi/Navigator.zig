@@ -17,9 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
-
-const log = @import("../../log.zig");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
@@ -27,6 +26,8 @@ const Page = @import("../Page.zig");
 const PluginArray = @import("PluginArray.zig");
 const Permissions = @import("Permissions.zig");
 const StorageManager = @import("StorageManager.zig");
+
+const log = lp.log;
 
 const Navigator = @This();
 _pad: bool = false,

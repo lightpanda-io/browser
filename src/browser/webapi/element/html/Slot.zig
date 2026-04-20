@@ -1,12 +1,13 @@
 const std = @import("std");
-
-const log = @import("../../../../log.zig");
+const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
 const Page = @import("../../../Page.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 const ShadowRoot = @import("../../ShadowRoot.zig");
+
+const log = lp.log;
 
 const Slot = @This();
 

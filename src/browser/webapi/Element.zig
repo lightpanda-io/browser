@@ -19,7 +19,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const log = @import("../../log.zig");
 const String = @import("../../string.zig").String;
 
 const js = @import("../js/js.zig");
@@ -41,6 +40,8 @@ pub const DOMRect = @import("DOMRect.zig");
 pub const Svg = @import("element/Svg.zig");
 pub const Html = @import("element/Html.zig");
 pub const Attribute = @import("element/Attribute.zig");
+
+const log = lp.log;
 
 const Element = @This();
 

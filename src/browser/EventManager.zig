@@ -17,9 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const log = @import("../log.zig");
 const String = @import("../string.zig").String;
 
 const js = @import("js/js.zig");
@@ -31,6 +31,7 @@ const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
 
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 // Re-export types from EventManagerBase for API compatibility

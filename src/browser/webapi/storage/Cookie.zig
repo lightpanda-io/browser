@@ -17,13 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
+const lp = @import("lightpanda");
 
 const URL = @import("../../URL.zig");
-const log = @import("../../../log.zig");
 const DateTime = @import("../../../datetime.zig").DateTime;
 const public_suffix_list = @import("../../../data/public_suffix_list.zig").lookup;
+
+const log = lp.log;
+const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 
 const Cookie = @This();
 

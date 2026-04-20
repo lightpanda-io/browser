@@ -19,13 +19,12 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const log = @import("log.zig");
 const Page = @import("browser/Page.zig");
 const Transfer = @import("browser/HttpClient.zig").Transfer;
 
-const Allocator = std.mem.Allocator;
-
+const log = lp.log;
 const List = std.DoublyLinkedList;
+const Allocator = std.mem.Allocator;
 
 // Allows code to register for and emit events.
 // Keeps two lists

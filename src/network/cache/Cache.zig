@@ -17,9 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const log = @import("../../log.zig");
+const lp = @import("lightpanda");
 const Http = @import("../http.zig");
 const FsCache = @import("FsCache.zig");
+
+const log = lp.log;
 
 /// A browser-wide cache for resources across the network.
 /// This mostly conforms to RFC9111 with regards to caching behavior.

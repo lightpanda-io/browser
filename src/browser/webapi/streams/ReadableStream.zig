@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const log = @import("../../../log.zig");
+const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
@@ -26,6 +26,7 @@ const ReadableStreamDefaultReader = @import("ReadableStreamDefaultReader.zig");
 const ReadableStreamDefaultController = @import("ReadableStreamDefaultController.zig");
 const WritableStream = @import("WritableStream.zig");
 
+const log = lp.log;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub fn registerTypes() []const type {

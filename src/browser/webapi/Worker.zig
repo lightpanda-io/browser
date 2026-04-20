@@ -17,9 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const log = @import("../../log.zig");
 const http = @import("../../network/http.zig");
 
 const URL = @import("../URL.zig");
@@ -33,6 +33,7 @@ const MessageEvent = @import("event/MessageEvent.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 
+const log = lp.log;
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;

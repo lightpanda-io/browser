@@ -1,8 +1,12 @@
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const protocol = @import("protocol.zig");
 const resources = @import("resources.zig");
 const Server = @import("Server.zig");
 const tools = @import("tools.zig");
+
+const log = lp.log;
 
 pub fn processRequests(server: *Server, reader: *std.io.Reader) !void {
     var arena: std.heap.ArenaAllocator = .init(server.allocator);
@@ -29,8 +33,6 @@ pub fn processRequests(server: *Server, reader: *std.io.Reader) !void {
         }
     }
 }
-
-const log = @import("../log.zig");
 
 const Method = enum {
     initialize,

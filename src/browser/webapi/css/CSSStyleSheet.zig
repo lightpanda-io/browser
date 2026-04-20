@@ -1,12 +1,17 @@
 const std = @import("std");
-const log = @import("../../../log.zig");
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Parser = @import("../../css/Parser.zig");
+
 const Element = @import("../Element.zig");
+
 const CSSRuleList = @import("CSSRuleList.zig");
 const CSSRule = @import("CSSRule.zig");
 const CSSStyleRule = @import("CSSStyleRule.zig");
-const Parser = @import("../../css/Parser.zig");
+
+const log = lp.log;
 
 const CSSStyleSheet = @This();
 

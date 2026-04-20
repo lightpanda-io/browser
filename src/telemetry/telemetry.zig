@@ -1,14 +1,14 @@
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const Allocator = std.mem.Allocator;
-
-const log = @import("../log.zig");
 const App = @import("../App.zig");
 const Config = @import("../Config.zig");
-
 const uuidv4 = @import("../id.zig").uuidv4;
+
+const log = lp.log;
 const IID_FILE = "iid";
+const Allocator = std.mem.Allocator;
 
 pub fn isDisabled() bool {
     if (builtin.mode == .Debug or builtin.is_test) {

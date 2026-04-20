@@ -17,13 +17,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const log = @import("../log.zig");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
+
+const log = lp.log;
 const net = std.net;
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
-const lp = @import("lightpanda");
 const Config = @import("../Config.zig");
 const libcurl = @import("../sys/libcurl.zig");
 

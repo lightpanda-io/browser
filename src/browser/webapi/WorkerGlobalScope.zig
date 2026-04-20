@@ -21,8 +21,7 @@
 // what's what...e.g what is a WebAPI call and what it called internally.
 
 const std = @import("std");
-
-const log = @import("../../log.zig");
+const lp = @import("lightpanda");
 
 const JS = @import("../js/js.zig");
 const Factory = @import("../Factory.zig");
@@ -39,6 +38,7 @@ const ErrorEvent = @import("event/ErrorEvent.zig");
 const builtin = @import("builtin");
 const IS_DEBUG = builtin.mode == .Debug;
 
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 const WorkerGlobalScope = @This();

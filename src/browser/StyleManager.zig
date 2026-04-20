@@ -17,8 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
-const log = @import("../log.zig");
+const lp = @import("lightpanda");
 const String = @import("../string.zig").String;
 
 const Page = @import("Page.zig");
@@ -35,6 +34,7 @@ const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CSSStyleProperties = @import("webapi/css/CSSStyleProperties.zig");
 const CSSStyleProperty = @import("webapi/css/CSSStyleDeclaration.zig").Property;
 
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 pub const VisibilityCache = std.AutoHashMapUnmanaged(*Element, bool);

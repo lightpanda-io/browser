@@ -23,10 +23,11 @@ const String = @import("../../string.zig").String;
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
+
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
-const log = @import("../../log.zig");
 
+const log = lp.log;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Allocator = std.mem.Allocator;

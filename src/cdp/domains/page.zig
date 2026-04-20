@@ -25,13 +25,13 @@ const screenshot_png = @embedFile("screenshot.png");
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 
-const log = @import("../../log.zig");
 const js = @import("../../browser/js/js.zig");
 const URL = @import("../../browser/URL.zig");
 const Page = @import("../../browser/Page.zig");
 const timestampF = @import("../../datetime.zig").timestamp;
 const Notification = @import("../../Notification.zig");
 
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 pub fn processMessage(cmd: *CDP.Command) !void {

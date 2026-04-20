@@ -17,10 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const js = @import("../js/js.zig");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const log = @import("../../log.zig");
+const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Console = @import("Console.zig");
 const History = @import("History.zig");
@@ -45,6 +45,7 @@ const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
 const Selection = @import("Selection.zig");
 
+const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
 
 const Allocator = std.mem.Allocator;

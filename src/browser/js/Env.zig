@@ -17,14 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const js = @import("js.zig");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const v8 = js.v8;
-
-const App = @import("../../App.zig");
-const log = @import("../../log.zig");
-
+const js = @import("js.zig");
 const bridge = @import("bridge.zig");
 const Context = @import("Context.zig");
 const Isolate = @import("Isolate.zig");
@@ -32,10 +28,13 @@ const Platform = @import("Platform.zig");
 const Snapshot = @import("Snapshot.zig");
 const Inspector = @import("Inspector.zig");
 
+const App = @import("../../App.zig");
 const Page = @import("../Page.zig");
 const Window = @import("../webapi/Window.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 
+const v8 = js.v8;
+const log = lp.log;
 const JsApis = bridge.JsApis;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;

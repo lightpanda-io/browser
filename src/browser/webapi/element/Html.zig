@@ -17,9 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const reflect = @import("../../reflect.zig");
-const log = @import("../../../log.zig");
 
 const global_event_handlers = @import("../global_event_handlers.zig");
 const GlobalEventHandler = global_event_handlers.Handler;
@@ -95,6 +95,7 @@ pub const Track = @import("html/Track.zig");
 pub const UL = @import("html/UL.zig");
 pub const Unknown = @import("html/Unknown.zig");
 
+const log = lp.log;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const HtmlElement = @This();
