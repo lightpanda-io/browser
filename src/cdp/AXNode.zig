@@ -42,7 +42,7 @@ pub const Writer = struct {
     page: *Page,
     visibility_cache: *DOMNode.Element.VisibilityCache,
     label_index: *Label.LabelByForIndex,
-    temp_arena: *std.heap.ArenaAllocator,
+    temp_arena: std.mem.Allocator,
 
     pub const Opts = struct {};
 
@@ -499,7 +499,7 @@ pub const Writer = struct {
             try w.objectField("type");
             try w.write(@tagName(.computedString));
             try w.objectField("value");
-            const source = try axn.writeName(w, self.page, self.label_index, self.temp_arena);
+            const source = try axn.writeName(self.temp_arena, w, self.page, self.label_index);
             if (source) |s| {
                 try self.writeAXSource(s, w);
             }
@@ -815,7 +815,7 @@ pub fn getName(self: AXNode, page: *Page, allocator: std.mem.Allocator) !?[]cons
 
     const w: TextCaptureWriter = .{ .aw = &aw, .writer = &aw.writer };
 
-    const source = try self.writeName(w, page, null, null);
+    const source = try self.writeName(null, w, page, null);
     if (source != null) {
         // Remove literal quotes inserted by writeString.
         var raw_text = std.mem.trim(u8, aw.written(), "\"");
@@ -828,12 +828,12 @@ pub fn getName(self: AXNode, page: *Page, allocator: std.mem.Allocator) !?[]cons
 
 fn writeName(
     axnode: AXNode,
+    temp_arena: ?std.mem.Allocator,
     w: anytype,
     page: *Page,
     label_index: ?*Label.LabelByForIndex,
-    temp_arena: ?*std.heap.ArenaAllocator,
 ) !?AXSource {
-    defer resetScratch(temp_arena);
+    defer if (temp_arena) |a| page._session.arena_pool.reset(a, scratch_retain_limit);
 
     const node = axnode.dom;
 
@@ -887,7 +887,7 @@ fn writeName(
             }
 
             if (isLabellableTag(el.getTag())) {
-                if (try writeLabelName(node, el, page, label_index, temp_arena, w)) |source| {
+                if (try writeLabelName(temp_arena, node, el, page, label_index, w)) |source| {
                     return source;
                 }
             }
@@ -1016,11 +1016,11 @@ fn isLabellableTag(tag: DOMNode.Element.Tag) bool {
 }
 
 fn writeLabelName(
+    temp_arena: ?std.mem.Allocator,
     node: *DOMNode,
     el: *DOMNode.Element,
     page: *Page,
     label_index: ?*Label.LabelByForIndex,
-    temp_arena: ?*std.heap.ArenaAllocator,
     w: anytype,
 ) !?AXSource {
     if (el.getAttributeSafe(comptime .wrap("id"))) |id_value| {
@@ -1031,23 +1031,23 @@ fn writeLabelName(
                 else
                     Label.findLabelByFor(doc.asNode(), id_value);
                 if (match) |label_el| {
-                    if (try writeLabelInnerText(label_el, page, temp_arena, w)) return .label_element;
+                    if (try writeLabelInnerText(temp_arena, label_el, page, w)) return .label_element;
                 }
             }
         }
     }
 
     if (Label.findWrappingLabel(el)) |wrap_label| {
-        if (try writeLabelInnerText(wrap_label, page, temp_arena, w)) return .label_wrap;
+        if (try writeLabelInnerText(temp_arena, wrap_label, page, w)) return .label_wrap;
     }
 
     return null;
 }
 
 fn writeLabelInnerText(
+    temp_arena: ?std.mem.Allocator,
     label_el: *DOMNode.Element,
     page: *Page,
-    temp_arena: ?*std.heap.ArenaAllocator,
     w: anytype,
 ) !bool {
     var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, page));
@@ -1061,14 +1061,8 @@ fn writeLabelInnerText(
 /// Allocator for throwaway name-resolution buffers: prefers the writer's
 /// temp arena so multiple calls reuse its retained page; falls back to
 /// `page.call_arena` on the non-Writer `getName` path.
-fn scratchAllocator(temp_arena: ?*std.heap.ArenaAllocator, page: *Page) std.mem.Allocator {
-    return if (temp_arena) |a| a.allocator() else page.call_arena;
-}
-
-fn resetScratch(temp_arena: ?*std.heap.ArenaAllocator) void {
-    if (temp_arena) |a| {
-        _ = a.reset(.{ .retain_with_limit = scratch_retain_limit });
-    }
+fn scratchAllocator(temp_arena: ?std.mem.Allocator, page: *Page) std.mem.Allocator {
+    return temp_arena orelse page.call_arena;
 }
 
 fn isHidden(elt: *DOMNode.Element, page: *Page, cache: *DOMNode.Element.VisibilityCache) bool {
@@ -1314,19 +1308,17 @@ test "AXNode: writer" {
     var doc = page.window._document;
 
     const node = try registry.register(doc.asNode());
-    // Cache inserts go through page.call_arena, so give the caches the same
-    // allocator and let the page arena clean them up.
     var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
-    var temp_arena = std.heap.ArenaAllocator.init(page.call_arena);
-    defer temp_arena.deinit();
+    const temp_arena = try page.getArena(.medium, "AXNode");
+    defer page.releaseArena(temp_arena);
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
         .root = node,
         .registry = &registry,
         .page = page,
         .visibility_cache = &visibility_cache,
         .label_index = &label_index,
-        .temp_arena = &temp_arena,
+        .temp_arena = temp_arena,
     }, .{});
     defer testing.allocator.free(json);
 
@@ -1392,15 +1384,15 @@ test "AXNode: writer prunes hidden and resolves labels" {
     const node = try registry.register(doc.asNode());
     var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
-    var temp_arena = std.heap.ArenaAllocator.init(page.call_arena);
-    defer temp_arena.deinit();
+    const temp_arena = try page.getArena(.medium, "AXNode");
+    defer page.releaseArena(temp_arena);
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
         .root = node,
         .registry = &registry,
         .page = page,
         .visibility_cache = &visibility_cache,
         .label_index = &label_index,
-        .temp_arena = &temp_arena,
+        .temp_arena = temp_arena,
     }, .{});
     defer testing.allocator.free(json);
 

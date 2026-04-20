@@ -526,15 +526,13 @@ pub const BrowserContext = struct {
         };
     }
 
-    pub fn axnodeWriter(self: *BrowserContext, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
+    pub fn axnodeWriter(self: *BrowserContext, temp_arena: Allocator, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
         const page = self.session.currentPage() orelse return error.PageNotLoaded;
         _ = opts;
         const cache = try page.call_arena.create(Element.VisibilityCache);
         cache.* = .empty;
         const label_index = try page.call_arena.create(Label.LabelByForIndex);
         label_index.* = .{};
-        const temp_arena = try page.call_arena.create(std.heap.ArenaAllocator);
-        temp_arena.* = std.heap.ArenaAllocator.init(page.call_arena);
         return .{
             .page = page,
             .root = root,

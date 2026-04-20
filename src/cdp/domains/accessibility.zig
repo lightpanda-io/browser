@@ -63,5 +63,8 @@ fn getFullAXTree(cmd: *CDP.Command) !void {
     const doc = page.window._document.asNode();
     const node = try bc.node_registry.register(doc);
 
-    return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(node, .{}) }, .{});
+    const temp_arena = try page.getArena(.medium, "AXNode");
+    defer page.releaseArena(temp_arena);
+
+    return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{}) }, .{});
 }
