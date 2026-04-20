@@ -17,11 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
-
-const log = @import("../../log.zig");
 const milliTimestamp = @import("../../datetime.zig").milliTimestamp;
 
+const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
 
 const Queue = std.PriorityQueue(Task, void, struct {

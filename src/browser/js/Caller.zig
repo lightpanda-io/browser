@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const log = @import("../../log.zig");
+const lp = @import("lightpanda");
 const string = @import("../../string.zig");
 
 const Page = @import("../Page.zig");
@@ -30,12 +30,13 @@ const Context = @import("Context.zig");
 const TaggedOpaque = @import("TaggedOpaque.zig");
 
 const v8 = js.v8;
+const log = lp.log;
 const ArenaAllocator = std.heap.ArenaAllocator;
-
 const CALL_ARENA_RETAIN = 1024 * 16;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Caller = @This();
+
 local: Local,
 prev_local: ?*const js.Local,
 prev_context: *Context,

@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 
-const log = @import("../../../log.zig");
 const HttpClient = @import("../../HttpClient.zig");
 const http = @import("../../../network/http.zig");
 
@@ -35,6 +34,7 @@ const Headers = @import("Headers.zig");
 const EventTarget = @import("../EventTarget.zig");
 const XMLHttpRequestEventTarget = @import("XMLHttpRequestEventTarget.zig");
 
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 

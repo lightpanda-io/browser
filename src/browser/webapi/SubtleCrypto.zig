@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const log = @import("../../log.zig");
 const crypto = @import("../../sys/libcrypto.zig");
 
 const Page = @import("../Page.zig");
@@ -29,6 +28,8 @@ const CryptoKey = @import("CryptoKey.zig");
 const algorithm = @import("crypto/algorithm.zig");
 const HMAC = @import("crypto/HMAC.zig");
 const X25519 = @import("crypto/X25519.zig");
+
+const log = lp.log;
 
 /// The SubtleCrypto interface of the Web Crypto API provides a number of low-level
 /// cryptographic functions.

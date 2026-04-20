@@ -19,11 +19,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const log = @import("../../log.zig");
-
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
-const Allocator = std.mem.Allocator;
 
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
@@ -31,6 +26,10 @@ const Session = @import("../Session.zig");
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
 const DOMRect = @import("DOMRect.zig");
+
+const log = lp.log;
+const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub fn registerTypes() []const type {
     return &.{

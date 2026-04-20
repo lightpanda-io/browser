@@ -17,15 +17,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
 
-const log = @import("../../../log.zig");
 const String = @import("../../../string.zig").String;
-const Allocator = std.mem.Allocator;
 
 const FormData = @import("FormData.zig");
 const KeyValueList = @import("../KeyValueList.zig");
+
+const log = lp.log;
 const Execution = js.Execution;
+const Allocator = std.mem.Allocator;
 
 const URLSearchParams = @This();
 

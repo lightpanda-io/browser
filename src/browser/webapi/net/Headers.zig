@@ -1,10 +1,13 @@
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
-const log = @import("../../../log.zig");
 
 const Page = @import("../../Page.zig");
 const KeyValueList = @import("../KeyValueList.zig");
 
+
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 const Headers = @This();

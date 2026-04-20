@@ -19,16 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const Allocator = std.mem.Allocator;
-const json = std.json;
-
-const Incrementing = @import("id.zig").Incrementing;
-
-const log = @import("../log.zig");
 const Notification = @import("../Notification.zig");
-
 const Client = @import("../Server.zig").Client;
-
 const js = @import("../browser/js/js.zig");
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
@@ -37,7 +29,12 @@ const Mime = @import("../browser/Mime.zig");
 const Element = @import("../browser/webapi/Element.zig");
 const Label = @import("../browser/webapi/element/html/Label.zig");
 
+const Incrementing = @import("id.zig").Incrementing;
 const InterceptState = @import("domains/fetch.zig").InterceptState;
+
+const log = lp.log;
+const json = std.json;
+const Allocator = std.mem.Allocator;
 
 pub const URL_BASE = "chrome://newtab/";
 

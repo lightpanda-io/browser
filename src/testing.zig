@@ -17,6 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 pub const allocator = std.testing.allocator;
@@ -473,7 +476,6 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Page {
     return page;
 }
 
-const log = @import("log.zig");
 const TestHTTPServer = @import("TestHTTPServer.zig");
 const TestWSServer = @import("TestWSServer.zig");
 

@@ -16,12 +16,14 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const js = @import("js.zig");
-const v8 = js.v8;
+const lp = @import("lightpanda");
 
-const log = @import("../../log.zig");
+const js = @import("js.zig");
 
 const DOMException = @import("../webapi/DOMException.zig");
+
+const v8 = js.v8;
+const log = lp.log;
 
 const PromiseResolver = @This();
 

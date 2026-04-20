@@ -18,11 +18,11 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const log = @import("../../../log.zig");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
 
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 const Animation = @This();

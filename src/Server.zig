@@ -18,17 +18,17 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const net = std.net;
-const posix = std.posix;
 
-const Allocator = std.mem.Allocator;
-
-const log = @import("log.zig");
 const App = @import("App.zig");
 const Config = @import("Config.zig");
 const CDP = @import("cdp/CDP.zig");
 const Net = @import("network/websocket.zig");
 const HttpClient = @import("browser/HttpClient.zig");
+
+const log = lp.log;
+const net = std.net;
+const posix = std.posix;
+const Allocator = std.mem.Allocator;
 
 const Server = @This();
 

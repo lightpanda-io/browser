@@ -19,8 +19,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const log = @import("../../log.zig");
-
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 
@@ -30,6 +28,8 @@ const Notification = @import("../../Notification.zig");
 const Mime = @import("../../browser/Mime.zig");
 
 const CdpStorage = @import("storage.zig");
+
+const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 pub fn processMessage(cmd: *CDP.Command) !void {

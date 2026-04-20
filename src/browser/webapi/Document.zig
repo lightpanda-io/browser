@@ -17,9 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const log = @import("../../log.zig");
-const String = @import("../../string.zig").String;
+const lp = @import("lightpanda");
 
+const String = @import("../../string.zig").String;
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const URL = @import("../URL.zig");
@@ -40,6 +40,7 @@ const Selection = @import("Selection.zig");
 pub const XMLDocument = @import("XMLDocument.zig");
 pub const HTMLDocument = @import("HTMLDocument.zig");
 
+const log = lp.log;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Document = @This();

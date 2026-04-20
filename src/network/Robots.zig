@@ -16,9 +16,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const builtin = @import("builtin");
 const std = @import("std");
-const log = @import("../log.zig");
+const lp = @import("lightpanda");
+const builtin = @import("builtin");
+
+const log = lp.log;
 
 pub const CompiledPattern = struct {
     pattern: []const u8,

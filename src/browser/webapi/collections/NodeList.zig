@@ -19,7 +19,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const log = @import("../../../log.zig");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
@@ -29,6 +28,8 @@ const ChildNodes = @import("ChildNodes.zig");
 const RadioNodeList = @import("RadioNodeList.zig");
 const SelectorList = @import("../selector/List.zig");
 const NodeLive = @import("node_live.zig").NodeLive;
+
+const log = lp.log;
 
 const NodeList = @This();
 

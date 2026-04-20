@@ -50,7 +50,7 @@ pub noinline fn crash(
                 writer.print("version: {s}\n", .{lp.build_config.version}) catch abort();
                 inline for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
                     writer.writeAll(f.name ++ ": ") catch break;
-                    @import("log.zig").writeValue(.pretty, @field(args, f.name), writer) catch abort();
+                    lp.log.writeValue(.pretty, @field(args, f.name), writer) catch abort();
                     writer.writeByte('\n') catch abort();
                 }
 
@@ -104,7 +104,7 @@ fn report(reason: []const u8, begin_addr: usize, args: anytype) !void {
         var writer: std.Io.Writer = .fixed(body_buffer[0..8191]); // reserve 1 space
         inline for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
             writer.writeAll(f.name ++ ": ") catch break;
-            @import("log.zig").writeValue(.pretty, @field(args, f.name), &writer) catch {};
+            lp.log.writeValue(.pretty, @field(args, f.name), &writer) catch {};
             writer.writeByte('\n') catch {};
         }
 
