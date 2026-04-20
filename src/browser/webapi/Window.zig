@@ -253,7 +253,13 @@ pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, pag
     return Fetch.init(input, options, page);
 }
 
-pub fn setTimeout(self: *Window, cb: js.Function.Temp, delay_ms: ?u32, params: []js.Value.Temp, page: *Page) !u32 {
+const LegacyHandler = union(enum) {
+    function: js.Function.Temp,
+    string: js.String,
+};
+
+pub fn setTimeout(self: *Window, handler: LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, page: *Page) !u32 {
+    const cb = try resolveTimerHandler(handler, page);
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = false,
         .params = params,
@@ -262,13 +268,29 @@ pub fn setTimeout(self: *Window, cb: js.Function.Temp, delay_ms: ?u32, params: [
     }, page);
 }
 
-pub fn setInterval(self: *Window, cb: js.Function.Temp, delay_ms: ?u32, params: []js.Value.Temp, page: *Page) !u32 {
+pub fn setInterval(self: *Window, handler: LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, page: *Page) !u32 {
+    const cb = try resolveTimerHandler(handler, page);
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = true,
         .params = params,
         .low_priority = false,
         .name = "window.setInterval",
     }, page);
+}
+
+// https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#dom-settimeout
+// https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#timerhandler
+// TimerHandler = Function or DOMString. When a string is passed, it is
+// compiled into an anonymous function body, matching how legacy browsers
+// (and all current UAs) interpret `setTimeout("foo()", 100)`.
+fn resolveTimerHandler(handler: LegacyHandler, page: *Page) !js.Function.Temp {
+    switch (handler) {
+        .function => |fun| return fun,
+        .string => |str| {
+            const fun = try page.js.local.?.compileFunction(str, &.{}, &.{});
+            return fun.temp();
+        },
+    }
 }
 
 pub fn setImmediate(self: *Window, cb: js.Function.Temp, params: []js.Value.Temp, page: *Page) !u32 {
