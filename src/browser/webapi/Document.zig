@@ -19,7 +19,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const String = @import("../../string.zig").String;
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const URL = @import("../URL.zig");
@@ -41,6 +40,7 @@ pub const XMLDocument = @import("XMLDocument.zig");
 pub const HTMLDocument = @import("HTMLDocument.zig");
 
 const log = lp.log;
+const String = lp.String;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Document = @This();
@@ -378,7 +378,7 @@ pub fn createEvent(_: *const Document, event_type: []const u8, page: *Page) !*@i
 
     if (std.mem.eql(u8, normalized, "messageevent")) {
         const MessageEvent = @import("event/MessageEvent.zig");
-        return (try MessageEvent.init("", null, page)).asEvent();
+        return (try MessageEvent.init("", null, page._session)).asEvent();
     }
 
     if (std.mem.eql(u8, normalized, "uievent") or std.mem.eql(u8, normalized, "uievents")) {

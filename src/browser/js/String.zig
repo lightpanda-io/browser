@@ -17,8 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("js.zig");
-const SSO = @import("../../string.zig").String;
 
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
@@ -54,13 +55,13 @@ fn _toSlice(self: String, comptime null_terminate: bool, allocator: Allocator) !
     return buf;
 }
 
-pub fn toSSO(self: String, comptime global: bool) !(if (global) SSO.Global else SSO) {
+pub fn toSSO(self: String, comptime global: bool) !(if (global) lp.String.Global else lp.String) {
     if (comptime global) {
         return .{ .str = try self.toSSOWithAlloc(self.local.ctx.session.page_arena) };
     }
     return self.toSSOWithAlloc(self.local.call_arena);
 }
-pub fn toSSOWithAlloc(self: String, allocator: Allocator) !SSO {
+pub fn toSSOWithAlloc(self: String, allocator: Allocator) !lp.String {
     const handle = self.handle;
     const isolate = self.local.isolate.handle;
 

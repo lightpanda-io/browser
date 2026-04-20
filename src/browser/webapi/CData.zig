@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const String = @import("../../string.zig").String;
+const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
@@ -27,6 +27,8 @@ pub const Text = @import("cdata/Text.zig");
 pub const Comment = @import("cdata/Comment.zig");
 pub const CDATASection = @import("cdata/CDATASection.zig");
 pub const ProcessingInstruction = @import("cdata/ProcessingInstruction.zig");
+
+const String = lp.String;
 
 const CData = @This();
 

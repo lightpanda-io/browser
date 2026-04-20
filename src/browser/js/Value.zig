@@ -17,8 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("js.zig");
-const SSO = @import("../../string.zig").String;
 
 const v8 = js.v8;
 
@@ -277,10 +278,10 @@ pub fn toString(self: Value) !js.String {
     return .{ .local = self.local, .handle = str_handle };
 }
 
-pub fn toSSO(self: Value, comptime global: bool) !(if (global) SSO.Global else SSO) {
+pub fn toSSO(self: Value, comptime global: bool) !(if (global) lp.String.Global else lp.String) {
     return (try self.toString()).toSSO(global);
 }
-pub fn toSSOWithAlloc(self: Value, allocator: Allocator) !SSO {
+pub fn toSSOWithAlloc(self: Value, allocator: Allocator) !lp.String {
     return (try self.toString()).toSSOWithAlloc(allocator);
 }
 
