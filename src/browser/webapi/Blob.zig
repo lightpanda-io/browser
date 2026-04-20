@@ -94,9 +94,9 @@ pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob 
 }
 
 /// Creates a new Blob from raw byte slices (for internal Zig use).
-pub fn initFromBytes(data: []const u8, content_type: []const u8, validate_mime: bool, page: *Page) !*Blob {
-    const arena = try page.getArena(.large, "Blob");
-    errdefer page.releaseArena(arena);
+pub fn initFromBytes(data: []const u8, content_type: []const u8, validate_mime: bool, session: *Session) !*Blob {
+    const arena = try session.getArena(.large, "Blob");
+    errdefer session.releaseArena(arena);
 
     const mime = try validateMimeType(arena, content_type, validate_mime);
 
@@ -291,7 +291,7 @@ pub fn slice(
     start_: ?i32,
     end_: ?i32,
     content_type_: ?[]const u8,
-    page: *Page,
+    session: *Session,
 ) !*Blob {
     const data = self._slice;
 
@@ -312,7 +312,7 @@ pub fn slice(
         break :blk @min(data.len, @max(start, @as(u31, @intCast(requested_end))));
     };
 
-    return Blob.initFromBytes(data[start..end], content_type_ orelse "", false, page);
+    return Blob.initFromBytes(data[start..end], content_type_ orelse "", false, session);
 }
 
 /// Returns the size of the Blob in bytes.

@@ -53,6 +53,8 @@ arena: Allocator,
 call_arena: Allocator,
 url: [:0]const u8,
 buf: [1024]u8 = undefined, // same size as page.buf
+// Document charset (matches Page.charset). Workers default to UTF-8.
+charset: []const u8 = "UTF-8",
 js: *JS.Context,
 
 // Reference back to the Worker object (for postMessage to page)
