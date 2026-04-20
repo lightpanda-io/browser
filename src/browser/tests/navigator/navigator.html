@@ -29,43 +29,53 @@
   testing.expectEqual(false, navigator.webdriver);
 </script>
 
-<script id=permission_query>
-    testing.async(async (restore) => {
-      const p = navigator.permissions.query({ name: 'notifications' });
-      testing.expectTrue(p instanceof Promise);
-      const status = await p;
-      restore();
+<script id=permission_query type=module>
+  {
+    const state = await testing.async();
+    const p = navigator.permissions.query({ name: 'notifications' });
+    testing.expectTrue(p instanceof Promise);
+    const status = await p;
+    state.resolve();
+
+    await state.done(() => {
       testing.expectEqual('prompt', status.state);
       testing.expectEqual('notifications', status.name);
-  });
+    });
+  }
 </script>
 
-<script id=storage_estimate>
-  testing.async(async (restore) => {
+<script id=storage_estimate type=module>
+  {
+    const state = await testing.async();
+
     const p = navigator.storage.estimate();
     testing.expectTrue(p instanceof Promise);
 
     const estimate = await p;
-    restore();
-    testing.expectEqual(0, estimate.usage);
-    testing.expectEqual(1024 * 1024 * 1024, estimate.quota);
-  });
+    state.resolve();
+
+    await state.done(() =>{
+      testing.expectEqual(0, estimate.usage);
+      testing.expectEqual(1024 * 1024 * 1024, estimate.quota);
+    });
+  }
 </script>
 
 <script id=deviceMemory>
   testing.expectEqual(8, navigator.deviceMemory);
 </script>
 
-<script id=getBattery>
-  testing.async(async (restore) => {
-    const p = navigator.getBattery();
+<script id=getBattery type=module>
+  {
+    const state = await testing.async();
     try {
-      await p;
-      testing.fail('getBattery should reject');
+      await navigator.getBattery();
+      state.resolve()
+      await state.done(() => { testing.fail('getBattery should reject'); });
     } catch (err) {
-      restore();
-      testing.expectEqual('NotSupportedError', err.name);
+      state.resolve()
+      await state.done(() => { testing.expectEqual('NotSupportedError', err.name); });
     }
-  });
+  }
 </script>
 
