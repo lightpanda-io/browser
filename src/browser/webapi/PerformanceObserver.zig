@@ -20,8 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig")
-;
+const Page = @import("../Page.zig");
 const Performance = @import("Performance.zig");
 
 const log = lp.log;

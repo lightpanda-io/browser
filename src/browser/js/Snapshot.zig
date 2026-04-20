@@ -23,7 +23,6 @@ const js = @import("js.zig");
 const bridge = @import("bridge.zig");
 const WebDriver = @import("../webapi/WebDriver.zig");
 
-
 const v8 = js.v8;
 const log = lp.log;
 const JsApis = bridge.JsApis;
