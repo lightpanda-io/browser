@@ -269,6 +269,13 @@ pub fn Builder(comptime commands: anytype) type {
 
             // Last resort, try sniffing.
             const command_enum = try sniffCommand(cmd_str);
+
+            // `help` takes no arguments; short-circuit so the sniffed flag
+            // isn't re-parsed as an unknown option.
+            if (command_enum == .help) {
+                return .{ exec_name, .{ .help = .{} } };
+            }
+
             // "cmd_str" wasn't a command but an option. We can't reset args, but
             // we can create a new one. Not great, but this fallback is temporary
             // as we transition to this command mode approach.
@@ -316,6 +323,11 @@ pub fn Builder(comptime commands: anytype) type {
                 if (std.mem.eql(u8, cmd_str, heuristic)) {
                     return .serve;
                 }
+            }
+
+            // Legacy `--help` flag maps to the `help` command.
+            if (std.mem.eql(u8, cmd_str, "--help")) {
+                return .help;
             }
 
             return error.UnknownCommand;
