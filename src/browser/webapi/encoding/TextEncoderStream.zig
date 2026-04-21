@@ -17,18 +17,19 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
 
 const ReadableStream = @import("../streams/ReadableStream.zig");
 const WritableStream = @import("../streams/WritableStream.zig");
 const TransformStream = @import("../streams/TransformStream.zig");
 
+const Execution = js.Execution;
+
 const TextEncoderStream = @This();
 
 _transform: *TransformStream,
 
-pub fn init(page: *Page) !TextEncoderStream {
-    const transform = try TransformStream.initWithZigTransform(&encodeTransform, page);
+pub fn init(exec: *const Execution) !TextEncoderStream {
+    const transform = try TransformStream.initWithZigTransform(&encodeTransform, exec);
     return .{
         ._transform = transform,
     };

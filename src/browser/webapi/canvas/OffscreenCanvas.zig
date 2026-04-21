@@ -72,7 +72,7 @@ pub fn getContext(_: *OffscreenCanvas, context_type: []const u8, page: *Page) !?
 /// Returns a Promise that resolves to a Blob containing the image.
 /// Since we have no actual rendering, this returns an empty blob.
 pub fn convertToBlob(_: *OffscreenCanvas, page: *Page) !js.Promise {
-    const blob = try Blob.init(null, null, page);
+    const blob = try Blob.init(null, null, page._session);
     return page.js.local.?.resolvePromise(blob);
 }
 

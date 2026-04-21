@@ -19,19 +19,20 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 
-const Page = @import("../../Page.zig");
 const ReadableStream = @import("ReadableStream.zig");
 const ReadableStreamDefaultController = @import("ReadableStreamDefaultController.zig");
 
+const Execution = js.Execution;
+
 const ReadableStreamDefaultReader = @This();
 
-_page: *Page,
 _stream: ?*ReadableStream,
+_execution: *const Execution,
 
-pub fn init(stream: *ReadableStream, page: *Page) !*ReadableStreamDefaultReader {
-    return page._factory.create(ReadableStreamDefaultReader{
+pub fn init(stream: *ReadableStream, exec: *const Execution) !*ReadableStreamDefaultReader {
+    return exec._factory.create(ReadableStreamDefaultReader{
         ._stream = stream,
-        ._page = page,
+        ._execution = exec,
     });
 }
 
@@ -56,14 +57,15 @@ pub const ReadResult = struct {
     };
 };
 
-pub fn read(self: *ReadableStreamDefaultReader, page: *Page) !js.Promise {
+pub fn read(self: *ReadableStreamDefaultReader, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
     const stream = self._stream orelse {
-        return page.js.local.?.rejectPromise(.{ .type_error = "Reader has been released" });
+        return local.rejectPromise(.{ .type_error = "Reader has been released" });
     };
 
     if (stream._state == .errored) {
         //const err = stream._stored_error orelse "Stream errored";
-        return page.js.local.?.rejectPromise(.{ .type_error = "Stream errored" });
+        return local.rejectPromise(.{ .type_error = "Stream errored" });
     }
 
     if (stream._controller.dequeue()) |chunk| {
@@ -71,7 +73,7 @@ pub fn read(self: *ReadableStreamDefaultReader, page: *Page) !js.Promise {
             .done = false,
             .value = .fromChunk(chunk),
         };
-        return page.js.local.?.resolvePromise(result);
+        return local.resolvePromise(result);
     }
 
     if (stream._state == .closed) {
@@ -79,11 +81,11 @@ pub fn read(self: *ReadableStreamDefaultReader, page: *Page) !js.Promise {
             .done = true,
             .value = .empty,
         };
-        return page.js.local.?.resolvePromise(result);
+        return local.resolvePromise(result);
     }
 
     // No data, but not closed. We need to queue the read for any future data
-    return stream._controller.addPendingRead(page);
+    return stream._controller.addPendingRead();
 }
 
 pub fn releaseLock(self: *ReadableStreamDefaultReader) void {
@@ -93,14 +95,14 @@ pub fn releaseLock(self: *ReadableStreamDefaultReader) void {
     }
 }
 
-pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?[]const u8, page: *Page) !js.Promise {
+pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?[]const u8, exec: *const Execution) !js.Promise {
     const stream = self._stream orelse {
-        return page.js.local.?.rejectPromise(.{ .type_error = "Reader has been released" });
+        return exec.context.local.?.rejectPromise(.{ .type_error = "Reader has been released" });
     };
 
     self.releaseLock();
 
-    return stream.cancel(reason_, page);
+    return stream.cancel(reason_, exec);
 }
 
 pub const JsApi = struct {

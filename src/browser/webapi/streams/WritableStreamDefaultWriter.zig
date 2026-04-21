@@ -17,45 +17,48 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
 const WritableStream = @import("WritableStream.zig");
+
+const Execution = js.Execution;
 
 const WritableStreamDefaultWriter = @This();
 
 _stream: ?*WritableStream,
 
-pub fn init(stream: *WritableStream, page: *Page) !*WritableStreamDefaultWriter {
-    return page._factory.create(WritableStreamDefaultWriter{
+pub fn init(stream: *WritableStream, exec: *const Execution) !*WritableStreamDefaultWriter {
+    return exec._factory.create(WritableStreamDefaultWriter{
         ._stream = stream,
     });
 }
 
-pub fn write(self: *WritableStreamDefaultWriter, chunk: js.Value, page: *Page) !js.Promise {
+pub fn write(self: *WritableStreamDefaultWriter, chunk: js.Value, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
     const stream = self._stream orelse {
-        return page.js.local.?.rejectPromise(.{ .type_error = "Writer has been released" });
+        return local.rejectPromise(.{ .type_error = "Writer has been released" });
     };
 
     if (stream._state != .writable) {
-        return page.js.local.?.rejectPromise(.{ .type_error = "Stream is not writable" });
+        return local.rejectPromise(.{ .type_error = "Stream is not writable" });
     }
 
-    try stream.writeChunk(chunk, page);
+    try stream.writeChunk(chunk, exec);
 
-    return page.js.local.?.resolvePromise(.{});
+    return local.resolvePromise(.{});
 }
 
-pub fn close(self: *WritableStreamDefaultWriter, page: *Page) !js.Promise {
+pub fn close(self: *WritableStreamDefaultWriter, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
     const stream = self._stream orelse {
-        return page.js.local.?.rejectPromise(.{ .type_error = "Writer has been released" });
+        return local.rejectPromise(.{ .type_error = "Writer has been released" });
     };
 
     if (stream._state != .writable) {
-        return page.js.local.?.rejectPromise(.{ .type_error = "Stream is not writable" });
+        return local.rejectPromise(.{ .type_error = "Stream is not writable" });
     }
 
-    try stream.closeStream(page);
+    try stream.closeStream(exec);
 
-    return page.js.local.?.resolvePromise(.{});
+    return local.resolvePromise(.{});
 }
 
 pub fn releaseLock(self: *WritableStreamDefaultWriter) void {
@@ -65,16 +68,17 @@ pub fn releaseLock(self: *WritableStreamDefaultWriter) void {
     }
 }
 
-pub fn getClosed(self: *WritableStreamDefaultWriter, page: *Page) !js.Promise {
+pub fn getClosed(self: *WritableStreamDefaultWriter, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
     const stream = self._stream orelse {
-        return page.js.local.?.rejectPromise(.{ .type_error = "Writer has been released" });
+        return local.rejectPromise(.{ .type_error = "Writer has been released" });
     };
 
     if (stream._state == .closed) {
-        return page.js.local.?.resolvePromise(.{});
+        return local.resolvePromise(.{});
     }
 
-    return page.js.local.?.resolvePromise(.{});
+    return local.resolvePromise(.{});
 }
 
 pub fn getDesiredSize(self: *const WritableStreamDefaultWriter) ?i32 {
@@ -86,9 +90,9 @@ pub fn getDesiredSize(self: *const WritableStreamDefaultWriter) ?i32 {
     };
 }
 
-pub fn getReady(self: *WritableStreamDefaultWriter, page: *Page) !js.Promise {
+pub fn getReady(self: *WritableStreamDefaultWriter, exec: *const Execution) !js.Promise {
     _ = self;
-    return page.js.local.?.resolvePromise(.{});
+    return exec.context.local.?.resolvePromise(.{});
 }
 
 pub const JsApi = struct {
