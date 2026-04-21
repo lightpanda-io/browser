@@ -321,7 +321,7 @@ pub fn findPageByLoaderId(self: *Session, loader_id: u32) ?*Page {
 
 fn findPageBy(page: *Page, comptime field: []const u8, id: u32) ?*Page {
     if (@field(page, field) == id) return page;
-    for (page.frames.items) |f| {
+    for (page.child_frames.items) |f| {
         if (findPageBy(f, field, id)) |found| {
             return found;
         }
@@ -433,10 +433,10 @@ fn processFrameNavigation(self: *Session, page: *Page, qn: *QueuedNavigation) !v
 
     try Page.init(page, frame_id, self, parent);
     errdefer {
-        for (parent.frames.items, 0..) |frame, i| {
+        for (parent.child_frames.items, 0..) |frame, i| {
             if (frame == page) {
-                parent.frames_sorted = false;
-                _ = parent.frames.swapRemove(i);
+                parent.child_frames_sorted = false;
+                _ = parent.child_frames.swapRemove(i);
                 break;
             }
         }

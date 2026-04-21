@@ -469,12 +469,12 @@ pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {
 
 pub fn getFrame(self: *Window, idx: usize) !?*Window {
     const page = self._page;
-    const frames = page.frames.items;
+    const frames = page.child_frames.items;
     if (idx >= frames.len) {
         return null;
     }
 
-    if (page.frames_sorted == false) {
+    if (page.child_frames_sorted == false) {
         std.mem.sort(*Page, frames, {}, struct {
             fn lessThan(_: void, a: *Page, b: *Page) bool {
                 const iframe_a = a.iframe orelse return false;
@@ -485,13 +485,13 @@ pub fn getFrame(self: *Window, idx: usize) !?*Window {
                 return (pos & 0x04) != 0; // FOLLOWING bit: b follows a
             }
         }.lessThan);
-        page.frames_sorted = true;
+        page.child_frames_sorted = true;
     }
     return frames[idx].window;
 }
 
 pub fn getFramesLength(self: *const Window) u32 {
-    return @intCast(self._page.frames.items.len);
+    return @intCast(self._page.child_frames.items.len);
 }
 
 pub fn getScrollX(self: *const Window) u32 {

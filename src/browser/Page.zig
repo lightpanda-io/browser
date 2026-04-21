@@ -232,8 +232,9 @@ parent: ?*Page,
 window: *Window,
 document: *Document,
 iframe: ?*IFrame = null,
-frames: std.ArrayList(*Page) = .{},
-frames_sorted: bool = true,
+
+child_frames_sorted: bool = true,
+child_frames: std.ArrayList(*Page) = .{},
 
 // Workers created by this page. Cleaned up when page is destroyed.
 workers: std.ArrayList(*Worker) = .{},
@@ -343,7 +344,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
 }
 
 pub fn deinit(self: *Page, abort_http: bool) void {
-    for (self.frames.items) |frame| {
+    for (self.child_frames.items) |frame| {
         frame.deinit(abort_http);
     }
 
@@ -1247,34 +1248,34 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
     };
 
     // window[N] is based on document order. For now we'll just append the frame
-    // at the end of our list and set frames_sorted == false. window.getFrame
+    // at the end of our list and set child_frames_sorted == false. window.getFrame
     // will check this flag to decide if it needs to sort the frames or not.
     // But, we can optimize this a bit. Since we expect frames to often be
     // added in document order, we can do a quick check to see whether the list
     // is sorted or not.
-    try self.frames.append(self.arena, page_frame);
+    try self.child_frames.append(self.arena, page_frame);
 
-    const frames_len = self.frames.items.len;
+    const frames_len = self.child_frames.items.len;
     if (frames_len == 1) {
         // this is the only frame, it must be sorted.
         return;
     }
 
-    if (self.frames_sorted == false) {
+    if (self.child_frames_sorted == false) {
         // the list already wasn't sorted, it still isn't
         return;
     }
 
     // So we added a frame into a sorted list. If this frame is sorted relative
     // to the last frame, it's still sorted
-    const iframe_a = self.frames.items[frames_len - 2].iframe.?;
-    const iframe_b = self.frames.items[frames_len - 1].iframe.?;
+    const iframe_a = self.child_frames.items[frames_len - 2].iframe.?;
+    const iframe_b = self.child_frames.items[frames_len - 1].iframe.?;
 
     if (iframe_a.asNode().compareDocumentPosition(iframe_b.asNode()) & 0x04 == 0) {
         // if b followed a, then & 0x04 = 0x04
         // but since we got 0, it means b does not follow a, and thus our list
         // is no longer sorted.
-        self.frames_sorted = false;
+        self.child_frames_sorted = false;
     }
 }
 
@@ -3410,15 +3411,15 @@ pub fn resolveTargetPage(self: *Page, target_name: []const u8) ?*Page {
 }
 
 fn findFrameByName(page: *Page, name: []const u8) ?*Page {
-    for (page.frames.items) |frame| {
-        if (frame.iframe) |iframe| {
+    for (page.child_frames.items) |f| {
+        if (f.iframe) |iframe| {
             const frame_name = iframe.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
             if (std.mem.eql(u8, frame_name, name)) {
-                return frame;
+                return f;
             }
         }
         // Recursively search child frames
-        if (findFrameByName(frame, name)) |found| {
+        if (findFrameByName(f, name)) |found| {
             return found;
         }
     }
