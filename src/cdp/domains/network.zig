@@ -277,8 +277,8 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
         .initiator = .{ .type = "other" },
         .redirectHasExtraInfo = false, // TODO change after adding Network.requestWillBeSentExtraInfo
         .hasUserGesture = false,
-        .timestamp = datetime(.monotonic),
-        .wallTime = datetime(.clock),
+        .timestamp = timestamp(.monotonic),
+        .wallTime = timestamp(.clock),
     }, .{ .session_id = session_id });
 }
 
