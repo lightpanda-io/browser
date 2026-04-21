@@ -262,8 +262,13 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
 
 fn isValidSessionId(self: *const CDP, input_session_id: []const u8) bool {
     const browser_context = &(self.browser_context orelse return false);
-    const session_id = browser_context.session_id orelse return false;
-    return std.mem.eql(u8, session_id, input_session_id);
+    if (browser_context.session_id) |sid| {
+        if (std.mem.eql(u8, sid, input_session_id)) return true;
+    }
+    if (browser_context.alt_session_id) |alt| {
+        if (std.mem.eql(u8, alt, input_session_id)) return true;
+    }
+    return false;
 }
 
 pub fn createBrowserContext(self: *CDP) ![]const u8 {
@@ -350,7 +355,19 @@ pub const BrowserContext = struct {
     // is all pretty straightforward, but it still needs to be enforced, i.e.
     // if we get a request with a sessionId that doesn't match the current one
     // we should reject it.
-    session_id: ?[]const u8,
+    // session_id_gen.next() reuses its internal buffer, so slices returned
+    // by it are only valid until the next call.  We copy into fixed buffers
+    // so that session IDs remain stable across multiple next() calls.
+    session_id: ?[]const u8 = null,
+    session_id_buf: [14]u8 = undefined,
+
+    // Additional session ID from explicit Target.attachToTarget calls.
+    alt_session_id: ?[]const u8 = null,
+    alt_session_id_buf: [14]u8 = undefined,
+
+    // Tracks which session to reply to for in-flight inspector commands.
+    // Set before callInspector, cleared after runMicrotasks.
+    inspector_reply_session: ?[]const u8 = null,
 
     security_origin: []const u8,
     page_life_cycle_events: bool,
@@ -720,13 +737,17 @@ pub const BrowserContext = struct {
         defer _ = self.cdp.notification_arena.reset(.{ .retain_with_limit = 1024 * 64 });
     }
 
-    pub fn callInspector(self: *const BrowserContext, msg: []const u8) void {
+    pub fn callInspector(self: *BrowserContext, msg: []const u8, reply_session_id: ?[]const u8) void {
+        self.inspector_reply_session = reply_session_id;
         self.inspector_session.send(msg);
         self.session.browser.env.runMicrotasks();
+        self.inspector_reply_session = null;
     }
 
     pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
-        sendInspectorMessage(@ptrCast(@alignCast(ctx)), msg) catch |err| {
+        const bc: *BrowserContext = @ptrCast(@alignCast(ctx));
+        const target_session = bc.inspector_reply_session orelse bc.session_id;
+        sendInspectorMessageTo(bc, msg, target_session) catch |err| {
             log.err(.cdp, "send inspector response", .{ .err = err });
         };
     }
@@ -752,7 +773,11 @@ pub const BrowserContext = struct {
     // session_id onto it. Second, we're much more client/websocket aware than
     // we should be.
     fn sendInspectorMessage(self: *BrowserContext, msg: []const u8) !void {
-        const session_id = self.session_id orelse {
+        return sendInspectorMessageTo(self, msg, self.session_id);
+    }
+
+    fn sendInspectorMessageTo(self: *BrowserContext, msg: []const u8, session_id: ?[]const u8) !void {
+        const sid = session_id orelse {
             // We no longer have an active session. What should we do
             // in this case?
             return;
@@ -765,7 +790,7 @@ pub const BrowserContext = struct {
 
         // + 1 for the closing quote after the session id
         // + 10 for the max websocket header
-        const message_len = msg.len + session_id.len + 1 + field.len + 10;
+        const message_len = msg.len + sid.len + 1 + field.len + 10;
 
         var buf: std.ArrayList(u8) = .{};
         buf.ensureTotalCapacity(allocator, message_len) catch |err| {
@@ -779,7 +804,7 @@ pub const BrowserContext = struct {
         // -1  because we dont' want the closing brace '}'
         buf.appendSliceAssumeCapacity(msg[0 .. msg.len - 1]);
         buf.appendSliceAssumeCapacity(field);
-        buf.appendSliceAssumeCapacity(session_id);
+        buf.appendSliceAssumeCapacity(sid);
         buf.appendSliceAssumeCapacity("\"}");
         if (comptime IS_DEBUG) {
             std.debug.assert(buf.items.len == message_len);
