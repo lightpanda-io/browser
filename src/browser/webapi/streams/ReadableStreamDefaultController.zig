@@ -20,12 +20,12 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
 
 const ReadableStream = @import("ReadableStream.zig");
 const ReadableStreamDefaultReader = @import("ReadableStreamDefaultReader.zig");
 
 const log = lp.log;
+const Execution = js.Execution;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const ReadableStreamDefaultController = @This();
@@ -45,26 +45,26 @@ pub const Chunk = union(enum) {
     }
 };
 
-_page: *Page,
 _stream: *ReadableStream,
+_execution: *const Execution,
 _arena: std.mem.Allocator,
 _queue: std.ArrayList(Chunk),
 _pending_reads: std.ArrayList(js.PromiseResolver.Global),
 _high_water_mark: u32,
 
-pub fn init(stream: *ReadableStream, high_water_mark: u32, page: *Page) !*ReadableStreamDefaultController {
-    return page._factory.create(ReadableStreamDefaultController{
-        ._page = page,
+pub fn init(stream: *ReadableStream, high_water_mark: u32, exec: *const Execution) !*ReadableStreamDefaultController {
+    return exec._factory.create(ReadableStreamDefaultController{
         ._queue = .empty,
         ._stream = stream,
-        ._arena = page.arena,
+        ._execution = exec,
+        ._arena = exec.arena,
         ._pending_reads = .empty,
         ._high_water_mark = high_water_mark,
     });
 }
 
-pub fn addPendingRead(self: *ReadableStreamDefaultController, page: *Page) !js.Promise {
-    const resolver = page.js.local.?.createPromiseResolver();
+pub fn addPendingRead(self: *ReadableStreamDefaultController) !js.Promise {
+    const resolver = self._execution.context.local.?.createPromiseResolver();
     try self._pending_reads.append(self._arena, try resolver.persist());
     return resolver.promise();
 }
@@ -74,8 +74,9 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
         return error.StreamNotReadable;
     }
 
+    const exec = self._execution;
     if (self._pending_reads.items.len == 0) {
-        const chunk_copy = try chunk.dupe(self._page.arena);
+        const chunk_copy = try chunk.dupe(self._arena);
         return self._queue.append(self._arena, chunk_copy);
     }
 
@@ -88,14 +89,14 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
     };
 
     if (comptime IS_DEBUG) {
-        if (self._page.js.local == null) {
-            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.enqueue", .url = self._page.url });
-            std.debug.assert(self._page.js.local != null);
+        if (exec.context.local == null) {
+            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.enqueue", .url = exec.url.* });
+            std.debug.assert(exec.context.local != null);
         }
     }
 
     var ls: js.Local.Scope = undefined;
-    self._page.js.localScope(&ls);
+    exec.context.localScope(&ls);
     defer ls.deinit();
 
     ls.toLocal(resolver).resolve("stream enqueue", result);
@@ -108,6 +109,7 @@ pub fn enqueueValue(self: *ReadableStreamDefaultController, value: js.Value) !vo
         return error.StreamNotReadable;
     }
 
+    const exec = self._execution;
     if (self._pending_reads.items.len == 0) {
         const persisted = try value.persist();
         try self._queue.append(self._arena, .{ .js_value = persisted });
@@ -122,14 +124,14 @@ pub fn enqueueValue(self: *ReadableStreamDefaultController, value: js.Value) !vo
     };
 
     if (comptime IS_DEBUG) {
-        if (self._page.js.local == null) {
-            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.enqueueValue", .url = self._page.url });
-            std.debug.assert(self._page.js.local != null);
+        if (exec.context.local == null) {
+            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.enqueueValue", .url = exec.url.* });
+            std.debug.assert(exec.context.local != null);
         }
     }
 
     var ls: js.Local.Scope = undefined;
-    self._page.js.localScope(&ls);
+    exec.context.localScope(&ls);
     defer ls.deinit();
 
     ls.toLocal(resolver).resolve("stream enqueue value", result);
@@ -148,16 +150,17 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
         .value = .empty,
     };
 
+    const exec = self._execution;
     if (comptime IS_DEBUG) {
-        if (self._page.js.local == null) {
-            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.close", .url = self._page.url });
-            std.debug.assert(self._page.js.local != null);
+        if (exec.context.local == null) {
+            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.close", .url = exec.url.* });
+            std.debug.assert(exec.context.local != null);
         }
     }
 
     for (self._pending_reads.items) |resolver| {
         var ls: js.Local.Scope = undefined;
-        self._page.js.localScope(&ls);
+        exec.context.localScope(&ls);
         defer ls.deinit();
         ls.toLocal(resolver).resolve("stream close", result);
     }
@@ -171,11 +174,11 @@ pub fn doError(self: *ReadableStreamDefaultController, err: []const u8) !void {
     }
 
     self._stream._state = .errored;
-    self._stream._stored_error = try self._page.arena.dupe(u8, err);
+    self._stream._stored_error = try self._arena.dupe(u8, err);
 
     // Reject all pending reads
     for (self._pending_reads.items) |resolver| {
-        self._page.js.toLocal(resolver).reject("stream error", err);
+        self._execution.context.toLocal(resolver).reject("stream error", err);
     }
     self._pending_reads.clearRetainingCapacity();
 }

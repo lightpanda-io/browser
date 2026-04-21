@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
 const HttpClient = @import("../../HttpClient.zig");
 
@@ -155,19 +154,12 @@ pub fn getBody(self: *Response, exec: *const Execution) !?*ReadableStream {
         .empty => null,
         .stream => |stream| stream,
         .bytes => |body| {
-            // ReadableStream creation currently requires a Page. Workers
-            // cannot produce stream bodies yet, so falling back to the page
-            // here is safe.
-            const page = switch (exec.context.global) {
-                .page => |p| p,
-                .worker => unreachable,
-            };
             if (body.len == 0) {
-                const stream = try ReadableStream.init(null, null, page);
+                const stream = try ReadableStream.init(null, null, exec);
                 try stream._controller.close();
                 return stream;
             }
-            return ReadableStream.initWithData(body, page);
+            return ReadableStream.initWithData(body, exec);
         },
     };
 }
@@ -204,16 +196,7 @@ pub fn arrayBuffer(self: *Response, exec: *const Execution) !js.Promise {
     return switch (self._body) {
         .bytes => |body| local.resolvePromise(js.ArrayBuffer{ .values = body }),
         .empty => local.resolvePromise(js.ArrayBuffer{ .values = "" }),
-        .stream => |stream| blk: {
-            // StreamConsumer currently requires a Page. Workers cannot
-            // produce stream bodies yet, so falling back to the page here
-            // is safe.
-            const page = switch (exec.context.global) {
-                .page => |p| p,
-                .worker => unreachable,
-            };
-            break :blk StreamConsumer.start(stream, page);
-        },
+        .stream => |stream| StreamConsumer.start(stream, exec),
     };
 }
 
@@ -221,27 +204,27 @@ pub fn arrayBuffer(self: *Response, exec: *const Execution) !js.Promise {
 const StreamConsumer = struct {
     const ReadableStreamDefaultReader = @import("../streams/ReadableStreamDefaultReader.zig");
 
-    page: *Page,
+    execution: *const Execution,
     total_len: usize,
     arena: Allocator,
     reader: *ReadableStreamDefaultReader,
     chunks: std.ArrayList([]const u8),
     resolver: js.PromiseResolver.Global,
 
-    fn start(stream: *ReadableStream, page: *Page) !js.Promise {
-        const local = page.js.local.?;
+    fn start(stream: *ReadableStream, exec: *const Execution) !js.Promise {
+        const local = exec.context.local.?;
         var resolver = local.createPromiseResolver();
         const promise = resolver.promise();
 
-        const reader = try stream.getReader(page);
+        const reader = try stream.getReader(exec);
 
-        const state = try page.arena.create(StreamConsumer);
+        const state = try exec.arena.create(StreamConsumer);
         state.* = .{
-            .page = page,
+            .execution = exec,
             .reader = reader,
             .chunks = .empty,
             .total_len = 0,
-            .arena = page.arena,
+            .arena = exec.arena,
             .resolver = try resolver.persist(),
         };
 
@@ -250,8 +233,8 @@ const StreamConsumer = struct {
     }
 
     fn pumpRead(self: *StreamConsumer) !void {
-        const local = self.page.js.local.?;
-        const read_promise = try self.reader.read(self.page);
+        const local = self.execution.context.local.?;
+        const read_promise = try self.reader.read(self.execution);
 
         const then_fn = local.newCallback(onReadFulfilled, self);
         const catch_fn = local.newCallback(onReadRejected, self);
@@ -267,25 +250,25 @@ const StreamConsumer = struct {
     };
 
     fn onReadFulfilled(self: *StreamConsumer, data_: ?ReadData) void {
-        const page = self.page;
+        const local = self.execution.context.local.?;
 
         const data = data_ orelse {
-            return self.finish(page.js.local.?, null);
+            return self.finish(local, null);
         };
 
         self._onReadFulfilled(data) catch {
-            self.finish(page.js.local.?, null);
+            self.finish(local, null);
         };
     }
 
     fn _onReadFulfilled(self: *StreamConsumer, data: ReadData) !void {
-        const page = self.page;
-        const local = page.js.local.?;
+        const exec = self.execution;
+        const local = exec.context.local.?;
 
         if (data.done) {
             // Stream is finished, concatenate all chunks and resolve
             self.reader.releaseLock();
-            const result = try self.concatenateChunks(page.call_arena);
+            const result = try self.concatenateChunks(exec.call_arena);
             local.toLocal(self.resolver).resolve("arrayBuffer complete", js.ArrayBuffer{ .values = result });
             return;
         }
@@ -311,7 +294,7 @@ const StreamConsumer = struct {
     }
 
     fn onReadRejected(self: *StreamConsumer) void {
-        self.finish(self.page.js.local.?, null);
+        self.finish(self.execution.context.local.?, null);
     }
 
     fn concatenateChunks(self: *StreamConsumer, allocator: Allocator) ![]const u8 {

@@ -20,12 +20,12 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
 
 const Mime = @import("../Mime.zig");
 
 const Writer = std.Io.Writer;
+const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
 /// https://w3c.github.io/FileAPI/#blob-section
@@ -61,9 +61,9 @@ const InitOptions = struct {
 
 /// Creates a new Blob from JS values with optional MIME validation.
 /// This is the JS Constructor
-pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob {
-    const arena = try page.getArena(.large, "Blob");
-    errdefer page.releaseArena(arena);
+pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, session: *Session) !*Blob {
+    const arena = try session.getArena(.large, "Blob");
+    errdefer session.releaseArena(arena);
 
     const opts: InitOptions = opts_ orelse .{};
     const mime = try validateMimeType(arena, opts.type, false);
@@ -259,29 +259,29 @@ fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: *Wri
 
 /// Returns a Promise that resolves with the contents of the blob
 /// as binary data contained in an ArrayBuffer.
-pub fn arrayBuffer(self: *const Blob, page: *Page) !js.Promise {
-    return page.js.local.?.resolvePromise(js.ArrayBuffer{ .values = self._slice });
+pub fn arrayBuffer(self: *const Blob, exec: *Execution) !js.Promise {
+    return exec.context.local.?.resolvePromise(js.ArrayBuffer{ .values = self._slice });
 }
 
 const ReadableStream = @import("streams/ReadableStream.zig");
 /// Returns a ReadableStream which upon reading returns the data
 /// contained within the Blob.
-pub fn stream(self: *const Blob, page: *Page) !*ReadableStream {
-    return ReadableStream.initWithData(self._slice, page);
+pub fn stream(self: *const Blob, exec: *Execution) !*ReadableStream {
+    return ReadableStream.initWithData(self._slice, exec);
 }
 
 /// Returns a Promise that resolves with a string containing
 /// the contents of the blob, interpreted as UTF-8.
-pub fn text(self: *const Blob, page: *Page) !js.Promise {
-    return page.js.local.?.resolvePromise(self._slice);
+pub fn text(self: *const Blob, exec: *Execution) !js.Promise {
+    return exec.context.local.?.resolvePromise(self._slice);
 }
 
 /// Extension to Blob; works on Firefox and Safari.
 /// https://developer.mozilla.org/en-US/docs/Web/API/Blob/bytes
 /// Returns a Promise that resolves with a Uint8Array containing
 /// the contents of the blob as an array of bytes.
-pub fn bytes(self: *const Blob, page: *Page) !js.Promise {
-    return page.js.local.?.resolvePromise(js.TypedArray(u8){ .values = self._slice });
+pub fn bytes(self: *const Blob, exec: *Execution) !js.Promise {
+    return exec.context.local.?.resolvePromise(js.TypedArray(u8){ .values = self._slice });
 }
 
 /// Returns a new Blob object which contains data

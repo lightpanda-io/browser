@@ -18,11 +18,12 @@
 
 const std = @import("std");
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
 
 const ReadableStream = @import("../streams/ReadableStream.zig");
 const WritableStream = @import("../streams/WritableStream.zig");
 const TransformStream = @import("../streams/TransformStream.zig");
+
+const Execution = js.Execution;
 
 const TextDecoderStream = @This();
 
@@ -41,7 +42,7 @@ const InitOpts = struct {
     ignoreBOM: bool = false,
 };
 
-pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !TextDecoderStream {
+pub fn init(label_: ?[]const u8, opts_: ?InitOpts, exec: *const Execution) !TextDecoderStream {
     if (label_) |label| {
         _ = std.meta.stringToEnum(Label, label) orelse return error.RangeError;
     }
@@ -63,7 +64,7 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !TextDecoderStre
         }
     };
 
-    const transform = try TransformStream.initWithZigTransform(decodeFn, page);
+    const transform = try TransformStream.initWithZigTransform(decodeFn, exec);
 
     return .{
         ._transform = transform,

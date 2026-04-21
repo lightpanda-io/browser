@@ -20,13 +20,13 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
 
 const ReadableStreamDefaultReader = @import("ReadableStreamDefaultReader.zig");
 const ReadableStreamDefaultController = @import("ReadableStreamDefaultController.zig");
 const WritableStream = @import("WritableStream.zig");
 
 const log = lp.log;
+const Execution = js.Execution;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub fn registerTypes() []const type {
@@ -44,8 +44,8 @@ pub const State = enum {
     errored,
 };
 
-_page: *Page,
 _state: State,
+_execution: *const Execution,
 _reader: ?*ReadableStreamDefaultReader,
 _controller: *ReadableStreamDefaultController,
 _stored_error: ?[]const u8,
@@ -66,18 +66,18 @@ const QueueingStrategy = struct {
     highWaterMark: u32 = 1,
 };
 
-pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, page: *Page) !*ReadableStream {
+pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, exec: *const Execution) !*ReadableStream {
     const strategy: QueueingStrategy = strategy_ orelse .{};
 
-    const self = try page._factory.create(ReadableStream{
-        ._page = page,
+    const self = try exec._factory.create(ReadableStream{
+        ._execution = exec,
         ._state = .readable,
         ._reader = null,
         ._controller = undefined,
         ._stored_error = null,
     });
 
-    self._controller = try ReadableStreamDefaultController.init(self, strategy.highWaterMark, page);
+    self._controller = try ReadableStreamDefaultController.init(self, strategy.highWaterMark, exec);
 
     if (src_) |src| {
         if (src.start) |start| {
@@ -99,8 +99,8 @@ pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, page: *Page) 
     return self;
 }
 
-pub fn initWithData(data: []const u8, page: *Page) !*ReadableStream {
-    const stream = try init(null, null, page);
+pub fn initWithData(data: []const u8, exec: *const Execution) !*ReadableStream {
+    const stream = try init(null, null, exec);
 
     // For Phase 1: immediately enqueue all data and close
     try stream._controller.enqueue(.{ .uint8array = .{ .values = data } });
@@ -109,12 +109,12 @@ pub fn initWithData(data: []const u8, page: *Page) !*ReadableStream {
     return stream;
 }
 
-pub fn getReader(self: *ReadableStream, page: *Page) !*ReadableStreamDefaultReader {
+pub fn getReader(self: *ReadableStream, exec: *const Execution) !*ReadableStreamDefaultReader {
     if (self.getLocked()) {
         return error.ReaderLocked;
     }
 
-    const reader = try ReadableStreamDefaultReader.init(self, page);
+    const reader = try ReadableStreamDefaultReader.init(self, exec);
     self._reader = reader;
     return reader;
 }
@@ -123,8 +123,8 @@ pub fn releaseReader(self: *ReadableStream) void {
     self._reader = null;
 }
 
-pub fn getAsyncIterator(self: *ReadableStream, page: *Page) !*AsyncIterator {
-    return AsyncIterator.init(self, page);
+pub fn getAsyncIterator(self: *ReadableStream, exec: *const Execution) !*AsyncIterator {
+    return AsyncIterator.init(self, exec);
 }
 
 pub fn getLocked(self: *const ReadableStream) bool {
@@ -143,10 +143,11 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
 
     self._pulling = true;
 
+    const exec = self._execution;
     if (comptime IS_DEBUG) {
-        if (self._page.js.local == null) {
-            log.fatal(.bug, "null context scope", .{ .src = "ReadableStream.callPullIfNeeded", .url = self._page.url });
-            std.debug.assert(self._page.js.local != null);
+        if (exec.context.local == null) {
+            log.fatal(.bug, "null context scope", .{ .src = "ReadableStream.callPullIfNeeded", .url = exec.url.* });
+            std.debug.assert(exec.context.local != null);
         }
     }
 
@@ -154,7 +155,7 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
         const func = self._pull_fn orelse return;
 
         var ls: js.Local.Scope = undefined;
-        self._page.js.localScope(&ls);
+        exec.context.localScope(&ls);
         defer ls.deinit();
 
         // Call the pull function
@@ -185,8 +186,8 @@ fn shouldCallPull(self: *const ReadableStream) bool {
     return desired_size > 0;
 }
 
-pub fn cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promise {
-    const local = page.js.local.?;
+pub fn cancel(self: *ReadableStream, reason: ?[]const u8, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
 
     if (self._state != .readable) {
         if (self._cancel) |c| {
@@ -241,63 +242,64 @@ const PipeTransform = struct {
     writable: *WritableStream,
     readable: *ReadableStream,
 };
-pub fn pipeThrough(self: *ReadableStream, transform: PipeTransform, page: *Page) !*ReadableStream {
+pub fn pipeThrough(self: *ReadableStream, transform: PipeTransform, exec: *const Execution) !*ReadableStream {
     if (self.getLocked()) {
         return error.ReaderLocked;
     }
 
     // Start async piping from this stream to the writable side
-    try PipeState.startPipe(self, transform.writable, null, page);
+    try PipeState.startPipe(self, transform.writable, null, exec);
 
     return transform.readable;
 }
 
 /// pipeTo(writable) — pipes this readable stream to a writable stream.
 /// Returns a promise that resolves when piping is complete.
-pub fn pipeTo(self: *ReadableStream, destination: *WritableStream, page: *Page) !js.Promise {
+pub fn pipeTo(self: *ReadableStream, destination: *WritableStream, exec: *const Execution) !js.Promise {
     if (self.getLocked()) {
-        return page.js.local.?.rejectPromise(.{ .type_error = "ReadableStream is locked" });
+        return exec.context.local.?.rejectPromise(.{ .type_error = "ReadableStream is locked" });
     }
 
-    const local = page.js.local.?;
+    const local = exec.context.local.?;
     var pipe_resolver = local.createPromiseResolver();
     const promise = pipe_resolver.promise();
     const persisted_resolver = try pipe_resolver.persist();
 
-    try PipeState.startPipe(self, destination, persisted_resolver, page);
+    try PipeState.startPipe(self, destination, persisted_resolver, exec);
 
     return promise;
 }
 
 /// State for an async pipe operation.
 const PipeState = struct {
+    execution: *const Execution,
     reader: *ReadableStreamDefaultReader,
     writable: *WritableStream,
-    context_id: usize,
     resolver: ?js.PromiseResolver.Global,
 
     fn startPipe(
         stream: *ReadableStream,
         writable: *WritableStream,
         resolver: ?js.PromiseResolver.Global,
-        page: *Page,
+        exec: *const Execution,
     ) !void {
-        const reader = try stream.getReader(page);
-        const state = try page.arena.create(PipeState);
+        const reader = try stream.getReader(exec);
+        const state = try exec.arena.create(PipeState);
         state.* = .{
+            .execution = exec,
             .reader = reader,
             .writable = writable,
-            .context_id = page.js.id,
             .resolver = resolver,
         };
-        try state.pumpRead(page);
+        try state.pumpRead();
     }
 
-    fn pumpRead(state: *PipeState, page: *Page) !void {
-        const local = page.js.local.?;
+    fn pumpRead(state: *PipeState) !void {
+        const exec = state.execution;
+        const local = exec.context.local.?;
 
         // Call reader.read() which returns a Promise
-        const read_promise = try state.reader.read(page);
+        const read_promise = try state.reader.read(exec);
 
         // Create JS callback functions for .then() and .catch()
         const then_fn = local.newCallback(onReadFulfilled, state);
@@ -312,15 +314,16 @@ const PipeState = struct {
         done: bool,
         value: js.Value,
     };
-    fn onReadFulfilled(self: *PipeState, data_: ?ReadData, page: *Page) void {
-        const local = page.js.local.?;
+    fn onReadFulfilled(self: *PipeState, data_: ?ReadData) void {
+        const exec = self.execution;
+        const local = exec.context.local.?;
         const data = data_ orelse {
             return self.finish(local);
         };
 
         if (data.done) {
             // Stream is finished, close the writable side
-            self.writable.closeStream(page) catch {};
+            self.writable.closeStream(exec) catch {};
             self.reader.releaseLock();
             if (self.resolver) |r| {
                 local.toLocal(r).resolve("pipeTo complete", {});
@@ -333,18 +336,18 @@ const PipeState = struct {
             return self.finish(local);
         }
 
-        self.writable.writeChunk(value, page) catch {
+        self.writable.writeChunk(value, exec) catch {
             return self.finish(local);
         };
 
         // Continue reading the next chunk
-        self.pumpRead(page) catch {
+        self.pumpRead() catch {
             self.finish(local);
         };
     }
 
-    fn onReadRejected(self: *PipeState, page: *Page) void {
-        self.finish(page.js.local.?);
+    fn onReadRejected(self: *PipeState) void {
+        self.finish(self.execution.context.local.?);
     }
 
     fn finish(self: *PipeState, local: *const js.Local) void {
@@ -383,21 +386,21 @@ pub const AsyncIterator = struct {
     _stream: *ReadableStream,
     _reader: *ReadableStreamDefaultReader,
 
-    pub fn init(stream: *ReadableStream, page: *Page) !*AsyncIterator {
-        const reader = try stream.getReader(page);
-        return page._factory.create(AsyncIterator{
+    pub fn init(stream: *ReadableStream, exec: *const Execution) !*AsyncIterator {
+        const reader = try stream.getReader(exec);
+        return exec._factory.create(AsyncIterator{
             ._reader = reader,
             ._stream = stream,
         });
     }
 
-    pub fn next(self: *AsyncIterator, page: *Page) !js.Promise {
-        return self._reader.read(page);
+    pub fn next(self: *AsyncIterator, exec: *const Execution) !js.Promise {
+        return self._reader.read(exec);
     }
 
-    pub fn @"return"(self: *AsyncIterator, page: *Page) !js.Promise {
+    pub fn @"return"(self: *AsyncIterator, exec: *const Execution) !js.Promise {
         self._reader.releaseLock();
-        return page.js.local.?.resolvePromise(.{ .done = true, .value = null });
+        return exec.context.local.?.resolvePromise(.{ .done = true, .value = null });
     }
 
     pub const JsApi = struct {

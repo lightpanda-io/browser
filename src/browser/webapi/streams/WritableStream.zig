@@ -17,11 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
 
 const WritableStreamDefaultWriter = @import("WritableStreamDefaultWriter.zig");
 const WritableStreamDefaultController = @import("WritableStreamDefaultController.zig");
 const TransformStream = @import("TransformStream.zig");
+
+const Execution = js.Execution;
 
 const WritableStream = @This();
 
@@ -47,8 +48,8 @@ const UnderlyingSink = struct {
     type: ?[]const u8 = null,
 };
 
-pub fn init(sink_: ?UnderlyingSink, page: *Page) !*WritableStream {
-    const self = try page._factory.create(WritableStream{
+pub fn init(sink_: ?UnderlyingSink, exec: *const Execution) !*WritableStream {
+    const self = try exec._factory.create(WritableStream{
         ._state = .writable,
         ._writer = null,
         ._controller = undefined,
@@ -58,7 +59,7 @@ pub fn init(sink_: ?UnderlyingSink, page: *Page) !*WritableStream {
         ._transform_stream = null,
     });
 
-    self._controller = try WritableStreamDefaultController.init(self, page);
+    self._controller = try WritableStreamDefaultController.init(self, exec);
 
     if (sink_) |sink| {
         if (sink.start) |start| {
@@ -71,8 +72,8 @@ pub fn init(sink_: ?UnderlyingSink, page: *Page) !*WritableStream {
     return self;
 }
 
-pub fn initForTransform(transform_stream: *TransformStream, page: *Page) !*WritableStream {
-    const self = try page._factory.create(WritableStream{
+pub fn initForTransform(transform_stream: *TransformStream, exec: *const Execution) !*WritableStream {
+    const self = try exec._factory.create(WritableStream{
         ._state = .writable,
         ._writer = null,
         ._controller = undefined,
@@ -82,16 +83,16 @@ pub fn initForTransform(transform_stream: *TransformStream, page: *Page) !*Writa
         ._transform_stream = transform_stream,
     });
 
-    self._controller = try WritableStreamDefaultController.init(self, page);
+    self._controller = try WritableStreamDefaultController.init(self, exec);
     return self;
 }
 
-pub fn getWriter(self: *WritableStream, page: *Page) !*WritableStreamDefaultWriter {
+pub fn getWriter(self: *WritableStream, exec: *const Execution) !*WritableStreamDefaultWriter {
     if (self.getLocked()) {
         return error.WriterLocked;
     }
 
-    const writer = try WritableStreamDefaultWriter.init(self, page);
+    const writer = try WritableStreamDefaultWriter.init(self, exec);
     self._writer = writer;
     return writer;
 }
@@ -100,35 +101,35 @@ pub fn getLocked(self: *const WritableStream) bool {
     return self._writer != null;
 }
 
-pub fn writeChunk(self: *WritableStream, chunk: js.Value, page: *Page) !void {
+pub fn writeChunk(self: *WritableStream, chunk: js.Value, exec: *const Execution) !void {
     if (self._state != .writable) return;
 
     if (self._transform_stream) |ts| {
-        try ts.transformWrite(chunk, page);
+        try ts.transformWrite(chunk, exec);
         return;
     }
 
     if (self._write_fn) |write_fn| {
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        exec.context.localScope(&ls);
         defer ls.deinit();
 
         try ls.toLocal(write_fn).call(void, .{ chunk, self._controller });
     }
 }
 
-pub fn closeStream(self: *WritableStream, page: *Page) !void {
+pub fn closeStream(self: *WritableStream, exec: *const Execution) !void {
     if (self._state != .writable) return;
     self._state = .closed;
 
     if (self._transform_stream) |ts| {
-        try ts.transformClose(page);
+        try ts.transformClose(exec);
         return;
     }
 
     if (self._close_fn) |close_fn| {
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        exec.context.localScope(&ls);
         defer ls.deinit();
 
         try ls.toLocal(close_fn).call(void, .{self._controller});
