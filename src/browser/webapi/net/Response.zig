@@ -18,15 +18,18 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const js = @import("../../js/js.zig");
-const HttpClient = @import("../../HttpClient.zig");
 
+const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
-const Headers = @import("Headers.zig");
-const ReadableStream = @import("../streams/ReadableStream.zig");
-const Blob = @import("../Blob.zig");
+const HttpClient = @import("../../HttpClient.zig");
 
+const Blob = @import("../Blob.zig");
+const ReadableStream = @import("../streams/ReadableStream.zig");
+
+const Headers = @import("Headers.zig");
+
+const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
 const Response = @This();
@@ -69,9 +72,10 @@ pub const BodyInit = union(enum) {
     js_val: js.Value,
 };
 
-pub fn init(body_: ?BodyInit, opts_: ?InitOpts, page: *Page) !*Response {
-    const arena = try page.getArena(.large, "Response");
-    errdefer page.releaseArena(arena);
+pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Response {
+    const session = exec.context.session;
+    const arena = try session.getArena(.large, "Response");
+    errdefer session.releaseArena(arena);
 
     const opts = opts_ orelse InitOpts{};
     const status_text = if (opts.statusText) |st| try arena.dupe(u8, st) else "";
@@ -101,7 +105,7 @@ pub fn init(body_: ?BodyInit, opts_: ?InitOpts, page: *Page) !*Response {
         ._body = body,
         ._type = .basic,
         ._is_redirected = false,
-        ._headers = try Headers.init(opts.headers, page),
+        ._headers = try Headers.init(opts.headers, exec),
     };
     return self;
 }
@@ -146,11 +150,18 @@ pub fn getType(self: *const Response) []const u8 {
     return @tagName(self._type);
 }
 
-pub fn getBody(self: *Response, page: *Page) !?*ReadableStream {
+pub fn getBody(self: *Response, exec: *const Execution) !?*ReadableStream {
     return switch (self._body) {
         .empty => null,
         .stream => |stream| stream,
         .bytes => |body| {
+            // ReadableStream creation currently requires a Page. Workers
+            // cannot produce stream bodies yet, so falling back to the page
+            // here is safe.
+            const page = switch (exec.context.global) {
+                .page => |p| p,
+                .worker => unreachable,
+            };
             if (body.len == 0) {
                 const stream = try ReadableStream.init(null, null, page);
                 try stream._controller.close();
@@ -165,17 +176,18 @@ pub fn isOK(self: *const Response) bool {
     return self._status >= 200 and self._status <= 299;
 }
 
-pub fn getText(self: *const Response, page: *Page) !js.Promise {
+pub fn getText(self: *const Response, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
     const body = switch (self._body) {
         .bytes => |b| b,
         .empty => "",
-        .stream => return page.js.local.?.rejectPromise(.{ .type_error = "Cannot read text from stream body" }),
+        .stream => return local.rejectPromise(.{ .type_error = "Cannot read text from stream body" }),
     };
-    return page.js.local.?.resolvePromise(body);
+    return local.resolvePromise(body);
 }
 
-pub fn getJson(self: *Response, page: *Page) !js.Promise {
-    const local = page.js.local.?;
+pub fn getJson(self: *Response, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
     const body = switch (self._body) {
         .bytes => |b| b,
         .empty => "",
@@ -187,11 +199,21 @@ pub fn getJson(self: *Response, page: *Page) !js.Promise {
     return local.resolvePromise(try value.persist());
 }
 
-pub fn arrayBuffer(self: *Response, page: *Page) !js.Promise {
+pub fn arrayBuffer(self: *Response, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
     return switch (self._body) {
-        .bytes => |body| page.js.local.?.resolvePromise(js.ArrayBuffer{ .values = body }),
-        .empty => page.js.local.?.resolvePromise(js.ArrayBuffer{ .values = "" }),
-        .stream => |stream| StreamConsumer.start(stream, page),
+        .bytes => |body| local.resolvePromise(js.ArrayBuffer{ .values = body }),
+        .empty => local.resolvePromise(js.ArrayBuffer{ .values = "" }),
+        .stream => |stream| blk: {
+            // StreamConsumer currently requires a Page. Workers cannot
+            // produce stream bodies yet, so falling back to the page here
+            // is safe.
+            const page = switch (exec.context.global) {
+                .page => |p| p,
+                .worker => unreachable,
+            };
+            break :blk StreamConsumer.start(stream, page);
+        },
     };
 }
 
@@ -308,20 +330,20 @@ const StreamConsumer = struct {
     }
 };
 
-pub fn blob(self: *const Response, page: *Page) !js.Promise {
-    const local = page.js.local.?;
+pub fn blob(self: *const Response, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
     const body = switch (self._body) {
         .bytes => |b| b,
         .empty => "",
         .stream => return local.rejectPromise(.{ .type_error = "Cannot read blob from stream body" }),
     };
-    const content_type = try self._headers.get("content-type", page) orelse "";
-    const b = try Blob.initFromBytes(body, content_type, true, page);
+    const content_type = try self._headers.get("content-type", exec) orelse "";
+    const b = try Blob.initFromBytes(body, content_type, true, exec.context.session);
     return local.resolvePromise(b);
 }
 
-pub fn bytes(self: *const Response, page: *Page) !js.Promise {
-    const local = page.js.local.?;
+pub fn bytes(self: *const Response, exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
     const body = switch (self._body) {
         .bytes => |b| b,
         .empty => "",
@@ -330,14 +352,15 @@ pub fn bytes(self: *const Response, page: *Page) !js.Promise {
     return local.resolvePromise(js.TypedArray(u8){ .values = body });
 }
 
-pub fn clone(self: *const Response, page: *Page) !*Response {
+pub fn clone(self: *const Response, exec: *const Execution) !*Response {
+    const session = exec.context.session;
     const body_len = switch (self._body) {
         .bytes => |b| b.len,
         .empty => 0,
         .stream => 0,
     };
-    const arena = try page.getArena(body_len + self._url.len + 256, "Response.clone");
-    errdefer page.releaseArena(arena);
+    const arena = try session.getArena(body_len + self._url.len + 256, "Response.clone");
+    errdefer session.releaseArena(arena);
 
     const body: Body = switch (self._body) {
         .bytes => |b| .{ .bytes = try arena.dupe(u8, b) },
@@ -356,7 +379,7 @@ pub fn clone(self: *const Response, page: *Page) !*Response {
         ._body = body,
         ._type = self._type,
         ._is_redirected = self._is_redirected,
-        ._headers = try Headers.init(.{ .obj = self._headers }, page),
+        ._headers = try Headers.init(.{ .obj = self._headers }, exec),
         ._http_response = null,
     };
     return cloned;

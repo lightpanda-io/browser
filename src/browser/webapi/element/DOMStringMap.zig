@@ -17,12 +17,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 
 const Element = @import("../Element.zig");
-const Page = @import("../../Page.zig");
-const String = @import("../../../string.zig").String;
 
+const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 const DOMStringMap = @This();

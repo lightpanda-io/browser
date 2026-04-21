@@ -47,7 +47,7 @@ pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
 
 pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
-    const request = try Request.init(input, options, page);
+    const request = try Request.init(input, options, &page.js.execution);
     const resolver = page.js.local.?.createPromiseResolver();
 
     if (request._signal) |signal| {
@@ -61,7 +61,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         return handleBlobUrl(request._url, resolver, page);
     }
 
-    const response = try Response.init(null, .{ .status = 0 }, page);
+    const response = try Response.init(null, .{ .status = 0 }, &page.js.execution);
     errdefer response.deinit(page._session);
 
     const fetch = try response._arena.create(Fetch);
@@ -120,13 +120,13 @@ fn handleBlobUrl(url: []const u8, resolver: js.PromiseResolver, page: *Page) !js
         return resolver.promise();
     };
 
-    const response = try Response.init(null, .{ .status = 200 }, page);
+    const response = try Response.init(null, .{ .status = 200 }, &page.js.execution);
     response._body = .{ .bytes = try response._arena.dupe(u8, blob._slice) };
     response._url = try response._arena.dupeZ(u8, url);
     response._type = .basic;
 
     if (blob._mime.len > 0) {
-        try response._headers.append("Content-Type", blob._mime, page);
+        try response._headers.append("Content-Type", blob._mime, &page.js.execution);
     }
 
     const js_val = try page.js.local.?.zigValueToJs(response, .{});
@@ -191,7 +191,7 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
 
     var it = response.headerIterator();
     while (it.next()) |hdr| {
-        try res._headers.append(hdr.name, hdr.value, self._page);
+        try res._headers.append(hdr.name, hdr.value, &self._page.js.execution);
     }
 
     return true;

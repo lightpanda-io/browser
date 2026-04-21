@@ -1,8 +1,11 @@
-const String = @import("../../../../string.zig").String;
+const lp = @import("lightpanda");
+
 const js = @import("../../../js/js.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+
+const String = lp.String;
 
 const TableCol = @This();
 

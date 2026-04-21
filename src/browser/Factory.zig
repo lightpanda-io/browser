@@ -21,7 +21,6 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const reflect = @import("reflect.zig");
-const String = @import("../string.zig").String;
 
 const SlabAllocator = @import("../slab.zig").SlabAllocator;
 
@@ -38,6 +37,7 @@ const Blob = @import("webapi/Blob.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 
 const log = lp.log;
+const String = lp.String;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;

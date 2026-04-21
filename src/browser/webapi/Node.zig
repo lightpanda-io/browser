@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const String = @import("../../string.zig").String;
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
@@ -38,6 +37,7 @@ pub const DocumentType = @import("DocumentType.zig");
 pub const ShadowRoot = @import("ShadowRoot.zig");
 
 const log = lp.log;
+const String = lp.String;
 const Allocator = std.mem.Allocator;
 const LinkedList = std.DoublyLinkedList;
 

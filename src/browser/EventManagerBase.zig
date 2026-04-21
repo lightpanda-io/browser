@@ -20,8 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const String = @import("../string.zig").String;
-
 const js = @import("js/js.zig");
 const Session = @import("Session.zig");
 
@@ -29,6 +27,7 @@ const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 
 const log = lp.log;
+const String = lp.String;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
 

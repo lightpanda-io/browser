@@ -3,10 +3,10 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 
-const Page = @import("../../Page.zig");
 const KeyValueList = @import("../KeyValueList.zig");
 
 const log = lp.log;
+const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
 const Headers = @This();
@@ -19,31 +19,31 @@ pub const InitOpts = union(enum) {
     js_obj: js.Object,
 };
 
-pub fn init(opts_: ?InitOpts, page: *Page) !*Headers {
+pub fn init(opts_: ?InitOpts, exec: *const Execution) !*Headers {
     const list = if (opts_) |opts| switch (opts) {
-        .obj => |obj| try KeyValueList.copy(page.arena, obj._list),
-        .js_obj => |js_obj| try KeyValueList.fromJsObject(page.arena, js_obj, normalizeHeaderName, &page.buf),
-        .strings => |kvs| try KeyValueList.fromArray(page.arena, kvs, normalizeHeaderName, &page.buf),
+        .obj => |obj| try KeyValueList.copy(exec.arena, obj._list),
+        .js_obj => |js_obj| try KeyValueList.fromJsObject(exec.arena, js_obj, normalizeHeaderName, exec.buf),
+        .strings => |kvs| try KeyValueList.fromArray(exec.arena, kvs, normalizeHeaderName, exec.buf),
     } else KeyValueList.init();
 
-    return page._factory.create(Headers{
+    return exec._factory.create(Headers{
         ._list = list,
     });
 }
 
-pub fn append(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
-    const normalized_name = normalizeHeaderName(name, &page.buf);
-    try self._list.append(page.arena, normalized_name, value);
+pub fn append(self: *Headers, name: []const u8, value: []const u8, exec: *const Execution) !void {
+    const normalized_name = normalizeHeaderName(name, exec.buf);
+    try self._list.append(exec.arena, normalized_name, value);
 }
 
-pub fn delete(self: *Headers, name: []const u8, page: *Page) void {
-    const normalized_name = normalizeHeaderName(name, &page.buf);
+pub fn delete(self: *Headers, name: []const u8, exec: *const Execution) void {
+    const normalized_name = normalizeHeaderName(name, exec.buf);
     self._list.delete(normalized_name, null);
 }
 
-pub fn get(self: *const Headers, name: []const u8, page: *Page) !?[]const u8 {
-    const normalized_name = normalizeHeaderName(name, &page.buf);
-    const all_values = try self._list.getAll(page.call_arena, normalized_name);
+pub fn get(self: *const Headers, name: []const u8, exec: *const Execution) !?[]const u8 {
+    const normalized_name = normalizeHeaderName(name, exec.buf);
+    const all_values = try self._list.getAll(exec.call_arena, normalized_name);
 
     if (all_values.len == 0) {
         return null;
@@ -51,17 +51,17 @@ pub fn get(self: *const Headers, name: []const u8, page: *Page) !?[]const u8 {
     if (all_values.len == 1) {
         return all_values[0];
     }
-    return try std.mem.join(page.call_arena, ", ", all_values);
+    return try std.mem.join(exec.call_arena, ", ", all_values);
 }
 
-pub fn has(self: *const Headers, name: []const u8, page: *Page) bool {
-    const normalized_name = normalizeHeaderName(name, &page.buf);
+pub fn has(self: *const Headers, name: []const u8, exec: *const Execution) bool {
+    const normalized_name = normalizeHeaderName(name, exec.buf);
     return self._list.has(normalized_name);
 }
 
-pub fn set(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
-    const normalized_name = normalizeHeaderName(name, &page.buf);
-    try self._list.set(page.arena, normalized_name, value);
+pub fn set(self: *Headers, name: []const u8, value: []const u8, exec: *const Execution) !void {
+    const normalized_name = normalizeHeaderName(name, exec.buf);
+    try self._list.set(exec.arena, normalized_name, value);
 }
 
 pub fn keys(self: *Headers, exec: *const js.Execution) !*KeyValueList.KeyIterator {

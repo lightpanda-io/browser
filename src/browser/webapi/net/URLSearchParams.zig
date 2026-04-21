@@ -21,12 +21,11 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 
-const String = @import("../../../string.zig").String;
-
 const FormData = @import("FormData.zig");
 const KeyValueList = @import("../KeyValueList.zig");
 
 const log = lp.log;
+const String = lp.String;
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 

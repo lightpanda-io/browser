@@ -20,8 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const String = @import("../string.zig").String;
-
 const JS = @import("js/js.zig");
 const Mime = @import("Mime.zig");
 const Factory = @import("Factory.zig");
@@ -68,6 +66,7 @@ const WebApiURL = @import("webapi/URL.zig");
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
 const log = lp.log;
+const String = lp.String;
 const IFrame = Element.Html.IFrame;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
@@ -3641,7 +3640,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
 
     // The submitter can be an input box (if enter was entered on the box)
     // I don't think this is technically correct, but FormData handles it ok
-    const form_data = try FormData.init(form, submitter_, self);
+    const form_data = try FormData.init(form, submitter_, &self.js.execution);
 
     const arena = try self._session.getArena(.medium, "submitForm");
     errdefer self._session.releaseArena(arena);

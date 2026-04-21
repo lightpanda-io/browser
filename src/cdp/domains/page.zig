@@ -21,6 +21,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const screenshot_png = @embedFile("screenshot.png");
+const screenshot_pdf = @embedFile("screenshot.pdf");
 
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
@@ -47,6 +48,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         stopLoading,
         close,
         captureScreenshot,
+        printToPDF,
         getLayoutMetrics,
         handleJavaScriptDialog,
     }, cmd.input.action) orelse return error.UnknownMethod;
@@ -63,6 +65,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .stopLoading => return cmd.sendResult(null, .{}),
         .close => return close(cmd),
         .captureScreenshot => return captureScreenshot(cmd),
+        .printToPDF => return printToPDF(cmd),
         .getLayoutMetrics => return getLayoutMetrics(cmd),
         .handleJavaScriptDialog => return handleJavaScriptDialog(cmd),
     }
@@ -719,6 +722,7 @@ fn base64Encode(comptime input: []const u8) [std.base64.standard.Encoder.calcSiz
     return buf;
 }
 
+// Return a fake screenshot
 fn captureScreenshot(cmd: *CDP.Command) !void {
     const Params = struct {
         format: ?[]const u8 = "png",
@@ -752,6 +756,14 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
 
     return cmd.sendResult(.{
         .data = base64Encode(screenshot_png),
+    }, .{});
+}
+
+// Return a fake pdf
+fn printToPDF(cmd: *CDP.Command) !void {
+    // Ignore all parameters.
+    return cmd.sendResult(.{
+        .data = base64Encode(screenshot_pdf),
     }, .{});
 }
 
@@ -891,6 +903,21 @@ test "cdp.page: captureScreenshot" {
         try ctx.expectSentResult(.{
             .data = base64Encode(screenshot_png),
         }, .{ .id = 11 });
+    }
+}
+
+test "cdp.page: printToPDF" {
+    const LogFilter = @import("../../testing.zig").LogFilter;
+    const filter: LogFilter = .init(&.{.not_implemented});
+    defer filter.deinit();
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    {
+        try ctx.processMessage(.{ .id = 10, .method = "Page.printToPDF", .params = .{ .landscape = true } });
+        try ctx.expectSentResult(.{
+            .data = base64Encode(screenshot_pdf),
+        }, .{ .id = 10 });
     }
 }
 

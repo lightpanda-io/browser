@@ -95,7 +95,7 @@ pub fn init(page: *Page) !*XMLHttpRequest {
         ._page = page,
         ._arena = arena,
         ._proto = undefined,
-        ._request_headers = try Headers.init(null, page),
+        ._request_headers = try Headers.init(null, &page.js.execution),
     });
     return self;
 }
@@ -218,7 +218,7 @@ pub fn setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const 
     if (self._ready_state != .opened) {
         return error.InvalidStateError;
     }
-    return self._request_headers.append(name, value, page);
+    return self._request_headers.append(name, value, &page.js.execution);
 }
 
 pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
