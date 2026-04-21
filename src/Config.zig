@@ -23,6 +23,7 @@ const builtin = @import("builtin");
 const dump = @import("browser/dump.zig");
 
 const mcp = @import("mcp.zig");
+const Storage = @import("storage/Storage.zig");
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
 
 const log = lp.log;
@@ -258,6 +259,20 @@ pub fn maxPendingConnections(self: *const Config) u31 {
     };
 }
 
+pub fn storageEngine(self: *const Config) ?Storage.EngineType {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.common.storage_engine,
+        else => unreachable,
+    };
+}
+
+pub fn storageSqlitePath(self: *const Config) ?[:0]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.common.storage_sqlite_path,
+        else => unreachable,
+    };
+}
+
 pub const Mode = union(RunMode) {
     help: bool, // false when being printed because of an error
     fetch: Fetch,
@@ -328,6 +343,8 @@ pub const Common = struct {
     http_cache_dir: ?[]const u8 = null,
     cookie: ?[]const u8 = null,
     cookie_jar: ?[]const u8 = null,
+    storage_engine: ?Storage.EngineType = null,
+    storage_sqlite_path: ?[:0]const u8 = null,
 
     web_bot_auth_key_file: ?[]const u8 = null,
     web_bot_auth_keyid: ?[]const u8 = null,
@@ -483,6 +500,14 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Path to a directory to use as a Filesystem Cache for network resources.
         \\                Omitting this will result is no caching.
         \\                Defaults to no caching.
+        \\
+        \\--storage-engine
+        \\                The storage engine to use. Choices are: sqlite.
+        \\                Default to sqlite.
+        \\
+        \\--storage-sqlite-path
+        \\                Path to SQLite database file for persistent storage.
+        \\                Use ":memory:" for in-memory storage.
     ;
 
     //                                                                     MAX_HELP_LEN|
@@ -1211,6 +1236,27 @@ fn parseCommonArg(
             return error.InvalidArgument;
         };
         common.http_cache_dir = try allocator.dupe(u8, str);
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--storage-engine", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--storage-engine" });
+            return error.InvalidArgument;
+        };
+        common.storage_engine = std.meta.stringToEnum(Storage.EngineType, str) orelse {
+            log.fatal(.app, "invalid argument value", .{ .arg = opt, .val = str });
+            return error.InvalidArgument;
+        };
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--storage-sqlite-path", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--storage-sqlite-path" });
+            return error.InvalidArgument;
+        };
+        common.storage_sqlite_path = try allocator.dupeZ(u8, str);
         return true;
     }
 
