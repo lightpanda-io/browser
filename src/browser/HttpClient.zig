@@ -17,13 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const builtin = @import("builtin");
-const posix = std.posix;
-const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
-
 const lp = @import("lightpanda");
-const log = lp.log;
+const builtin = @import("builtin");
+
 const URL = @import("URL.zig");
 const Config = @import("../Config.zig");
 const Notification = @import("../Notification.zig");
@@ -34,15 +30,20 @@ const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");
 const Robots = @import("../network/Robots.zig");
 const Cache = @import("../network/cache/Cache.zig");
-const CacheMetadata = Cache.CachedMetadata;
-const CachedResponse = Cache.CachedResponse;
+const timestamp = @import("../datetime.zig").timestamp;
 
+const log = lp.log;
+const posix = std.posix;
+const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const IS_DEBUG = builtin.mode == .Debug;
 
 pub const Method = http.Method;
 pub const Headers = http.Headers;
 pub const ResponseHead = http.ResponseHead;
 pub const HeaderIterator = http.HeaderIterator;
+const CacheMetadata = Cache.CachedMetadata;
+const CachedResponse = Cache.CachedResponse;
 
 // This is loosely tied to a browser Page. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -769,6 +770,7 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
 
     const id = self.incrReqId();
     transfer.* = .{
+        .start_time = timestamp(.monotonic),
         .arena = ArenaAllocator.init(self.allocator),
         .id = id,
         .url = req.url,
@@ -1292,6 +1294,7 @@ pub const Transfer = struct {
     bytes_received: usize = 0,
     _pending_cache_metadata: ?*CacheMetadata = null,
 
+    start_time: u64,
     aborted: bool = false,
 
     // We'll store the response header here
