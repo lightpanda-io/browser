@@ -785,11 +785,12 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
                 .max_turns = 1,
                 .max_tokens = 4096,
                 .tool_choice = .none,
-                // Disable thinking for the finalize turn. Otherwise Gemini
-                // thinking models can fill the turn entirely with thought
-                // parts and leave the answer empty. Thinking stays enabled
-                // in the main loop where it helps plan tool use.
-                .thinking_budget = 0,
+                // Cap thinking on the finalize turn. Fully disabling it (0)
+                // leaves reasoning-heavy tasks with no answer at all; letting
+                // it run unbounded lets Gemini fill the turn with thoughts
+                // and emit nothing as the final text. 512 tokens is enough
+                // for the model to pick its answer but not to freewheel.
+                .thinking_budget = 512,
             },
         ) catch |err| {
             log.err(.app, "AI synthesis error", .{ .err = err });
