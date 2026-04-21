@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Node = @import("Node.zig");
 const Document = @import("Document.zig");
 const DocumentType = @import("DocumentType.zig");
@@ -27,60 +27,60 @@ const DocumentType = @import("DocumentType.zig");
 const DOMImplementation = @This();
 _pad: bool = false,
 
-pub fn createDocumentType(_: *const DOMImplementation, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, page: *Page) !*DocumentType {
-    return DocumentType.init(qualified_name, public_id, system_id, page);
+pub fn createDocumentType(_: *const DOMImplementation, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, frame: *Frame) !*DocumentType {
+    return DocumentType.init(qualified_name, public_id, system_id, frame);
 }
 
-pub fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString, page: *Page) !*Document {
-    const document = (try page._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
+pub fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString, frame: *Frame) !*Document {
+    const document = (try frame._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
     document._ready_state = .complete;
     document._url = "about:blank";
 
     {
-        const doctype = try page._factory.node(DocumentType{
+        const doctype = try frame._factory.node(DocumentType{
             ._proto = undefined,
             ._name = "html",
             ._public_id = "",
             ._system_id = "",
         });
-        _ = try document.asNode().appendChild(doctype.asNode(), page);
+        _ = try document.asNode().appendChild(doctype.asNode(), frame);
     }
 
-    const html_node = try page.createElementNS(.html, "html", null);
-    _ = try document.asNode().appendChild(html_node, page);
+    const html_node = try frame.createElementNS(.html, "html", null);
+    _ = try document.asNode().appendChild(html_node, frame);
 
-    const head_node = try page.createElementNS(.html, "head", null);
-    _ = try html_node.appendChild(head_node, page);
+    const head_node = try frame.createElementNS(.html, "head", null);
+    _ = try html_node.appendChild(head_node, frame);
 
     if (title) |t| {
-        const title_node = try page.createElementNS(.html, "title", null);
-        _ = try head_node.appendChild(title_node, page);
-        const text_node = try page.createTextNode(t.value);
-        _ = try title_node.appendChild(text_node, page);
+        const title_node = try frame.createElementNS(.html, "title", null);
+        _ = try head_node.appendChild(title_node, frame);
+        const text_node = try frame.createTextNode(t.value);
+        _ = try title_node.appendChild(text_node, frame);
     }
 
-    const body_node = try page.createElementNS(.html, "body", null);
-    _ = try html_node.appendChild(body_node, page);
+    const body_node = try frame.createElementNS(.html, "body", null);
+    _ = try html_node.appendChild(body_node, frame);
 
     return document;
 }
 
-pub fn createDocument(_: *const DOMImplementation, namespace_: ?[]const u8, qualified_name: ?[]const u8, doctype: ?*DocumentType, page: *Page) !*Document {
+pub fn createDocument(_: *const DOMImplementation, namespace_: ?[]const u8, qualified_name: ?[]const u8, doctype: ?*DocumentType, frame: *Frame) !*Document {
     // Create XML Document
-    const document = (try page._factory.document(Node.Document.XMLDocument{ ._proto = undefined })).asDocument();
+    const document = (try frame._factory.document(Node.Document.XMLDocument{ ._proto = undefined })).asDocument();
     document._url = "about:blank";
 
     // Append doctype if provided
     if (doctype) |dt| {
-        _ = try document.asNode().appendChild(dt.asNode(), page);
+        _ = try document.asNode().appendChild(dt.asNode(), frame);
     }
 
     // Create and append root element if qualified_name provided
     if (qualified_name) |qname| {
         if (qname.len > 0) {
             const namespace = if (namespace_) |ns| Node.Element.Namespace.parse(ns) else .xml;
-            const root = try page.createElementNS(namespace, qname, null);
-            _ = try document.asNode().appendChild(root, page);
+            const root = try frame.createElementNS(namespace, qname, null);
+            _ = try document.asNode().appendChild(root, frame);
         }
     }
 

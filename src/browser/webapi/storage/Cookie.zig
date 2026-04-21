@@ -198,7 +198,7 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
                 // Algolia, for example, will call document.setCookie with
                 // an expired value which is literally 'Invalid Date'
                 // (it's trying to do something like: `new Date() + undefined`).
-                log.debug(.page, "cookie expires date", .{ .date = expires_ });
+                log.debug(.frame, "cookie expires date", .{ .date = expires_ });
             }
         }
     }
@@ -550,7 +550,7 @@ pub const Jar = struct {
 
     pub fn populateFromResponse(self: *Jar, url: [:0]const u8, set_cookie: []const u8) !void {
         const c = Cookie.parse(self.allocator, url, set_cookie) catch |err| {
-            log.warn(.page, "cookie parse failed", .{ .raw = set_cookie, .err = err });
+            log.warn(.frame, "cookie parse failed", .{ .raw = set_cookie, .err = err });
             return;
         };
 

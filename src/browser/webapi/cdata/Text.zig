@@ -17,15 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const CData = @import("../CData.zig");
 
 const Text = @This();
 
 _proto: *CData,
 
-pub fn init(str: ?js.NullableString, page: *Page) !*Text {
-    const node = try page.createTextNode(if (str) |s| s.value else "");
+pub fn init(str: ?js.NullableString, frame: *Frame) !*Text {
+    const node = try frame.createTextNode(if (str) |s| s.value else "");
     return node.as(Text);
 }
 
@@ -33,13 +33,13 @@ pub fn getWholeText(self: *Text) []const u8 {
     return self._proto._data.str();
 }
 
-pub fn splitText(self: *Text, offset: usize, page: *Page) !*Text {
+pub fn splitText(self: *Text, offset: usize, frame: *Frame) !*Text {
     const data = self._proto._data.str();
 
     const byte_offset = CData.utf16OffsetToUtf8(data, offset) catch return error.IndexSizeError;
 
     const new_data = data[byte_offset..];
-    const new_node = try page.createTextNode(new_data);
+    const new_node = try frame.createTextNode(new_data);
     const new_text = new_node.as(Text);
 
     const node = self._proto.asNode();
@@ -48,11 +48,11 @@ pub fn splitText(self: *Text, offset: usize, page: *Page) !*Text {
     // then truncate original node (step 8).
     if (node.parentNode()) |parent| {
         const next_sibling = node.nextSibling();
-        _ = try parent.insertBefore(new_node, next_sibling, page);
+        _ = try parent.insertBefore(new_node, next_sibling, frame);
 
         // splitText-specific range updates (steps 7b-7e)
         if (parent.getChildIndex(node)) |node_index| {
-            page.updateRangesForSplitText(node, new_node, @intCast(offset), parent, node_index);
+            frame.updateRangesForSplitText(node, new_node, @intCast(offset), parent, node_index);
         }
     }
 
@@ -60,7 +60,7 @@ pub fn splitText(self: *Text, offset: usize, page: *Page) !*Text {
     // Use replaceData instead of setData so live range updates fire
     // (matters for detached text nodes where steps 7b-7e were skipped).
     const length = self._proto.getLength();
-    try self._proto.replaceData(offset, length - offset, "", page);
+    try self._proto.replaceData(offset, length - offset, "", frame);
 
     return new_text;
 }

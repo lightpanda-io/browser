@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const crypto = @import("../../sys/libcrypto.zig");
 
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const js = @import("../js/js.zig");
 
 const CryptoKey = @import("CryptoKey.zig");
@@ -45,13 +45,13 @@ pub fn generateKey(
     algo: algorithm.Init,
     extractable: bool,
     key_usages: []const []const u8,
-    page: *Page,
+    frame: *Frame,
 ) !js.Promise {
     switch (algo) {
-        .hmac_key_gen => |params| return HMAC.init(params, extractable, key_usages, page),
+        .hmac_key_gen => |params| return HMAC.init(params, extractable, key_usages, frame),
         .name => |name| {
             if (std.mem.eql(u8, "X25519", name)) {
-                return X25519.init(extractable, key_usages, page);
+                return X25519.init(extractable, key_usages, frame);
             }
 
             log.warn(.not_implemented, "generateKey", .{ .name = name });
@@ -60,7 +60,7 @@ pub fn generateKey(
             // Ditto.
             const name = object.name;
             if (std.mem.eql(u8, "X25519", name)) {
-                return X25519.init(extractable, key_usages, page);
+                return X25519.init(extractable, key_usages, frame);
             }
 
             log.warn(.not_implemented, "generateKey", .{ .name = name });
@@ -68,7 +68,7 @@ pub fn generateKey(
         else => log.warn(.not_implemented, "generateKey", .{}),
     }
 
-    return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.SyntaxError } });
+    return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.SyntaxError } });
 }
 
 /// Exports a key: that is, it takes as input a CryptoKey object and gives you
@@ -77,14 +77,14 @@ pub fn exportKey(
     _: *const SubtleCrypto,
     format: []const u8,
     key: *CryptoKey,
-    page: *Page,
+    frame: *Frame,
 ) !js.Promise {
     if (!key.canExportKey()) {
-        return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+        return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
     }
 
     if (std.mem.eql(u8, format, "raw")) {
-        return page.js.local.?.resolvePromise(js.ArrayBuffer{ .values = key._key });
+        return frame.js.local.?.resolvePromise(js.ArrayBuffer{ .values = key._key });
     }
 
     const is_unsupported = std.mem.eql(u8, format, "pkcs8") or
@@ -92,10 +92,10 @@ pub fn exportKey(
 
     if (is_unsupported) {
         log.warn(.not_implemented, "SubtleCrypto.exportKey", .{ .format = format });
-        return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+        return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
     }
 
-    return page.js.local.?.rejectPromise(.{ .type_error = "invalid format" });
+    return frame.js.local.?.rejectPromise(.{ .type_error = "invalid format" });
 }
 
 /// Derive a secret key from a master key.
@@ -104,27 +104,27 @@ pub fn deriveBits(
     algo: algorithm.Derive,
     base_key: *const CryptoKey, // Private key.
     length: usize,
-    page: *Page,
+    frame: *Frame,
 ) !js.Promise {
     return switch (algo) {
         .ecdh_or_x25519 => |params| {
             const name = params.name;
             if (std.mem.eql(u8, name, "X25519")) {
-                const result = X25519.deriveBits(base_key, params.public, length, page) catch |err| switch (err) {
-                    error.InvalidAccessError => return page.js.local.?.rejectPromise(.{
+                const result = X25519.deriveBits(base_key, params.public, length, frame) catch |err| switch (err) {
+                    error.InvalidAccessError => return frame.js.local.?.rejectPromise(.{
                         .dom_exception = .{ .err = error.InvalidAccessError },
                     }),
                     else => return err,
                 };
 
-                return page.js.local.?.resolvePromise(result);
+                return frame.js.local.?.resolvePromise(result);
             }
 
             if (std.mem.eql(u8, name, "ECDH")) {
                 log.warn(.not_implemented, "SubtleCrypto.deriveBits", .{ .name = name });
             }
 
-            return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+            return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
         },
     };
 }
@@ -136,14 +136,14 @@ pub fn sign(
     algo: algorithm.Sign,
     key: *CryptoKey,
     data: []const u8, // ArrayBuffer.
-    page: *Page,
+    frame: *Frame,
 ) !js.Promise {
     return switch (key._type) {
         // Call sign for HMAC.
-        .hmac => return HMAC.sign(algo, key, data, page),
+        .hmac => return HMAC.sign(algo, key, data, frame),
         else => {
             log.warn(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
-            return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+            return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
         },
     };
 }
@@ -155,33 +155,33 @@ pub fn verify(
     key: *const CryptoKey,
     signature: []const u8, // ArrayBuffer.
     data: []const u8, // ArrayBuffer.
-    page: *Page,
+    frame: *Frame,
 ) !js.Promise {
     if (!algo.isHMAC()) {
-        return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+        return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
     }
 
     return switch (key._type) {
-        .hmac => HMAC.verify(key, signature, data, page),
-        else => page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } }),
+        .hmac => HMAC.verify(key, signature, data, frame),
+        else => frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } }),
     };
 }
 
 /// Generates a digest of the given data, using the specified hash function.
-pub fn digest(_: *const SubtleCrypto, algo: []const u8, data: js.TypedArray(u8), page: *Page) !js.Promise {
-    const local = page.js.local.?;
+pub fn digest(_: *const SubtleCrypto, algo: []const u8, data: js.TypedArray(u8), frame: *Frame) !js.Promise {
+    const local = frame.js.local.?;
 
     if (algo.len > 10) {
         return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
     }
 
-    const normalized = std.ascii.upperString(&page.buf, algo);
+    const normalized = std.ascii.upperString(&frame.buf, algo);
     const digest_type = crypto.findDigest(normalized) catch {
         return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
     };
 
     const bytes = data.values;
-    const out = page.buf[0..crypto.EVP_MAX_MD_SIZE];
+    const out = frame.buf[0..crypto.EVP_MAX_MD_SIZE];
     var out_size: c_uint = 0;
     const result = crypto.EVP_Digest(bytes.ptr, bytes.len, out, &out_size, digest_type, null);
     lp.assert(result == 1, "SubtleCrypto.digest", .{ .algo = algo });

@@ -2,7 +2,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -29,9 +29,9 @@ pub fn getColSpan(self: *TableCell) u32 {
     return @min(v, 1000);
 }
 
-pub fn setColSpan(self: *TableCell, value: u32, page: *Page) !void {
-    const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("colspan"), .wrap(str), page);
+pub fn setColSpan(self: *TableCell, value: u32, frame: *Frame) !void {
+    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
+    try self.asElement().setAttributeSafe(comptime .wrap("colspan"), .wrap(str), frame);
 }
 
 pub fn getRowSpan(self: *TableCell) u32 {
@@ -40,9 +40,9 @@ pub fn getRowSpan(self: *TableCell) u32 {
     return @min(v, 65534);
 }
 
-pub fn setRowSpan(self: *TableCell, value: u32, page: *Page) !void {
-    const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("rowspan"), .wrap(str), page);
+pub fn setRowSpan(self: *TableCell, value: u32, frame: *Frame) !void {
+    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
+    try self.asElement().setAttributeSafe(comptime .wrap("rowspan"), .wrap(str), frame);
 }
 
 pub const JsApi = struct {

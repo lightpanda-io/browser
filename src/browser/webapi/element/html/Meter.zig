@@ -1,5 +1,5 @@
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -15,8 +15,8 @@ pub fn asNode(self: *Meter) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getLabels(self: *Meter, page: *Page) !js.Array {
-    return @import("Label.zig").getControlLabels(self.asElement(), page);
+pub fn getLabels(self: *Meter, frame: *Frame) !js.Array {
+    return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
 pub const JsApi = struct {

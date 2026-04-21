@@ -24,7 +24,7 @@ const Client = @import("../Server.zig").Client;
 const js = @import("../browser/js/js.zig");
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
-const Page = @import("../browser/Page.zig");
+const Frame = @import("../browser/Frame.zig");
 const Mime = @import("../browser/Mime.zig");
 const Element = @import("../browser/webapi/Element.zig");
 const Label = @import("../browser/webapi/element/html/Label.zig");
@@ -71,8 +71,8 @@ message_arena: std.heap.ArenaAllocator,
 // Used for processing notifications within a browser context.
 notification_arena: std.heap.ArenaAllocator,
 
-// Valid for 1 page navigation (what CDP calls a "renderer")
-page_arena: std.heap.ArenaAllocator,
+// Valid for 1 frame navigation (what CDP calls a "renderer")
+frame_arena: std.heap.ArenaAllocator,
 
 // Valid for the entire lifetime of the BrowserContext. Should minimize
 // (or altogether eliminate) our use of this.
@@ -92,7 +92,7 @@ pub fn init(client: *Client) !CDP {
         .browser = browser,
         .allocator = allocator,
         .browser_context = null,
-        .page_arena = std.heap.ArenaAllocator.init(allocator),
+        .frame_arena = std.heap.ArenaAllocator.init(allocator),
         .message_arena = std.heap.ArenaAllocator.init(allocator),
         .notification_arena = std.heap.ArenaAllocator.init(allocator),
         .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
@@ -104,7 +104,7 @@ pub fn deinit(self: *CDP) void {
         bc.deinit();
     }
     self.browser.deinit();
-    self.page_arena.deinit();
+    self.frame_arena.deinit();
     self.message_arena.deinit();
     self.notification_arena.deinit();
     self.browser_context_arena.deinit();
@@ -329,7 +329,7 @@ pub const BrowserContext = struct {
     arena: Allocator,
 
     // Tied to the lifetime of 1 page rendered in the BrowserContext.
-    page_arena: Allocator,
+    frame_arena: Allocator,
 
     // From the parent's notification_arena.allocator(). Most of the CDP
     // code paths deal with a cmd which has its own arena (from the
@@ -376,7 +376,7 @@ pub const BrowserContext = struct {
 
     // When network is enabled, we'll capture the transfer.id -> body
     // This is awfully memory intensive, but our underlying http client and
-    // its users (script manager and page) correctly do not hold the body
+    // its users (script manager and frame) correctly do not hold the body
     // memory longer than they have to. In fact, the main request is only
     // ever streamed. So if CDP is the only thing that needs bodies in
     // memory for an arbitrary amount of time, then that's where we're going
@@ -417,7 +417,7 @@ pub const BrowserContext = struct {
             .node_search_list = undefined,
             .isolated_worlds = .empty,
             .inspector_session = inspector_session,
-            .page_arena = cdp.page_arena.allocator(),
+            .frame_arena = cdp.frame_arena.allocator(),
             .arena = cdp.browser_context_arena.allocator(),
             .notification_arena = cdp.notification_arena.allocator(),
             .intercept_state = try InterceptState.init(allocator),
@@ -427,13 +427,13 @@ pub const BrowserContext = struct {
         self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
         errdefer self.deinit();
 
-        try notification.register(.page_remove, self, onPageRemove);
-        try notification.register(.page_created, self, onPageCreated);
-        try notification.register(.page_navigate, self, onPageNavigate);
-        try notification.register(.page_navigated, self, onPageNavigated);
-        try notification.register(.page_frame_created, self, onPageFrameCreated);
-        try notification.register(.page_dom_content_loaded, self, onPageDOMContentLoaded);
-        try notification.register(.page_loaded, self, onPageLoaded);
+        try notification.register(.frame_remove, self, onFrameRemove);
+        try notification.register(.frame_created, self, onFrameCreated);
+        try notification.register(.frame_navigate, self, onFrameNavigate);
+        try notification.register(.frame_navigated, self, onFrameNavigated);
+        try notification.register(.frame_child_frame_created, self, onFrameChildFrameCreated);
+        try notification.register(.frame_dom_content_loaded, self, onFrameDOMContentLoaded);
+        try notification.register(.frame_loaded, self, onFrameLoaded);
         try notification.register(.javascript_dialog_opening, self, onJavascriptDialogOpening);
     }
 
@@ -464,7 +464,7 @@ pub const BrowserContext = struct {
 
         self.notification.unregisterAll(self);
 
-        // If the session has a page, we need to clear it first. The page
+        // If the session has a frame, we need to clear it first. The page
         // context is always nested inside of the isolated world context,
         // so we need to shutdown the page one first.
         browser.closeSession();
@@ -524,14 +524,14 @@ pub const BrowserContext = struct {
     }
 
     pub fn axnodeWriter(self: *BrowserContext, temp_arena: Allocator, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
-        const page = self.session.currentPage() orelse return error.PageNotLoaded;
+        const frame = self.session.currentFrame() orelse return error.FrameNotLoaded;
         _ = opts;
-        const cache = try page.call_arena.create(Element.VisibilityCache);
+        const cache = try frame.call_arena.create(Element.VisibilityCache);
         cache.* = .empty;
-        const label_index = try page.call_arena.create(Label.LabelByForIndex);
+        const label_index = try frame.call_arena.create(Label.LabelByForIndex);
         label_index.* = .{};
         return .{
-            .page = page,
+            .frame = frame,
             .root = root,
             .registry = &self.node_registry,
             .visibility_cache = cache,
@@ -541,14 +541,14 @@ pub const BrowserContext = struct {
     }
 
     pub fn getURL(self: *const BrowserContext) ?[:0]const u8 {
-        const page = self.session.currentPage() orelse return null;
-        const url = page.url;
+        const frame = self.session.currentFrame() orelse return null;
+        const url = frame.url;
         return if (url.len == 0) null else url;
     }
 
     pub fn getTitle(self: *const BrowserContext) ?[]const u8 {
-        const page = self.session.currentPage() orelse return null;
-        return page.getTitle() catch |err| {
+        const frame = self.session.currentFrame() orelse return null;
+        return frame.getTitle() catch |err| {
             log.err(.cdp, "page title", .{ .err = err });
             return null;
         };
@@ -584,50 +584,50 @@ pub const BrowserContext = struct {
 
     pub fn lifecycleEventsEnable(self: *BrowserContext) !void {
         self.page_life_cycle_events = true;
-        try self.notification.register(.page_network_idle, self, onPageNetworkIdle);
-        try self.notification.register(.page_network_almost_idle, self, onPageNetworkAlmostIdle);
+        try self.notification.register(.frame_network_idle, self, onFrameNetworkIdle);
+        try self.notification.register(.frame_network_almost_idle, self, onFrameNetworkAlmostIdle);
     }
 
     pub fn lifecycleEventsDisable(self: *BrowserContext) void {
         self.page_life_cycle_events = false;
-        self.notification.unregister(.page_network_idle, self);
-        self.notification.unregister(.page_network_almost_idle, self);
+        self.notification.unregister(.frame_network_idle, self);
+        self.notification.unregister(.frame_network_almost_idle, self);
     }
 
-    pub fn onPageRemove(ctx: *anyopaque, _: Notification.PageRemove) !void {
+    pub fn onFrameRemove(ctx: *anyopaque, _: Notification.FrameRemove) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        @import("domains/page.zig").pageRemove(self);
+        @import("domains/page.zig").frameRemove(self);
     }
 
-    pub fn onPageCreated(ctx: *anyopaque, page: *Page) !void {
+    pub fn onFrameCreated(ctx: *anyopaque, frame: *Frame) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/page.zig").pageCreated(self, page);
+        return @import("domains/page.zig").frameCreated(self, frame);
     }
 
-    pub fn onPageNavigate(ctx: *anyopaque, msg: *const Notification.PageNavigate) !void {
+    pub fn onFrameNavigate(ctx: *anyopaque, msg: *const Notification.FrameNavigate) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/page.zig").pageNavigate(self, msg);
+        return @import("domains/page.zig").frameNavigate(self, msg);
     }
 
-    pub fn onPageNavigated(ctx: *anyopaque, msg: *const Notification.PageNavigated) !void {
+    pub fn onFrameNavigated(ctx: *anyopaque, msg: *const Notification.FrameNavigated) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
-        return @import("domains/page.zig").pageNavigated(self.notification_arena, self, msg);
+        return @import("domains/page.zig").frameNavigated(self.notification_arena, self, msg);
     }
 
-    pub fn onPageFrameCreated(ctx: *anyopaque, msg: *const Notification.PageFrameCreated) !void {
+    pub fn onFrameChildFrameCreated(ctx: *anyopaque, msg: *const Notification.FrameChildFrameCreated) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/page.zig").pageFrameCreated(self, msg);
+        return @import("domains/page.zig").frameChildFrameCreated(self, msg);
     }
 
-    pub fn onPageNetworkIdle(ctx: *anyopaque, msg: *const Notification.PageNetworkIdle) !void {
+    pub fn onFrameNetworkIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkIdle) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/page.zig").pageNetworkIdle(self, msg);
+        return @import("domains/page.zig").frameNetworkIdle(self, msg);
     }
 
-    pub fn onPageNetworkAlmostIdle(ctx: *anyopaque, msg: *const Notification.PageNetworkAlmostIdle) !void {
+    pub fn onFrameNetworkAlmostIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkAlmostIdle) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/page.zig").pageNetworkAlmostIdle(self, msg);
+        return @import("domains/page.zig").frameNetworkAlmostIdle(self, msg);
     }
 
     pub fn onHttpRequestStart(ctx: *anyopaque, msg: *const Notification.RequestStart) !void {
@@ -645,14 +645,14 @@ pub const BrowserContext = struct {
         return @import("domains/network.zig").httpRequestFail(self, msg);
     }
 
-    pub fn onPageDOMContentLoaded(ctx: *anyopaque, msg: *const Notification.PageDOMContentLoaded) !void {
+    pub fn onFrameDOMContentLoaded(ctx: *anyopaque, msg: *const Notification.FrameDOMContentLoaded) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/page.zig").pageDOMContentLoaded(self, msg);
+        return @import("domains/page.zig").frameDOMContentLoaded(self, msg);
     }
 
-    pub fn onPageLoaded(ctx: *anyopaque, msg: *const Notification.PageLoaded) !void {
+    pub fn onFrameLoaded(ctx: *anyopaque, msg: *const Notification.FrameLoaded) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/page.zig").pageLoaded(self, msg);
+        return @import("domains/page.zig").frameLoaded(self, msg);
     }
 
     pub fn onJavascriptDialogOpening(ctx: *anyopaque, msg: *const Notification.JavascriptDialogOpening) !void {
@@ -664,7 +664,7 @@ pub const BrowserContext = struct {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
 
-        const arena = self.page_arena;
+        const arena = self.frame_arena;
 
         // Prepare the captured response value.
         const id = msg.transfer.id;
@@ -702,7 +702,7 @@ pub const BrowserContext = struct {
 
     pub fn onHttpResponseData(ctx: *anyopaque, msg: *const Notification.ResponseData) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        const arena = self.page_arena;
+        const arena = self.frame_arena;
 
         const id = msg.transfer.id;
         const resp = self.captured_responses.getPtr(id) orelse lp.assert(false, "onHttpResponseData missinf captured response", .{});
@@ -792,8 +792,8 @@ pub const BrowserContext = struct {
 /// see: https://chromium.googlesource.com/chromium/src/+/master/third_party/blink/renderer/bindings/core/v8/V8BindingDesign.md#world
 /// The current understanding. An isolated world lives in the same isolate, but a separated context.
 /// Clients create this to be able to create variables and run code without interfering with the
-/// normal namespace and values of the webpage. Similar to the main context we need to pretend to recreate it after
-/// a executionContextsCleared event which happens when navigating to a new page. A client can have a command be executed
+/// normal namespace and values of the webframe. Similar to the main context we need to pretend to recreate it after
+/// a executionContextsCleared event which happens when navigating to a new frame. A client can have a command be executed
 const ScriptOnNewDocument = struct {
     identifier: u32,
     source: []const u8,
@@ -833,14 +833,14 @@ const IsolatedWorld = struct {
         self.identity = .{};
     }
 
-    // The isolate world must share at least some of the state with the related page, specifically the DocumentHTML
+    // The isolate world must share at least some of the state with the related frame, specifically the DocumentHTML
     // (assuming grantUniversalAccess will be set to True!).
-    // We just created the world and the page. The page's state lives in the session, but is update on navigation.
-    // This also means this pointer becomes invalid after removePage until a new page is created.
-    // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
-    pub fn createContext(self: *IsolatedWorld, page: *Page) !*js.Context {
+    // We just created the world and the frame. The frame's state lives in the session, but is update on navigation.
+    // This also means this pointer becomes invalid after removeFrame until a new frame is created.
+    // Currently we have only 1 frame and thus also only 1 state in the isolate world.
+    pub fn createContext(self: *IsolatedWorld, frame: *Frame) !*js.Context {
         if (self.context == null) {
-            const ctx = try self.browser.env.createContext(page, .{
+            const ctx = try self.browser.env.createContext(frame, .{
                 .identity = &self.identity,
                 .identity_arena = self.arena,
                 .call_arena = self.call_arena,

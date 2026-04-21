@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const Element = @import("../Element.zig");
 
 const NodeList = @import("NodeList.zig");
@@ -36,15 +36,15 @@ pub const NamedItemResult = union(enum) {
     radio_node_list: *RadioNodeList,
 };
 
-pub fn length(self: *HTMLFormControlsCollection, page: *Page) u32 {
-    return self._proto.length(page);
+pub fn length(self: *HTMLFormControlsCollection, frame: *Frame) u32 {
+    return self._proto.length(frame);
 }
 
-pub fn getAtIndex(self: *HTMLFormControlsCollection, index: usize, page: *Page) ?*Element {
-    return self._proto.getAtIndex(index, page);
+pub fn getAtIndex(self: *HTMLFormControlsCollection, index: usize, frame: *Frame) ?*Element {
+    return self._proto.getAtIndex(index, frame);
 }
 
-pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, page: *Page) !?NamedItemResult {
+pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Frame) !?NamedItemResult {
     if (name.len == 0) {
         return null;
     }
@@ -79,13 +79,13 @@ pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, page: *Pag
             count += 1;
 
             if (count == 2) {
-                const radio_node_list = try page._factory.create(RadioNodeList{
+                const radio_node_list = try frame._factory.create(RadioNodeList{
                     ._proto = undefined,
                     ._form_collection = self,
-                    ._name = try page.dupeString(name),
+                    ._name = try frame.dupeString(name),
                 });
 
-                radio_node_list._proto = try page._factory.create(NodeList{ ._data = .{ .radio_node_list = radio_node_list } });
+                radio_node_list._proto = try frame._factory.create(NodeList{ ._data = .{ .radio_node_list = radio_node_list } });
 
                 return .{ .radio_node_list = radio_node_list };
             }

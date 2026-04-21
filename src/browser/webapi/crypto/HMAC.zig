@@ -22,7 +22,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const crypto = @import("../../../sys/libcrypto.zig");
 
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const js = @import("../../js/js.zig");
 const algorithm = @import("algorithm.zig");
 
@@ -32,9 +32,9 @@ pub fn init(
     params: algorithm.Init.HmacKeyGen,
     extractable: bool,
     key_usages: []const []const u8,
-    page: *Page,
+    frame: *Frame,
 ) !js.Promise {
-    const local = page.js.local.?;
+    const local = frame.js.local.?;
     // Find digest.
     const digest = crypto.findDigest(switch (params.hash) {
         .string => |str| str,
@@ -74,14 +74,14 @@ pub fn init(
     };
 
     // Should we reject this in promise too?
-    const key = try page.arena.alloc(u8, block_size);
-    errdefer page.arena.free(key);
+    const key = try frame.arena.alloc(u8, block_size);
+    errdefer frame.arena.free(key);
 
     // HMAC is simply CSPRNG.
     const res = crypto.RAND_bytes(key.ptr, key.len);
     lp.assert(res == 1, "HMAC.init", .{ .res = res });
 
-    const crypto_key = try page._factory.create(CryptoKey{
+    const crypto_key = try frame._factory.create(CryptoKey{
         ._type = .hmac,
         ._extractable = extractable,
         ._usages = mask,
@@ -96,16 +96,16 @@ pub fn sign(
     algo: algorithm.Sign,
     crypto_key: *const CryptoKey,
     data: []const u8,
-    page: *Page,
+    frame: *Frame,
 ) !js.Promise {
-    var resolver = page.js.local.?.createPromiseResolver();
+    var resolver = frame.js.local.?.createPromiseResolver();
 
     if (!algo.isHMAC() or !crypto_key.canSign()) {
         resolver.rejectError("HMAC.sign", .{ .dom_exception = .{ .err = error.InvalidAccessError } });
         return resolver.promise();
     }
 
-    const buffer = try page.call_arena.alloc(u8, crypto.EVP_MD_size(crypto_key.getDigest()));
+    const buffer = try frame.call_arena.alloc(u8, crypto.EVP_MD_size(crypto_key.getDigest()));
     var out_len: u32 = 0;
     // Try to sign.
     _ = crypto.HMAC(
@@ -117,7 +117,7 @@ pub fn sign(
         buffer.ptr,
         &out_len,
     ) orelse {
-        page.call_arena.free(buffer);
+        frame.call_arena.free(buffer);
         // Failure.
         resolver.rejectError("HMAC.sign", .{ .dom_exception = .{ .err = error.InvalidAccessError } });
         return resolver.promise();
@@ -132,9 +132,9 @@ pub fn verify(
     crypto_key: *const CryptoKey,
     signature: []const u8,
     data: []const u8,
-    page: *Page,
+    frame: *Frame,
 ) !js.Promise {
-    var resolver = page.js.local.?.createPromiseResolver();
+    var resolver = frame.js.local.?.createPromiseResolver();
 
     if (!crypto_key.canVerify()) {
         resolver.rejectError("HMAC.verify", .{ .dom_exception = .{ .err = error.InvalidAccessError } });

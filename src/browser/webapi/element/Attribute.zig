@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
@@ -58,17 +58,17 @@ pub fn getValue(self: *const Attribute) String {
     return self._value;
 }
 
-pub fn setValue(self: *Attribute, data_: ?String, page: *Page) !void {
+pub fn setValue(self: *Attribute, data_: ?String, frame: *Frame) !void {
     const data = data_ orelse String.empty;
     const el = self._element orelse {
-        self._value = try data.dupe(page.arena);
+        self._value = try data.dupe(frame.arena);
         return;
     };
     // this takes ownership of the data
-    try el.setAttribute(self._name, data, page);
+    try el.setAttribute(self._name, data, frame);
 
     // not the most efficient, but we don't expect this to be called often
-    self._value = (try el.getAttribute(self._name, page)) orelse String.empty;
+    self._value = (try el.getAttribute(self._name, frame)) orelse String.empty;
 }
 
 pub fn getNamespaceURI(_: *const Attribute) ?[]const u8 {
@@ -83,8 +83,8 @@ pub fn isEqualNode(self: *const Attribute, other: *const Attribute) bool {
     return self.getName().eql(other.getName()) and self.getValue().eql(other.getValue());
 }
 
-pub fn clone(self: *const Attribute, page: *Page) !*Attribute {
-    return page._factory.node(Attribute{
+pub fn clone(self: *const Attribute, frame: *Frame) !*Attribute {
+    return frame._factory.node(Attribute{
         ._proto = undefined,
         ._element = self._element,
         ._name = self._name,
@@ -123,7 +123,7 @@ pub const JsApi = struct {
 // Attribute value (the same JSValue) when called multiple time, and that gets
 // more important when you look at the [hardly every used] el.removeAttributeNode
 // and setAttributeNode.
-// So, we maintain a lookup, page._attribute_lookup, to serve as an identity map
+// So, we maintain a lookup, frame._attribute_lookup, to serve as an identity map
 // from our internal Entry to a proper Attribute. This is lazily populated
 // whenever an Attribute is created. Why not just have an ?*Attribute field
 // in our Entry? Because that would require an extra 8 bytes for every single
@@ -139,8 +139,8 @@ pub const List = struct {
         return self._list.first == null;
     }
 
-    pub fn get(self: *const List, name: String, page: *Page) !?String {
-        const entry = (try self.getEntry(name, page)) orelse return null;
+    pub fn get(self: *const List, name: String, frame: *Frame) !?String {
+        const entry = (try self.getEntry(name, frame)) orelse return null;
         return entry._value;
     }
 
@@ -180,44 +180,44 @@ pub const List = struct {
         return self.getEntryWithNormalizedName(name) != null;
     }
 
-    pub fn getAttribute(self: *const List, name: String, element: ?*Element, page: *Page) !?*Attribute {
-        const entry = (try self.getEntry(name, page)) orelse return null;
-        const gop = try page._attribute_lookup.getOrPut(page.arena, @intFromPtr(entry));
+    pub fn getAttribute(self: *const List, name: String, element: ?*Element, frame: *Frame) !?*Attribute {
+        const entry = (try self.getEntry(name, frame)) orelse return null;
+        const gop = try frame._attribute_lookup.getOrPut(frame.arena, @intFromPtr(entry));
         if (gop.found_existing) {
             return gop.value_ptr.*;
         }
-        const attribute = try entry.toAttribute(element, page);
+        const attribute = try entry.toAttribute(element, frame);
         gop.value_ptr.* = attribute;
         return attribute;
     }
 
-    pub fn put(self: *List, name: String, value: String, element: *Element, page: *Page) !*Entry {
-        const result = try self.getEntryAndNormalizedName(name, page);
-        return self._put(result, value, element, page);
+    pub fn put(self: *List, name: String, value: String, element: *Element, frame: *Frame) !*Entry {
+        const result = try self.getEntryAndNormalizedName(name, frame);
+        return self._put(result, value, element, frame);
     }
 
-    pub fn putSafe(self: *List, name: String, value: String, element: *Element, page: *Page) !*Entry {
+    pub fn putSafe(self: *List, name: String, value: String, element: *Element, frame: *Frame) !*Entry {
         const entry = self.getEntryWithNormalizedName(name);
-        return self._put(.{ .entry = entry, .normalized = name }, value, element, page);
+        return self._put(.{ .entry = entry, .normalized = name }, value, element, frame);
     }
 
-    fn _put(self: *List, result: NormalizeAndEntry, value: String, element: *Element, page: *Page) !*Entry {
+    fn _put(self: *List, result: NormalizeAndEntry, value: String, element: *Element, frame: *Frame) !*Entry {
         const is_id = shouldAddToIdMap(result.normalized, element);
 
         var entry: *Entry = undefined;
         var old_value: ?String = null;
         if (result.entry) |e| {
-            old_value = try e._value.dupe(page.call_arena);
+            old_value = try e._value.dupe(frame.call_arena);
             if (is_id) {
-                page.removeElementId(element, e._value.str());
+                frame.removeElementId(element, e._value.str());
             }
-            e._value = try value.dupe(page.arena);
+            e._value = try value.dupe(frame.arena);
             entry = e;
         } else {
-            entry = try page._factory.create(Entry{
+            entry = try frame._factory.create(Entry{
                 ._node = .{},
-                ._name = try result.normalized.dupe(page.arena),
-                ._value = try value.dupe(page.arena),
+                ._name = try result.normalized.dupe(frame.arena),
+                ._value = try value.dupe(frame.arena),
             });
             self._list.append(&entry._node);
             self._len += 1;
@@ -227,84 +227,84 @@ pub const List = struct {
             const parent = element.asNode()._parent orelse {
                 return entry;
             };
-            try page.addElementId(parent, element, entry._value.str());
+            try frame.addElementId(parent, element, entry._value.str());
         }
-        page.domChanged();
-        page.attributeChange(element, result.normalized, entry._value, old_value);
+        frame.domChanged();
+        frame.attributeChange(element, result.normalized, entry._value, old_value);
         return entry;
     }
 
     // Optimized for cloning. We know `name` is already normalized. We know there isn't duplicates.
     // We know the Element is detached (and thus, don't need to check for `id`).
-    pub fn putForCloned(self: *List, name: []const u8, value: []const u8, page: *Page) !void {
-        const entry = try page._factory.create(Entry{
+    pub fn putForCloned(self: *List, name: []const u8, value: []const u8, frame: *Frame) !void {
+        const entry = try frame._factory.create(Entry{
             ._node = .{},
-            ._name = try String.init(page.arena, name, .{}),
-            ._value = try String.init(page.arena, value, .{}),
+            ._name = try String.init(frame.arena, name, .{}),
+            ._value = try String.init(frame.arena, value, .{}),
         });
         self._list.append(&entry._node);
         self._len += 1;
     }
 
     // not efficient, won't be called often (if ever!)
-    pub fn putAttribute(self: *List, attribute: *Attribute, element: *Element, page: *Page) !?*Attribute {
+    pub fn putAttribute(self: *List, attribute: *Attribute, element: *Element, frame: *Frame) !?*Attribute {
         // we expect our caller to make sure this is true
         if (comptime IS_DEBUG) {
             std.debug.assert(attribute._element == null);
         }
 
-        const existing_attribute = try self.getAttribute(attribute._name, element, page);
+        const existing_attribute = try self.getAttribute(attribute._name, element, frame);
         if (existing_attribute) |ea| {
-            try self.delete(ea._name, element, page);
+            try self.delete(ea._name, element, frame);
         }
 
-        const entry = try self.put(attribute._name, attribute._value, element, page);
+        const entry = try self.put(attribute._name, attribute._value, element, frame);
         attribute._element = element;
-        try page._attribute_lookup.put(page.arena, @intFromPtr(entry), attribute);
+        try frame._attribute_lookup.put(frame.arena, @intFromPtr(entry), attribute);
         return existing_attribute;
     }
 
     // called form our parser, names already lower-cased
-    pub fn putNew(self: *List, name: []const u8, value: []const u8, page: *Page) !void {
-        if (try self.getEntry(.wrap(name), page) != null) {
+    pub fn putNew(self: *List, name: []const u8, value: []const u8, frame: *Frame) !void {
+        if (try self.getEntry(.wrap(name), frame) != null) {
             // When parsing, if there are duplicate names, it isn't valid, and
             // the first is kept
             return;
         }
 
-        const entry = try page._factory.create(Entry{
+        const entry = try frame._factory.create(Entry{
             ._node = .{},
-            ._name = try String.init(page.arena, name, .{}),
-            ._value = try String.init(page.arena, value, .{}),
+            ._name = try String.init(frame.arena, name, .{}),
+            ._value = try String.init(frame.arena, value, .{}),
         });
         self._list.append(&entry._node);
         self._len += 1;
     }
 
-    pub fn delete(self: *List, name: String, element: *Element, page: *Page) !void {
-        const result = try self.getEntryAndNormalizedName(name, page);
+    pub fn delete(self: *List, name: String, element: *Element, frame: *Frame) !void {
+        const result = try self.getEntryAndNormalizedName(name, frame);
         const entry = result.entry orelse return;
 
         const is_id = shouldAddToIdMap(result.normalized, element);
         const old_value = entry._value;
 
         if (is_id) {
-            page.removeElementId(element, entry._value.str());
+            frame.removeElementId(element, entry._value.str());
         }
 
-        page.domChanged();
-        page.attributeRemove(element, result.normalized, old_value);
-        _ = page._attribute_lookup.remove(@intFromPtr(entry));
+        frame.domChanged();
+        frame.attributeRemove(element, result.normalized, old_value);
+        _ = frame._attribute_lookup.remove(@intFromPtr(entry));
         self._list.remove(&entry._node);
         self._len -= 1;
-        page._factory.destroy(entry);
+        frame._factory.destroy(entry);
     }
 
-    pub fn getNames(self: *const List, page: *Page) ![][]const u8 {
+    pub fn getNames(self: *const List, frame: *Frame) ![][]const u8 {
         var arr: std.ArrayList([]const u8) = .empty;
         var node = self._list.first;
         while (node) |n| {
-            try arr.append(page.call_arena, Entry.fromNode(n)._name.str());
+            try arr.append(frame.call_arena, Entry.fromNode(n)._name.str());
             node = n.next;
         }
         return arr.items;
@@ -314,8 +314,8 @@ pub const List = struct {
         return .{ ._node = self._list.first };
     }
 
-    fn getEntry(self: *const List, name: String, page: *Page) !?*Entry {
-        const result = try self.getEntryAndNormalizedName(name, page);
+    fn getEntry(self: *const List, name: String, frame: *Frame) !?*Entry {
+        const result = try self.getEntryAndNormalizedName(name, frame);
         return result.entry;
     }
 
@@ -325,9 +325,9 @@ pub const List = struct {
         entry: ?*Entry,
         normalized: String,
     };
-    fn getEntryAndNormalizedName(self: *const List, name: String, page: *Page) !NormalizeAndEntry {
+    fn getEntryAndNormalizedName(self: *const List, name: String, frame: *Frame) !NormalizeAndEntry {
         const normalized =
-            if (self.normalize) try normalizeNameForLookup(name, page) else name;
+            if (self.normalize) try normalizeNameForLookup(name, frame) else name;
 
         return .{
             .normalized = normalized,
@@ -366,15 +366,15 @@ pub const List = struct {
             return formatAttribute(self._name, self._value, writer);
         }
 
-        pub fn toAttribute(self: *const Entry, element: ?*Element, page: *Page) !*Attribute {
-            return page._factory.node(Attribute{
+        pub fn toAttribute(self: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
+            return frame._factory.node(Attribute{
                 ._proto = undefined,
                 ._element = element,
                 // Cannot directly reference self._name.str() and self._value.str()
                 // This attribute can outlive the list entry (the node can be
                 // removed from the element's attribute, but still exist in the DOM)
-                ._name = try self._name.dupe(page.arena),
-                ._value = try self._value.dupe(page.arena),
+                ._name = try self._name.dupe(frame.arena),
+                ._value = try self._value.dupe(frame.arena),
             });
         }
     };
@@ -422,14 +422,14 @@ pub fn validateAttributeName(name: String) !void {
     }
 }
 
-fn normalizeNameForLookup(name: String, page: *Page) !String {
+fn normalizeNameForLookup(name: String, frame: *Frame) !String {
     if (!needsLowerCasing(name.str())) {
         return name;
     }
-    const normalized = if (name.len < page.buf.len)
-        std.ascii.lowerString(&page.buf, name.str())
+    const normalized = if (name.len < frame.buf.len)
+        std.ascii.lowerString(&frame.buf, name.str())
     else
-        try std.ascii.allocLowerString(page.call_arena, name.str());
+        try std.ascii.allocLowerString(frame.call_arena, name.str());
 
     return .wrap(normalized);
 }
@@ -473,17 +473,17 @@ pub const NamedNodeMap = struct {
         return @intCast(self._list._list.len());
     }
 
-    pub fn getAtIndex(self: *const NamedNodeMap, index: usize, page: *Page) !?*Attribute {
+    pub fn getAtIndex(self: *const NamedNodeMap, index: usize, frame: *Frame) !?*Attribute {
         var i: usize = 0;
         var node = self._list._list.first;
         while (node) |n| {
             if (i == index) {
                 var entry = List.Entry.fromNode(n);
-                const gop = try page._attribute_lookup.getOrPut(page.arena, @intFromPtr(entry));
+                const gop = try frame._attribute_lookup.getOrPut(frame.arena, @intFromPtr(entry));
                 if (gop.found_existing) {
                     return gop.value_ptr.*;
                 }
-                const attribute = try entry.toAttribute(self._element, page);
+                const attribute = try entry.toAttribute(self._element, frame);
                 gop.value_ptr.* = attribute;
                 return attribute;
             }
@@ -493,35 +493,35 @@ pub const NamedNodeMap = struct {
         return null;
     }
 
-    pub fn getByName(self: *const NamedNodeMap, name: String, page: *Page) !?*Attribute {
-        return self._list.getAttribute(name, self._element, page);
+    pub fn getByName(self: *const NamedNodeMap, name: String, frame: *Frame) !?*Attribute {
+        return self._list.getAttribute(name, self._element, frame);
     }
 
-    pub fn set(self: *const NamedNodeMap, attribute: *Attribute, page: *Page) !?*Attribute {
+    pub fn set(self: *const NamedNodeMap, attribute: *Attribute, frame: *Frame) !?*Attribute {
         attribute._element = null; // just a requirement of list.putAttribute, it'll re-set it.
-        return self._list.putAttribute(attribute, self._element, page);
+        return self._list.putAttribute(attribute, self._element, frame);
     }
 
-    pub fn removeByName(self: *const NamedNodeMap, name: String, page: *Page) !?*Attribute {
+    pub fn removeByName(self: *const NamedNodeMap, name: String, frame: *Frame) !?*Attribute {
         // this 2-step process (get then delete) isn't efficient. But we don't
         // expect this to be called often, and this lets us keep delete straightforward.
-        const attr = (try self.getByName(name, page)) orelse return null;
-        try self._list.delete(name, self._element, page);
+        const attr = (try self.getByName(name, frame)) orelse return null;
+        try self._list.delete(name, self._element, frame);
         return attr;
     }
 
-    pub fn iterator(self: *const NamedNodeMap, page: *Page) !*Iterator {
-        return .init(.{ .list = self }, page);
+    pub fn iterator(self: *const NamedNodeMap, frame: *Frame) !*Iterator {
+        return .init(.{ .list = self }, frame);
     }
 
     pub const Iterator = GenericIterator(struct {
         index: usize = 0,
         list: *const NamedNodeMap,
 
-        pub fn next(self: *@This(), page: *Page) !?*Attribute {
+        pub fn next(self: *@This(), frame: *Frame) !?*Attribute {
             const index = self.index;
             self.index = index + 1;
-            return self.list.getAtIndex(index, page);
+            return self.list.getAtIndex(index, frame);
         }
     }, null);
 
@@ -541,7 +541,7 @@ pub const NamedNodeMap = struct {
         pub const setNamedItem = bridge.function(NamedNodeMap.set, .{});
         pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{});
         pub const item = bridge.function(_item, .{});
-        fn _item(self: *const NamedNodeMap, index: i32, page: *Page) !?*Attribute {
+        fn _item(self: *const NamedNodeMap, index: i32, frame: *Frame) !?*Attribute {
             // the bridge.indexed handles this, so if we want
             //   list.item(-2) to return the same as list[-2] we need to
             // 1 - take an i32 for the index
@@ -549,7 +549,7 @@ pub const NamedNodeMap = struct {
             if (index < 0) {
                 return null;
             }
-            return self.getAtIndex(@intCast(index), page);
+            return self.getAtIndex(@intCast(index), frame);
         }
         pub const symbol_iterator = bridge.iterator(NamedNodeMap.iterator, .{});
     };

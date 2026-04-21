@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Session = @import("../Session.zig");
 
 const v8 = js.v8;
@@ -161,7 +161,7 @@ pub const Function = struct {
         var params = @typeInfo(T).@"fn".params;
         for (params[1..]) |p| { // start at 1, skip self
             const PT = p.type.?;
-            if (PT == *Page or PT == *const Page) {
+            if (PT == *Frame or PT == *const Frame) {
                 break;
             }
             if (@typeInfo(PT) == .optional) {
@@ -428,9 +428,9 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
 
     // Only Page contexts have document.getElementById lookup
     switch (local.ctx.global) {
-        .page => |page| {
-            const document = page.document;
-            if (document.getElementById(property, page)) |el| {
+        .frame => |frame| {
+            const document = frame.document;
+            if (document.getElementById(property, frame)) |el| {
                 const js_val = local.zigValueToJs(el, .{}) catch return 0;
                 var pc = Caller.PropertyCallbackInfo{ .handle = handle.? };
                 pc.getReturnValue().set(js_val);

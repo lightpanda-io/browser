@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
 const UIEvent = @import("UIEvent.zig");
@@ -41,14 +41,14 @@ pub const Options = Event.inheritOptions(
     TextEventOptions,
 );
 
-pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*TextEvent {
-    const arena = try page.getArena(.tiny, "TextEvent");
-    errdefer page.releaseArena(arena);
+pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*TextEvent {
+    const arena = try frame.getArena(.tiny, "TextEvent");
+    errdefer frame.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 
     const opts = _opts orelse Options{};
 
-    const event = try page._factory.uiEvent(
+    const event = try frame._factory.uiEvent(
         arena,
         type_string,
         TextEvent{

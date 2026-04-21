@@ -65,10 +65,10 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
     event._is_trusted = false;
 
     switch (exec.context.global) {
-        .page => |page| {
+        .frame => |frame| {
             event.acquireRef();
-            defer _ = event.releaseRef(page._session);
-            try page._event_manager.dispatch(self, event);
+            defer _ = event.releaseRef(frame._session);
+            try frame._event_manager.dispatch(self, event);
         },
         .worker => |wgs| try wgs.dispatch(self, event, null),
     }
@@ -101,7 +101,7 @@ pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventLi
     };
 
     switch (exec.context.global) {
-        .page => |page| _ = try page._event_manager.register(self, typ, em_callback, options),
+        .frame => |frame| _ = try frame._event_manager.register(self, typ, em_callback, options),
         .worker => |wgs| _ = try wgs._event_manager.register(self, typ, em_callback, options),
     }
 }
@@ -138,7 +138,7 @@ pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: ?Even
     };
 
     switch (exec.context.global) {
-        .page => |page| page._event_manager.remove(self, typ, em_callback, use_capture),
+        .frame => |frame| frame._event_manager.remove(self, typ, em_callback, use_capture),
         .worker => |wgs| wgs._event_manager.remove(self, typ, em_callback, use_capture),
     }
 }
@@ -206,7 +206,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: EventTarget" {
-    // we create thousands of these per page. Nothing should bloat it.
+    // we create thousands of these per frame. Nothing should bloat it.
     try testing.expectEqual(16, @sizeOf(EventTarget));
     try testing.htmlRunner("events.html", .{});
 }

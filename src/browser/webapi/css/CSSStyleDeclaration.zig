@@ -22,7 +22,7 @@ const lp = @import("lightpanda");
 const CssParser = @import("../../css/Parser.zig");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const Element = @import("../Element.zig");
 
 const log = lp.log;
@@ -35,8 +35,8 @@ _element: ?*Element = null,
 _properties: std.DoublyLinkedList = .{},
 _is_computed: bool = false,
 
-pub fn init(element: ?*Element, is_computed: bool, page: *Page) !*CSSStyleDeclaration {
-    const self = try page._factory.create(CSSStyleDeclaration{
+pub fn init(element: ?*Element, is_computed: bool, frame: *Frame) !*CSSStyleDeclaration {
+    const self = try frame._factory.create(CSSStyleDeclaration{
         ._element = element,
         ._is_computed = is_computed,
     });
@@ -49,7 +49,7 @@ pub fn init(element: ?*Element, is_computed: bool, page: *Page) !*CSSStyleDeclar
             if (el.getAttributeSafe(comptime .wrap("style"))) |attr_value| {
                 var it = CssParser.parseDeclarationsList(attr_value);
                 while (it.next()) |declaration| {
-                    try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, page);
+                    try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, frame);
                 }
             }
         }
@@ -76,8 +76,8 @@ pub fn item(self: *const CSSStyleDeclaration, index: u32) []const u8 {
     return "";
 }
 
-pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const u8, page: *Page) []const u8 {
-    const normalized = normalizePropertyName(property_name, &page.buf);
+pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {
+    const normalized = normalizePropertyName(property_name, &frame.buf);
     const wrapped = String.wrap(normalized);
 
     // Computed styles must reflect stylesheet rules, not just the element's
@@ -86,9 +86,9 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     if (self._is_computed) {
         if (self._element) |element| {
             if (wrapped.eql(comptime .wrap("display"))) {
-                if (page._style_manager.hasDisplayNone(element)) return "none";
+                if (frame._style_manager.hasDisplayNone(element)) return "none";
             } else if (wrapped.eql(comptime .wrap("visibility"))) {
-                if (page._style_manager.hasVisibilityHiddenInherited(element)) return "hidden";
+                if (frame._style_manager.hasVisibilityHiddenInherited(element)) return "hidden";
             }
         }
     }
@@ -103,13 +103,13 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     return prop._value.str();
 }
 
-pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, page: *Page) []const u8 {
-    const normalized = normalizePropertyName(property_name, &page.buf);
+pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {
+    const normalized = normalizePropertyName(property_name, &frame.buf);
     const prop = self.findProperty(.wrap(normalized)) orelse return "";
     return if (prop._important) "important" else "";
 }
 
-pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, priority_: ?[]const u8, page: *Page) !void {
+pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, priority_: ?[]const u8, frame: *Frame) !void {
     // Validate priority
     const priority = priority_ orelse "";
     const important = if (priority.len > 0) blk: {
@@ -119,97 +119,97 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
         break :blk true;
     } else false;
 
-    try self.setPropertyImpl(property_name, value, important, page);
+    try self.setPropertyImpl(property_name, value, important, frame);
 
-    try self.syncStyleAttribute(page);
+    try self.syncStyleAttribute(frame);
 }
 
-fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, important: bool, page: *Page) !void {
+fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, important: bool, frame: *Frame) !void {
     if (value.len == 0) {
-        _ = try self.removePropertyImpl(property_name, page);
+        _ = try self.removePropertyImpl(property_name, frame);
         return;
     }
 
-    const normalized = normalizePropertyName(property_name, &page.buf);
+    const normalized = normalizePropertyName(property_name, &frame.buf);
 
     // Normalize the value for canonical serialization
-    const normalized_value = try normalizePropertyValue(page.call_arena, normalized, value);
+    const normalized_value = try normalizePropertyValue(frame.call_arena, normalized, value);
 
     // Find existing property
     if (self.findProperty(.wrap(normalized))) |existing| {
-        existing._value = try String.init(page.arena, normalized_value, .{});
+        existing._value = try String.init(frame.arena, normalized_value, .{});
         existing._important = important;
         return;
     }
 
     // Create new property
-    const prop = try page._factory.create(Property{
+    const prop = try frame._factory.create(Property{
         ._node = .{},
-        ._name = try String.init(page.arena, normalized, .{}),
-        ._value = try String.init(page.arena, normalized_value, .{}),
+        ._name = try String.init(frame.arena, normalized, .{}),
+        ._value = try String.init(frame.arena, normalized_value, .{}),
         ._important = important,
     });
     self._properties.append(&prop._node);
 }
 
-pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, page: *Page) ![]const u8 {
-    const result = try self.removePropertyImpl(property_name, page);
-    try self.syncStyleAttribute(page);
+pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) ![]const u8 {
+    const result = try self.removePropertyImpl(property_name, frame);
+    try self.syncStyleAttribute(frame);
     return result;
 }
 
-fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, page: *Page) ![]const u8 {
-    const normalized = normalizePropertyName(property_name, &page.buf);
+fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) ![]const u8 {
+    const normalized = normalizePropertyName(property_name, &frame.buf);
     const prop = self.findProperty(.wrap(normalized)) orelse return "";
 
     // the value might not be on the heap (it could be inlined in the small string
     // optimization), so we need to dupe it.
-    const old_value = try page.call_arena.dupe(u8, prop._value.str());
+    const old_value = try frame.call_arena.dupe(u8, prop._value.str());
     self._properties.remove(&prop._node);
-    page._factory.destroy(prop);
+    frame._factory.destroy(prop);
     return old_value;
 }
 
 // Serialize current properties back to the element's style attribute so that
 // DOM serialization (outerHTML, getAttribute) reflects JS-modified styles.
-fn syncStyleAttribute(self: *CSSStyleDeclaration, page: *Page) !void {
+fn syncStyleAttribute(self: *CSSStyleDeclaration, frame: *Frame) !void {
     const element = self._element orelse return;
-    const css_text = try self.getCssText(page);
-    try element.setAttributeSafe(comptime .wrap("style"), .wrap(css_text), page);
+    const css_text = try self.getCssText(frame);
+    try element.setAttributeSafe(comptime .wrap("style"), .wrap(css_text), frame);
 }
 
-pub fn getFloat(self: *const CSSStyleDeclaration, page: *Page) []const u8 {
-    return self.getPropertyValue("float", page);
+pub fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
+    return self.getPropertyValue("float", frame);
 }
 
-pub fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, page: *Page) !void {
-    try self.setPropertyImpl("float", value_ orelse "", false, page);
-    try self.syncStyleAttribute(page);
+pub fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) !void {
+    try self.setPropertyImpl("float", value_ orelse "", false, frame);
+    try self.syncStyleAttribute(frame);
 }
 
-pub fn getCssText(self: *const CSSStyleDeclaration, page: *Page) ![]const u8 {
-    var buf = std.Io.Writer.Allocating.init(page.call_arena);
+pub fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
+    var buf = std.Io.Writer.Allocating.init(frame.call_arena);
     try self.format(&buf.writer);
     return buf.written();
 }
 
-pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, page: *Page) !void {
+pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !void {
     // Clear existing properties
     var node = self._properties.first;
     while (node) |n| {
         const next = n.next;
         const prop = Property.fromNodeLink(n);
         self._properties.remove(n);
-        page._factory.destroy(prop);
+        frame._factory.destroy(prop);
         node = next;
     }
 
     // Parse and set new properties
     var it = CssParser.parseDeclarationsList(text);
     while (it.next()) |declaration| {
-        try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, page);
+        try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, frame);
     }
-    try self.syncStyleAttribute(page);
+    try self.syncStyleAttribute(frame);
 }
 
 pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {

@@ -242,6 +242,7 @@ const PipeTransform = struct {
     writable: *WritableStream,
     readable: *ReadableStream,
 };
+
 pub fn pipeThrough(self: *ReadableStream, transform: PipeTransform, exec: *const Execution) !*ReadableStream {
     if (self.getLocked()) {
         return error.ReaderLocked;
@@ -249,7 +250,6 @@ pub fn pipeThrough(self: *ReadableStream, transform: PipeTransform, exec: *const
 
     // Start async piping from this stream to the writable side
     try PipeState.startPipe(self, transform.writable, null, exec);
-
     return transform.readable;
 }
 
@@ -266,7 +266,6 @@ pub fn pipeTo(self: *ReadableStream, destination: *WritableStream, exec: *const 
     const persisted_resolver = try pipe_resolver.persist();
 
     try PipeState.startPipe(self, destination, persisted_resolver, exec);
-
     return promise;
 }
 

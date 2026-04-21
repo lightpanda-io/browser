@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const Session = @import("../../Session.zig");
 const Node = @import("../Node.zig");
 
@@ -57,44 +57,44 @@ pub fn acquireRef(self: *NodeList) void {
     self._rc.acquire();
 }
 
-pub fn length(self: *NodeList, page: *Page) !u32 {
+pub fn length(self: *NodeList, frame: *Frame) !u32 {
     return switch (self._data) {
-        .child_nodes => |impl| impl.length(page),
+        .child_nodes => |impl| impl.length(frame),
         .selector_list => |impl| @intCast(impl.getLength()),
         .radio_node_list => |impl| impl.getLength(),
-        .name => |*impl| impl.length(page),
+        .name => |*impl| impl.length(frame),
     };
 }
 
-pub fn indexedGet(self: *NodeList, index: usize, page: *Page) !*Node {
-    return try self.getAtIndex(index, page) orelse return error.NotHandled;
+pub fn indexedGet(self: *NodeList, index: usize, frame: *Frame) !*Node {
+    return try self.getAtIndex(index, frame) orelse return error.NotHandled;
 }
 
-pub fn getAtIndex(self: *NodeList, index: usize, page: *Page) !?*Node {
+pub fn getAtIndex(self: *NodeList, index: usize, frame: *Frame) !?*Node {
     return switch (self._data) {
-        .child_nodes => |impl| impl.getAtIndex(index, page),
+        .child_nodes => |impl| impl.getAtIndex(index, frame),
         .selector_list => |impl| impl.getAtIndex(index),
-        .radio_node_list => |impl| impl.getAtIndex(index, page),
-        .name => |*impl| if (impl.getAtIndex(index, page)) |el| el.asNode() else null,
+        .radio_node_list => |impl| impl.getAtIndex(index, frame),
+        .name => |*impl| if (impl.getAtIndex(index, frame)) |el| el.asNode() else null,
     };
 }
 
-pub fn keys(self: *NodeList, page: *Page) !*KeyIterator {
-    return .init(.{ .list = self }, page);
+pub fn keys(self: *NodeList, frame: *Frame) !*KeyIterator {
+    return .init(.{ .list = self }, frame);
 }
 
-pub fn values(self: *NodeList, page: *Page) !*ValueIterator {
-    return .init(.{ .list = self }, page);
+pub fn values(self: *NodeList, frame: *Frame) !*ValueIterator {
+    return .init(.{ .list = self }, frame);
 }
 
-pub fn entries(self: *NodeList, page: *Page) !*EntryIterator {
-    return .init(.{ .list = self }, page);
+pub fn entries(self: *NodeList, frame: *Frame) !*EntryIterator {
+    return .init(.{ .list = self }, frame);
 }
 
-pub fn forEach(self: *NodeList, cb: js.Function, page: *Page) !void {
+pub fn forEach(self: *NodeList, cb: js.Function, frame: *Frame) !void {
     var i: i32 = 0;
     while (true) : (i += 1) {
-        const node = try self.getAtIndex(@intCast(i), page) orelse return;
+        const node = try self.getAtIndex(@intCast(i), frame) orelse return;
 
         var caught: js.TryCatch.Caught = undefined;
         cb.tryCall(void, .{ node, i, self }, &caught) catch {
@@ -127,9 +127,9 @@ const Iterator = struct {
         self.list.acquireRef();
     }
 
-    pub fn next(self: *Iterator, page: *Page) !?Entry {
+    pub fn next(self: *Iterator, frame: *Frame) !?Entry {
         const index = self.index;
-        const node = try self.list.getAtIndex(index, page) orelse return null;
+        const node = try self.list.getAtIndex(index, frame) orelse return null;
         self.index = index + 1;
         return .{ index, node };
     }
@@ -154,9 +154,9 @@ pub const JsApi = struct {
     pub const forEach = bridge.function(NodeList.forEach, .{});
     pub const symbol_iterator = bridge.iterator(NodeList.values, .{});
 
-    fn getIndexes(self: *NodeList, page: *Page) !js.Array {
-        const len = try self.length(page);
-        var arr = page.js.local.?.newArray(len);
+    fn getIndexes(self: *NodeList, frame: *Frame) !js.Array {
+        const len = try self.length(frame);
+        var arr = frame.js.local.?.newArray(len);
         for (0..len) |i| {
             _ = try arr.set(@intCast(i), i, .{});
         }

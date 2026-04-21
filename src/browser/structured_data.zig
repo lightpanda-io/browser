@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const Page = @import("Page.zig");
+const Frame = @import("Frame.zig");
 const URL = @import("URL.zig");
 const TreeWalker = @import("webapi/TreeWalker.zig");
 const Element = @import("webapi/Element.zig");
@@ -132,11 +132,11 @@ fn writeProperties(jw: anytype, properties: []const Property) !void {
     try jw.endObject();
 }
 
-/// Extract all structured data from the page.
+/// Extract all structured data from the frame.
 pub fn collectStructuredData(
     root: *Node,
     arena: Allocator,
-    page: *Page,
+    frame: *Frame,
 ) !StructuredData {
     var json_ld: std.ArrayList([]const u8) = .empty;
     var open_graph: std.ArrayList(Property) = .empty;
@@ -175,7 +175,7 @@ pub fn collectStructuredData(
             },
             .meta => collectMeta(el, &open_graph, &twitter_card, &meta, arena) catch {},
             .title => try collectTitle(node, arena, &meta),
-            .link => try collectLink(el, arena, page, &links, &alternate),
+            .link => try collectLink(el, arena, frame, &links, &alternate),
             // Skip body subtree for non-JSON-LD — all other metadata is in <head>.
             // JSON-LD can appear in <body> so we don't skip the whole body.
             else => {},
@@ -282,13 +282,13 @@ fn collectTitle(
 fn collectLink(
     el: *Element,
     arena: Allocator,
-    page: *Page,
+    frame: *Frame,
     links: *std.ArrayList(Property),
     alternate: *std.ArrayList(AlternateLink),
 ) !void {
     const rel = el.getAttributeSafe(comptime .wrap("rel")) orelse return;
     const raw_href = el.getAttributeSafe(comptime .wrap("href")) orelse return;
-    const href = URL.resolve(arena, page.base(), raw_href, .{ .encoding = page.charset }) catch raw_href;
+    const href = URL.resolve(arena, frame.base(), raw_href, .{ .encoding = frame.charset }) catch raw_href;
 
     if (std.ascii.eqlIgnoreCase(rel, "alternate")) {
         try alternate.append(arena, .{
@@ -318,14 +318,14 @@ fn collectLink(
 const testing = @import("../testing.zig");
 
 fn testStructuredData(html: []const u8) !StructuredData {
-    const page = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.test_session.createFrame();
+    defer testing.test_session.removeFrame();
 
-    const doc = page.window._document;
-    const div = try doc.createElement("div", null, page);
-    try page.parseHtmlAsChildren(div.asNode(), html);
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try frame.parseHtmlAsChildren(div.asNode(), html);
 
-    return collectStructuredData(div.asNode(), page.call_arena, page);
+    return collectStructuredData(div.asNode(), frame.call_arena, frame);
 }
 
 fn findProperty(props: []const Property, key: []const u8) ?[]const u8 {

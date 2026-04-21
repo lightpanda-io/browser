@@ -22,7 +22,7 @@ const js = @import("../../js/js.zig");
 const http = @import("../../../network/http.zig");
 
 const URL = @import("../URL.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const Headers = @import("Headers.zig");
 const Blob = @import("../Blob.zig");
 const AbortSignal = @import("../AbortSignal.zig");

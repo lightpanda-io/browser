@@ -24,7 +24,7 @@ const reflect = @import("reflect.zig");
 
 const SlabAllocator = @import("../slab.zig").SlabAllocator;
 
-const Page = @import("Page.zig");
+const Frame = @import("Frame.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const UIEvent = @import("webapi/event/UIEvent.zig");
@@ -266,10 +266,10 @@ pub fn blob(_: *const Factory, arena: Allocator, child: anytype) !*@TypeOf(child
     return chain.get(1);
 }
 
-pub fn abstractRange(_: *const Factory, arena: Allocator, child: anytype, page: *Page) !*@TypeOf(child) {
+pub fn abstractRange(_: *const Factory, arena: Allocator, child: anytype, frame: *Frame) !*@TypeOf(child) {
     const chain = try PrototypeChain(&.{ AbstractRange, @TypeOf(child) }).allocate(arena);
 
-    const doc = page.document.asNode();
+    const doc = frame.document.asNode();
     const abstract_range = chain.get(0);
     abstract_range.* = AbstractRange{
         ._rc = .{},
@@ -278,11 +278,11 @@ pub fn abstractRange(_: *const Factory, arena: Allocator, child: anytype, page: 
         ._start_offset = 0,
         ._end_container = doc,
         ._start_container = doc,
-        ._page_loader_id = page._loader_id,
+        ._frame_loader_id = frame._loader_id,
         ._type = unionInit(AbstractRange.Type, chain.get(1)),
     };
     chain.setLeaf(1, child);
-    page._live_ranges.append(&abstract_range._range_link);
+    frame._live_ranges.append(&abstract_range._range_link);
     return chain.get(1);
 }
 

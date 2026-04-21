@@ -19,7 +19,7 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Node = @import("Node.zig");
 const dump = @import("../dump.zig");
 
@@ -32,13 +32,13 @@ pub fn init() XMLSerializer {
     return .{};
 }
 
-pub fn serializeToString(self: *const XMLSerializer, node: *Node, page: *Page) ![]const u8 {
+pub fn serializeToString(self: *const XMLSerializer, node: *Node, frame: *Frame) ![]const u8 {
     _ = self;
-    var buf = std.Io.Writer.Allocating.init(page.call_arena);
+    var buf = std.Io.Writer.Allocating.init(frame.call_arena);
     if (node.is(Node.Document)) |doc| {
-        try dump.root(doc, .{ .shadow = .skip }, &buf.writer, page);
+        try dump.root(doc, .{ .shadow = .skip }, &buf.writer, frame);
     } else {
-        try dump.deep(node, .{ .shadow = .skip }, &buf.writer, page);
+        try dump.deep(node, .{ .shadow = .skip }, &buf.writer, frame);
     }
     // Not sure about this trim. But `dump` is meant to display relatively
     // pretty HTML, so it does include newlines, which can result in a trailing

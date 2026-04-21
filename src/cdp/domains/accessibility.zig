@@ -50,20 +50,20 @@ fn getFullAXTree(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const session = bc.session;
 
-    const page = blk: {
+    const frame = blk: {
         const frame_id = params.frameId orelse {
-            break :blk session.currentPage() orelse return error.PageNotLoaded;
+            break :blk session.currentFrame() orelse return error.FrameNotLoaded;
         };
-        break :blk session.findPageByFrameId(try id.parseFrameId(frame_id)) orelse {
+        break :blk session.findFrameByFrameId(try id.parseFrameId(frame_id)) orelse {
             return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
         };
     };
 
-    const doc = page.window._document.asNode();
+    const doc = frame.window._document.asNode();
     const node = try bc.node_registry.register(doc);
 
-    const temp_arena = try page.getArena(.medium, "AXNode");
-    defer page.releaseArena(temp_arena);
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer frame.releaseArena(temp_arena);
 
     return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{}) }, .{});
 }

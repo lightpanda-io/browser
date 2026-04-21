@@ -1,14 +1,14 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const CSSStyleSheet = @import("CSSStyleSheet.zig");
 
 const StyleSheetList = @This();
 
 _sheets: std.ArrayList(*CSSStyleSheet) = .empty,
 
-pub fn init(page: *Page) !*StyleSheetList {
-    return page._factory.create(StyleSheetList{});
+pub fn init(frame: *Frame) !*StyleSheetList {
+    return frame._factory.create(StyleSheetList{});
 }
 
 pub fn length(self: *const StyleSheetList) u32 {
@@ -20,8 +20,8 @@ pub fn item(self: *const StyleSheetList, index: usize) ?*CSSStyleSheet {
     return self._sheets.items[index];
 }
 
-pub fn add(self: *StyleSheetList, sheet: *CSSStyleSheet, page: *Page) !void {
-    try self._sheets.append(page.arena, sheet);
+pub fn add(self: *StyleSheetList, sheet: *CSSStyleSheet, frame: *Frame) !void {
+    try self._sheets.append(frame.arena, sheet);
 }
 
 pub fn remove(self: *StyleSheetList, sheet: *CSSStyleSheet) void {

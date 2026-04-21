@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 const Window = @import("../../Window.zig");
 const Document = @import("../../Document.zig");
 const Node = @import("../../Node.zig");
@@ -38,9 +38,9 @@ pub fn asNode(self: *IFrame) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getContentWindow(self: *const IFrame, page: *Page) ?Window.Access {
+pub fn getContentWindow(self: *const IFrame, frame: *Frame) ?Window.Access {
     const frame_window = self._window orelse return null;
-    return Window.Access.init(page.window, frame_window);
+    return Window.Access.init(frame.window, frame_window);
 }
 
 pub fn getContentDocument(self: *const IFrame) ?*Document {
@@ -48,20 +48,20 @@ pub fn getContentDocument(self: *const IFrame) ?*Document {
     return window._document;
 }
 
-pub fn getSrc(self: *IFrame, page: *Page) ![:0]const u8 {
+pub fn getSrc(self: *IFrame, frame: *Frame) ![:0]const u8 {
     if (self._src.len == 0) return "";
-    return self.asNode().resolveURL(self._src, page, .{});
+    return self.asNode().resolveURL(self._src, frame, .{});
 }
 
-pub fn setSrc(self: *IFrame, src: []const u8, page: *Page) !void {
+pub fn setSrc(self: *IFrame, src: []const u8, frame: *Frame) !void {
     const element = self.asElement();
-    try element.setAttributeSafe(comptime .wrap("src"), .wrap(src), page);
+    try element.setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
     self._src = element.getAttributeSafe(comptime .wrap("src")) orelse unreachable;
     if (element.asNode().isConnected()) {
         // unlike script, an iframe is reloaded every time the src is set
         // even if it's set to the same URL.
         self._executed = false;
-        try page.iframeAddedCallback(self);
+        try frame.iframeAddedCallback(self);
     }
 }
 
@@ -69,8 +69,8 @@ pub fn getName(self: *IFrame) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
-pub fn setName(self: *IFrame, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), page);
+pub fn setName(self: *IFrame, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), frame);
 }
 
 pub const JsApi = struct {
@@ -89,7 +89,7 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
-    pub fn complete(node: *Node, _: *Page) !void {
+    pub fn complete(node: *Node, _: *Frame) !void {
         const self = node.as(IFrame);
         const element = self.asElement();
         self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";

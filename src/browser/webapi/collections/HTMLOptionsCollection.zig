@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
 const HTMLCollection = @import("HTMLCollection.zig");
@@ -30,17 +30,17 @@ _proto: *HTMLCollection,
 _select: *@import("../element/html/Select.zig"),
 
 // Forward length to HTMLCollection
-pub fn length(self: *HTMLOptionsCollection, page: *Page) u32 {
-    return self._proto.length(page);
+pub fn length(self: *HTMLOptionsCollection, frame: *Frame) u32 {
+    return self._proto.length(frame);
 }
 
 // Forward indexed access to HTMLCollection
-pub fn getAtIndex(self: *HTMLOptionsCollection, index: usize, page: *Page) ?*Element {
-    return self._proto.getAtIndex(index, page);
+pub fn getAtIndex(self: *HTMLOptionsCollection, index: usize, frame: *Frame) ?*Element {
+    return self._proto.getAtIndex(index, frame);
 }
 
-pub fn getByName(self: *HTMLOptionsCollection, name: []const u8, page: *Page) ?*Element {
-    return self._proto.getByName(name, page);
+pub fn getByName(self: *HTMLOptionsCollection, name: []const u8, frame: *Frame) ?*Element {
+    return self._proto.getByName(name, frame);
 }
 
 // Forward selectedIndex to the owning select element
@@ -60,7 +60,7 @@ const AddBeforeOption = union(enum) {
 };
 
 // Add a new option element
-pub fn add(self: *HTMLOptionsCollection, element: *Option, before_: ?AddBeforeOption, page: *Page) !void {
+pub fn add(self: *HTMLOptionsCollection, element: *Option, before_: ?AddBeforeOption, frame: *Frame) !void {
     const select_node = self._select.asNode();
     const element_node = element.asElement().asNode();
 
@@ -68,24 +68,24 @@ pub fn add(self: *HTMLOptionsCollection, element: *Option, before_: ?AddBeforeOp
     if (before_) |before| {
         switch (before) {
             .index => |idx| {
-                if (self.getAtIndex(idx, page)) |el| {
+                if (self.getAtIndex(idx, frame)) |el| {
                     before_node = el.asNode();
                 }
             },
             .option => |before_option| before_node = before_option.asNode(),
         }
     }
-    _ = try select_node.insertBefore(element_node, before_node, page);
+    _ = try select_node.insertBefore(element_node, before_node, frame);
 }
 
 // Remove an option element by index
-pub fn remove(self: *HTMLOptionsCollection, index: i32, page: *Page) void {
+pub fn remove(self: *HTMLOptionsCollection, index: i32, frame: *Frame) void {
     if (index < 0) {
         return;
     }
 
-    if (self._proto.getAtIndex(@intCast(index), page)) |element| {
-        element.remove(page);
+    if (self._proto.getAtIndex(@intCast(index), frame)) |element| {
+        element.remove(frame);
     }
 }
 

@@ -19,7 +19,7 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
@@ -52,8 +52,8 @@ pub fn as(self: *DocumentFragment, comptime T: type) *T {
     return self.is(T).?;
 }
 
-pub fn init(page: *Page) !*DocumentFragment {
-    return page._factory.node(DocumentFragment{
+pub fn init(frame: *Frame) !*DocumentFragment {
+    return frame._factory.node(DocumentFragment{
         ._type = .generic,
         ._proto = undefined,
     });
@@ -83,16 +83,16 @@ pub fn getElementById(self: *DocumentFragment, id: []const u8) ?*Element {
     return null;
 }
 
-pub fn querySelector(self: *DocumentFragment, selector: []const u8, page: *Page) !?*Element {
-    return Selector.querySelector(self.asNode(), selector, page);
+pub fn querySelector(self: *DocumentFragment, selector: []const u8, frame: *Frame) !?*Element {
+    return Selector.querySelector(self.asNode(), selector, frame);
 }
 
-pub fn querySelectorAll(self: *DocumentFragment, input: []const u8, page: *Page) !*Selector.List {
-    return Selector.querySelectorAll(self.asNode(), input, page);
+pub fn querySelectorAll(self: *DocumentFragment, input: []const u8, frame: *Frame) !*Selector.List {
+    return Selector.querySelectorAll(self.asNode(), input, frame);
 }
 
-pub fn getChildren(self: *DocumentFragment, page: *Page) !collections.NodeLive(.child_elements) {
-    return collections.NodeLive(.child_elements).init(self.asNode(), {}, page);
+pub fn getChildren(self: *DocumentFragment, frame: *Frame) !collections.NodeLive(.child_elements) {
+    return collections.NodeLive(.child_elements).init(self.asNode(), {}, frame);
 }
 
 pub fn firstElementChild(self: *DocumentFragment) ?*Element {
@@ -124,51 +124,51 @@ pub fn getChildElementCount(self: *DocumentFragment) usize {
     return count;
 }
 
-pub fn append(self: *DocumentFragment, nodes: []const Node.NodeOrText, page: *Page) !void {
+pub fn append(self: *DocumentFragment, nodes: []const Node.NodeOrText, frame: *Frame) !void {
     const parent = self.asNode();
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(page);
-        _ = try parent.appendChild(child, page);
+        const child = try node_or_text.toNode(frame);
+        _ = try parent.appendChild(child, frame);
     }
 }
 
-pub fn prepend(self: *DocumentFragment, nodes: []const Node.NodeOrText, page: *Page) !void {
+pub fn prepend(self: *DocumentFragment, nodes: []const Node.NodeOrText, frame: *Frame) !void {
     const parent = self.asNode();
     var i = nodes.len;
     while (i > 0) {
         i -= 1;
-        const child = try nodes[i].toNode(page);
-        _ = try parent.insertBefore(child, parent.firstChild(), page);
+        const child = try nodes[i].toNode(frame);
+        _ = try parent.insertBefore(child, parent.firstChild(), frame);
     }
 }
 
-pub fn replaceChildren(self: *DocumentFragment, nodes: []const Node.NodeOrText, page: *Page) !void {
-    return self.asNode().replaceChildren(nodes, page);
+pub fn replaceChildren(self: *DocumentFragment, nodes: []const Node.NodeOrText, frame: *Frame) !void {
+    return self.asNode().replaceChildren(nodes, frame);
 }
 
-pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer, page: *Page) !void {
+pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer, frame: *Frame) !void {
     const dump = @import("../dump.zig");
-    return dump.children(self.asNode(), .{ .shadow = .complete }, writer, page);
+    return dump.children(self.asNode(), .{ .shadow = .complete }, writer, frame);
 }
 
-pub fn setInnerHTML(self: *DocumentFragment, html: []const u8, page: *Page) !void {
+pub fn setInnerHTML(self: *DocumentFragment, html: []const u8, frame: *Frame) !void {
     const parent = self.asNode();
 
-    page.domChanged();
+    frame.domChanged();
     var it = parent.childrenIterator();
     while (it.next()) |child| {
-        page.removeNode(parent, child, .{ .will_be_reconnected = false });
+        frame.removeNode(parent, child, .{ .will_be_reconnected = false });
     }
 
     if (html.len == 0) {
         return;
     }
 
-    try page.parseHtmlAsChildren(parent, html);
+    try frame.parseHtmlAsChildren(parent, html);
 }
 
-pub fn cloneFragment(self: *DocumentFragment, deep: bool, page: *Page) !*Node {
-    const fragment = try DocumentFragment.init(page);
+pub fn cloneFragment(self: *DocumentFragment, deep: bool, frame: *Frame) !*Node {
+    const fragment = try DocumentFragment.init(frame);
     const fragment_node = fragment.asNode();
 
     if (deep) {
@@ -177,8 +177,8 @@ pub fn cloneFragment(self: *DocumentFragment, deep: bool, page: *Page) !*Node {
 
         var child_it = node.childrenIterator();
         while (child_it.next()) |child| {
-            if (try child.cloneNodeForAppending(true, page)) |cloned_child| {
-                try page.appendNode(fragment_node, cloned_child, .{ .child_already_connected = self_is_connected });
+            if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
+                try frame.appendNode(fragment_node, cloned_child, .{ .child_already_connected = self_is_connected });
             }
         }
     }
@@ -244,9 +244,9 @@ pub const JsApi = struct {
     pub const replaceChildren = bridge.function(DocumentFragment.replaceChildren, .{ .dom_exception = true });
     pub const innerHTML = bridge.accessor(_innerHTML, DocumentFragment.setInnerHTML, .{});
 
-    fn _innerHTML(self: *DocumentFragment, page: *Page) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(page.call_arena);
-        try self.getInnerHTML(&buf.writer, page);
+    fn _innerHTML(self: *DocumentFragment, frame: *Frame) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        try self.getInnerHTML(&buf.writer, frame);
         return buf.written();
     }
 };

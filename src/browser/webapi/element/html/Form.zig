@@ -19,7 +19,7 @@
 const std = @import("std");
 const js = @import("../../../js/js.zig");
 const URL = @import("../../../URL.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -51,8 +51,8 @@ pub fn getName(self: *const Form) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
-pub fn setName(self: *Form, name: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), page);
+pub fn setName(self: *Form, name: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
 }
 
 pub fn getMethod(self: *const Form) []const u8 {
@@ -68,82 +68,82 @@ pub fn getMethod(self: *const Form) []const u8 {
     return "get";
 }
 
-pub fn setMethod(self: *Form, method: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("method"), .wrap(method), page);
+pub fn setMethod(self: *Form, method: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("method"), .wrap(method), frame);
 }
 
-pub fn getElements(self: *Form, page: *Page) !*collections.HTMLFormControlsCollection {
-    const node_live = self.iterator(page);
-    const html_collection = try node_live.runtimeGenericWrap(page);
+pub fn getElements(self: *Form, frame: *Frame) !*collections.HTMLFormControlsCollection {
+    const node_live = self.iterator(frame);
+    const html_collection = try node_live.runtimeGenericWrap(frame);
 
-    return page._factory.create(collections.HTMLFormControlsCollection{
+    return frame._factory.create(collections.HTMLFormControlsCollection{
         ._proto = html_collection,
     });
 }
 
-pub fn iterator(self: *Form, page: *Page) collections.NodeLive(.form) {
+pub fn iterator(self: *Form, frame: *Frame) collections.NodeLive(.form) {
     const form_id = self.asElement().getAttributeSafe(comptime .wrap("id"));
     const root = if (form_id != null)
         self.asNode().getRootNode(null) // Has ID: walk entire document to find form=ID controls
     else
         self.asNode(); // No ID: walk only form subtree (no external controls possible)
 
-    return collections.NodeLive(.form).init(root, .{ .form = self, .form_id = form_id }, page);
+    return collections.NodeLive(.form).init(root, .{ .form = self, .form_id = form_id }, frame);
 }
 
-pub fn getAction(self: *Form, page: *Page) ![]const u8 {
+pub fn getAction(self: *Form, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const action = element.getAttributeSafe(comptime .wrap("action")) orelse return page.url;
+    const action = element.getAttributeSafe(comptime .wrap("action")) orelse return frame.url;
     if (action.len == 0) {
-        return page.url;
+        return frame.url;
     }
-    return element.asNode().resolveURL(action, page, .{});
+    return element.asNode().resolveURL(action, frame, .{});
 }
 
-pub fn setAction(self: *Form, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("action"), .wrap(value), page);
+pub fn setAction(self: *Form, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("action"), .wrap(value), frame);
 }
 
 pub fn getTarget(self: *Form) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("target")) orelse "";
 }
 
-pub fn setTarget(self: *Form, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), page);
+pub fn setTarget(self: *Form, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), frame);
 }
 
 pub fn getAcceptCharset(self: *Form) []const u8 {
     return self.asElement().getAttributeSafe(.wrap("accept-charset")) orelse "";
 }
 
-pub fn setAcceptCharset(self: *Form, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(.wrap("accept-charset"), .wrap(value), page);
+pub fn setAcceptCharset(self: *Form, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(.wrap("accept-charset"), .wrap(value), frame);
 }
 
-pub fn getLength(self: *Form, page: *Page) !u32 {
-    const elements = try self.getElements(page);
-    return elements.length(page);
+pub fn getLength(self: *Form, frame: *Frame) !u32 {
+    const elements = try self.getElements(frame);
+    return elements.length(frame);
 }
 
-pub fn submit(self: *Form, page: *Page) !void {
-    return page.submitForm(null, self, .{ .fire_event = false });
+pub fn submit(self: *Form, frame: *Frame) !void {
+    return frame.submitForm(null, self, .{ .fire_event = false });
 }
 
 /// https://html.spec.whatwg.org/multipage/forms.html#dom-form-requestsubmit
 /// Like submit(), but fires the submit event and validates the form.
-pub fn requestSubmit(self: *Form, submitter: ?*Element, page: *Page) !void {
+pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
     const submitter_element = if (submitter) |s| blk: {
         // The submitter must be a submit button.
         if (!isSubmitButton(s)) return error.TypeError;
 
         // The submitter's form owner must be this form element.
-        const submitter_form = getFormOwner(s, page);
+        const submitter_form = getFormOwner(s, frame);
         if (submitter_form == null or submitter_form.? != self) return error.NotFound;
 
         break :blk s;
     } else self.asElement();
 
-    return page.submitForm(submitter_element, self, .{});
+    return frame.submitForm(submitter_element, self, .{});
 }
 
 /// Returns true if the element is a submit button per the HTML spec:
@@ -160,12 +160,12 @@ fn isSubmitButton(element: *Element) bool {
 }
 
 /// Returns the form owner of a submittable element (Input or Button).
-fn getFormOwner(element: *Element, page: *Page) ?*Form {
+fn getFormOwner(element: *Element, frame: *Frame) ?*Form {
     if (element.is(Input)) |input| {
-        return input.getForm(page);
+        return input.getForm(frame);
     }
     if (element.is(Button)) |button| {
-        return button.getForm(page);
+        return button.getForm(frame);
     }
     return null;
 }

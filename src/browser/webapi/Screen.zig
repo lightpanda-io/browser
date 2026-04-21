@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const EventTarget = @import("EventTarget.zig");
 
 pub fn registerTypes() []const type {
@@ -36,11 +36,11 @@ pub fn asEventTarget(self: *Screen) *EventTarget {
     return self._proto;
 }
 
-pub fn getOrientation(self: *Screen, page: *Page) !*Orientation {
+pub fn getOrientation(self: *Screen, frame: *Frame) !*Orientation {
     if (self._orientation) |orientation| {
         return orientation;
     }
-    const orientation = try Orientation.init(page);
+    const orientation = try Orientation.init(frame);
     self._orientation = orientation;
     return orientation;
 }
@@ -66,8 +66,8 @@ pub const JsApi = struct {
 pub const Orientation = struct {
     _proto: *EventTarget,
 
-    pub fn init(page: *Page) !*Orientation {
-        return page._factory.eventTarget(Orientation{
+    pub fn init(frame: *Frame) !*Orientation {
+        return frame._factory.eventTarget(Orientation{
             ._proto = undefined,
         });
     }

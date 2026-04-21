@@ -1,6 +1,6 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const CSSRule = @import("CSSRule.zig");
 const CSSStyleProperties = @import("CSSStyleProperties.zig");
 
@@ -10,11 +10,11 @@ _proto: *CSSRule,
 _selector_text: []const u8 = "",
 _style: ?*CSSStyleProperties = null,
 
-pub fn init(page: *Page) !*CSSStyleRule {
-    const style_rule = try page._factory.create(CSSStyleRule{
+pub fn init(frame: *Frame) !*CSSStyleRule {
+    const style_rule = try frame._factory.create(CSSStyleRule{
         ._proto = undefined,
     });
-    style_rule._proto = try CSSRule.init(.{ .style = style_rule }, page);
+    style_rule._proto = try CSSRule.init(.{ .style = style_rule }, frame);
     return style_rule;
 }
 
@@ -22,23 +22,23 @@ pub fn getSelectorText(self: *const CSSStyleRule) []const u8 {
     return self._selector_text;
 }
 
-pub fn setSelectorText(self: *CSSStyleRule, text: []const u8, page: *Page) !void {
-    self._selector_text = try page.dupeString(text);
+pub fn setSelectorText(self: *CSSStyleRule, text: []const u8, frame: *Frame) !void {
+    self._selector_text = try frame.dupeString(text);
 }
 
-pub fn getStyle(self: *CSSStyleRule, page: *Page) !*CSSStyleProperties {
+pub fn getStyle(self: *CSSStyleRule, frame: *Frame) !*CSSStyleProperties {
     if (self._style) |style| {
         return style;
     }
-    const style = try CSSStyleProperties.init(null, false, page);
+    const style = try CSSStyleProperties.init(null, false, frame);
     self._style = style;
     return style;
 }
 
-pub fn getCssText(self: *CSSStyleRule, page: *Page) ![]const u8 {
-    const style_props = try self.getStyle(page);
+pub fn getCssText(self: *CSSStyleRule, frame: *Frame) ![]const u8 {
+    const style_props = try self.getStyle(frame);
     const style = style_props.asCSSStyleDeclaration();
-    var buf = std.Io.Writer.Allocating.init(page.call_arena);
+    var buf = std.Io.Writer.Allocating.init(frame.call_arena);
     try buf.writer.print("{s} {{ ", .{self._selector_text});
     try style.format(&buf.writer);
     try buf.writer.writeAll(" }");

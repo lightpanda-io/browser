@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 
 const Node = @import("Node.zig");
 
@@ -30,13 +30,13 @@ _name: []const u8,
 _public_id: []const u8,
 _system_id: []const u8,
 
-pub fn init(qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, page: *Page) !*DocumentType {
-    const name = try page.dupeString(qualified_name);
+pub fn init(qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, frame: *Frame) !*DocumentType {
+    const name = try frame.dupeString(qualified_name);
     // Firefox converts null to the string "null", not empty string
-    const pub_id = if (public_id) |p| try page.dupeString(p) else "null";
-    const sys_id = if (system_id) |s| try page.dupeString(s) else "null";
+    const pub_id = if (public_id) |p| try frame.dupeString(p) else "null";
+    const sys_id = if (system_id) |s| try frame.dupeString(s) else "null";
 
-    return page._factory.node(DocumentType{
+    return frame._factory.node(DocumentType{
         ._proto = undefined,
         ._name = name,
         ._public_id = pub_id,
@@ -70,14 +70,14 @@ pub fn isEqualNode(self: *const DocumentType, other: *const DocumentType) bool {
         std.mem.eql(u8, self._system_id, other._system_id);
 }
 
-pub fn clone(self: *const DocumentType, page: *Page) !*DocumentType {
-    return .init(self._name, self._public_id, self._system_id, page);
+pub fn clone(self: *const DocumentType, frame: *Frame) !*DocumentType {
+    return .init(self._name, self._public_id, self._system_id, frame);
 }
 
-pub fn remove(self: *DocumentType, page: *Page) !void {
+pub fn remove(self: *DocumentType, frame: *Frame) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
-    _ = try parent.removeChild(node, page);
+    _ = try parent.removeChild(node, frame);
 }
 
 pub const JsApi = struct {

@@ -132,7 +132,7 @@ pub const CdpCookie = struct {
 
 pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
     // Silently ignore partitionKey since we don't support partitioned cookies (CHIPS).
-    // This allows Puppeteer's page.setCookie() to work, which may send cookies with
+    // This allows Puppeteer's frame.setCookie() to work, which may send cookies with
     // partitionKey as part of its cookie-setting workflow.
     if (param.partitionKey != null) {
         log.warn(.not_implemented, "partition key", .{ .src = "setCdpCookie" });

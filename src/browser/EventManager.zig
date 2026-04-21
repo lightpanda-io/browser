@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
-const Page = @import("Page.zig");
+const Frame = @import("Frame.zig");
 const EventManagerBase = @import("EventManagerBase.zig");
 
 const Node = @import("webapi/Node.zig");
@@ -42,7 +42,7 @@ const IS_DEBUG = builtin.mode == .Debug;
 
 pub const EventManager = @This();
 
-page: *Page,
+frame: *Frame,
 base: EventManagerBase,
 
 // Used as an optimization in Page._documentIsComplete. If we know there are no
@@ -52,9 +52,9 @@ has_dom_load_listener: bool,
 
 ignore_list: std.ArrayList(*Listener),
 
-pub fn init(arena: Allocator, page: *Page) EventManager {
+pub fn init(arena: Allocator, frame: *Frame) EventManager {
     return .{
-        .page = page,
+        .frame = frame,
         .ignore_list = .{},
         .has_dom_load_listener = false,
         .base = EventManagerBase.init(arena),
@@ -104,10 +104,10 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
 
 pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, comptime opts: DispatchOpts) DispatchError!void {
     event.acquireRef();
-    defer _ = event.releaseRef(self.page._session);
+    defer _ = event.releaseRef(self.frame._session);
 
     // Increment event count for Event Timing API
-    self.page.window._performance._event_counts.increment(event._type_string.str());
+    self.frame.window._performance._event_counts.increment(event._type_string.str());
 
     if (comptime IS_DEBUG) {
         log.debug(.event, "eventManager.dispatch", .{ .type = event._type_string.str(), .bubbles = event._bubbles });
@@ -130,15 +130,15 @@ const DispatchDirectOptions = EventManagerBase.DispatchDirectOptions;
 // property handlers. No propagation - just calls the handler and registered listeners.
 // Handler can be: null, ?js.Function.Global, ?js.Function.Temp, or js.Function
 pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, handler: anytype, comptime opts: DispatchDirectOptions) !void {
-    const page = self.page;
+    const frame = self.frame;
 
     // Set window.event to the currently dispatching event (WHATWG spec)
-    const window = page.window;
+    const window = frame.window;
     const prev_event = window._current_event;
     window._current_event = event;
     defer window._current_event = prev_event;
 
-    try self.base.dispatchDirect(page.call_arena, page.js, target, event, handler, page._session, opts);
+    try self.base.dispatchDirect(frame.call_arena, frame.js, target, event, handler, frame._session, opts);
 }
 
 /// Check if there are any listeners for a direct dispatch (non-DOM target).
@@ -156,10 +156,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         event._dispatch_target = et; // Store original target for composedPath()
     }
 
-    const page = self.page;
+    const frame = self.frame;
 
     // Set window.event to the currently dispatching event (WHATWG spec)
-    const window = page.window;
+    const window = frame.window;
     const prev_event = window._current_event;
     window._current_event = event;
     defer window._current_event = prev_event;
@@ -170,7 +170,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
     // This ensures function handles passed to queueMicrotask remain valid
     // throughout the entire dispatch, preventing crashes when microtasks run.
     var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
+    frame.js.localScope(&ls);
     defer {
         if (was_handled) {
             ls.local.runMicrotasks();
@@ -178,7 +178,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         ls.deinit();
     }
 
-    const activation_state = try ActivationState.create(event, target, page);
+    const activation_state = try ActivationState.create(event, target, frame);
 
     // Defer runs even on early return - ensures event phase is reset
     // and default actions execute (unless prevented)
@@ -188,19 +188,19 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         event._stop_immediate_propagation = false;
         // Handle checkbox/radio activation rollback or commit
         if (activation_state) |state| {
-            state.restore(event, page);
+            state.restore(event, frame);
         }
 
         // Execute default action if not prevented
         if (event._prevent_default) {
             // can't return in a defer (╯°□°)╯︵ ┻━┻
         } else if (event._type_string.eql(comptime .wrap("click"))) {
-            page.handleClick(target) catch |err| {
-                log.warn(.event, "page.click", .{ .err = err });
+            frame.handleClick(target) catch |err| {
+                log.warn(.event, "frame.click", .{ .err = err });
             };
         } else if (event._type_string.eql(comptime .wrap("keydown"))) {
-            page.handleKeydown(target, event) catch |err| {
-                log.warn(.event, "page.keydown", .{ .err = err });
+            frame.handleKeydown(target, event) catch |err| {
+                log.warn(.event, "frame.keydown", .{ .err = err });
             };
         }
     }
@@ -236,7 +236,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
     // The only explicit exception is "load"
     if (event._type_string.eql(comptime .wrap("load")) == false) {
         if (path_len < path_buffer.len) {
-            path_buffer[path_len] = page.window.asEventTarget();
+            path_buffer[path_len] = frame.window.asEventTarget();
             path_len += 1;
         }
     }
@@ -312,7 +312,7 @@ const DispatchPhaseOpts = struct {
 };
 
 fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime opts: DispatchPhaseOpts) !void {
-    const page = self.page;
+    const frame = self.frame;
     const base = &self.base;
 
     // Track dispatch depth for deferred removal
@@ -392,7 +392,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
         switch (listener.function) {
             .value => |value| try local.toLocal(value).callWithThis(void, current_target, .{event}),
             .string => |string| {
-                const str = try page.call_arena.dupeZ(u8, string.str());
+                const str = try frame.call_arena.dupeZ(u8, string.str());
                 try local.eval(str, null);
             },
             .object => |obj_global| {
@@ -424,7 +424,7 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
         else => return null,
     };
 
-    return html_element.getAttributeFunction(handler_type, self.page) catch |err| {
+    return html_element.getAttributeFunction(handler_type, self.frame) catch |err| {
         log.warn(.event, "inline html callback", .{ .type = handler_type, .err = err });
         return null;
     };
@@ -502,7 +502,7 @@ const ActivationState = struct {
 
     const Input = Element.Html.Input;
 
-    fn create(event: *const Event, target: *Node, page: *Page) !?ActivationState {
+    fn create(event: *const Event, target: *Node, frame: *Frame) !?ActivationState {
         if (event._type_string.eql(comptime .wrap("click")) == false) {
             return null;
         }
@@ -517,12 +517,12 @@ const ActivationState = struct {
 
         // For radio buttons, find the currently checked radio in the group
         if (input._input_type == .radio and !old_checked) {
-            previously_checked_radio = try findCheckedRadioInGroup(input, page);
+            previously_checked_radio = try findCheckedRadioInGroup(input, frame);
         }
 
         // Toggle checkbox or check radio (which unchecks others in group)
         const new_checked = if (input._input_type == .checkbox) !old_checked else true;
-        try input.setChecked(new_checked, page);
+        try input.setChecked(new_checked, frame);
 
         return .{
             .input = input,
@@ -531,7 +531,7 @@ const ActivationState = struct {
         };
     }
 
-    fn restore(self: *const ActivationState, event: *const Event, page: *Page) void {
+    fn restore(self: *const ActivationState, event: *const Event, frame: *Frame) void {
         const input = self.input;
         if (event._prevent_default) {
             // Rollback: restore previous state
@@ -549,16 +549,16 @@ const ActivationState = struct {
         // For checkboxes, state always changes. For radios, only if was unchecked.
         const state_changed = (input._input_type == .checkbox) or !self.old_checked;
         if (state_changed and input.asElement().asNode().isConnected()) {
-            fireEvent(page, input, "input") catch |err| {
+            fireEvent(frame, input, "input") catch |err| {
                 log.warn(.event, "input event", .{ .err = err });
             };
-            fireEvent(page, input, "change") catch |err| {
+            fireEvent(frame, input, "change") catch |err| {
                 log.warn(.event, "change event", .{ .err = err });
             };
         }
     }
 
-    fn findCheckedRadioInGroup(input: *Input, page: *Page) !?*Input {
+    fn findCheckedRadioInGroup(input: *Input, frame: *Frame) !?*Input {
         const elem = input.asElement();
 
         const name = elem.getAttributeSafe(comptime .wrap("name")) orelse return null;
@@ -566,7 +566,7 @@ const ActivationState = struct {
             return null;
         }
 
-        const form = input.getForm(page);
+        const form = input.getForm(frame);
 
         // Walk from the root of the tree containing this element
         // This handles both document-attached and orphaned elements
@@ -594,7 +594,7 @@ const ActivationState = struct {
             }
 
             // Check if same form context
-            const other_form = other_input.getForm(page);
+            const other_form = other_input.getForm(frame);
             if (form) |f| {
                 const of = other_form orelse continue;
                 if (f != of) {
@@ -613,13 +613,13 @@ const ActivationState = struct {
     }
 
     // Fire input or change event
-    fn fireEvent(page: *Page, input: *Input, comptime typ: []const u8) !void {
+    fn fireEvent(frame: *Frame, input: *Input, comptime typ: []const u8) !void {
         const event = try Event.initTrusted(comptime .wrap(typ), .{
             .bubbles = true,
             .cancelable = false,
-        }, page);
+        }, frame);
 
         const target = input.asElement().asEventTarget();
-        try page._event_manager.dispatch(target, event);
+        try frame._event_manager.dispatch(target, event);
     }
 };

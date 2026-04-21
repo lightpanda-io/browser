@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
 const NavigationHistoryEntry = @import("../navigation/NavigationHistoryEntry.zig");
@@ -45,17 +45,17 @@ const Options = Event.inheritOptions(
     NavigationCurrentEntryChangeEventOptions,
 );
 
-pub fn init(typ: []const u8, opts: Options, page: *Page) !*NavigationCurrentEntryChangeEvent {
-    const arena = try page.getArena(.tiny, "NavigationCurrentEntryChangeEvent");
-    errdefer page.releaseArena(arena);
+pub fn init(typ: []const u8, opts: Options, frame: *Frame) !*NavigationCurrentEntryChangeEvent {
+    const arena = try frame.getArena(.tiny, "NavigationCurrentEntryChangeEvent");
+    errdefer frame.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
-    return initWithTrusted(arena, type_string, opts, false, page);
+    return initWithTrusted(arena, type_string, opts, false, frame);
 }
 
-pub fn initTrusted(typ: String, opts: Options, page: *Page) !*NavigationCurrentEntryChangeEvent {
-    const arena = try page.getArena(.tiny, "NavigationCurrentEntryChangeEvent.trusted");
-    errdefer page.releaseArena(arena);
-    return initWithTrusted(arena, typ, opts, true, page);
+pub fn initTrusted(typ: String, opts: Options, frame: *Frame) !*NavigationCurrentEntryChangeEvent {
+    const arena = try frame.getArena(.tiny, "NavigationCurrentEntryChangeEvent.trusted");
+    errdefer frame.releaseArena(arena);
+    return initWithTrusted(arena, typ, opts, true, frame);
 }
 
 fn initWithTrusted(
@@ -63,14 +63,14 @@ fn initWithTrusted(
     typ: String,
     opts: Options,
     trusted: bool,
-    page: *Page,
+    frame: *Frame,
 ) !*NavigationCurrentEntryChangeEvent {
     const navigation_type = if (opts.navigationType) |nav_type_str|
         std.meta.stringToEnum(NavigationType, nav_type_str)
     else
         null;
 
-    const event = try page._factory.event(
+    const event = try frame._factory.event(
         arena,
         typ,
         NavigationCurrentEntryChangeEvent{

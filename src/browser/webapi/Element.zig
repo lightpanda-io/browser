@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const StyleManager = @import("../StyleManager.zig");
 const reflect = @import("../reflect.zig");
 
@@ -64,7 +64,7 @@ pub const Namespace = enum(u8) {
     mathml,
     xml,
     // We should keep the original value, but don't.  If this becomes important
-    // consider storing it in a page lookup, like `_element_class_lists`, rather
+    // consider storing it in a frame lookup, like `_element_class_lists`, rather
     // that adding a slice directly here (directly in every element).
     unknown,
     null,
@@ -368,12 +368,12 @@ pub fn getNamespaceURI(self: *const Element) ?[]const u8 {
     return self._namespace.toUri();
 }
 
-pub fn getNamespaceUri(self: *Element, page: *Page) ?[]const u8 {
+pub fn getNamespaceUri(self: *Element, frame: *Frame) ?[]const u8 {
     if (self._namespace != .unknown) return self._namespace.toUri();
-    return page._element_namespace_uris.get(self);
+    return frame._element_namespace_uris.get(self);
 }
 
-pub fn lookupNamespaceURIForElement(self: *Element, prefix: ?[]const u8, page: *Page) ?[]const u8 {
+pub fn lookupNamespaceURIForElement(self: *Element, prefix: ?[]const u8, frame: *Frame) ?[]const u8 {
     // Hardcoded reserved prefixes
     if (prefix) |p| {
         if (std.mem.eql(u8, p, "xml")) return "http://www.w3.org/XML/1998/namespace";
@@ -381,7 +381,7 @@ pub fn lookupNamespaceURIForElement(self: *Element, prefix: ?[]const u8, page: *
     }
 
     // Step 1: check element's own namespace/prefix
-    if (self.getNamespaceUri(page)) |ns_uri| {
+    if (self.getNamespaceUri(frame)) |ns_uri| {
         const el_prefix = self._prefix();
         const match = if (prefix == null and el_prefix == null)
             true
@@ -415,7 +415,7 @@ pub fn lookupNamespaceURIForElement(self: *Element, prefix: ?[]const u8, page: *
 
     // Step 3: recurse to parent element
     const parent = self.asNode().parentElement() orelse return null;
-    return parent.lookupNamespaceURIForElement(prefix, page);
+    return parent.lookupNamespaceURIForElement(prefix, frame);
 }
 
 fn _prefix(self: *const Element) ?[]const u8 {
@@ -441,53 +441,53 @@ pub fn getInnerText(self: *Element, writer: *std.Io.Writer) !void {
     return he.getInnerText(writer);
 }
 
-pub fn setInnerText(self: *Element, text: []const u8, page: *Page) !void {
+pub fn setInnerText(self: *Element, text: []const u8, frame: *Frame) !void {
     const he = self.is(Html) orelse return error.NotHtmlElement;
-    return he.setInnerText(text, page);
+    return he.setInnerText(text, frame);
 }
 
 pub fn insertAdjacentHTML(
     self: *Element,
     position: []const u8,
     html_or_xml: []const u8,
-    page: *Page,
+    frame: *Frame,
 ) !void {
     const he = self.is(Html) orelse return error.NotHtmlElement;
-    return he.insertAdjacentHTML(position, html_or_xml, page);
+    return he.insertAdjacentHTML(position, html_or_xml, frame);
 }
 
-pub fn getOuterHTML(self: *Element, writer: *std.Io.Writer, page: *Page) !void {
+pub fn getOuterHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void {
     const dump = @import("../dump.zig");
-    return dump.deep(self.asNode(), .{ .shadow = .skip }, writer, page);
+    return dump.deep(self.asNode(), .{ .shadow = .skip }, writer, frame);
 }
 
-pub fn setOuterHTML(self: *Element, html: []const u8, page: *Page) !void {
+pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     const node = self.asNode();
     const parent = node._parent orelse return;
 
-    page.domChanged();
+    frame.domChanged();
     if (html.len > 0) {
-        const fragment = (try Node.DocumentFragment.init(page)).asNode();
-        try page.parseHtmlAsChildren(fragment, html);
-        try page.insertAllChildrenBefore(fragment, parent, node);
+        const fragment = (try Node.DocumentFragment.init(frame)).asNode();
+        try frame.parseHtmlAsChildren(fragment, html);
+        try frame.insertAllChildrenBefore(fragment, parent, node);
     }
 
-    page.removeNode(parent, node, .{ .will_be_reconnected = false });
+    frame.removeNode(parent, node, .{ .will_be_reconnected = false });
 }
 
-pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, page: *Page) !void {
+pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void {
     const dump = @import("../dump.zig");
-    return dump.children(self.asNode(), .{ .shadow = .skip }, writer, page);
+    return dump.children(self.asNode(), .{ .shadow = .skip }, writer, frame);
 }
 
-pub fn setInnerHTML(self: *Element, html: []const u8, page: *Page) !void {
+pub fn setInnerHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     const parent = self.asNode();
 
     // Remove all existing children
-    page.domChanged();
+    frame.domChanged();
     var it = parent.childrenIterator();
     while (it.next()) |child| {
-        page.removeNode(parent, child, .{ .will_be_reconnected = false });
+        frame.removeNode(parent, child, .{ .will_be_reconnected = false });
     }
 
     // Fast path: skip parsing if html is empty
@@ -496,31 +496,31 @@ pub fn setInnerHTML(self: *Element, html: []const u8, page: *Page) !void {
     }
 
     // Parse and add new children
-    try page.parseHtmlAsChildren(parent, html);
+    try frame.parseHtmlAsChildren(parent, html);
 }
 
 pub fn getId(self: *const Element) []const u8 {
     return self.getAttributeSafe(comptime .wrap("id")) orelse "";
 }
 
-pub fn setId(self: *Element, value: []const u8, page: *Page) !void {
-    return self.setAttributeSafe(comptime .wrap("id"), .wrap(value), page);
+pub fn setId(self: *Element, value: []const u8, frame: *Frame) !void {
+    return self.setAttributeSafe(comptime .wrap("id"), .wrap(value), frame);
 }
 
 pub fn getSlot(self: *const Element) []const u8 {
     return self.getAttributeSafe(comptime .wrap("slot")) orelse "";
 }
 
-pub fn setSlot(self: *Element, value: []const u8, page: *Page) !void {
-    return self.setAttributeSafe(comptime .wrap("slot"), .wrap(value), page);
+pub fn setSlot(self: *Element, value: []const u8, frame: *Frame) !void {
+    return self.setAttributeSafe(comptime .wrap("slot"), .wrap(value), frame);
 }
 
 pub fn getDir(self: *const Element) []const u8 {
     return self.getAttributeSafe(comptime .wrap("dir")) orelse "";
 }
 
-pub fn setDir(self: *Element, value: []const u8, page: *Page) !void {
-    return self.setAttributeSafe(comptime .wrap("dir"), .wrap(value), page);
+pub fn setDir(self: *Element, value: []const u8, frame: *Frame) !void {
+    return self.setAttributeSafe(comptime .wrap("dir"), .wrap(value), frame);
 }
 
 // ARIAMixin - ARIA attribute reflection
@@ -528,11 +528,11 @@ pub fn getAriaAtomic(self: *const Element) ?[]const u8 {
     return self.getAttributeSafe(comptime .wrap("aria-atomic"));
 }
 
-pub fn setAriaAtomic(self: *Element, value: ?[]const u8, page: *Page) !void {
+pub fn setAriaAtomic(self: *Element, value: ?[]const u8, frame: *Frame) !void {
     if (value) |v| {
-        try self.setAttributeSafe(comptime .wrap("aria-atomic"), .wrap(v), page);
+        try self.setAttributeSafe(comptime .wrap("aria-atomic"), .wrap(v), frame);
     } else {
-        try self.removeAttribute(comptime .wrap("aria-atomic"), page);
+        try self.removeAttribute(comptime .wrap("aria-atomic"), frame);
     }
 }
 
@@ -540,11 +540,11 @@ pub fn getAriaLive(self: *const Element) ?[]const u8 {
     return self.getAttributeSafe(comptime .wrap("aria-live"));
 }
 
-pub fn setAriaLive(self: *Element, value: ?[]const u8, page: *Page) !void {
+pub fn setAriaLive(self: *Element, value: ?[]const u8, frame: *Frame) !void {
     if (value) |v| {
-        try self.setAttributeSafe(comptime .wrap("aria-live"), .wrap(v), page);
+        try self.setAttributeSafe(comptime .wrap("aria-live"), .wrap(v), frame);
     } else {
-        try self.removeAttribute(comptime .wrap("aria-live"), page);
+        try self.removeAttribute(comptime .wrap("aria-live"), frame);
     }
 }
 
@@ -552,8 +552,8 @@ pub fn getClassName(self: *const Element) []const u8 {
     return self.getAttributeSafe(comptime .wrap("class")) orelse "";
 }
 
-pub fn setClassName(self: *Element, value: []const u8, page: *Page) !void {
-    return self.setAttributeSafe(comptime .wrap("class"), .wrap(value), page);
+pub fn setClassName(self: *Element, value: []const u8, frame: *Frame) !void {
+    return self.setAttributeSafe(comptime .wrap("class"), .wrap(value), frame);
 }
 
 pub fn attributeIterator(self: *Element) Attribute.InnerIterator {
@@ -561,9 +561,9 @@ pub fn attributeIterator(self: *Element) Attribute.InnerIterator {
     return attributes.iterator();
 }
 
-pub fn getAttribute(self: *const Element, name: String, page: *Page) !?String {
+pub fn getAttribute(self: *const Element, name: String, frame: *Frame) !?String {
     const attributes = self._attributes orelse return null;
-    return attributes.get(name, page);
+    return attributes.get(name, frame);
 }
 
 /// For simplicity, the namespace is currently ignored and only the local name is used.
@@ -571,7 +571,7 @@ pub fn getAttributeNS(
     self: *const Element,
     maybe_namespace: ?[]const u8,
     local_name: String,
-    page: *Page,
+    frame: *Frame,
 ) !?String {
     if (maybe_namespace) |namespace| {
         if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
@@ -579,7 +579,7 @@ pub fn getAttributeNS(
         }
     }
 
-    return self.getAttribute(local_name, page);
+    return self.getAttribute(local_name, frame);
 }
 
 pub fn getAttributeSafe(self: *const Element, name: String) ?[]const u8 {
@@ -587,9 +587,9 @@ pub fn getAttributeSafe(self: *const Element, name: String) ?[]const u8 {
     return attributes.getSafe(name);
 }
 
-pub fn hasAttribute(self: *const Element, name: String, page: *Page) !bool {
+pub fn hasAttribute(self: *const Element, name: String, frame: *Frame) !bool {
     const attributes = self._attributes orelse return false;
-    const value = try attributes.get(name, page);
+    const value = try attributes.get(name, frame);
     return value != null;
 }
 
@@ -629,15 +629,15 @@ pub fn hasAttributes(self: *const Element) bool {
     return attributes.isEmpty() == false;
 }
 
-pub fn getAttributeNode(self: *Element, name: String, page: *Page) !?*Attribute {
+pub fn getAttributeNode(self: *Element, name: String, frame: *Frame) !?*Attribute {
     const attributes = self._attributes orelse return null;
-    return attributes.getAttribute(name, self, page);
+    return attributes.getAttribute(name, self, frame);
 }
 
-pub fn setAttribute(self: *Element, name: String, value: String, page: *Page) !void {
+pub fn setAttribute(self: *Element, name: String, value: String, frame: *Frame) !void {
     try Attribute.validateAttributeName(name);
-    const attributes = try self.getOrCreateAttributeList(page);
-    _ = try attributes.put(name, value, self, page);
+    const attributes = try self.getOrCreateAttributeList(frame);
+    _ = try attributes.put(name, value, self, frame);
 }
 
 pub fn setAttributeNS(
@@ -645,7 +645,7 @@ pub fn setAttributeNS(
     maybe_namespace: ?[]const u8,
     qualified_name: []const u8,
     value: String,
-    page: *Page,
+    frame: *Frame,
 ) !void {
     const attr_name = if (maybe_namespace) |namespace| blk: {
         // For xmlns namespace, store the full qualified name (e.g. "xmlns:bar")
@@ -666,43 +666,43 @@ pub fn setAttributeNS(
         else
             qualified_name;
     };
-    return self.setAttribute(.wrap(attr_name), value, page);
+    return self.setAttribute(.wrap(attr_name), value, frame);
 }
 
-pub fn setAttributeSafe(self: *Element, name: String, value: String, page: *Page) !void {
-    const attributes = try self.getOrCreateAttributeList(page);
-    _ = try attributes.putSafe(name, value, self, page);
+pub fn setAttributeSafe(self: *Element, name: String, value: String, frame: *Frame) !void {
+    const attributes = try self.getOrCreateAttributeList(frame);
+    _ = try attributes.putSafe(name, value, self, frame);
 }
 
-pub fn getOrCreateAttributeList(self: *Element, page: *Page) !*Attribute.List {
-    return self._attributes orelse return self.createAttributeList(page);
+pub fn getOrCreateAttributeList(self: *Element, frame: *Frame) !*Attribute.List {
+    return self._attributes orelse return self.createAttributeList(frame);
 }
 
-pub fn createAttributeList(self: *Element, page: *Page) !*Attribute.List {
+pub fn createAttributeList(self: *Element, frame: *Frame) !*Attribute.List {
     lp.assert(self._attributes == null, "Element.createAttributeList non-null _attributes", .{});
-    const a = try page.arena.create(Attribute.List);
+    const a = try frame.arena.create(Attribute.List);
     a.* = .{ .normalize = self._namespace == .html };
     self._attributes = a;
     return a;
 }
 
-pub fn getShadowRoot(self: *Element, page: *Page) ?*ShadowRoot {
-    const shadow_root = page._element_shadow_roots.get(self) orelse return null;
+pub fn getShadowRoot(self: *Element, frame: *Frame) ?*ShadowRoot {
+    const shadow_root = frame._element_shadow_roots.get(self) orelse return null;
     if (shadow_root._mode == .closed) return null;
     return shadow_root;
 }
 
-pub fn getAssignedSlot(self: *Element, page: *Page) ?*Html.Slot {
-    return page._element_assigned_slots.get(self);
+pub fn getAssignedSlot(self: *Element, frame: *Frame) ?*Html.Slot {
+    return frame._element_assigned_slots.get(self);
 }
 
-pub fn attachShadow(self: *Element, mode_str: []const u8, page: *Page) !*ShadowRoot {
-    if (page._element_shadow_roots.get(self)) |_| {
+pub fn attachShadow(self: *Element, mode_str: []const u8, frame: *Frame) !*ShadowRoot {
+    if (frame._element_shadow_roots.get(self)) |_| {
         return error.AlreadyHasShadowRoot;
     }
     const mode = try ShadowRoot.Mode.fromString(mode_str);
-    const shadow_root = try ShadowRoot.init(self, mode, page);
-    try page._element_shadow_roots.put(page.arena, self, shadow_root);
+    const shadow_root = try ShadowRoot.init(self, mode, frame);
+    try frame._element_shadow_roots.put(frame.arena, self, shadow_root);
     return shadow_root;
 }
 
@@ -710,98 +710,98 @@ pub fn insertAdjacentElement(
     self: *Element,
     position: []const u8,
     element: *Element,
-    page: *Page,
+    frame: *Frame,
 ) !void {
     const target_node, const prev_node = try self.asNode().findAdjacentNodes(position);
-    _ = try target_node.insertBefore(element.asNode(), prev_node, page);
+    _ = try target_node.insertBefore(element.asNode(), prev_node, frame);
 }
 
 pub fn insertAdjacentText(
     self: *Element,
     where: []const u8,
     data: []const u8,
-    page: *Page,
+    frame: *Frame,
 ) !void {
-    const text_node = try page.createTextNode(data);
+    const text_node = try frame.createTextNode(data);
     const target_node, const prev_node = try self.asNode().findAdjacentNodes(where);
-    _ = try target_node.insertBefore(text_node, prev_node, page);
+    _ = try target_node.insertBefore(text_node, prev_node, frame);
 }
 
-pub fn setAttributeNode(self: *Element, attr: *Attribute, page: *Page) !?*Attribute {
+pub fn setAttributeNode(self: *Element, attr: *Attribute, frame: *Frame) !?*Attribute {
     if (attr._element) |el| {
         if (el == self) {
             return attr;
         }
         attr._element = null;
-        _ = try el.removeAttributeNode(attr, page);
+        _ = try el.removeAttributeNode(attr, frame);
     }
 
-    const attributes = try self.getOrCreateAttributeList(page);
-    return attributes.putAttribute(attr, self, page);
+    const attributes = try self.getOrCreateAttributeList(frame);
+    return attributes.putAttribute(attr, self, frame);
 }
 
-pub fn removeAttribute(self: *Element, name: String, page: *Page) !void {
+pub fn removeAttribute(self: *Element, name: String, frame: *Frame) !void {
     const attributes = self._attributes orelse return;
-    return attributes.delete(name, self, page);
+    return attributes.delete(name, self, frame);
 }
 
-pub fn toggleAttribute(self: *Element, name: String, force: ?bool, page: *Page) !bool {
+pub fn toggleAttribute(self: *Element, name: String, force: ?bool, frame: *Frame) !bool {
     try Attribute.validateAttributeName(name);
-    const has = try self.hasAttribute(name, page);
+    const has = try self.hasAttribute(name, frame);
 
     const should_add = force orelse !has;
 
     if (should_add and !has) {
-        try self.setAttribute(name, String.empty, page);
+        try self.setAttribute(name, String.empty, frame);
         return true;
     } else if (!should_add and has) {
-        try self.removeAttribute(name, page);
+        try self.removeAttribute(name, frame);
         return false;
     }
 
     return should_add;
 }
 
-pub fn removeAttributeNode(self: *Element, attr: *Attribute, page: *Page) !*Attribute {
+pub fn removeAttributeNode(self: *Element, attr: *Attribute, frame: *Frame) !*Attribute {
     if (attr._element == null or attr._element.? != self) {
         return error.NotFound;
     }
-    try self.removeAttribute(attr._name, page);
+    try self.removeAttribute(attr._name, frame);
     attr._element = null;
     return attr;
 }
 
-pub fn getAttributeNames(self: *const Element, page: *Page) ![][]const u8 {
+pub fn getAttributeNames(self: *const Element, frame: *Frame) ![][]const u8 {
     const attributes = self._attributes orelse return &.{};
-    return attributes.getNames(page);
+    return attributes.getNames(frame);
 }
 
-pub fn getAttributeNamedNodeMap(self: *Element, page: *Page) !*Attribute.NamedNodeMap {
-    const gop = try page._attribute_named_node_map_lookup.getOrPut(page.arena, @intFromPtr(self));
+pub fn getAttributeNamedNodeMap(self: *Element, frame: *Frame) !*Attribute.NamedNodeMap {
+    const gop = try frame._attribute_named_node_map_lookup.getOrPut(frame.arena, @intFromPtr(self));
     if (!gop.found_existing) {
-        const attributes = try self.getOrCreateAttributeList(page);
-        const named_node_map = try page._factory.create(Attribute.NamedNodeMap{ ._list = attributes, ._element = self });
+        const attributes = try self.getOrCreateAttributeList(frame);
+        const named_node_map = try frame._factory.create(Attribute.NamedNodeMap{ ._list = attributes, ._element = self });
         gop.value_ptr.* = named_node_map;
     }
     return gop.value_ptr.*;
 }
 
-pub fn getOrCreateStyle(self: *Element, page: *Page) !*CSSStyleProperties {
-    const gop = try page._element_styles.getOrPut(page.arena, self);
+pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
+    const gop = try frame._element_styles.getOrPut(frame.arena, self);
     if (!gop.found_existing) {
-        gop.value_ptr.* = try CSSStyleProperties.init(self, false, page);
+        gop.value_ptr.* = try CSSStyleProperties.init(self, false, frame);
     }
     return gop.value_ptr.*;
 }
 
-fn getStyle(self: *Element, page: *Page) ?*CSSStyleProperties {
-    return page._element_styles.get(self);
+fn getStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
+    return frame._element_styles.get(self);
 }
 
-pub fn getClassList(self: *Element, page: *Page) !*collections.DOMTokenList {
-    const gop = try page._element_class_lists.getOrPut(page.arena, self);
+pub fn getClassList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
+    const gop = try frame._element_class_lists.getOrPut(frame.arena, self);
     if (!gop.found_existing) {
-        gop.value_ptr.* = try page._factory.create(collections.DOMTokenList{
+        gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
             ._attribute_name = comptime .wrap("class"),
         });
@@ -809,15 +809,15 @@ pub fn getClassList(self: *Element, page: *Page) !*collections.DOMTokenList {
     return gop.value_ptr.*;
 }
 
-pub fn setClassList(self: *Element, value: String, page: *Page) !void {
-    const class_list = try self.getClassList(page);
-    try class_list.setValue(value, page);
+pub fn setClassList(self: *Element, value: String, frame: *Frame) !void {
+    const class_list = try self.getClassList(frame);
+    try class_list.setValue(value, frame);
 }
 
-pub fn getRelList(self: *Element, page: *Page) !*collections.DOMTokenList {
-    const gop = try page._element_rel_lists.getOrPut(page.arena, self);
+pub fn getRelList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
+    const gop = try frame._element_rel_lists.getOrPut(frame.arena, self);
     if (!gop.found_existing) {
-        gop.value_ptr.* = try page._factory.create(collections.DOMTokenList{
+        gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
             ._attribute_name = comptime .wrap("rel"),
         });
@@ -825,22 +825,22 @@ pub fn getRelList(self: *Element, page: *Page) !*collections.DOMTokenList {
     return gop.value_ptr.*;
 }
 
-pub fn getDataset(self: *Element, page: *Page) !*DOMStringMap {
-    const gop = try page._element_datasets.getOrPut(page.arena, self);
+pub fn getDataset(self: *Element, frame: *Frame) !*DOMStringMap {
+    const gop = try frame._element_datasets.getOrPut(frame.arena, self);
     if (!gop.found_existing) {
-        gop.value_ptr.* = try page._factory.create(DOMStringMap{
+        gop.value_ptr.* = try frame._factory.create(DOMStringMap{
             ._element = self,
         });
     }
     return gop.value_ptr.*;
 }
 
-pub fn replaceChildren(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
-    return self.asNode().replaceChildren(nodes, page);
+pub fn replaceChildren(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
+    return self.asNode().replaceChildren(nodes, frame);
 }
 
-pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
-    page.domChanged();
+pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
+    frame.domChanged();
 
     const ref_node = self.asNode();
     const parent = ref_node._parent orelse return;
@@ -852,7 +852,7 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, page: *Page) 
     var rm_ref_node = true;
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(page);
+        const child = try node_or_text.toNode(frame);
 
         // If a child is the ref node. We keep it at its own current position.
         if (child == ref_node) {
@@ -861,10 +861,10 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, page: *Page) 
         }
 
         if (child._parent) |current_parent| {
-            page.removeNode(current_parent, child, .{ .will_be_reconnected = parent_is_connected });
+            frame.removeNode(current_parent, child, .{ .will_be_reconnected = parent_is_connected });
         }
 
-        try page.insertNodeRelative(
+        try frame.insertNodeRelative(
             parent,
             child,
             .{ .before = ref_node },
@@ -875,18 +875,18 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, page: *Page) 
     // Re-check parent after insertNodeRelative since callbacks (e.g. connectedCallback)
     // could have already removed ref_node from parent.
     if (rm_ref_node and ref_node._parent == parent) {
-        page.removeNode(parent, ref_node, .{ .will_be_reconnected = false });
+        frame.removeNode(parent, ref_node, .{ .will_be_reconnected = false });
     }
 }
 
-pub fn remove(self: *Element, page: *Page) void {
-    page.domChanged();
+pub fn remove(self: *Element, frame: *Frame) void {
+    frame.domChanged();
     const node = self.asNode();
     const parent = node._parent orelse return;
-    page.removeNode(parent, node, .{ .will_be_reconnected = false });
+    frame.removeNode(parent, node, .{ .will_be_reconnected = false });
 }
 
-pub fn focus(self: *Element, page: *Page) !void {
+pub fn focus(self: *Element, frame: *Frame) !void {
     if (self.asNode().isConnected() == false) {
         // a disconnected node cannot take focus
         return;
@@ -895,8 +895,8 @@ pub fn focus(self: *Element, page: *Page) !void {
     const FocusEvent = @import("event/FocusEvent.zig");
 
     const new_target = self.asEventTarget();
-    const old_active = page.document._active_element;
-    page.document._active_element = self;
+    const old_active = frame.document._active_element;
+    frame.document._active_element = self;
 
     if (old_active) |old| {
         if (old == self) {
@@ -906,82 +906,82 @@ pub fn focus(self: *Element, page: *Page) !void {
         const old_target = old.asEventTarget();
 
         // Dispatch blur on old element (no bubble, composed)
-        const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = new_target }, page);
-        try page._event_manager.dispatch(old_target, blur_event.asEvent());
+        const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = new_target }, frame);
+        try frame._event_manager.dispatch(old_target, blur_event.asEvent());
 
         // Dispatch focusout on old element (bubbles, composed)
-        const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = new_target }, page);
-        try page._event_manager.dispatch(old_target, focusout_event.asEvent());
+        const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = new_target }, frame);
+        try frame._event_manager.dispatch(old_target, focusout_event.asEvent());
     }
 
     const old_related: ?*EventTarget = if (old_active) |old| old.asEventTarget() else null;
 
     // Dispatch focus on new element (no bubble, composed)
-    const focus_event = try FocusEvent.initTrusted(comptime .wrap("focus"), .{ .composed = true, .relatedTarget = old_related }, page);
-    try page._event_manager.dispatch(new_target, focus_event.asEvent());
+    const focus_event = try FocusEvent.initTrusted(comptime .wrap("focus"), .{ .composed = true, .relatedTarget = old_related }, frame);
+    try frame._event_manager.dispatch(new_target, focus_event.asEvent());
 
     // Dispatch focusin on new element (bubbles, composed)
-    const focusin_event = try FocusEvent.initTrusted(comptime .wrap("focusin"), .{ .bubbles = true, .composed = true, .relatedTarget = old_related }, page);
-    try page._event_manager.dispatch(new_target, focusin_event.asEvent());
+    const focusin_event = try FocusEvent.initTrusted(comptime .wrap("focusin"), .{ .bubbles = true, .composed = true, .relatedTarget = old_related }, frame);
+    try frame._event_manager.dispatch(new_target, focusin_event.asEvent());
 }
 
-pub fn blur(self: *Element, page: *Page) !void {
-    if (page.document._active_element != self) return;
+pub fn blur(self: *Element, frame: *Frame) !void {
+    if (frame.document._active_element != self) return;
 
-    page.document._active_element = null;
+    frame.document._active_element = null;
 
     const FocusEvent = @import("event/FocusEvent.zig");
     const old_target = self.asEventTarget();
 
     // Dispatch blur (no bubble, composed)
-    const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true }, page);
-    try page._event_manager.dispatch(old_target, blur_event.asEvent());
+    const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true }, frame);
+    try frame._event_manager.dispatch(old_target, blur_event.asEvent());
 
     // Dispatch focusout (bubbles, composed)
-    const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true }, page);
-    try page._event_manager.dispatch(old_target, focusout_event.asEvent());
+    const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true }, frame);
+    try frame._event_manager.dispatch(old_target, focusout_event.asEvent());
 }
 
-pub fn getChildren(self: *Element, page: *Page) !collections.NodeLive(.child_elements) {
-    return collections.NodeLive(.child_elements).init(self.asNode(), {}, page);
+pub fn getChildren(self: *Element, frame: *Frame) !collections.NodeLive(.child_elements) {
+    return collections.NodeLive(.child_elements).init(self.asNode(), {}, frame);
 }
 
-pub fn append(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
+pub fn append(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
     const parent = self.asNode();
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(page);
-        _ = try parent.appendChild(child, page);
+        const child = try node_or_text.toNode(frame);
+        _ = try parent.appendChild(child, frame);
     }
 }
 
-pub fn prepend(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
+pub fn prepend(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
     const parent = self.asNode();
     var i = nodes.len;
     while (i > 0) {
         i -= 1;
-        const child = try nodes[i].toNode(page);
-        _ = try parent.insertBefore(child, parent.firstChild(), page);
+        const child = try nodes[i].toNode(frame);
+        _ = try parent.insertBefore(child, parent.firstChild(), frame);
     }
 }
 
-pub fn before(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
+pub fn before(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(page);
-        _ = try parent.insertBefore(child, node, page);
+        const child = try node_or_text.toNode(frame);
+        _ = try parent.insertBefore(child, node, frame);
     }
 }
 
-pub fn after(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
+pub fn after(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
     const viable_next = Node.NodeOrText.viableNextSibling(node, nodes);
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(page);
-        _ = try parent.insertBefore(child, viable_next, page);
+        const child = try node_or_text.toNode(frame);
+        _ = try parent.insertBefore(child, viable_next, frame);
     }
 }
 
@@ -1032,34 +1032,34 @@ pub fn getChildElementCount(self: *Element) usize {
     return count;
 }
 
-pub fn matches(self: *Element, selector: []const u8, page: *Page) !bool {
-    return Selector.matches(self, selector, page);
+pub fn matches(self: *Element, selector: []const u8, frame: *Frame) !bool {
+    return Selector.matches(self, selector, frame);
 }
 
-pub fn querySelector(self: *Element, selector: []const u8, page: *Page) !?*Element {
-    return Selector.querySelector(self.asNode(), selector, page);
+pub fn querySelector(self: *Element, selector: []const u8, frame: *Frame) !?*Element {
+    return Selector.querySelector(self.asNode(), selector, frame);
 }
 
-pub fn querySelectorAll(self: *Element, input: []const u8, page: *Page) !*Selector.List {
-    return Selector.querySelectorAll(self.asNode(), input, page);
+pub fn querySelectorAll(self: *Element, input: []const u8, frame: *Frame) !*Selector.List {
+    return Selector.querySelectorAll(self.asNode(), input, frame);
 }
 
 pub fn getAnimations(_: *const Element) []*Animation {
     return &.{};
 }
 
-pub fn animate(_: *Element, _: ?js.Object, _: ?js.Object, page: *Page) !*Animation {
-    return Animation.init(page);
+pub fn animate(_: *Element, _: ?js.Object, _: ?js.Object, frame: *Frame) !*Animation {
+    return Animation.init(frame);
 }
 
-pub fn closest(self: *Element, selector: []const u8, page: *Page) !?*Element {
+pub fn closest(self: *Element, selector: []const u8, frame: *Frame) !?*Element {
     if (selector.len == 0) {
         return error.SyntaxError;
     }
 
     var current: ?*Element = self;
     while (current) |el| {
-        if (try Selector.matchesWithScope(el, selector, self, page)) {
+        if (try Selector.matchesWithScope(el, selector, self, frame)) {
             return el;
         }
 
@@ -1084,12 +1084,12 @@ pub const VisibilityCache = StyleManager.VisibilityCache;
 /// Cache for pointer-events checks - re-exported from StyleManager for convenience.
 pub const PointerEventsCache = StyleManager.PointerEventsCache;
 
-pub fn hasPointerEventsNone(self: *Element, cache: ?*PointerEventsCache, page: *Page) bool {
-    return page._style_manager.hasPointerEventsNone(self, cache);
+pub fn hasPointerEventsNone(self: *Element, cache: ?*PointerEventsCache, frame: *Frame) bool {
+    return frame._style_manager.hasPointerEventsNone(self, cache);
 }
 
-pub fn checkVisibilityCached(self: *Element, cache: ?*VisibilityCache, page: *Page) bool {
-    return !page._style_manager.isHidden(self, cache, .{});
+pub fn checkVisibilityCached(self: *Element, cache: ?*VisibilityCache, frame: *Frame) bool {
+    return !frame._style_manager.isHidden(self, cache, .{});
 }
 
 const CheckVisibilityOpts = struct {
@@ -1098,22 +1098,22 @@ const CheckVisibilityOpts = struct {
     checkVisibilityCSS: bool = false,
     visibilityProperty: bool = false,
 };
-pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, page: *Page) bool {
+pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Frame) bool {
     const opts = opts_ orelse CheckVisibilityOpts{};
-    return !page._style_manager.isHidden(self, null, .{
+    return !frame._style_manager.isHidden(self, null, .{
         .check_opacity = opts.checkOpacity or opts.opacityProperty,
         .check_visibility = opts.visibilityProperty or opts.checkVisibilityCSS,
     });
 }
 
-fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height: f64 } {
+fn getElementDimensions(self: *Element, frame: *Frame) struct { width: f64, height: f64 } {
     var width: f64 = 5.0;
     var height: f64 = 5.0;
 
-    if (self.getStyle(page)) |style| {
+    if (self.getStyle(frame)) |style| {
         const decl = style.asCSSStyleDeclaration();
-        width = CSS.parseDimension(decl.getPropertyValue("width", page)) orelse 5.0;
-        height = CSS.parseDimension(decl.getPropertyValue("height", page)) orelse 5.0;
+        width = CSS.parseDimension(decl.getPropertyValue("width", frame)) orelse 5.0;
+        height = CSS.parseDimension(decl.getPropertyValue("height", frame)) orelse 5.0;
     }
 
     if (width == 5.0 or height == 5.0) {
@@ -1139,24 +1139,24 @@ fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height
     return .{ .width = width, .height = height };
 }
 
-pub fn getClientWidth(self: *Element, page: *Page) f64 {
-    if (!self.checkVisibilityCached(null, page)) {
+pub fn getClientWidth(self: *Element, frame: *Frame) f64 {
+    if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
     }
-    const dims = self.getElementDimensions(page);
+    const dims = self.getElementDimensions(frame);
     return dims.width;
 }
 
-pub fn getClientHeight(self: *Element, page: *Page) f64 {
-    if (!self.checkVisibilityCached(null, page)) {
+pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
+    if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
     }
-    const dims = self.getElementDimensions(page);
+    const dims = self.getElementDimensions(frame);
     return dims.height;
 }
 
-pub fn getBoundingClientRect(self: *Element, page: *Page) DOMRect {
-    if (!self.checkVisibilityCached(null, page)) {
+pub fn getBoundingClientRect(self: *Element, frame: *Frame) DOMRect {
+    if (!self.checkVisibilityCached(null, frame)) {
         return .{
             ._x = 0.0,
             ._y = 0.0,
@@ -1165,14 +1165,14 @@ pub fn getBoundingClientRect(self: *Element, page: *Page) DOMRect {
         };
     }
 
-    return self.getBoundingClientRectForVisible(page);
+    return self.getBoundingClientRectForVisible(frame);
 }
 
 // Some cases need a the BoundingClientRect but have already done the
 // visibility check.
-pub fn getBoundingClientRectForVisible(self: *Element, page: *Page) DOMRect {
+pub fn getBoundingClientRectForVisible(self: *Element, frame: *Frame) DOMRect {
     const y = calculateDocumentPosition(self.asNode());
-    const dims = self.getElementDimensions(page);
+    const dims = self.getElementDimensions(frame);
 
     // Use sibling position for x coordinate to ensure siblings have different x values
     const x = calculateSiblingPosition(self.asNode());
@@ -1185,76 +1185,76 @@ pub fn getBoundingClientRectForVisible(self: *Element, page: *Page) DOMRect {
     };
 }
 
-pub fn getClientRects(self: *Element, page: *Page) ![]DOMRect {
-    if (!self.checkVisibilityCached(null, page)) {
+pub fn getClientRects(self: *Element, frame: *Frame) ![]DOMRect {
+    if (!self.checkVisibilityCached(null, frame)) {
         return &.{};
     }
-    const rects = try page.call_arena.alloc(DOMRect, 1);
-    rects[0] = self.getBoundingClientRectForVisible(page);
+    const rects = try frame.call_arena.alloc(DOMRect, 1);
+    rects[0] = self.getBoundingClientRectForVisible(frame);
     return rects;
 }
 
-pub fn getScrollTop(self: *Element, page: *Page) u32 {
-    const pos = page._element_scroll_positions.get(self) orelse return 0;
+pub fn getScrollTop(self: *Element, frame: *Frame) u32 {
+    const pos = frame._element_scroll_positions.get(self) orelse return 0;
     return pos.y;
 }
 
-pub fn setScrollTop(self: *Element, value: i32, page: *Page) !void {
-    const gop = try page._element_scroll_positions.getOrPut(page.arena, self);
+pub fn setScrollTop(self: *Element, value: i32, frame: *Frame) !void {
+    const gop = try frame._element_scroll_positions.getOrPut(frame.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
     gop.value_ptr.y = @intCast(@max(0, value));
 }
 
-pub fn getScrollLeft(self: *Element, page: *Page) u32 {
-    const pos = page._element_scroll_positions.get(self) orelse return 0;
+pub fn getScrollLeft(self: *Element, frame: *Frame) u32 {
+    const pos = frame._element_scroll_positions.get(self) orelse return 0;
     return pos.x;
 }
 
-pub fn setScrollLeft(self: *Element, value: i32, page: *Page) !void {
-    const gop = try page._element_scroll_positions.getOrPut(page.arena, self);
+pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
+    const gop = try frame._element_scroll_positions.getOrPut(frame.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
     gop.value_ptr.x = @intCast(@max(0, value));
 }
 
-pub fn getScrollHeight(self: *Element, page: *Page) f64 {
+pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
     // In our dummy layout engine, content doesn't overflow
-    return self.getClientHeight(page);
+    return self.getClientHeight(frame);
 }
 
-pub fn getScrollWidth(self: *Element, page: *Page) f64 {
+pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
     // In our dummy layout engine, content doesn't overflow
-    return self.getClientWidth(page);
+    return self.getClientWidth(frame);
 }
 
-pub fn getOffsetHeight(self: *Element, page: *Page) f64 {
-    if (!self.checkVisibilityCached(null, page)) {
+pub fn getOffsetHeight(self: *Element, frame: *Frame) f64 {
+    if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
     }
-    const dims = self.getElementDimensions(page);
+    const dims = self.getElementDimensions(frame);
     return dims.height;
 }
 
-pub fn getOffsetWidth(self: *Element, page: *Page) f64 {
-    if (!self.checkVisibilityCached(null, page)) {
+pub fn getOffsetWidth(self: *Element, frame: *Frame) f64 {
+    if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
     }
-    const dims = self.getElementDimensions(page);
+    const dims = self.getElementDimensions(frame);
     return dims.width;
 }
 
-pub fn getOffsetTop(self: *Element, page: *Page) f64 {
-    if (!self.checkVisibilityCached(null, page)) {
+pub fn getOffsetTop(self: *Element, frame: *Frame) f64 {
+    if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
     }
     return calculateDocumentPosition(self.asNode());
 }
 
-pub fn getOffsetLeft(self: *Element, page: *Page) f64 {
-    if (!self.checkVisibilityCached(null, page)) {
+pub fn getOffsetLeft(self: *Element, frame: *Frame) f64 {
+    if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
     }
     return calculateSiblingPosition(self.asNode());
@@ -1353,35 +1353,35 @@ fn calculateSiblingPosition(node: *Node) f64 {
     return position * 5.0; // 5px per node
 }
 
-pub fn getElementsByTagName(self: *Element, tag_name: []const u8, page: *Page) !Node.GetElementsByTagNameResult {
-    return self.asNode().getElementsByTagName(tag_name, page);
+pub fn getElementsByTagName(self: *Element, tag_name: []const u8, frame: *Frame) !Node.GetElementsByTagNameResult {
+    return self.asNode().getElementsByTagName(tag_name, frame);
 }
 
-pub fn getElementsByTagNameNS(self: *Element, namespace: ?[]const u8, local_name: []const u8, page: *Page) !collections.NodeLive(.tag_name_ns) {
-    return self.asNode().getElementsByTagNameNS(namespace, local_name, page);
+pub fn getElementsByTagNameNS(self: *Element, namespace: ?[]const u8, local_name: []const u8, frame: *Frame) !collections.NodeLive(.tag_name_ns) {
+    return self.asNode().getElementsByTagNameNS(namespace, local_name, frame);
 }
 
-pub fn getElementsByClassName(self: *Element, class_name: []const u8, page: *Page) !collections.NodeLive(.class_name) {
-    return self.asNode().getElementsByClassName(class_name, page);
+pub fn getElementsByClassName(self: *Element, class_name: []const u8, frame: *Frame) !collections.NodeLive(.class_name) {
+    return self.asNode().getElementsByClassName(class_name, frame);
 }
 
-pub fn clone(self: *Element, deep: bool, page: *Page) !*Node {
+pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
     const tag_name = self.getTagNameDump();
-    const node = try page.createElementNS(self._namespace, tag_name, self._attributes);
+    const node = try frame.createElementNS(self._namespace, tag_name, self._attributes);
 
     // Allow element-specific types to copy their runtime state
-    _ = Element.Build.call(node.as(Element), "cloned", .{ self, node.as(Element), page }) catch |err| {
+    _ = Element.Build.call(node.as(Element), "cloned", .{ self, node.as(Element), frame }) catch |err| {
         log.err(.dom, "element.clone.failed", .{ .err = err });
     };
 
     if (deep) {
         var child_it = self.asNode().childrenIterator();
         while (child_it.next()) |child| {
-            if (try child.cloneNodeForAppending(true, page)) |cloned_child| {
+            if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
                 // We pass `true` to `child_already_connected` as a hacky optimization
                 // We _know_ this child isn't connected (Because the parent isn't connected)
                 // setting this to `true` skips all connection checks.
-                try page.appendNode(node, cloned_child, .{ .child_already_connected = true });
+                try frame.appendNode(node, cloned_child, .{ .child_already_connected = true });
             }
         }
     }
@@ -1672,42 +1672,42 @@ pub const JsApi = struct {
     };
 
     pub const tagName = bridge.accessor(_tagName, null, .{});
-    fn _tagName(self: *Element, page: *Page) []const u8 {
-        return self.getTagNameSpec(&page.buf);
+    fn _tagName(self: *Element, frame: *Frame) []const u8 {
+        return self.getTagNameSpec(&frame.buf);
     }
     pub const namespaceURI = bridge.accessor(Element.getNamespaceURI, null, .{});
 
     pub const innerText = bridge.accessor(_innerText, Element.setInnerText, .{});
-    fn _innerText(self: *Element, page: *const Page) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(page.call_arena);
+    fn _innerText(self: *Element, frame: *const Frame) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.getInnerText(&buf.writer);
         return buf.written();
     }
 
     pub const outerHTML = bridge.accessor(_outerHTML, Element.setOuterHTML, .{});
-    fn _outerHTML(self: *Element, page: *Page) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(page.call_arena);
-        try self.getOuterHTML(&buf.writer, page);
+    fn _outerHTML(self: *Element, frame: *Frame) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        try self.getOuterHTML(&buf.writer, frame);
         return buf.written();
     }
 
     pub const innerHTML = bridge.accessor(_innerHTML, Element.setInnerHTML, .{});
-    fn _innerHTML(self: *Element, page: *Page) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(page.call_arena);
-        try self.getInnerHTML(&buf.writer, page);
+    fn _innerHTML(self: *Element, frame: *Frame) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        try self.getInnerHTML(&buf.writer, frame);
         return buf.written();
     }
 
     pub const prefix = bridge.accessor(Element._prefix, null, .{});
 
     pub const setAttribute = bridge.function(_setAttribute, .{ .dom_exception = true });
-    fn _setAttribute(self: *Element, name: String, value: js.Value, page: *Page) !void {
-        return self.setAttribute(name, .wrap(try value.toStringSlice()), page);
+    fn _setAttribute(self: *Element, name: String, value: js.Value, frame: *Frame) !void {
+        return self.setAttribute(name, .wrap(try value.toStringSlice()), frame);
     }
 
     pub const setAttributeNS = bridge.function(_setAttributeNS, .{ .dom_exception = true });
-    fn _setAttributeNS(self: *Element, maybe_ns: ?[]const u8, qn: []const u8, value: js.Value, page: *Page) !void {
-        return self.setAttributeNS(maybe_ns, qn, .wrap(try value.toStringSlice()), page);
+    fn _setAttributeNS(self: *Element, maybe_ns: ?[]const u8, qn: []const u8, value: js.Value, frame: *Frame) !void {
+        return self.setAttributeNS(maybe_ns, qn, .wrap(try value.toStringSlice()), frame);
     }
 
     pub const localName = bridge.accessor(Element.getLocalName, null, .{});
@@ -1741,8 +1741,8 @@ pub const JsApi = struct {
     const ShadowRootInit = struct {
         mode: []const u8,
     };
-    fn _attachShadow(self: *Element, init: ShadowRootInit, page: *Page) !*ShadowRoot {
-        return self.attachShadow(init.mode, page);
+    fn _attachShadow(self: *Element, init: ShadowRootInit, frame: *Frame) !*ShadowRoot {
+        return self.attachShadow(init.mode, frame);
     }
     pub const replaceChildren = bridge.function(Element.replaceChildren, .{ .dom_exception = true });
     pub const replaceWith = bridge.function(Element.replaceWith, .{ .dom_exception = true });

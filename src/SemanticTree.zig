@@ -29,13 +29,13 @@ const AXNode = @import("cdp/AXNode.zig");
 const CDPNode = @import("cdp/Node.zig");
 
 const log = lp.log;
-const Page = lp.Page;
+const Frame = lp.Frame;
 
 const Self = @This();
 
 dom_node: *Node,
 registry: *CDPNode.Registry,
-page: *Page,
+frame: *Frame,
 arena: std.mem.Allocator,
 prune: bool = true,
 interactive_only: bool = false,
@@ -44,7 +44,7 @@ max_depth: u32 = std.math.maxInt(u32) - 1,
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
     var visitor = JsonVisitor{ .jw = jw, .tree = self };
     var xpath_buffer: std.ArrayList(u8) = .{};
-    const listener_targets = interactive.buildListenerTargetMap(self.page, self.arena) catch |err| {
+    const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -65,7 +65,7 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
 pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
     var visitor = TextVisitor{ .writer = writer, .tree = self, .depth = 0 };
     var xpath_buffer: std.ArrayList(u8) = .empty;
-    const listener_targets = interactive.buildListenerTargetMap(self.page, self.arena) catch |err| {
+    const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -130,7 +130,7 @@ fn walk(
         if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
         // Check visibility using the engine's checkVisibility which handles CSS display: none
-        if (!el.checkVisibilityCached(ctx.visibility_cache, self.page)) {
+        if (!el.checkVisibilityCached(ctx.visibility_cache, self.frame)) {
             return;
         }
 
@@ -166,17 +166,17 @@ fn walk(
                 checked = input.getChecked();
             }
             if (el.getAttributeSafe(comptime .wrap("list"))) |list_id| {
-                options = try extractDataListOptions(list_id, self.page, self.arena);
+                options = try extractDataListOptions(list_id, self.frame, self.arena);
             }
         } else if (el.is(Element.Html.TextArea)) |textarea| {
             value = textarea.getValue();
         } else if (el.is(Element.Html.Select)) |select| {
-            value = select.getValue(self.page);
-            options = try extractSelectOptions(el.asNode(), self.page, self.arena);
+            value = select.getValue(self.frame);
+            options = try extractSelectOptions(el.asNode(), self.frame, self.arena);
         }
 
         if (el.is(Element.Html)) |html_el| {
-            if (interactive.classifyInteractivity(self.page, el, html_el, ctx.listener_targets, ctx.pointer_events_cache) != null) {
+            if (interactive.classifyInteractivity(self.frame, el, html_el, ctx.listener_targets, ctx.pointer_events_cache) != null) {
                 is_interactive = true;
             }
         }
@@ -190,7 +190,7 @@ fn walk(
     try appendXPathSegment(node, ctx.xpath_buffer.writer(self.arena), index);
     const xpath = ctx.xpath_buffer.items;
 
-    var name = try axn.getName(self.page, self.arena);
+    var name = try axn.getName(self.frame, self.arena);
 
     const has_explicit_label = if (node.is(Element)) |el|
         el.getAttributeSafe(.wrap("aria-label")) != null or el.getAttributeSafe(.wrap("title")) != null
@@ -287,15 +287,15 @@ fn walk(
     ctx.xpath_buffer.shrinkRetainingCapacity(initial_xpath_len);
 }
 
-fn extractSelectOptions(node: *Node, page: *Page, arena: std.mem.Allocator) ![]OptionData {
+fn extractSelectOptions(node: *Node, frame: *Frame, arena: std.mem.Allocator) ![]OptionData {
     var options: std.ArrayList(OptionData) = .empty;
     var it = node.childrenIterator();
     while (it.next()) |child| {
         if (child.is(Element)) |el| {
             if (el.getTag() == .option) {
                 if (el.is(Element.Html.Option)) |opt| {
-                    const text = opt.getText(page);
-                    const value = opt.getValue(page);
+                    const text = opt.getText(frame);
+                    const value = opt.getValue(frame);
                     const selected = opt.getSelected();
                     try options.append(arena, .{ .text = text, .value = value, .selected = selected });
                 }
@@ -303,8 +303,8 @@ fn extractSelectOptions(node: *Node, page: *Page, arena: std.mem.Allocator) ![]O
                 var group_it = child.childrenIterator();
                 while (group_it.next()) |group_child| {
                     if (group_child.is(Element.Html.Option)) |opt| {
-                        const text = opt.getText(page);
-                        const value = opt.getValue(page);
+                        const text = opt.getText(frame);
+                        const value = opt.getValue(frame);
                         const selected = opt.getSelected();
                         try options.append(arena, .{ .text = text, .value = value, .selected = selected });
                     }
@@ -315,10 +315,10 @@ fn extractSelectOptions(node: *Node, page: *Page, arena: std.mem.Allocator) ![]O
     return options.toOwnedSlice(arena);
 }
 
-fn extractDataListOptions(list_id: []const u8, page: *Page, arena: std.mem.Allocator) !?[]OptionData {
-    if (page.document.getElementById(list_id, page)) |referenced_el| {
+fn extractDataListOptions(list_id: []const u8, frame: *Frame, arena: std.mem.Allocator) !?[]OptionData {
+    if (frame.document.getElementById(list_id, frame)) |referenced_el| {
         if (referenced_el.getTag() == .datalist) {
-            return try extractSelectOptions(referenced_el.asNode(), page, arena);
+            return try extractSelectOptions(referenced_el.asNode(), frame, arena);
         }
     }
     return null;
@@ -644,12 +644,12 @@ pub fn getNodeDetails(
     arena: std.mem.Allocator,
     node: *Node,
     registry: *CDPNode.Registry,
-    page: *Page,
+    frame: *Frame,
 ) !NodeDetails {
     const cdp_node = try registry.register(node);
     const axn = AXNode.fromNode(node);
     const role = try axn.getRole();
-    const name = try axn.getName(page, arena);
+    const name = try axn.getName(frame, arena);
 
     var is_interactive = false;
     var is_disabled = false;
@@ -672,7 +672,7 @@ pub fn getNodeDetails(
 
         if (el.getAttributeSafe(comptime .wrap("href"))) |h| {
             const URL = lp.URL;
-            href = URL.resolve(arena, page.base(), h, .{ .encoding = page.charset }) catch h;
+            href = URL.resolve(arena, frame.base(), h, .{ .encoding = frame.charset }) catch h;
         }
 
         if (el.is(Element.Html.Input)) |input| {
@@ -682,19 +682,19 @@ pub fn getNodeDetails(
                 checked = input.getChecked();
             }
             if (el.getAttributeSafe(comptime .wrap("list"))) |list_id| {
-                options = try extractDataListOptions(list_id, page, arena);
+                options = try extractDataListOptions(list_id, frame, arena);
             }
         } else if (el.is(Element.Html.TextArea)) |textarea| {
             value = textarea.getValue();
         } else if (el.is(Element.Html.Select)) |select| {
-            value = select.getValue(page);
-            options = try extractSelectOptions(el.asNode(), page, arena);
+            value = select.getValue(frame);
+            options = try extractSelectOptions(el.asNode(), frame, arena);
         }
 
         if (el.is(Element.Html)) |html_el| {
-            const listener_targets = try interactive.buildListenerTargetMap(page, arena);
+            const listener_targets = try interactive.buildListenerTargetMap(frame, arena);
             var pointer_events_cache: Element.PointerEventsCache = .empty;
-            if (interactive.classifyInteractivity(page, el, html_el, listener_targets, &pointer_events_cache) != null) {
+            if (interactive.classifyInteractivity(frame, el, html_el, listener_targets, &pointer_events_cache) != null) {
                 is_interactive = true;
             }
         }
@@ -724,14 +724,14 @@ test "SemanticTree backendDOMNodeId" {
     var registry: CDPNode.Registry = .init(testing.allocator);
     defer registry.deinit();
 
-    var page = try testing.pageTest("cdp/registry1.html", .{});
+    var frame = try testing.pageTest("cdp/registry1.html", .{});
     defer testing.reset();
-    defer page._session.removePage();
+    defer frame._session.removeFrame();
 
     const st: Self = .{
-        .dom_node = page.window._document.asNode(),
+        .dom_node = frame.window._document.asNode(),
         .registry = &registry,
-        .page = page,
+        .frame = frame,
         .arena = testing.arena_allocator,
         .prune = false,
         .interactive_only = false,
@@ -748,14 +748,14 @@ test "SemanticTree max_depth" {
     var registry: CDPNode.Registry = .init(testing.allocator);
     defer registry.deinit();
 
-    var page = try testing.pageTest("cdp/registry1.html", .{});
+    var frame = try testing.pageTest("cdp/registry1.html", .{});
     defer testing.reset();
-    defer page._session.removePage();
+    defer frame._session.removeFrame();
 
     const st: Self = .{
-        .dom_node = page.window._document.asNode(),
+        .dom_node = frame.window._document.asNode(),
         .registry = &registry,
-        .page = page,
+        .frame = frame,
         .arena = testing.arena_allocator,
         .prune = false,
         .interactive_only = false,

@@ -21,7 +21,7 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 
 const color = @import("../../color.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Canvas = @import("../element/html/Canvas.zig");
 const ImageData = @import("../ImageData.zig");
@@ -41,8 +41,8 @@ pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
     return self._canvas;
 }
 
-pub fn getFillStyle(self: *const CanvasRenderingContext2D, page: *Page) ![]const u8 {
-    var w = std.Io.Writer.Allocating.init(page.call_arena);
+pub fn getFillStyle(self: *const CanvasRenderingContext2D, frame: *Frame) ![]const u8 {
+    var w = std.Io.Writer.Allocating.init(frame.call_arena);
     try self._fill_style.format(&w.writer);
     return w.written();
 }
@@ -67,15 +67,15 @@ pub fn createImageData(
     maybe_height: ?u32,
     /// Can be used if width and height provided.
     maybe_settings: ?ImageData.ConstructorSettings,
-    page: *Page,
+    frame: *Frame,
 ) !*ImageData {
     switch (width_or_image_data) {
         .width => |width| {
             const height = maybe_height orelse return error.TypeError;
-            return ImageData.init(width, height, maybe_settings, page);
+            return ImageData.init(width, height, maybe_settings, frame);
         },
         .image_data => |image_data| {
-            return ImageData.init(image_data._width, image_data._height, null, page);
+            return ImageData.init(image_data._width, image_data._height, null, frame);
         },
     }
 }
@@ -88,12 +88,12 @@ pub fn getImageData(
     _: i32, // sy
     sw: i32,
     sh: i32,
-    page: *Page,
+    frame: *Frame,
 ) !*ImageData {
     if (sw <= 0 or sh <= 0) {
         return error.IndexSizeError;
     }
-    return ImageData.init(@intCast(sw), @intCast(sh), null, page);
+    return ImageData.init(@intCast(sw), @intCast(sh), null, frame);
 }
 
 pub fn save(_: *CanvasRenderingContext2D) void {}

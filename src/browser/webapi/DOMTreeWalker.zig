@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 
 const Node = @import("Node.zig");
 const NodeFilter = @import("NodeFilter.zig");
@@ -31,9 +31,9 @@ _what_to_show: u32,
 _filter: NodeFilter,
 _current: *Node,
 
-pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, page: *Page) !*DOMTreeWalker {
+pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, frame: *Frame) !*DOMTreeWalker {
     const node_filter = try NodeFilter.init(filter);
-    return page._factory.create(DOMTreeWalker{
+    return frame._factory.create(DOMTreeWalker{
         ._root = root,
         ._current = root,
         ._filter = node_filter,
@@ -62,13 +62,13 @@ pub fn setCurrentNode(self: *DOMTreeWalker, node: *Node) void {
 }
 
 // Navigation methods
-pub fn parentNode(self: *DOMTreeWalker, page: *Page) !?*Node {
+pub fn parentNode(self: *DOMTreeWalker, frame: *Frame) !?*Node {
     var node = self._current._parent;
     while (node) |n| {
         if (n == self._root._parent) {
             return null;
         }
-        if (try self.acceptNode(n, page) == NodeFilter.FILTER_ACCEPT) {
+        if (try self.acceptNode(n, frame) == NodeFilter.FILTER_ACCEPT) {
             self._current = n;
             return n;
         }
@@ -77,11 +77,11 @@ pub fn parentNode(self: *DOMTreeWalker, page: *Page) !?*Node {
     return null;
 }
 
-pub fn firstChild(self: *DOMTreeWalker, page: *Page) !?*Node {
+pub fn firstChild(self: *DOMTreeWalker, frame: *Frame) !?*Node {
     var node = self._current.firstChild();
 
     while (node) |n| {
-        const filter_result = try self.acceptNode(n, page);
+        const filter_result = try self.acceptNode(n, frame);
 
         if (filter_result == NodeFilter.FILTER_ACCEPT) {
             self._current = n;
@@ -117,11 +117,11 @@ pub fn firstChild(self: *DOMTreeWalker, page: *Page) !?*Node {
     return null;
 }
 
-pub fn lastChild(self: *DOMTreeWalker, page: *Page) !?*Node {
+pub fn lastChild(self: *DOMTreeWalker, frame: *Frame) !?*Node {
     var node = self._current.lastChild();
 
     while (node) |n| {
-        const filter_result = try self.acceptNode(n, page);
+        const filter_result = try self.acceptNode(n, frame);
 
         if (filter_result == NodeFilter.FILTER_ACCEPT) {
             self._current = n;
@@ -157,10 +157,10 @@ pub fn lastChild(self: *DOMTreeWalker, page: *Page) !?*Node {
     return null;
 }
 
-pub fn previousSibling(self: *DOMTreeWalker, page: *Page) !?*Node {
+pub fn previousSibling(self: *DOMTreeWalker, frame: *Frame) !?*Node {
     var node = self.previousSiblingOrNull(self._current);
     while (node) |n| {
-        if (try self.acceptNode(n, page) == NodeFilter.FILTER_ACCEPT) {
+        if (try self.acceptNode(n, frame) == NodeFilter.FILTER_ACCEPT) {
             self._current = n;
             return n;
         }
@@ -169,10 +169,10 @@ pub fn previousSibling(self: *DOMTreeWalker, page: *Page) !?*Node {
     return null;
 }
 
-pub fn nextSibling(self: *DOMTreeWalker, page: *Page) !?*Node {
+pub fn nextSibling(self: *DOMTreeWalker, frame: *Frame) !?*Node {
     var node = self.nextSiblingOrNull(self._current);
     while (node) |n| {
-        if (try self.acceptNode(n, page) == NodeFilter.FILTER_ACCEPT) {
+        if (try self.acceptNode(n, frame) == NodeFilter.FILTER_ACCEPT) {
             self._current = n;
             return n;
         }
@@ -181,7 +181,7 @@ pub fn nextSibling(self: *DOMTreeWalker, page: *Page) !?*Node {
     return null;
 }
 
-pub fn previousNode(self: *DOMTreeWalker, page: *Page) !?*Node {
+pub fn previousNode(self: *DOMTreeWalker, frame: *Frame) !?*Node {
     var node = self._current;
     while (node != self._root) {
         var sibling = self.previousSiblingOrNull(node);
@@ -189,7 +189,7 @@ pub fn previousNode(self: *DOMTreeWalker, page: *Page) !?*Node {
             node = sib;
 
             // Check if this sibling is rejected before descending into it
-            const sib_result = try self.acceptNode(node, page);
+            const sib_result = try self.acceptNode(node, frame);
             if (sib_result == NodeFilter.FILTER_REJECT) {
                 // Skip this sibling and its descendants entirely
                 sibling = self.previousSiblingOrNull(node);
@@ -204,7 +204,7 @@ pub fn previousNode(self: *DOMTreeWalker, page: *Page) !?*Node {
                 while (child) |c| {
                     if (!self.isInSubtree(c)) break;
 
-                    const filter_result = try self.acceptNode(c, page);
+                    const filter_result = try self.acceptNode(c, frame);
                     if (filter_result == NodeFilter.FILTER_REJECT) {
                         // Skip this child and try its previous sibling
                         child = self.previousSiblingOrNull(c);
@@ -220,7 +220,7 @@ pub fn previousNode(self: *DOMTreeWalker, page: *Page) !?*Node {
                 node = child.?;
             }
 
-            if (try self.acceptNode(node, page) == NodeFilter.FILTER_ACCEPT) {
+            if (try self.acceptNode(node, frame) == NodeFilter.FILTER_ACCEPT) {
                 self._current = node;
                 return node;
             }
@@ -232,7 +232,7 @@ pub fn previousNode(self: *DOMTreeWalker, page: *Page) !?*Node {
         }
 
         const parent = node._parent orelse return null;
-        if (try self.acceptNode(parent, page) == NodeFilter.FILTER_ACCEPT) {
+        if (try self.acceptNode(parent, frame) == NodeFilter.FILTER_ACCEPT) {
             self._current = parent;
             return parent;
         }
@@ -241,14 +241,14 @@ pub fn previousNode(self: *DOMTreeWalker, page: *Page) !?*Node {
     return null;
 }
 
-pub fn nextNode(self: *DOMTreeWalker, page: *Page) !?*Node {
+pub fn nextNode(self: *DOMTreeWalker, frame: *Frame) !?*Node {
     var node = self._current;
 
     while (true) {
         // Try children first (depth-first)
         if (node.firstChild()) |child| {
             node = child;
-            const filter_result = try self.acceptNode(node, page);
+            const filter_result = try self.acceptNode(node, frame);
             if (filter_result == NodeFilter.FILTER_ACCEPT) {
                 self._current = node;
                 return node;
@@ -271,7 +271,7 @@ pub fn nextNode(self: *DOMTreeWalker, page: *Page) !?*Node {
 
             if (node.nextSibling()) |sibling| {
                 node = sibling;
-                const filter_result = try self.acceptNode(node, page);
+                const filter_result = try self.acceptNode(node, frame);
                 if (filter_result == NodeFilter.FILTER_ACCEPT) {
                     self._current = node;
                     return node;
@@ -293,7 +293,7 @@ pub fn nextNode(self: *DOMTreeWalker, page: *Page) !?*Node {
 }
 
 // Helper methods
-fn acceptNode(self: *const DOMTreeWalker, node: *Node, page: *Page) !i32 {
+fn acceptNode(self: *const DOMTreeWalker, node: *Node, frame: *Frame) !i32 {
     // First check whatToShow
     if (!NodeFilter.shouldShow(node, self._what_to_show)) {
         return NodeFilter.FILTER_SKIP;
@@ -303,7 +303,7 @@ fn acceptNode(self: *const DOMTreeWalker, node: *Node, page: *Page) !i32 {
     // For TreeWalker, REJECT means reject node and its descendants
     // SKIP means skip node but check its descendants
     // ACCEPT means accept the node
-    return try self._filter.acceptNode(node, page.js.local.?);
+    return try self._filter.acceptNode(node, frame.js.local.?);
 }
 
 fn isInSubtree(self: *const DOMTreeWalker, node: *Node) bool {

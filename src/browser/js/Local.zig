@@ -34,7 +34,7 @@ const log = lp.log;
 const CallOpts = Caller.CallOpts;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
-// Where js.Context has a lifetime tied to the page, and holds the
+// Where js.Context has a lifetime tied to the frame, and holds the
 // v8::Global<v8::Context>, this has a much shorter lifetime and holds a
 // v8::Local<v8::Context>. In V8, you need a Local<v8::Context> or get anything
 // done, but the local only exists for the lifetime of the HandleScope it was
@@ -271,11 +271,11 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 const finalizer_ptr_id = finalizer.ptr_id;
 
                 const session = ctx.session;
-                const finalizer_gop = try session.finalizer_callbacks.getOrPut(session.page_arena, finalizer_ptr_id);
+                const finalizer_gop = try session.finalizer_callbacks.getOrPut(session.frame_arena, finalizer_ptr_id);
                 if (finalizer_gop.found_existing == false) {
                     // This is the first context (and very likely only one) to
                     // see this Zig instance. We need to create the FinalizerCallback
-                    // so that we can cleanup on page reset if v8 doesn't finalize.
+                    // so that we can cleanup on frame reset if v8 doesn't finalize.
                     errdefer _ = session.finalizer_callbacks.remove(finalizer_ptr_id);
                     finalizer.acquire_ref(finalizer_ptr_id);
                     finalizer_gop.value_ptr.* = try self.createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.release_ref_from_zig);
@@ -336,15 +336,15 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                 }
 
                 if (@typeInfo(ptr.child) == .@"struct" and @hasDecl(ptr.child, "runtimeGenericWrap")) {
-                    const page = switch (self.ctx.global) {
-                        .page => |p| p,
+                    const frame = switch (self.ctx.global) {
+                        .frame => |f| f,
                         .worker => {
                             // No Worker-related API currently uses this, so haven't
                             // added support for it
                             unreachable;
                         },
                     };
-                    const wrap = try value.runtimeGenericWrap(page);
+                    const wrap = try value.runtimeGenericWrap(frame);
                     return self.zigValueToJs(wrap, opts);
                 }
 
@@ -424,15 +424,15 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
             // zig fmt: on
 
             if (@hasDecl(T, "runtimeGenericWrap")) {
-                const page = switch (self.ctx.global) {
-                    .page => |p| p,
+                const frame = switch (self.ctx.global) {
+                    .frame => |f| f,
                     .worker => {
                         // No Worker-related API currently uses this, so haven't
                         // added support for it
                         unreachable;
                     },
                 };
-                const wrap = try value.runtimeGenericWrap(page);
+                const wrap = try value.runtimeGenericWrap(frame);
                 return self.zigValueToJs(wrap, opts);
             }
 
@@ -1226,7 +1226,7 @@ fn resolveT(comptime T: type, value: *T) Resolved {
                     const ptr = v8.v8__WeakCallbackInfo__GetParameter(handle.?).?;
                     const identity_finalizer: *Session.FinalizerCallback.Identity = @ptrCast(@alignCast(ptr));
 
-                    // Identity is allocated from pool, so it's valid even after page reset.
+                    // Identity is allocated from pool, so it's valid even after frame reset.
                     const session = identity_finalizer.session;
                     const resolved_ptr_id = identity_finalizer.resolved_ptr_id;
                     defer session.fc_identity_pool.destroy(identity_finalizer);
@@ -1237,7 +1237,7 @@ fn resolveT(comptime T: type, value: *T) Resolved {
                         v8.v8__Global__Reset(&global);
                     }
 
-                    // If done, FC was already cleaned up during page reset. The
+                    // If done, FC was already cleaned up during frame reset. The
                     // finalizer_ptr_id may have been reused for a new object, so
                     // we must not look it up in the map.
                     if (identity_finalizer.done) return;
@@ -1474,7 +1474,7 @@ pub fn throw(self: *const Local, err: []const u8) js.Exception {
 }
 
 // Convert a Global (or optional Global) to a Local (or optional Local).
-// Meant to be used from either page.js.toLocal, where the context must have an
+// Meant to be used from either frame.js.toLocal, where the context must have an
 // non-null local (orelse panic), or from a LocalScope
 pub fn toLocal(self: *const Local, global: anytype) ToLocalReturnType(@TypeOf(global)) {
     const T = @TypeOf(global);
@@ -1561,12 +1561,12 @@ fn createFinalizerCallback(
 // initiated or not), we need to create a Local.Scope:
 //
 //   var ls: js.Local.Scope = udnefined;
-//   page.js.localScope(&ls);
+//   frame.js.localScope(&ls);
 //   defer ls.deinit();
 //   // can use ls.local as needed.
 //
 // Note: Zig code that is 100% guaranteed to be v8-initiated can get a local via:
-//   page.js.local.?
+//   frame.js.local.?
 pub const Scope = struct {
     local: Local,
     handle_scope: js.HandleScope,

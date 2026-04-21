@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 const HttpClient = @import("../../HttpClient.zig");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const URL = @import("../../URL.zig");
 
 const Blob = @import("../Blob.zig");
@@ -35,7 +35,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Fetch = @This();
 
-_page: *Page,
+_frame: *Frame,
 _url: []const u8,
 _buf: std.ArrayList(u8),
 _response: *Response,
@@ -46,9 +46,9 @@ _signal: ?*AbortSignal,
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
 
-pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
-    const request = try Request.init(input, options, &page.js.execution);
-    const resolver = page.js.local.?.createPromiseResolver();
+pub fn init(input: Input, options: ?InitOpts, frame: *Frame) !js.Promise {
+    const request = try Request.init(input, options, &frame.js.execution);
+    const resolver = frame.js.local.?.createPromiseResolver();
 
     if (request._signal) |signal| {
         if (signal._aborted) {
@@ -58,15 +58,15 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     }
 
     if (std.mem.startsWith(u8, request._url, "blob:")) {
-        return handleBlobUrl(request._url, resolver, page);
+        return handleBlobUrl(request._url, resolver, frame);
     }
 
-    const response = try Response.init(null, .{ .status = 0 }, &page.js.execution);
-    errdefer response.deinit(page._session);
+    const response = try Response.init(null, .{ .status = 0 }, &frame.js.execution);
+    errdefer response.deinit(frame._session);
 
     const fetch = try response._arena.create(Fetch);
     fetch.* = .{
-        ._page = page,
+        ._frame = frame,
         ._buf = .empty,
         ._url = try response._arena.dupe(u8, request._url),
         ._resolver = try resolver.persist(),
@@ -75,12 +75,12 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         ._signal = request._signal,
     };
 
-    const http_client = page._session.browser.http_client;
+    const http_client = frame._session.browser.http_client;
     var headers = try http_client.newHeaders();
     if (request._headers) |h| {
-        try h.populateHttpHeader(page.call_arena, &headers);
+        try h.populateHttpHeader(frame.call_arena, &headers);
     }
-    try page.headersForRequest(&headers);
+    try frame.headersForRequest(&headers);
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });
@@ -88,22 +88,22 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
 
     const cookie_jar = switch (request._credentials) {
         .omit => null,
-        .include => &page._session.cookie_jar,
-        .@"same-origin" => if (page.isSameOrigin(request._url)) &page._session.cookie_jar else null,
+        .include => &frame._session.cookie_jar,
+        .@"same-origin" => if (frame.isSameOrigin(request._url)) &frame._session.cookie_jar else null,
     };
 
     try http_client.request(.{
         .ctx = fetch,
         .url = request._url,
         .method = request._method,
-        .frame_id = page._frame_id,
-        .loader_id = page._loader_id,
+        .frame_id = frame._frame_id,
+        .loader_id = frame._loader_id,
         .body = request._body,
         .headers = headers,
         .resource_type = .fetch,
         .cookie_jar = cookie_jar,
-        .cookie_origin = page.url,
-        .notification = page._session.notification,
+        .cookie_origin = frame.url,
+        .notification = frame._session.notification,
         .start_callback = httpStartCallback,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
@@ -114,22 +114,22 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     return resolver.promise();
 }
 
-fn handleBlobUrl(url: []const u8, resolver: js.PromiseResolver, page: *Page) !js.Promise {
-    const blob: *Blob = page.lookupBlobUrl(url) orelse {
+fn handleBlobUrl(url: []const u8, resolver: js.PromiseResolver, frame: *Frame) !js.Promise {
+    const blob: *Blob = frame.lookupBlobUrl(url) orelse {
         resolver.rejectError("fetch blob error", .{ .type_error = "BlobNotFound" });
         return resolver.promise();
     };
 
-    const response = try Response.init(null, .{ .status = 200 }, &page.js.execution);
+    const response = try Response.init(null, .{ .status = 200 }, &frame.js.execution);
     response._body = .{ .bytes = try response._arena.dupe(u8, blob._slice) };
     response._url = try response._arena.dupeZ(u8, url);
     response._type = .basic;
 
     if (blob._mime.len > 0) {
-        try response._headers.append("Content-Type", blob._mime, &page.js.execution);
+        try response._headers.append("Content-Type", blob._mime, &frame.js.execution);
     }
 
-    const js_val = try page.js.local.?.zigValueToJs(response, .{});
+    const js_val = try frame.js.local.?.zigValueToJs(response, .{});
     resolver.resolve("fetch blob done", js_val);
     return resolver.promise();
 }
@@ -172,12 +172,12 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
     res._is_redirected = response.redirectCount().? > 0;
 
     // Determine response type based on origin comparison
-    const page_origin = URL.getOrigin(arena, self._page.url) catch null;
+    const frame_origin = URL.getOrigin(arena, self._frame.url) catch null;
     const response_origin = URL.getOrigin(arena, res._url) catch null;
 
-    if (page_origin) |po| {
+    if (frame_origin) |fo| {
         if (response_origin) |ro| {
-            if (std.mem.eql(u8, po, ro)) {
+            if (std.mem.eql(u8, fo, ro)) {
                 res._type = .basic; // Same-origin
             } else {
                 res._type = .cors; // Cross-origin (for simplicity, assume CORS passed)
@@ -191,7 +191,7 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
 
     var it = response.headerIterator();
     while (it.next()) |hdr| {
-        try res._headers.append(hdr.name, hdr.value, &self._page.js.execution);
+        try res._headers.append(hdr.name, hdr.value, &self._frame.js.execution);
     }
 
     return true;
@@ -224,7 +224,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     });
 
     var ls: js.Local.Scope = undefined;
-    self._page.js.localScope(&ls);
+    self._frame.js.localScope(&ls);
     defer ls.deinit();
 
     const js_val = try ls.local.zigValueToJs(self._response, .{});
@@ -248,11 +248,11 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // clear this. (defer since `self is in the response's arena).
 
     defer if (self._owns_response) {
-        response.deinit(self._page._session);
+        response.deinit(self._frame._session);
     };
 
     var ls: js.Local.Scope = undefined;
-    self._page.js.localScope(&ls);
+    self._frame.js.localScope(&ls);
     defer ls.deinit();
 
     // fetch() must reject with a TypeError on network errors per spec
@@ -269,7 +269,7 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
     if (self._owns_response) {
         var response = self._response;
         response._http_response = null;
-        response.deinit(self._page._session);
+        response.deinit(self._frame._session);
         // Do not access `self` after this point: the Fetch struct was
         // allocated from response._arena which has been released.
     }

@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const Session = @import("../../Session.zig");
 
 const Node = @import("../Node.zig");
@@ -50,16 +50,16 @@ pub fn collect(
     root: *Node,
     selector: Selector.Selector,
     nodes: *std.AutoArrayHashMapUnmanaged(*Node, void),
-    page: *Page,
+    frame: *Frame,
 ) !void {
-    if (optimizeSelector(root, &selector, page)) |result| {
+    if (optimizeSelector(root, &selector, frame)) |result| {
         var tw = TreeWalker.init(result.root, .{});
         if (result.exclude_root) {
             _ = tw.next();
         }
 
         while (tw.next()) |node| {
-            if (matches(node, result.selector, root, page)) {
+            if (matches(node, result.selector, root, frame)) {
                 try nodes.put(allocator, node, {});
             }
         }
@@ -67,15 +67,15 @@ pub fn collect(
 }
 
 // used internally to find the first match
-pub fn initOne(root: *Node, selector: Selector.Selector, page: *Page) ?*Node {
-    const result = optimizeSelector(root, &selector, page) orelse return null;
+pub fn initOne(root: *Node, selector: Selector.Selector, frame: *Frame) ?*Node {
+    const result = optimizeSelector(root, &selector, frame) orelse return null;
 
     var tw = TreeWalker.init(result.root, .{});
     if (result.exclude_root) {
         _ = tw.next();
     }
     while (tw.next()) |node| {
-        if (matches(node, result.selector, root, page)) {
+        if (matches(node, result.selector, root, frame)) {
             return node;
         }
     }
@@ -88,7 +88,7 @@ const OptimizeResult = struct {
     selector: Selector.Selector,
 };
 
-fn optimizeSelector(root: *Node, selector: *const Selector.Selector, page: *Page) ?OptimizeResult {
+fn optimizeSelector(root: *Node, selector: *const Selector.Selector, frame: *Frame) ?OptimizeResult {
     const anchor = findIdSelector(selector) orelse return .{
         .root = root,
         .selector = selector.*,
@@ -104,7 +104,7 @@ fn optimizeSelector(root: *Node, selector: *const Selector.Selector, page: *Page
     const segment_index = anchor.segment_index;
 
     // Look up the element by ID (O(1) hash map lookup)
-    const id_element = page.getElementByIdFromNode(root, id) orelse return null;
+    const id_element = frame.getElementByIdFromNode(root, id) orelse return null;
     const id_node = id_element.asNode();
 
     if (!root.contains(id_node)) {
@@ -173,7 +173,7 @@ fn optimizeSelector(root: *Node, selector: *const Selector.Selector, page: *Page
         .segments = selector.segments[0 .. seg_idx + 1],
     };
 
-    if (!matches(id_node, prefix_selector, id_node, page)) {
+    if (!matches(id_node, prefix_selector, id_node, frame)) {
         return null;
     }
 
@@ -192,16 +192,16 @@ pub fn getLength(self: *const List) usize {
     return self._nodes.len;
 }
 
-pub fn keys(self: *List, page: *Page) !*KeyIterator {
-    return .init(.{ .list = self }, page);
+pub fn keys(self: *List, frame: *Frame) !*KeyIterator {
+    return .init(.{ .list = self }, frame);
 }
 
-pub fn values(self: *List, page: *Page) !*ValueIterator {
-    return .init(.{ .list = self }, page);
+pub fn values(self: *List, frame: *Frame) !*ValueIterator {
+    return .init(.{ .list = self }, frame);
 }
 
-pub fn entries(self: *List, page: *Page) !*EntryIterator {
-    return .init(.{ .list = self }, page);
+pub fn entries(self: *List, frame: *Frame) !*EntryIterator {
+    return .init(.{ .list = self }, frame);
 }
 
 pub fn getAtIndex(self: *const List, index: usize) !?*Node {
@@ -212,7 +212,7 @@ pub fn getAtIndex(self: *const List, index: usize) !?*Node {
 }
 
 const NodeList = @import("../collections/NodeList.zig");
-pub fn runtimeGenericWrap(self: *List, _: *const Page) !*NodeList {
+pub fn runtimeGenericWrap(self: *List, _: *const Frame) !*NodeList {
     const nl = try self._arena.create(NodeList);
     nl.* = .{
         ._data = .{ .selector_list = self },
@@ -252,23 +252,23 @@ fn findIdSelector(selector: *const Selector.Selector) ?IdAnchor {
     return null;
 }
 
-pub fn matches(node: *Node, selector: Selector.Selector, scope: *Node, page: *Page) bool {
+pub fn matches(node: *Node, selector: Selector.Selector, scope: *Node, frame: *Frame) bool {
     const el = node.is(Node.Element) orelse return false;
 
     if (selector.segments.len == 0) {
-        return matchesCompound(el, selector.first, scope, page);
+        return matchesCompound(el, selector.first, scope, frame);
     }
 
     const last_segment = selector.segments[selector.segments.len - 1];
-    if (!matchesCompound(el, last_segment.compound, scope, page)) {
+    if (!matchesCompound(el, last_segment.compound, scope, frame)) {
         return false;
     }
 
-    return matchSegments(node, selector, selector.segments.len - 1, null, scope, page);
+    return matchSegments(node, selector, selector.segments.len - 1, null, scope, frame);
 }
 
 // Match segments backward, with support for backtracking on subsequent_sibling
-fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize, root: ?*Node, scope: *Node, page: *Page) bool {
+fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize, root: ?*Node, scope: *Node, frame: *Frame) bool {
     const segment = selector.segments[segment_index];
     const target_compound = if (segment_index == 0)
         selector.first
@@ -276,9 +276,9 @@ fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize,
         selector.segments[segment_index - 1].compound;
 
     const matched: ?*Node = switch (segment.combinator) {
-        .descendant => matchDescendant(node, target_compound, root, scope, page),
-        .child => matchChild(node, target_compound, root, scope, page),
-        .next_sibling => matchNextSibling(node, target_compound, scope, page),
+        .descendant => matchDescendant(node, target_compound, root, scope, frame),
+        .child => matchChild(node, target_compound, root, scope, frame),
+        .next_sibling => matchNextSibling(node, target_compound, scope, frame),
         .subsequent_sibling => {
             // For subsequent_sibling, try all matching siblings with backtracking
             var sibling = node.previousSibling();
@@ -288,13 +288,13 @@ fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize,
                     continue;
                 };
 
-                if (matchesCompound(sibling_el, target_compound, scope, page)) {
+                if (matchesCompound(sibling_el, target_compound, scope, frame)) {
                     // If we're at the first segment, we found a match
                     if (segment_index == 0) {
                         return true;
                     }
                     // Try to match remaining segments from this sibling
-                    if (matchSegments(s, selector, segment_index - 1, root, scope, page)) {
+                    if (matchSegments(s, selector, segment_index - 1, root, scope, frame)) {
                         return true;
                     }
                     // This sibling didn't work, try the next one
@@ -311,7 +311,7 @@ fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize,
         if (segment_index == 0) {
             return true;
         }
-        return matchSegments(current, selector, segment_index - 1, root, scope, page);
+        return matchSegments(current, selector, segment_index - 1, root, scope, frame);
     }
 
     // subsequent_sibling already handled its recursion above
@@ -319,12 +319,12 @@ fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize,
 }
 
 // Find an ancestor that matches the compound (any distance up the tree)
-fn matchDescendant(node: *Node, compound: Selector.Compound, root: ?*Node, scope: *Node, page: *Page) ?*Node {
+fn matchDescendant(node: *Node, compound: Selector.Compound, root: ?*Node, scope: *Node, frame: *Frame) ?*Node {
     var current = node._parent;
 
     while (current) |ancestor| {
         if (ancestor.is(Node.Element)) |ancestor_el| {
-            if (matchesCompound(ancestor_el, compound, scope, page)) {
+            if (matchesCompound(ancestor_el, compound, scope, frame)) {
                 return ancestor;
             }
         }
@@ -343,7 +343,7 @@ fn matchDescendant(node: *Node, compound: Selector.Compound, root: ?*Node, scope
 }
 
 // Find the direct parent if it matches the compound
-fn matchChild(node: *Node, compound: Selector.Compound, root: ?*Node, scope: *Node, page: *Page) ?*Node {
+fn matchChild(node: *Node, compound: Selector.Compound, root: ?*Node, scope: *Node, frame: *Frame) ?*Node {
     const parent = node._parent orelse return null;
 
     // Don't match beyond the root boundary
@@ -356,7 +356,7 @@ fn matchChild(node: *Node, compound: Selector.Compound, root: ?*Node, scope: *No
 
     const parent_el = parent.is(Node.Element) orelse return null;
 
-    if (matchesCompound(parent_el, compound, scope, page)) {
+    if (matchesCompound(parent_el, compound, scope, frame)) {
         return parent;
     }
 
@@ -364,7 +364,7 @@ fn matchChild(node: *Node, compound: Selector.Compound, root: ?*Node, scope: *No
 }
 
 // Find the immediately preceding sibling if it matches the compound
-fn matchNextSibling(node: *Node, compound: Selector.Compound, scope: *Node, page: *Page) ?*Node {
+fn matchNextSibling(node: *Node, compound: Selector.Compound, scope: *Node, frame: *Frame) ?*Node {
     var sibling = node.previousSibling();
 
     // For next_sibling (+), we need the immediately preceding element sibling
@@ -376,7 +376,7 @@ fn matchNextSibling(node: *Node, compound: Selector.Compound, scope: *Node, page
         };
 
         // Found an element - check if it matches
-        if (matchesCompound(sibling_el, compound, scope, page)) {
+        if (matchesCompound(sibling_el, compound, scope, frame)) {
             return s;
         }
         // we found an element, it wasn't a match, we're done
@@ -387,7 +387,7 @@ fn matchNextSibling(node: *Node, compound: Selector.Compound, scope: *Node, page
 }
 
 // Find any preceding sibling that matches the compound
-fn matchSubsequentSibling(node: *Node, compound: Selector.Compound, scope: *Node, page: *Page) ?*Node {
+fn matchSubsequentSibling(node: *Node, compound: Selector.Compound, scope: *Node, frame: *Frame) ?*Node {
     var sibling = node.previousSibling();
 
     // For subsequent_sibling (~), check all preceding element siblings
@@ -398,7 +398,7 @@ fn matchSubsequentSibling(node: *Node, compound: Selector.Compound, scope: *Node
             continue;
         };
 
-        if (matchesCompound(sibling_el, compound, scope, page)) {
+        if (matchesCompound(sibling_el, compound, scope, frame)) {
             return s;
         }
 
@@ -408,17 +408,17 @@ fn matchSubsequentSibling(node: *Node, compound: Selector.Compound, scope: *Node
     return null;
 }
 
-fn matchesCompound(el: *Node.Element, compound: Selector.Compound, scope: *Node, page: *Page) bool {
+fn matchesCompound(el: *Node.Element, compound: Selector.Compound, scope: *Node, frame: *Frame) bool {
     // For compound selectors, ALL parts must match
     for (compound.parts) |part| {
-        if (!matchesPart(el, part, scope, page)) {
+        if (!matchesPart(el, part, scope, frame)) {
             return false;
         }
     }
     return true;
 }
 
-fn matchesPart(el: *Node.Element, part: Part, scope: *Node, page: *Page) bool {
+fn matchesPart(el: *Node.Element, part: Part, scope: *Node, frame: *Frame) bool {
     switch (part) {
         .id => |id| {
             const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse return false;
@@ -439,7 +439,7 @@ fn matchesPart(el: *Node.Element, part: Part, scope: *Node, page: *Page) bool {
             return std.mem.eql(u8, element_tag, tag_name);
         },
         .universal => return true,
-        .pseudo_class => |pseudo| return matchesPseudoClass(el, pseudo, scope, page),
+        .pseudo_class => |pseudo| return matchesPseudoClass(el, pseudo, scope, frame),
         .attribute => |attr| return matchesAttribute(el, attr),
     }
 }
@@ -525,7 +525,7 @@ fn attributeContainsWord(value: []const u8, word: []const u8) bool {
     return false;
 }
 
-fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *Node, page: *Page) bool {
+fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *Node, frame: *Frame) bool {
     const node = el.asNode();
     switch (pseudo) {
         // State pseudo-classes
@@ -557,10 +557,10 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
                 };
             }
             if (el.is(Node.Element.Html.Select)) |select| {
-                return !select.getRequired() or select.getValue(page).len > 0;
+                return !select.getRequired() or select.getValue(frame).len > 0;
             }
             if (el.is(Node.Element.Html.Form) != null or el.is(Node.Element.Html.FieldSet) != null) {
-                return !hasInvalidDescendant(node, page);
+                return !hasInvalidDescendant(node, frame);
             }
             return false;
         },
@@ -572,10 +572,10 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
                 };
             }
             if (el.is(Node.Element.Html.Select)) |select| {
-                return select.getRequired() and select.getValue(page).len == 0;
+                return select.getRequired() and select.getValue(frame).len == 0;
             }
             if (el.is(Node.Element.Html.Form) != null or el.is(Node.Element.Html.FieldSet) != null) {
-                return hasInvalidDescendant(node, page);
+                return hasInvalidDescendant(node, frame);
             }
             return false;
         },
@@ -600,11 +600,11 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .hover => return false,
         .active => return false,
         .focus => {
-            const active = page.document._active_element orelse return false;
+            const active = frame.document._active_element orelse return false;
             return active == el;
         },
         .focus_within => {
-            const active = page.document._active_element orelse return false;
+            const active = frame.document._active_element orelse return false;
             return node.contains(active.asNode());
         },
         .focus_visible => return false,
@@ -618,7 +618,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
         .target => {
             const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse return false;
-            const location = page.document._location orelse return false;
+            const location = frame.document._location orelse return false;
             const hash = location.getHash();
             if (hash.len <= 1) return false;
             return std.mem.eql(u8, element_id, hash[1..]);
@@ -651,7 +651,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .defined => {
             const tag_name = el.getTagNameLower();
             if (std.mem.indexOfScalar(u8, tag_name, '-') == null) return true;
-            const registry = &page.window._custom_elements;
+            const registry = &frame.window._custom_elements;
             return registry.get(tag_name) != null;
         },
 
@@ -659,7 +659,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .lang => return false,
         .not => |selectors| {
             for (selectors) |selector| {
-                if (matches(node, selector, scope, page)) {
+                if (matches(node, selector, scope, frame)) {
                     return false;
                 }
             }
@@ -667,7 +667,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
         .is => |selectors| {
             for (selectors) |selector| {
-                if (matches(node, selector, scope, page)) {
+                if (matches(node, selector, scope, frame)) {
                     return true;
                 }
             }
@@ -675,7 +675,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
         .where => |selectors| {
             for (selectors) |selector| {
-                if (matches(node, selector, scope, page)) {
+                if (matches(node, selector, scope, frame)) {
                     return true;
                 }
             }
@@ -690,11 +690,11 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
                         continue;
                     };
 
-                    if (matches(child_el.asNode(), selector, scope, page)) {
+                    if (matches(child_el.asNode(), selector, scope, frame)) {
                         return true;
                     }
 
-                    if (matchesHasDescendant(child_el, selector, scope, page)) {
+                    if (matchesHasDescendant(child_el, selector, scope, frame)) {
                         return true;
                     }
 
@@ -706,7 +706,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
     }
 }
 
-fn matchesHasDescendant(el: *Node.Element, selector: Selector.Selector, scope: *Node, page: *Page) bool {
+fn matchesHasDescendant(el: *Node.Element, selector: Selector.Selector, scope: *Node, frame: *Frame) bool {
     var child = el.asNode().firstChild();
     while (child) |c| {
         const child_el = c.is(Node.Element) orelse {
@@ -714,11 +714,11 @@ fn matchesHasDescendant(el: *Node.Element, selector: Selector.Selector, scope: *
             continue;
         };
 
-        if (matches(child_el.asNode(), selector, scope, page)) {
+        if (matches(child_el.asNode(), selector, scope, frame)) {
             return true;
         }
 
-        if (matchesHasDescendant(child_el, selector, scope, page)) {
+        if (matchesHasDescendant(child_el, selector, scope, frame)) {
             return true;
         }
 
@@ -727,7 +727,7 @@ fn matchesHasDescendant(el: *Node.Element, selector: Selector.Selector, scope: *
     return false;
 }
 
-fn hasInvalidDescendant(parent: *Node, page: *Page) bool {
+fn hasInvalidDescendant(parent: *Node, frame: *Frame) bool {
     var child = parent.firstChild();
     while (child) |c| {
         if (c.is(Node.Element)) |child_el| {
@@ -738,10 +738,10 @@ fn hasInvalidDescendant(parent: *Node, page: *Page) bool {
                 };
                 if (invalid) return true;
             } else if (child_el.is(Node.Element.Html.Select)) |select| {
-                if (select.getRequired() and select.getValue(page).len == 0) return true;
+                if (select.getRequired() and select.getValue(frame).len == 0) return true;
             }
         }
-        if (hasInvalidDescendant(c, page)) return true;
+        if (hasInvalidDescendant(c, frame)) return true;
         child = c.nextSibling();
     }
     return false;
@@ -949,7 +949,7 @@ const Iterator = struct {
 
     const Entry = struct { u32, *Node };
 
-    pub fn next(self: *Iterator, _: *const Page) ?Entry {
+    pub fn next(self: *Iterator, _: *const Frame) ?Entry {
         const index = self.index;
         if (index >= self.list._nodes.len) {
             return null;

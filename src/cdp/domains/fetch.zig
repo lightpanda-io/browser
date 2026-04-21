@@ -185,13 +185,13 @@ fn arePatternsSupported(patterns: []RequestPattern) bool {
 }
 
 pub fn requestIntercept(bc: *CDP.BrowserContext, intercept: *const Notification.RequestIntercept) !void {
-    // detachTarget could be called, in which case, we still have a page doing
+    // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
     // We keep it around to wait for modifications to the request.
     // NOTE: we assume whomever created the request created it with a lifetime of the Page.
-    // TODO: What to do when receiving replies for a previous page's requests?
+    // TODO: What to do when receiving replies for a previous frame's requests?
 
     const transfer = intercept.transfer;
     try bc.intercept_state.put(transfer);
@@ -387,13 +387,13 @@ fn failRequest(cmd: *CDP.Command) !void {
 }
 
 pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notification.RequestAuthRequired) !void {
-    // detachTarget could be called, in which case, we still have a page doing
+    // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
     // We keep it around to wait for modifications to the request.
     // NOTE: we assume whomever created the request created it with a lifetime of the Page.
-    // TODO: What to do when receiving replies for a previous page's requests?
+    // TODO: What to do when receiving replies for a previous frame's requests?
 
     const transfer = intercept.transfer;
     try bc.intercept_state.put(transfer);

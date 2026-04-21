@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Session = @import("../Session.zig");
 
 const Range = @import("Range.zig");
@@ -54,9 +54,9 @@ pub fn acquireRef(self: *Selection) void {
     self._rc.acquire();
 }
 
-fn dispatchSelectionChangeEvent(page: *Page) !void {
-    const event = try Event.init("selectionchange", .{}, page);
-    try page._event_manager.dispatch(page.document.asEventTarget(), event);
+fn dispatchSelectionChangeEvent(frame: *Frame) !void {
+    const event = try Event.init("selectionchange", .{}, frame);
+    try frame._event_manager.dispatch(frame.document.asEventTarget(), event);
 }
 
 fn isInTree(self: *const Selection) bool {
@@ -146,70 +146,70 @@ pub fn getType(self: *const Selection) []const u8 {
     return "Range";
 }
 
-pub fn addRange(self: *Selection, range: *Range, page: *Page) !void {
+pub fn addRange(self: *Selection, range: *Range, frame: *Frame) !void {
     if (self._range != null) {
         return;
     }
 
     // Only add the range if its root node is in the document associated with this selection
     const start_node = range.asAbstractRange().getStartContainer();
-    if (!page.document.asNode().contains(start_node)) {
+    if (!frame.document.asNode().contains(start_node)) {
         return;
     }
 
-    self.setRange(range, page);
-    try dispatchSelectionChangeEvent(page);
+    self.setRange(range, frame);
+    try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn removeRange(self: *Selection, range: *Range, page: *Page) !void {
+pub fn removeRange(self: *Selection, range: *Range, frame: *Frame) !void {
     const existing_range = self._range orelse return error.NotFound;
     if (existing_range != range) {
         return error.NotFound;
     }
-    self.setRange(null, page);
-    try dispatchSelectionChangeEvent(page);
+    self.setRange(null, frame);
+    try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn removeAllRanges(self: *Selection, page: *Page) !void {
+pub fn removeAllRanges(self: *Selection, frame: *Frame) !void {
     if (self._range == null) {
         return;
     }
 
-    self.setRange(null, page);
+    self.setRange(null, frame);
     self._direction = .none;
-    try dispatchSelectionChangeEvent(page);
+    try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn collapseToEnd(self: *Selection, page: *Page) !void {
+pub fn collapseToEnd(self: *Selection, frame: *Frame) !void {
     const range = self._range orelse return;
 
     const abstract = range.asAbstractRange();
     const last_node = abstract.getEndContainer();
     const last_offset = abstract.getEndOffset();
 
-    const new_range = try Range.init(page);
+    const new_range = try Range.init(frame);
     try new_range.setStart(last_node, last_offset);
     try new_range.setEnd(last_node, last_offset);
 
-    self.setRange(new_range, page);
+    self.setRange(new_range, frame);
     self._direction = .none;
-    try dispatchSelectionChangeEvent(page);
+    try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn collapseToStart(self: *Selection, page: *Page) !void {
+pub fn collapseToStart(self: *Selection, frame: *Frame) !void {
     const range = self._range orelse return error.InvalidStateError;
 
     const abstract = range.asAbstractRange();
     const first_node = abstract.getStartContainer();
     const first_offset = abstract.getStartOffset();
 
-    const new_range = try Range.init(page);
+    const new_range = try Range.init(frame);
     try new_range.setStart(first_node, first_offset);
     try new_range.setEnd(first_node, first_offset);
 
-    self.setRange(new_range, page);
+    self.setRange(new_range, frame);
     self._direction = .none;
-    try dispatchSelectionChangeEvent(page);
+    try dispatchSelectionChangeEvent(frame);
 }
 
 pub fn containsNode(self: *const Selection, node: *Node, partial: bool) !bool {
@@ -238,18 +238,18 @@ pub fn containsNode(self: *const Selection, node: *Node, partial: bool) !bool {
     return false;
 }
 
-pub fn deleteFromDocument(self: *Selection, page: *Page) !void {
+pub fn deleteFromDocument(self: *Selection, frame: *Frame) !void {
     const range = self._range orelse return;
-    try range.deleteContents(page);
-    try dispatchSelectionChangeEvent(page);
+    try range.deleteContents(frame);
+    try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn extend(self: *Selection, node: *Node, _offset: ?u32, page: *Page) !void {
+pub fn extend(self: *Selection, node: *Node, _offset: ?u32, frame: *Frame) !void {
     const range = self._range orelse return error.InvalidState;
     const offset = _offset orelse 0;
 
     // If the node is not contained in the document, do not change the selection
-    if (!page.document.asNode().contains(node)) {
+    if (!frame.document.asNode().contains(node)) {
         return;
     }
 
@@ -268,7 +268,7 @@ pub fn extend(self: *Selection, node: *Node, _offset: ?u32, page: *Page) !void {
         .forward, .none => range.asAbstractRange().getStartOffset(),
     };
 
-    const new_range = try Range.init(page);
+    const new_range = try Range.init(frame);
 
     const cmp = AbstractRange.compareBoundaryPoints(node, offset, old_anchor, old_anchor_offset);
     switch (cmp) {
@@ -289,8 +289,8 @@ pub fn extend(self: *Selection, node: *Node, _offset: ?u32, page: *Page) !void {
         },
     }
 
-    self.setRange(new_range, page);
-    try dispatchSelectionChangeEvent(page);
+    self.setRange(new_range, frame);
+    try dispatchSelectionChangeEvent(frame);
 }
 
 pub fn getRangeAt(self: *Selection, index: u32) !*Range {
@@ -338,7 +338,7 @@ pub fn modify(
     alter_str: []const u8,
     direction_str: []const u8,
     granularity_str: []const u8,
-    page: *Page,
+    frame: *Frame,
 ) !void {
     const alter = ModifyAlter.fromString(alter_str) orelse return;
     const direction = ModifyDirection.fromString(direction_str) orelse return;
@@ -352,8 +352,8 @@ pub fn modify(
     };
 
     switch (granularity) {
-        .character => try self.modifyByCharacter(alter, is_forward, range, page),
-        .word => try self.modifyByWord(alter, is_forward, range, page),
+        .character => try self.modifyByCharacter(alter, is_forward, range, frame),
+        .word => try self.modifyByWord(alter, is_forward, range, frame),
     }
 }
 
@@ -428,7 +428,7 @@ fn prevTextNode(node: *Node) ?*Node {
     }
 }
 
-fn modifyByCharacter(self: *Selection, alter: ModifyAlter, forward: bool, range: *Range, page: *Page) !void {
+fn modifyByCharacter(self: *Selection, alter: ModifyAlter, forward: bool, range: *Range, frame: *Frame) !void {
     const abstract = range.asAbstractRange();
 
     const focus_node = switch (self._direction) {
@@ -491,7 +491,7 @@ fn modifyByCharacter(self: *Selection, alter: ModifyAlter, forward: bool, range:
         }
     }
 
-    try self.applyModify(alter, new_node, new_offset, page);
+    try self.applyModify(alter, new_node, new_offset, frame);
 }
 
 fn isWordChar(c: u8) bool {
@@ -517,7 +517,7 @@ fn prevWordStart(text: []const u8, offset: u32) u32 {
     return i;
 }
 
-fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Range, page: *Page) !void {
+fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Range, frame: *Frame) !void {
     const abstract = range.asAbstractRange();
 
     const focus_node = switch (self._direction) {
@@ -560,11 +560,11 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
                     new_node = next;
                     new_offset = nextWordEnd(next.getData().str(), 0);
                 }
-                return self.applyModify(alter, new_node, new_offset, page);
+                return self.applyModify(alter, new_node, new_offset, frame);
             };
 
             const t = if (isTextNode(child)) child else nextTextNode(child) orelse {
-                return self.applyModify(alter, new_node, new_offset, page);
+                return self.applyModify(alter, new_node, new_offset, frame);
             };
 
             new_node = t;
@@ -585,41 +585,41 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
         }
     }
 
-    try self.applyModify(alter, new_node, new_offset, page);
+    try self.applyModify(alter, new_node, new_offset, frame);
 }
 
-fn applyModify(self: *Selection, alter: ModifyAlter, new_node: *Node, new_offset: u32, page: *Page) !void {
+fn applyModify(self: *Selection, alter: ModifyAlter, new_node: *Node, new_offset: u32, frame: *Frame) !void {
     switch (alter) {
         .move => {
-            const new_range = try Range.init(page);
+            const new_range = try Range.init(frame);
             try new_range.setStart(new_node, new_offset);
             try new_range.setEnd(new_node, new_offset);
 
-            self.setRange(new_range, page);
+            self.setRange(new_range, frame);
             self._direction = .none;
-            try dispatchSelectionChangeEvent(page);
+            try dispatchSelectionChangeEvent(frame);
         },
-        .extend => try self.extend(new_node, new_offset, page),
+        .extend => try self.extend(new_node, new_offset, frame),
     }
 }
 
-pub fn selectAllChildren(self: *Selection, parent: *Node, page: *Page) !void {
+pub fn selectAllChildren(self: *Selection, parent: *Node, frame: *Frame) !void {
     if (parent._type == .document_type) return error.InvalidNodeType;
 
     // If the node is not contained in the document, do not change the selection
-    if (!page.document.asNode().contains(parent)) {
+    if (!frame.document.asNode().contains(parent)) {
         return;
     }
 
-    const range = try Range.init(page);
+    const range = try Range.init(frame);
     try range.setStart(parent, 0);
 
     const child_count = parent.getChildrenCount();
     try range.setEnd(parent, @intCast(child_count));
 
-    self.setRange(range, page);
+    self.setRange(range, frame);
     self._direction = .forward;
-    try dispatchSelectionChangeEvent(page);
+    try dispatchSelectionChangeEvent(frame);
 }
 
 pub fn setBaseAndExtent(
@@ -628,7 +628,7 @@ pub fn setBaseAndExtent(
     anchor_offset: u32,
     focus_node: *Node,
     focus_offset: u32,
-    page: *Page,
+    frame: *Frame,
 ) !void {
     if (anchor_offset > anchor_node.getLength()) {
         return error.IndexSizeError;
@@ -645,7 +645,7 @@ pub fn setBaseAndExtent(
         focus_offset,
     );
 
-    const range = try Range.init(page);
+    const range = try Range.init(frame);
 
     switch (cmp) {
         .before => {
@@ -665,13 +665,13 @@ pub fn setBaseAndExtent(
         },
     }
 
-    self.setRange(range, page);
-    try dispatchSelectionChangeEvent(page);
+    self.setRange(range, frame);
+    try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn collapse(self: *Selection, _node: ?*Node, _offset: ?u32, page: *Page) !void {
+pub fn collapse(self: *Selection, _node: ?*Node, _offset: ?u32, frame: *Frame) !void {
     const node = _node orelse {
-        try self.removeAllRanges(page);
+        try self.removeAllRanges(frame);
         return;
     };
 
@@ -683,27 +683,27 @@ pub fn collapse(self: *Selection, _node: ?*Node, _offset: ?u32, page: *Page) !vo
     }
 
     // If the node is not contained in the document, do not change the selection
-    if (!page.document.asNode().contains(node)) {
+    if (!frame.document.asNode().contains(node)) {
         return;
     }
 
-    const range = try Range.init(page);
+    const range = try Range.init(frame);
     try range.setStart(node, offset);
     try range.setEnd(node, offset);
 
-    self.setRange(range, page);
+    self.setRange(range, frame);
     self._direction = .none;
-    try dispatchSelectionChangeEvent(page);
+    try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn toString(self: *const Selection, page: *Page) ![]const u8 {
+pub fn toString(self: *const Selection, frame: *Frame) ![]const u8 {
     const range = self._range orelse return "";
-    return try range.toString(page);
+    return try range.toString(frame);
 }
 
-fn setRange(self: *Selection, new_range: ?*Range, page: *Page) void {
+fn setRange(self: *Selection, new_range: ?*Range, frame: *Frame) void {
     if (self._range) |existing| {
-        _ = existing.asAbstractRange().releaseRef(page._session);
+        _ = existing.asAbstractRange().releaseRef(frame._session);
     }
     if (new_range) |nr| {
         nr.asAbstractRange().acquireRef();

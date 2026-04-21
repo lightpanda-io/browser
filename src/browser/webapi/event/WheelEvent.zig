@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
 const MouseEvent = @import("MouseEvent.zig");
@@ -51,14 +51,14 @@ pub const Options = Event.inheritOptions(
     WheelEventOptions,
 );
 
-pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*WheelEvent {
-    const arena = try page.getArena(.medium, "WheelEvent");
-    errdefer page.releaseArena(arena);
+pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*WheelEvent {
+    const arena = try frame.getArena(.medium, "WheelEvent");
+    errdefer frame.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 
     const opts = _opts orelse Options{};
 
-    const event = try page._factory.mouseEvent(
+    const event = try frame._factory.mouseEvent(
         arena,
         type_string,
         MouseEvent{

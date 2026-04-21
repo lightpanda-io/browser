@@ -19,7 +19,7 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Location = @import("Location.zig");
 const PopStateEvent = @import("event/PopStateEvent.zig");
 const URL = @import("URL.zig");
@@ -30,13 +30,13 @@ const ScrollRestoration = enum { auto, manual };
 
 _scroll_restoration: ScrollRestoration = .auto,
 
-pub fn getLength(_: *const History, page: *Page) u32 {
-    return @intCast(page._session.navigation._entries.items.len);
+pub fn getLength(_: *const History, frame: *Frame) u32 {
+    return @intCast(frame._session.navigation._entries.items.len);
 }
 
-pub fn getState(_: *const History, page: *Page) !?js.Value {
-    if (page._session.navigation.getCurrentEntry()._state.value) |state| {
-        const value = try page.js.local.?.parseJSON(state);
+pub fn getState(_: *const History, frame: *Frame) !?js.Value {
+    if (frame._session.navigation.getCurrentEntry()._state.value) |state| {
+        const value = try frame.js.local.?.parseJSON(state);
         return value;
     } else return null;
 }
@@ -51,69 +51,69 @@ pub fn setScrollRestoration(self: *History, str: []const u8) void {
     }
 }
 
-pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
-    const arena = page._session.arena;
+pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, frame: *Frame) !void {
+    const arena = frame._session.arena;
     const url = if (_url) |u|
-        try @import("../URL.zig").resolve(arena, page.url, u, .{ .always_dupe = true })
+        try @import("../URL.zig").resolve(arena, frame.url, u, .{ .always_dupe = true })
     else
-        try arena.dupeZ(u8, page.url);
+        try arena.dupeZ(u8, frame.url);
 
     const json = state.toJson(arena) catch return error.DataClone;
-    _ = try page._session.navigation.pushEntry(url, .{ .source = .history, .value = json }, page, true);
+    _ = try frame._session.navigation.pushEntry(url, .{ .source = .history, .value = json }, frame, true);
 
-    page.url = url;
-    page.window._location._url = try URL.init(url, null, &page.js.execution);
+    frame.url = url;
+    frame.window._location._url = try URL.init(url, null, &frame.js.execution);
 }
 
-pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
-    const arena = page._session.arena;
+pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, frame: *Frame) !void {
+    const arena = frame._session.arena;
     const url = if (_url) |u|
-        try @import("../URL.zig").resolve(arena, page.url, u, .{ .always_dupe = true })
+        try @import("../URL.zig").resolve(arena, frame.url, u, .{ .always_dupe = true })
     else
-        try arena.dupeZ(u8, page.url);
+        try arena.dupeZ(u8, frame.url);
 
     const json = state.toJson(arena) catch return error.DataClone;
-    _ = try page._session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, page, true);
+    _ = try frame._session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, frame, true);
 
-    page.url = url;
-    page.window._location = try Location.init(url, page);
+    frame.url = url;
+    frame.window._location = try Location.init(url, frame);
 }
 
-fn goInner(delta: i32, page: *Page) !void {
-    // 0 behaves the same as no argument, both reloading the page.
+fn goInner(delta: i32, frame: *Frame) !void {
+    // 0 behaves the same as no argument, both reloading the frame.
 
-    const current = page._session.navigation._index;
+    const current = frame._session.navigation._index;
     const index_s: i64 = @intCast(@as(i64, @intCast(current)) + @as(i64, @intCast(delta)));
-    if (index_s < 0 or index_s > page._session.navigation._entries.items.len - 1) {
+    if (index_s < 0 or index_s > frame._session.navigation._entries.items.len - 1) {
         return;
     }
 
     const index = @as(usize, @intCast(index_s));
-    const entry = page._session.navigation._entries.items[index];
+    const entry = frame._session.navigation._entries.items[index];
 
     if (entry._url) |url| {
-        if (page.isSameOrigin(url)) {
-            const target = page.window.asEventTarget();
-            if (page._event_manager.hasDirectListeners(target, "popstate", page.window._on_popstate)) {
-                const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, page)).asEvent();
-                try page._event_manager.dispatchDirect(target, event, page.window._on_popstate, .{ .context = "Pop State" });
+        if (frame.isSameOrigin(url)) {
+            const target = frame.window.asEventTarget();
+            if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
+                const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
+                try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
             }
         }
     }
 
-    _ = try page._session.navigation.navigateInner(entry._url, .{ .traverse = index }, page);
+    _ = try frame._session.navigation.navigateInner(entry._url, .{ .traverse = index }, frame);
 }
 
-pub fn back(_: *History, page: *Page) !void {
-    try goInner(-1, page);
+pub fn back(_: *History, frame: *Frame) !void {
+    try goInner(-1, frame);
 }
 
-pub fn forward(_: *History, page: *Page) !void {
-    try goInner(1, page);
+pub fn forward(_: *History, frame: *Frame) !void {
+    try goInner(1, frame);
 }
 
-pub fn go(_: *History, delta: ?i32, page: *Page) !void {
-    try goInner(delta orelse 0, page);
+pub fn go(_: *History, delta: ?i32, frame: *Frame) !void {
+    try goInner(delta orelse 0, frame);
 }
 
 pub const JsApi = struct {

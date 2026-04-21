@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Session = @import("../Session.zig");
 const EventTarget = @import("EventTarget.zig");
 const ProgressEvent = @import("event/ProgressEvent.zig");
@@ -34,7 +34,7 @@ const Allocator = std.mem.Allocator;
 const FileReader = @This();
 
 _rc: lp.RC(u8) = .{},
-_page: *Page,
+_frame: *Frame,
 _proto: *EventTarget,
 _arena: Allocator,
 
@@ -62,12 +62,12 @@ const Result = union(enum) {
     arraybuffer: js.ArrayBuffer,
 };
 
-pub fn init(page: *Page) !*FileReader {
-    const arena = try page.getArena(.tiny, "FileReader");
-    errdefer page.releaseArena(arena);
+pub fn init(frame: *Frame) !*FileReader {
+    const arena = try frame.getArena(.tiny, "FileReader");
+    errdefer frame.releaseArena(arena);
 
-    return page._factory.eventTargetWithAllocator(arena, FileReader{
-        ._page = page,
+    return frame._factory.eventTargetWithAllocator(arena, FileReader{
+        ._frame = frame,
         ._arena = arena,
         ._proto = undefined,
     });
@@ -191,9 +191,9 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
     self._error = null;
     self._aborted = false;
 
-    const page = self._page;
+    const frame = self._frame;
 
-    try self.dispatch(.load_start, .{ .loaded = 0, .total = blob.getSize() }, page);
+    try self.dispatch(.load_start, .{ .loaded = 0, .total = blob.getSize() }, frame);
     if (self._aborted) {
         return;
     }
@@ -201,7 +201,7 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
     // Perform the read (synchronous since data is in memory)
     const data = blob._slice;
     const size = data.len;
-    try self.dispatch(.progress, .{ .loaded = size, .total = size }, page);
+    try self.dispatch(.progress, .{ .loaded = size, .total = size }, frame);
     if (self._aborted) {
         return;
     }
@@ -221,8 +221,8 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
 
     self._ready_state = .done;
 
-    try self.dispatch(.load, .{ .loaded = size, .total = size }, page);
-    try self.dispatch(.load_end, .{ .loaded = size, .total = size }, page);
+    try self.dispatch(.load, .{ .loaded = size, .total = size }, frame);
+    try self.dispatch(.load_end, .{ .loaded = size, .total = size }, frame);
 }
 
 pub fn abort(self: *FileReader) !void {
@@ -234,14 +234,14 @@ pub fn abort(self: *FileReader) !void {
     self._ready_state = .done;
     self._result = null;
 
-    const page = self._page;
+    const frame = self._frame;
 
-    try self.dispatch(.abort, null, page);
+    try self.dispatch(.abort, null, frame);
 
-    try self.dispatch(.load_end, null, page);
+    try self.dispatch(.load_end, null, frame);
 }
 
-fn dispatch(self: *FileReader, comptime event_type: DispatchType, progress_: ?Progress, page: *Page) !void {
+fn dispatch(self: *FileReader, comptime event_type: DispatchType, progress_: ?Progress, frame: *Frame) !void {
     const field, const typ = comptime blk: {
         break :blk switch (event_type) {
             .abort => .{ "_on_abort", "abort" },
@@ -257,10 +257,10 @@ fn dispatch(self: *FileReader, comptime event_type: DispatchType, progress_: ?Pr
     const event = (try ProgressEvent.initTrusted(
         comptime .wrap(typ),
         .{ .total = progress.total, .loaded = progress.loaded },
-        page,
+        frame,
     )).asEvent();
 
-    return page._event_manager.dispatchDirect(
+    return frame._event_manager.dispatchDirect(
         self.asEventTarget(),
         event,
         @field(self, field),

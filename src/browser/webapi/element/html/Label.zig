@@ -1,6 +1,6 @@
 const std = @import("std");
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -21,13 +21,13 @@ pub fn getHtmlFor(self: *Label) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("for")) orelse "";
 }
 
-pub fn setHtmlFor(self: *Label, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("for"), .wrap(value), page);
+pub fn setHtmlFor(self: *Label, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("for"), .wrap(value), frame);
 }
 
-pub fn getControl(self: *Label, page: *Page) ?*Element {
+pub fn getControl(self: *Label, frame: *Frame) ?*Element {
     if (self.asElement().getAttributeSafe(comptime .wrap("for"))) |id| {
-        const el = page.document.getElementById(id, page) orelse return null;
+        const el = frame.document.getElementById(id, frame) orelse return null;
         if (!isLabelable(el)) {
             return null;
         }
@@ -101,14 +101,14 @@ pub const LabelByForIndex = struct {
 /// Matches HTMLInputElement.labels (and the equivalent on button/select/etc).
 /// Includes every `<label for="id">` reference plus the nearest ancestor
 /// `<label>` wrapping the control.
-pub fn getControlLabels(control: *Element, page: *Page) !js.Array {
-    const local = page.js.local orelse return error.NotHandled;
+pub fn getControlLabels(control: *Element, frame: *Frame) !js.Array {
+    const local = frame.js.local orelse return error.NotHandled;
     var arr = local.newArray(0);
     var idx: u32 = 0;
 
     if (control.getAttributeSafe(comptime .wrap("id"))) |id_value| {
         if (id_value.len > 0) {
-            const doc = control.asNode().ownerDocument(page);
+            const doc = control.asNode().ownerDocument(frame);
             const search_root: *Node = if (doc) |d| d.asNode() else control.asNode();
             var it = TreeWalker.Full.Elements.init(search_root, .{});
             while (it.next()) |el| {

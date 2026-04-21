@@ -20,22 +20,22 @@ const std = @import("std");
 
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
-const Page = @import("Page.zig");
+const Frame = @import("Frame.zig");
 const Selector = @import("webapi/selector/Selector.zig");
 
 const Allocator = std.mem.Allocator;
 
 /// Collect all links (href attributes from anchor tags) under `root`.
 /// Returns a slice of strings allocated with `arena`.
-pub fn collectLinks(arena: Allocator, root: *Node, page: *Page) ![]const []const u8 {
+pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]const []const u8 {
     var links: std.ArrayList([]const u8) = .empty;
 
-    if (Selector.querySelectorAll(root, "a[href]", page)) |list| {
-        defer list.deinit(page._session);
+    if (Selector.querySelectorAll(root, "a[href]", frame)) |list| {
+        defer list.deinit(frame._session);
 
         for (list._nodes) |node| {
             if (node.is(Element.Html.Anchor)) |anchor| {
-                const href = anchor.getHref(page) catch |err| {
+                const href = anchor.getHref(frame) catch |err| {
                     @import("../lightpanda.zig").log.err(.app, "resolve href failed", .{ .err = err });
                     continue;
                 };

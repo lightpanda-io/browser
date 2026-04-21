@@ -18,7 +18,7 @@
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -38,13 +38,13 @@ pub fn asNode(self: *Body) *Node {
 }
 
 /// Special-case: `body.onload` is actually an alias for `window.onload`.
-pub fn setOnLoad(_: *Body, callback: ?js.Function.Global, page: *Page) !void {
-    page.window._on_load = callback;
+pub fn setOnLoad(_: *Body, callback: ?js.Function.Global, frame: *Frame) !void {
+    frame.window._on_load = callback;
 }
 
 /// Special-case: `body.onload` is actually an alias for `window.onload`.
-pub fn getOnLoad(_: *Body, page: *Page) ?js.Function.Global {
-    return page.window._on_load;
+pub fn getOnLoad(_: *Body, frame: *Frame) ?js.Function.Global {
+    return frame.window._on_load;
 }
 
 pub const JsApi = struct {
@@ -60,11 +60,11 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
-    pub fn complete(node: *Node, page: *Page) !void {
+    pub fn complete(node: *Node, frame: *Frame) !void {
         const el = node.as(Element);
         const on_load = el.getAttributeSafe(comptime .wrap("onload")) orelse return;
-        if (page.js.stringToPersistedFunction(on_load, &.{"event"}, &.{})) |func| {
-            page.window._on_load = func;
+        if (frame.js.stringToPersistedFunction(on_load, &.{"event"}, &.{})) |func| {
+            frame.window._on_load = func;
         } else |err| {
             log.err(.js, "body.onload", .{ .err = err, .str = on_load });
         }

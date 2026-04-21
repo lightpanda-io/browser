@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -101,14 +101,14 @@ pub fn setOnSelectionChange(self: *Input, listener: ?js.Function) !void {
     }
 }
 
-fn dispatchSelectionChangeEvent(self: *Input, page: *Page) !void {
-    const event = try Event.init("selectionchange", .{ .bubbles = true }, page);
-    try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
+fn dispatchSelectionChangeEvent(self: *Input, frame: *Frame) !void {
+    const event = try Event.init("selectionchange", .{ .bubbles = true }, frame);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
-fn dispatchInputEvent(self: *Input, data: ?[]const u8, input_type: []const u8, page: *Page) !void {
-    const event = try InputEvent.initTrusted(comptime .wrap("input"), .{ .data = data, .inputType = input_type }, page);
-    try page._event_manager.dispatch(self.asElement().asEventTarget(), event.asEvent());
+fn dispatchInputEvent(self: *Input, data: ?[]const u8, input_type: []const u8, frame: *Frame) !void {
+    const event = try InputEvent.initTrusted(comptime .wrap("input"), .{ .data = data, .inputType = input_type }, frame);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event.asEvent());
 }
 
 pub fn asElement(self: *Input) *Element {
@@ -125,10 +125,10 @@ pub fn getType(self: *const Input) []const u8 {
     return self._input_type.toString();
 }
 
-pub fn setType(self: *Input, typ: []const u8, page: *Page) !void {
+pub fn setType(self: *Input, typ: []const u8, frame: *Frame) !void {
     // Setting the type property should update the attribute, which will trigger attributeChange
     const type_enum = Type.fromString(typ);
-    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(type_enum.toString()), page);
+    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(type_enum.toString()), frame);
 }
 
 pub fn getValue(self: *const Input) []const u8 {
@@ -139,32 +139,32 @@ pub fn getValue(self: *const Input) []const u8 {
     };
 }
 
-pub fn setValue(self: *Input, value: []const u8, page: *Page) !void {
+pub fn setValue(self: *Input, value: []const u8, frame: *Frame) !void {
     // File inputs: setting to empty string is a no-op, anything else throws
     if (self._input_type == .file) {
         if (value.len == 0) return;
         return error.InvalidStateError;
     }
     // This should _not_ call setAttribute. It updates the current state only
-    self._value = try self.sanitizeValue(true, value, page);
+    self._value = try self.sanitizeValue(true, value, frame);
 }
 
 pub fn getDefaultValue(self: *const Input) []const u8 {
     return self._default_value orelse "";
 }
 
-pub fn setDefaultValue(self: *Input, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), page);
+pub fn setDefaultValue(self: *Input, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), frame);
 }
 
 pub fn getChecked(self: *const Input) bool {
     return self._checked;
 }
 
-pub fn setChecked(self: *Input, checked: bool, page: *Page) !void {
+pub fn setChecked(self: *Input, checked: bool, frame: *Frame) !void {
     // If checking a radio button, uncheck others in the group first
     if (checked and self._input_type == .radio) {
-        try self.uncheckRadioGroup(page);
+        try self.uncheckRadioGroup(frame);
     }
     // This should _not_ call setAttribute. It updates the current state only
     self._checked = checked;
@@ -183,11 +183,11 @@ pub fn getDefaultChecked(self: *const Input) bool {
     return self._default_checked;
 }
 
-pub fn setDefaultChecked(self: *Input, checked: bool, page: *Page) !void {
+pub fn setDefaultChecked(self: *Input, checked: bool, frame: *Frame) !void {
     if (checked) {
-        try self.asElement().setAttributeSafe(comptime .wrap("checked"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("checked"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("checked"), page);
+        try self.asElement().removeAttribute(comptime .wrap("checked"), frame);
     }
 }
 
@@ -217,11 +217,11 @@ pub fn getDisabled(self: *const Input) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
 }
 
-pub fn setDisabled(self: *Input, disabled: bool, page: *Page) !void {
+pub fn setDisabled(self: *Input, disabled: bool, frame: *Frame) !void {
     if (disabled) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), page);
+        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
     }
 }
 
@@ -229,24 +229,24 @@ pub fn getName(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
-pub fn setName(self: *Input, name: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), page);
+pub fn setName(self: *Input, name: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
 }
 
 pub fn getAccept(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("accept")) orelse "";
 }
 
-pub fn setAccept(self: *Input, accept: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("accept"), .wrap(accept), page);
+pub fn setAccept(self: *Input, accept: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("accept"), .wrap(accept), frame);
 }
 
 pub fn getAlt(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("alt")) orelse "";
 }
 
-pub fn setAlt(self: *Input, alt: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("alt"), .wrap(alt), page);
+pub fn setAlt(self: *Input, alt: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("alt"), .wrap(alt), frame);
 }
 
 pub fn getMaxLength(self: *const Input) i32 {
@@ -254,13 +254,13 @@ pub fn getMaxLength(self: *const Input) i32 {
     return std.fmt.parseInt(i32, attr, 10) catch -1;
 }
 
-pub fn setMaxLength(self: *Input, max_length: i32, page: *Page) !void {
+pub fn setMaxLength(self: *Input, max_length: i32, frame: *Frame) !void {
     if (max_length < 0) {
         return error.IndexSizeError;
     }
     var buf: [32]u8 = undefined;
     const value = std.fmt.bufPrint(&buf, "{d}", .{max_length}) catch unreachable;
-    try self.asElement().setAttributeSafe(comptime .wrap("maxlength"), .wrap(value), page);
+    try self.asElement().setAttributeSafe(comptime .wrap("maxlength"), .wrap(value), frame);
 }
 
 pub fn getSize(self: *const Input) i32 {
@@ -269,39 +269,39 @@ pub fn getSize(self: *const Input) i32 {
     return if (parsed == 0) 20 else parsed;
 }
 
-pub fn setSize(self: *Input, size: i32, page: *Page) !void {
+pub fn setSize(self: *Input, size: i32, frame: *Frame) !void {
     if (size == 0) {
         return error.ZeroNotAllowed;
     }
     if (size < 0) {
-        return self.asElement().setAttributeSafe(comptime .wrap("size"), .wrap("20"), page);
+        return self.asElement().setAttributeSafe(comptime .wrap("size"), .wrap("20"), frame);
     }
 
     var buf: [32]u8 = undefined;
     const value = std.fmt.bufPrint(&buf, "{d}", .{size}) catch unreachable;
-    try self.asElement().setAttributeSafe(comptime .wrap("size"), .wrap(value), page);
+    try self.asElement().setAttributeSafe(comptime .wrap("size"), .wrap(value), frame);
 }
 
-pub fn getSrc(self: *const Input, page: *Page) ![]const u8 {
+pub fn getSrc(self: *const Input, frame: *Frame) ![]const u8 {
     const src = self.asConstElement().getAttributeSafe(comptime .wrap("src")) orelse return "";
     // If attribute is explicitly set (even if empty), resolve it against the base URL
-    return @import("../../URL.zig").resolve(page.call_arena, page.base(), src, .{});
+    return @import("../../URL.zig").resolve(frame.call_arena, frame.base(), src, .{});
 }
 
-pub fn setSrc(self: *Input, src: []const u8, page: *Page) !void {
+pub fn setSrc(self: *Input, src: []const u8, frame: *Frame) !void {
     const trimmed = std.mem.trim(u8, src, &std.ascii.whitespace);
-    try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(trimmed), page);
+    try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(trimmed), frame);
 }
 
 pub fn getReadonly(self: *const Input) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("readonly")) != null;
 }
 
-pub fn setReadonly(self: *Input, readonly: bool, page: *Page) !void {
+pub fn setReadonly(self: *Input, readonly: bool, frame: *Frame) !void {
     if (readonly) {
-        try self.asElement().setAttributeSafe(comptime .wrap("readonly"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("readonly"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("readonly"), page);
+        try self.asElement().removeAttribute(comptime .wrap("readonly"), frame);
     }
 }
 
@@ -309,11 +309,11 @@ pub fn getRequired(self: *const Input) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
 }
 
-pub fn setRequired(self: *Input, required: bool, page: *Page) !void {
+pub fn setRequired(self: *Input, required: bool, frame: *Frame) !void {
     if (required) {
-        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("required"), page);
+        try self.asElement().removeAttribute(comptime .wrap("required"), frame);
     }
 }
 
@@ -321,43 +321,43 @@ pub fn getPlaceholder(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("placeholder")) orelse "";
 }
 
-pub fn setPlaceholder(self: *Input, placeholder: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("placeholder"), .wrap(placeholder), page);
+pub fn setPlaceholder(self: *Input, placeholder: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("placeholder"), .wrap(placeholder), frame);
 }
 
 pub fn getMin(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("min")) orelse "";
 }
 
-pub fn setMin(self: *Input, min: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("min"), .wrap(min), page);
+pub fn setMin(self: *Input, min: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("min"), .wrap(min), frame);
 }
 
 pub fn getMax(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("max")) orelse "";
 }
 
-pub fn setMax(self: *Input, max: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("max"), .wrap(max), page);
+pub fn setMax(self: *Input, max: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("max"), .wrap(max), frame);
 }
 
 pub fn getStep(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("step")) orelse "";
 }
 
-pub fn setStep(self: *Input, step: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("step"), .wrap(step), page);
+pub fn setStep(self: *Input, step: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("step"), .wrap(step), frame);
 }
 
 pub fn getMultiple(self: *const Input) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("multiple")) != null;
 }
 
-pub fn setMultiple(self: *Input, multiple: bool, page: *Page) !void {
+pub fn setMultiple(self: *Input, multiple: bool, frame: *Frame) !void {
     if (multiple) {
-        try self.asElement().setAttributeSafe(comptime .wrap("multiple"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("multiple"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("multiple"), page);
+        try self.asElement().removeAttribute(comptime .wrap("multiple"), frame);
     }
 }
 
@@ -365,15 +365,15 @@ pub fn getAutocomplete(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("autocomplete")) orelse "";
 }
 
-pub fn setAutocomplete(self: *Input, autocomplete: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("autocomplete"), .wrap(autocomplete), page);
+pub fn setAutocomplete(self: *Input, autocomplete: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("autocomplete"), .wrap(autocomplete), frame);
 }
 
-pub fn select(self: *Input, page: *Page) !void {
+pub fn select(self: *Input, frame: *Frame) !void {
     const len = if (self._value) |v| @as(u32, @intCast(v.len)) else 0;
-    try self.setSelectionRange(0, len, null, page);
-    const event = try Event.init("select", .{ .bubbles = true }, page);
-    try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
+    try self.setSelectionRange(0, len, null, frame);
+    const event = try Event.init("select", .{ .bubbles = true }, frame);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
 fn selectionAvailable(self: *const Input) bool {
@@ -394,18 +394,18 @@ fn howSelected(self: *const Input) HowSelected {
     return .{ .partial = .{ self._selection_start, self._selection_end } };
 }
 
-pub fn innerInsert(self: *Input, str: []const u8, page: *Page) !void {
-    const arena = page.arena;
+pub fn innerInsert(self: *Input, str: []const u8, frame: *Frame) !void {
+    const arena = frame.arena;
 
     switch (self.howSelected()) {
         .full => {
             // if the input is fully selected, replace the content.
             const new_value = try arena.dupe(u8, str);
-            try self.setValue(new_value, page);
+            try self.setValue(new_value, frame);
             self._selection_start = @intCast(new_value.len);
             self._selection_end = @intCast(new_value.len);
             self._selection_direction = .none;
-            try self.dispatchSelectionChangeEvent(page);
+            try self.dispatchSelectionChangeEvent(frame);
         },
         .partial => |range| {
             // if the input is partially selected, replace the selected content.
@@ -418,22 +418,22 @@ pub fn innerInsert(self: *Input, str: []const u8, page: *Page) !void {
                 u8,
                 &.{ before, str, remaining },
             );
-            try self.setValue(new_value, page);
+            try self.setValue(new_value, frame);
 
             const new_pos = range[0] + str.len;
             self._selection_start = @intCast(new_pos);
             self._selection_end = @intCast(new_pos);
             self._selection_direction = .none;
-            try self.dispatchSelectionChangeEvent(page);
+            try self.dispatchSelectionChangeEvent(frame);
         },
         .none => {
             // if the input is not selected, just insert at cursor.
             const current_value = self.getValue();
             const new_value = try std.mem.concat(arena, u8, &.{ current_value, str });
-            try self.setValue(new_value, page);
+            try self.setValue(new_value, frame);
         },
     }
-    try self.dispatchInputEvent(str, "insertText", page);
+    try self.dispatchInputEvent(str, "insertText", frame);
 }
 
 pub fn getSelectionDirection(self: *const Input) []const u8 {
@@ -445,10 +445,10 @@ pub fn getSelectionStart(self: *const Input) !?u32 {
     return self._selection_start;
 }
 
-pub fn setSelectionStart(self: *Input, value: u32, page: *Page) !void {
+pub fn setSelectionStart(self: *Input, value: u32, frame: *Frame) !void {
     if (!self.selectionAvailable()) return error.InvalidStateError;
     self._selection_start = value;
-    try self.dispatchSelectionChangeEvent(page);
+    try self.dispatchSelectionChangeEvent(frame);
 }
 
 pub fn getSelectionEnd(self: *const Input) !?u32 {
@@ -456,10 +456,10 @@ pub fn getSelectionEnd(self: *const Input) !?u32 {
     return self._selection_end;
 }
 
-pub fn setSelectionEnd(self: *Input, value: u32, page: *Page) !void {
+pub fn setSelectionEnd(self: *Input, value: u32, frame: *Frame) !void {
     if (!self.selectionAvailable()) return error.InvalidStateError;
     self._selection_end = value;
-    try self.dispatchSelectionChangeEvent(page);
+    try self.dispatchSelectionChangeEvent(frame);
 }
 
 pub fn setSelectionRange(
@@ -467,7 +467,7 @@ pub fn setSelectionRange(
     selection_start: u32,
     selection_end: u32,
     selection_dir: ?[]const u8,
-    page: *Page,
+    frame: *Frame,
 ) !void {
     if (!self.selectionAvailable()) return error.InvalidStateError;
 
@@ -497,22 +497,22 @@ pub fn setSelectionRange(
     self._selection_start = start;
     self._selection_end = end;
 
-    try self.dispatchSelectionChangeEvent(page);
+    try self.dispatchSelectionChangeEvent(frame);
 }
 
-pub fn getLabels(self: *Input, page: *Page) !js.Array {
+pub fn getLabels(self: *Input, frame: *Frame) !js.Array {
     if (self._input_type == .hidden) {
-        return page.js.local.?.newArray(0);
+        return frame.js.local.?.newArray(0);
     }
-    return @import("Label.zig").getControlLabels(self.asElement(), page);
+    return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
-pub fn getForm(self: *Input, page: *Page) ?*Form {
+pub fn getForm(self: *Input, frame: *Frame) ?*Form {
     const element = self.asElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
     if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        if (page.document.getElementById(form_id, page)) |form_element| {
+        if (frame.document.getElementById(form_id, frame)) |form_element| {
             return form_element.is(Form);
         }
         // form attribute present but invalid - no form owner
@@ -532,15 +532,15 @@ pub fn getForm(self: *Input, page: *Page) ?*Form {
 }
 
 /// Sanitize the value according to the current input type
-fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, page: *Page) ![]const u8 {
+fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *Frame) ![]const u8 {
     switch (self._input_type) {
         .text, .search, .tel, .password, .url, .email => {
             const sanitized = blk: {
                 const first = std.mem.indexOfAny(u8, value, "\r\n") orelse {
-                    break :blk if (comptime dupe) try page.dupeString(value) else value;
+                    break :blk if (comptime dupe) try frame.dupeString(value) else value;
                 };
 
-                var result = try page.arena.alloc(u8, value.len);
+                var result = try frame.arena.alloc(u8, value.len);
                 @memcpy(result[0..first], value[0..first]);
 
                 var i: usize = first;
@@ -558,13 +558,13 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, page: *Pa
                 else => sanitized,
             };
         },
-        .date => return if (isValidDate(value)) if (comptime dupe) try page.dupeString(value) else value else "",
-        .month => return if (isValidMonth(value)) if (comptime dupe) try page.dupeString(value) else value else "",
-        .week => return if (isValidWeek(value)) if (comptime dupe) try page.dupeString(value) else value else "",
-        .time => return if (isValidTime(value)) if (comptime dupe) try page.dupeString(value) else value else "",
-        .@"datetime-local" => return try sanitizeDatetimeLocal(dupe, value, page.arena),
-        .number => return if (isValidFloatingPoint(value)) if (comptime dupe) try page.dupeString(value) else value else "",
-        .range => return if (isValidFloatingPoint(value)) if (comptime dupe) try page.dupeString(value) else value else "50",
+        .date => return if (isValidDate(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
+        .month => return if (isValidMonth(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
+        .week => return if (isValidWeek(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
+        .time => return if (isValidTime(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
+        .@"datetime-local" => return try sanitizeDatetimeLocal(dupe, value, frame.arena),
+        .number => return if (isValidFloatingPoint(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
+        .range => return if (isValidFloatingPoint(value)) if (comptime dupe) try frame.dupeString(value) else value else "50",
         .color => {
             if (value.len == 7 and value[0] == '#') {
                 var needs_lower = false;
@@ -577,11 +577,11 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, page: *Pa
                     }
                 }
                 if (!needs_lower) {
-                    return if (comptime dupe) try page.dupeString(value) else value;
+                    return if (comptime dupe) try frame.dupeString(value) else value;
                 }
 
                 // Normalize to lowercase per spec
-                const result = try page.arena.alloc(u8, 7);
+                const result = try frame.arena.alloc(u8, 7);
                 result[0] = '#';
                 for (value[1..], 1..) |c, j| {
                     result[j] = std.ascii.toLower(c);
@@ -591,7 +591,7 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, page: *Pa
             return "#000000";
         },
         .file => return "", // File: always empty
-        .checkbox, .radio, .submit, .image, .reset, .button, .hidden => return if (comptime dupe) try page.dupeString(value) else value, // no sanitization
+        .checkbox, .radio, .submit, .image, .reset, .button, .hidden => return if (comptime dupe) try frame.dupeString(value) else value, // no sanitization
     }
 }
 
@@ -821,7 +821,7 @@ fn maxWeeksInYear(year: u32) u32 {
     return 52;
 }
 
-fn uncheckRadioGroup(self: *Input, page: *Page) !void {
+fn uncheckRadioGroup(self: *Input, frame: *Frame) !void {
     const element = self.asElement();
 
     const name = element.getAttributeSafe(comptime .wrap("name")) orelse return;
@@ -829,7 +829,7 @@ fn uncheckRadioGroup(self: *Input, page: *Page) !void {
         return;
     }
 
-    const my_form = self.getForm(page);
+    const my_form = self.getForm(frame);
 
     // Walk from the root of the tree containing this element
     // This handles both document-attached and orphaned elements
@@ -857,7 +857,7 @@ fn uncheckRadioGroup(self: *Input, page: *Page) !void {
         }
 
         // Check if same form context
-        const other_form = other_input.getForm(page);
+        const other_form = other_input.getForm(frame);
         if (my_form == null and other_form == null) {
             other_input._checked = false;
             continue;
@@ -883,11 +883,11 @@ pub const JsApi = struct {
     };
 
     /// Handles [LegacyNullToEmptyString]: null → "" per HTML spec.
-    fn setValueFromJS(self: *Input, js_value: js.Value, page: *Page) !void {
+    fn setValueFromJS(self: *Input, js_value: js.Value, frame: *Frame) !void {
         if (js_value.isNull()) {
-            return self.setValue("", page);
+            return self.setValue("", frame);
         }
-        return self.setValue(try js_value.toZig([]const u8), page);
+        return self.setValue(try js_value.toZig([]const u8), frame);
     }
 
     pub const onselectionchange = bridge.accessor(Input.getOnSelectionChange, Input.setOnSelectionChange, .{});
@@ -924,7 +924,7 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
-    pub fn created(node: *Node, page: *Page) !void {
+    pub fn created(node: *Node, frame: *Frame) !void {
         var self = node.as(Input);
         const element = self.asElement();
 
@@ -941,18 +941,18 @@ pub const Build = struct {
 
         // Sanitize initial value per input type (e.g. date rejects "invalid-date").
         if (self._default_value) |dv| {
-            self._value = try self.sanitizeValue(false, dv, page);
+            self._value = try self.sanitizeValue(false, dv, frame);
         } else {
             self._value = null;
         }
 
         // If this is a checked radio button, uncheck others in its group
         if (self._checked and self._input_type == .radio) {
-            try self.uncheckRadioGroup(page);
+            try self.uncheckRadioGroup(frame);
         }
     }
 
-    pub fn attributeChange(element: *Element, name: String, value: String, page: *Page) !void {
+    pub fn attributeChange(element: *Element, name: String, value: String, frame: *Frame) !void {
         const attribute = std.meta.stringToEnum(enum { type, value, checked }, name.str()) orelse return;
         const self = element.as(Input);
         switch (attribute) {
@@ -960,14 +960,14 @@ pub const Build = struct {
                 self._input_type = Type.fromString(value.str());
                 // Sanitize the current value according to the new type
                 if (self._value) |current_value| {
-                    self._value = try self.sanitizeValue(false, current_value, page);
+                    self._value = try self.sanitizeValue(false, current_value, frame);
                     // Apply default value for checkbox/radio if value is now empty
                     if (self._value.?.len == 0 and (self._input_type == .checkbox or self._input_type == .radio)) {
                         self._value = "on";
                     }
                 }
             },
-            .value => self._default_value = try page.arena.dupe(u8, value.str()),
+            .value => self._default_value = try frame.arena.dupe(u8, value.str()),
             .checked => {
                 self._default_checked = true;
                 // Only update checked state if it hasn't been manually modified
@@ -975,14 +975,14 @@ pub const Build = struct {
                     self._checked = true;
                     // If setting a radio button to checked, uncheck others in the group
                     if (self._input_type == .radio) {
-                        try self.uncheckRadioGroup(page);
+                        try self.uncheckRadioGroup(frame);
                     }
                 }
             },
         }
     }
 
-    pub fn attributeRemove(element: *Element, name: String, _: *Page) !void {
+    pub fn attributeRemove(element: *Element, name: String, _: *Frame) !void {
         const attribute = std.meta.stringToEnum(enum { type, value, checked }, name.str()) orelse return;
         const self = element.as(Input);
         switch (attribute) {
@@ -998,7 +998,7 @@ pub const Build = struct {
         }
     }
 
-    pub fn cloned(source_element: *Element, cloned_element: *Element, _: *Page) !void {
+    pub fn cloned(source_element: *Element, cloned_element: *Element, _: *Frame) !void {
         const source = source_element.as(Input);
         const clone = cloned_element.as(Input);
 

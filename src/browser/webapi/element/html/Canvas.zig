@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -48,9 +48,9 @@ pub fn getWidth(self: *const Canvas) u32 {
     return std.fmt.parseUnsigned(u32, attr, 10) catch 300;
 }
 
-pub fn setWidth(self: *Canvas, value: u32, page: *Page) !void {
-    const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(str), page);
+pub fn setWidth(self: *Canvas, value: u32, frame: *Frame) !void {
+    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
+    try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(str), frame);
 }
 
 pub fn getHeight(self: *const Canvas) u32 {
@@ -58,9 +58,9 @@ pub fn getHeight(self: *const Canvas) u32 {
     return std.fmt.parseUnsigned(u32, attr, 10) catch 150;
 }
 
-pub fn setHeight(self: *Canvas, value: u32, page: *Page) !void {
-    const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(str), page);
+pub fn setHeight(self: *Canvas, value: u32, frame: *Frame) !void {
+    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
+    try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(str), frame);
 }
 
 /// Since there's no base class rendering contexts inherit from,
@@ -70,7 +70,7 @@ const DrawingContext = union(enum) {
     webgl: *WebGLRenderingContext,
 };
 
-pub fn getContext(self: *Canvas, context_type: []const u8, page: *Page) !?DrawingContext {
+pub fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingContext {
     if (self._cached) |cached| {
         const matches = switch (cached) {
             .@"2d" => std.mem.eql(u8, context_type, "2d"),
@@ -81,12 +81,12 @@ pub fn getContext(self: *Canvas, context_type: []const u8, page: *Page) !?Drawin
 
     const drawing_context: DrawingContext = blk: {
         if (std.mem.eql(u8, context_type, "2d")) {
-            const ctx = try page._factory.create(CanvasRenderingContext2D{ ._canvas = self });
+            const ctx = try frame._factory.create(CanvasRenderingContext2D{ ._canvas = self });
             break :blk .{ .@"2d" = ctx };
         }
 
         if (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")) {
-            const ctx = try page._factory.create(WebGLRenderingContext{});
+            const ctx = try frame._factory.create(WebGLRenderingContext{});
             break :blk .{ .webgl = ctx };
         }
         return null;
@@ -97,10 +97,10 @@ pub fn getContext(self: *Canvas, context_type: []const u8, page: *Page) !?Drawin
 
 /// Transfers control of the canvas to an OffscreenCanvas.
 /// Returns an OffscreenCanvas with the same dimensions.
-pub fn transferControlToOffscreen(self: *Canvas, page: *Page) !*OffscreenCanvas {
+pub fn transferControlToOffscreen(self: *Canvas, frame: *Frame) !*OffscreenCanvas {
     const width = self.getWidth();
     const height = self.getHeight();
-    return OffscreenCanvas.constructor(width, height, page);
+    return OffscreenCanvas.constructor(width, height, frame);
 }
 
 pub const JsApi = struct {

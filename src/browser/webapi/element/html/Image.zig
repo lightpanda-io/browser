@@ -1,6 +1,6 @@
 const std = @import("std");
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 const URL = @import("../../../URL.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -9,17 +9,17 @@ const HtmlElement = @import("../Html.zig");
 const Image = @This();
 _proto: *HtmlElement,
 
-pub fn constructor(w_: ?u32, h_: ?u32, page: *Page) !*Image {
-    const node = try page.createElementNS(.html, "img", null);
+pub fn constructor(w_: ?u32, h_: ?u32, frame: *Frame) !*Image {
+    const node = try frame.createElementNS(.html, "img", null);
     const el = node.as(Element);
 
     if (w_) |w| blk: {
-        const w_string = std.fmt.bufPrint(&page.buf, "{d}", .{w}) catch break :blk;
-        try el.setAttributeSafe(comptime .wrap("width"), .wrap(w_string), page);
+        const w_string = std.fmt.bufPrint(&frame.buf, "{d}", .{w}) catch break :blk;
+        try el.setAttributeSafe(comptime .wrap("width"), .wrap(w_string), frame);
     }
     if (h_) |h| blk: {
-        const h_string = std.fmt.bufPrint(&page.buf, "{d}", .{h}) catch break :blk;
-        try el.setAttributeSafe(comptime .wrap("height"), .wrap(h_string), page);
+        const h_string = std.fmt.bufPrint(&frame.buf, "{d}", .{h}) catch break :blk;
+        try el.setAttributeSafe(comptime .wrap("height"), .wrap(h_string), frame);
     }
     return el.as(Image);
 }
@@ -34,28 +34,28 @@ pub fn asNode(self: *Image) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
+pub fn getSrc(self: *const Image, frame: *Frame) ![]const u8 {
     const element = self.asConstElement();
     const src = element.getAttributeSafe(comptime .wrap("src")) orelse return "";
     if (src.len == 0) {
         return "";
     }
-    return element.asConstNode().resolveURL(src, page, .{});
+    return element.asConstNode().resolveURL(src, frame, .{});
 }
 
-pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {
+pub fn setSrc(self: *Image, value: []const u8, frame: *Frame) !void {
     const element = self.asElement();
-    try element.setAttributeSafe(comptime .wrap("src"), .wrap(value), page);
+    try element.setAttributeSafe(comptime .wrap("src"), .wrap(value), frame);
     // No need to check if `Image` is connected to DOM; this is a special case.
-    return self.imageAddedCallback(page);
+    return self.imageAddedCallback(frame);
 }
 
 pub fn getAlt(self: *const Image) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("alt")) orelse "";
 }
 
-pub fn setAlt(self: *Image, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("alt"), .wrap(value), page);
+pub fn setAlt(self: *Image, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("alt"), .wrap(value), frame);
 }
 
 pub fn getWidth(self: *const Image) u32 {
@@ -63,9 +63,9 @@ pub fn getWidth(self: *const Image) u32 {
     return std.fmt.parseUnsigned(u32, attr, 10) catch 0;
 }
 
-pub fn setWidth(self: *Image, value: u32, page: *Page) !void {
-    const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(str), page);
+pub fn setWidth(self: *Image, value: u32, frame: *Frame) !void {
+    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
+    try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(str), frame);
 }
 
 pub fn getHeight(self: *const Image) u32 {
@@ -73,28 +73,28 @@ pub fn getHeight(self: *const Image) u32 {
     return std.fmt.parseUnsigned(u32, attr, 10) catch 0;
 }
 
-pub fn setHeight(self: *Image, value: u32, page: *Page) !void {
-    const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(str), page);
+pub fn setHeight(self: *Image, value: u32, frame: *Frame) !void {
+    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
+    try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(str), frame);
 }
 
 pub fn getCrossOrigin(self: *const Image) ?[]const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("crossorigin"));
 }
 
-pub fn setCrossOrigin(self: *Image, value: ?[]const u8, page: *Page) !void {
+pub fn setCrossOrigin(self: *Image, value: ?[]const u8, frame: *Frame) !void {
     if (value) |v| {
-        return self.asElement().setAttributeSafe(comptime .wrap("crossorigin"), .wrap(v), page);
+        return self.asElement().setAttributeSafe(comptime .wrap("crossorigin"), .wrap(v), frame);
     }
-    return self.asElement().removeAttribute(comptime .wrap("crossorigin"), page);
+    return self.asElement().removeAttribute(comptime .wrap("crossorigin"), frame);
 }
 
 pub fn getLoading(self: *const Image) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("loading")) orelse "eager";
 }
 
-pub fn setLoading(self: *Image, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("loading"), .wrap(value), page);
+pub fn setLoading(self: *Image, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("loading"), .wrap(value), frame);
 }
 
 pub fn getNaturalWidth(_: *const Image) u32 {
@@ -118,9 +118,9 @@ pub fn getComplete(_: *const Image) bool {
 }
 
 /// Used in `Page.nodeIsReady`.
-pub fn imageAddedCallback(self: *Image, page: *Page) !void {
-    // if we're planning on navigating to another page, don't trigger load event.
-    if (page.isGoingAway()) {
+pub fn imageAddedCallback(self: *Image, frame: *Frame) !void {
+    // if we're planning on navigating to another frame, don't trigger load event.
+    if (frame.isGoingAway()) {
         return;
     }
 
@@ -129,7 +129,7 @@ pub fn imageAddedCallback(self: *Image, page: *Page) !void {
     const src = element.getAttributeSafe(comptime .wrap("src")) orelse return;
     if (src.len == 0) return;
 
-    try page._to_load.append(page.arena, self._proto);
+    try frame._to_load.append(frame.arena, self._proto);
 }
 
 pub const JsApi = struct {
@@ -156,9 +156,9 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
-    pub fn created(node: *Node, page: *Page) !void {
+    pub fn created(node: *Node, frame: *Frame) !void {
         const self = node.as(Image);
-        return self.imageAddedCallback(page);
+        return self.imageAddedCallback(frame);
     }
 };
 

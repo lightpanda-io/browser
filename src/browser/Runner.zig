@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
-const Page = @import("Page.zig");
+const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
 const HttpClient = @import("HttpClient.zig");
 
@@ -33,17 +33,17 @@ const IS_DEBUG = builtin.mode == .Debug;
 
 const Runner = @This();
 
-page: *Page,
+frame: *Frame,
 session: *Session,
 http_client: *HttpClient,
 
 pub const Opts = struct {};
 
 pub fn init(session: *Session, _: Opts) !Runner {
-    const page = &(session.page orelse return error.NoPage);
+    const frame = &(session.frame orelse return error.NoPage);
 
     return .{
-        .page = page,
+        .frame = frame,
         .session = session,
         .http_client = session.browser.http_client,
     };
@@ -78,7 +78,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
                 error.JsError => {}, // already logged (with hopefully more context)
                 else => log.err(.browser, "session wait", .{
                     .err = err,
-                    .url = self.page.url,
+                    .url = self.frame.url,
                 }),
             }
             return err;
@@ -127,12 +127,12 @@ pub fn tickCDP(self: *Runner, opts: TickOpts) !CDPTickResult {
 }
 
 fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
-    const page = self.page;
+    const frame = self.frame;
     const http_client = self.http_client;
 
-    switch (page._parse_state) {
+    switch (frame._parse_state) {
         .pre, .raw, .text, .image => {
-            // The main page hasn't started/finished navigating.
+            // The main frame hasn't started/finished navigating.
             // There's no JS to run, and no reason to run the scheduler.
             if (http_client.http_active == 0 and (comptime is_cdp) == false) {
                 // haven't started navigating, I guess.
@@ -152,7 +152,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
             const session = self.session;
             if (session.queued_navigation.items.len != 0) {
                 try session.processQueuedNavigation();
-                self.page = &session.page.?; // might have changed
+                self.frame = &session.frame.?; // might have changed
                 return .{ .ok = 0 };
             }
             const browser = session.browser;
@@ -166,26 +166,26 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
             try browser.runMacrotasks();
 
             // Each call to this runs scheduled load events.
-            try page.dispatchLoad();
+            try frame.dispatchLoad();
 
             const http_active = http_client.http_active;
             const total_network_activity = http_active + http_client.intercepted;
-            if (page._notified_network_almost_idle.check(total_network_activity <= 2)) {
-                page.notifyNetworkAlmostIdle();
+            if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
+                frame.notifyNetworkAlmostIdle();
             }
-            if (page._notified_network_idle.check(total_network_activity == 0)) {
-                page.notifyNetworkIdle();
+            if (frame._notified_network_idle.check(total_network_activity == 0)) {
+                frame.notifyNetworkIdle();
             }
 
             switch (opts.until) {
                 .done => {},
-                .domcontentloaded => if (page._load_state == .load or page._load_state == .complete) {
+                .domcontentloaded => if (frame._load_state == .load or frame._load_state == .complete) {
                     return .done;
                 },
-                .load => if (page._load_state == .complete) {
+                .load => if (frame._load_state == .complete) {
                     return .done;
                 },
-                .networkidle => if (page._notified_network_idle == .done) {
+                .networkidle => if (frame._notified_network_idle == .done) {
                     return .done;
                 },
             }
@@ -231,7 +231,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
             return .{ .ok = 0 };
         },
         .err => |err| {
-            page._parse_state = .{ .raw_done = @errorName(err) };
+            frame._parse_state = .{ .raw_done = @errorName(err) };
             return err;
         },
         .raw_done => {
@@ -255,9 +255,9 @@ pub fn waitForSelector(self: *Runner, selector: [:0]const u8, timeout_ms: u32) !
     const parsed_selector = try Selector.parseLeaky(arena, selector);
 
     while (true) {
-        // self.page can change between ticks
-        const page = self.page;
-        if (try parsed_selector.query(page.document.asNode(), page)) |el| {
+        // self.frame can change between ticks
+        const frame = self.frame;
+        if (try parsed_selector.query(frame.document.asNode(), frame)) |el| {
             return el;
         }
 
@@ -280,11 +280,11 @@ pub fn waitForScript(runner: *Runner, script: [:0]const u8, timeout_ms: u32) !vo
     var timer = try std.time.Timer.start();
 
     while (true) {
-        const page = runner.page;
+        const frame = runner.frame;
 
         // Execute the script and check if it returns truthy
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         var try_catch: js.TryCatch = undefined;
@@ -292,7 +292,7 @@ pub fn waitForScript(runner: *Runner, script: [:0]const u8, timeout_ms: u32) !vo
         defer try_catch.deinit();
 
         const value = ls.local.exec(script, "wait_script") catch |err| {
-            const caught = try_catch.caughtOrError(page.call_arena, err);
+            const caught = try_catch.caughtOrError(frame.call_arena, err);
             log.err(.app, "wait script error", .{ .err = caught });
             return error.ScriptError;
         };
@@ -322,35 +322,35 @@ test "Runner: no page" {
 }
 
 test "Runner: waitForSelector timeout" {
-    const page = try testing.pageTest("runner/runner1.html", .{});
-    defer page._session.removePage();
+    const frame = try testing.pageTest("runner/runner1.html", .{});
+    defer frame._session.removeFrame();
 
-    var runner = try page._session.runner(.{});
+    var runner = try frame._session.runner(.{});
     try testing.expectError(error.Timeout, runner.waitForSelector("#nope", 10));
 }
 
 test "Runner: waitForSelector" {
     defer testing.reset();
-    const page = try testing.pageTest("runner/runner1.html", .{});
-    defer page._session.removePage();
+    const frame = try testing.pageTest("runner/runner1.html", .{});
+    defer frame._session.removeFrame();
 
-    var runner = try page._session.runner(.{});
+    var runner = try frame._session.runner(.{});
     const el = try runner.waitForSelector("#sel1", 10);
     try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
 }
 
 test "Runner: waitForScript timeout" {
-    const page = try testing.pageTest("runner/runner1.html", .{});
-    defer page._session.removePage();
+    const frame = try testing.pageTest("runner/runner1.html", .{});
+    defer frame._session.removeFrame();
 
-    var runner = try page._session.runner(.{});
+    var runner = try frame._session.runner(.{});
     try testing.expectError(error.Timeout, runner.waitForScript("document.querySelector('#nope')", 10));
 }
 
 test "Runner: waitForScript" {
-    const page = try testing.pageTest("runner/runner1.html", .{});
-    defer page._session.removePage();
+    const frame = try testing.pageTest("runner/runner1.html", .{});
+    defer frame._session.removeFrame();
 
-    var runner = try page._session.runner(.{});
+    var runner = try frame._session.runner(.{});
     try runner.waitForScript("document.querySelector('#sel1')", 10);
 }

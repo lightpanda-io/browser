@@ -53,7 +53,7 @@ pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
                     break :blk try paramsFromArray(arena, js_val.toArray());
                 }
                 if (js_val.isObject()) {
-                    // normalizer is null, so page won't be used
+                    // normalizer is null, so frame won't be used
                     break :blk try KeyValueList.fromJsObject(arena, js_val.toObject(), null, exec.buf);
                 }
                 if (js_val.isString()) |js_str| {
