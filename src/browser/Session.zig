@@ -107,8 +107,8 @@ queued_navigation: *std.ArrayList(*Page),
 // about:blank navigations (which may add to queued_navigation).
 queued_queued_navigation: std.ArrayList(*Page),
 
-page_id_gen: u32 = 0,
 frame_id_gen: u32 = 0,
+loader_id_gen: u32 = 0,
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
@@ -314,9 +314,9 @@ pub fn findPageByFrameId(self: *Session, frame_id: u32) ?*Page {
     return findPageBy(page, "_frame_id", frame_id);
 }
 
-pub fn findPageById(self: *Session, id: u32) ?*Page {
+pub fn findPageByLoaderId(self: *Session, loader_id: u32) ?*Page {
     const page = self.currentPage() orelse return null;
-    return findPageBy(page, "id", id);
+    return findPageBy(page, "_loader_id", loader_id);
 }
 
 fn findPageBy(page: *Page, comptime field: []const u8, id: u32) ?*Page {
@@ -490,9 +490,9 @@ pub fn nextFrameId(self: *Session) u32 {
     return id;
 }
 
-pub fn nextPageId(self: *Session) u32 {
-    const id = self.page_id_gen +% 1;
-    self.page_id_gen = id;
+pub fn nextLoaderId(self: *Session) u32 {
+    const id = self.loader_id_gen +% 1;
+    self.loader_id_gen = id;
     return id;
 }
 

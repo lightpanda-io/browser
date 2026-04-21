@@ -71,7 +71,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     }
 }
 
-const Frame = struct {
+const CDPFrame = struct {
     id: []const u8,
     loaderId: []const u8,
     url: []const u8,
@@ -105,7 +105,7 @@ fn getFrameTree(cmd: *CDP.Command) !void {
 
     return cmd.sendResult(.{
         .frameTree = .{
-            .frame = Frame{
+            .frame = CDPFrame{
                 .id = &target_id,
                 .securityOrigin = bc.security_origin,
                 .loaderId = "LID-0000000001",
@@ -137,7 +137,7 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
 
     if (page._load_state == .complete) {
         const frame_id = &id.toFrameId(page._frame_id);
-        const loader_id = &id.toLoaderId(page.id);
+        const loader_id = &id.toLoaderId(page._loader_id);
 
         const now = timestampF(.monotonic);
         try sendPageLifecycle(bc, "DOMContentLoaded", now, frame_id, loader_id);
@@ -361,7 +361,7 @@ pub fn pageNavigate(bc: *CDP.BrowserContext, event: *const Notification.PageNavi
     bc.reset();
 
     const frame_id = &id.toFrameId(event.frame_id);
-    const loader_id = &id.toLoaderId(event.page_id);
+    const loader_id = &id.toLoaderId(event.loader_id);
 
     var cdp = bc.cdp;
     const reason_: ?[]const u8 = switch (event.opts.reason) {
@@ -444,7 +444,7 @@ pub fn pageFrameCreated(bc: *CDP.BrowserContext, event: *const Notification.Page
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .name = "init",
             .frameId = frame_id,
-            .loaderId = &id.toLoaderId(event.page_id),
+            .loaderId = &id.toLoaderId(event.loader_id),
             .timestamp = event.timestamp,
         }, .{ .session_id = session_id });
     }
@@ -456,7 +456,7 @@ pub fn pageNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const No
     const session_id = bc.session_id orelse return;
 
     const frame_id = &id.toFrameId(event.frame_id);
-    const loader_id = &id.toLoaderId(event.page_id);
+    const loader_id = &id.toLoaderId(event.loader_id);
 
     var cdp = bc.cdp;
 
@@ -521,7 +521,7 @@ pub fn pageNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const No
     // frameNavigated event
     try cdp.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
-        .frame = Frame{
+        .frame = CDPFrame{
             .id = frame_id,
             .url = event.url,
             .loaderId = loader_id,
@@ -587,7 +587,7 @@ pub fn pageNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const No
     // frameNavigated event
     try cdp.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
-        .frame = Frame{
+        .frame = CDPFrame{
             .id = frame_id,
             .url = event.url,
             .loaderId = loader_id,
@@ -615,7 +615,7 @@ pub fn pageDOMContentLoaded(bc: anytype, event: *const Notification.PageDOMConte
 
     if (bc.page_life_cycle_events) {
         const frame_id = &id.toFrameId(event.frame_id);
-        const loader_id = &id.toLoaderId(event.page_id);
+        const loader_id = &id.toLoaderId(event.loader_id);
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .timestamp = timestamp,
             .name = "DOMContentLoaded",
@@ -639,7 +639,7 @@ pub fn pageLoaded(bc: anytype, event: *const Notification.PageLoaded) !void {
     );
 
     if (bc.page_life_cycle_events) {
-        const loader_id = &id.toLoaderId(event.page_id);
+        const loader_id = &id.toLoaderId(event.loader_id);
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .timestamp = timestamp,
             .name = "load",
@@ -654,11 +654,11 @@ pub fn pageLoaded(bc: anytype, event: *const Notification.PageLoaded) !void {
 }
 
 pub fn pageNetworkIdle(bc: *CDP.BrowserContext, event: *const Notification.PageNetworkIdle) !void {
-    return sendPageLifecycle(bc, "networkIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.page_id));
+    return sendPageLifecycle(bc, "networkIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.loader_id));
 }
 
 pub fn pageNetworkAlmostIdle(bc: *CDP.BrowserContext, event: *const Notification.PageNetworkAlmostIdle) !void {
-    return sendPageLifecycle(bc, "networkAlmostIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.page_id));
+    return sendPageLifecycle(bc, "networkAlmostIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.loader_id));
 }
 
 fn sendPageLifecycle(bc: *CDP.BrowserContext, name: []const u8, timestamp: u64, frame_id: []const u8, loader_id: []const u8) !void {

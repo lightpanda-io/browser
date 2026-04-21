@@ -268,9 +268,9 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
 
     // We're missing a bunch of fields, but, for now, this eems like enough
     try bc.cdp.sendEvent("Network.requestWillBeSent", .{
-        .loaderId = &id.toLoaderId(req.page_id),
-        .requestId = &id.toRequestId(transfer),
         .frameId = &id.toFrameId(frame_id),
+        .requestId = &id.toRequestId(transfer),
+        .loaderId = &id.toLoaderId(req.loader_id),
         .type = req.resource_type.string(),
         .documentURL = page.url,
         .request = TransferAsRequestWriter.init(transfer),
@@ -292,9 +292,9 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
-        .loaderId = &id.toLoaderId(req.page_id),
-        .requestId = &id.toRequestId(transfer),
         .frameId = &id.toFrameId(req.frame_id),
+        .requestId = &id.toRequestId(transfer),
+        .loaderId = &id.toLoaderId(req.loader_id),
         .response = TransferAsResponseWriter.init(arena, transfer),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });

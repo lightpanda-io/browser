@@ -274,12 +274,12 @@ pub fn abstractRange(_: *const Factory, arena: Allocator, child: anytype, page: 
     abstract_range.* = AbstractRange{
         ._rc = .{},
         ._arena = arena,
-        ._page_id = page.id,
-        ._type = unionInit(AbstractRange.Type, chain.get(1)),
         ._end_offset = 0,
         ._start_offset = 0,
         ._end_container = doc,
         ._start_container = doc,
+        ._page_loader_id = page._loader_id,
+        ._type = unionInit(AbstractRange.Type, chain.get(1)),
     };
     chain.setLeaf(1, child);
     page._live_ranges.append(&abstract_range._range_link);

@@ -505,9 +505,9 @@ fn getFrameOwner(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page_frame_id = try id.toPageId(.frame_id, params.frameId);
+    const frame_id = try id.parseFrameId(params.frameId);
 
-    const page = bc.session.findPageByFrameId(page_frame_id) orelse {
+    const page = bc.session.findPageByFrameId(frame_id) orelse {
         return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
     };
 

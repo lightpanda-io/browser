@@ -517,8 +517,8 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
             .method = .GET,
             .headers = headers,
             .blocking = false,
-            .page_id = req.page_id,
             .frame_id = req.frame_id,
+            .loader_id = req.loader_id,
             .cookie_jar = req.cookie_jar,
             .cookie_origin = req.cookie_origin,
             .notification = req.notification,
@@ -1157,8 +1157,8 @@ fn ensureNoActiveConnection(self: *const Client) !void {
 }
 
 pub const Request = struct {
-    page_id: u32,
     frame_id: u32,
+    loader_id: u32,
     method: Method,
     url: [:0]const u8,
     headers: http.Headers,

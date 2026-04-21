@@ -78,11 +78,13 @@ pub const BUF_SIZE = 1024;
 
 const Page = @This();
 
-id: u32,
-
 // This is the "id" of the frame. It can be re-used from page-to-page, e.g.
 // when navigating.
 _frame_id: u32,
+
+// This is the "id" of this specific instance of the frame. It changes on every
+// navigate.
+_loader_id: u32,
 
 _session: *Session,
 
@@ -265,7 +267,6 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
     })).asDocument();
 
     self.* = .{
-        .id = session.nextPageId(),
         .js = undefined,
         .parent = parent,
         .arena = session.page_arena,
@@ -273,6 +274,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         .window = undefined,
         .call_arena = call_arena,
         ._frame_id = frame_id,
+        ._loader_id = session.nextLoaderId(),
         ._session = session,
         ._factory = factory,
         ._pending_loads = 1, // always 1 for the ScriptManager
@@ -556,8 +558,8 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         session.notification.dispatch(.page_navigate, &.{
             .opts = opts,
             .req_id = req_id,
-            .page_id = self.id,
             .frame_id = self._frame_id,
+            .loader_id = self._loader_id,
             .url = request_url,
             .timestamp = timestamp(.monotonic),
         });
@@ -572,8 +574,8 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
 
         session.notification.dispatch(.page_navigated, &.{
             .req_id = req_id,
-            .page_id = self.id,
             .frame_id = self._frame_id,
+            .loader_id = self._loader_id,
             .opts = .{
                 .cdp_id = opts.cdp_id,
                 .reason = opts.reason,
@@ -612,8 +614,8 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         .opts = opts,
         .url = self.url,
         .req_id = req_id,
-        .page_id = self.id,
         .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
     });
 
@@ -628,8 +630,8 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     http_client.request(.{
         .ctx = self,
         .url = self.url,
-        .page_id = self.id,
         .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
         .method = opts.method,
         .headers = headers,
         .body = opts.body,
@@ -810,9 +812,9 @@ pub fn _documentIsLoaded(self: *Page) !void {
     );
 
     self._session.notification.dispatch(.page_dom_content_loaded, &.{
-        .page_id = self.id,
         .req_id = self._req_id,
         .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
     });
 }
@@ -892,9 +894,9 @@ fn _documentIsComplete(self: *Page) !void {
     }
 
     self._session.notification.dispatch(.page_loaded, &.{
-        .page_id = self.id,
         .req_id = self._req_id,
         .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
     });
 
@@ -955,9 +957,9 @@ fn pageHeaderDoneCallback(response: HttpClient.Response) !bool {
         self._session.notification.dispatch(.page_navigated, &.{
             .opts = no,
             .url = self.url,
-            .page_id = self.id,
             .req_id = self._req_id,
             .frame_id = self._frame_id,
+            .loader_id = self._loader_id,
             .timestamp = timestamp(.monotonic),
         });
     }
@@ -1219,9 +1221,9 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
 
     // on first load, dispatch frame_created event
     self._session.notification.dispatch(.page_frame_created, &.{
-        .page_id = self.id,
-        .frame_id = frame_id,
         .parent_id = self._frame_id,
+        .frame_id = page_frame._frame_id,
+        .loader_id = page_frame._loader_id,
         .timestamp = timestamp(.monotonic),
     });
 
@@ -1589,9 +1591,9 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
 pub fn notifyNetworkIdle(self: *Page) void {
     lp.assert(self._notified_network_idle == .done, "Page.notifyNetworkIdle", .{});
     self._session.notification.dispatch(.page_network_idle, &.{
-        .page_id = self.id,
         .req_id = self._req_id,
         .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
     });
 }
@@ -1599,9 +1601,9 @@ pub fn notifyNetworkIdle(self: *Page) void {
 pub fn notifyNetworkAlmostIdle(self: *Page) void {
     lp.assert(self._notified_network_almost_idle == .done, "Page.notifyNetworkAlmostIdle", .{});
     self._session.notification.dispatch(.page_network_almost_idle, &.{
-        .page_id = self.id,
         .req_id = self._req_id,
         .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
     });
 }
