@@ -28,6 +28,7 @@ const URL = @import("../../URL.zig");
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 const HttpClient = @import("../../HttpClient.zig");
+const ArenaPool = @import("../../../ArenaPool.zig");
 
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
@@ -44,6 +45,8 @@ _rc: lp.RC(u8) = .{},
 _frame: *Frame,
 _proto: *EventTarget,
 _arena: Allocator,
+// Cached for use by deinit — `_frame._page` may be torn down by then.
+_arena_pool: *ArenaPool,
 
 // Connection state
 _ready_state: ReadyState = .connecting,
@@ -74,9 +77,9 @@ _recv_buffer: std.ArrayList(u8) = .empty,
 // Used to slice out the message when bytes_left reaches 0.
 _assembling_start: usize = 0,
 
-// Events queued by libcurl callbacks; drained from the worker thread via
-// drainPending. Callbacks must NEVER enter V8 directly (they can run from
-// any thread driving curl_multi_perform), so all dispatch happens here.
+// Events queued by libcurl callbacks on the Network thread; drained from
+// the worker thread via drainPending. Callbacks must NEVER enter V8 directly,
+// so all dispatch happens here.
 _pending_messages: std.ArrayList(QueuedMessage) = .empty,
 _pending_open: bool = false,
 _pending_close: ?PendingClose = null,
@@ -85,6 +88,10 @@ _pending_close: ?PendingClose = null,
 // flag and the marker that we hold one extra "pending events" ref so the
 // WebSocket stays alive between queueing and drain.
 _in_ready_list: bool = false,
+
+// Set while a cancel is in flight; holds an extra ref so callbacks
+// can't deref `_conn` after free, and dedupes repeated cleanup(false).
+_cancel_pending: bool = false,
 
 // close info for event dispatch
 _close_code: u16 = 1000,
@@ -175,13 +182,14 @@ pub fn init(url: []const u8, protocols: [][]const u8, frame: *Frame) !*WebSocket
         ._frame = frame,
         ._conn = conn,
         ._arena = arena,
+        ._arena_pool = frame._session.browser.arena_pool,
         ._proto = undefined,
         ._url = resolved_url,
         ._req_headers = headers,
         ._http_client = http_client,
     });
     conn.transport = .{ .websocket = self };
-    try http_client.trackConn(conn);
+    http_client.trackConn(conn);
 
     if (comptime IS_DEBUG) {
         log.info(.websocket, "connecting", .{ .url = url });
@@ -196,7 +204,8 @@ pub fn init(url: []const u8, protocols: [][]const u8, frame: *Frame) !*WebSocket
 }
 
 pub fn deinit(self: *WebSocket, page: *Page) void {
-    self.cleanup();
+    _ = page;
+    self.cleanup(false);
 
     if (self._on_open) |func| {
         func.release();
@@ -212,10 +221,9 @@ pub fn deinit(self: *WebSocket, page: *Page) void {
     }
 
     for (self._send_queue.items) |msg| {
-        msg.deinit(page);
+        msg.deinit(self._arena_pool);
     }
-
-    page.releaseArena(self._arena);
+    self._arena_pool.release(self._arena);
 }
 
 pub fn releaseRef(self: *WebSocket, page: *Page) void {
@@ -232,15 +240,15 @@ fn asEventTarget(self: *WebSocket) *EventTarget {
 
 // we're being aborted internally (e.g. frame shutting down)
 pub fn kill(self: *WebSocket) void {
-    self.cleanup();
+    self._ready_state = .closed;
+    self.cleanup(false);
 }
 
 pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
-    if (self._ready_state == .closed) {
-        // already disconnected (e.g. close-handshake disconnected us, then
-        // libcurl reports the same connection completion).
-        return;
-    }
+    defer self.cleanup(true);
+
+    if (self._ready_state == .closed) return;
+
     const was_clean = self._ready_state == .closing and err_ == null;
     self._ready_state = .closed;
 
@@ -250,9 +258,6 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
         log.info(.websocket, "disconnected", .{ .url = self._url, .reason = "closed" });
     }
 
-    // Queue events first (markReady acquires a "pending" ref), then cleanup
-    // (which releases the create-time ref). The pending ref keeps us alive
-    // until drainPending dispatches and releases it.
     self._pending_close = .{
         .code = if (was_clean) self._close_code else 1006,
         .reason = if (was_clean) self._close_reason else "",
@@ -260,18 +265,30 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
         .with_error = !was_clean,
     };
     self.markReady();
-
-    self.cleanup();
 }
 
-fn cleanup(self: *WebSocket) void {
-    if (self._conn) |conn| {
-        self._http_client.removeConn(conn);
-        self._req_headers.deinit();
-        self._conn = null;
-        self.releaseRef(self._frame._page);
-        self._send_queue.clearRetainingCapacity();
+// completed=true releases the conn to the pool and drops the create-time
+// ref; called from disconnected(). completed=false begins a cancel and
+// holds an extra ref until the canceled completion routes through
+// disconnected → cleanup(true).
+fn cleanup(self: *WebSocket, completed: bool) void {
+    const conn = self._conn orelse return;
+    if (!completed) {
+        if (self._cancel_pending) return;
+        self._cancel_pending = true;
+        self.acquireRef();
+        self._http_client.cancelConn(conn);
+        return;
     }
+    self._http_client.finishConn(conn);
+    self._req_headers.deinit();
+    self._conn = null;
+    self.releaseRef(self._frame._page); // create-time
+    if (self._cancel_pending) {
+        self._cancel_pending = false;
+        self.releaseRef(self._frame._page); // pending-cancel
+    }
+    self._send_queue.clearRetainingCapacity();
 }
 
 fn queueMessage(self: *WebSocket, msg: Message) !void {
@@ -279,9 +296,10 @@ fn queueMessage(self: *WebSocket, msg: Message) !void {
     try self._send_queue.append(self._arena, msg);
 
     if (was_empty) {
-        // Unpause the send callback so libcurl will request data
+        // Unpause via Network — curl_easy_pause from this thread would
+        // race with curl_multi_perform.
         if (self._conn) |conn| {
-            try conn.pause(.{ .cont = true });
+            self._http_client.network.submitOp(conn, .unpause);
         }
     }
 }
@@ -392,7 +410,7 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
             .with_error = false,
         };
         self.markReady();
-        self.cleanup();
+        self.cleanup(false);
         return;
     }
 
@@ -487,10 +505,9 @@ pub fn setOnClose(self: *WebSocket, cb_: ?js.Function) !void {
     }
 }
 
-// Register self as having pending events to drain. Called from any thread
-// that produces ws events (currently libcurl callbacks on the worker thread,
-// future: Network thread). Acquires one extra ref to keep the WebSocket
-// alive between queueing and the drainPending call.
+// Register self as having pending events to drain. Called from the Network
+// thread while libcurl is producing WS events. Acquires one extra ref to keep
+// the WebSocket alive between queueing and the drainPending call.
 fn markReady(self: *WebSocket) void {
     if (self._in_ready_list) return;
     self._in_ready_list = true;
@@ -499,11 +516,10 @@ fn markReady(self: *WebSocket) void {
 }
 
 // Dispatches all queued events to JS. Must be called from the worker thread
-// (the one that owns the V8 isolate). HttpClient calls this from its perform
-// loop after curl_multi_perform.
+// (the one that owns the V8 isolate).
 pub fn drainPending(self: *WebSocket) void {
     self._in_ready_list = false;
-    defer self.releaseRef(self._page._session);
+    defer self.releaseRef(self._frame._page);
 
     if (self._pending_open) {
         self._pending_open = false;
@@ -662,7 +678,7 @@ fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: M
 
     if (self._send_offset >= byte_msg.data.len) {
         const removed = self._send_queue.orderedRemove(0);
-        removed.deinit(self._frame._page);
+        removed.deinit(self._arena_pool);
         if (comptime IS_DEBUG) {
             log.debug(.websocket, "send complete", .{ .url = self._url, .len = byte_msg.data.len, .queue = self._send_queue.items.len });
         }
@@ -738,9 +754,10 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
                 1005; // No status code received
 
             if (self._ready_state == .closing) {
-                // Client-initiated close: this is the server's response.
-                // Close handshake complete - disconnect.
-                self.disconnected(null);
+                // Client-initiated close — server's response. Don't
+                // disconnect inline (UAF: conn still in multi). Curl
+                // will deliver normal completion when the server closes
+                // the socket per RFC 6455 §5.5.1.
             } else {
                 // Server-initiated close: send reciprocal close frame per RFC 6455 §5.5.1
                 self._close_code = received_code;
@@ -823,9 +840,9 @@ const Message = union(enum) {
         arena: Allocator,
         data: []const u8,
     };
-    fn deinit(self: Message, page: *Page) void {
+    fn deinit(self: Message, pool: *ArenaPool) void {
         switch (self) {
-            .text, .binary => |msg| page.releaseArena(msg.arena),
+            .text, .binary => |msg| pool.release(msg.arena),
             .close => {},
         }
     }
