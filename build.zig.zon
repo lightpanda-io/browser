@@ -31,8 +31,8 @@
             .hash = "N-V-__8AALp9QAGn6CCHZ6fK_FfMyGtG824LSHYHHasM3w-y",
         },
         .zenai = .{
-            .url = "git+https://github.com/lightpanda-io/zenai.git#29d1eec30f54ac2a0f10a928a09abfe542b1feb9",
-            .hash = "zenai-0.0.0-iOY_VCsMAwCcG1lwEAMfixEIwKEa5bhbe3RVd3zo5X2K",
+            .url = "git+https://github.com/lightpanda-io/zenai.git#c1f5841d13c67ab401be06ddd13dbff8f4cc4d25",
+            .hash = "zenai-0.0.0-iOY_VB4aAwBrp27u8iFroHFXjNcUjMmZ4dkdr4Uel7rG",
         },
         .linenoise = .{
             .url = "https://github.com/antirez/linenoise/archive/refs/tags/2.0.tar.gz",
