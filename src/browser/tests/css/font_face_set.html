@@ -51,6 +51,15 @@
 }
 </script>
 
+<script id="document_fonts_add_increases_size">
+{
+    const face = new FontFace("SizeTest", "url(s.woff)");
+    const before = document.fonts.size;
+    document.fonts.add(face);
+    testing.expectEqual(before + 1, document.fonts.size);
+}
+</script>
+
 <script id="document_fonts_constructor_name">
 {
     testing.expectEqual('FontFaceSet', document.fonts.constructor.name);

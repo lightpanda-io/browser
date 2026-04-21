@@ -197,6 +197,14 @@ fn PrototypeChain(comptime types: []const type) type {
             ptr.* = .{ ._proto = self.get(index - 1), ._type = unionInit(T, self.get(index + 1)) };
         }
 
+        fn setProto(self: *const Self, comptime index: usize) void {
+            assert(index >= 1);
+            assert(index < types.len);
+
+            const ptr = self.get(index);
+            ptr.* = .{ ._proto = self.get(index - 1) };
+        }
+
         fn setMiddleWithValue(self: *const Self, comptime index: usize, comptime T: type, value: anytype) void {
             assert(index >= 1);
 
@@ -336,26 +344,136 @@ pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeO
         return self.element(child);
     }
 
-    const chain = try PrototypeChain(
-        &.{ EventTarget, Node, Element, Element.Svg, ChildT },
-    ).allocate(allocator);
-
-    chain.setRoot(EventTarget.Type);
-    chain.setMiddle(1, Node.Type);
-    chain.setMiddle(2, Element.Type);
-
     // will never allocate, can't fail
     const tag_name_str = String.init(self._arena, tag_name, .{}) catch unreachable;
 
-    // Manually set Element.Svg with the tag_name
-    chain.set(3, .{
-        ._proto = chain.get(2),
-        ._tag_name = tag_name_str,
-        ._type = unionInit(Element.Svg.Type, chain.get(4)),
-    });
+    const ProtoType = @TypeOf(@as(ChildT, undefined)._proto);
+    const SvgGraphics = Element.Svg.GraphicsElement;
+    const SvgGeometry = Element.Svg.GeometryElement;
 
-    chain.setLeaf(4, child);
-    return chain.get(4);
+    if (ProtoType == *SvgGeometry) {
+        // 7-level: EventTarget→Node→Element→Svg→GraphicsElement→GeometryElement→Child
+        const chain = try PrototypeChain(
+            &.{ EventTarget, Node, Element, Element.Svg, SvgGraphics, SvgGeometry, ChildT },
+        ).allocate(allocator);
+
+        chain.setRoot(EventTarget.Type);
+        chain.setMiddle(1, Node.Type);
+        chain.setMiddle(2, Element.Type);
+        chain.set(3, .{
+            ._proto = chain.get(2),
+            ._tag_name = tag_name_str,
+            ._type = unionInit(Element.Svg.Type, chain.get(6)),
+        });
+        chain.setProto(4);
+        chain.setProto(5);
+        chain.setLeaf(6, child);
+        return chain.get(6);
+    } else if (ProtoType == *SvgGraphics) {
+        // 6-level: EventTarget→Node→Element→Svg→GraphicsElement→Child
+        const chain = try PrototypeChain(
+            &.{ EventTarget, Node, Element, Element.Svg, SvgGraphics, ChildT },
+        ).allocate(allocator);
+
+        chain.setRoot(EventTarget.Type);
+        chain.setMiddle(1, Node.Type);
+        chain.setMiddle(2, Element.Type);
+        chain.set(3, .{
+            ._proto = chain.get(2),
+            ._tag_name = tag_name_str,
+            ._type = unionInit(Element.Svg.Type, chain.get(5)),
+        });
+        chain.setProto(4);
+        chain.setLeaf(5, child);
+        return chain.get(5);
+    } else if (ProtoType == *Element.Svg.TextContent) {
+        // 7-level: EventTarget→Node→Element→Svg→GraphicsElement→TextContent→Child
+        const chain = try PrototypeChain(
+            &.{ EventTarget, Node, Element, Element.Svg, SvgGraphics, Element.Svg.TextContent, ChildT },
+        ).allocate(allocator);
+
+        chain.setRoot(EventTarget.Type);
+        chain.setMiddle(1, Node.Type);
+        chain.setMiddle(2, Element.Type);
+        chain.set(3, .{
+            ._proto = chain.get(2),
+            ._tag_name = tag_name_str,
+            ._type = unionInit(Element.Svg.Type, chain.get(6)),
+        });
+        chain.setProto(4);
+        chain.setProto(5);
+        chain.setLeaf(6, child);
+        return chain.get(6);
+    } else if (ProtoType == *Element.Svg.TextPositioning) {
+        // 8-level: EventTarget→Node→Element→Svg→GraphicsElement→TextContent→TextPositioning→Child
+        const chain = try PrototypeChain(
+            &.{ EventTarget, Node, Element, Element.Svg, SvgGraphics, Element.Svg.TextContent, Element.Svg.TextPositioning, ChildT },
+        ).allocate(allocator);
+
+        chain.setRoot(EventTarget.Type);
+        chain.setMiddle(1, Node.Type);
+        chain.setMiddle(2, Element.Type);
+        chain.set(3, .{
+            ._proto = chain.get(2),
+            ._tag_name = tag_name_str,
+            ._type = unionInit(Element.Svg.Type, chain.get(7)),
+        });
+        chain.setProto(4);
+        chain.setProto(5);
+        chain.setProto(6);
+        chain.setLeaf(7, child);
+        return chain.get(7);
+    } else if (ProtoType == *Element.Svg.AnimationElement) {
+        // 6-level: EventTarget→Node→Element→Svg→AnimationElement→Child
+        const chain = try PrototypeChain(
+            &.{ EventTarget, Node, Element, Element.Svg, Element.Svg.AnimationElement, ChildT },
+        ).allocate(allocator);
+
+        chain.setRoot(EventTarget.Type);
+        chain.setMiddle(1, Node.Type);
+        chain.setMiddle(2, Element.Type);
+        chain.set(3, .{
+            ._proto = chain.get(2),
+            ._tag_name = tag_name_str,
+            ._type = unionInit(Element.Svg.Type, chain.get(5)),
+        });
+        chain.setProto(4);
+        chain.setLeaf(5, child);
+        return chain.get(5);
+    } else if (ProtoType == *Element.Svg.GradientElement) {
+        // 6-level: EventTarget→Node→Element→Svg→GradientElement→Child
+        const chain = try PrototypeChain(
+            &.{ EventTarget, Node, Element, Element.Svg, Element.Svg.GradientElement, ChildT },
+        ).allocate(allocator);
+
+        chain.setRoot(EventTarget.Type);
+        chain.setMiddle(1, Node.Type);
+        chain.setMiddle(2, Element.Type);
+        chain.set(3, .{
+            ._proto = chain.get(2),
+            ._tag_name = tag_name_str,
+            ._type = unionInit(Element.Svg.Type, chain.get(5)),
+        });
+        chain.setProto(4);
+        chain.setLeaf(5, child);
+        return chain.get(5);
+    } else {
+        // 5-level: EventTarget→Node→Element→Svg→Child
+        const chain = try PrototypeChain(
+            &.{ EventTarget, Node, Element, Element.Svg, ChildT },
+        ).allocate(allocator);
+
+        chain.setRoot(EventTarget.Type);
+        chain.setMiddle(1, Node.Type);
+        chain.setMiddle(2, Element.Type);
+        chain.set(3, .{
+            ._proto = chain.get(2),
+            ._tag_name = tag_name_str,
+            ._type = unionInit(Element.Svg.Type, chain.get(4)),
+        });
+        chain.setLeaf(4, child);
+        return chain.get(4);
+    }
 }
 
 pub fn xhrEventTarget(_: *const Factory, allocator: Allocator, child: anytype) !*@TypeOf(child) {

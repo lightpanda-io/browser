@@ -30,6 +30,15 @@
             .url = "https://github.com/curl/curl/releases/download/curl-8_18_0/curl-8.18.0.tar.gz",
             .hash = "N-V-__8AALp9QAGn6CCHZ6fK_FfMyGtG824LSHYHHasM3w-y",
         },
+        // Font rendering: upstream C sources built inline (like zlib, brotli, curl)
+        .freetype = .{
+            .url = "https://github.com/freetype/freetype/archive/refs/tags/VER-2-13-3.tar.gz",
+            .hash = "N-V-__8AAKfbpwAXnUJ6TJEaqZGWgp6F_8OhiLErejRxQ7Y5",
+        },
+        .harfbuzz = .{
+            .url = "https://github.com/harfbuzz/harfbuzz/releases/download/10.4.0/harfbuzz-10.4.0.tar.xz",
+            .hash = "N-V-__8AAPF4uAWdqmPOQOHNDU36lkNeasDNpb43uPEfa3PC",
+        },
     },
     .paths = .{""},
 }
