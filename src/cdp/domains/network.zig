@@ -23,9 +23,10 @@ const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 
 const URL = @import("../../browser/URL.zig");
-const Transfer = @import("../../browser/HttpClient.zig").Transfer;
-const Notification = @import("../../Notification.zig");
 const Mime = @import("../../browser/Mime.zig");
+const Notification = @import("../../Notification.zig");
+const timestamp = @import("../../datetime.zig").timestamp;
+const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 
 const CdpStorage = @import("storage.zig");
 
@@ -276,6 +277,8 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
         .initiator = .{ .type = "other" },
         .redirectHasExtraInfo = false, // TODO change after adding Network.requestWillBeSentExtraInfo
         .hasUserGesture = false,
+        .timestamp = datetime(.monotonic),
+        .wallTime = datetime(.clock),
     }, .{ .session_id = session_id });
 }
 
@@ -412,6 +415,25 @@ const TransferAsResponseWriter = struct {
             try jws.write(mime.contentTypeString());
             try jws.objectField("charset");
             try jws.write(mime.charsetString());
+        }
+
+        {
+            try jws.objectField("timing");
+            try jws.write(.{
+                .requestTime = transfer.start_time,
+                .connectEnd = -1,
+                .connectStart = -1,
+                .dnsEnd = -1,
+                .dnsStart = -1,
+                .proxyEnd = -1,
+                .proxyStart = -1,
+                .receiveHeadersEnd = -1,
+                .receiveHeadersStart = -1,
+                .sendEnd = -1,
+                .sendStart = -1,
+                .sslEnd = -1,
+                .sslStart = -1,
+            });
         }
 
         {
