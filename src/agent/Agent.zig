@@ -728,6 +728,12 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
             .max_turns = 30,
             .max_tokens = 4096,
             .tool_choice = .auto,
+            // Cap per-turn reasoning for thinking models. Without this,
+            // Gemini thinking models can spend minutes per turn exploring,
+            // which makes 30-turn tool-use loops take 7-10 min per task on
+            // open-ended questions. 2048 tokens is enough to plan the next
+            // tool call or finalize; it's ignored by non-thinking models.
+            .thinking_budget = 2048,
         },
     ) catch |err| {
         log.err(.app, "AI API error", .{ .err = err });
