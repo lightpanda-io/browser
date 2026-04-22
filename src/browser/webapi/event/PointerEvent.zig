@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
 const MouseEvent = @import("MouseEvent.zig");
@@ -85,13 +85,13 @@ const Options = Event.inheritOptions(
     PointerEventOptions,
 );
 
-pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*PointerEvent {
-    const arena = try page.getArena(.tiny, "PointerEvent");
-    errdefer page.releaseArena(arena);
+pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*PointerEvent {
+    const arena = try frame.getArena(.tiny, "PointerEvent");
+    errdefer frame.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 
     const opts = _opts orelse Options{};
-    const event = try page._factory.mouseEvent(
+    const event = try frame._factory.mouseEvent(
         arena,
         type_string,
         MouseEvent{

@@ -20,7 +20,7 @@ const std = @import("std");
 
 const js = @import("../js/js.zig");
 
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Parser = @import("../parser/Parser.zig");
 
 const HTMLDocument = @import("HTMLDocument.zig");
@@ -40,7 +40,7 @@ pub fn parseFromString(
     _: *const DOMParser,
     html: []const u8,
     mime_type: []const u8,
-    page: *Page,
+    frame: *Frame,
 ) !*Document {
     const target_mime = std.meta.stringToEnum(enum {
         @"text/html",
@@ -50,13 +50,13 @@ pub fn parseFromString(
         @"image/svg+xml",
     }, mime_type) orelse return error.NotSupported;
 
-    const arena = try page.getArena(.medium, "DOMParser.parseFromString");
-    defer page.releaseArena(arena);
+    const arena = try frame.getArena(.medium, "DOMParser.parseFromString");
+    defer frame.releaseArena(arena);
 
     return switch (target_mime) {
         .@"text/html" => {
             // Create a new HTMLDocument
-            const doc = try page._factory.document(HTMLDocument{
+            const doc = try frame._factory.document(HTMLDocument{
                 ._proto = undefined,
             });
 
@@ -66,7 +66,7 @@ pub fn parseFromString(
             }
 
             // Parse HTML into the document
-            var parser = Parser.init(arena, doc.asNode(), page);
+            var parser = Parser.init(arena, doc.asNode(), frame);
             parser.parse(normalized);
 
             if (parser.err) |pe| {
@@ -77,19 +77,19 @@ pub fn parseFromString(
         },
         else => {
             // Create a new XMLDocument.
-            const doc = try page._factory.document(XMLDocument{
+            const doc = try frame._factory.document(XMLDocument{
                 ._proto = undefined,
             });
 
             // Parse XML into XMLDocument.
             const doc_node = doc.asNode();
-            var parser = Parser.init(arena, doc_node, page);
+            var parser = Parser.init(arena, doc_node, frame);
             parser.parseXML(html);
 
             if (parser.err != null or doc_node.firstChild() == null) {
                 // Return a document with a <parsererror> element per spec.
-                const err_doc = try page._factory.document(XMLDocument{ ._proto = undefined });
-                var err_parser = Parser.init(arena, err_doc.asNode(), page);
+                const err_doc = try frame._factory.document(XMLDocument{ ._proto = undefined });
+                var err_parser = Parser.init(arena, err_doc.asNode(), frame);
                 err_parser.parseXML("<parsererror xmlns=\"http://www.mozilla.org/newlayout/xml/parsererror.xml\">error</parsererror>");
                 return err_doc.asDocument();
             }
@@ -99,7 +99,7 @@ pub fn parseFromString(
             // If first node is a `ProcessingInstruction`, skip it.
             if (first_child.getNodeType() == 7) {
                 // We're sure that firstChild exist, this cannot fail.
-                _ = try doc_node.removeChild(first_child, page);
+                _ = try doc_node.removeChild(first_child, frame);
             }
 
             return doc.asDocument();

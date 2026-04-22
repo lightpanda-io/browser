@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -42,11 +42,11 @@ pub fn getDisabled(self: *const Button) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
 }
 
-pub fn setDisabled(self: *Button, disabled: bool, page: *Page) !void {
+pub fn setDisabled(self: *Button, disabled: bool, frame: *Frame) !void {
     if (disabled) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), page);
+        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
     }
 }
 
@@ -54,44 +54,44 @@ pub fn getName(self: *const Button) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
-pub fn setName(self: *Button, name: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), page);
+pub fn setName(self: *Button, name: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
 }
 
 pub fn getType(self: *const Button) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "submit";
 }
 
-pub fn setType(self: *Button, typ: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(typ), page);
+pub fn setType(self: *Button, typ: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(typ), frame);
 }
 
 pub fn getValue(self: *const Button) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("value")) orelse "";
 }
 
-pub fn setValue(self: *Button, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), page);
+pub fn setValue(self: *Button, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), frame);
 }
 
 pub fn getRequired(self: *const Button) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
 }
 
-pub fn setRequired(self: *Button, required: bool, page: *Page) !void {
+pub fn setRequired(self: *Button, required: bool, frame: *Frame) !void {
     if (required) {
-        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("required"), page);
+        try self.asElement().removeAttribute(comptime .wrap("required"), frame);
     }
 }
 
-pub fn getForm(self: *Button, page: *Page) ?*Form {
+pub fn getForm(self: *Button, frame: *Frame) ?*Form {
     const element = self.asElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
     if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        if (page.document.getElementById(form_id, page)) |form_element| {
+        if (frame.document.getElementById(form_id, frame)) |form_element| {
             return form_element.is(Form);
         }
         // form attribute present but invalid - no form owner
@@ -110,8 +110,8 @@ pub fn getForm(self: *Button, page: *Page) ?*Form {
     return null;
 }
 
-pub fn getLabels(self: *Button, page: *Page) !js.Array {
-    return @import("Label.zig").getControlLabels(self.asElement(), page);
+pub fn getLabels(self: *Button, frame: *Frame) !js.Array {
+    return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
 pub const JsApi = struct {
@@ -133,7 +133,7 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
-    pub fn created(_: *Node, _: *Page) !void {
+    pub fn created(_: *Node, _: *Frame) !void {
         // No initialization needed - disabled is lazy from attribute
     }
 };

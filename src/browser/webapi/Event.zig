@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Session = @import("../Session.zig");
 
 const Node = @import("Node.zig");
@@ -89,16 +89,16 @@ pub const Options = struct {
     composed: bool = false,
 };
 
-pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
-    const arena = try page.getArena(.tiny, "Event");
-    errdefer page.releaseArena(arena);
+pub fn init(typ: []const u8, opts_: ?Options, frame: *Frame) !*Event {
+    const arena = try frame.getArena(.tiny, "Event");
+    errdefer frame.releaseArena(arena);
     const str = try String.init(arena, typ, .{});
     return initWithTrusted(arena, str, opts_, false);
 }
 
-pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*Event {
-    const arena = try page.getArena(.tiny, "Event.trusted");
-    errdefer page.releaseArena(arena);
+pub fn initTrusted(typ: String, opts_: ?Options, frame: *Frame) !*Event {
+    const arena = try frame.getArena(.tiny, "Event.trusted");
+    errdefer frame.releaseArena(arena);
     return initWithTrusted(arena, typ, opts_, true);
 }
 
@@ -267,7 +267,7 @@ pub fn getIsTrusted(self: *const Event) bool {
     return self._is_trusted;
 }
 
-pub fn composedPath(self: *Event, page: *Page) ![]const *EventTarget {
+pub fn composedPath(self: *Event, frame: *Frame) ![]const *EventTarget {
     // Return empty array if event is not being dispatched
     if (self._event_phase == .none) {
         return &.{};
@@ -332,7 +332,7 @@ pub fn composedPath(self: *Event, page: *Page) ![]const *EventTarget {
     // Add window at the end (unless we stopped at shadow boundary)
     if (!stopped_at_shadow_boundary) {
         if (path_len < path_buffer.len) {
-            path_buffer[path_len] = page.window.asEventTarget();
+            path_buffer[path_len] = frame.window.asEventTarget();
             path_len += 1;
         }
     }
@@ -369,7 +369,7 @@ pub fn composedPath(self: *Event, page: *Page) ![]const *EventTarget {
     const visible_path_len = if (path_len > visible_start_index) path_len - visible_start_index else 0;
 
     // Allocate and return the visible path using call_arena (short-lived)
-    const path = try page.call_arena.alloc(*EventTarget, visible_path_len);
+    const path = try frame.call_arena.alloc(*EventTarget, visible_path_len);
     @memcpy(path, path_buffer[visible_start_index..path_len]);
     return path;
 }

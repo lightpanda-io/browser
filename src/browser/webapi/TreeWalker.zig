@@ -160,9 +160,9 @@ pub fn TreeWalker(comptime mode: Mode) type {
 
 test "TreeWalker: skipChildren" {
     const testing = @import("../../testing.zig");
-    const page = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
-    const doc = page.window._document;
+    const frame = try testing.test_session.createFrame();
+    defer testing.test_session.removeFrame();
+    const doc = frame.window._document;
 
     // <div>
     //   <span>
@@ -170,13 +170,13 @@ test "TreeWalker: skipChildren" {
     //   </span>
     //   <p>B</p>
     // </div>
-    const div = try doc.createElement("div", null, page);
-    const span = try doc.createElement("span", null, page);
-    const b = try doc.createElement("b", null, page);
-    const p = try doc.createElement("p", null, page);
-    _ = try span.asNode().appendChild(b.asNode(), page);
-    _ = try div.asNode().appendChild(span.asNode(), page);
-    _ = try div.asNode().appendChild(p.asNode(), page);
+    const div = try doc.createElement("div", null, frame);
+    const span = try doc.createElement("span", null, frame);
+    const b = try doc.createElement("b", null, frame);
+    const p = try doc.createElement("p", null, frame);
+    _ = try span.asNode().appendChild(b.asNode(), frame);
+    _ = try div.asNode().appendChild(span.asNode(), frame);
+    _ = try div.asNode().appendChild(p.asNode(), frame);
 
     var tw = Full.init(div.asNode(), .{});
 

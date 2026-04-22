@@ -1,5 +1,5 @@
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -23,11 +23,11 @@ pub fn getOpen(self: *const Dialog) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("open")) != null;
 }
 
-pub fn setOpen(self: *Dialog, open: bool, page: *Page) !void {
+pub fn setOpen(self: *Dialog, open: bool, frame: *Frame) !void {
     if (open) {
-        try self.asElement().setAttributeSafe(comptime .wrap("open"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("open"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("open"), page);
+        try self.asElement().removeAttribute(comptime .wrap("open"), frame);
     }
 }
 
@@ -35,8 +35,8 @@ pub fn getReturnValue(self: *const Dialog) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("returnvalue")) orelse "";
 }
 
-pub fn setReturnValue(self: *Dialog, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("returnvalue"), .wrap(value), page);
+pub fn setReturnValue(self: *Dialog, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("returnvalue"), .wrap(value), frame);
 }
 
 pub const JsApi = struct {

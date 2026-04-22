@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -44,40 +44,40 @@ pub fn getBlocking(self: *const Style) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("blocking")) orelse "";
 }
 
-pub fn setBlocking(self: *Style, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("blocking"), .wrap(value), page);
+pub fn setBlocking(self: *Style, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("blocking"), .wrap(value), frame);
 }
 
 pub fn getMedia(self: *const Style) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("media")) orelse "";
 }
 
-pub fn setMedia(self: *Style, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("media"), .wrap(value), page);
+pub fn setMedia(self: *Style, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("media"), .wrap(value), frame);
 }
 
 pub fn getType(self: *const Style) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "text/css";
 }
 
-pub fn setType(self: *Style, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), page);
+pub fn setType(self: *Style, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), frame);
 }
 
 pub fn getDisabled(self: *const Style) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
 }
 
-pub fn setDisabled(self: *Style, disabled: bool, page: *Page) !void {
+pub fn setDisabled(self: *Style, disabled: bool, frame: *Frame) !void {
     if (disabled) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), page);
+        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
     }
 }
 
 const CSSStyleSheet = @import("../../css/CSSStyleSheet.zig");
-pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
+pub fn getSheet(self: *Style, frame: *Frame) !?*CSSStyleSheet {
     // Per spec, sheet is null for disconnected elements or non-CSS types.
     // Valid types: absent (defaults to "text/css"), empty string, or
     // case-insensitive match for "text/css".
@@ -92,28 +92,28 @@ pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
     }
 
     if (self._sheet) |sheet| return sheet;
-    const sheet = try CSSStyleSheet.initWithOwner(self.asElement(), page);
+    const sheet = try CSSStyleSheet.initWithOwner(self.asElement(), frame);
     self._sheet = sheet;
 
-    const sheets = try page.document.getStyleSheets(page);
-    try sheets.add(sheet, page);
+    const sheets = try frame.document.getStyleSheets(frame);
+    try sheets.add(sheet, frame);
 
     return sheet;
 }
 
-pub fn styleAddedCallback(self: *Style, page: *Page) !void {
+pub fn styleAddedCallback(self: *Style, frame: *Frame) !void {
     // Force stylesheet initialization so rules are parsed immediately
-    if (self.getSheet(page) catch null) |_| {
+    if (self.getSheet(frame) catch null) |_| {
         // Notify StyleManager about the new stylesheet
-        page._style_manager.sheetModified();
+        frame._style_manager.sheetModified();
     }
 
-    // if we're planning on navigating to another page, don't trigger load event.
-    if (page.isGoingAway()) {
+    // if we're planning on navigating to another frame, don't trigger load event.
+    if (frame.isGoingAway()) {
         return;
     }
 
-    try page._to_load.append(page.arena, self._proto);
+    try frame._to_load.append(frame.arena, self._proto);
 }
 
 pub const JsApi = struct {

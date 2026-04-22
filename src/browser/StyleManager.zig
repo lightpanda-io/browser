@@ -19,7 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const Page = @import("Page.zig");
+const Frame = @import("Frame.zig");
 
 const CssParser = @import("css/Parser.zig");
 const Element = @import("webapi/Element.zig");
@@ -47,7 +47,7 @@ const StyleManager = @This();
 const Tag = Element.Tag;
 const RuleList = std.MultiArrayList(VisibilityRule);
 
-page: *Page,
+frame: *Frame,
 
 arena: Allocator,
 
@@ -63,15 +63,15 @@ next_doc_order: u32 = 0,
 // When true, rules need to be rebuilt
 dirty: bool = false,
 
-pub fn init(page: *Page) !StyleManager {
+pub fn init(frame: *Frame) !StyleManager {
     return .{
-        .page = page,
-        .arena = try page.getArena(.medium, "StyleManager"),
+        .frame = frame,
+        .arena = try frame.getArena(.medium, "StyleManager"),
     };
 }
 
 pub fn deinit(self: *StyleManager) void {
-    self.page.releaseArena(self.arena);
+    self.frame.releaseArena(self.arena);
 }
 
 fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
@@ -170,7 +170,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     const tag_rules_count = self.tag_rules.count();
     const other_rules_count = self.other_rules.len;
 
-    self.page._session.arena_pool.resetRetain(self.arena);
+    self.frame._session.arena_pool.resetRetain(self.arena);
 
     self.next_doc_order = 0;
 
@@ -186,7 +186,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.other_rules = .{};
     try self.other_rules.ensureTotalCapacity(self.arena, other_rules_count);
 
-    const sheets = self.page.document._style_sheets orelse return;
+    const sheets = self.frame.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
         self.parseSheet(sheet) catch |err| {
             log.err(.browser, "StyleManager parseSheet", .{ .err = err });
@@ -219,7 +219,7 @@ pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, opt
 
         // Store in cache
         if (cache) |c| {
-            c.put(self.page.call_arena, elem, hidden) catch {};
+            c.put(self.frame.call_arena, elem, hidden) catch {};
         }
 
         if (hidden) {
@@ -272,7 +272,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
 
     // Check inline styles FIRST - they use INLINE_PRIORITY so no stylesheet can beat them
     if (options.check_display) {
-        if (getInlineStyleProperty(el, comptime .wrap("display"), self.page)) |property| {
+        if (getInlineStyleProperty(el, comptime .wrap("display"), self.frame)) |property| {
             if (property._value.eql(comptime .wrap("none"))) {
                 return true; // Early exit for hiding value
             }
@@ -285,7 +285,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     }
 
     if (options.check_visibility) {
-        if (getInlineStyleProperty(el, comptime .wrap("visibility"), self.page)) |property| {
+        if (getInlineStyleProperty(el, comptime .wrap("visibility"), self.frame)) |property| {
             if (property._value.eql(comptime .wrap("hidden")) or property._value.eql(comptime .wrap("collapse"))) {
                 return true;
             }
@@ -300,7 +300,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     }
 
     if (options.check_opacity) {
-        if (getInlineStyleProperty(el, comptime .wrap("opacity"), self.page)) |property| {
+        if (getInlineStyleProperty(el, comptime .wrap("opacity"), self.frame)) |property| {
             if (property._value.eql(comptime .wrap("0"))) {
                 return true;
             }
@@ -324,7 +324,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
         opacity_zero: *?bool,
         opacity_priority: *u64,
         el: *Element,
-        page: *Page,
+        frame: *Frame,
 
         fn checkRules(ctx: @This(), rules: *const RuleList) void {
             if (ctx.display_priority.* == INLINE_PRIORITY and
@@ -351,7 +351,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
 
                 if (dominated) continue;
 
-                if (matchesSelector(ctx.el, selector, ctx.page)) {
+                if (matchesSelector(ctx.el, selector, ctx.frame)) {
                     // Update best priorities
                     if (props.display_none != null and p > ctx.display_priority.*) {
                         ctx.display_none.* = props.display_none;
@@ -377,7 +377,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
         .opacity_zero = &opacity_zero,
         .opacity_priority = &opacity_priority,
         .el = el,
-        .page = self.page,
+        .frame = self.frame,
     };
 
     if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
@@ -425,7 +425,7 @@ pub fn hasPointerEventsNone(self: *StyleManager, el: *Element, cache: ?*PointerE
         const pe_none = self.elementHasPointerEventsNone(elem);
 
         if (cache) |c| {
-            c.put(self.page.call_arena, elem, pe_none) catch {};
+            c.put(self.frame.call_arena, elem, pe_none) catch {};
         }
 
         if (pe_none) {
@@ -439,10 +439,10 @@ pub fn hasPointerEventsNone(self: *StyleManager, el: *Element, cache: ?*PointerE
 
 /// Check if a single element (not ancestors) has pointer-events:none.
 fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
-    const page = self.page;
+    const frame = self.frame;
 
     // Check inline style first
-    if (getInlineStyleProperty(el, .wrap("pointer-events"), page)) |property| {
+    if (getInlineStyleProperty(el, .wrap("pointer-events"), frame)) |property| {
         if (property._value.eql(comptime .wrap("none"))) {
             return true;
         }
@@ -454,7 +454,7 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
 
     // Helper to check a single rule
     const checkRules = struct {
-        fn check(rules: *const RuleList, res: *?bool, current_priority: *u64, elem: *Element, p: *Page) void {
+        fn check(rules: *const RuleList, res: *?bool, current_priority: *u64, elem: *Element, p: *Frame) void {
             if (current_priority.* == INLINE_PRIORITY) return;
 
             const priorities = rules.items(.priority);
@@ -475,7 +475,7 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
 
     if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
         if (self.id_rules.get(id)) |rules| {
-            checkRules(&rules, &result, &best_priority, el, page);
+            checkRules(&rules, &result, &best_priority, el, frame);
         }
     }
 
@@ -483,16 +483,16 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
         var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
         while (it.next()) |class| {
             if (self.class_rules.get(class)) |rules| {
-                checkRules(&rules, &result, &best_priority, el, page);
+                checkRules(&rules, &result, &best_priority, el, frame);
             }
         }
     }
 
     if (self.tag_rules.get(el.getTag())) |rules| {
-        checkRules(&rules, &result, &best_priority, el, page);
+        checkRules(&rules, &result, &best_priority, el, frame);
     }
 
-    checkRules(&self.other_rules, &result, &best_priority, el, page);
+    checkRules(&self.other_rules, &result, &best_priority, el, frame);
 
     return result orelse false;
 }
@@ -686,9 +686,9 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
     }
 }
 
-fn matchesSelector(el: *Element, selector: Selector.Selector, page: *Page) bool {
+fn matchesSelector(el: *Element, selector: Selector.Selector, frame: *Frame) bool {
     const node = el.asNode();
-    return SelectorList.matches(node, selector, node, page);
+    return SelectorList.matches(node, selector, node, frame);
 }
 
 const VisibilityProperties = struct {
@@ -723,8 +723,8 @@ const CheckVisibilityOptions = struct {
 // Inline styles always win over stylesheets - use max u64 as sentinel
 const INLINE_PRIORITY: u64 = std.math.maxInt(u64);
 
-fn getInlineStyleProperty(el: *Element, property_name: String, page: *Page) ?*CSSStyleProperty {
-    const style = el.getOrCreateStyle(page) catch |err| {
+fn getInlineStyleProperty(el: *Element, property_name: String, frame: *Frame) ?*CSSStyleProperty {
+    const style = el.getOrCreateStyle(frame) catch |err| {
         log.err(.browser, "StyleManager getOrCreateStyle", .{ .err = err });
         return null;
     };

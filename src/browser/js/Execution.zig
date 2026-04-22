@@ -19,7 +19,7 @@
 //! Execution context for worker-compatible APIs.
 //!
 //! This provides a common interface for APIs that work in both Window and Worker
-//! contexts. Instead of taking `*Page` (which is DOM-specific), these APIs take
+//! contexts. Instead of taking `*Frame` (which is DOM-specific), these APIs take
 //! `*Execution` which abstracts the common infrastructure.
 //!
 //! The bridge constructs an Execution on-the-fly from the current context,

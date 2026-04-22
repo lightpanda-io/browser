@@ -94,18 +94,18 @@ pub fn main() !void {
 pub fn run(allocator: Allocator, file: []const u8, session: *lp.Session) !void {
     const url = try std.fmt.allocPrintSentinel(allocator, "http://localhost:9589/{s}", .{file}, 0);
 
-    const page = try session.createPage();
-    defer session.removePage();
+    const frame = try session.createFrame();
+    defer session.removeFrame();
 
     var ls: lp.js.Local.Scope = undefined;
-    page.js.localScope(&ls);
+    frame.js.localScope(&ls);
     defer ls.deinit();
 
     var try_catch: lp.js.TryCatch = undefined;
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
-    try page.navigate(url, .{});
+    try frame.navigate(url, .{});
     var runner = try session.runner(.{});
     try runner.wait(.{ .ms = 2000 });
 

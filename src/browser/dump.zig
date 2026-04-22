@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Page = @import("Page.zig");
+const Frame = @import("Frame.zig");
 const Node = @import("webapi/Node.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
 const IFrame = @import("webapi/element/html/IFrame.zig");
@@ -48,7 +48,7 @@ pub const Opts = struct {
     };
 };
 
-pub fn root(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, page: *Page) !void {
+pub fn root(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
     if (doc.is(Node.Document.HTMLDocument)) |html_doc| {
         blk: {
             // Ideally we just render the doctype which is part of the document
@@ -64,20 +64,20 @@ pub fn root(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, page: *Page
 
         if (opts.with_base) {
             const parent = if (html_doc.getHead()) |head| head.asNode() else doc.asNode();
-            const base = try doc.createElement("base", null, page);
-            try base.setAttributeSafe(comptime .wrap("base"), .wrap(page.base()), page);
-            _ = try parent.insertBefore(base.asNode(), parent.firstChild(), page);
+            const base = try doc.createElement("base", null, frame);
+            try base.setAttributeSafe(comptime .wrap("base"), .wrap(frame.base()), frame);
+            _ = try parent.insertBefore(base.asNode(), parent.firstChild(), frame);
         }
     }
 
-    return deep(doc.asNode(), opts, writer, page);
+    return deep(doc.asNode(), opts, writer, frame);
 }
 
-pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) error{WriteFailed}!void {
-    return _deep(node, opts, false, writer, page);
+pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) error{WriteFailed}!void {
+    return _deep(node, opts, false, writer, frame);
 }
 
-fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Writer, page: *Page) error{WriteFailed}!void {
+fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Writer, frame: *Frame) error{WriteFailed}!void {
     switch (node._type) {
         .cdata => |cd| {
             if (node.is(Node.CData.Comment)) |_| {
@@ -119,13 +119,13 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
 
             if (opts.shadow == .rendered) {
                 if (el.is(Slot)) |slot| {
-                    try dumpSlotContent(slot, opts, writer, page);
+                    try dumpSlotContent(slot, opts, writer, frame);
                     return writer.writeAll("</slot>");
                 }
             }
             if (opts.shadow != .skip) {
-                if (page._element_shadow_roots.get(el)) |shadow| {
-                    try children(shadow.asNode(), opts, writer, page);
+                if (frame._element_shadow_roots.get(el)) |shadow| {
+                    try children(shadow.asNode(), opts, writer, frame);
                     // In rendered mode, light DOM is only shown through slots, not directly
                     if (opts.shadow == .rendered) {
                         // Skip rendering light DOM children
@@ -140,21 +140,21 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
             }
 
             if (opts.with_frames and el.is(IFrame) != null) {
-                const frame = el.as(IFrame);
-                if (frame.getContentDocument()) |doc| {
-                    // A frame's document should always ahave a page, but
+                const iframe = el.as(IFrame);
+                if (iframe.getContentDocument()) |doc| {
+                    // A frame's document should always ahave a frame, but
                     // I'm not willing to crash a release build on that assertion.
                     if (comptime IS_DEBUG) {
-                        std.debug.assert(doc._page != null);
+                        std.debug.assert(doc._frame != null);
                     }
-                    if (doc._page) |frame_page| {
+                    if (doc._frame) |f| {
                         try writer.writeByte('\n');
-                        root(doc, opts, writer, frame_page) catch return error.WriteFailed;
+                        root(doc, opts, writer, f) catch return error.WriteFailed;
                         try writer.writeByte('\n');
                     }
                 }
             } else {
-                try children(node, opts, writer, page);
+                try children(node, opts, writer, frame);
             }
 
             if (!isVoidElement(el)) {
@@ -163,7 +163,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
                 try writer.writeByte('>');
             }
         },
-        .document => try children(node, opts, writer, page),
+        .document => try children(node, opts, writer, frame),
         .document_type => |dt| {
             try writer.writeAll("<!DOCTYPE ");
             try writer.writeAll(dt.getName());
@@ -187,7 +187,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
             }
             try writer.writeAll(">\n");
         },
-        .document_fragment => try children(node, opts, writer, page),
+        .document_fragment => try children(node, opts, writer, frame),
         .attribute => {
             // Not called normally, but can be called via XMLSerializer.serializeToString
             // in which case it should return an empty string
@@ -196,10 +196,10 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
     }
 }
 
-pub fn children(parent: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) !void {
+pub fn children(parent: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
     var it = parent.childrenIterator();
     while (it.next()) |child| {
-        try deep(child, opts, writer, page);
+        try deep(child, opts, writer, frame);
     }
 }
 
@@ -243,15 +243,15 @@ pub fn toJSON(node: *Node, writer: *std.json.Stringify) !void {
     try writer.endObject();
 }
 
-fn dumpSlotContent(slot: *Slot, opts: Opts, writer: *std.Io.Writer, page: *Page) !void {
-    const assigned = slot.assignedNodes(null, page) catch return;
+fn dumpSlotContent(slot: *Slot, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
+    const assigned = slot.assignedNodes(null, frame) catch return;
 
     if (assigned.len > 0) {
         for (assigned) |assigned_node| {
-            try _deep(assigned_node, opts, true, writer, page);
+            try _deep(assigned_node, opts, true, writer, frame);
         }
     } else {
-        try children(slot.asNode(), opts, writer, page);
+        try children(slot.asNode(), opts, writer, frame);
     }
 }
 

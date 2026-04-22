@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const Page = @import("Page.zig");
+const Frame = @import("Frame.zig");
 const URL = @import("URL.zig");
 const TreeWalker = @import("webapi/TreeWalker.zig");
 const Element = @import("webapi/Element.zig");
@@ -131,7 +131,7 @@ fn analyzeContent(root: *Node) ContentInfo {
 const Context = struct {
     state: State,
     writer: *std.Io.Writer,
-    page: *Page,
+    frame: *Frame,
 
     fn ensureNewline(self: *Context) !void {
         if (!self.state.last_char_was_newline) {
@@ -278,8 +278,8 @@ const Context = struct {
                 }
                 try self.writer.writeAll("](");
                 if (el.getAttributeSafe(comptime .wrap("src"))) |src| {
-                    const page = self.page;
-                    const absolute_src = URL.resolve(page.call_arena, page.base(), src, .{ .encoding = page.charset }) catch src;
+                    const frame = self.frame;
+                    const absolute_src = URL.resolve(frame.call_arena, frame.base(), src, .{ .encoding = frame.charset }) catch src;
                     try self.writer.writeAll(absolute_src);
                 }
                 try self.writer.writeAll(")");
@@ -287,14 +287,14 @@ const Context = struct {
                 return;
             },
             .anchor => {
-                const page = self.page;
+                const frame = self.frame;
                 const info = analyzeContent(el.asNode());
                 const label = getAnchorLabel(el);
                 const href_raw = el.getAttributeSafe(comptime .wrap("href"));
 
                 if (!info.has_visible and label == null and href_raw == null) return;
 
-                const href = if (href_raw) |h| URL.resolve(page.call_arena, page.base(), h, .{ .encoding = page.charset }) catch h else null;
+                const href = if (href_raw) |h| URL.resolve(frame.call_arena, frame.base(), h, .{ .encoding = frame.charset }) catch h else null;
 
                 if (info.has_block) {
                     try self.renderChildren(el.asNode());
@@ -459,12 +459,12 @@ const Context = struct {
     }
 };
 
-pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) !void {
+pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
     _ = opts;
     var ctx: Context = .{
         .state = .{},
         .writer = writer,
-        .page = page,
+        .frame = frame,
     };
     try ctx.render(node);
     if (!ctx.state.last_char_was_newline) {
@@ -474,18 +474,18 @@ pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) !void 
 
 fn testMarkdownHTML(html: []const u8, expected: []const u8) !void {
     const testing = @import("../testing.zig");
-    const page = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
-    page.url = "http://localhost/";
+    const frame = try testing.test_session.createFrame();
+    defer testing.test_session.removeFrame();
+    frame.url = "http://localhost/";
 
-    const doc = page.window._document;
+    const doc = frame.window._document;
 
-    const div = try doc.createElement("div", null, page);
-    try page.parseHtmlAsChildren(div.asNode(), html);
+    const div = try doc.createElement("div", null, frame);
+    try frame.parseHtmlAsChildren(div.asNode(), html);
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(div.asNode(), .{}, &aw.writer, page);
+    try dump(div.asNode(), .{}, &aw.writer, frame);
 
     try testing.expectString(expected, aw.written());
 }
@@ -677,13 +677,13 @@ test "browser.markdown: skip empty links" {
 
 test "browser.markdown: resolve links" {
     const testing = @import("../testing.zig");
-    const page = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
-    page.url = "https://example.com/a/index.html";
+    const frame = try testing.test_session.createFrame();
+    defer testing.test_session.removeFrame();
+    frame.url = "https://example.com/a/index.html";
 
-    const doc = page.window._document;
-    const div = try doc.createElement("div", null, page);
-    try page.parseHtmlAsChildren(div.asNode(),
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try frame.parseHtmlAsChildren(div.asNode(),
         \\<a href="b">Link</a>
         \\<img src="../c.png" alt="Img">
         \\<a href="/my page">Space</a>
@@ -691,7 +691,7 @@ test "browser.markdown: resolve links" {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(div.asNode(), .{}, &aw.writer, page);
+    try dump(div.asNode(), .{}, &aw.writer, frame);
 
     try testing.expectString(
         \\[Link](https://example.com/a/b)

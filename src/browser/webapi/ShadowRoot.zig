@@ -19,7 +19,7 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Node = @import("Node.zig");
 const DocumentFragment = @import("DocumentFragment.zig");
 const Element = @import("Element.zig");
@@ -42,8 +42,8 @@ _elements_by_id: std.StringHashMapUnmanaged(*Element) = .{},
 _removed_ids: std.StringHashMapUnmanaged(void) = .{},
 _adopted_style_sheets: ?js.Object.Global = null,
 
-pub fn init(host: *Element, mode: Mode, page: *Page) !*ShadowRoot {
-    return page._factory.documentFragment(ShadowRoot{
+pub fn init(host: *Element, mode: Mode, frame: *Frame) !*ShadowRoot {
+    return frame._factory.documentFragment(ShadowRoot{
         ._proto = undefined,
         ._mode = mode,
         ._host = host,
@@ -70,7 +70,7 @@ pub fn getHost(self: *const ShadowRoot) *Element {
     return self._host;
 }
 
-pub fn getElementById(self: *ShadowRoot, id: []const u8, page: *Page) ?*Element {
+pub fn getElementById(self: *ShadowRoot, id: []const u8, frame: *Frame) ?*Element {
     if (id.len == 0) {
         return null;
     }
@@ -90,8 +90,8 @@ pub fn getElementById(self: *ShadowRoot, id: []const u8, page: *Page) ?*Element 
                 // we ignore this error to keep getElementById easy to call
                 // if it really failed, then we're out of memory and nothing's
                 // going to work like it should anyways.
-                const owned_id = page.dupeString(id) catch return null;
-                self._elements_by_id.put(page.arena, owned_id, el) catch return null;
+                const owned_id = frame.dupeString(id) catch return null;
+                self._elements_by_id.put(frame.arena, owned_id, el) catch return null;
                 return el;
             }
         }
@@ -100,11 +100,11 @@ pub fn getElementById(self: *ShadowRoot, id: []const u8, page: *Page) ?*Element 
     return null;
 }
 
-pub fn getAdoptedStyleSheets(self: *ShadowRoot, page: *Page) !js.Object.Global {
+pub fn getAdoptedStyleSheets(self: *ShadowRoot, frame: *Frame) !js.Object.Global {
     if (self._adopted_style_sheets) |ass| {
         return ass;
     }
-    const js_arr = page.js.local.?.newArray(0);
+    const js_arr = frame.js.local.?.newArray(0);
     const js_obj = js_arr.toObject();
     self._adopted_style_sheets = try js_obj.persist();
     return self._adopted_style_sheets.?;
@@ -126,15 +126,15 @@ pub const JsApi = struct {
     pub const mode = bridge.accessor(ShadowRoot.getMode, null, .{});
     pub const host = bridge.accessor(ShadowRoot.getHost, null, .{});
     pub const getElementById = bridge.function(_getElementById, .{});
-    fn _getElementById(self: *ShadowRoot, value_: ?js.Value, page: *Page) !?*Element {
+    fn _getElementById(self: *ShadowRoot, value_: ?js.Value, frame: *Frame) !?*Element {
         const value = value_ orelse return null;
         if (value.isNull()) {
-            return self.getElementById("null", page);
+            return self.getElementById("null", frame);
         }
         if (value.isUndefined()) {
-            return self.getElementById("undefined", page);
+            return self.getElementById("undefined", frame);
         }
-        return self.getElementById(try value.toZig([]const u8), page);
+        return self.getElementById(try value.toZig([]const u8), frame);
     }
     pub const adoptedStyleSheets = bridge.accessor(ShadowRoot.getAdoptedStyleSheets, ShadowRoot.setAdoptedStyleSheets, .{});
 };

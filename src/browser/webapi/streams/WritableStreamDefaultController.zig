@@ -17,15 +17,16 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
 const WritableStream = @import("WritableStream.zig");
+
+const Execution = js.Execution;
 
 const WritableStreamDefaultController = @This();
 
 _stream: *WritableStream,
 
-pub fn init(stream: *WritableStream, page: *Page) !*WritableStreamDefaultController {
-    return page._factory.create(WritableStreamDefaultController{
+pub fn init(stream: *WritableStream, exec: *const Execution) !*WritableStreamDefaultController {
+    return exec._factory.create(WritableStreamDefaultController{
         ._stream = stream,
     });
 }

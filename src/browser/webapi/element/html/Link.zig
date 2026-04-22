@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const URL = @import("../../URL.zig");
 const Node = @import("../../Node.zig");
@@ -38,21 +38,21 @@ pub fn asNode(self: *Link) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getHref(self: *Link, page: *Page) ![]const u8 {
+pub fn getHref(self: *Link, frame: *Frame) ![]const u8 {
     const element = self.asElement();
     const href = element.getAttributeSafe(comptime .wrap("href")) orelse return "";
     if (href.len == 0) {
         return "";
     }
-    return element.asNode().resolveURL(href, page, .{});
+    return element.asNode().resolveURL(href, frame, .{});
 }
 
-pub fn setHref(self: *Link, value: []const u8, page: *Page) !void {
+pub fn setHref(self: *Link, value: []const u8, frame: *Frame) !void {
     const element = self.asElement();
-    try element.setAttributeSafe(comptime .wrap("href"), .wrap(value), page);
+    try element.setAttributeSafe(comptime .wrap("href"), .wrap(value), frame);
 
     if (element.asNode().isConnected()) {
-        try self.linkAddedCallback(page);
+        try self.linkAddedCallback(frame);
     }
 }
 
@@ -60,33 +60,33 @@ pub fn getRel(self: *Link) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("rel")) orelse return "";
 }
 
-pub fn setRel(self: *Link, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("rel"), .wrap(value), page);
+pub fn setRel(self: *Link, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("rel"), .wrap(value), frame);
 }
 
 pub fn getAs(self: *const Link) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("as")) orelse "";
 }
 
-pub fn setAs(self: *Link, value: []const u8, page: *Page) !void {
-    return self.asElement().setAttributeSafe(comptime .wrap("as"), .wrap(value), page);
+pub fn setAs(self: *Link, value: []const u8, frame: *Frame) !void {
+    return self.asElement().setAttributeSafe(comptime .wrap("as"), .wrap(value), frame);
 }
 
 pub fn getCrossOrigin(self: *const Link) ?[]const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("crossOrigin"));
 }
 
-pub fn setCrossOrigin(self: *Link, value: []const u8, page: *Page) !void {
+pub fn setCrossOrigin(self: *Link, value: []const u8, frame: *Frame) !void {
     var normalized: []const u8 = "anonymous";
     if (std.ascii.eqlIgnoreCase(value, "use-credentials")) {
         normalized = "use-credentials";
     }
-    return self.asElement().setAttributeSafe(comptime .wrap("crossOrigin"), .wrap(normalized), page);
+    return self.asElement().setAttributeSafe(comptime .wrap("crossOrigin"), .wrap(normalized), frame);
 }
 
-pub fn linkAddedCallback(self: *Link, page: *Page) !void {
-    // if we're planning on navigating to another page, don't trigger load event.
-    if (page.isGoingAway()) {
+pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
+    // if we're planning on navigating to another frame, don't trigger load event.
+    if (frame.isGoingAway()) {
         return;
     }
 
@@ -107,7 +107,7 @@ pub fn linkAddedCallback(self: *Link, page: *Page) !void {
         return;
     }
 
-    try page._to_load.append(page.arena, self._proto);
+    try frame._to_load.append(frame.arena, self._proto);
 }
 
 pub const JsApi = struct {
@@ -125,13 +125,13 @@ pub const JsApi = struct {
     pub const crossOrigin = bridge.accessor(Link.getCrossOrigin, Link.setCrossOrigin, .{});
     pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
 
-    fn _getRelList(self: *Link, page: *Page) !?*@import("../../collections.zig").DOMTokenList {
+    fn _getRelList(self: *Link, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {
         const element = self.asElement();
         // relList is only valid for HTML <link> elements, not SVG or MathML
         if (element._namespace != .html) {
             return null;
         }
-        return element.getRelList(page);
+        return element.getRelList(frame);
     }
 };
 

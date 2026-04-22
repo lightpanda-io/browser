@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const MessagePort = @import("MessagePort.zig");
 
 const MessageChannel = @This();
@@ -25,13 +25,13 @@ const MessageChannel = @This();
 _port1: *MessagePort,
 _port2: *MessagePort,
 
-pub fn init(page: *Page) !*MessageChannel {
-    const port1 = try MessagePort.init(page);
-    const port2 = try MessagePort.init(page);
+pub fn init(frame: *Frame) !*MessageChannel {
+    const port1 = try MessagePort.init(frame);
+    const port2 = try MessagePort.init(frame);
 
     MessagePort.entangle(port1, port2);
 
-    return page._factory.create(MessageChannel{
+    return frame._factory.create(MessageChannel{
         ._port1 = port1,
         ._port2 = port2,
     });

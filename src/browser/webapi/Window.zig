@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Console = @import("Console.zig");
 const History = @import("History.zig");
 const Navigation = @import("navigation/Navigation.zig");
@@ -57,7 +57,7 @@ pub fn registerTypes() []const type {
 const Window = @This();
 
 _proto: *EventTarget,
-_page: *Page,
+_frame: *Frame,
 _document: *Document,
 _css: CSS = .init,
 _crypto: Crypto = .init,
@@ -111,17 +111,17 @@ pub fn getWindow(self: *Window) *Window {
     return self;
 }
 
-pub fn getTop(self: *Window, page: *Page) Access {
-    var p = self._page;
+pub fn getTop(self: *Window, frame: *Frame) Access {
+    var p = self._frame;
     while (p.parent) |parent| {
         p = parent;
     }
-    return Access.init(page.window, p.window);
+    return Access.init(frame.window, p.window);
 }
 
-pub fn getParent(self: *Window, page: *Page) Access {
-    if (self._page.parent) |p| {
-        return Access.init(page.window, p.window);
+pub fn getParent(self: *Window, frame: *Frame) Access {
+    if (self._frame.parent) |p| {
+        return Access.init(frame.window, p.window);
     }
     return .{ .window = self };
 }
@@ -167,7 +167,7 @@ pub fn getSessionStorage(self: *Window) *storage.Lookup {
 }
 
 pub fn getOrigin(self: *const Window) []const u8 {
-    return self._page.origin orelse "null";
+    return self._frame.origin orelse "null";
 }
 
 pub fn getLocation(self: *const Window) *Location {
@@ -178,16 +178,16 @@ pub fn getSelection(self: *const Window) *Selection {
     return &self._document._selection;
 }
 
-pub fn setLocation(self: *Window, url: [:0]const u8, page: *Page) !void {
-    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._page });
+pub fn setLocation(self: *Window, url: [:0]const u8, frame: *Frame) !void {
+    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._frame });
 }
 
-pub fn getHistory(_: *Window, page: *Page) *History {
-    return &page._session.history;
+pub fn getHistory(_: *Window, frame: *Frame) *History {
+    return &frame._session.history;
 }
 
-pub fn getNavigation(_: *Window, page: *Page) *Navigation {
-    return &page._session.navigation;
+pub fn getNavigation(_: *Window, frame: *Frame) *Navigation {
+    return &frame._session.navigation;
 }
 
 pub fn getCustomElements(self: *Window) *CustomElementRegistry {
@@ -250,8 +250,8 @@ pub fn setOnUnhandledRejection(self: *Window, setter: ?FunctionSetter) void {
     self._on_unhandled_rejection = getFunctionFromSetter(setter);
 }
 
-pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, page: *Page) !js.Promise {
-    return Fetch.init(input, options, page);
+pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, frame: *Frame) !js.Promise {
+    return Fetch.init(input, options, frame);
 }
 
 const LegacyHandler = union(enum) {
@@ -259,24 +259,24 @@ const LegacyHandler = union(enum) {
     string: js.String,
 };
 
-pub fn setTimeout(self: *Window, handler: LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, page: *Page) !u32 {
-    const cb = try resolveTimerHandler(handler, page);
+pub fn setTimeout(self: *Window, handler: LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, frame: *Frame) !u32 {
+    const cb = try resolveTimerHandler(handler, frame);
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = false,
         .params = params,
         .low_priority = false,
         .name = "window.setTimeout",
-    }, page);
+    }, frame);
 }
 
-pub fn setInterval(self: *Window, handler: LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, page: *Page) !u32 {
-    const cb = try resolveTimerHandler(handler, page);
+pub fn setInterval(self: *Window, handler: LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, frame: *Frame) !u32 {
+    const cb = try resolveTimerHandler(handler, frame);
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = true,
         .params = params,
         .low_priority = false,
         .name = "window.setInterval",
-    }, page);
+    }, frame);
 }
 
 // https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#dom-settimeout
@@ -284,37 +284,37 @@ pub fn setInterval(self: *Window, handler: LegacyHandler, delay_ms: ?u32, params
 // TimerHandler = Function or DOMString. When a string is passed, it is
 // compiled into an anonymous function body, matching how legacy browsers
 // (and all current UAs) interpret `setTimeout("foo()", 100)`.
-fn resolveTimerHandler(handler: LegacyHandler, page: *Page) !js.Function.Temp {
+fn resolveTimerHandler(handler: LegacyHandler, frame: *Frame) !js.Function.Temp {
     switch (handler) {
         .function => |fun| return fun,
         .string => |str| {
-            const fun = try page.js.local.?.compileFunction(str, &.{}, &.{});
+            const fun = try frame.js.local.?.compileFunction(str, &.{}, &.{});
             return fun.temp();
         },
     }
 }
 
-pub fn setImmediate(self: *Window, cb: js.Function.Temp, params: []js.Value.Temp, page: *Page) !u32 {
+pub fn setImmediate(self: *Window, cb: js.Function.Temp, params: []js.Value.Temp, frame: *Frame) !u32 {
     return self.scheduleCallback(cb, 0, .{
         .repeat = false,
         .params = params,
         .low_priority = false,
         .name = "window.setImmediate",
-    }, page);
+    }, frame);
 }
 
-pub fn requestAnimationFrame(self: *Window, cb: js.Function.Temp, page: *Page) !u32 {
+pub fn requestAnimationFrame(self: *Window, cb: js.Function.Temp, frame: *Frame) !u32 {
     return self.scheduleCallback(cb, 5, .{
         .repeat = false,
         .params = &.{},
         .low_priority = false,
         .mode = .animation_frame,
         .name = "window.requestAnimationFrame",
-    }, page);
+    }, frame);
 }
 
-pub fn queueMicrotask(_: *Window, cb: js.Function, page: *Page) void {
-    page.js.queueMicrotaskFunc(cb);
+pub fn queueMicrotask(_: *Window, cb: js.Function, frame: *Frame) void {
+    frame.js.queueMicrotaskFunc(cb);
 }
 
 pub fn clearTimeout(self: *Window, id: u32) void {
@@ -340,7 +340,7 @@ pub fn cancelAnimationFrame(self: *Window, id: u32) void {
 const RequestIdleCallbackOpts = struct {
     timeout: ?u32 = null,
 };
-pub fn requestIdleCallback(self: *Window, cb: js.Function.Temp, opts_: ?RequestIdleCallbackOpts, page: *Page) !u32 {
+pub fn requestIdleCallback(self: *Window, cb: js.Function.Temp, opts_: ?RequestIdleCallbackOpts, frame: *Frame) !u32 {
     const opts = opts_ orelse RequestIdleCallbackOpts{};
     return self.scheduleCallback(cb, opts.timeout orelse 50, .{
         .mode = .idle,
@@ -348,7 +348,7 @@ pub fn requestIdleCallback(self: *Window, cb: js.Function.Temp, opts_: ?RequestI
         .params = &.{},
         .low_priority = true,
         .name = "window.requestIdleCallback",
-    }, page);
+    }, frame);
 }
 
 pub fn cancelIdleCallback(self: *Window, id: u32) void {
@@ -356,13 +356,13 @@ pub fn cancelIdleCallback(self: *Window, id: u32) void {
     sc.value.removed = true;
 }
 
-pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
+pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.temp(),
         .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
-    }, page._session);
+    }, frame._session);
 
     // Invoke window.onerror callback if set (per WHATWG spec, this is called
     // with 5 arguments: message, source, lineno, colno, error)
@@ -370,7 +370,7 @@ pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
     var prevent_default = false;
     if (self._on_error) |on_error| {
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         const local_func = ls.toLocal(on_error);
@@ -392,7 +392,7 @@ pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
     event._prevent_default = prevent_default;
     // Pass null as handler: onerror was already called above with 5 args.
     // We still dispatch so that addEventListener('error', ...) listeners fire.
-    try page._event_manager.dispatchDirect(self.asEventTarget(), event, null, .{
+    try frame._event_manager.dispatchDirect(self.asEventTarget(), event, null, .{
         .context = "window.reportError",
     });
 
@@ -408,59 +408,57 @@ pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
     }
 }
 
-pub fn matchMedia(_: *const Window, query: []const u8, page: *Page) !*MediaQueryList {
-    return page._factory.eventTarget(MediaQueryList{
+pub fn matchMedia(_: *const Window, query: []const u8, frame: *Frame) !*MediaQueryList {
+    return frame._factory.eventTarget(MediaQueryList{
         ._proto = undefined,
-        ._media = try page.dupeString(query),
+        ._media = try frame.dupeString(query),
     });
 }
 
-pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]const u8, page: *Page) !*CSSStyleProperties {
+pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]const u8, frame: *Frame) !*CSSStyleProperties {
     if (pseudo_element) |pe| {
         if (pe.len != 0) {
             log.warn(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pe });
         }
     }
-    return CSSStyleProperties.init(element, true, page);
+    return CSSStyleProperties.init(element, true, frame);
 }
 
-pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]const u8, page: *Page) !void {
+pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]const u8, frame: *Frame) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
     // In a full implementation, we would validate the origin
     _ = target_origin;
 
-    // self = the window that will get the message
-    // page = the context calling postMessage
-    const target_page = self._page;
-    const source_window = target_page.js.getIncumbent().window;
+    const target_frame = self._frame;
+    const source_window = target_frame.js.getIncumbent().window;
 
-    const arena = try target_page.getArena(.medium, "Window.postMessage");
-    errdefer target_page.releaseArena(arena);
+    const arena = try target_frame.getArena(.medium, "Window.postMessage");
+    errdefer target_frame.releaseArena(arena);
 
     // Origin should be the source window's origin (where the message came from)
-    const origin = try source_window._location.getOrigin(&page.js.execution);
+    const origin = try source_window._location.getOrigin(&frame.js.execution);
     const callback = try arena.create(PostMessageCallback);
     callback.* = .{
         .arena = arena,
         .message = message,
-        .page = target_page,
+        .frame = target_frame,
         .source = source_window,
         .origin = try arena.dupe(u8, origin),
     };
 
-    try target_page.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
+    try target_frame.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "postMessage",
         .low_priority = false,
         .finalizer = PostMessageCallback.cancelled,
     });
 }
 
-pub fn btoa(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
-    return @import("encoding/base64.zig").encode(page.call_arena, input);
+pub fn btoa(_: *const Window, input: []const u8, frame: *Frame) ![]const u8 {
+    return @import("encoding/base64.zig").encode(frame.call_arena, input);
 }
 
-pub fn atob(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
-    return @import("encoding/base64.zig").decode(page.call_arena, input);
+pub fn atob(_: *const Window, input: []const u8, frame: *Frame) ![]const u8 {
+    return @import("encoding/base64.zig").decode(frame.call_arena, input);
 }
 
 pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {
@@ -468,15 +466,15 @@ pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {
 }
 
 pub fn getFrame(self: *Window, idx: usize) !?*Window {
-    const page = self._page;
-    const frames = page.frames.items;
+    const frame = self._frame;
+    const frames = frame.child_frames.items;
     if (idx >= frames.len) {
         return null;
     }
 
-    if (page.frames_sorted == false) {
-        std.mem.sort(*Page, frames, {}, struct {
-            fn lessThan(_: void, a: *Page, b: *Page) bool {
+    if (frame.child_frames_sorted == false) {
+        std.mem.sort(*Frame, frames, {}, struct {
+            fn lessThan(_: void, a: *Frame, b: *Frame) bool {
                 const iframe_a = a.iframe orelse return false;
                 const iframe_b = b.iframe orelse return true;
 
@@ -485,13 +483,13 @@ pub fn getFrame(self: *Window, idx: usize) !?*Window {
                 return (pos & 0x04) != 0; // FOLLOWING bit: b follows a
             }
         }.lessThan);
-        page.frames_sorted = true;
+        frame.child_frames_sorted = true;
     }
     return frames[idx].window;
 }
 
 pub fn getFramesLength(self: *const Window) u32 {
-    return @intCast(self._page.frames.items.len);
+    return @intCast(self._frame.child_frames.items.len);
 }
 
 pub fn getScrollX(self: *const Window) u32 {
@@ -512,7 +510,7 @@ const ScrollToOpts = union(enum) {
         behavior: []const u8 = "",
     };
 };
-pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
+pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void {
     switch (opts) {
         .x => |x| {
             self._scroll_pos.x = @intCast(@max(x, 0));
@@ -528,11 +526,11 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
 
     // We dispatch scroll event asynchronously after 10ms. So we can throttle
     // them.
-    try page.js.scheduler.add(
-        page,
+    try frame.js.scheduler.add(
+        frame,
         struct {
-            fn dispatch(_page: *anyopaque) anyerror!?u32 {
-                const p: *Page = @ptrCast(@alignCast(_page));
+            fn dispatch(_frame: *anyopaque) anyerror!?u32 {
+                const p: *Frame = @ptrCast(@alignCast(_frame));
                 const pos = &p.window._scroll_pos;
                 // If the state isn't scroll, we can ignore safely to throttle
                 // the events.
@@ -552,11 +550,11 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
         .{ .low_priority = true },
     );
     // We dispatch scrollend event asynchronously after 20ms.
-    try page.js.scheduler.add(
-        page,
+    try frame.js.scheduler.add(
+        frame,
         struct {
-            fn dispatch(_page: *anyopaque) anyerror!?u32 {
-                const p: *Page = @ptrCast(@alignCast(_page));
+            fn dispatch(_frame: *anyopaque) anyerror!?u32 {
+                const p: *Frame = @ptrCast(@alignCast(_frame));
                 const pos = &p.window._scroll_pos;
                 // Dispatch only if the state is .end.
                 // If a scroll is pending, retry in 10ms.
@@ -580,7 +578,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
     );
 }
 
-pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
+pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void {
     // The scroll is relative to the current position. So compute to new
     // absolute position.
     var absx: i32 = undefined;
@@ -595,7 +593,7 @@ pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
             absy = @as(i32, @intCast(self._scroll_pos.y)) + o.top;
         },
     }
-    return self.scrollTo(.{ .x = absx }, absy, page);
+    return self.scrollTo(.{ .x = absx }, absy, frame);
 }
 
 // only exposed when the binary is built with the -Dwpt_extensions flag
@@ -603,7 +601,7 @@ pub fn getWebDriver(_: *const Window) @import("WebDriver.zig") {
     return .{};
 }
 
-pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.PromiseRejection, page: *Page) !void {
+pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.PromiseRejection, frame: *Frame) !void {
     if (comptime IS_DEBUG) {
         log.debug(.js, "unhandled rejection", .{
             .target = "window",
@@ -620,12 +618,12 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.
     };
 
     const target = self.asEventTarget();
-    if (page._event_manager.hasDirectListeners(target, event_name, attribute_callback)) {
+    if (frame._event_manager.hasDirectListeners(target, event_name, attribute_callback)) {
         const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
             .reason = if (rejection.reason()) |r| try r.temp() else null,
             .promise = try rejection.promise().temp(),
-        }, page._session)).asEvent();
-        try page._event_manager.dispatchDirect(target, event, attribute_callback, .{ .context = "window.unhandledrejection" });
+        }, frame._session)).asEvent();
+        try frame._event_manager.dispatchDirect(target, event, attribute_callback, .{ .context = "window.unhandledrejection" });
     }
 }
 
@@ -639,7 +637,7 @@ pub const Access = union(enum) {
             return .{ .window = accessing };
         }
 
-        if (callee._page.js.origin == accessing._page.js.origin) {
+        if (callee._frame.js.origin == accessing._frame.js.origin) {
             // two different windows, but same origin, return the full window
             return .{ .window = accessing };
         }
@@ -656,14 +654,14 @@ const ScheduleOpts = struct {
     animation_frame: bool = false,
     mode: ScheduleCallback.Mode = .normal,
 };
-fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: ScheduleOpts, page: *Page) !u32 {
+fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: ScheduleOpts, frame: *Frame) !u32 {
     if (self._timers.count() > 512) {
         // these are active
         return error.TooManyTimeout;
     }
 
-    const arena = try page.getArena(.tiny, "Window.schedule");
-    errdefer page.releaseArena(arena);
+    const arena = try frame.getArena(.tiny, "Window.schedule");
+    errdefer frame.releaseArena(arena);
 
     const timer_id = self._timer_id +% 1;
     self._timer_id = timer_id;
@@ -674,7 +672,7 @@ fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: Sc
         persisted_params = try arena.dupe(js.Value.Temp, params);
     }
 
-    const gop = try self._timers.getOrPut(page.arena, timer_id);
+    const gop = try self._timers.getOrPut(frame.arena, timer_id);
     if (gop.found_existing) {
         // 2^31 would have to wrap for this to happen.
         return error.TooManyTimeout;
@@ -684,7 +682,7 @@ fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: Sc
     const callback = try arena.create(ScheduleCallback);
     callback.* = .{
         .cb = cb,
-        .page = page,
+        .frame = frame,
         .arena = arena,
         .mode = opts.mode,
         .name = opts.name,
@@ -694,7 +692,7 @@ fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: Sc
     };
     gop.value_ptr.* = callback;
 
-    try page.js.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
+    try frame.js.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
         .name = opts.name,
         .low_priority = opts.low_priority,
         .finalizer = ScheduleCallback.cancelled,
@@ -716,7 +714,7 @@ const ScheduleCallback = struct {
     cb: js.Function.Temp,
 
     mode: Mode,
-    page: *Page,
+    frame: *Frame,
     arena: Allocator,
     removed: bool = false,
     params: []const js.Value.Temp,
@@ -737,13 +735,13 @@ const ScheduleCallback = struct {
         for (self.params) |param| {
             param.release();
         }
-        self.page.releaseArena(self.arena);
+        self.frame.releaseArena(self.arena);
     }
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *ScheduleCallback = @ptrCast(@alignCast(ctx));
-        const page = self.page;
-        const window = page.window;
+        const frame = self.frame;
+        const window = frame.window;
 
         if (self.removed) {
             self.deinit();
@@ -751,7 +749,7 @@ const ScheduleCallback = struct {
         }
 
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         switch (self.mode) {
@@ -783,14 +781,14 @@ const ScheduleCallback = struct {
 };
 
 const PostMessageCallback = struct {
-    page: *Page,
+    frame: *Frame,
     source: *Window,
     arena: Allocator,
     origin: []const u8,
     message: js.Value.Temp,
 
     fn deinit(self: *PostMessageCallback) void {
-        self.page.releaseArena(self.arena);
+        self.frame.releaseArena(self.arena);
     }
 
     fn cancelled(ctx: *anyopaque) void {
@@ -802,19 +800,19 @@ const PostMessageCallback = struct {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
 
-        const page = self.page;
-        const window = page.window;
+        const frame = self.frame;
+        const window = frame.window;
 
         const event_target = window.asEventTarget();
-        if (page._event_manager.hasDirectListeners(event_target, "message", window._on_message)) {
+        if (frame._event_manager.hasDirectListeners(event_target, "message", window._on_message)) {
             const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
                 .data = .{ .value = self.message },
                 .origin = self.origin,
                 .source = self.source,
                 .bubbles = false,
                 .cancelable = false,
-            }, page._session)).asEvent();
-            try page._event_manager.dispatchDirect(event_target, event, window._on_message, .{ .context = "window.postMessage" });
+            }, frame._session)).asEvent();
+            try frame._event_manager.dispatchDirect(event_target, event, window._on_message, .{ .context = "window.postMessage" });
         }
 
         return null;
@@ -921,18 +919,18 @@ pub const JsApi = struct {
     pub const opener = bridge.property(null, .{ .template = false });
 
     pub const alert = bridge.function(struct {
-        fn alert(_: *const Window, message: ?[]const u8, page: *Page) void {
-            page._session.notification.dispatch(.javascript_dialog_opening, &.{
-                .url = page.url,
+        fn alert(_: *const Window, message: ?[]const u8, frame: *Frame) void {
+            frame._session.notification.dispatch(.javascript_dialog_opening, &.{
+                .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "alert",
             });
         }
     }.alert, .{});
     pub const confirm = bridge.function(struct {
-        fn confirm(_: *const Window, message: ?[]const u8, page: *Page) bool {
-            page._session.notification.dispatch(.javascript_dialog_opening, &.{
-                .url = page.url,
+        fn confirm(_: *const Window, message: ?[]const u8, frame: *Frame) bool {
+            frame._session.notification.dispatch(.javascript_dialog_opening, &.{
+                .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "confirm",
             });
@@ -940,9 +938,9 @@ pub const JsApi = struct {
         }
     }.confirm, .{});
     pub const prompt = bridge.function(struct {
-        fn prompt(_: *const Window, message: ?[]const u8, _: ?[]const u8, page: *Page) ?[]const u8 {
-            page._session.notification.dispatch(.javascript_dialog_opening, &.{
-                .url = page.url,
+        fn prompt(_: *const Window, message: ?[]const u8, _: ?[]const u8, frame: *Frame) ?[]const u8 {
+            frame._session.notification.dispatch(.javascript_dialog_opening, &.{
+                .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "prompt",
             });
@@ -956,16 +954,16 @@ pub const JsApi = struct {
 const CrossOriginWindow = struct {
     window: *Window,
 
-    pub fn postMessage(self: *CrossOriginWindow, message: js.Value.Temp, target_origin: ?[]const u8, page: *Page) !void {
-        return self.window.postMessage(message, target_origin, page);
+    pub fn postMessage(self: *CrossOriginWindow, message: js.Value.Temp, target_origin: ?[]const u8, frame: *Frame) !void {
+        return self.window.postMessage(message, target_origin, frame);
     }
 
-    pub fn getTop(self: *CrossOriginWindow, page: *Page) Access {
-        return self.window.getParent(page);
+    pub fn getTop(self: *CrossOriginWindow, frame: *Frame) Access {
+        return self.window.getParent(frame);
     }
 
-    pub fn getParent(self: *CrossOriginWindow, page: *Page) Access {
-        return self.window.getParent(page);
+    pub fn getParent(self: *CrossOriginWindow, frame: *Frame) Access {
+        return self.window.getParent(frame);
     }
 
     pub fn getFramesLength(self: *const CrossOriginWindow) u32 {

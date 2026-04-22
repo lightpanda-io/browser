@@ -302,7 +302,7 @@ pub const tool_defs = [_]ToolDef{
 };
 
 pub const ToolError = error{
-    PageNotLoaded,
+    FrameNotLoaded,
     InvalidParams,
     NodeNotFound,
     NavigationFailed,
@@ -327,7 +327,7 @@ pub const UrlParams = struct {
     waitUntil: ?lp.Config.WaitUntil = null,
 };
 
-const NodeAndPage = struct { node: *DOMNode, page: *lp.Page };
+const NodeAndPage = struct { node: *DOMNode, page: *lp.Frame };
 
 pub const Action = enum {
     goto,
@@ -438,7 +438,7 @@ fn execTree(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Al
     const st = lp.SemanticTree{
         .dom_node = root_node,
         .registry = registry,
-        .page = page,
+        .frame = page,
         .arena = arena,
         .prune = true,
         .max_depth = args.maxDepth orelse std.math.maxInt(u32) - 1,
@@ -453,7 +453,7 @@ fn execNodeDetails(session: *lp.Session, registry: *CDPNode.Registry, arena: std
     const Params = struct { backendNodeId: CDPNode.Id };
     const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
 
-    const page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
 
     const node = registry.lookup_by_id.get(args.backendNodeId) orelse
         return ToolError.NodeNotFound;
@@ -558,7 +558,7 @@ fn execClick(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
         runner.wait(.{ .ms = 10000, .until = .done }) catch return ToolError.NavigationFailed;
     }
 
-    const page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
     const page_title = page.getTitle() catch null;
     if (args.selector) |sel| {
         return std.fmt.allocPrint(arena, "Clicked element (selector: {s}). Page url: {s}, title: {s}", .{
@@ -617,7 +617,7 @@ fn execScroll(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.
         y: ?i32 = null,
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
-    const page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
 
     var target_node: ?*DOMNode = null;
     if (args.backendNodeId) |node_id| {
@@ -646,7 +646,7 @@ fn execWaitForSelector(session: *lp.Session, registry: *CDPNode.Registry, arena:
     };
     const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
 
-    _ = session.currentPage() orelse return ToolError.PageNotLoaded;
+    _ = session.currentFrame() orelse return ToolError.FrameNotLoaded;
 
     const timeout_ms = args.timeout orelse 5000;
 
@@ -697,7 +697,7 @@ fn execPress(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
     };
     const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
 
-    const page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
 
     var target_node: ?*DOMNode = null;
     if (args.backendNodeId) |node_id| {
@@ -716,7 +716,7 @@ fn execPress(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
         runner.wait(.{ .ms = 10000, .until = .done }) catch return ToolError.NavigationFailed;
     }
 
-    const current_page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const current_page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
     const page_title = current_page.getTitle() catch null;
     return std.fmt.allocPrint(arena, "Pressed key '{s}'. Page url: {s}, title: {s}", .{
         args.key,
@@ -801,7 +801,7 @@ fn execFindElement(session: *lp.Session, registry: *CDPNode.Registry, arena: std
 
     if (args.role == null and args.name == null) return ToolError.InvalidParams;
 
-    const page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
 
     const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch
         return ToolError.InternalError;
@@ -841,7 +841,7 @@ fn execConsoleLogs(
     session: *lp.Session,
     arena: std.mem.Allocator,
 ) ToolError![]const u8 {
-    const page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
     const messages = page.drainConsoleMessages();
     if (messages.len == 0) return "No console messages.";
 
@@ -854,7 +854,7 @@ fn execConsoleLogs(
 }
 
 fn execGetUrl(session: *lp.Session) ToolError![]const u8 {
-    const page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
     return page.url;
 }
 
@@ -874,19 +874,19 @@ fn execGetCookies(session: *lp.Session, arena: std.mem.Allocator) ToolError![]co
     return aw.written();
 }
 
-fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!*lp.Page {
+fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!*lp.Frame {
     if (url) |u| {
         try performGoto(session, registry, u, timeout, waitUntil);
     }
-    return session.currentPage() orelse ToolError.PageNotLoaded;
+    return session.currentFrame() orelse ToolError.FrameNotLoaded;
 }
 
 fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!void {
-    if (session.page != null) {
+    if (session.frame != null) {
         registry.reset();
-        session.removePage();
+        session.removeFrame();
     }
-    const page = session.createPage() catch return ToolError.NavigationFailed;
+    const page = session.createFrame() catch return ToolError.NavigationFailed;
     _ = page.navigate(url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
@@ -900,13 +900,13 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
 }
 
 fn resolveNodeAndPage(session: *lp.Session, registry: *CDPNode.Registry, node_id: CDPNode.Id) ToolError!NodeAndPage {
-    const page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
     const node = registry.lookup_by_id.get(node_id) orelse return ToolError.NodeNotFound;
     return .{ .node = node.dom, .page = page };
 }
 
 fn resolveBySelector(session: *lp.Session, selector: []const u8) ToolError!NodeAndPage {
-    const page = session.currentPage() orelse return ToolError.PageNotLoaded;
+    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
     const element = Selector.querySelector(page.document.asNode(), selector, page) catch return ToolError.InvalidParams;
     const node = (element orelse return ToolError.NodeNotFound).asNode();
     return .{ .node = node, .page = page };

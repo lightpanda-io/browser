@@ -19,7 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const Page = @import("../browser/Page.zig");
+const Frame = @import("../browser/Frame.zig");
 const DOMNode = @import("../browser/webapi/Node.zig");
 const Label = @import("../browser/webapi/element/html/Label.zig");
 
@@ -41,7 +41,7 @@ const scratch_retain_limit = 64 * 1024;
 pub const Writer = struct {
     root: *const Node,
     registry: *Node.Registry,
-    page: *Page,
+    frame: *Frame,
     visibility_cache: *DOMNode.Element.VisibilityCache,
     label_index: *Label.LabelByForIndex,
     temp_arena: std.mem.Allocator,
@@ -97,7 +97,7 @@ pub const Writer = struct {
                     // visibility:hidden, aria-hidden, hidden, inert). Matches
                     // Chromium: these elements aren't exposed to the AX tree.
                     const child_el = dom_node.as(DOMNode.Element);
-                    if (child_in_aria_hidden or isHidden(child_el, self.page, self.visibility_cache)) {
+                    if (child_in_aria_hidden or isHidden(child_el, self.frame, self.visibility_cache)) {
                         continue;
                     }
                 },
@@ -290,11 +290,12 @@ pub const Writer = struct {
     };
 
     fn writeAXProperties(self: *const Writer, axnode: AXNode, w: anytype) !void {
+        const frame = self.frame;
         const dom_node = axnode.dom;
-        const page = self.page;
+
         switch (dom_node._type) {
             .document => |document| {
-                const uri = document.getURL(page);
+                const uri = document.getURL(frame);
                 try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
                 try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
                 try self.writeAXProperty(.{ .name = .focused, .value = .{ .booleanOrUndefined = true } }, w);
@@ -310,13 +311,13 @@ pub const Writer = struct {
                 .h6 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 6 } }, w),
                 .img => {
                     const img = el.as(DOMNode.Element.Html.Image);
-                    const uri = try img.getSrc(self.page);
+                    const uri = try img.getSrc(self.frame);
                     if (uri.len == 0) return;
                     try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
                 },
                 .anchor => {
                     const a = el.as(DOMNode.Element.Html.Anchor);
-                    const uri = try a.getHref(self.page);
+                    const uri = try a.getHref(self.frame);
                     if (uri.len == 0) return;
                     try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
                     try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
@@ -479,7 +480,7 @@ pub const Writer = struct {
         try w.objectField("role");
         try self.writeAXValue(.{ .role = try axn.getRole() }, w);
 
-        const ignore = axn.isIgnore(self.page, self.visibility_cache, in_aria_hidden);
+        const ignore = axn.isIgnore(self.frame, self.visibility_cache, in_aria_hidden);
         try w.objectField("ignored");
         try w.write(ignore);
 
@@ -501,7 +502,7 @@ pub const Writer = struct {
             try w.objectField("type");
             try w.write(@tagName(.computedString));
             try w.objectField("value");
-            const source = try axn.writeName(self.temp_arena, w, self.page, self.label_index);
+            const source = try axn.writeName(self.temp_arena, w, self.frame, self.label_index);
             if (source) |s| {
                 try self.writeAXSource(s, w);
             }
@@ -549,7 +550,7 @@ pub const Writer = struct {
                 // Skip hidden element children so childIds matches the
                 // subtree-pruning done in writeNodeChildren.
                 if (child.is(DOMNode.Element)) |child_el| {
-                    if (child_in_aria_hidden or isHidden(child_el, self.page, self.visibility_cache)) {
+                    if (child_in_aria_hidden or isHidden(child_el, self.frame, self.visibility_cache)) {
                         continue;
                     }
                 }
@@ -589,7 +590,7 @@ pub const Writer = struct {
             },
             .select => blk: {
                 const select = el.as(DOMNode.Element.Html.Select);
-                const val = select.getValue(self.page);
+                const val = select.getValue(self.frame);
                 if (val.len == 0) break :blk null;
                 break :blk val;
             },
@@ -790,7 +791,7 @@ const AXSource = enum(u8) {
     value, // input value
 };
 
-pub fn getName(self: AXNode, page: *Page, allocator: std.mem.Allocator) !?[]const u8 {
+pub fn getName(self: AXNode, frame: *Frame, allocator: std.mem.Allocator) !?[]const u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     defer aw.deinit();
 
@@ -817,7 +818,7 @@ pub fn getName(self: AXNode, page: *Page, allocator: std.mem.Allocator) !?[]cons
 
     const w: TextCaptureWriter = .{ .aw = &aw, .writer = &aw.writer };
 
-    const source = try self.writeName(null, w, page, null);
+    const source = try self.writeName(null, w, frame, null);
     if (source != null) {
         // Remove literal quotes inserted by writeString.
         var raw_text = std.mem.trim(u8, aw.written(), "\"");
@@ -832,17 +833,17 @@ fn writeName(
     axnode: AXNode,
     temp_arena: ?std.mem.Allocator,
     w: anytype,
-    page: *Page,
+    frame: *Frame,
     label_index: ?*Label.LabelByForIndex,
 ) !?AXSource {
-    defer if (temp_arena) |a| page._session.arena_pool.reset(a, scratch_retain_limit);
+    defer if (temp_arena) |a| frame._session.arena_pool.reset(a, scratch_retain_limit);
 
     const node = axnode.dom;
 
     return switch (node._type) {
         .document => |doc| switch (doc._type) {
             .html => |doc_html| {
-                try w.write(try doc_html.getTitle(page));
+                try w.write(try doc_html.getTitle(frame));
                 return .title;
             },
             else => null,
@@ -858,18 +859,18 @@ fn writeName(
             // Handle aria-labelledby attribute (highest priority)
             if (el.getAttributeSafe(.wrap("aria-labelledby"))) |labelledby| {
                 // Get the document to look up elements by ID
-                const doc = node.ownerDocument(page) orelse return null;
+                const doc = node.ownerDocument(frame) orelse return null;
 
                 // Parse space-separated list of IDs and concatenate their text content
                 var it = std.mem.splitScalar(u8, labelledby, ' ');
                 var has_content = false;
 
-                var buf = std.Io.Writer.Allocating.init(scratchAllocator(temp_arena, page));
+                var buf = std.Io.Writer.Allocating.init(scratchAllocator(temp_arena, frame));
                 while (it.next()) |id| {
                     const trimmed_id = std.mem.trim(u8, id, &std.ascii.whitespace);
                     if (trimmed_id.len == 0) continue;
 
-                    if (doc.getElementById(trimmed_id, page)) |referenced_el| {
+                    if (doc.getElementById(trimmed_id, frame)) |referenced_el| {
                         // Get the text content of the referenced element
                         try referenced_el.getInnerText(&buf.writer);
                         try buf.writer.writeByte(' ');
@@ -889,7 +890,7 @@ fn writeName(
             }
 
             if (isLabellableTag(el.getTag())) {
-                if (try writeLabelName(temp_arena, node, el, page, label_index, w)) |source| {
+                if (try writeLabelName(temp_arena, node, el, frame, label_index, w)) |source| {
                     return source;
                 }
             }
@@ -932,8 +933,8 @@ fn writeName(
                 => {},
                 else => {
                     // write text content if exists.
-                    var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, page));
-                    try writeAccessibleNameFallback(node, &buf.writer, page);
+                    var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, frame));
+                    try writeAccessibleNameFallback(node, &buf.writer, frame);
                     if (buf.written().len > 0) {
                         try writeString(buf.written(), w);
                         return .contents;
@@ -961,7 +962,7 @@ fn writeName(
     };
 }
 
-fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, page: *Page) !void {
+fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, frame: *Frame) !void {
     var it = node.childrenIterator();
     while (it.next()) |child| {
         switch (child._type) {
@@ -987,14 +988,14 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, page: *Pa
                     while (sit.next()) |s_child| {
                         if (s_child.is(DOMNode.Element)) |s_el| {
                             if (std.mem.eql(u8, s_el.getTagNameLower(), "title")) {
-                                try writeAccessibleNameFallback(s_child, writer, page);
+                                try writeAccessibleNameFallback(s_child, writer, frame);
                                 try writer.writeByte(' ');
                             }
                         }
                     }
                 } else {
                     if (!el.getTag().isMetadata()) {
-                        try writeAccessibleNameFallback(child, writer, page);
+                        try writeAccessibleNameFallback(child, writer, frame);
                     }
                 }
             },
@@ -1021,26 +1022,26 @@ fn writeLabelName(
     temp_arena: ?std.mem.Allocator,
     node: *DOMNode,
     el: *DOMNode.Element,
-    page: *Page,
+    frame: *Frame,
     label_index: ?*Label.LabelByForIndex,
     w: anytype,
 ) !?AXSource {
     if (el.getAttributeSafe(comptime .wrap("id"))) |id_value| {
         if (id_value.len > 0) {
-            if (node.ownerDocument(page)) |doc| {
+            if (node.ownerDocument(frame)) |doc| {
                 const match: ?*DOMNode.Element = if (label_index) |idx|
-                    try idx.lookup(doc.asNode(), id_value, page.call_arena)
+                    try idx.lookup(doc.asNode(), id_value, frame.call_arena)
                 else
                     Label.findLabelByFor(doc.asNode(), id_value);
                 if (match) |label_el| {
-                    if (try writeLabelInnerText(temp_arena, label_el, page, w)) return .label_element;
+                    if (try writeLabelInnerText(temp_arena, label_el, frame, w)) return .label_element;
                 }
             }
         }
     }
 
     if (Label.findWrappingLabel(el)) |wrap_label| {
-        if (try writeLabelInnerText(temp_arena, wrap_label, page, w)) return .label_wrap;
+        if (try writeLabelInnerText(temp_arena, wrap_label, frame, w)) return .label_wrap;
     }
 
     return null;
@@ -1049,10 +1050,10 @@ fn writeLabelName(
 fn writeLabelInnerText(
     temp_arena: ?std.mem.Allocator,
     label_el: *DOMNode.Element,
-    page: *Page,
+    frame: *Frame,
     w: anytype,
 ) !bool {
-    var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, page));
+    var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, frame));
     try label_el.getInnerText(&buf.writer);
     const text = std.mem.trim(u8, buf.written(), &std.ascii.whitespace);
     if (text.len == 0) return false;
@@ -1062,12 +1063,12 @@ fn writeLabelInnerText(
 
 /// Allocator for throwaway name-resolution buffers: prefers the writer's
 /// temp arena so multiple calls reuse its retained page; falls back to
-/// `page.call_arena` on the non-Writer `getName` path.
-fn scratchAllocator(temp_arena: ?std.mem.Allocator, page: *Page) std.mem.Allocator {
-    return temp_arena orelse page.call_arena;
+/// `frame.call_arena` on the non-Writer `getName` path.
+fn scratchAllocator(temp_arena: ?std.mem.Allocator, frame: *Frame) std.mem.Allocator {
+    return temp_arena orelse frame.call_arena;
 }
 
-fn isHidden(elt: *DOMNode.Element, page: *Page, cache: *DOMNode.Element.VisibilityCache) bool {
+fn isHidden(elt: *DOMNode.Element, frame: *Frame, cache: *DOMNode.Element.VisibilityCache) bool {
     if (elt.getAttributeSafe(comptime .wrap("aria-hidden"))) |value| {
         if (std.mem.eql(u8, value, "true")) {
             return true;
@@ -1084,7 +1085,7 @@ fn isHidden(elt: *DOMNode.Element, page: *Page, cache: *DOMNode.Element.Visibili
 
     // CSS display:none and visibility:hidden (both inherited from ancestors via
     // style computation). Matches Chromium's AX tree which prunes both.
-    if (page._style_manager.isHidden(elt, cache, .{ .check_visibility = true })) {
+    if (frame._style_manager.isHidden(elt, cache, .{ .check_visibility = true })) {
         return true;
     }
 
@@ -1133,7 +1134,7 @@ fn ignoreChildren(self: AXNode) bool {
     };
 }
 
-fn isIgnore(self: AXNode, page: *Page, cache: *DOMNode.Element.VisibilityCache, in_aria_hidden: bool) bool {
+fn isIgnore(self: AXNode, frame: *Frame, cache: *DOMNode.Element.VisibilityCache, in_aria_hidden: bool) bool {
     const node = self.dom;
     const role_attr = self.role_attr;
 
@@ -1179,7 +1180,7 @@ fn isIgnore(self: AXNode, page: *Page, cache: *DOMNode.Element.VisibilityCache, 
         return true;
     }
 
-    if (isHidden(elt, page, cache)) {
+    if (isHidden(elt, frame, cache)) {
         return true;
     }
 
@@ -1194,7 +1195,7 @@ fn isIgnore(self: AXNode, page: *Page, cache: *DOMNode.Element.VisibilityCache, 
             var it = node.childrenIterator();
             while (it.next()) |child| {
                 const axn = AXNode.fromNode(child);
-                if (!axn.isIgnore(page, cache, in_aria_hidden)) {
+                if (!axn.isIgnore(frame, cache, in_aria_hidden)) {
                     return false;
                 }
             }
@@ -1305,19 +1306,19 @@ test "AXNode: writer" {
     var registry = Node.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var page = try testing.pageTest("cdp/dom3.html", .{});
-    defer page._session.removePage();
-    var doc = page.window._document;
+    var frame = try testing.pageTest("cdp/dom3.html", .{});
+    defer frame._session.removeFrame();
+    var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
     var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
-    const temp_arena = try page.getArena(.medium, "AXNode");
-    defer page.releaseArena(temp_arena);
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer frame.releaseArena(temp_arena);
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
         .root = node,
         .registry = &registry,
-        .page = page,
+        .frame = frame,
         .visibility_cache = &visibility_cache,
         .label_index = &label_index,
         .temp_arena = temp_arena,
@@ -1379,19 +1380,19 @@ test "AXNode: writer prunes hidden and resolves labels" {
     var registry = Node.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var page = try testing.pageTest("cdp/ax_tree.html", .{});
-    defer page._session.removePage();
-    var doc = page.window._document;
+    var frame = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer frame._session.removeFrame();
+    var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
     var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
-    const temp_arena = try page.getArena(.medium, "AXNode");
-    defer page.releaseArena(temp_arena);
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer frame.releaseArena(temp_arena);
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
         .root = node,
         .registry = &registry,
-        .page = page,
+        .frame = frame,
         .visibility_cache = &visibility_cache,
         .label_index = &label_index,
         .temp_arena = temp_arena,

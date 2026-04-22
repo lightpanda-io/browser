@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -96,14 +96,14 @@ pub fn as(self: *Media, comptime T: type) *T {
     return self.is(T).?;
 }
 
-pub fn canPlayType(_: *const Media, mime_type: []const u8, page: *Page) []const u8 {
+pub fn canPlayType(_: *const Media, mime_type: []const u8, frame: *Frame) []const u8 {
     const pos = std.mem.indexOfScalar(u8, mime_type, ';') orelse mime_type.len;
     const base_type = std.mem.trim(u8, mime_type[0..pos], &std.ascii.whitespace);
 
-    if (base_type.len > page.buf.len) {
+    if (base_type.len > frame.buf.len) {
         return "";
     }
-    const lower = std.ascii.lowerString(&page.buf, base_type);
+    const lower = std.ascii.lowerString(&frame.buf, base_type);
 
     if (isProbablySupported(lower)) {
         return "probably";
@@ -137,37 +137,37 @@ fn isMaybeSupported(mime_type: []const u8) bool {
     return false;
 }
 
-pub fn play(self: *Media, page: *Page) !js.Promise {
+pub fn play(self: *Media, frame: *Frame) !js.Promise {
     const was_paused = self._paused;
     self._paused = false;
     self._ready_state = .HAVE_ENOUGH_DATA;
     self._network_state = .NETWORK_IDLE;
     if (was_paused) {
-        try self.dispatchEvent("play", page);
-        try self.dispatchEvent("playing", page);
+        try self.dispatchEvent("play", frame);
+        try self.dispatchEvent("playing", frame);
     }
-    return page.js.local.?.resolvePromise(js.Undefined{});
+    return frame.js.local.?.resolvePromise(js.Undefined{});
 }
 
-pub fn pause(self: *Media, page: *Page) !void {
+pub fn pause(self: *Media, frame: *Frame) !void {
     if (!self._paused) {
         self._paused = true;
-        try self.dispatchEvent("pause", page);
+        try self.dispatchEvent("pause", frame);
     }
 }
 
-pub fn load(self: *Media, page: *Page) !void {
+pub fn load(self: *Media, frame: *Frame) !void {
     self._paused = true;
     self._current_time = 0;
     self._ready_state = .HAVE_NOTHING;
     self._network_state = .NETWORK_LOADING;
     self._error = null;
-    try self.dispatchEvent("emptied", page);
+    try self.dispatchEvent("emptied", frame);
 }
 
-fn dispatchEvent(self: *Media, name: []const u8, page: *Page) !void {
-    const event = try Event.init(name, .{ .bubbles = false, .cancelable = false }, page);
-    try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
+fn dispatchEvent(self: *Media, name: []const u8, frame: *Frame) !void {
+    const event = try Event.init(name, .{ .bubbles = false, .cancelable = false }, frame);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
 pub fn getPaused(self: *const Media) bool {
@@ -230,28 +230,28 @@ pub fn setCurrentTime(self: *Media, value: f64) void {
     self._current_time = value;
 }
 
-pub fn getSrc(self: *const Media, page: *Page) ![]const u8 {
+pub fn getSrc(self: *const Media, frame: *Frame) ![]const u8 {
     const element = self.asConstElement();
     const src = element.getAttributeSafe(comptime .wrap("src")) orelse return "";
     if (src.len == 0) {
         return "";
     }
-    return element.asConstNode().resolveURL(src, page, .{});
+    return element.asConstNode().resolveURL(src, frame, .{});
 }
 
-pub fn setSrc(self: *Media, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), page);
+pub fn setSrc(self: *Media, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), frame);
 }
 
 pub fn getAutoplay(self: *const Media) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("autoplay")) != null;
 }
 
-pub fn setAutoplay(self: *Media, value: bool, page: *Page) !void {
+pub fn setAutoplay(self: *Media, value: bool, frame: *Frame) !void {
     if (value) {
-        try self.asElement().setAttributeSafe(comptime .wrap("autoplay"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("autoplay"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("autoplay"), page);
+        try self.asElement().removeAttribute(comptime .wrap("autoplay"), frame);
     }
 }
 
@@ -259,11 +259,11 @@ pub fn getControls(self: *const Media) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("controls")) != null;
 }
 
-pub fn setControls(self: *Media, value: bool, page: *Page) !void {
+pub fn setControls(self: *Media, value: bool, frame: *Frame) !void {
     if (value) {
-        try self.asElement().setAttributeSafe(comptime .wrap("controls"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("controls"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("controls"), page);
+        try self.asElement().removeAttribute(comptime .wrap("controls"), frame);
     }
 }
 
@@ -271,11 +271,11 @@ pub fn getLoop(self: *const Media) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("loop")) != null;
 }
 
-pub fn setLoop(self: *Media, value: bool, page: *Page) !void {
+pub fn setLoop(self: *Media, value: bool, frame: *Frame) !void {
     if (value) {
-        try self.asElement().setAttributeSafe(comptime .wrap("loop"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("loop"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("loop"), page);
+        try self.asElement().removeAttribute(comptime .wrap("loop"), frame);
     }
 }
 
@@ -283,8 +283,8 @@ pub fn getPreload(self: *const Media) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("preload")) orelse "auto";
 }
 
-pub fn setPreload(self: *Media, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("preload"), .wrap(value), page);
+pub fn setPreload(self: *Media, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("preload"), .wrap(value), frame);
 }
 
 pub const JsApi = struct {

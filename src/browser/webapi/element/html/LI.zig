@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -38,9 +38,9 @@ pub fn getValue(self: *LI) i32 {
     return std.fmt.parseInt(i32, attr, 10) catch 0;
 }
 
-pub fn setValue(self: *LI, value: i32, page: *Page) !void {
-    const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(str), page);
+pub fn setValue(self: *LI, value: i32, frame: *Frame) !void {
+    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
+    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(str), frame);
 }
 
 pub const JsApi = struct {

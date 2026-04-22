@@ -20,16 +20,16 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 
 const Element = @import("../Element.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const CSSStyleDeclaration = @import("CSSStyleDeclaration.zig");
 
 const CSSStyleProperties = @This();
 
 _proto: *CSSStyleDeclaration,
 
-pub fn init(element: ?*Element, is_computed: bool, page: *Page) !*CSSStyleProperties {
-    return page._factory.create(CSSStyleProperties{
-        ._proto = try CSSStyleDeclaration.init(element, is_computed, page),
+pub fn init(element: ?*Element, is_computed: bool, frame: *Frame) !*CSSStyleProperties {
+    return frame._factory.create(CSSStyleProperties{
+        ._proto = try CSSStyleDeclaration.init(element, is_computed, frame),
     });
 }
 
@@ -37,20 +37,20 @@ pub fn asCSSStyleDeclaration(self: *CSSStyleProperties) *CSSStyleDeclaration {
     return self._proto;
 }
 
-pub fn setNamed(self: *CSSStyleProperties, name: []const u8, value: []const u8, page: *Page) !void {
+pub fn setNamed(self: *CSSStyleProperties, name: []const u8, value: []const u8, frame: *Frame) !void {
     if (method_names.has(name)) {
         return error.NotHandled;
     }
-    const dash_case = camelCaseToDashCase(name, &page.buf);
-    try self._proto.setProperty(dash_case, value, null, page);
+    const dash_case = camelCaseToDashCase(name, &frame.buf);
+    try self._proto.setProperty(dash_case, value, null, frame);
 }
 
-pub fn getNamed(self: *CSSStyleProperties, name: []const u8, page: *Page) ![]const u8 {
+pub fn getNamed(self: *CSSStyleProperties, name: []const u8, frame: *Frame) ![]const u8 {
     if (method_names.has(name)) {
         return error.NotHandled;
     }
 
-    const dash_case = camelCaseToDashCase(name, &page.buf);
+    const dash_case = camelCaseToDashCase(name, &frame.buf);
 
     // Only apply vendor prefix filtering for camelCase access (no dashes in input)
     // Bracket notation with dash-case (e.g., div.style['-moz-user-select']) should return the actual value
@@ -67,7 +67,7 @@ pub fn getNamed(self: *CSSStyleProperties, name: []const u8, page: *Page) ![]con
         }
     }
 
-    const value = self._proto.getPropertyValue(dash_case, page);
+    const value = self._proto.getPropertyValue(dash_case, frame);
 
     // Property accessors have special handling for empty values:
     // - Known CSS properties return '' when not set

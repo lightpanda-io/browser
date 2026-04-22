@@ -39,7 +39,7 @@ const ResourceStreamingResult = struct {
     },
 
     const StreamingText = struct {
-        page: *lp.Page,
+        frame: *lp.Frame,
         format: Format,
 
         pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) !void {
@@ -47,11 +47,11 @@ const ResourceStreamingResult = struct {
             try jw.writer.writeByte('"');
             var escaped = protocol.JsonEscapingWriter.init(jw.writer);
             switch (self.format) {
-                .html => lp.dump.root(self.page.document, .{}, &escaped.writer, self.page) catch |err| {
+                .html => lp.dump.root(self.frame.document, .{}, &escaped.writer, self.frame) catch |err| {
                     log.err(.mcp, "html dump failed", .{ .err = err });
                     return error.WriteFailed;
                 },
-                .markdown => lp.markdown.dump(self.page.document.asNode(), .{}, &escaped.writer, self.page) catch |err| {
+                .markdown => lp.markdown.dump(self.frame.document.asNode(), .{}, &escaped.writer, self.frame) catch |err| {
                     log.err(.mcp, "markdown dump failed", .{ .err = err });
                     return error.WriteFailed;
                 },
@@ -86,8 +86,8 @@ pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         return server.sendError(req_id, .InvalidRequest, "Resource not found");
     };
 
-    const page = server.session.currentPage() orelse {
-        return server.sendError(req_id, .PageNotLoaded, "Page not loaded");
+    const frame = server.session.currentFrame() orelse {
+        return server.sendError(req_id, .FrameNotLoaded, "Page not loaded");
     };
 
     const format: Format = switch (uri) {
@@ -103,7 +103,7 @@ pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .contents = &.{.{
             .uri = params.uri,
             .mimeType = mime_type,
-            .text = .{ .page = page, .format = format },
+            .text = .{ .frame = frame, .format = format },
         }},
     };
     server.sendResult(req_id, result) catch {

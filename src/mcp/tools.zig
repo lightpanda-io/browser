@@ -55,7 +55,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 
     const result = browser_tools.call(server.session, &server.node_registry, arena, call_params.name, call_params.arguments) catch |err| {
         const code: protocol.ErrorCode = switch (err) {
-            error.PageNotLoaded => .PageNotLoaded,
+            error.FrameNotLoaded => .FrameNotLoaded,
             error.NodeNotFound, error.InvalidParams => .InvalidParams,
             error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
         };
@@ -106,11 +106,11 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
-    const page = &server.session.page.?;
+    const frame = &server.session.frame.?;
 
     {
         // Test Click
-        const btn = page.document.getElementById("btn", page).?.asNode();
+        const btn = frame.document.getElementById("btn", frame).?.asNode();
         const btn_id = (try server.node_registry.register(btn)).id;
         var btn_id_buf: [12]u8 = undefined;
         const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
@@ -123,7 +123,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test Fill Input
-        const inp = page.document.getElementById("inp", page).?.asNode();
+        const inp = frame.document.getElementById("inp", frame).?.asNode();
         const inp_id = (try server.node_registry.register(inp)).id;
         var inp_id_buf: [12]u8 = undefined;
         const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
@@ -136,7 +136,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test Fill Select
-        const sel = page.document.getElementById("sel", page).?.asNode();
+        const sel = frame.document.getElementById("sel", frame).?.asNode();
         const sel_id = (try server.node_registry.register(sel)).id;
         var sel_id_buf: [12]u8 = undefined;
         const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
@@ -149,7 +149,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test Scroll
-        const scrollbox = page.document.getElementById("scrollbox", page).?.asNode();
+        const scrollbox = frame.document.getElementById("scrollbox", frame).?.asNode();
         const scrollbox_id = (try server.node_registry.register(scrollbox)).id;
         var scroll_id_buf: [12]u8 = undefined;
         const scroll_id_str = std.fmt.bufPrint(&scroll_id_buf, "{d}", .{scrollbox_id}) catch unreachable;
@@ -161,7 +161,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test Hover
-        const el = page.document.getElementById("hoverTarget", page).?.asNode();
+        const el = frame.document.getElementById("hoverTarget", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -173,7 +173,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test Press
-        const el = page.document.getElementById("keyTarget", page).?.asNode();
+        const el = frame.document.getElementById("keyTarget", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -185,7 +185,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test SelectOption
-        const el = page.document.getElementById("sel2", page).?.asNode();
+        const el = frame.document.getElementById("sel2", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -197,7 +197,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test SetChecked (checkbox)
-        const el = page.document.getElementById("chk", page).?.asNode();
+        const el = frame.document.getElementById("chk", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -209,7 +209,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test SetChecked (radio)
-        const el = page.document.getElementById("rad", page).?.asNode();
+        const el = frame.document.getElementById("rad", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -221,7 +221,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     // Evaluate JS assertions for all actions
     var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
+    frame.js.localScope(&ls);
     defer ls.deinit();
 
     var try_catch: js.TryCatch = undefined;
@@ -424,8 +424,8 @@ fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {
     var server = try Server.init(testing.allocator, testing.test_app, writer);
     errdefer server.deinit();
 
-    const page = try server.session.createPage();
-    try page.navigate(url, .{});
+    const frame = try server.session.createFrame();
+    try frame.navigate(url, .{});
 
     var runner = try server.session.runner(.{});
     try runner.wait(.{ .ms = 2000 });

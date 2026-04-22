@@ -20,15 +20,15 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 
 const URL = @import("URL.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 
 const Location = @This();
 
 _url: *URL,
 
-pub fn init(raw_url: [:0]const u8, page: *Page) !*Location {
-    const url = try URL.init(raw_url, null, &page.js.execution);
-    return page._factory.create(Location{
+pub fn init(raw_url: [:0]const u8, frame: *Frame) !*Location {
+    const url = try URL.init(raw_url, null, &frame.js.execution);
+    return frame._factory.create(Location{
         ._url = url,
     });
 }
@@ -65,10 +65,10 @@ pub fn getHash(self: *const Location) []const u8 {
     return self._url.getHash();
 }
 
-pub fn setHash(_: *const Location, hash: []const u8, page: *Page) !void {
+pub fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
     const normalized_hash = blk: {
         if (hash.len == 0) {
-            const old_url = page.url;
+            const old_url = frame.url;
 
             break :blk if (std.mem.indexOfScalar(u8, old_url, '#')) |index|
                 old_url[0..index]
@@ -77,25 +77,25 @@ pub fn setHash(_: *const Location, hash: []const u8, page: *Page) !void {
         } else if (hash[0] == '#')
             break :blk hash
         else
-            break :blk try std.fmt.allocPrint(page.call_arena, "#{s}", .{hash});
+            break :blk try std.fmt.allocPrint(frame.call_arena, "#{s}", .{hash});
     };
 
-    return page.scheduleNavigation(normalized_hash, .{
+    return frame.scheduleNavigation(normalized_hash, .{
         .reason = .script,
         .kind = .{ .replace = null },
-    }, .{ .script = page });
+    }, .{ .script = frame });
 }
 
-pub fn assign(_: *const Location, url: [:0]const u8, page: *Page) !void {
-    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = page });
+pub fn assign(_: *const Location, url: [:0]const u8, frame: *Frame) !void {
+    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
 }
 
-pub fn replace(_: *const Location, url: [:0]const u8, page: *Page) !void {
-    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = page });
+pub fn replace(_: *const Location, url: [:0]const u8, frame: *Frame) !void {
+    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = frame });
 }
 
-pub fn reload(_: *const Location, page: *Page) !void {
-    return page.scheduleNavigation(page.url, .{ .reason = .script, .kind = .reload }, .{ .script = page });
+pub fn reload(_: *const Location, frame: *Frame) !void {
+    return frame.scheduleNavigation(frame.url, .{ .reason = .script, .kind = .reload }, .{ .script = frame });
 }
 
 pub fn toString(self: *const Location, exec: *const js.Execution) ![:0]const u8 {
@@ -113,8 +113,8 @@ pub const JsApi = struct {
 
     pub const toString = bridge.function(Location.toString, .{});
     pub const href = bridge.accessor(Location.toString, setHref, .{});
-    fn setHref(self: *const Location, url: [:0]const u8, page: *Page) !void {
-        return self.assign(url, page);
+    fn setHref(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
+        return self.assign(url, frame);
     }
 
     pub const search = bridge.accessor(Location.getSearch, null, .{});

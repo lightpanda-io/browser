@@ -18,7 +18,7 @@
 const std = @import("std");
 
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -45,17 +45,17 @@ pub fn asNode(self: *Script) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getSrc(self: *Script, page: *Page) ![]const u8 {
+pub fn getSrc(self: *Script, frame: *Frame) ![]const u8 {
     if (self._src.len == 0) return "";
-    return self.asNode().resolveURL(self._src, page, .{});
+    return self.asNode().resolveURL(self._src, frame, .{});
 }
 
-pub fn setSrc(self: *Script, src: []const u8, page: *Page) !void {
+pub fn setSrc(self: *Script, src: []const u8, frame: *Frame) !void {
     const element = self.asElement();
-    try element.setAttributeSafe(comptime .wrap("src"), .wrap(src), page);
+    try element.setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
     self._src = element.getAttributeSafe(comptime .wrap("src")) orelse unreachable;
     if (element.asNode().isConnected()) {
-        try page.scriptAddedCallback(false, self);
+        try frame.scriptAddedCallback(false, self);
     }
 }
 
@@ -63,36 +63,36 @@ pub fn getType(self: *const Script) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "";
 }
 
-pub fn setType(self: *Script, value: []const u8, page: *Page) !void {
-    return self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), page);
+pub fn setType(self: *Script, value: []const u8, frame: *Frame) !void {
+    return self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), frame);
 }
 
 pub fn getNonce(self: *const Script) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("nonce")) orelse "";
 }
 
-pub fn setNonce(self: *Script, value: []const u8, page: *Page) !void {
-    return self.asElement().setAttributeSafe(comptime .wrap("nonce"), .wrap(value), page);
+pub fn setNonce(self: *Script, value: []const u8, frame: *Frame) !void {
+    return self.asElement().setAttributeSafe(comptime .wrap("nonce"), .wrap(value), frame);
 }
 
 pub fn getCharset(self: *const Script) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("charset")) orelse "";
 }
 
-pub fn setCharset(self: *Script, value: []const u8, page: *Page) !void {
-    return self.asElement().setAttributeSafe(comptime .wrap("charset"), .wrap(value), page);
+pub fn setCharset(self: *Script, value: []const u8, frame: *Frame) !void {
+    return self.asElement().setAttributeSafe(comptime .wrap("charset"), .wrap(value), frame);
 }
 
 pub fn getAsync(self: *const Script) bool {
     return self._force_async or self.asConstElement().getAttributeSafe(comptime .wrap("async")) != null;
 }
 
-pub fn setAsync(self: *Script, value: bool, page: *Page) !void {
+pub fn setAsync(self: *Script, value: bool, frame: *Frame) !void {
     self._force_async = false;
     if (value) {
-        try self.asElement().setAttributeSafe(comptime .wrap("async"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("async"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("async"), page);
+        try self.asElement().removeAttribute(comptime .wrap("async"), frame);
     }
 }
 
@@ -100,11 +100,11 @@ pub fn getDefer(self: *const Script) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("defer")) != null;
 }
 
-pub fn setDefer(self: *Script, value: bool, page: *Page) !void {
+pub fn setDefer(self: *Script, value: bool, frame: *Frame) !void {
     if (value) {
-        try self.asElement().setAttributeSafe(comptime .wrap("defer"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("defer"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("defer"), page);
+        try self.asElement().removeAttribute(comptime .wrap("defer"), frame);
     }
 }
 
@@ -112,8 +112,8 @@ pub fn getNoModule(self: *const Script) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("nomodule")) != null;
 }
 
-pub fn setInnerText(self: *Script, text: []const u8, page: *Page) !void {
-    try self.asNode().setTextContent(text, page);
+pub fn setInnerText(self: *Script, text: []const u8, frame: *Frame) !void {
+    try self.asNode().setTextContent(text, frame);
 }
 
 pub const JsApi = struct {
@@ -133,21 +133,21 @@ pub const JsApi = struct {
     pub const charset = bridge.accessor(Script.getCharset, Script.setCharset, .{});
     pub const noModule = bridge.accessor(Script.getNoModule, null, .{});
     pub const innerText = bridge.accessor(_innerText, Script.setInnerText, .{});
-    fn _innerText(self: *Script, page: *const Page) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(page.call_arena);
+    fn _innerText(self: *Script, frame: *const Frame) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.asNode().getTextContent(&buf.writer);
         return buf.written();
     }
     pub const text = bridge.accessor(_text, Script.setInnerText, .{});
-    fn _text(self: *Script, page: *const Page) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(page.call_arena);
+    fn _text(self: *Script, frame: *const Frame) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.asNode().getChildTextContent(&buf.writer);
         return buf.written();
     }
 };
 
 pub const Build = struct {
-    pub fn complete(node: *Node, _: *Page) !void {
+    pub fn complete(node: *Node, _: *Frame) !void {
         const self = node.as(Script);
         const element = self.asElement();
         self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";

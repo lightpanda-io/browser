@@ -20,7 +20,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Session = @import("../Session.zig");
 
 const Node = @import("Node.zig");
@@ -69,9 +69,9 @@ pub const ObserverInit = struct {
     };
 };
 
-pub fn init(callback: js.Function.Temp, options: ?ObserverInit, page: *Page) !*IntersectionObserver {
-    const arena = try page.getArena(.small, "IntersectionObserver");
-    errdefer page.releaseArena(arena);
+pub fn init(callback: js.Function.Temp, options: ?ObserverInit, frame: *Frame) !*IntersectionObserver {
+    const arena = try frame.getArena(.small, "IntersectionObserver");
+    errdefer frame.releaseArena(arena);
 
     const opts = options orelse ObserverInit{};
     const root_margin = if (opts.rootMargin) |rm| try arena.dupe(u8, rm) else "0px";
@@ -128,7 +128,7 @@ pub fn acquireRef(self: *IntersectionObserver) void {
     self._rc.acquire();
 }
 
-pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void {
+pub fn observe(self: *IntersectionObserver, target: *Element, frame: *Frame) !void {
     // Check if already observing this target
     for (self._observing.items) |elem| {
         if (elem == target) {
@@ -138,20 +138,20 @@ pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void
 
     try self._observing.append(self._arena, target);
     if (self._observing.items.len == 1) {
-        try page.registerIntersectionObserver(self);
+        try frame.registerIntersectionObserver(self);
     }
 
     // Don't initialize previous state yet - let checkIntersection do it
     // This ensures we get an entry on first observation
 
     // Check intersection for this new target and schedule delivery
-    try self.checkIntersection(target, page);
+    try self.checkIntersection(target, frame);
     if (self._pending_entries.items.len > 0) {
-        try page.scheduleIntersectionDelivery();
+        try frame.scheduleIntersectionDelivery();
     }
 }
 
-pub fn unobserve(self: *IntersectionObserver, target: *Element, page: *Page) void {
+pub fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) void {
     const original_length = self._observing.items.len;
     for (self._observing.items, 0..) |elem, i| {
         if (elem == target) {
@@ -164,7 +164,7 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, page: *Page) voi
             while (j < self._pending_entries.items.len) {
                 if (self._pending_entries.items[j]._target == target) {
                     const entry = self._pending_entries.swapRemove(j);
-                    entry.deinit(page._session);
+                    entry.deinit(frame._session);
                 } else {
                     j += 1;
                 }
@@ -174,25 +174,25 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, page: *Page) voi
     }
 
     if (original_length > 0 and self._observing.items.len == 0) {
-        page.unregisterIntersectionObserver(self);
+        frame.unregisterIntersectionObserver(self);
     }
 }
 
-pub fn disconnect(self: *IntersectionObserver, page: *Page) void {
+pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
     for (self._pending_entries.items) |entry| {
-        entry.deinit(page._session);
+        entry.deinit(frame._session);
     }
     self._pending_entries.clearRetainingCapacity();
     self._previous_states.clearRetainingCapacity();
 
     if (self._observing.items.len > 0) {
-        page.unregisterIntersectionObserver(self);
+        frame.unregisterIntersectionObserver(self);
     }
     self._observing.clearRetainingCapacity();
 }
 
-pub fn takeRecords(self: *IntersectionObserver, page: *Page) ![]*IntersectionObserverEntry {
-    const entries = try page.call_arena.dupe(*IntersectionObserverEntry, self._pending_entries.items);
+pub fn takeRecords(self: *IntersectionObserver, frame: *Frame) ![]*IntersectionObserverEntry {
+    const entries = try frame.call_arena.dupe(*IntersectionObserverEntry, self._pending_entries.items);
     self._pending_entries.clearRetainingCapacity();
     return entries;
 }
@@ -200,13 +200,13 @@ pub fn takeRecords(self: *IntersectionObserver, page: *Page) ![]*IntersectionObs
 fn calculateIntersection(
     self: *IntersectionObserver,
     target: *Element,
-    page: *Page,
+    frame: *Frame,
 ) !IntersectionData {
-    const target_rect = target.getBoundingClientRect(page);
+    const target_rect = target.getBoundingClientRect(frame);
 
     // Use root element's rect or viewport (simplified: assume 1920x1080)
     const root_rect = if (self._root) |root|
-        root.getBoundingClientRect(page)
+        root.getBoundingClientRect(frame)
     else
         // Simplified viewport - assume 1920x1080 for now
         DOMRect{
@@ -253,8 +253,8 @@ fn meetsThreshold(self: *IntersectionObserver, ratio: f64) bool {
     return false;
 }
 
-fn checkIntersection(self: *IntersectionObserver, target: *Element, page: *Page) !void {
-    const data = try self.calculateIntersection(target, page);
+fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Frame) !void {
+    const data = try self.calculateIntersection(target, frame);
     const was_intersecting_opt = self._previous_states.get(target);
     const is_now_intersecting = data.is_intersecting and self.meetsThreshold(data.intersection_ratio);
 
@@ -265,18 +265,18 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, page: *Page)
         (was_intersecting_opt != null and was_intersecting_opt.? != is_now_intersecting);
 
     if (should_report) {
-        const arena = try page.getArena(.tiny, "IntersectionObserverEntry");
-        errdefer page.releaseArena(arena);
+        const arena = try frame.getArena(.tiny, "IntersectionObserverEntry");
+        errdefer frame.releaseArena(arena);
 
         const entry = try arena.create(IntersectionObserverEntry);
         entry.* = .{
             ._arena = arena,
             ._target = target,
-            ._time = page.window._performance.now(),
+            ._time = frame.window._performance.now(),
             ._is_intersecting = is_now_intersecting,
-            ._root_bounds = try page._factory.create(data.root_bounds),
-            ._intersection_rect = try page._factory.create(data.intersection_rect),
-            ._bounding_client_rect = try page._factory.create(data.bounding_client_rect),
+            ._root_bounds = try frame._factory.create(data.root_bounds),
+            ._intersection_rect = try frame._factory.create(data.intersection_rect),
+            ._bounding_client_rect = try frame._factory.create(data.bounding_client_rect),
             ._intersection_ratio = data.intersection_ratio,
         };
         try self._pending_entries.append(self._arena, entry);
@@ -287,34 +287,34 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, page: *Page)
     try self._previous_states.put(self._arena, target, is_now_intersecting);
 }
 
-pub fn checkIntersections(self: *IntersectionObserver, page: *Page) !void {
+pub fn checkIntersections(self: *IntersectionObserver, frame: *Frame) !void {
     if (self._observing.items.len == 0) {
         return;
     }
 
     for (self._observing.items) |target| {
-        try self.checkIntersection(target, page);
+        try self.checkIntersection(target, frame);
     }
 
     if (self._pending_entries.items.len > 0) {
-        try page.scheduleIntersectionDelivery();
+        try frame.scheduleIntersectionDelivery();
     }
 }
 
-pub fn deliverEntries(self: *IntersectionObserver, page: *Page) !void {
+pub fn deliverEntries(self: *IntersectionObserver, frame: *Frame) !void {
     if (self._pending_entries.items.len == 0) {
         return;
     }
 
-    const entries = try self.takeRecords(page);
+    const entries = try self.takeRecords(frame);
     var caught: js.TryCatch.Caught = undefined;
 
     var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
+    frame.js.localScope(&ls);
     defer ls.deinit();
 
     ls.toLocal(self._callback).tryCall(void, .{ entries, self }, &caught) catch |err| {
-        log.err(.page, "IntsctObserver.deliverEntries", .{ .err = err, .caught = caught });
+        log.err(.frame, "IntsctObserver.deliverEntries", .{ .err = err, .caught = caught });
         return err;
     };
 }

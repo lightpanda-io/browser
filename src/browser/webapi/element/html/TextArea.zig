@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -51,14 +51,14 @@ pub fn setOnSelectionChange(self: *TextArea, listener: ?js.Function) !void {
     }
 }
 
-fn dispatchSelectionChangeEvent(self: *TextArea, page: *Page) !void {
-    const event = try Event.init("selectionchange", .{ .bubbles = true }, page);
-    try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
+fn dispatchSelectionChangeEvent(self: *TextArea, frame: *Frame) !void {
+    const event = try Event.init("selectionchange", .{ .bubbles = true }, frame);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
-fn dispatchInputEvent(self: *TextArea, data: ?[]const u8, input_type: []const u8, page: *Page) !void {
-    const event = try InputEvent.initTrusted(comptime .wrap("input"), .{ .data = data, .inputType = input_type }, page);
-    try page._event_manager.dispatch(self.asElement().asEventTarget(), event.asEvent());
+fn dispatchInputEvent(self: *TextArea, data: ?[]const u8, input_type: []const u8, frame: *Frame) !void {
+    const event = try InputEvent.initTrusted(comptime .wrap("input"), .{ .data = data, .inputType = input_type }, frame);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event.asEvent());
 }
 
 pub fn asElement(self: *TextArea) *Element {
@@ -78,8 +78,8 @@ pub fn getValue(self: *const TextArea) []const u8 {
     return self._value orelse self.getDefaultValue();
 }
 
-pub fn setValue(self: *TextArea, value: []const u8, page: *Page) !void {
-    const owned = try page.arena.dupe(u8, value);
+pub fn setValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
+    const owned = try frame.arena.dupe(u8, value);
     self._value = owned;
 }
 
@@ -93,29 +93,29 @@ pub fn getDefaultValue(self: *const TextArea) []const u8 {
     return "";
 }
 
-pub fn setDefaultValue(self: *TextArea, value: []const u8, page: *Page) !void {
+pub fn setDefaultValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
     const node = self.asNode();
     if (node.firstChild()) |child| {
         if (child.is(Node.CData.Text)) |txt| {
-            txt._proto._data = try page.dupeSSO(value);
+            txt._proto._data = try frame.dupeSSO(value);
             return;
         }
     }
 
     // No text child exists, create one
-    const text_node = try page.createTextNode(value);
-    _ = try node.appendChild(text_node, page);
+    const text_node = try frame.createTextNode(value);
+    _ = try node.appendChild(text_node, frame);
 }
 
 pub fn getDisabled(self: *const TextArea) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
 }
 
-pub fn setDisabled(self: *TextArea, disabled: bool, page: *Page) !void {
+pub fn setDisabled(self: *TextArea, disabled: bool, frame: *Frame) !void {
     if (disabled) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), page);
+        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
     }
 }
 
@@ -123,27 +123,27 @@ pub fn getName(self: *const TextArea) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
-pub fn setName(self: *TextArea, name: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), page);
+pub fn setName(self: *TextArea, name: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
 }
 
 pub fn getRequired(self: *const TextArea) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
 }
 
-pub fn setRequired(self: *TextArea, required: bool, page: *Page) !void {
+pub fn setRequired(self: *TextArea, required: bool, frame: *Frame) !void {
     if (required) {
-        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("required"), page);
+        try self.asElement().removeAttribute(comptime .wrap("required"), frame);
     }
 }
 
-pub fn select(self: *TextArea, page: *Page) !void {
+pub fn select(self: *TextArea, frame: *Frame) !void {
     const len = if (self._value) |v| @as(u32, @intCast(v.len)) else 0;
-    try self.setSelectionRange(0, len, null, page);
-    const event = try Event.init("select", .{ .bubbles = true }, page);
-    try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
+    try self.setSelectionRange(0, len, null, frame);
+    const event = try Event.init("select", .{ .bubbles = true }, frame);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
 const HowSelected = union(enum) { partial: struct { u32, u32 }, full, none };
@@ -156,18 +156,18 @@ fn howSelected(self: *const TextArea) HowSelected {
     return .{ .partial = .{ self._selection_start, self._selection_end } };
 }
 
-pub fn innerInsert(self: *TextArea, str: []const u8, page: *Page) !void {
-    const arena = page.arena;
+pub fn innerInsert(self: *TextArea, str: []const u8, frame: *Frame) !void {
+    const arena = frame.arena;
 
     switch (self.howSelected()) {
         .full => {
             // if the text area is fully selected, replace the content.
             const new_value = try arena.dupe(u8, str);
-            try self.setValue(new_value, page);
+            try self.setValue(new_value, frame);
             self._selection_start = @intCast(new_value.len);
             self._selection_end = @intCast(new_value.len);
             self._selection_direction = .none;
-            try self.dispatchSelectionChangeEvent(page);
+            try self.dispatchSelectionChangeEvent(frame);
         },
         .partial => |range| {
             // if the text area is partially selected, replace the selected content.
@@ -180,22 +180,22 @@ pub fn innerInsert(self: *TextArea, str: []const u8, page: *Page) !void {
                 u8,
                 &.{ before, str, remaining },
             );
-            try self.setValue(new_value, page);
+            try self.setValue(new_value, frame);
 
             const new_pos = range[0] + str.len;
             self._selection_start = @intCast(new_pos);
             self._selection_end = @intCast(new_pos);
             self._selection_direction = .none;
-            try self.dispatchSelectionChangeEvent(page);
+            try self.dispatchSelectionChangeEvent(frame);
         },
         .none => {
             // if the text area is not selected, just insert at cursor.
             const current_value = self.getValue();
             const new_value = try std.mem.concat(arena, u8, &.{ current_value, str });
-            try self.setValue(new_value, page);
+            try self.setValue(new_value, frame);
         },
     }
-    try self.dispatchInputEvent(str, "insertText", page);
+    try self.dispatchInputEvent(str, "insertText", frame);
 }
 
 pub fn getSelectionDirection(self: *const TextArea) []const u8 {
@@ -206,18 +206,18 @@ pub fn getSelectionStart(self: *const TextArea) u32 {
     return self._selection_start;
 }
 
-pub fn setSelectionStart(self: *TextArea, value: u32, page: *Page) !void {
+pub fn setSelectionStart(self: *TextArea, value: u32, frame: *Frame) !void {
     self._selection_start = value;
-    try self.dispatchSelectionChangeEvent(page);
+    try self.dispatchSelectionChangeEvent(frame);
 }
 
 pub fn getSelectionEnd(self: *const TextArea) u32 {
     return self._selection_end;
 }
 
-pub fn setSelectionEnd(self: *TextArea, value: u32, page: *Page) !void {
+pub fn setSelectionEnd(self: *TextArea, value: u32, frame: *Frame) !void {
     self._selection_end = value;
-    try self.dispatchSelectionChangeEvent(page);
+    try self.dispatchSelectionChangeEvent(frame);
 }
 
 pub fn setSelectionRange(
@@ -225,7 +225,7 @@ pub fn setSelectionRange(
     selection_start: u32,
     selection_end: u32,
     selection_dir: ?[]const u8,
-    page: *Page,
+    frame: *Frame,
 ) !void {
     const direction = blk: {
         if (selection_dir) |sd| {
@@ -253,15 +253,15 @@ pub fn setSelectionRange(
     self._selection_start = start;
     self._selection_end = end;
 
-    try self.dispatchSelectionChangeEvent(page);
+    try self.dispatchSelectionChangeEvent(frame);
 }
 
-pub fn getForm(self: *TextArea, page: *Page) ?*Form {
+pub fn getForm(self: *TextArea, frame: *Frame) ?*Form {
     const element = self.asElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
     if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        if (page.document.getElementById(form_id, page)) |form_element| {
+        if (frame.document.getElementById(form_id, frame)) |form_element| {
             return form_element.is(Form);
         }
         // form attribute present but invalid - no form owner
@@ -280,8 +280,8 @@ pub fn getForm(self: *TextArea, page: *Page) ?*Form {
     return null;
 }
 
-pub fn getLabels(self: *TextArea, page: *Page) !js.Array {
-    return @import("Label.zig").getControlLabels(self.asElement(), page);
+pub fn getLabels(self: *TextArea, frame: *Frame) !js.Array {
+    return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
 pub const JsApi = struct {
@@ -310,7 +310,7 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
-    pub fn cloned(source_element: *Element, cloned_element: *Element, _: *Page) !void {
+    pub fn cloned(source_element: *Element, cloned_element: *Element, _: *Frame) !void {
         const source = source_element.as(TextArea);
         const clone = cloned_element.as(TextArea);
         clone._value = source._value;

@@ -17,11 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
 
 const ReadableStream = @import("ReadableStream.zig");
 const ReadableStreamDefaultController = @import("ReadableStreamDefaultController.zig");
 const WritableStream = @import("WritableStream.zig");
+
+const Execution = js.Execution;
 
 const TransformStream = @This();
 
@@ -39,10 +40,10 @@ const Transformer = struct {
     flush: ?js.Function.Global = null,
 };
 
-pub fn init(transformer_: ?Transformer, page: *Page) !*TransformStream {
-    const readable = try ReadableStream.init(null, null, page);
+pub fn init(transformer_: ?Transformer, exec: *const Execution) !*TransformStream {
+    const readable = try ReadableStream.init(null, null, exec);
 
-    const self = try page._factory.create(TransformStream{
+    const self = try exec._factory.create(TransformStream{
         ._readable = readable,
         ._writable = undefined,
         ._controller = undefined,
@@ -53,11 +54,11 @@ pub fn init(transformer_: ?Transformer, page: *Page) !*TransformStream {
         if (transformer_) |t| t.transform else null,
         if (transformer_) |t| t.flush else null,
         null,
-        page,
+        exec,
     );
     self._controller = transform_controller;
 
-    self._writable = try WritableStream.initForTransform(self, page);
+    self._writable = try WritableStream.initForTransform(self, exec);
 
     if (transformer_) |transformer| {
         if (transformer.start) |start| {
@@ -68,24 +69,23 @@ pub fn init(transformer_: ?Transformer, page: *Page) !*TransformStream {
     return self;
 }
 
-pub fn initWithZigTransform(zig_transform: ZigTransformFn, page: *Page) !*TransformStream {
-    const readable = try ReadableStream.init(null, null, page);
+pub fn initWithZigTransform(zig_transform: ZigTransformFn, exec: *const Execution) !*TransformStream {
+    const readable = try ReadableStream.init(null, null, exec);
 
-    const self = try page._factory.create(TransformStream{
+    const self = try exec._factory.create(TransformStream{
         ._readable = readable,
         ._writable = undefined,
         ._controller = undefined,
     });
 
-    const transform_controller = try TransformStreamDefaultController.init(self, null, null, zig_transform, page);
+    const transform_controller = try TransformStreamDefaultController.init(self, null, null, zig_transform, exec);
     self._controller = transform_controller;
 
-    self._writable = try WritableStream.initForTransform(self, page);
-
+    self._writable = try WritableStream.initForTransform(self, exec);
     return self;
 }
 
-pub fn transformWrite(self: *TransformStream, chunk: js.Value, page: *Page) !void {
+pub fn transformWrite(self: *TransformStream, chunk: js.Value, exec: *const Execution) !void {
     if (self._controller._zig_transform_fn) |zig_fn| {
         // Zig-level transform (used by TextEncoderStream etc.)
         try zig_fn(self._controller, chunk);
@@ -94,7 +94,7 @@ pub fn transformWrite(self: *TransformStream, chunk: js.Value, page: *Page) !voi
 
     if (self._controller._transform_fn) |transform_fn| {
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        exec.context.localScope(&ls);
         defer ls.deinit();
 
         try ls.toLocal(transform_fn).call(void, .{ chunk, self._controller });
@@ -103,10 +103,10 @@ pub fn transformWrite(self: *TransformStream, chunk: js.Value, page: *Page) !voi
     }
 }
 
-pub fn transformClose(self: *TransformStream, page: *Page) !void {
+pub fn transformClose(self: *TransformStream, exec: *const Execution) !void {
     if (self._controller._flush_fn) |flush_fn| {
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        exec.context.localScope(&ls);
         defer ls.deinit();
 
         try ls.toLocal(flush_fn).call(void, .{self._controller});
@@ -155,9 +155,9 @@ pub const TransformStreamDefaultController = struct {
         transform_fn: ?js.Function.Global,
         flush_fn: ?js.Function.Global,
         zig_transform_fn: ?ZigTransformFn,
-        page: *Page,
+        exec: *const Execution,
     ) !*TransformStreamDefaultController {
-        return page._factory.create(TransformStreamDefaultController{
+        return exec._factory.create(TransformStreamDefaultController{
             ._stream = stream,
             ._transform_fn = transform_fn,
             ._flush_fn = flush_fn,

@@ -1,6 +1,6 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const CSSStyleRule = @import("CSSStyleRule.zig");
 
@@ -12,7 +12,7 @@ pub const Type = union(enum) {
     import: void,
     media: void,
     font_face: void,
-    page: void,
+    frame: void,
     keyframes: void,
     keyframe: void,
     margin: void,
@@ -38,8 +38,8 @@ pub fn is(self: *CSSRule, comptime T: type) ?*T {
     }
 }
 
-pub fn init(rule_type: Type, page: *Page) !*CSSRule {
-    return page._factory.create(CSSRule{
+pub fn init(rule_type: Type, frame: *Frame) !*CSSRule {
+    return frame._factory.create(CSSRule{
         ._type = rule_type,
     });
 }
@@ -48,7 +48,7 @@ pub fn getType(self: *const CSSRule) u16 {
     return @as(u16, @intFromEnum(std.meta.activeTag(self._type))) + 1;
 }
 
-pub fn getCssText(_: *const CSSRule, _: *Page) []const u8 {
+pub fn getCssText(_: *const CSSRule, _: *Frame) []const u8 {
     return "";
 }
 

@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const string = @import("../../string.zig");
 
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Session = @import("../Session.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 
@@ -448,7 +448,7 @@ fn tupleFieldName(comptime i: usize) [:0]const u8 {
 }
 
 fn isPage(comptime T: type) bool {
-    return T == *Page or T == *const Page;
+    return T == *Frame or T == *const Frame;
 }
 
 fn isSession(comptime T: type) bool {
@@ -462,7 +462,7 @@ fn isExecution(comptime T: type) bool {
 fn getGlobalArg(comptime T: type, ctx: *Context) T {
     if (comptime isPage(T)) {
         return switch (ctx.global) {
-            .page => |page| page,
+            .frame => |frame| frame,
             .worker => unreachable,
         };
     }

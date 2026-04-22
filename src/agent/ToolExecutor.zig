@@ -77,7 +77,7 @@ pub fn getTools(self: *Self) ![]const zenai.provider.Tool {
 }
 
 pub fn getCurrentUrl(self: *Self) []const u8 {
-    const page = self.session.currentPage() orelse return "(no page loaded)";
+    const page = self.session.currentFrame() orelse return "(no page loaded)";
     return page.url;
 }
 

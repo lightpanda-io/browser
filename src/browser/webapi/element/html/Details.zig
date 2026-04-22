@@ -1,5 +1,5 @@
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -23,11 +23,11 @@ pub fn getOpen(self: *const Details) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("open")) != null;
 }
 
-pub fn setOpen(self: *Details, open: bool, page: *Page) !void {
+pub fn setOpen(self: *Details, open: bool, frame: *Frame) !void {
     if (open) {
-        try self.asElement().setAttributeSafe(comptime .wrap("open"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("open"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("open"), page);
+        try self.asElement().removeAttribute(comptime .wrap("open"), frame);
     }
 }
 
@@ -35,8 +35,8 @@ pub fn getName(self: *const Details) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
-pub fn setName(self: *Details, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), page);
+pub fn setName(self: *Details, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), frame);
 }
 
 pub const JsApi = struct {

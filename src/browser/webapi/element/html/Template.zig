@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -23,16 +23,16 @@ pub fn getContent(self: *Template) *DocumentFragment {
     return self._content;
 }
 
-pub fn setInnerHTML(self: *Template, html: []const u8, page: *Page) !void {
-    return self._content.setInnerHTML(html, page);
+pub fn setInnerHTML(self: *Template, html: []const u8, frame: *Frame) !void {
+    return self._content.setInnerHTML(html, frame);
 }
 
-pub fn getOuterHTML(self: *Template, writer: *std.Io.Writer, page: *Page) !void {
+pub fn getOuterHTML(self: *Template, writer: *std.Io.Writer, frame: *Frame) !void {
     const dump = @import("../../../dump.zig");
     const el = self.asElement();
 
     try el.format(writer);
-    try dump.children(self._content.asNode(), .{ .shadow = .skip }, writer, page);
+    try dump.children(self._content.asNode(), .{ .shadow = .skip }, writer, frame);
     try writer.writeAll("</");
     try writer.writeAll(el.getTagNameDump());
     try writer.writeByte('>');
@@ -51,24 +51,24 @@ pub const JsApi = struct {
     pub const innerHTML = bridge.accessor(_getInnerHTML, Template.setInnerHTML, .{});
     pub const outerHTML = bridge.accessor(_getOuterHTML, null, .{});
 
-    fn _getInnerHTML(self: *Template, page: *Page) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(page.call_arena);
-        try self._content.getInnerHTML(&buf.writer, page);
+    fn _getInnerHTML(self: *Template, frame: *Frame) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        try self._content.getInnerHTML(&buf.writer, frame);
         return buf.written();
     }
 
-    fn _getOuterHTML(self: *Template, page: *Page) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(page.call_arena);
-        try self.getOuterHTML(&buf.writer, page);
+    fn _getOuterHTML(self: *Template, frame: *Frame) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+        try self.getOuterHTML(&buf.writer, frame);
         return buf.written();
     }
 };
 
 pub const Build = struct {
-    pub fn created(node: *Node, page: *Page) !void {
+    pub fn created(node: *Node, frame: *Frame) !void {
         const self = node.as(Template);
         // Create the template content DocumentFragment
-        self._content = try DocumentFragment.init(page);
+        self._content = try DocumentFragment.init(frame);
     }
 };
 

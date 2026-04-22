@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 
 const EventTarget = @import("EventTarget.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
@@ -36,8 +36,8 @@ _on_message: ?js.Function.Global = null,
 _on_message_error: ?js.Function.Global = null,
 _entangled_port: ?*MessagePort = null,
 
-pub fn init(page: *Page) !*MessagePort {
-    return page._factory.eventTarget(MessagePort{
+pub fn init(frame: *Frame) !*MessagePort {
+    return frame._factory.eventTarget(MessagePort{
         ._proto = undefined,
     });
 }
@@ -51,7 +51,7 @@ pub fn entangle(port1: *MessagePort, port2: *MessagePort) void {
     port2._entangled_port = port1;
 }
 
-pub fn postMessage(self: *MessagePort, message: js.Value.Temp, page: *Page) !void {
+pub fn postMessage(self: *MessagePort, message: js.Value.Temp, frame: *Frame) !void {
     if (self._closed) {
         return;
     }
@@ -62,13 +62,13 @@ pub fn postMessage(self: *MessagePort, message: js.Value.Temp, page: *Page) !voi
     }
 
     // Create callback to deliver message
-    const callback = try page._factory.create(PostMessageCallback{
-        .page = page,
+    const callback = try frame._factory.create(PostMessageCallback{
+        .frame = frame,
         .port = other,
         .message = message,
     });
 
-    try page.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
+    try frame.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "MessagePort.postMessage",
         .low_priority = false,
     });
@@ -110,33 +110,33 @@ pub fn setOnMessageError(self: *MessagePort, cb: ?js.Function.Global) !void {
 const PostMessageCallback = struct {
     port: *MessagePort,
     message: js.Value.Temp,
-    page: *Page,
+    frame: *Frame,
 
     fn deinit(self: *PostMessageCallback) void {
-        self.page._factory.destroy(self);
+        self.frame._factory.destroy(self);
     }
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
-        const page = self.page;
+        const frame = self.frame;
 
         if (self.port._closed) {
             return null;
         }
 
         const target = self.port.asEventTarget();
-        if (page._event_manager.hasDirectListeners(target, "message", self.port._on_message)) {
+        if (frame._event_manager.hasDirectListeners(target, "message", self.port._on_message)) {
             const event = (MessageEvent.initTrusted(comptime .wrap("message"), .{
                 .data = .{ .value = self.message },
                 .origin = "",
                 .source = null,
-            }, page._session) catch |err| {
+            }, frame._session) catch |err| {
                 log.err(.dom, "MessagePort.postMessage", .{ .err = err });
                 return null;
             }).asEvent();
 
-            page._event_manager.dispatchDirect(target, event, self.port._on_message, .{ .context = "MessagePort message" }) catch |err| {
+            frame._event_manager.dispatchDirect(target, event, self.port._on_message, .{ .context = "MessagePort message" }) catch |err| {
                 log.err(.dom, "MessagePort.postMessage", .{ .err = err });
             };
         }

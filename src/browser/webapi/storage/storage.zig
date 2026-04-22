@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -69,7 +69,7 @@ pub const Lookup = struct {
         return self._data.get(k);
     }
 
-    pub fn setItem(self: *Lookup, key_: ?[]const u8, value: []const u8, page: *Page) !void {
+    pub fn setItem(self: *Lookup, key_: ?[]const u8, value: []const u8, frame: *Frame) !void {
         const k = key_ orelse return;
 
         if (self._size + value.len > max_size) {
@@ -77,10 +77,10 @@ pub const Lookup = struct {
         }
         defer self._size += value.len;
 
-        const key_owned = try page.dupeString(k);
-        const value_owned = try page.dupeString(value);
+        const key_owned = try frame.dupeString(k);
+        const value_owned = try frame.dupeString(value);
 
-        const gop = try self._data.getOrPut(page.arena, key_owned);
+        const gop = try self._data.getOrPut(frame.arena, key_owned);
         gop.value_ptr.* = value_owned;
     }
 

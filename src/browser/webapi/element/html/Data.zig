@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -39,8 +39,8 @@ pub fn getValue(self: *Data) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("value")) orelse "";
 }
 
-pub fn setValue(self: *Data, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), page);
+pub fn setValue(self: *Data, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), frame);
 }
 
 pub const JsApi = struct {

@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const logger = lp.log;
 
 const Console = @This();
@@ -149,12 +149,12 @@ fn timestamp() u64 {
     return @import("../../datetime.zig").timestamp(.monotonic);
 }
 
-// Forwards page-context console output to the Page's message buffer (read by
+// Forwards frame-context console output to the Frame's message buffer (read by
 // the `consoleLogs` tool / CDP Runtime.consoleAPICalled). Worker contexts are
 // dropped — no buffer is attached there.
-fn appendMessage(exec: *js.Execution, level: Page.ConsoleMessage.Level, values: []js.Value) void {
+fn appendMessage(exec: *js.Execution, level: Frame.ConsoleMessage.Level, values: []js.Value) void {
     switch (exec.context.global) {
-        .page => |p| p.appendConsoleMessage(level, values),
+        .frame => |f| f.appendConsoleMessage(level, values),
         .worker => {},
     }
 }

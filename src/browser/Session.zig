@@ -28,26 +28,26 @@ const storage = @import("webapi/storage/storage.zig");
 const Navigation = @import("webapi/navigation/Navigation.zig");
 const History = @import("webapi/History.zig");
 
-const Page = @import("Page.zig");
+const Frame = @import("Frame.zig");
 pub const Runner = @import("Runner.zig");
 const Browser = @import("Browser.zig");
 const Factory = @import("Factory.zig");
 const Notification = @import("../Notification.zig");
-const QueuedNavigation = Page.QueuedNavigation;
+const QueuedNavigation = Frame.QueuedNavigation;
 
 const log = lp.log;
 const ArenaPool = App.ArenaPool;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
 
-// You can create successively multiple pages for a session, but you must
-// deinit a page before running another one. It manages two distinct lifetimes.
+// You can create successively multiple frames for a session, but you must
+// deinit a frame before running another one. It manages two distinct lifetimes.
 //
-// The first is the lifetime of the Session itself, where pages are created and
+// The first is the lifetime of the Session itself, where frames are created and
 // removed, but share the same cookie jar and navigation history (etc...)
 //
-// The second is as a container the data needed by the full page hierarchy, i.e. \
-// the root page and all of its frames (and all of their frames.)
+// The second is as a container the data needed by the full frame hierarchy, i.e. \
+// the root frame and all of its frames (and all of their frames.)
 const Session = @This();
 
 // These are the fields that remain intact for the duration of the Session
@@ -59,12 +59,12 @@ storage_shed: storage.Shed,
 notification: *Notification,
 cookie_jar: storage.Cookie.Jar,
 
-// These are the fields that get reset whenever the Session's page (the root) is reset.
+// These are the fields that get reset whenever the Session's frame (the root) is reset.
 factory: Factory,
 
-page_arena: Allocator,
+frame_arena: Allocator,
 
-// Origin map for same-origin context sharing. Scoped to the root page lifetime.
+// Origin map for same-origin context sharing. Scoped to the root frame lifetime.
 origins: std.StringHashMapUnmanaged(*js.Origin) = .empty,
 
 // Identity tracking for the main world. All main world contexts share this,
@@ -75,7 +75,7 @@ identity: js.Identity = .{},
 // This ensures objects are only freed when ALL v8 wrappers are gone.
 finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *FinalizerCallback) = .empty,
 
-// Pool for FinalizerCallback.Identity structs. These must survive page resets
+// Pool for FinalizerCallback.Identity structs. These must survive frame resets
 // so V8 weak callbacks can validate the FC before dereferencing it.
 fc_identity_pool: std.heap.MemoryPool(FinalizerCallback.Identity),
 
@@ -87,28 +87,28 @@ globals: std.ArrayList(v8.Global) = .empty,
 // Lives at Session level so objects holding Temps can outlive individual Identities.
 temps: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
 
-// Shared resources for all pages in this session.
-// These live for the duration of the page tree (root + frames).
+// Shared resources for all frames in this session.
+// These live for the duration of the frame tree (root + frames).
 arena_pool: *ArenaPool,
 
-page: ?Page,
+frame: ?Frame,
 
 // Double buffer so that, as we process one list of queued navigations, new entries
 // are added to the separate buffer. This ensures that we don't end up with
 // endless navigation loops AND that we don't invalidate the list while iterating
 // if a new entry gets appended
-queued_navigation_1: std.ArrayList(*Page),
-queued_navigation_2: std.ArrayList(*Page),
+queued_navigation_1: std.ArrayList(*Frame),
+queued_navigation_2: std.ArrayList(*Frame),
 // pointer to either queued_navigation_1 or queued_navigation_2
-queued_navigation: *std.ArrayList(*Page),
+queued_navigation: *std.ArrayList(*Frame),
 
 // Temporary buffer for about:blank navigations during processing.
 // We process async navigations first (safe from re-entrance), then sync
 // about:blank navigations (which may add to queued_navigation).
-queued_queued_navigation: std.ArrayList(*Page),
+queued_queued_navigation: std.ArrayList(*Frame),
 
-page_id_gen: u32 = 0,
 frame_id_gen: u32 = 0,
+loader_id_gen: u32 = 0,
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
@@ -117,17 +117,17 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     const arena = try arena_pool.acquire(.small, "Session");
     errdefer arena_pool.release(arena);
 
-    const page_arena = try arena_pool.acquire(.large, "Session.page_arena");
-    errdefer arena_pool.release(page_arena);
+    const frame_arena = try arena_pool.acquire(.large, "Session.frame_arena");
+    errdefer arena_pool.release(frame_arena);
 
     self.* = .{
-        .page = null,
+        .frame = null,
         .arena = arena,
         .arena_pool = arena_pool,
-        .page_arena = page_arena,
-        .factory = Factory.init(page_arena),
+        .frame_arena = frame_arena,
+        .factory = Factory.init(frame_arena),
         .history = .{},
-        // The prototype (EventTarget) for Navigation is created when a Page is created.
+        // The prototype (EventTarget) for Navigation is created when a Frame is created.
         .navigation = .{ ._proto = undefined },
         .storage_shed = .{},
         .browser = browser,
@@ -143,52 +143,52 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
 }
 
 pub fn deinit(self: *Session) void {
-    if (self.page != null) {
-        self.removePage();
+    if (self.frame != null) {
+        self.removeFrame();
     }
     self.cookie_jar.deinit();
     self.fc_identity_pool.deinit();
 
     self.storage_shed.deinit(self.browser.app.allocator);
-    self.arena_pool.release(self.page_arena);
+    self.arena_pool.release(self.frame_arena);
     self.arena_pool.release(self.arena);
 }
 
 // NOTE: the caller is not the owner of the returned value,
-// the pointer on Page is just returned as a convenience
-pub fn createPage(self: *Session) !*Page {
-    lp.assert(self.page == null, "Session.createPage - page not null", .{});
+// the pointer on Frame is just returned as a convenience
+pub fn createFrame(self: *Session) !*Frame {
+    lp.assert(self.frame == null, "Session.createFrame - frame not null", .{});
 
-    self.page = @as(Page, undefined);
-    const page = &self.page.?;
-    try Page.init(page, self.nextFrameId(), self, null);
+    self.frame = @as(Frame, undefined);
+    const frame = &self.frame.?;
+    try Frame.init(frame, self.nextFrameId(), self, null);
 
-    // Creates a new NavigationEventTarget for this page.
-    try self.navigation.onNewPage(page);
+    // Creates a new NavigationEventTarget for this frame.
+    try self.navigation.onNewFrame(frame);
 
     if (comptime IS_DEBUG) {
-        log.debug(.browser, "create page", .{});
+        log.debug(.browser, "create frame", .{});
     }
     // start JS env
-    // Inform CDP the main page has been created such that additional context for other Worlds can be created as well
-    self.notification.dispatch(.page_created, page);
+    // Inform CDP the main frame has been created such that additional context for other Worlds can be created as well
+    self.notification.dispatch(.frame_created, frame);
 
-    return page;
+    return frame;
 }
 
-pub fn removePage(self: *Session) void {
-    // Inform CDP the page is going to be removed, allowing other worlds to remove themselves before the main one
-    self.notification.dispatch(.page_remove, .{});
-    lp.assert(self.page != null, "Session.removePage - page is null", .{});
+pub fn removeFrame(self: *Session) void {
+    // Inform CDP the frame is going to be removed, allowing other worlds to remove themselves before the main one
+    self.notification.dispatch(.frame_remove, .{});
+    lp.assert(self.frame != null, "Session.removeFrame - frame is null", .{});
 
-    self.page.?.deinit(false);
-    self.page = null;
+    self.frame.?.deinit(false);
+    self.frame = null;
 
-    self.navigation.onRemovePage();
-    self.resetPageResources();
+    self.navigation.onRemoveFrame();
+    self.resetFrameResources();
 
     if (comptime IS_DEBUG) {
-        log.debug(.browser, "remove page", .{});
+        log.debug(.browser, "remove frame", .{});
     }
 }
 
@@ -235,9 +235,9 @@ pub fn releaseOrigin(self: *Session, origin: *js.Origin) void {
     }
 }
 
-/// Reset page_arena and factory for a clean slate.
-/// Called when root page is removed.
-fn resetPageResources(self: *Session) void {
+/// Reset frame_arena and factory for a clean slate.
+/// Called when root frame is removed.
+fn resetFrameResources(self: *Session) void {
     defer self.browser.env.memoryPressureNotification(.moderate);
 
     self.identity.deinit();
@@ -281,48 +281,48 @@ fn resetPageResources(self: *Session) void {
     }
 
     self.frame_id_gen = 0;
-    self.arena_pool.reset(self.page_arena, 64 * 1024);
-    self.factory = Factory.init(self.page_arena);
+    self.arena_pool.reset(self.frame_arena, 64 * 1024);
+    self.factory = Factory.init(self.frame_arena);
 }
 
-pub fn replacePage(self: *Session) !*Page {
+pub fn replaceFrame(self: *Session) !*Frame {
     if (comptime IS_DEBUG) {
-        log.debug(.browser, "replace page", .{});
+        log.debug(.browser, "replace frame", .{});
     }
 
-    lp.assert(self.page != null, "Session.replacePage null page", .{});
-    lp.assert(self.page.?.parent == null, "Session.replacePage with parent", .{});
+    lp.assert(self.frame != null, "Session.replaceFrame null frame", .{});
+    lp.assert(self.frame.?.parent == null, "Session.replaceFrame with parent", .{});
 
-    var current = self.page.?;
+    var current = self.frame.?;
     const frame_id = current._frame_id;
     current.deinit(true);
 
-    self.resetPageResources();
+    self.resetFrameResources();
 
-    self.page = @as(Page, undefined);
-    const page = &self.page.?;
-    try Page.init(page, frame_id, self, null);
-    return page;
+    self.frame = @as(Frame, undefined);
+    const frame = &self.frame.?;
+    try Frame.init(frame, frame_id, self, null);
+    return frame;
 }
 
-pub fn currentPage(self: *Session) ?*Page {
-    return &(self.page orelse return null);
+pub fn currentFrame(self: *Session) ?*Frame {
+    return &(self.frame orelse return null);
 }
 
-pub fn findPageByFrameId(self: *Session, frame_id: u32) ?*Page {
-    const page = self.currentPage() orelse return null;
-    return findPageBy(page, "_frame_id", frame_id);
+pub fn findFrameByFrameId(self: *Session, frame_id: u32) ?*Frame {
+    const frame = self.currentFrame() orelse return null;
+    return findFrameBy(frame, "_frame_id", frame_id);
 }
 
-pub fn findPageById(self: *Session, id: u32) ?*Page {
-    const page = self.currentPage() orelse return null;
-    return findPageBy(page, "id", id);
+pub fn findFrameByLoaderId(self: *Session, loader_id: u32) ?*Frame {
+    const frame = self.currentFrame() orelse return null;
+    return findFrameBy(frame, "_loader_id", loader_id);
 }
 
-fn findPageBy(page: *Page, comptime field: []const u8, id: u32) ?*Page {
-    if (@field(page, field) == id) return page;
-    for (page.frames.items) |f| {
-        if (findPageBy(f, field, id)) |found| {
+fn findFrameBy(frame: *Frame, comptime field: []const u8, id: u32) ?*Frame {
+    if (@field(frame, field) == id) return frame;
+    for (frame.child_frames.items) |f| {
+        if (findFrameBy(f, field, id)) |found| {
             return found;
         }
     }
@@ -333,18 +333,18 @@ pub fn runner(self: *Session, opts: Runner.Opts) !Runner {
     return Runner.init(self, opts);
 }
 
-pub fn scheduleNavigation(self: *Session, page: *Page) !void {
+pub fn scheduleNavigation(self: *Session, frame: *Frame) !void {
     const list = self.queued_navigation;
 
-    // Check if page is already queued
+    // Check if frame is already queued
     for (list.items) |existing| {
-        if (existing == page) {
+        if (existing == frame) {
             // Already queued
             return;
         }
     }
 
-    return list.append(self.arena, page);
+    return list.append(self.arena, frame);
 }
 
 pub fn processQueuedNavigation(self: *Session) !void {
@@ -355,10 +355,10 @@ pub fn processQueuedNavigation(self: *Session) !void {
         self.queued_navigation = &self.queued_navigation_1;
     }
 
-    if (self.page.?._queued_navigation != null) {
+    if (self.frame.?._queued_navigation != null) {
         // This is both an optimization and a simplification of sorts. If the
-        // root page is navigating, then we don't need to process any other
-        // navigation. Also, the navigation for the root page and for a frame
+        // root frame is navigating, then we don't need to process any other
+        // navigation. Also, the navigation for the root frame and for a frame
         // is different enough that have two distinct code blocks is, imo,
         // better. Yes, there will be duplication.
         navigations.clearRetainingCapacity();
@@ -369,20 +369,20 @@ pub fn processQueuedNavigation(self: *Session) !void {
     defer about_blank_queue.clearRetainingCapacity();
 
     // First pass: process async navigations (non-about:blank)
-    for (navigations.items) |page| {
-        const qn = page._queued_navigation orelse {
-            log.debug(.page, "skipped null queued nav", .{});
+    for (navigations.items) |frame| {
+        const qn = frame._queued_navigation orelse {
+            log.debug(.frame, "skipped null queued nav", .{});
             continue;
         };
 
         if (qn.is_about_blank) {
             // Defer about:blank to second pass
-            try about_blank_queue.append(self.arena, page);
+            try about_blank_queue.append(self.arena, frame);
             continue;
         }
 
-        self.processFrameNavigation(page, qn) catch |err| {
-            log.warn(.page, "frame navigation", .{ .url = qn.url, .err = err });
+        self.processFrameNavigation(frame, qn) catch |err| {
+            log.warn(.frame, "frame navigation", .{ .url = qn.url, .err = err });
         };
     }
 
@@ -390,12 +390,12 @@ pub fn processQueuedNavigation(self: *Session) !void {
 
     // Second pass: process synchronous navigations (about:blank)
     // These may trigger new navigations which go into queued_navigation
-    for (about_blank_queue.items) |page| {
-        const qn = page._queued_navigation orelse {
-            log.debug(.page, "skipped null queued nav", .{});
+    for (about_blank_queue.items) |frame| {
+        const qn = frame._queued_navigation orelse {
+            log.debug(.frame, "skipped null queued nav", .{});
             continue;
         };
-        try self.processFrameNavigation(page, qn);
+        try self.processFrameNavigation(frame, qn);
     }
 
     // Safety: Remove any about:blank navigations that were queued during
@@ -404,10 +404,10 @@ pub fn processQueuedNavigation(self: *Session) !void {
     const new_navigations = self.queued_navigation;
     var i: usize = 0;
     while (i < new_navigations.items.len) {
-        const page = new_navigations.items[i];
-        if (page._queued_navigation) |qn| {
+        const frame = new_navigations.items[i];
+        if (frame._queued_navigation) |qn| {
             if (qn.is_about_blank) {
-                log.warn(.page, "recursive about blank", .{});
+                log.warn(.frame, "recursive about blank", .{});
                 _ = self.queued_navigation.swapRemove(i);
                 continue;
             }
@@ -416,75 +416,75 @@ pub fn processQueuedNavigation(self: *Session) !void {
     }
 }
 
-fn processFrameNavigation(self: *Session, page: *Page, qn: *QueuedNavigation) !void {
-    lp.assert(page.parent != null, "root queued navigation", .{});
+fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) !void {
+    lp.assert(frame.parent != null, "root queued navigation", .{});
 
-    const iframe = page.iframe.?;
-    const parent = page.parent.?;
+    const iframe = frame.iframe.?;
+    const parent = frame.parent.?;
 
-    page._queued_navigation = null;
+    frame._queued_navigation = null;
     defer self.releaseArena(qn.arena);
 
     errdefer iframe._window = null;
 
-    const parent_notified = page._parent_notified;
+    const parent_notified = frame._parent_notified;
     if (parent_notified) {
         // we already notified the parent that we had loaded
         parent._pending_loads += 1;
     }
 
-    const frame_id = page._frame_id;
-    page.deinit(true);
-    page.* = undefined;
+    const frame_id = frame._frame_id;
+    frame.deinit(true);
+    frame.* = undefined;
 
-    try Page.init(page, frame_id, self, parent);
+    try Frame.init(frame, frame_id, self, parent);
     errdefer {
-        for (parent.frames.items, 0..) |frame, i| {
-            if (frame == page) {
-                parent.frames_sorted = false;
-                _ = parent.frames.swapRemove(i);
+        for (parent.child_frames.items, 0..) |f, i| {
+            if (f == frame) {
+                parent.child_frames_sorted = false;
+                _ = parent.child_frames.swapRemove(i);
                 break;
             }
         }
         if (parent_notified) {
             parent._pending_loads -= 1;
         }
-        page.deinit(true);
+        frame.deinit(true);
     }
 
-    page.iframe = iframe;
-    iframe._window = page.window;
+    frame.iframe = iframe;
+    iframe._window = frame.window;
 
-    page.navigate(qn.url, qn.opts) catch |err| {
+    frame.navigate(qn.url, qn.opts) catch |err| {
         log.err(.browser, "queued frame navigation error", .{ .err = err });
         return err;
     };
 }
 
 fn processRootQueuedNavigation(self: *Session) !void {
-    const current_page = &self.page.?;
-    const frame_id = current_page._frame_id;
+    const current_frame = &self.frame.?;
+    const frame_id = current_frame._frame_id;
 
-    // create a copy before the page is cleared
-    const qn = current_page._queued_navigation.?;
-    current_page._queued_navigation = null;
+    // create a copy before the frame is cleared
+    const qn = current_frame._queued_navigation.?;
+    current_frame._queued_navigation = null;
 
     defer self.arena_pool.release(qn.arena);
 
-    self.removePage();
+    self.removeFrame();
 
-    self.page = @as(Page, undefined);
-    const new_page = &self.page.?;
-    try Page.init(new_page, frame_id, self, null);
+    self.frame = @as(Frame, undefined);
+    const new_frame = &self.frame.?;
+    try Frame.init(new_frame, frame_id, self, null);
 
-    // Creates a new NavigationEventTarget for this page.
-    try self.navigation.onNewPage(new_page);
+    // Creates a new NavigationEventTarget for this frame.
+    try self.navigation.onNewFrame(new_frame);
 
     // start JS env
-    // Inform CDP the main page has been created such that additional context for other Worlds can be created as well
-    self.notification.dispatch(.page_created, new_page);
+    // Inform CDP the main frame has been created such that additional context for other Worlds can be created as well
+    self.notification.dispatch(.frame_created, new_frame);
 
-    new_page.navigate(qn.url, qn.opts) catch |err| {
+    new_frame.navigate(qn.url, qn.opts) catch |err| {
         log.err(.browser, "queued navigation error", .{ .err = err });
         return err;
     };
@@ -496,15 +496,15 @@ pub fn nextFrameId(self: *Session) u32 {
     return id;
 }
 
-pub fn nextPageId(self: *Session) u32 {
-    const id = self.page_id_gen +% 1;
-    self.page_id_gen = id;
+pub fn nextLoaderId(self: *Session) u32 {
+    const id = self.loader_id_gen +% 1;
+    self.loader_id_gen = id;
     return id;
 }
 
 // Every finalizable instance of Zig gets 1 FinalizerCallback registered in the
 // session. This is to ensure that, if v8 doesn't finalize the value, we can
-// release on page reset.
+// release on frame reset.
 pub const FinalizerCallback = struct {
     arena: Allocator,
     session: *Session,
@@ -519,7 +519,7 @@ pub const FinalizerCallback = struct {
 
     // For every FinalizerCallback we'll have 1+ FinalizerCallback.Identity: one
     // for every identity that gets the instance. In most cases, that'll be 1.
-    // Allocated from Session.fc_identity_pool so it survives page resets and
+    // Allocated from Session.fc_identity_pool so it survives frame resets and
     // allows the weak callback to safely check the done flag.
     pub const Identity = struct {
         session: *Session,
@@ -530,7 +530,7 @@ pub const FinalizerCallback = struct {
         done: bool = false,
     };
 
-    // Called during page reset to force cleanup regardless of identities.
+    // Called during frame reset to force cleanup regardless of identities.
     fn deinit(self: *FinalizerCallback, session: *Session) void {
         // Mark all identities as done so stale V8 weak callbacks
         // won't find the wrong FC if resolved_ptr_id is reused.

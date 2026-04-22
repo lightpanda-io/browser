@@ -328,12 +328,23 @@ pub fn structuredCloneTo(self: Value, target: *const js.Local) !Value {
 
         // Called by V8 to report serialization errors. The exception should already be thrown.
         fn throwDataCloneError(_: ?*anyopaque, _: ?*const v8.String) callconv(.c) void {}
+
+        // Called when V8 encounters a SharedArrayBuffer. We don't support sharing them across
+        // contexts, so throw a DataCloneError and return false. V8's WriteJSArrayBuffer calls
+        // RETURN_VALUE_IF_EXCEPTION after this, so throwing prevents the fatal FromJust call.
+        fn getSharedArrayBufferId(_: ?*anyopaque, isolate: ?*v8.Isolate, _: ?*const v8.SharedArrayBuffer, _: ?*u32) callconv(.c) bool {
+            const iso = isolate orelse return false;
+            const message = v8.v8__String__NewFromUtf8(iso, "SharedArrayBuffer cannot be cloned.", v8.kNormal, -1);
+            const error_value = v8.v8__Exception__Error(message) orelse return false;
+            _ = v8.v8__Isolate__ThrowException(iso, error_value);
+            return false;
+        }
     };
 
     const size, const data = blk: {
         const serializer = v8.v8__ValueSerializer__New(v8_isolate, &.{
             .data = null,
-            .get_shared_array_buffer_id = null,
+            .get_shared_array_buffer_id = SerializerDelegate.getSharedArrayBufferId,
             .write_host_object = SerializerDelegate.writeHostObject,
             .throw_data_clone_error = SerializerDelegate.throwDataCloneError,
         }) orelse return error.JsException;

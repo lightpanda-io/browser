@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
 const UIEvent = @import("UIEvent.zig");
@@ -186,23 +186,23 @@ const Options = Event.inheritOptions(
     KeyboardEventOptions,
 );
 
-pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*KeyboardEvent {
-    const arena = try page.getArena(.tiny, "KeyboardEvent.trusted");
-    errdefer page.releaseArena(arena);
-    return initWithTrusted(arena, typ, _opts, true, page);
+pub fn initTrusted(typ: String, _opts: ?Options, frame: *Frame) !*KeyboardEvent {
+    const arena = try frame.getArena(.tiny, "KeyboardEvent.trusted");
+    errdefer frame.releaseArena(arena);
+    return initWithTrusted(arena, typ, _opts, true, frame);
 }
 
-pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*KeyboardEvent {
-    const arena = try page.getArena(.tiny, "KeyboardEvent");
-    errdefer page.releaseArena(arena);
+pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*KeyboardEvent {
+    const arena = try frame.getArena(.tiny, "KeyboardEvent");
+    errdefer frame.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
-    return initWithTrusted(arena, type_string, _opts, false, page);
+    return initWithTrusted(arena, type_string, _opts, false, frame);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, page: *Page) !*KeyboardEvent {
+fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, frame: *Frame) !*KeyboardEvent {
     const opts = _opts orelse Options{};
 
-    const event = try page._factory.uiEvent(
+    const event = try frame._factory.uiEvent(
         arena,
         typ,
         KeyboardEvent{

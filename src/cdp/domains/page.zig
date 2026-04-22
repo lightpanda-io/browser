@@ -28,7 +28,7 @@ const CDP = @import("../CDP.zig");
 
 const js = @import("../../browser/js/js.zig");
 const URL = @import("../../browser/URL.zig");
-const Page = @import("../../browser/Page.zig");
+const Frame = @import("../../browser/Frame.zig");
 const timestampF = @import("../../datetime.zig").timestamp;
 const Notification = @import("../../Notification.zig");
 
@@ -71,7 +71,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     }
 }
 
-const Frame = struct {
+const CDPFrame = struct {
     id: []const u8,
     loaderId: []const u8,
     url: []const u8,
@@ -105,7 +105,7 @@ fn getFrameTree(cmd: *CDP.Command) !void {
 
     return cmd.sendResult(.{
         .frameTree = .{
-            .frame = Frame{
+            .frame = CDPFrame{
                 .id = &target_id,
                 .securityOrigin = bc.security_origin,
                 .loaderId = "LID-0000000001",
@@ -133,23 +133,23 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
 
     // When we enable lifecycle events, we must dispatch events for all
     // attached targets.
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
-    if (page._load_state == .complete) {
-        const frame_id = &id.toFrameId(page._frame_id);
-        const loader_id = &id.toLoaderId(page.id);
+    if (frame._load_state == .complete) {
+        const frame_id = &id.toFrameId(frame._frame_id);
+        const loader_id = &id.toLoaderId(frame._loader_id);
 
         const now = timestampF(.monotonic);
         try sendPageLifecycle(bc, "DOMContentLoaded", now, frame_id, loader_id);
         try sendPageLifecycle(bc, "load", now, frame_id, loader_id);
 
-        const http_client = page._session.browser.http_client;
+        const http_client = frame._session.browser.http_client;
         const http_active = http_client.http_active;
         const total_network_activity = http_active + http_client.intercepted;
-        if (page._notified_network_almost_idle.check(total_network_activity <= 2)) {
+        if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
             try sendPageLifecycle(bc, "networkAlmostIdle", now, frame_id, loader_id);
         }
-        if (page._notified_network_idle.check(total_network_activity == 0)) {
+        if (frame._notified_network_idle.check(total_network_activity == 0)) {
             try sendPageLifecycle(bc, "networkIdle", now, frame_id, loader_id);
         }
     }
@@ -212,7 +212,7 @@ fn close(cmd: *CDP.Command) !void {
     const target_id = bc.target_id orelse return error.TargetNotLoaded;
 
     // can't be null if we have a target_id
-    lp.assert(bc.session.page != null, "CDP.page.close null page", .{});
+    lp.assert(bc.session.frame != null, "CDP.frame.close null frame", .{});
 
     try cmd.sendResult(.{}, .{});
 
@@ -235,7 +235,7 @@ fn close(cmd: *CDP.Command) !void {
         bc.session_id = null;
     }
 
-    bc.session.removePage();
+    bc.session.removeFrame();
     for (bc.isolated_worlds.items) |world| {
         world.deinit();
     }
@@ -257,9 +257,9 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
-    const js_context = try world.createContext(page);
+    const js_context = try world.createContext(frame);
     const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
 
     var ls: js.Local.Scope = undefined;
@@ -269,7 +269,7 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
     bc.inspector_session.inspector.contextCreated(
         &ls.local,
         params.worldName,
-        page.origin orelse "",
+        frame.origin orelse "",
         aux_data,
         false,
     );
@@ -298,20 +298,20 @@ fn navigate(cmd: *CDP.Command) !void {
     }
 
     const session = bc.session;
-    var page = session.currentPage() orelse return error.PageNotLoaded;
+    var frame = session.currentFrame() orelse return error.FrameNotLoaded;
 
-    if (page._load_state != .waiting) {
+    if (frame._load_state != .waiting) {
         // Reset isolated world identities to disable V8 weak callbacks before
         // resetPageResources releases refs. Prevents double-release crashes.
         for (bc.isolated_worlds.items) |isolated_world| {
             isolated_world.identity.deinit();
             isolated_world.identity = .{};
         }
-        page = try session.replacePage();
+        frame = try session.replaceFrame();
     }
 
-    const encoded_url = try URL.ensureEncoded(page.call_arena, params.url, "UTF-8");
-    try page.navigate(encoded_url, .{
+    const encoded_url = try URL.ensureEncoded(frame.call_arena, params.url, "UTF-8");
+    try frame.navigate(encoded_url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
         .kind = .{ .push = null },
@@ -331,22 +331,22 @@ fn doReload(cmd: *CDP.Command) !void {
     }
 
     const session = bc.session;
-    var page = session.currentPage() orelse return error.PageNotLoaded;
+    var frame = session.currentFrame() orelse return error.FrameNotLoaded;
 
-    // Dupe URL before replacePage() frees the old page's arena.
-    const reload_url = try cmd.arena.dupeZ(u8, page.url);
+    // Dupe URL before replaceFrame() frees the old frame's arena.
+    const reload_url = try cmd.arena.dupeZ(u8, frame.url);
 
-    if (page._load_state != .waiting) {
+    if (frame._load_state != .waiting) {
         // Reset isolated world identities to disable V8 weak callbacks before
         // resetPageResources releases refs. Prevents double-release crashes.
         for (bc.isolated_worlds.items) |isolated_world| {
             isolated_world.identity.deinit();
             isolated_world.identity = .{};
         }
-        page = try session.replacePage();
+        frame = try session.replaceFrame();
     }
 
-    try page.navigate(reload_url, .{
+    try frame.navigate(reload_url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
         .kind = .reload,
@@ -354,14 +354,14 @@ fn doReload(cmd: *CDP.Command) !void {
     });
 }
 
-pub fn pageNavigate(bc: *CDP.BrowserContext, event: *const Notification.PageNavigate) !void {
-    // detachTarget could be called, in which case, we still have a page doing
+pub fn frameNavigate(bc: *CDP.BrowserContext, event: *const Notification.FrameNavigate) !void {
+    // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
     bc.reset();
 
     const frame_id = &id.toFrameId(event.frame_id);
-    const loader_id = &id.toLoaderId(event.page_id);
+    const loader_id = &id.toLoaderId(event.loader_id);
 
     var cdp = bc.cdp;
     const reason_: ?[]const u8 = switch (event.opts.reason) {
@@ -406,22 +406,22 @@ pub fn pageNavigate(bc: *CDP.BrowserContext, event: *const Notification.PageNavi
     }, .{ .session_id = session_id });
 }
 
-pub fn pageRemove(bc: *CDP.BrowserContext) void {
+pub fn frameRemove(bc: *CDP.BrowserContext) void {
     // Clear all remote object mappings to prevent stale objectIds from being used
     // after the context is destroy
     bc.inspector_session.inspector.resetContextGroup();
 
-    // The main page is going to be removed, we need to remove contexts from other worlds first.
+    // The main frame is going to be removed, we need to remove contexts from other worlds first.
     for (bc.isolated_worlds.items) |isolated_world| {
         isolated_world.removeContext();
     }
 }
 
-pub fn pageCreated(bc: *CDP.BrowserContext, page: *Page) !void {
-    _ = bc.cdp.page_arena.reset(.{ .retain_with_limit = 1024 * 512 });
+pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
+    _ = bc.cdp.frame_arena.reset(.{ .retain_with_limit = 1024 * 512 });
 
     for (bc.isolated_worlds.items) |isolated_world| {
-        _ = try isolated_world.createContext(page);
+        _ = try isolated_world.createContext(frame);
     }
     // Only retain captured responses until a navigation event. In CDP term,
     // this is called a "renderer" and the cache-duration can be controlled via
@@ -429,7 +429,7 @@ pub fn pageCreated(bc: *CDP.BrowserContext, page: *Page) !void {
     bc.captured_responses = .empty;
 }
 
-pub fn pageFrameCreated(bc: *CDP.BrowserContext, event: *const Notification.PageFrameCreated) !void {
+pub fn frameChildFrameCreated(bc: *CDP.BrowserContext, event: *const Notification.FrameChildFrameCreated) !void {
     const session_id = bc.session_id orelse return;
 
     const cdp = bc.cdp;
@@ -444,19 +444,19 @@ pub fn pageFrameCreated(bc: *CDP.BrowserContext, event: *const Notification.Page
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .name = "init",
             .frameId = frame_id,
-            .loaderId = &id.toLoaderId(event.page_id),
+            .loaderId = &id.toLoaderId(event.loader_id),
             .timestamp = event.timestamp,
         }, .{ .session_id = session_id });
     }
 }
 
-pub fn pageNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.PageNavigated) !void {
-    // detachTarget could be called, in which case, we still have a page doing
+pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.FrameNavigated) !void {
+    // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
     const frame_id = &id.toFrameId(event.frame_id);
-    const loader_id = &id.toLoaderId(event.page_id);
+    const loader_id = &id.toLoaderId(event.loader_id);
 
     var cdp = bc.cdp;
 
@@ -503,7 +503,7 @@ pub fn pageNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const No
         }, .{ .session_id = session_id });
     }
 
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     // When we actually recreated the context we should have the inspector send
     // this event, see: resetContextGroup. Sending this event will tell the
@@ -512,16 +512,16 @@ pub fn pageNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const No
     // such that the client has new id's for the active contexts.
     // Only send executionContextsCleared for main frame navigations. For child
     // frames (iframes), clearing all contexts would destroy the main frame's
-    // context, causing Puppeteer's page.evaluate()/page.content() to hang
+    // context, causing Puppeteer's frame.evaluate()/frame.content() to hang
     // forever.
-    if (event.frame_id == page._frame_id) {
+    if (event.frame_id == frame._frame_id) {
         try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
     }
 
     // frameNavigated event
     try cdp.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
-        .frame = Frame{
+        .frame = CDPFrame{
             .id = frame_id,
             .url = event.url,
             .loaderId = loader_id,
@@ -534,13 +534,13 @@ pub fn pageNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const No
         const aux_data = try std.fmt.allocPrint(arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
 
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         bc.inspector_session.inspector.contextCreated(
             &ls.local,
             "",
-            page.origin orelse "",
+            frame.origin orelse "",
             aux_data,
             true,
         );
@@ -569,7 +569,7 @@ pub fn pageNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const No
     // subsequent CDP commands.
     if (bc.scripts_on_new_document.items.len > 0) {
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         for (bc.scripts_on_new_document.items) |script| {
@@ -587,7 +587,7 @@ pub fn pageNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const No
     // frameNavigated event
     try cdp.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
-        .frame = Frame{
+        .frame = CDPFrame{
             .id = frame_id,
             .url = event.url,
             .loaderId = loader_id,
@@ -602,7 +602,7 @@ pub fn pageNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const No
     try cdp.sendEvent("DOM.documentUpdated", null, .{ .session_id = session_id });
 }
 
-pub fn pageDOMContentLoaded(bc: anytype, event: *const Notification.PageDOMContentLoaded) !void {
+pub fn frameDOMContentLoaded(bc: anytype, event: *const Notification.FrameDOMContentLoaded) !void {
     const session_id = bc.session_id orelse return;
     const timestamp = event.timestamp;
     var cdp = bc.cdp;
@@ -615,7 +615,7 @@ pub fn pageDOMContentLoaded(bc: anytype, event: *const Notification.PageDOMConte
 
     if (bc.page_life_cycle_events) {
         const frame_id = &id.toFrameId(event.frame_id);
-        const loader_id = &id.toLoaderId(event.page_id);
+        const loader_id = &id.toLoaderId(event.loader_id);
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .timestamp = timestamp,
             .name = "DOMContentLoaded",
@@ -625,7 +625,7 @@ pub fn pageDOMContentLoaded(bc: anytype, event: *const Notification.PageDOMConte
     }
 }
 
-pub fn pageLoaded(bc: anytype, event: *const Notification.PageLoaded) !void {
+pub fn frameLoaded(bc: anytype, event: *const Notification.FrameLoaded) !void {
     const session_id = bc.session_id orelse return;
     const timestamp = event.timestamp;
     var cdp = bc.cdp;
@@ -639,7 +639,7 @@ pub fn pageLoaded(bc: anytype, event: *const Notification.PageLoaded) !void {
     );
 
     if (bc.page_life_cycle_events) {
-        const loader_id = &id.toLoaderId(event.page_id);
+        const loader_id = &id.toLoaderId(event.loader_id);
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .timestamp = timestamp,
             .name = "load",
@@ -653,16 +653,16 @@ pub fn pageLoaded(bc: anytype, event: *const Notification.PageLoaded) !void {
     }, .{ .session_id = session_id });
 }
 
-pub fn pageNetworkIdle(bc: *CDP.BrowserContext, event: *const Notification.PageNetworkIdle) !void {
-    return sendPageLifecycle(bc, "networkIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.page_id));
+pub fn frameNetworkIdle(bc: *CDP.BrowserContext, event: *const Notification.FrameNetworkIdle) !void {
+    return sendPageLifecycle(bc, "networkIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.loader_id));
 }
 
-pub fn pageNetworkAlmostIdle(bc: *CDP.BrowserContext, event: *const Notification.PageNetworkAlmostIdle) !void {
-    return sendPageLifecycle(bc, "networkAlmostIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.page_id));
+pub fn frameNetworkAlmostIdle(bc: *CDP.BrowserContext, event: *const Notification.FrameNetworkAlmostIdle) !void {
+    return sendPageLifecycle(bc, "networkAlmostIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.loader_id));
 }
 
 fn sendPageLifecycle(bc: *CDP.BrowserContext, name: []const u8, timestamp: u64, frame_id: []const u8, loader_id: []const u8) !void {
-    // detachTarget could be called, in which case, we still have a page doing
+    // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
@@ -820,7 +820,7 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
 }
 
 const testing = @import("../testing.zig");
-test "cdp.page: getFrameTree" {
+test "cdp.frame: getFrameTree" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -886,7 +886,7 @@ test "cdp.page: getFrameTree" {
     }
 }
 
-test "cdp.page: captureScreenshot" {
+test "cdp.frame: captureScreenshot" {
     const LogFilter = @import("../../testing.zig").LogFilter;
     const filter: LogFilter = .init(&.{.not_implemented});
     defer filter.deinit();
@@ -906,7 +906,7 @@ test "cdp.page: captureScreenshot" {
     }
 }
 
-test "cdp.page: printToPDF" {
+test "cdp.frame: printToPDF" {
     const LogFilter = @import("../../testing.zig").LogFilter;
     const filter: LogFilter = .init(&.{.not_implemented});
     defer filter.deinit();
@@ -921,7 +921,7 @@ test "cdp.page: printToPDF" {
     }
 }
 
-test "cdp.page: getLayoutMetrics" {
+test "cdp.frame: getLayoutMetrics" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -979,7 +979,7 @@ test "cdp.page: getLayoutMetrics" {
     }, .{ .id = 12 });
 }
 
-test "cdp.page: reload" {
+test "cdp.frame: reload" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -1003,7 +1003,7 @@ test "cdp.page: reload" {
     }
 }
 
-test "cdp.page: addScriptToEvaluateOnNewDocument" {
+test "cdp.frame: addScriptToEvaluateOnNewDocument" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -1044,10 +1044,10 @@ test "cdp.page: addScriptToEvaluateOnNewDocument" {
             .frame = .{ .loaderId = "LID-0000000002" },
         }, .{});
 
-        const page = bc.session.currentPage() orelse unreachable;
+        const frame = bc.session.currentFrame() orelse unreachable;
 
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         const test_val = try ls.local.exec("window.__test2", null);

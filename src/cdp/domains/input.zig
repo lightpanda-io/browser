@@ -56,7 +56,7 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
     if (params.type == .rawKeyDown) return;
 
     const bc = cmd.browser_context orelse return;
-    const page = bc.session.currentPage() orelse return;
+    const frame = bc.session.currentFrame() orelse return;
 
     const KeyboardEvent = @import("../../browser/webapi/event/KeyboardEvent.zig");
     const keyboard_event = try KeyboardEvent.initTrusted(switch (params.type) {
@@ -71,8 +71,8 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
         .ctrlKey = params.modifiers & 2 == 2,
         .metaKey = params.modifiers & 4 == 4,
         .shiftKey = params.modifiers & 8 == 8,
-    }, page);
-    try page.triggerKeyboard(keyboard_event);
+    }, frame);
+    try frame.triggerKeyboard(keyboard_event);
     // result already sent
 }
 
@@ -101,8 +101,8 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
     }
 
     const bc = cmd.browser_context orelse return;
-    const page = bc.session.currentPage() orelse return;
-    try page.triggerMouseClick(params.x, params.y);
+    const frame = bc.session.currentFrame() orelse return;
+    try frame.triggerMouseClick(params.x, params.y);
     // result already sent
 }
 
@@ -113,9 +113,9 @@ fn insertText(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return;
-    const page = bc.session.currentPage() orelse return;
+    const frame = bc.session.currentFrame() orelse return;
 
-    try page.insertText(params.text);
+    try frame.insertText(params.text);
 
     try cmd.sendResult(null, .{});
 }

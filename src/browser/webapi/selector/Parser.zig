@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Node = @import("../Node.zig");
 const Attribute = @import("../element/Attribute.zig");

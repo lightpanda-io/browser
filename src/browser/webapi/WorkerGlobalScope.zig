@@ -52,12 +52,12 @@ _identity: JS.Identity = .{},
 arena: Allocator,
 call_arena: Allocator,
 url: [:0]const u8,
-buf: [1024]u8 = undefined, // same size as page.buf
+buf: [1024]u8 = undefined, // same size as frame.buf
 // Document charset (matches Page.charset). Workers default to UTF-8.
 charset: []const u8 = "UTF-8",
 js: *JS.Context,
 
-// Reference back to the Worker object (for postMessage to page)
+// Reference back to the Worker object (for postMessage to frame)
 _worker: *Worker,
 
 // Event management for non-DOM targets in worker context
@@ -76,7 +76,7 @@ _on_messageerror: ?JS.Function.Global = null,
 
 pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
     const arena = worker._arena;
-    const session = worker._page._session;
+    const session = worker._frame._session;
     const factory = &session.factory;
 
     const call_arena = try session.getArena(.small, "WorkerGlobalScope.call_arena");
@@ -187,7 +187,7 @@ pub fn setOnMessageError(self: *WorkerGlobalScope, setter: ?FunctionSetter) void
     self._on_messageerror = getFunctionFromSetter(setter);
 }
 
-// Posts a message from the worker back to the page.
+// Posts a message from the worker back to the frame.
 // The message is cloned via structured clone and dispatched on the Worker object.
 pub fn postMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
     try self._worker.receiveMessage(data);

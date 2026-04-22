@@ -1,7 +1,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -29,25 +29,25 @@ pub fn getName(self: *const Slot) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
-pub fn setName(self: *Slot, name: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), page);
+pub fn setName(self: *Slot, name: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
 }
 
 const AssignedNodesOptions = struct {
     flatten: bool = false,
 };
 
-pub fn assignedNodes(self: *Slot, opts_: ?AssignedNodesOptions, page: *Page) ![]const *Node {
+pub fn assignedNodes(self: *Slot, opts_: ?AssignedNodesOptions, frame: *Frame) ![]const *Node {
     const opts = opts_ orelse AssignedNodesOptions{};
     var nodes: std.ArrayList(*Node) = .empty;
-    try self.collectAssignedNodes(false, &nodes, opts, page);
+    try self.collectAssignedNodes(false, &nodes, opts, frame);
     return nodes.items;
 }
 
-pub fn assignedElements(self: *Slot, opts_: ?AssignedNodesOptions, page: *Page) ![]const *Element {
+pub fn assignedElements(self: *Slot, opts_: ?AssignedNodesOptions, frame: *Frame) ![]const *Element {
     const opts = opts_ orelse AssignedNodesOptions{};
     var elements: std.ArrayList(*Element) = .empty;
-    try self.collectAssignedNodes(true, &elements, opts, page);
+    try self.collectAssignedNodes(true, &elements, opts, frame);
     return elements.items;
 }
 
@@ -55,12 +55,12 @@ fn CollectionType(comptime elements: bool) type {
     return if (elements) *std.ArrayList(*Element) else *std.ArrayList(*Node);
 }
 
-fn collectAssignedNodes(self: *Slot, comptime elements: bool, coll: CollectionType(elements), opts: AssignedNodesOptions, page: *Page) !void {
+fn collectAssignedNodes(self: *Slot, comptime elements: bool, coll: CollectionType(elements), opts: AssignedNodesOptions, frame: *Frame) !void {
     // Find the shadow root this slot belongs to
     const shadow_root = self.findShadowRoot() orelse return;
 
     const slot_name = self.getName();
-    const allocator = page.call_arena;
+    const allocator = frame.call_arena;
 
     const host = shadow_root.getHost();
     const initial_count = coll.items.len;
@@ -74,7 +74,7 @@ fn collectAssignedNodes(self: *Slot, comptime elements: bool, coll: CollectionTy
             if (child.is(Slot)) |child_slot| {
                 // Only flatten if the child slot is actually in a shadow tree
                 if (child_slot.findShadowRoot()) |_| {
-                    try child_slot.collectAssignedNodes(elements, coll, opts, page);
+                    try child_slot.collectAssignedNodes(elements, coll, opts, frame);
                     continue;
                 }
                 // Otherwise, treat it as a regular element and fall through

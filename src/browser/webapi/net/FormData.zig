@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const Form = @import("../element/html/Form.zig");
 const Element = @import("../Element.zig");
 const KeyValueList = @import("../KeyValueList.zig");
@@ -42,22 +42,22 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
         });
     };
 
-    const page = switch (exec.context.global) {
-        .page => |p| p,
+    const frame = switch (exec.context.global) {
+        .frame => |f| f,
         .worker => lp.assert(false, "FormData worker form", .{}),
     };
 
     const form_data = try exec._factory.create(FormData{
         ._arena = exec.arena,
-        ._list = try collectForm(page.arena, form, submitter, page),
+        ._list = try collectForm(frame.arena, form, submitter, frame),
     });
 
     const form_data_event = try (@import("../event/FormDataEvent.zig")).initTrusted(
         comptime .wrap("formdata"),
         .{ .bubbles = true, .cancelable = false, .formData = form_data },
-        page,
+        frame,
     );
-    try page._event_manager.dispatch(form.asNode().asEventTarget(), form_data_event.asEvent());
+    try frame._event_manager.dispatch(form.asNode().asEventTarget(), form_data_event.asEvent());
 
     return form_data;
 }
@@ -135,7 +135,7 @@ pub const Iterator = struct {
 
     const Entry = struct { []const u8, []const u8 };
 
-    pub fn next(self: *Iterator, _: *Page) !?Iterator.Entry {
+    pub fn next(self: *Iterator, _: *Frame) !?Iterator.Entry {
         const index = self.index;
         const items = self.list._list.items();
         if (index >= items.len) {
@@ -148,11 +148,11 @@ pub const Iterator = struct {
     }
 };
 
-fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, page: *Page) !KeyValueList {
+fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, frame: *Frame) !KeyValueList {
     var list: KeyValueList = .empty;
     const form = form_ orelse return list;
 
-    var elements = try form.getElements(page);
+    var elements = try form.getElements(frame);
     var it = try elements.iterator();
     while (it.next()) |element| {
         if (element.isDisabled()) {
@@ -196,12 +196,12 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, page: *Pa
 
             if (element.is(Form.Select)) |select| {
                 if (select.getMultiple() == false) {
-                    break :blk select.getValue(page);
+                    break :blk select.getValue(frame);
                 }
 
-                var options = try select.getSelectedOptions(page);
+                var options = try select.getSelectedOptions(frame);
                 while (options.next()) |option| {
-                    try list.append(arena, name, option.as(Form.Select.Option).getValue(page));
+                    try list.append(arena, name, option.as(Form.Select.Option).getValue(frame));
                 }
                 continue;
             }

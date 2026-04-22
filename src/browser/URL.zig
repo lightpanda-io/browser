@@ -1309,7 +1309,7 @@ test "URL: resolve with encoding" {
         },
         // Relative paths with encoding
         .{
-            .base = "https://example.com/dir/page.html",
+            .base = "https://example.com/dir/frame.html",
             .path = "../other dir/file.html",
             .expected = "https://example.com/other%20dir/file.html",
         },

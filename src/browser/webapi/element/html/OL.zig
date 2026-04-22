@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -38,20 +38,20 @@ pub fn getStart(self: *OL) i32 {
     return std.fmt.parseInt(i32, attr, 10) catch 1;
 }
 
-pub fn setStart(self: *OL, value: i32, page: *Page) !void {
-    const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("start"), .wrap(str), page);
+pub fn setStart(self: *OL, value: i32, frame: *Frame) !void {
+    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
+    try self.asElement().setAttributeSafe(comptime .wrap("start"), .wrap(str), frame);
 }
 
 pub fn getReversed(self: *OL) bool {
     return self.asElement().getAttributeSafe(comptime .wrap("reversed")) != null;
 }
 
-pub fn setReversed(self: *OL, value: bool, page: *Page) !void {
+pub fn setReversed(self: *OL, value: bool, frame: *Frame) !void {
     if (value) {
-        try self.asElement().setAttributeSafe(comptime .wrap("reversed"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("reversed"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("reversed"), page);
+        try self.asElement().removeAttribute(comptime .wrap("reversed"), frame);
     }
 }
 
@@ -59,8 +59,8 @@ pub fn getType(self: *OL) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("type")) orelse "1";
 }
 
-pub fn setType(self: *OL, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), page);
+pub fn setType(self: *OL, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), frame);
 }
 
 pub const JsApi = struct {

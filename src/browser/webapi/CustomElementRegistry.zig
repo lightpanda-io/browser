@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
@@ -38,7 +38,7 @@ const DefineOptions = struct {
     extends: ?[]const u8 = null,
 };
 
-pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Function, options_: ?DefineOptions, page: *Page) !void {
+pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Function, options_: ?DefineOptions, frame: *Frame) !void {
     const options = options_ orelse DefineOptions{};
 
     try validateName(name);
@@ -55,15 +55,15 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
         break :blk tag;
     } else null;
 
-    const gop = try self._definitions.getOrPut(page.arena, name);
+    const gop = try self._definitions.getOrPut(frame.arena, name);
     if (gop.found_existing) {
         // Yes, this is the correct error to return when trying to redefine a name
         return error.NotSupported;
     }
 
-    const owned_name = try page.dupeString(name);
+    const owned_name = try frame.dupeString(name);
 
-    const definition = try page._factory.create(CustomElementDefinition{
+    const definition = try frame._factory.create(CustomElementDefinition{
         .name = owned_name,
         .constructor = try constructor.persist(),
         .extends = extends_tag,
@@ -75,8 +75,8 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
             var js_arr = observed_attrs.toArray();
             for (0..js_arr.len()) |i| {
                 const attr_val = js_arr.get(@intCast(i)) catch continue;
-                const attr_name = attr_val.toStringSliceWithAlloc(page.arena) catch continue;
-                definition.observed_attributes.put(page.arena, attr_name, {}) catch continue;
+                const attr_name = attr_val.toStringSliceWithAlloc(frame.arena) catch continue;
+                definition.observed_attributes.put(frame.arena, attr_name, {}) catch continue;
             }
         }
     }
@@ -86,8 +86,8 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
 
     // Upgrade any undefined custom elements with this name
     var idx: usize = 0;
-    while (idx < page._undefined_custom_elements.items.len) {
-        const custom = page._undefined_custom_elements.items[idx];
+    while (idx < frame._undefined_custom_elements.items.len) {
+        const custom = frame._undefined_custom_elements.items[idx];
         if (!custom._tag_name.eqlSlice(name)) {
             idx += 1;
             continue;
@@ -98,16 +98,16 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
             continue;
         }
 
-        upgradeCustomElement(custom, definition, page) catch {
-            _ = page._undefined_custom_elements.swapRemove(idx);
+        upgradeCustomElement(custom, definition, frame) catch {
+            _ = frame._undefined_custom_elements.swapRemove(idx);
             continue;
         };
 
-        _ = page._undefined_custom_elements.swapRemove(idx);
+        _ = frame._undefined_custom_elements.swapRemove(idx);
     }
 
     if (self._when_defined.fetchRemove(name)) |entry| {
-        page.js.toLocal(entry.value).resolve("whenDefined", constructor);
+        frame.js.toLocal(entry.value).resolve("whenDefined", constructor);
     }
 }
 
@@ -116,12 +116,12 @@ pub fn get(self: *CustomElementRegistry, name: []const u8) ?js.Function.Global {
     return definition.constructor;
 }
 
-pub fn upgrade(self: *CustomElementRegistry, root: *Node, page: *Page) !void {
-    try upgradeNode(self, root, page);
+pub fn upgrade(self: *CustomElementRegistry, root: *Node, frame: *Frame) !void {
+    try upgradeNode(self, root, frame);
 }
 
-pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, page: *Page) !js.Promise {
-    const local = page.js.local.?;
+pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, frame: *Frame) !js.Promise {
+    const local = frame.js.local.?;
     if (self._definitions.get(name)) |definition| {
         return local.resolvePromise(definition.constructor);
     }
@@ -130,12 +130,12 @@ pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, page: *Page) 
         error.SyntaxError => return local.rejectPromise(.{ .dom_exception = .{ .err = error.SyntaxError } }),
     };
 
-    const gop = try self._when_defined.getOrPut(page.arena, name);
+    const gop = try self._when_defined.getOrPut(frame.arena, name);
     if (gop.found_existing) {
         return local.toLocal(gop.value_ptr.*).promise();
     }
     errdefer _ = self._when_defined.remove(name);
-    const owned_name = try page.dupeString(name);
+    const owned_name = try frame.dupeString(name);
 
     const resolver = local.createPromiseResolver();
     gop.key_ptr.* = owned_name;
@@ -144,20 +144,20 @@ pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, page: *Page) 
     return resolver.promise();
 }
 
-fn upgradeNode(self: *CustomElementRegistry, node: *Node, page: *Page) !void {
+fn upgradeNode(self: *CustomElementRegistry, node: *Node, frame: *Frame) !void {
     if (node.is(Element)) |element| {
-        try upgradeElement(self, element, page);
+        try upgradeElement(self, element, frame);
     }
 
     var it = node.childrenIterator();
     while (it.next()) |child| {
-        try upgradeNode(self, child, page);
+        try upgradeNode(self, child, frame);
     }
 }
 
-fn upgradeElement(self: *CustomElementRegistry, element: *Element, page: *Page) !void {
+fn upgradeElement(self: *CustomElementRegistry, element: *Element, frame: *Frame) !void {
     const custom = element.is(Custom) orelse {
-        return Custom.checkAndAttachBuiltIn(element, page);
+        return Custom.checkAndAttachBuiltIn(element, frame);
     };
 
     if (custom._definition != null) return;
@@ -165,10 +165,10 @@ fn upgradeElement(self: *CustomElementRegistry, element: *Element, page: *Page) 
     const name = custom._tag_name.str();
     const definition = self._definitions.get(name) orelse return;
 
-    try upgradeCustomElement(custom, definition, page);
+    try upgradeCustomElement(custom, definition, frame);
 }
 
-pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinition, page: *Page) !void {
+pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinition, frame: *Frame) !void {
     custom._definition = definition;
 
     // Reset callback flags since this is a fresh upgrade
@@ -176,12 +176,12 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     custom._disconnected_callback_invoked = false;
 
     const node = custom.asNode();
-    const prev_upgrading = page._upgrading_element;
-    page._upgrading_element = node;
-    defer page._upgrading_element = prev_upgrading;
+    const prev_upgrading = frame._upgrading_element;
+    frame._upgrading_element = node;
+    defer frame._upgrading_element = prev_upgrading;
 
     var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
+    frame.js.localScope(&ls);
     defer ls.deinit();
 
     var caught: js.TryCatch.Caught = undefined;
@@ -195,12 +195,12 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     while (attr_it.next()) |attr| {
         const name = attr._name;
         if (definition.isAttributeObserved(name)) {
-            custom.invokeAttributeChangedCallback(name, null, attr._value, page);
+            custom.invokeAttributeChangedCallback(name, null, attr._value, frame);
         }
     }
 
     if (node.isConnected()) {
-        custom.invokeConnectedCallback(page);
+        custom.invokeConnectedCallback(frame);
     }
 }
 

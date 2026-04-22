@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const CData = @import("../CData.zig");
 
@@ -25,8 +25,8 @@ const Comment = @This();
 
 _proto: *CData,
 
-pub fn init(str: ?js.NullableString, page: *Page) !*Comment {
-    const node = try page.createComment(if (str) |s| s.value else "");
+pub fn init(str: ?js.NullableString, frame: *Frame) !*Comment {
+    const node = try frame.createComment(if (str) |s| s.value else "");
     return node.as(Comment);
 }
 

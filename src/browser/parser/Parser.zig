@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const h5e = @import("html5ever.zig");
 
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Node = @import("../webapi/Node.zig");
 const Element = @import("../webapi/Element.zig");
 
@@ -41,16 +41,16 @@ pub const ParsedNode = struct {
 
 const Parser = @This();
 
-page: *Page,
+frame: *Frame,
 err: ?Error,
 container: ParsedNode,
 arena: Allocator,
 strings: std.StringHashMapUnmanaged(void),
 
-pub fn init(arena: Allocator, node: *Node, page: *Page) Parser {
+pub fn init(arena: Allocator, node: *Node, frame: *Frame) Parser {
     return .{
         .err = null,
-        .page = page,
+        .frame = frame,
         .strings = .empty,
         .arena = arena,
         .container = ParsedNode{
@@ -179,10 +179,10 @@ pub const Streaming = struct {
     parser: Parser,
     handle: ?*anyopaque,
 
-    pub fn init(arena: Allocator, node: *Node, page: *Page) Streaming {
+    pub fn init(arena: Allocator, node: *Node, frame: *Frame) Streaming {
         return .{
             .handle = null,
-            .parser = Parser.init(arena, node, page),
+            .parser = Parser.init(arena, node, frame),
         };
     }
 
@@ -252,7 +252,7 @@ fn popCallback(ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void {
 }
 
 fn _popCallback(self: *Parser, node: *Node) !void {
-    try self.page.nodeComplete(node);
+    try self.frame.nodeComplete(node);
 }
 
 fn createElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator) callconv(.c) ?*anyopaque {
@@ -271,11 +271,11 @@ fn _createElementCallbackWithDefaultnamespace(ctx: *anyopaque, data: *anyopaque,
     };
 }
 fn _createElementCallback(self: *Parser, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator, default_namespace: Element.Namespace) !*anyopaque {
-    const page = self.page;
+    const frame = self.frame;
     const name = qname.local.slice();
     const namespace_string = qname.ns.slice();
     const namespace = if (namespace_string.len == 0) default_namespace else Element.Namespace.parse(namespace_string);
-    const node = try page.createElementNS(namespace, name, attributes);
+    const node = try frame.createElementNS(namespace, name, attributes);
 
     const pn = try self.arena.create(ParsedNode);
     pn.* = .{
@@ -293,8 +293,8 @@ fn createCommentCallback(ctx: *anyopaque, str: h5e.StringSlice) callconv(.c) ?*a
     };
 }
 fn _createCommentCallback(self: *Parser, str: []const u8) !*anyopaque {
-    const page = self.page;
-    const node = try page.createComment(str);
+    const frame = self.frame;
+    const node = try frame.createComment(str);
     const pn = try self.arena.create(ParsedNode);
     pn.* = .{
         .data = null,
@@ -311,8 +311,8 @@ fn createProcessingInstruction(ctx: *anyopaque, target: h5e.StringSlice, data: h
     };
 }
 fn _createProcessingInstruction(self: *Parser, target: []const u8, data: []const u8) !*anyopaque {
-    const page = self.page;
-    const node = try page.createProcessingInstruction(target, data);
+    const frame = self.frame;
+    const node = try frame.createProcessingInstruction(target, data);
     const pn = try self.arena.create(ParsedNode);
     pn.* = .{
         .data = null,
@@ -328,19 +328,19 @@ fn appendDoctypeToDocument(ctx: *anyopaque, name: h5e.StringSlice, public_id: h5
     };
 }
 fn _appendDoctypeToDocument(self: *Parser, name: []const u8, public_id: []const u8, system_id: []const u8) !void {
-    const page = self.page;
+    const frame = self.frame;
 
     // Create the DocumentType node
     const DocumentType = @import("../webapi/DocumentType.zig");
-    const doctype = try page._factory.node(DocumentType{
+    const doctype = try frame._factory.node(DocumentType{
         ._proto = undefined,
-        ._name = try page.dupeString(name),
-        ._public_id = try page.dupeString(public_id),
-        ._system_id = try page.dupeString(system_id),
+        ._name = try frame.dupeString(name),
+        ._public_id = try frame.dupeString(public_id),
+        ._system_id = try frame.dupeString(system_id),
     });
 
     // Append it to the document
-    try page.appendNew(self.container.node, .{ .node = doctype.asNode() });
+    try frame.appendNew(self.container.node, .{ .node = doctype.asNode() });
 }
 
 fn addAttrsIfMissingCallback(ctx: *anyopaque, target_ref: *anyopaque, attributes: h5e.AttributeIterator) callconv(.c) void {
@@ -351,14 +351,14 @@ fn addAttrsIfMissingCallback(ctx: *anyopaque, target_ref: *anyopaque, attributes
 }
 fn _addAttrsIfMissingCallback(self: *Parser, node: *Node, attributes: h5e.AttributeIterator) !void {
     const element = node.as(Element);
-    const page = self.page;
+    const frame = self.frame;
 
-    const attr_list = try element.getOrCreateAttributeList(page);
+    const attr_list = try element.getOrCreateAttributeList(frame);
     while (attributes.next()) |attr| {
         const name = attr.name.local.slice();
         const value = attr.value.slice();
         // putNew only adds if the attribute doesn't already exist
-        try attr_list.putNew(name, value, page);
+        try attr_list.putNew(name, value, frame);
     }
 }
 
@@ -412,11 +412,11 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
                 if (comptime IS_DEBUG) {
                     unreachable;
                 }
-                self.page.removeNode(previous_parent, child, .{ .will_be_reconnected = parent.isConnected() });
+                self.frame.removeNode(previous_parent, child, .{ .will_be_reconnected = parent.isConnected() });
             }
-            try self.page.appendNew(parent, .{ .node = child });
+            try self.frame.appendNew(parent, .{ .node = child });
         },
-        .text => |txt| try self.page.appendNew(parent, .{ .text = txt }),
+        .text => |txt| try self.frame.appendNew(parent, .{ .text = txt }),
     }
 }
 
@@ -428,7 +428,7 @@ fn removeFromParentCallback(ctx: *anyopaque, target_ref: *anyopaque) callconv(.c
 }
 fn _removeFromParentCallback(self: *Parser, node: *Node) !void {
     const parent = node.parentNode() orelse return;
-    _ = try parent.removeChild(node, self.page);
+    _ = try parent.removeChild(node, self.frame);
 }
 
 fn reparentChildrenCallback(ctx: *anyopaque, node_ref: *anyopaque, new_parent_ref: *anyopaque) callconv(.c) void {
@@ -438,7 +438,7 @@ fn reparentChildrenCallback(ctx: *anyopaque, node_ref: *anyopaque, new_parent_re
     };
 }
 fn _reparentChildrenCallback(self: *Parser, node: *Node, new_parent: *Node) !void {
-    try self.page.appendAllChildren(node, new_parent);
+    try self.frame.appendAllChildren(node, new_parent);
 }
 
 fn appendBeforeSiblingCallback(ctx: *anyopaque, sibling_ref: *anyopaque, node_or_text: h5e.NodeOrText) callconv(.c) void {
@@ -456,13 +456,13 @@ fn _appendBeforeSiblingCallback(self: *Parser, sibling: *Node, node_or_text: h5e
                 // A custom element constructor may have inserted the node into the
                 // DOM before the parser officially places it (e.g. via foster
                 // parenting). Detach it first so insertNodeRelative's assertion holds.
-                self.page.removeNode(previous_parent, child, .{ .will_be_reconnected = parent.isConnected() });
+                self.frame.removeNode(previous_parent, child, .{ .will_be_reconnected = parent.isConnected() });
             }
             break :blk child;
         },
-        .text => |txt| try self.page.createTextNode(txt),
+        .text => |txt| try self.frame.createTextNode(txt),
     };
-    try self.page.insertNodeRelative(parent, node, .{ .before = sibling }, .{});
+    try self.frame.insertNodeRelative(parent, node, .{ .before = sibling }, .{});
 }
 
 fn appendBasedOnParentNodeCallback(ctx: *anyopaque, element_ref: *anyopaque, prev_element_ref: *anyopaque, node_or_text: h5e.NodeOrText) callconv(.c) void {

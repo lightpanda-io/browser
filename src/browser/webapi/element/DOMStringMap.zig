@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Element = @import("../Element.zig");
 
@@ -31,19 +31,19 @@ const DOMStringMap = @This();
 
 _element: *Element,
 
-fn getProperty(self: *DOMStringMap, name: String, page: *Page) !?String {
-    const attr_name = try camelToKebab(page.call_arena, name);
-    return try self._element.getAttribute(attr_name, page);
+fn getProperty(self: *DOMStringMap, name: String, frame: *Frame) !?String {
+    const attr_name = try camelToKebab(frame.call_arena, name);
+    return try self._element.getAttribute(attr_name, frame);
 }
 
-fn setProperty(self: *DOMStringMap, name: String, value: String, page: *Page) !void {
-    const attr_name = try camelToKebab(page.call_arena, name);
-    return self._element.setAttributeSafe(attr_name, value, page);
+fn setProperty(self: *DOMStringMap, name: String, value: String, frame: *Frame) !void {
+    const attr_name = try camelToKebab(frame.call_arena, name);
+    return self._element.setAttributeSafe(attr_name, value, frame);
 }
 
-fn deleteProperty(self: *DOMStringMap, name: String, page: *Page) !void {
-    const attr_name = try camelToKebab(page.call_arena, name);
-    try self._element.removeAttribute(attr_name, page);
+fn deleteProperty(self: *DOMStringMap, name: String, frame: *Frame) !void {
+    const attr_name = try camelToKebab(frame.call_arena, name);
+    try self._element.removeAttribute(attr_name, frame);
 }
 
 // fooBar -> data-foo-bar (with SSO optimization for short strings)

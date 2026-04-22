@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Session = @import("../Session.zig");
 
 const Node = @import("Node.zig");
@@ -34,10 +34,10 @@ const Range = @This();
 
 _proto: *AbstractRange,
 
-pub fn init(page: *Page) !*Range {
-    const arena = try page.getArena(.medium, "Range");
-    errdefer page.releaseArena(arena);
-    return page._factory.abstractRange(arena, Range{ ._proto = undefined }, page);
+pub fn init(frame: *Frame) !*Range {
+    const arena = try frame.getArena(.medium, "Range");
+    errdefer frame.releaseArena(arena);
+    return frame._factory.abstractRange(arena, Range{ ._proto = undefined }, frame);
 }
 
 pub fn asAbstractRange(self: *Range) *AbstractRange {
@@ -313,11 +313,11 @@ pub fn intersectsNode(self: *const Range, node: *Node) bool {
     return false;
 }
 
-pub fn cloneRange(self: *const Range, page: *Page) !*Range {
-    const arena = try page.getArena(.medium, "Range.clone");
-    errdefer page.releaseArena(arena);
+pub fn cloneRange(self: *const Range, frame: *Frame) !*Range {
+    const arena = try frame.getArena(.medium, "Range.clone");
+    errdefer frame.releaseArena(arena);
 
-    const clone = try page._factory.abstractRange(arena, Range{ ._proto = undefined }, page);
+    const clone = try frame._factory.abstractRange(arena, Range{ ._proto = undefined }, frame);
     clone._proto._end_offset = self._proto._end_offset;
     clone._proto._start_offset = self._proto._start_offset;
     clone._proto._end_container = self._proto._end_container;
@@ -325,7 +325,7 @@ pub fn cloneRange(self: *const Range, page: *Page) !*Range {
     return clone;
 }
 
-pub fn insertNode(self: *Range, node: *Node, page: *Page) !void {
+pub fn insertNode(self: *Range, node: *Node, frame: *Frame) !void {
     // Insert node at the start of the range
     const container = self._proto._start_container;
     const offset = self._proto._start_offset;
@@ -340,28 +340,28 @@ pub fn insertNode(self: *Range, node: *Node, page: *Page) !void {
         const parent = container.parentNode() orelse return error.InvalidNodeType;
 
         if (offset == 0) {
-            _ = try parent.insertBefore(node, container, page);
+            _ = try parent.insertBefore(node, container, frame);
         } else {
             const text_data = container.getData().str();
             if (offset >= text_data.len) {
-                _ = try parent.insertBefore(node, container.nextSibling(), page);
+                _ = try parent.insertBefore(node, container.nextSibling(), frame);
             } else {
                 // Split the text node into before and after parts
                 const before_text = text_data[0..offset];
                 const after_text = text_data[offset..];
 
-                const before = try page.createTextNode(before_text);
-                const after = try page.createTextNode(after_text);
+                const before = try frame.createTextNode(before_text);
+                const after = try frame.createTextNode(after_text);
 
-                _ = try parent.replaceChild(before, container, page);
-                _ = try parent.insertBefore(node, before.nextSibling(), page);
-                _ = try parent.insertBefore(after, node.nextSibling(), page);
+                _ = try parent.replaceChild(before, container, frame);
+                _ = try parent.insertBefore(node, before.nextSibling(), frame);
+                _ = try parent.insertBefore(after, node.nextSibling(), frame);
             }
         }
     } else {
         // Container is an element, insert at offset
         const ref_child = container.getChildAt(offset);
-        _ = try container.insertBefore(node, ref_child, page);
+        _ = try container.insertBefore(node, ref_child, frame);
     }
 
     // Per spec step 11: if range was collapsed, extend end to include inserted node.
@@ -371,11 +371,11 @@ pub fn insertNode(self: *Range, node: *Node, page: *Page) !void {
     }
 }
 
-pub fn deleteContents(self: *Range, page: *Page) !void {
+pub fn deleteContents(self: *Range, frame: *Frame) !void {
     if (self._proto.getCollapsed()) {
         return;
     }
-    page.domChanged();
+    frame.domChanged();
 
     // Simple case: same container
     if (self._proto._start_container == self._proto._end_container) {
@@ -384,10 +384,10 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
             const old_value = cdata.getData();
             const text_data = old_value.str();
             cdata._data = try String.concat(
-                page.arena,
+                frame.arena,
                 &.{ text_data[0..self._proto._start_offset], text_data[self._proto._end_offset..] },
             );
-            page.characterDataChange(self._proto._start_container, old_value);
+            frame.characterDataChange(self._proto._start_container, old_value);
         } else {
             // Delete child nodes in range.
             // Capture count before the loop: removeChild triggers live range
@@ -396,7 +396,7 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
             var i: u32 = 0;
             while (i < count) : (i += 1) {
                 if (self._proto._start_container.getChildAt(self._proto._start_offset)) |child| {
-                    _ = try self._proto._start_container.removeChild(child, page);
+                    _ = try self._proto._start_container.removeChild(child, frame);
                 }
             }
         }
@@ -411,7 +411,7 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
         if (self._proto._start_offset < text_data.len) {
             // Keep only the part before start_offset
             const new_text = text_data[0..self._proto._start_offset];
-            try self._proto._start_container.setData(new_text, page);
+            try self._proto._start_container.setData(new_text, frame);
         }
     }
 
@@ -421,10 +421,10 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
         if (self._proto._end_offset < text_data.len) {
             // Keep only the part from end_offset onwards
             const new_text = text_data[self._proto._end_offset..];
-            try self._proto._end_container.setData(new_text, page);
+            try self._proto._end_container.setData(new_text, frame);
         } else if (self._proto._end_offset == text_data.len) {
             // If we're at the end, set to empty (will be removed if needed)
-            try self._proto._end_container.setData("", page);
+            try self._proto._end_container.setData("", frame);
         }
     }
 
@@ -435,7 +435,7 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
         while (current != null and current != self._proto._end_container) {
             const next = current.?.nextSibling();
             if (current.?.parentNode()) |parent| {
-                _ = try parent.removeChild(current.?, page);
+                _ = try parent.removeChild(current.?, frame);
             }
             current = next;
         }
@@ -444,8 +444,8 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
     self.collapse(true);
 }
 
-pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
-    const fragment = try DocumentFragment.init(page);
+pub fn cloneContents(self: *const Range, frame: *Frame) !*DocumentFragment {
+    const fragment = try DocumentFragment.init(frame);
 
     if (self._proto.getCollapsed()) return fragment;
 
@@ -456,16 +456,16 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
             const text_data = self._proto._start_container.getData().str();
             if (self._proto._start_offset < text_data.len and self._proto._end_offset <= text_data.len) {
                 const cloned_text = text_data[self._proto._start_offset..self._proto._end_offset];
-                const text_node = try page.createTextNode(cloned_text);
-                _ = try fragment.asNode().appendChild(text_node, page);
+                const text_node = try frame.createTextNode(cloned_text);
+                _ = try fragment.asNode().appendChild(text_node, frame);
             }
         } else {
             // Clone child nodes in range
             var offset = self._proto._start_offset;
             while (offset < self._proto._end_offset) : (offset += 1) {
                 if (self._proto._start_container.getChildAt(offset)) |child| {
-                    if (try child.cloneNodeForAppending(true, page)) |cloned| {
-                        _ = try fragment.asNode().appendChild(cloned, page);
+                    if (try child.cloneNodeForAppending(true, frame)) |cloned| {
+                        _ = try fragment.asNode().appendChild(cloned, frame);
                     }
                 }
             }
@@ -478,8 +478,8 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
             if (self._proto._start_offset < text_data.len) {
                 // Clone from start_offset to end of text
                 const cloned_text = text_data[self._proto._start_offset..];
-                const text_node = try page.createTextNode(cloned_text);
-                _ = try fragment.asNode().appendChild(text_node, page);
+                const text_node = try frame.createTextNode(cloned_text);
+                _ = try fragment.asNode().appendChild(text_node, frame);
             }
         }
 
@@ -488,8 +488,8 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
             var current = self._proto._start_container.nextSibling();
             while (current != null and current != self._proto._end_container) {
                 const next = current.?.nextSibling();
-                if (try current.?.cloneNodeForAppending(true, page)) |cloned| {
-                    _ = try fragment.asNode().appendChild(cloned, page);
+                if (try current.?.cloneNodeForAppending(true, frame)) |cloned| {
+                    _ = try fragment.asNode().appendChild(cloned, frame);
                 }
                 current = next;
             }
@@ -501,8 +501,8 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
             if (self._proto._end_offset > 0 and self._proto._end_offset <= text_data.len) {
                 // Clone from start to end_offset
                 const cloned_text = text_data[0..self._proto._end_offset];
-                const text_node = try page.createTextNode(cloned_text);
-                _ = try fragment.asNode().appendChild(text_node, page);
+                const text_node = try frame.createTextNode(cloned_text);
+                _ = try fragment.asNode().appendChild(text_node, frame);
             }
         }
     }
@@ -510,27 +510,27 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
     return fragment;
 }
 
-pub fn extractContents(self: *Range, page: *Page) !*DocumentFragment {
-    const fragment = try self.cloneContents(page);
-    try self.deleteContents(page);
+pub fn extractContents(self: *Range, frame: *Frame) !*DocumentFragment {
+    const fragment = try self.cloneContents(frame);
+    try self.deleteContents(frame);
     return fragment;
 }
 
-pub fn surroundContents(self: *Range, new_parent: *Node, page: *Page) !void {
+pub fn surroundContents(self: *Range, new_parent: *Node, frame: *Frame) !void {
     // Extract contents
-    const contents = try self.extractContents(page);
+    const contents = try self.extractContents(frame);
 
     // Insert the new parent
-    try self.insertNode(new_parent, page);
+    try self.insertNode(new_parent, frame);
 
     // Move contents into new parent
-    _ = try new_parent.appendChild(contents.asNode(), page);
+    _ = try new_parent.appendChild(contents.asNode(), frame);
 
     // Select the new parent's contents
     try self.selectNodeContents(new_parent);
 }
 
-pub fn createContextualFragment(self: *const Range, html: []const u8, page: *Page) !*DocumentFragment {
+pub fn createContextualFragment(self: *const Range, html: []const u8, frame: *Frame) !*DocumentFragment {
     var context_node = self._proto._start_container;
 
     // If start container is a text node, use its parent as context
@@ -538,7 +538,7 @@ pub fn createContextualFragment(self: *const Range, html: []const u8, page: *Pag
         context_node = context_node.parentNode() orelse context_node;
     }
 
-    const fragment = try DocumentFragment.init(page);
+    const fragment = try DocumentFragment.init(frame);
 
     if (html.len == 0) {
         return fragment;
@@ -547,26 +547,26 @@ pub fn createContextualFragment(self: *const Range, html: []const u8, page: *Pag
     // Create a temporary element of the same type as the context for parsing
     // This preserves the parsing context without modifying the original node
     const temp_node = if (context_node.is(Node.Element)) |el|
-        try page.createElementNS(el._namespace, el.getTagNameLower(), null)
+        try frame.createElementNS(el._namespace, el.getTagNameLower(), null)
     else
-        try page.createElementNS(.html, "div", null);
+        try frame.createElementNS(.html, "div", null);
 
-    try page.parseHtmlAsChildren(temp_node, html);
+    try frame.parseHtmlAsChildren(temp_node, html);
 
     // Move all parsed children to the fragment
     // Keep removing first child until temp element is empty
     const fragment_node = fragment.asNode();
     while (temp_node.firstChild()) |child| {
-        page.removeNode(temp_node, child, .{ .will_be_reconnected = true });
-        try page.appendNode(fragment_node, child, .{ .child_already_connected = false });
+        frame.removeNode(temp_node, child, .{ .will_be_reconnected = true });
+        try frame.appendNode(fragment_node, child, .{ .child_already_connected = false });
     }
 
     return fragment;
 }
 
-pub fn toString(self: *const Range, page: *Page) ![]const u8 {
+pub fn toString(self: *const Range, frame: *Frame) ![]const u8 {
     // Simplified implementation: just extract text content
-    var buf = std.Io.Writer.Allocating.init(page.call_arena);
+    var buf = std.Io.Writer.Allocating.init(frame.call_arena);
     try self.writeTextContent(&buf.writer);
     return buf.written();
 }
@@ -661,24 +661,24 @@ fn nextAfterSubtree(node: *Node, root: *Node) ?*Node {
     return null;
 }
 
-pub fn getBoundingClientRect(self: *const Range, page: *Page) DOMRect {
+pub fn getBoundingClientRect(self: *const Range, frame: *Frame) DOMRect {
     if (self._proto.getCollapsed()) {
         return .{ ._x = 0, ._y = 0, ._width = 0, ._height = 0 };
     }
     const element = self.getContainerElement() orelse {
         return .{ ._x = 0, ._y = 0, ._width = 0, ._height = 0 };
     };
-    return element.getBoundingClientRect(page);
+    return element.getBoundingClientRect(frame);
 }
 
-pub fn getClientRects(self: *const Range, page: *Page) ![]DOMRect {
+pub fn getClientRects(self: *const Range, frame: *Frame) ![]DOMRect {
     if (self._proto.getCollapsed()) {
         return &.{};
     }
     const element = self.getContainerElement() orelse {
         return &.{};
     };
-    return element.getClientRects(page);
+    return element.getClientRects(frame);
 }
 
 fn getContainerElement(self: *const Range) ?*Node.Element {
