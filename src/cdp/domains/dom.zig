@@ -85,9 +85,9 @@ fn getDocument(cmd: *CDP.Command) !void {
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
-    const node = try bc.node_registry.register(page.window._document.asNode());
+    const node = try bc.node_registry.register(frame.window._document.asNode());
     return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
 }
 
@@ -99,9 +99,9 @@ fn performSearch(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
-    const list = try Selector.querySelectorAll(page.window._document.asNode(), params.query, page);
-    defer list.deinit(page._session);
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const list = try Selector.querySelectorAll(frame.window._document.asNode(), params.query, frame);
+    defer list.deinit(frame._session);
 
     const search = try bc.node_search_list.create(list._nodes);
 
@@ -219,13 +219,13 @@ fn querySelector(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
         return cmd.sendError(-32000, "Could not find node with given id", .{});
     };
 
-    const element = try Selector.querySelector(node.dom, params.selector, page) orelse return error.NodeNotFoundForGivenId;
+    const element = try Selector.querySelector(node.dom, params.selector, frame) orelse return error.NodeNotFoundForGivenId;
     const dom_node = element.asNode();
     const registered_node = try bc.node_registry.register(dom_node);
 
@@ -245,14 +245,14 @@ fn querySelectorAll(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
         return cmd.sendError(-32000, "Could not find node with given id", .{});
     };
 
-    const selected_nodes = try Selector.querySelectorAll(node.dom, params.selector, page);
-    defer selected_nodes.deinit(page._session);
+    const selected_nodes = try Selector.querySelectorAll(node.dom, params.selector, frame);
+    defer selected_nodes.deinit(frame._session);
 
     const nodes = selected_nodes._nodes;
 
@@ -278,7 +278,7 @@ fn resolveNode(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     var ls: ?js.Local.Scope = null;
     defer if (ls) |*_ls| {
@@ -287,7 +287,7 @@ fn resolveNode(cmd: *CDP.Command) !void {
 
     if (params.executionContextId) |context_id| blk: {
         ls = undefined;
-        page.js.localScope(&ls.?);
+        frame.js.localScope(&ls.?);
         if (ls.?.local.debugContextId() == context_id) {
             break :blk;
         }
@@ -305,7 +305,7 @@ fn resolveNode(cmd: *CDP.Command) !void {
         } else return error.ContextNotFound;
     } else {
         ls = undefined;
-        page.js.localScope(&ls.?);
+        frame.js.localScope(&ls.?);
     }
 
     const input_node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
@@ -406,9 +406,9 @@ fn getNode(arena: Allocator, bc: *CDP.BrowserContext, node_id: ?Node.Id, backend
         return bc.node_registry.lookup_by_id.get(input_node_id_) orelse return error.NodeNotFound;
     }
     if (object_id) |object_id_| {
-        const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+        const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         // Retrieve the object from which ever context it is in.
@@ -428,7 +428,7 @@ fn getContentQuads(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
@@ -442,7 +442,7 @@ fn getContentQuads(cmd: *CDP.Command) !void {
     // Text may be tricky, multiple quads in case of multiple lines? empty quads of text  = ""?
     // Elements like SVGElement may have multiple quads.
 
-    const quad = rectToQuad(element.getBoundingClientRect(page));
+    const quad = rectToQuad(element.getBoundingClientRect(frame));
     return cmd.sendResult(.{ .quads = &.{quad} }, .{});
 }
 
@@ -454,14 +454,14 @@ fn getBoxModel(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
     // TODO implement for document or text
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
 
-    const rect = element.getBoundingClientRect(page);
+    const rect = element.getBoundingClientRect(frame);
     const quad = rectToQuad(rect);
     const zero = [_]f64{0.0} ** 8;
 
@@ -505,13 +505,13 @@ fn getFrameOwner(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page_frame_id = try id.toPageId(.frame_id, params.frameId);
+    const frame_id = try id.parseFrameId(params.frameId);
 
-    const page = bc.session.findPageByFrameId(page_frame_id) orelse {
+    const frame = bc.session.findFrameByFrameId(frame_id) orelse {
         return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
     };
 
-    const node = try bc.node_registry.register(page.window._document.asNode());
+    const node = try bc.node_registry.register(frame.window._document.asNode());
     return cmd.sendResult(.{ .nodeId = node.id, .backendNodeId = node.id }, .{});
 }
 
@@ -527,12 +527,12 @@ fn getOuterHTML(cmd: *CDP.Command) !void {
         log.warn(.not_implemented, "DOM.getOuterHTML", .{ .param = "includeShadowDOM" });
     }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
     var aw = std.Io.Writer.Allocating.init(cmd.arena);
-    try dump.deep(node.dom, .{}, &aw.writer, page);
+    try dump.deep(node.dom, .{}, &aw.writer, frame);
 
     return cmd.sendResult(.{ .outerHTML = aw.written() }, .{});
 }

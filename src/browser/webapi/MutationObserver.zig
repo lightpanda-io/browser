@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Session = @import("../Session.zig");
 
 const Node = @import("Node.zig");
@@ -46,7 +46,7 @@ _callback: js.Function.Temp,
 _observing: std.ArrayList(Observing) = .{},
 _pending_records: std.ArrayList(*MutationRecord) = .{},
 
-/// Intrusively linked to next element (see Page.zig).
+/// Intrusively linked to next element (see Frame.zig).
 node: std.DoublyLinkedList.Node = .{},
 
 const Observing = struct {
@@ -75,9 +75,9 @@ pub const ObserveOptions = struct {
     attributeFilter: ?[]const []const u8 = null,
 };
 
-pub fn init(callback: js.Function.Temp, page: *Page) !*MutationObserver {
-    const arena = try page.getArena(.small, "MutationObserver");
-    errdefer page.releaseArena(arena);
+pub fn init(callback: js.Function.Temp, frame: *Frame) !*MutationObserver {
+    const arena = try frame.getArena(.small, "MutationObserver");
+    errdefer frame.releaseArena(arena);
     const self = try arena.create(MutationObserver);
     self.* = .{
         ._arena = arena,
@@ -104,7 +104,7 @@ pub fn acquireRef(self: *MutationObserver) void {
     self._rc.acquire();
 }
 
-pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, page: *Page) !void {
+pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, frame: *Frame) !void {
     const arena = self._arena;
 
     // Per spec: if attributeOldValue/attributeFilter present and attributes
@@ -172,24 +172,24 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
     });
 
     if (self._observing.items.len == 1) {
-        try page.registerMutationObserver(self);
+        try frame.registerMutationObserver(self);
     }
 }
 
-pub fn disconnect(self: *MutationObserver, page: *Page) void {
+pub fn disconnect(self: *MutationObserver, frame: *Frame) void {
     for (self._pending_records.items) |record| {
-        record.deinit(page._session);
+        record.deinit(frame._session);
     }
     self._pending_records.clearRetainingCapacity();
 
     if (self._observing.items.len > 0) {
-        page.unregisterMutationObserver(self);
+        frame.unregisterMutationObserver(self);
     }
     self._observing.clearRetainingCapacity();
 }
 
-pub fn takeRecords(self: *MutationObserver, page: *Page) ![]*MutationRecord {
-    const records = try page.call_arena.dupe(*MutationRecord, self._pending_records.items);
+pub fn takeRecords(self: *MutationObserver, frame: *Frame) ![]*MutationRecord {
+    const records = try frame.call_arena.dupe(*MutationRecord, self._pending_records.items);
     self._pending_records.clearRetainingCapacity();
     return records;
 }
@@ -200,7 +200,7 @@ pub fn notifyAttributeChange(
     target: *Element,
     attribute_name: String,
     old_value: ?String,
-    page: *Page,
+    frame: *Frame,
 ) !void {
     const target_node = target.asNode();
 
@@ -226,7 +226,7 @@ pub fn notifyAttributeChange(
             }
         }
 
-        const arena = try page.getArena(.tiny, "MutationRecord");
+        const arena = try frame.getArena(.tiny, "MutationRecord");
         const record = try arena.create(MutationRecord);
         record.* = .{
             ._arena = arena,
@@ -245,7 +245,7 @@ pub fn notifyAttributeChange(
 
         try self._pending_records.append(self._arena, record);
 
-        try page.scheduleMutationDelivery();
+        try frame.scheduleMutationDelivery();
         break;
     }
 }
@@ -255,7 +255,7 @@ pub fn notifyCharacterDataChange(
     self: *MutationObserver,
     target: *Node,
     old_value: ?String,
-    page: *Page,
+    frame: *Frame,
 ) !void {
     for (self._observing.items) |obs| {
         if (obs.target != target) {
@@ -270,7 +270,7 @@ pub fn notifyCharacterDataChange(
             continue;
         }
 
-        const arena = try page.getArena(.tiny, "MutationRecord");
+        const arena = try frame.getArena(.tiny, "MutationRecord");
         const record = try arena.create(MutationRecord);
         record.* = .{
             ._arena = arena,
@@ -289,7 +289,7 @@ pub fn notifyCharacterDataChange(
 
         try self._pending_records.append(self._arena, record);
 
-        try page.scheduleMutationDelivery();
+        try frame.scheduleMutationDelivery();
         break;
     }
 }
@@ -302,7 +302,7 @@ pub fn notifyChildListChange(
     removed_nodes: []const *Node,
     previous_sibling: ?*Node,
     next_sibling: ?*Node,
-    page: *Page,
+    frame: *Frame,
 ) !void {
     for (self._observing.items) |obs| {
         if (obs.target != target) {
@@ -317,7 +317,7 @@ pub fn notifyChildListChange(
             continue;
         }
 
-        const arena = try page.getArena(.tiny, "MutationRecord");
+        const arena = try frame.getArena(.tiny, "MutationRecord");
         const record = try arena.create(MutationRecord);
         record.* = .{
             ._arena = arena,
@@ -333,26 +333,26 @@ pub fn notifyChildListChange(
 
         try self._pending_records.append(self._arena, record);
 
-        try page.scheduleMutationDelivery();
+        try frame.scheduleMutationDelivery();
         break;
     }
 }
 
-pub fn deliverRecords(self: *MutationObserver, page: *Page) !void {
+pub fn deliverRecords(self: *MutationObserver, frame: *Frame) !void {
     if (self._pending_records.items.len == 0) {
         return;
     }
 
     // Take a copy of the records and clear the list before calling callback
     // This ensures mutations triggered during the callback go into a fresh list
-    const records = try self.takeRecords(page);
+    const records = try self.takeRecords(frame);
     var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
+    frame.js.localScope(&ls);
     defer ls.deinit();
 
     var caught: js.TryCatch.Caught = undefined;
     ls.toLocal(self._callback).tryCall(void, .{ records, self }, &caught) catch |err| {
-        log.err(.page, "MutObserver.deliverRecords", .{ .err = err, .caught = caught });
+        log.err(.frame, "MutObserver.deliverRecords", .{ .err = err, .caught = caught });
         return err;
     };
 }

@@ -43,7 +43,7 @@ const App = @import("App.zig");
 const js = @import("browser/js/js.zig");
 const Config = @import("Config.zig");
 const HttpClient = @import("browser/HttpClient.zig");
-const Page = @import("browser/Page.zig");
+const Frame = @import("browser/Frame.zig");
 const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");
 const Notification = @import("Notification.zig");
@@ -394,8 +394,8 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
 }
 
 fn runWebApiTest(test_file: [:0]const u8) !void {
-    const page = try test_session.createPage();
-    defer test_session.removePage();
+    const frame = try test_session.createFrame();
+    defer test_session.removeFrame();
 
     const url = try std.fmt.allocPrintSentinel(
         arena_allocator,
@@ -405,7 +405,7 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     );
 
     var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
+    frame.js.localScope(&ls);
     defer ls.deinit();
 
     {
@@ -413,7 +413,7 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
         try_catch.init(&ls.local);
         defer try_catch.deinit();
 
-        try page.navigate(url, .{});
+        try frame.navigate(url, .{});
     }
 
     var runner = try test_session.runner(.{});
@@ -452,9 +452,9 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
 const PageTestOpts = struct {
     wait_until_done: bool = true,
 };
-pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Page {
-    const page = try test_session.createPage();
-    errdefer test_session.removePage();
+pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Frame {
+    const frame = try test_session.createFrame();
+    errdefer test_session.removeFrame();
 
     const url = try std.fmt.allocPrintSentinel(
         arena_allocator,
@@ -463,12 +463,12 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Page {
         0,
     );
 
-    try page.navigate(url, .{});
+    try frame.navigate(url, .{});
     var runner = try test_session.runner(.{});
     if (opts.wait_until_done) {
         try runner.wait(.{ .ms = 2000 });
     }
-    return page;
+    return frame;
 }
 
 const TestHTTPServer = @import("TestHTTPServer.zig");

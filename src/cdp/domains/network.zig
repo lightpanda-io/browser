@@ -123,7 +123,7 @@ fn deleteCookies(cmd: *CDP.Command) !void {
         partitionKey: ?CdpStorage.CookiePartitionKey = null,
     })) orelse return error.InvalidParams;
     // Silently ignore partitionKey since we don't support partitioned cookies (CHIPS).
-    // This allows Puppeteer's page.setCookie() to work, which sends deleteCookies
+    // This allows Puppeteer's frame.setCookie() to work, which sends deleteCookies
     // with partitionKey as part of its cookie-setting workflow.
     if (params.partitionKey != null) {
         log.warn(.not_implemented, "partition key", .{ .src = "deleteCookies" });
@@ -187,8 +187,8 @@ fn getCookies(cmd: *CDP.Command) !void {
     const params = (try cmd.params(GetCookiesParam)) orelse GetCookiesParam{};
 
     // If not specified, use the URLs of the page and all of its subframes. TODO subframes
-    const page_url = if (bc.session.page) |page| page.url else null;
-    const param_urls = params.urls orelse &[_][:0]const u8{page_url orelse return error.InvalidParams};
+    const frame_url = if (bc.session.frame) |frame| frame.url else null;
+    const param_urls = params.urls orelse &[_][:0]const u8{frame_url orelse return error.InvalidParams};
 
     var urls = try std.ArrayList(CdpStorage.PreparedUri).initCapacity(cmd.arena, param_urls.len);
     for (param_urls) |url| {
@@ -238,8 +238,8 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
     const session_id = bc.session_id orelse return;
 
     // Isn't possible to do a network request within a Browser (which our
-    // notification is tied to), without a page.
-    lp.assert(bc.session.page != null, "CDP.network.httpRequestFail null page", .{});
+    // notification is tied to), without a frame.
+    lp.assert(bc.session.frame != null, "CDP.network.httpRequestFail null frame", .{});
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
@@ -252,14 +252,14 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
 }
 
 pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.RequestStart) !void {
-    // detachTarget could be called, in which case, we still have a page doing
+    // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
     const transfer = msg.transfer;
     const req = &transfer.req;
     const frame_id = req.frame_id;
-    const page = bc.session.findPageByFrameId(frame_id) orelse return;
+    const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
 
     // Modify request with extra CDP headers
     for (bc.extra_headers.items) |extra| {
@@ -268,11 +268,11 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
 
     // We're missing a bunch of fields, but, for now, this eems like enough
     try bc.cdp.sendEvent("Network.requestWillBeSent", .{
-        .loaderId = &id.toLoaderId(req.page_id),
-        .requestId = &id.toRequestId(transfer),
         .frameId = &id.toFrameId(frame_id),
+        .requestId = &id.toRequestId(transfer),
+        .loaderId = &id.toLoaderId(req.loader_id),
         .type = req.resource_type.string(),
-        .documentURL = page.url,
+        .documentURL = frame.url,
         .request = TransferAsRequestWriter.init(transfer),
         .initiator = .{ .type = "other" },
         .redirectHasExtraInfo = false, // TODO change after adding Network.requestWillBeSentExtraInfo
@@ -283,7 +283,7 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
 }
 
 pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *const Notification.ResponseHeaderDone) !void {
-    // detachTarget could be called, in which case, we still have a page doing
+    // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
@@ -292,16 +292,16 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
-        .loaderId = &id.toLoaderId(req.page_id),
-        .requestId = &id.toRequestId(transfer),
         .frameId = &id.toFrameId(req.frame_id),
+        .requestId = &id.toRequestId(transfer),
+        .loaderId = &id.toLoaderId(req.loader_id),
         .response = TransferAsResponseWriter.init(arena, transfer),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
 }
 
 pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.RequestDone) !void {
-    // detachTarget could be called, in which case, we still have a page doing
+    // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
     const transfer = msg.transfer;

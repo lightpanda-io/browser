@@ -19,7 +19,7 @@
 const std = @import("std");
 const URL = @import("../URL.zig");
 const NavigationState = @import("root.zig").NavigationState;
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const js = @import("../../js/js.zig");
 
 const NavigationHistoryEntry = @This();
@@ -36,8 +36,8 @@ pub fn id(self: *const NavigationHistoryEntry) []const u8 {
     return self._id;
 }
 
-pub fn index(self: *const NavigationHistoryEntry, page: *Page) i32 {
-    const navigation = &page._session.navigation;
+pub fn index(self: *const NavigationHistoryEntry, frame: *Frame) i32 {
+    const navigation = &frame._session.navigation;
 
     for (navigation._entries.items, 0..) |entry, i| {
         if (std.mem.eql(u8, entry._id, self._id)) {
@@ -52,9 +52,9 @@ pub fn key(self: *const NavigationHistoryEntry) []const u8 {
     return self._key;
 }
 
-pub fn sameDocument(self: *const NavigationHistoryEntry, page: *Page) bool {
+pub fn sameDocument(self: *const NavigationHistoryEntry, frame: *Frame) bool {
     const got_url = self._url orelse return false;
-    return URL.eqlDocument(got_url, page.base());
+    return URL.eqlDocument(got_url, frame.base());
 }
 
 pub fn url(self: *const NavigationHistoryEntry) ?[:0]const u8 {
@@ -63,10 +63,10 @@ pub fn url(self: *const NavigationHistoryEntry) ?[:0]const u8 {
 
 pub const StateReturn = union(enum) { value: ?js.Value, undefined: void };
 
-pub fn getState(self: *const NavigationHistoryEntry, page: *Page) !StateReturn {
+pub fn getState(self: *const NavigationHistoryEntry, frame: *Frame) !StateReturn {
     if (self._state.source == .navigation) {
         if (self._state.value) |value| {
-            return .{ .value = try page.js.local.?.parseJSON(value) };
+            return .{ .value = try frame.js.local.?.parseJSON(value) };
         }
     }
 

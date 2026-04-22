@@ -19,7 +19,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
 
@@ -36,13 +36,13 @@ const CompositionEventOptions = struct {
 
 const Options = Event.inheritOptions(CompositionEvent, CompositionEventOptions);
 
-pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CompositionEvent {
-    const arena = try page.getArena(.tiny, "CompositionEvent");
-    errdefer page.releaseArena(arena);
+pub fn init(typ: []const u8, opts_: ?Options, frame: *Frame) !*CompositionEvent {
+    const arena = try frame.getArena(.tiny, "CompositionEvent");
+    errdefer frame.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 
     const opts = opts_ orelse Options{};
-    const event = try page._factory.event(
+    const event = try frame._factory.event(
         arena,
         type_string,
         CompositionEvent{

@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const EventTarget = @import("EventTarget.zig");
 
 const VisualViewport = @This();
@@ -28,12 +28,12 @@ pub fn asEventTarget(self: *VisualViewport) *EventTarget {
     return self._proto;
 }
 
-pub fn getPageLeft(_: *const VisualViewport, page: *Page) u32 {
-    return page.window.getScrollX();
+pub fn getPageLeft(_: *const VisualViewport, frame: *Frame) u32 {
+    return frame.window.getScrollX();
 }
 
-pub fn getPageTop(_: *const VisualViewport, page: *Page) u32 {
-    return page.window.getScrollY();
+pub fn getPageTop(_: *const VisualViewport, frame: *Frame) u32 {
+    return frame.window.getScrollY();
 }
 
 pub const JsApi = struct {

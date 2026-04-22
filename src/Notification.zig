@@ -19,7 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const Page = @import("browser/Page.zig");
+const Frame = @import("browser/Frame.zig");
 const Transfer = @import("browser/HttpClient.zig").Transfer;
 
 const log = lp.log;
@@ -66,15 +66,15 @@ allocator: Allocator,
 mem_pool: std.heap.MemoryPool(Listener),
 
 const EventListeners = struct {
-    page_remove: List = .{},
-    page_created: List = .{},
-    page_navigate: List = .{},
-    page_navigated: List = .{},
-    page_network_idle: List = .{},
-    page_network_almost_idle: List = .{},
-    page_frame_created: List = .{},
-    page_dom_content_loaded: List = .{},
-    page_loaded: List = .{},
+    frame_remove: List = .{},
+    frame_created: List = .{},
+    frame_navigate: List = .{},
+    frame_navigated: List = .{},
+    frame_network_idle: List = .{},
+    frame_network_almost_idle: List = .{},
+    frame_child_frame_created: List = .{},
+    frame_dom_content_loaded: List = .{},
+    frame_loaded: List = .{},
     http_request_fail: List = .{},
     http_request_start: List = .{},
     http_request_intercept: List = .{},
@@ -86,15 +86,15 @@ const EventListeners = struct {
 };
 
 const Events = union(enum) {
-    page_remove: PageRemove,
-    page_created: *Page,
-    page_navigate: *const PageNavigate,
-    page_navigated: *const PageNavigated,
-    page_network_idle: *const PageNetworkIdle,
-    page_network_almost_idle: *const PageNetworkAlmostIdle,
-    page_frame_created: *const PageFrameCreated,
-    page_dom_content_loaded: *const PageDOMContentLoaded,
-    page_loaded: *const PageLoaded,
+    frame_remove: FrameRemove,
+    frame_created: *Frame,
+    frame_navigate: *const FrameNavigate,
+    frame_navigated: *const FrameNavigated,
+    frame_network_idle: *const FrameNetworkIdle,
+    frame_network_almost_idle: *const FrameNetworkAlmostIdle,
+    frame_child_frame_created: *const FrameChildFrameCreated,
+    frame_dom_content_loaded: *const FrameDOMContentLoaded,
+    frame_loaded: *const FrameLoaded,
     http_request_fail: *const RequestFail,
     http_request_start: *const RequestStart,
     http_request_intercept: *const RequestIntercept,
@@ -106,58 +106,58 @@ const Events = union(enum) {
 };
 const EventType = std.meta.FieldEnum(Events);
 
-pub const PageRemove = struct {};
+pub const FrameRemove = struct {};
 
-pub const PageNavigate = struct {
+pub const FrameNavigate = struct {
     req_id: u32,
-    page_id: u32,
     frame_id: u32,
+    loader_id: u32,
     timestamp: u64,
     url: [:0]const u8,
-    opts: Page.NavigateOpts,
+    opts: Frame.NavigateOpts,
 };
 
-pub const PageNavigated = struct {
+pub const FrameNavigated = struct {
     req_id: u32,
-    page_id: u32,
     frame_id: u32,
+    loader_id: u32,
     timestamp: u64,
     url: [:0]const u8,
-    opts: Page.NavigatedOpts,
+    opts: Frame.NavigatedOpts,
 };
 
-pub const PageNetworkIdle = struct {
+pub const FrameNetworkIdle = struct {
     req_id: u32,
-    page_id: u32,
     frame_id: u32,
+    loader_id: u32,
     timestamp: u64,
 };
 
-pub const PageNetworkAlmostIdle = struct {
+pub const FrameNetworkAlmostIdle = struct {
     req_id: u32,
-    page_id: u32,
     frame_id: u32,
+    loader_id: u32,
     timestamp: u64,
 };
 
-pub const PageFrameCreated = struct {
-    page_id: u32,
+pub const FrameChildFrameCreated = struct {
     frame_id: u32,
+    loader_id: u32,
     parent_id: u32,
     timestamp: u64,
 };
 
-pub const PageDOMContentLoaded = struct {
+pub const FrameDOMContentLoaded = struct {
     req_id: u32,
-    page_id: u32,
     frame_id: u32,
+    loader_id: u32,
     timestamp: u64,
 };
 
-pub const PageLoaded = struct {
+pub const FrameLoaded = struct {
     req_id: u32,
-    page_id: u32,
     frame_id: u32,
+    loader_id: u32,
     timestamp: u64,
 };
 
@@ -348,8 +348,8 @@ test "Notification" {
     defer notifier.deinit();
 
     // noop
-    notifier.dispatch(.page_navigate, &.{
-        .page_id = 39,
+    notifier.dispatch(.frame_navigate, &.{
+        .loader_id = 39,
         .frame_id = 0,
         .req_id = 1,
         .timestamp = 4,
@@ -359,96 +359,96 @@ test "Notification" {
 
     var tc = TestClient{};
 
-    try notifier.register(.page_navigate, &tc, TestClient.pageNavigate);
-    notifier.dispatch(.page_navigate, &.{
-        .page_id = 39,
+    try notifier.register(.frame_navigate, &tc, TestClient.frameNavigate);
+    notifier.dispatch(.frame_navigate, &.{
+        .loader_id = 39,
         .frame_id = 0,
         .req_id = 1,
         .timestamp = 4,
         .url = undefined,
         .opts = .{},
     });
-    try testing.expectEqual(4, tc.page_navigate);
+    try testing.expectEqual(4, tc.frame_navigate);
 
     notifier.unregisterAll(&tc);
-    notifier.dispatch(.page_navigate, &.{
-        .page_id = 39,
+    notifier.dispatch(.frame_navigate, &.{
+        .loader_id = 39,
         .frame_id = 0,
         .req_id = 1,
         .timestamp = 10,
         .url = undefined,
         .opts = .{},
     });
-    try testing.expectEqual(4, tc.page_navigate);
+    try testing.expectEqual(4, tc.frame_navigate);
 
-    try notifier.register(.page_navigate, &tc, TestClient.pageNavigate);
-    try notifier.register(.page_navigated, &tc, TestClient.pageNavigated);
-    notifier.dispatch(.page_navigate, &.{
-        .page_id = 39,
+    try notifier.register(.frame_navigate, &tc, TestClient.frameNavigate);
+    try notifier.register(.frame_navigated, &tc, TestClient.frameNavigated);
+    notifier.dispatch(.frame_navigate, &.{
+        .loader_id = 39,
         .frame_id = 0,
         .req_id = 1,
         .timestamp = 10,
         .url = undefined,
         .opts = .{},
     });
-    notifier.dispatch(.page_navigated, &.{ .page_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 6, .url = undefined, .opts = .{} });
-    try testing.expectEqual(14, tc.page_navigate);
-    try testing.expectEqual(6, tc.page_navigated);
+    notifier.dispatch(.frame_navigated, &.{ .loader_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 6, .url = undefined, .opts = .{} });
+    try testing.expectEqual(14, tc.frame_navigate);
+    try testing.expectEqual(6, tc.frame_navigated);
 
     notifier.unregisterAll(&tc);
-    notifier.dispatch(.page_navigate, &.{
-        .page_id = 39,
+    notifier.dispatch(.frame_navigate, &.{
+        .loader_id = 39,
         .frame_id = 0,
         .req_id = 1,
         .timestamp = 100,
         .url = undefined,
         .opts = .{},
     });
-    notifier.dispatch(.page_navigated, &.{ .page_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
-    try testing.expectEqual(14, tc.page_navigate);
-    try testing.expectEqual(6, tc.page_navigated);
+    notifier.dispatch(.frame_navigated, &.{ .loader_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
+    try testing.expectEqual(14, tc.frame_navigate);
+    try testing.expectEqual(6, tc.frame_navigated);
 
     {
         // unregister
-        try notifier.register(.page_navigate, &tc, TestClient.pageNavigate);
-        try notifier.register(.page_navigated, &tc, TestClient.pageNavigated);
-        notifier.dispatch(.page_navigate, &.{ .page_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
-        notifier.dispatch(.page_navigated, &.{ .page_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 1000, .url = undefined, .opts = .{} });
-        try testing.expectEqual(114, tc.page_navigate);
-        try testing.expectEqual(1006, tc.page_navigated);
+        try notifier.register(.frame_navigate, &tc, TestClient.frameNavigate);
+        try notifier.register(.frame_navigated, &tc, TestClient.frameNavigated);
+        notifier.dispatch(.frame_navigate, &.{ .loader_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
+        notifier.dispatch(.frame_navigated, &.{ .loader_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 1000, .url = undefined, .opts = .{} });
+        try testing.expectEqual(114, tc.frame_navigate);
+        try testing.expectEqual(1006, tc.frame_navigated);
 
-        notifier.unregister(.page_navigate, &tc);
-        notifier.dispatch(.page_navigate, &.{ .page_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
-        notifier.dispatch(.page_navigated, &.{ .page_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 1000, .url = undefined, .opts = .{} });
-        try testing.expectEqual(114, tc.page_navigate);
-        try testing.expectEqual(2006, tc.page_navigated);
+        notifier.unregister(.frame_navigate, &tc);
+        notifier.dispatch(.frame_navigate, &.{ .loader_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
+        notifier.dispatch(.frame_navigated, &.{ .loader_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 1000, .url = undefined, .opts = .{} });
+        try testing.expectEqual(114, tc.frame_navigate);
+        try testing.expectEqual(2006, tc.frame_navigated);
 
-        notifier.unregister(.page_navigated, &tc);
-        notifier.dispatch(.page_navigate, &.{ .page_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
-        notifier.dispatch(.page_navigated, &.{ .page_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 1000, .url = undefined, .opts = .{} });
-        try testing.expectEqual(114, tc.page_navigate);
-        try testing.expectEqual(2006, tc.page_navigated);
+        notifier.unregister(.frame_navigated, &tc);
+        notifier.dispatch(.frame_navigate, &.{ .loader_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
+        notifier.dispatch(.frame_navigated, &.{ .loader_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 1000, .url = undefined, .opts = .{} });
+        try testing.expectEqual(114, tc.frame_navigate);
+        try testing.expectEqual(2006, tc.frame_navigated);
 
         // already unregistered, try anyways
-        notifier.unregister(.page_navigated, &tc);
-        notifier.dispatch(.page_navigate, &.{ .page_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
-        notifier.dispatch(.page_navigated, &.{ .page_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 1000, .url = undefined, .opts = .{} });
-        try testing.expectEqual(114, tc.page_navigate);
-        try testing.expectEqual(2006, tc.page_navigated);
+        notifier.unregister(.frame_navigated, &tc);
+        notifier.dispatch(.frame_navigate, &.{ .loader_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
+        notifier.dispatch(.frame_navigated, &.{ .loader_id = 39, .frame_id = 0, .req_id = 1, .timestamp = 1000, .url = undefined, .opts = .{} });
+        try testing.expectEqual(114, tc.frame_navigate);
+        try testing.expectEqual(2006, tc.frame_navigated);
     }
 }
 
 const TestClient = struct {
-    page_navigate: u64 = 0,
-    page_navigated: u64 = 0,
+    frame_navigate: u64 = 0,
+    frame_navigated: u64 = 0,
 
-    fn pageNavigate(ptr: *anyopaque, data: *const Notification.PageNavigate) !void {
+    fn frameNavigate(ptr: *anyopaque, data: *const Notification.FrameNavigate) !void {
         const self: *TestClient = @ptrCast(@alignCast(ptr));
-        self.page_navigate += data.timestamp;
+        self.frame_navigate += data.timestamp;
     }
 
-    fn pageNavigated(ptr: *anyopaque, data: *const Notification.PageNavigated) !void {
+    fn frameNavigated(ptr: *anyopaque, data: *const Notification.FrameNavigated) !void {
         const self: *TestClient = @ptrCast(@alignCast(ptr));
-        self.page_navigated += data.timestamp;
+        self.frame_navigated += data.timestamp;
     }
 };

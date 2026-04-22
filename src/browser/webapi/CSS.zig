@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 
 const CSS = @This();
 _pad: bool = false,
@@ -40,7 +40,7 @@ pub fn parseDimension(value: []const u8) ?f64 {
 
 /// Escapes a CSS identifier string
 /// https://drafts.csswg.org/cssom/#the-css.escape()-method
-pub fn escape(_: *const CSS, value: []const u8, page: *Page) ![]const u8 {
+pub fn escape(_: *const CSS, value: []const u8, frame: *Frame) ![]const u8 {
     if (value.len == 0) {
         return "";
     }
@@ -65,7 +65,7 @@ pub fn escape(_: *const CSS, value: []const u8, page: *Page) ![]const u8 {
         return value;
     }
 
-    const result = try page.call_arena.alloc(u8, out_len);
+    const result = try frame.call_arena.alloc(u8, out_len);
     var pos: usize = 0;
 
     if (needsEscape(true, first)) {

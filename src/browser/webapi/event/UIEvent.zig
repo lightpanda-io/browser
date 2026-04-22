@@ -19,7 +19,7 @@
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
 const Window = @import("../Window.zig");
@@ -52,20 +52,20 @@ pub const Options = Event.inheritOptions(
     UIEventOptions,
 );
 
-pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*UIEvent {
-    const arena = try page.getArena(.tiny, "UIEvent");
-    errdefer page.releaseArena(arena);
+pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*UIEvent {
+    const arena = try frame.getArena(.tiny, "UIEvent");
+    errdefer frame.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 
     const opts = _opts orelse Options{};
-    const event = try page._factory.event(
+    const event = try frame._factory.event(
         arena,
         type_string,
         UIEvent{
             ._type = .generic,
             ._proto = undefined,
             ._detail = opts.detail,
-            ._view = opts.view orelse page.window,
+            ._view = opts.view orelse frame.window,
         },
     );
 
@@ -107,8 +107,8 @@ pub fn getDetail(self: *UIEvent) u32 {
 
 // sourceCapabilities not implemented
 
-pub fn getView(self: *UIEvent, page: *Page) *Window {
-    return self._view orelse page.window;
+pub fn getView(self: *UIEvent, frame: *Frame) *Window {
+    return self._view orelse frame.window;
 }
 
 // deprecated `initUIEvent()` not implemented

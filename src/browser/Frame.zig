@@ -76,13 +76,15 @@ pub var default_location: Location = Location{ ._url = &default_url };
 
 pub const BUF_SIZE = 1024;
 
-const Page = @This();
+const Frame = @This();
 
-id: u32,
-
-// This is the "id" of the frame. It can be re-used from page-to-page, e.g.
+// This is the "id" of the frame. It can be re-used from frame-to-frame, e.g.
 // when navigating.
 _frame_id: u32,
+
+// This is the "id" of this specific instance of the frame. It changes on every
+// navigate.
+_loader_id: u32,
 
 _session: *Session,
 
@@ -196,7 +198,7 @@ _notified_network_almost_idle: IdleNotification = .init,
 // next tick.
 _queued_navigation: ?*QueuedNavigation = null,
 
-// The URL of the current page
+// The URL of the current frame
 url: [:0]const u8 = "about:blank",
 
 origin: ?[]const u8 = null,
@@ -219,21 +221,22 @@ buf: [BUF_SIZE]u8 = undefined,
 // access to the JavaScript engine
 js: *JS.Context,
 
-// An arena for the lifetime of the page.
+// An arena for the lifetime of the frame.
 arena: Allocator,
 
 // An arena with a lifetime guaranteed to be for 1 invoking of a Zig function
 // from JS. Best arena to use, when possible.
 call_arena: Allocator,
 
-parent: ?*Page,
+parent: ?*Frame,
 window: *Window,
 document: *Document,
 iframe: ?*IFrame = null,
-frames: std.ArrayList(*Page) = .{},
-frames_sorted: bool = true,
 
-// Workers created by this page. Cleaned up when page is destroyed.
+child_frames_sorted: bool = true,
+child_frames: std.ArrayList(*Frame) = .{},
+
+// Workers created by this frame. Cleaned up when frame is destroyed.
 workers: std.ArrayList(*Worker) = .{},
 
 // DOM version used to invalidate cached state of "live" collections
@@ -251,9 +254,9 @@ _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
 
-pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void {
+pub fn init(self: *Frame, frame_id: u32, session: *Session, parent: ?*Frame) !void {
     if (comptime IS_DEBUG) {
-        log.debug(.page, "page.init", .{});
+        log.debug(.frame, "frame.init", .{});
     }
 
     const call_arena = try session.getArena(.medium, "call_arena");
@@ -265,21 +268,21 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
     })).asDocument();
 
     self.* = .{
-        .id = session.nextPageId(),
         .js = undefined,
         .parent = parent,
-        .arena = session.page_arena,
+        .arena = session.frame_arena,
         .document = document,
         .window = undefined,
         .call_arena = call_arena,
         ._frame_id = frame_id,
+        ._loader_id = session.nextLoaderId(),
         ._session = session,
         ._factory = factory,
         ._pending_loads = 1, // always 1 for the ScriptManager
         ._type = if (parent == null) .root else .frame,
         ._style_manager = undefined,
         ._script_manager = undefined,
-        ._event_manager = EventManager.init(session.page_arena, self),
+        ._event_manager = EventManager.init(session.frame_arena, self),
     };
     self._to_load = &self._to_load_1;
 
@@ -299,7 +302,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
     }
 
     self.window = try factory.eventTarget(Window{
-        ._page = self,
+        ._frame = self,
         ._proto = undefined,
         ._document = self.document,
         ._location = &default_location,
@@ -319,12 +322,12 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
 
     self.js = try browser.env.createContext(self, .{
         .identity = &session.identity,
-        .identity_arena = session.page_arena,
+        .identity_arena = session.frame_arena,
         .call_arena = self.call_arena,
     });
     errdefer browser.env.destroyContext(self.js);
 
-    document._page = self;
+    document._frame = self;
 
     if (comptime builtin.is_test == false) {
         if (parent == null) {
@@ -335,13 +338,13 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
                     b.runIdleTasks();
                     return 200;
                 }
-            }.runIdleTasks, 200, .{ .name = "page.runIdleTasks", .low_priority = true });
+            }.runIdleTasks, 200, .{ .name = "frame.runIdleTasks", .low_priority = true });
         }
     }
 }
 
-pub fn deinit(self: *Page, abort_http: bool) void {
-    for (self.frames.items) |frame| {
+pub fn deinit(self: *Frame, abort_http: bool) void {
+    for (self.child_frames.items) |frame| {
         frame.deinit(abort_http);
     }
 
@@ -350,7 +353,7 @@ pub fn deinit(self: *Page, abort_http: bool) void {
     }
 
     if (comptime IS_DEBUG) {
-        log.debug(.page, "page.deinit", .{ .url = self.url, .type = self._type });
+        log.debug(.frame, "frame.deinit", .{ .url = self.url, .type = self._type });
 
         // Uncomment if you want slab statistics to print.
         // const stats = self._factory._slab.getStats(self.arena) catch unreachable;
@@ -403,7 +406,7 @@ pub fn deinit(self: *Page, abort_http: bool) void {
         session.browser.http_client.abort();
     } else if (abort_http) {
         // a small optimization, it's faster to abort _everything_ on the root
-        // page, so we prefer that. But if it's just the frame that's going
+        // frame, so we prefer that. But if it's just the frame that's going
         // away (a frame navigation) then we'll abort the frame-related requests
         session.browser.http_client.abortFrame(self._frame_id);
     }
@@ -414,11 +417,11 @@ pub fn deinit(self: *Page, abort_http: bool) void {
     session.releaseArena(self.call_arena);
 }
 
-pub fn trackWorker(self: *Page, worker: *Worker) !void {
+pub fn trackWorker(self: *Frame, worker: *Worker) !void {
     try self.workers.append(self.arena, worker);
 }
 
-pub fn removeWorker(self: *Page, worker: *Worker) void {
+pub fn removeWorker(self: *Frame, worker: *Worker) void {
     for (self.workers.items, 0..) |w, i| {
         if (w == worker) {
             _ = self.workers.swapRemove(i);
@@ -427,11 +430,11 @@ pub fn removeWorker(self: *Page, worker: *Worker) void {
     }
 }
 
-pub fn base(self: *const Page) [:0]const u8 {
+pub fn base(self: *const Frame) [:0]const u8 {
     return self.base_url orelse self.url;
 }
 
-pub fn getTitle(self: *Page) !?[]const u8 {
+pub fn getTitle(self: *Frame) !?[]const u8 {
     if (self.window._document.is(Document.HTMLDocument)) |html_doc| {
         return try html_doc.getTitle(self);
     }
@@ -440,7 +443,7 @@ pub fn getTitle(self: *Page) !?[]const u8 {
 
 // Add common headers for a request:
 // * referer
-pub fn headersForRequest(self: *Page, headers: *HttpClient.Headers) !void {
+pub fn headersForRequest(self: *Frame, headers: *HttpClient.Headers) !void {
     // Build the referer
     const referer = blk: {
         if (self.referer_header == null) {
@@ -461,15 +464,15 @@ pub fn headersForRequest(self: *Page, headers: *HttpClient.Headers) !void {
     }
 }
 
-pub fn getArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !Allocator {
+pub fn getArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) !Allocator {
     return self._session.getArena(size_or_bucket, debug);
 }
 
-pub fn releaseArena(self: *Page, allocator: Allocator) void {
+pub fn releaseArena(self: *Frame, allocator: Allocator) void {
     return self._session.releaseArena(allocator);
 }
 
-pub fn isSameOrigin(self: *const Page, url: [:0]const u8) bool {
+pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
     const current_origin = self.origin orelse return false;
 
     // fastpath
@@ -482,18 +485,18 @@ pub fn isSameOrigin(self: *const Page, url: [:0]const u8) bool {
     return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
 }
 
-/// Look up a blob URL in this page's registry.
-pub fn lookupBlobUrl(self: *Page, url: []const u8) ?*Blob {
+/// Look up a blob URL in this frame's registry.
+pub fn lookupBlobUrl(self: *Frame, url: []const u8) ?*Blob {
     return self._blob_urls.get(url);
 }
 
-pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
-    lp.assert(self._load_state == .waiting, "page.renavigate", .{});
+pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !void {
+    lp.assert(self._load_state == .waiting, "frame.renavigate", .{});
     const session = self._session;
     self._load_state = .parsing;
 
     const req_id = self._session.browser.http_client.nextReqId();
-    log.info(.page, "navigate", .{
+    log.info(.frame, "navigate", .{
         .url = request_url,
         .method = opts.method,
         .reason = opts.reason,
@@ -534,15 +537,15 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
             // For navigation, walk up the parent chain to find blob URLs
             // (e.g., parent creates blob URL and sets iframe.src to it)
             const blob = blk: {
-                var current: ?*Page = self.parent;
-                while (current) |page| {
-                    if (page._blob_urls.get(request_url)) |b| break :blk b;
-                    current = page.parent;
+                var current: ?*Frame = self.parent;
+                while (current) |frame| {
+                    if (frame._blob_urls.get(request_url)) |b| break :blk b;
+                    current = frame.parent;
                 }
                 log.warn(.js, "invalid blob", .{ .url = request_url });
                 return error.BlobNotFound;
             };
-            const parse_arena = try self.getArena(.medium, "Page.parseBlob");
+            const parse_arena = try self.getArena(.medium, "Frame.parseBlob");
             defer self.releaseArena(parse_arena);
             var parser = Parser.init(parse_arena, self.document.asNode(), self);
             parser.parse(blob._slice);
@@ -553,11 +556,11 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
             };
         }
 
-        session.notification.dispatch(.page_navigate, &.{
+        session.notification.dispatch(.frame_navigate, &.{
             .opts = opts,
             .req_id = req_id,
-            .page_id = self.id,
             .frame_id = self._frame_id,
+            .loader_id = self._loader_id,
             .url = request_url,
             .timestamp = timestamp(.monotonic),
         });
@@ -570,10 +573,10 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
             },
         });
 
-        session.notification.dispatch(.page_navigated, &.{
+        session.notification.dispatch(.frame_navigated, &.{
             .req_id = req_id,
-            .page_id = self.id,
             .frame_id = self._frame_id,
+            .loader_id = self._loader_id,
             .opts = .{
                 .cdp_id = opts.cdp_id,
                 .reason = opts.reason,
@@ -606,14 +609,14 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     if (opts.header) |hdr| {
         try headers.add(hdr);
     }
-    // We dispatch page_navigate event before sending the request.
-    // It ensures the event page_navigated is not dispatched before this one.
-    session.notification.dispatch(.page_navigate, &.{
+    // We dispatch frame_navigate event before sending the request.
+    // It ensures the event frame_navigated is not dispatched before this one.
+    session.notification.dispatch(.frame_navigate, &.{
         .opts = opts,
         .url = self.url,
         .req_id = req_id,
-        .page_id = self.id,
         .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
     });
 
@@ -628,8 +631,8 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     http_client.request(.{
         .ctx = self,
         .url = self.url,
-        .page_id = self.id,
         .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
         .method = opts.method,
         .headers = headers,
         .body = opts.body,
@@ -637,21 +640,21 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         .cookie_origin = self.url,
         .resource_type = .document,
         .notification = self._session.notification,
-        .header_callback = pageHeaderDoneCallback,
-        .data_callback = pageDataCallback,
-        .done_callback = pageDoneCallback,
-        .error_callback = pageErrorCallback,
+        .header_callback = frameHeaderDoneCallback,
+        .data_callback = frameDataCallback,
+        .done_callback = frameDoneCallback,
+        .error_callback = frameErrorCallback,
     }) catch |err| {
-        log.err(.page, "navigate request", .{ .url = self.url, .err = err, .type = self._type });
+        log.err(.frame, "navigate request", .{ .url = self.url, .err = err, .type = self._type });
         return err;
     };
 }
 
 // Navigation can happen in many places, such as executing a <script> tag or
 // a JavaScript callback, a CDP command, etc...It's rarely safe to do immediately
-// as the caller almost certainly does'nt expect the page to go away during the
+// as the caller almost certainly doesn't expect the frame to go away during the
 // call. So, we schedule the navigation for the next tick.
-pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
+pub fn scheduleNavigation(self: *Frame, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
     if (self.canScheduleNavigation(std.meta.activeTag(nt)) == false) {
         return;
     }
@@ -662,8 +665,8 @@ pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOp
 
 // Don't name the first parameter "self", because the target of this navigation
 // might change inside the function. So the code should be explicit about the
-// page that it's acting on.
-fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
+// frame that it's acting on.
+fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
     const resolved_url, const is_about_blank = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
             break :blk .{ try arena.dupeZ(u8, request_url), false };
@@ -677,22 +680,22 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
         // request_url isn't a "complete" URL, so it has to be resolved with the
         // originator's base. Unless, originator's base is "about:blank", in which
         // case we have to walk up the parents and find a real base.
-        const page_base = base_blk: {
-            var maybe_not_blank_page = originator;
+        const frame_base = base_blk: {
+            var maybe_not_blank_frame = originator;
             while (true) {
-                const maybe_base = maybe_not_blank_page.base();
+                const maybe_base = maybe_not_blank_frame.base();
                 if (std.mem.eql(u8, maybe_base, "about:blank") == false) {
                     break :base_blk maybe_base;
                 }
                 // The orelse here is probably an invalid case, but there isn't
                 // anything we can do about it. It should never happen?
-                maybe_not_blank_page = maybe_not_blank_page.parent orelse break :base_blk "";
+                maybe_not_blank_frame = maybe_not_blank_frame.parent orelse break :base_blk "";
             }
         };
 
         const u = try URL.resolve(
             arena,
-            page_base,
+            frame_base,
             request_url,
             .{ .always_dupe = true, .encoding = originator.charset },
         );
@@ -702,7 +705,7 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
     const target = switch (nt) {
         .form, .anchor => |p| p,
         .script => |p| p orelse originator,
-        .iframe => |iframe| iframe._window.?._page, // only an frame with existing content (i.e. a window) can be navigated
+        .iframe => |iframe| iframe._window.?._frame, // only an frame with existing content (i.e. a window) can be navigated
     };
 
     const session = target._session;
@@ -764,7 +767,7 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
 // 3 - anchor clicks
 // 4 - iframe.src =
 // Within, each category, it's last-one-wins.
-fn canScheduleNavigation(self: *Page, new_target_type: NavigationType) bool {
+fn canScheduleNavigation(self: *Frame, new_target_type: NavigationType) bool {
     if (self.parent) |parent| {
         if (parent.isGoingAway()) {
             return false;
@@ -786,7 +789,7 @@ fn canScheduleNavigation(self: *Page, new_target_type: NavigationType) bool {
     };
 }
 
-pub fn documentIsLoaded(self: *Page) void {
+pub fn documentIsLoaded(self: *Frame) void {
     if (self._load_state != .parsing) {
         // Ideally, documentIsLoaded would only be called once, but if a
         // script is dynamically added from an async script after
@@ -798,30 +801,30 @@ pub fn documentIsLoaded(self: *Page) void {
     self._load_state = .load;
     self.document._ready_state = .interactive;
     self._documentIsLoaded() catch |err| {
-        log.err(.page, "document is loaded", .{ .err = err, .type = self._type, .url = self.url });
+        log.err(.frame, "document is loaded", .{ .err = err, .type = self._type, .url = self.url });
     };
 }
 
-pub fn _documentIsLoaded(self: *Page) !void {
+pub fn _documentIsLoaded(self: *Frame) !void {
     const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self);
     try self._event_manager.dispatch(
         self.document.asEventTarget(),
         event,
     );
 
-    self._session.notification.dispatch(.page_dom_content_loaded, &.{
-        .page_id = self.id,
+    self._session.notification.dispatch(.frame_dom_content_loaded, &.{
         .req_id = self._req_id,
         .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
     });
 }
 
-pub fn scriptsCompletedLoading(self: *Page) void {
+pub fn scriptsCompletedLoading(self: *Frame) void {
     self.pendingLoadCompleted();
 }
 
-pub fn iframeCompletedLoading(self: *Page, iframe: *IFrame) void {
+pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame) void {
     var ls: JS.Local.Scope = undefined;
     self.js.localScope(&ls);
     defer ls.deinit();
@@ -831,7 +834,7 @@ pub fn iframeCompletedLoading(self: *Page, iframe: *IFrame) void {
 
     blk: {
         const event = Event.initTrusted(comptime .wrap("load"), .{}, self) catch |err| {
-            log.err(.page, "iframe event init", .{ .err = err, .url = iframe._src });
+            log.err(.frame, "iframe event init", .{ .err = err, .url = iframe._src });
             break :blk;
         };
         self._event_manager.dispatch(iframe.asNode().asEventTarget(), event) catch |err| {
@@ -842,7 +845,7 @@ pub fn iframeCompletedLoading(self: *Page, iframe: *IFrame) void {
     self.pendingLoadCompleted();
 }
 
-fn pendingLoadCompleted(self: *Page) void {
+fn pendingLoadCompleted(self: *Frame) void {
     const pending_loads = self._pending_loads;
     if (pending_loads == 1) {
         self._pending_loads = 0;
@@ -852,7 +855,7 @@ fn pendingLoadCompleted(self: *Page) void {
     }
 }
 
-pub fn documentIsComplete(self: *Page) void {
+pub fn documentIsComplete(self: *Frame) void {
     if (self._load_state == .complete) {
         // Ideally, documentIsComplete would only be called once, but with
         // dynamic scripts, it can be hard to keep track of that. An async
@@ -871,11 +874,11 @@ pub fn documentIsComplete(self: *Page) void {
 
     self._load_state = .complete;
     self._documentIsComplete() catch |err| {
-        log.err(.page, "document is complete", .{ .err = err, .type = self._type, .url = self.url });
+        log.err(.frame, "document is complete", .{ .err = err, .type = self._type, .url = self.url });
     };
 }
 
-fn _documentIsComplete(self: *Page) !void {
+fn _documentIsComplete(self: *Frame) !void {
     self.document._ready_state = .complete;
 
     // Run load events before window.load.
@@ -891,10 +894,10 @@ fn _documentIsComplete(self: *Page) !void {
         try self._event_manager.dispatchDirect(window_target, event, self.window._on_load, .{ .inject_target = false, .context = "page load" });
     }
 
-    self._session.notification.dispatch(.page_loaded, &.{
-        .page_id = self.id,
+    self._session.notification.dispatch(.frame_loaded, &.{
         .req_id = self._req_id,
         .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
     });
 
@@ -904,13 +907,13 @@ fn _documentIsComplete(self: *Page) !void {
     }
 
     if (comptime IS_DEBUG) {
-        log.debug(.page, "load", .{ .url = self.url, .type = self._type });
+        log.debug(.frame, "load", .{ .url = self.url, .type = self._type });
     }
 
     self.notifyParentLoadComplete();
 }
 
-fn notifyParentLoadComplete(self: *Page) void {
+fn notifyParentLoadComplete(self: *Frame) void {
     const parent = self.parent orelse return;
 
     if (self._parent_notified == true) {
@@ -925,8 +928,8 @@ fn notifyParentLoadComplete(self: *Page) void {
     parent.iframeCompletedLoading(self.iframe.?);
 }
 
-fn pageHeaderDoneCallback(response: HttpClient.Response) !bool {
-    var self: *Page = @ptrCast(@alignCast(response.ctx));
+fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
+    var self: *Frame = @ptrCast(@alignCast(response.ctx));
 
     const response_url = response.url();
     if (std.mem.eql(u8, response_url, self.url) == false) {
@@ -940,7 +943,7 @@ fn pageHeaderDoneCallback(response: HttpClient.Response) !bool {
     self.document._location = self.window._location;
 
     if (comptime IS_DEBUG) {
-        log.debug(.page, "navigate header", .{
+        log.debug(.frame, "navigate header", .{
             .url = self.url,
             .status = response.status(),
             .content_type = response.contentType(),
@@ -952,12 +955,12 @@ fn pageHeaderDoneCallback(response: HttpClient.Response) !bool {
         // _navigated_options will be null in special short-circuit cases, like
         // "navigating" to about:blank, in which case this notification has
         // already been sent
-        self._session.notification.dispatch(.page_navigated, &.{
+        self._session.notification.dispatch(.frame_navigated, &.{
             .opts = no,
             .url = self.url,
-            .page_id = self.id,
             .req_id = self._req_id,
             .frame_id = self._frame_id,
+            .loader_id = self._loader_id,
             .timestamp = timestamp(.monotonic),
         });
     }
@@ -965,8 +968,8 @@ fn pageHeaderDoneCallback(response: HttpClient.Response) !bool {
     return true;
 }
 
-fn pageDataCallback(response: HttpClient.Response, data: []const u8) !void {
-    var self: *Page = @ptrCast(@alignCast(response.ctx));
+fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
+    var self: *Frame = @ptrCast(@alignCast(response.ctx));
 
     if (self._parse_state == .pre) {
         // we lazily do this, because we might need the first chunk of data
@@ -991,7 +994,7 @@ fn pageDataCallback(response: HttpClient.Response, data: []const u8) !void {
         }
 
         if (comptime IS_DEBUG) {
-            log.debug(.page, "navigate first chunk", .{
+            log.debug(.frame, "navigate first chunk", .{
                 .content_type = mime.content_type,
                 .len = data.len,
                 .type = self._type,
@@ -1047,25 +1050,25 @@ fn pageDataCallback(response: HttpClient.Response, data: []const u8) !void {
     }
 }
 
-fn pageDoneCallback(ctx: *anyopaque) !void {
-    var self: *Page = @ptrCast(@alignCast(ctx));
+fn frameDoneCallback(ctx: *anyopaque) !void {
+    var self: *Frame = @ptrCast(@alignCast(ctx));
 
     if (comptime IS_DEBUG) {
-        log.debug(.page, "navigate done", .{ .type = self._type, .url = self.url });
+        log.debug(.frame, "navigate done", .{ .type = self._type, .url = self.url });
     }
 
     //We need to handle different navigation types differently.
     try self._session.navigation.commitNavigation(self);
 
     defer if (comptime IS_DEBUG) {
-        log.debug(.page, "page load complete", .{
+        log.debug(.frame, "frame load complete", .{
             .url = self.url,
             .type = self._type,
             .state = std.meta.activeTag(self._parse_state),
         });
     };
 
-    const parse_arena = try self.getArena(.medium, "Page.parse");
+    const parse_arena = try self.getArena(.medium, "Frame.parse");
     defer self.releaseArena(parse_arena);
 
     var parser = Parser.init(parse_arena, self.document.asNode(), self);
@@ -1109,7 +1112,7 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
         .pre => {
             // Received a response without a body like: https://httpbin.io/status/200
             // We assume we have received an OK status (checked in Client.headerCallback)
-            // so we load a blank document to navigate away from any prior page.
+            // so we load a blank document to navigate away from any prior frame.
             self._parse_state = .{ .complete = {} };
 
             // Use empty an empty HTML document.
@@ -1132,20 +1135,20 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
     }
 }
 
-fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
-    var self: *Page = @ptrCast(@alignCast(ctx));
+fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
+    var self: *Frame = @ptrCast(@alignCast(ctx));
 
-    log.err(.page, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
+    log.err(.frame, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
     self._parse_state = .{ .err = err };
 
-    // In case of error, we want to complete the page with a custom HTML
+    // In case of error, we want to complete the frame with a custom HTML
     // containing the error.
-    pageDoneCallback(ctx) catch |e| {
-        log.err(.browser, "pageErrorCallback", .{ .err = e, .type = self._type, .url = self.url });
+    frameDoneCallback(ctx) catch |e| {
+        log.err(.browser, "frameErrorCallback", .{ .err = e, .type = self._type, .url = self.url });
         return;
     };
 }
-pub fn isGoingAway(self: *const Page) bool {
+pub fn isGoingAway(self: *const Frame) bool {
     if (self._queued_navigation != null) {
         return true;
     }
@@ -1153,9 +1156,9 @@ pub fn isGoingAway(self: *const Page) bool {
     return parent.isGoingAway();
 }
 
-pub fn scriptAddedCallback(self: *Page, comptime from_parser: bool, script: *Element.Html.Script) !void {
+pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *Element.Html.Script) !void {
     if (self.isGoingAway()) {
-        // if we're planning on navigating to another page, don't run this script
+        // if we're planning on navigating to another frame, don't run this script
         return;
     }
 
@@ -1168,7 +1171,7 @@ pub fn scriptAddedCallback(self: *Page, comptime from_parser: bool, script: *Ele
     }
 
     self._script_manager.addFromElement(from_parser, script, "parsing") catch |err| {
-        log.err(.page, "page.scriptAddedCallback", .{
+        log.err(.frame, "frame.scriptAddedCallback", .{
             .err = err,
             .url = self.url,
             .src = script.asElement().getAttributeSafe(comptime .wrap("src")),
@@ -1177,9 +1180,9 @@ pub fn scriptAddedCallback(self: *Page, comptime from_parser: bool, script: *Ele
     };
 }
 
-pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
+pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     if (self.isGoingAway()) {
-        // if we're planning on navigating to another page, don't load this iframe
+        // if we're planning on navigating to another frame, don't load this iframe
         return;
     }
     if (iframe._executed) {
@@ -1194,9 +1197,9 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
     if (iframe._window != null) {
         // This frame is being re-navigated. We need to do this through a
         // scheduleNavigation phase. We can't navigate immediately here, for
-        // the same reason that a "root" page can't immediately navigate:
+        // the same reason that a "root" frame can't immediately navigate:
         // we could be in the middle of a JS callback or something else that
-        // doesn't exit the page to just suddenly go away.
+        // doesn't exit the frame to just suddenly go away.
         return self.scheduleNavigation(src, .{
             .reason = .script,
             .kind = .{ .push = null },
@@ -1206,22 +1209,22 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
     iframe._executed = true;
     const session = self._session;
 
-    const page_frame = try self.arena.create(Page);
+    const new_frame = try self.arena.create(Frame);
     const frame_id = session.nextFrameId();
 
-    try Page.init(page_frame, frame_id, session, self);
-    errdefer page_frame.deinit(true);
+    try Frame.init(new_frame, frame_id, session, self);
+    errdefer new_frame.deinit(true);
 
     self._pending_loads += 1;
-    page_frame.iframe = iframe;
-    iframe._window = page_frame.window;
+    new_frame.iframe = iframe;
+    iframe._window = new_frame.window;
     errdefer iframe._window = null;
 
     // on first load, dispatch frame_created event
-    self._session.notification.dispatch(.page_frame_created, &.{
-        .page_id = self.id,
-        .frame_id = frame_id,
+    self._session.notification.dispatch(.frame_child_frame_created, &.{
         .parent_id = self._frame_id,
+        .frame_id = new_frame._frame_id,
+        .loader_id = new_frame._loader_id,
         .timestamp = timestamp(.monotonic),
     });
 
@@ -1230,53 +1233,53 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
             break :blk "about:blank"; // navigate will handle this special case
         }
         break :blk try URL.resolve(
-            self.call_arena, // ok to use, page.navigate dupes this
+            self.call_arena, // ok to use, frame.navigate dupes this
             self.base(),
             src,
             .{ .encoding = self.charset },
         );
     };
 
-    page_frame.navigate(url, .{ .reason = .initialFrameNavigation }) catch |err| {
-        log.warn(.page, "iframe navigate failure", .{ .url = url, .err = err });
+    new_frame.navigate(url, .{ .reason = .initialFrameNavigation }) catch |err| {
+        log.warn(.frame, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
         iframe._window = null;
         return error.IFrameLoadError;
     };
 
     // window[N] is based on document order. For now we'll just append the frame
-    // at the end of our list and set frames_sorted == false. window.getFrame
+    // at the end of our list and set child_frames_sorted == false. window.getFrame
     // will check this flag to decide if it needs to sort the frames or not.
     // But, we can optimize this a bit. Since we expect frames to often be
     // added in document order, we can do a quick check to see whether the list
     // is sorted or not.
-    try self.frames.append(self.arena, page_frame);
+    try self.child_frames.append(self.arena, new_frame);
 
-    const frames_len = self.frames.items.len;
+    const frames_len = self.child_frames.items.len;
     if (frames_len == 1) {
         // this is the only frame, it must be sorted.
         return;
     }
 
-    if (self.frames_sorted == false) {
+    if (self.child_frames_sorted == false) {
         // the list already wasn't sorted, it still isn't
         return;
     }
 
     // So we added a frame into a sorted list. If this frame is sorted relative
     // to the last frame, it's still sorted
-    const iframe_a = self.frames.items[frames_len - 2].iframe.?;
-    const iframe_b = self.frames.items[frames_len - 1].iframe.?;
+    const iframe_a = self.child_frames.items[frames_len - 2].iframe.?;
+    const iframe_b = self.child_frames.items[frames_len - 1].iframe.?;
 
     if (iframe_a.asNode().compareDocumentPosition(iframe_b.asNode()) & 0x04 == 0) {
         // if b followed a, then & 0x04 = 0x04
         // but since we got 0, it means b does not follow a, and thus our list
         // is no longer sorted.
-        self.frames_sorted = false;
+        self.child_frames_sorted = false;
     }
 }
 
-pub fn domChanged(self: *Page) void {
+pub fn domChanged(self: *Frame) void {
     self.version += 1;
 
     if (self._intersection_check_scheduled) {
@@ -1285,13 +1288,13 @@ pub fn domChanged(self: *Page) void {
 
     self._intersection_check_scheduled = true;
     self.js.queueIntersectionChecks() catch |err| {
-        log.err(.page, "page.schedIntersectChecks", .{ .err = err, .type = self._type, .url = self.url });
+        log.err(.frame, "frame.schedIntersectChecks", .{ .err = err, .type = self._type, .url = self.url });
     };
 }
 
 const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
 
-fn getElementIdMap(page: *Page, node: *Node) ElementIdMaps {
+fn getElementIdMap(frame: *Frame, node: *Node) ElementIdMaps {
     // Walk up the tree checking for ShadowRoot and tracking the root
     var current = node;
     while (true) {
@@ -1314,8 +1317,8 @@ fn getElementIdMap(page: *Page, node: *Node) ElementIdMaps {
                 std.debug.assert(false);
             }
             return .{
-                .lookup = &page.document._elements_by_id,
-                .removed_ids = &page.document._removed_ids,
+                .lookup = &frame.document._elements_by_id,
+                .removed_ids = &frame.document._removed_ids,
             };
         };
 
@@ -1323,7 +1326,7 @@ fn getElementIdMap(page: *Page, node: *Node) ElementIdMaps {
     }
 }
 
-pub fn addElementId(self: *Page, parent: *Node, element: *Element, id: []const u8) !void {
+pub fn addElementId(self: *Frame, parent: *Node, element: *Element, id: []const u8) !void {
     var id_maps = self.getElementIdMap(parent);
     const gop = try id_maps.lookup.getOrPut(self.arena, id);
     if (!gop.found_existing) {
@@ -1338,18 +1341,18 @@ pub fn addElementId(self: *Page, parent: *Node, element: *Element, id: []const u
     }
 }
 
-pub fn removeElementId(self: *Page, element: *Element, id: []const u8) void {
+pub fn removeElementId(self: *Frame, element: *Element, id: []const u8) void {
     const node = element.asNode();
     self.removeElementIdWithMaps(self.getElementIdMap(node), id);
 }
 
-pub fn removeElementIdWithMaps(self: *Page, id_maps: ElementIdMaps, id: []const u8) void {
+pub fn removeElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, id: []const u8) void {
     if (id_maps.lookup.remove(id)) {
         id_maps.removed_ids.put(self.arena, self.dupeString(id) catch return, {}) catch {};
     }
 }
 
-pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Element {
+pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Element {
     if (node.isConnected() or node.isInShadowTree()) {
         const lookup = self.getElementIdMap(node).lookup;
         return lookup.get(id);
@@ -1364,11 +1367,11 @@ pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Elemen
     return null;
 }
 
-pub fn registerPerformanceObserver(self: *Page, observer: *PerformanceObserver) !void {
+pub fn registerPerformanceObserver(self: *Frame, observer: *PerformanceObserver) !void {
     return self._performance_observers.append(self.arena, observer);
 }
 
-pub fn unregisterPerformanceObserver(self: *Page, observer: *PerformanceObserver) void {
+pub fn unregisterPerformanceObserver(self: *Frame, observer: *PerformanceObserver) void {
     for (self._performance_observers.items, 0..) |perf_observer, i| {
         if (perf_observer == observer) {
             _ = self._performance_observers.swapRemove(i);
@@ -1379,11 +1382,11 @@ pub fn unregisterPerformanceObserver(self: *Page, observer: *PerformanceObserver
 
 /// Updates performance observers with the new entry.
 /// This doesn't emit callbacks but rather fills the queues of observers.
-pub fn notifyPerformanceObservers(self: *Page, entry: *Performance.Entry) !void {
+pub fn notifyPerformanceObservers(self: *Frame, entry: *Performance.Entry) !void {
     for (self._performance_observers.items) |observer| {
         if (observer.interested(entry)) {
             observer._entries.append(self.arena, entry) catch |err| {
-                log.err(.page, "notifyPerformanceObservers", .{ .err = err, .type = self._type, .url = self.url });
+                log.err(.frame, "notifyPerformanceObservers", .{ .err = err, .type = self._type, .url = self.url });
             };
         }
     }
@@ -1392,7 +1395,7 @@ pub fn notifyPerformanceObservers(self: *Page, entry: *Performance.Entry) !void 
 }
 
 /// Schedules async delivery of performance observer records.
-pub fn schedulePerformanceObserverDelivery(self: *Page) !void {
+pub fn schedulePerformanceObserverDelivery(self: *Frame) !void {
     // Already scheduled.
     if (self._performance_delivery_scheduled) {
         return;
@@ -1402,14 +1405,14 @@ pub fn schedulePerformanceObserverDelivery(self: *Page) !void {
     return self.js.scheduler.add(
         self,
         struct {
-            fn run(_page: *anyopaque) anyerror!?u32 {
-                const page: *Page = @ptrCast(@alignCast(_page));
-                page._performance_delivery_scheduled = false;
+            fn run(_frame: *anyopaque) anyerror!?u32 {
+                const frame: *Frame = @ptrCast(@alignCast(_frame));
+                frame._performance_delivery_scheduled = false;
 
                 // Dispatch performance observer events.
-                for (page._performance_observers.items) |observer| {
+                for (frame._performance_observers.items) |observer| {
                     if (observer.hasRecords()) {
-                        try observer.dispatch(page);
+                        try observer.dispatch(frame);
                     }
                 }
 
@@ -1421,22 +1424,22 @@ pub fn schedulePerformanceObserverDelivery(self: *Page) !void {
     );
 }
 
-pub fn registerMutationObserver(self: *Page, observer: *MutationObserver) !void {
+pub fn registerMutationObserver(self: *Frame, observer: *MutationObserver) !void {
     observer.acquireRef();
     self._mutation_observers.append(&observer.node);
 }
 
-pub fn unregisterMutationObserver(self: *Page, observer: *MutationObserver) void {
+pub fn unregisterMutationObserver(self: *Frame, observer: *MutationObserver) void {
     observer.releaseRef(self._session);
     self._mutation_observers.remove(&observer.node);
 }
 
-pub fn registerIntersectionObserver(self: *Page, observer: *IntersectionObserver) !void {
+pub fn registerIntersectionObserver(self: *Frame, observer: *IntersectionObserver) !void {
     observer.acquireRef();
     try self._intersection_observers.append(self.arena, observer);
 }
 
-pub fn unregisterIntersectionObserver(self: *Page, observer: *IntersectionObserver) void {
+pub fn unregisterIntersectionObserver(self: *Frame, observer: *IntersectionObserver) void {
     for (self._intersection_observers.items, 0..) |obs, i| {
         if (obs == observer) {
             observer.releaseRef(self._session);
@@ -1446,13 +1449,13 @@ pub fn unregisterIntersectionObserver(self: *Page, observer: *IntersectionObserv
     }
 }
 
-pub fn checkIntersections(self: *Page) !void {
+pub fn checkIntersections(self: *Frame) !void {
     for (self._intersection_observers.items) |observer| {
         try observer.checkIntersections(self);
     }
 }
 
-pub fn dispatchLoad(self: *Page) !void {
+pub fn dispatchLoad(self: *Frame) !void {
     const has_dom_load_listener = self._event_manager.has_dom_load_listener;
 
     // Swap buffers - new additions during dispatch go to the other buffer
@@ -1472,7 +1475,7 @@ pub fn dispatchLoad(self: *Page) !void {
     to_process.clearRetainingCapacity();
 }
 
-pub fn scheduleMutationDelivery(self: *Page) !void {
+pub fn scheduleMutationDelivery(self: *Frame) !void {
     if (self._mutation_delivery_scheduled) {
         return;
     }
@@ -1480,7 +1483,7 @@ pub fn scheduleMutationDelivery(self: *Page) !void {
     try self.js.queueMutationDelivery();
 }
 
-pub fn scheduleIntersectionDelivery(self: *Page) !void {
+pub fn scheduleIntersectionDelivery(self: *Frame) !void {
     if (self._intersection_delivery_scheduled) {
         return;
     }
@@ -1488,7 +1491,7 @@ pub fn scheduleIntersectionDelivery(self: *Page) !void {
     try self.js.queueIntersectionDelivery();
 }
 
-pub fn scheduleSlotchangeDelivery(self: *Page) !void {
+pub fn scheduleSlotchangeDelivery(self: *Frame) !void {
     if (self._slotchange_delivery_scheduled) {
         return;
     }
@@ -1496,17 +1499,17 @@ pub fn scheduleSlotchangeDelivery(self: *Page) !void {
     try self.js.queueSlotchangeDelivery();
 }
 
-pub fn performScheduledIntersectionChecks(self: *Page) void {
+pub fn performScheduledIntersectionChecks(self: *Frame) void {
     if (!self._intersection_check_scheduled) {
         return;
     }
     self._intersection_check_scheduled = false;
     self.checkIntersections() catch |err| {
-        log.err(.page, "page.schedIntersectChecks", .{ .err = err, .type = self._type, .url = self.url });
+        log.err(.frame, "frame.schedIntersectChecks", .{ .err = err, .type = self._type, .url = self.url });
     };
 }
 
-pub fn deliverIntersections(self: *Page) void {
+pub fn deliverIntersections(self: *Frame) void {
     if (!self._intersection_delivery_scheduled) {
         return;
     }
@@ -1518,12 +1521,12 @@ pub fn deliverIntersections(self: *Page) void {
         i -= 1;
         const observer = self._intersection_observers.items[i];
         observer.deliverEntries(self) catch |err| {
-            log.err(.page, "page.deliverIntersections", .{ .err = err, .type = self._type, .url = self.url });
+            log.err(.frame, "frame.deliverIntersections", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
 
-pub fn deliverMutations(self: *Page) void {
+pub fn deliverMutations(self: *Frame) void {
     if (!self._mutation_delivery_scheduled) {
         return;
     }
@@ -1536,7 +1539,7 @@ pub fn deliverMutations(self: *Page) void {
     };
 
     if (self._mutation_delivery_depth > 100) {
-        log.err(.page, "page.MutationLimit", .{ .type = self._type, .url = self.url });
+        log.err(.frame, "frame.MutationLimit", .{ .type = self._type, .url = self.url });
         self._mutation_delivery_depth = 0;
         return;
     }
@@ -1545,12 +1548,12 @@ pub fn deliverMutations(self: *Page) void {
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.deliverRecords(self) catch |err| {
-            log.err(.page, "page.deliverMutations", .{ .err = err, .type = self._type, .url = self.url });
+            log.err(.frame, "frame.deliverMutations", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
 
-pub fn deliverSlotchangeEvents(self: *Page) void {
+pub fn deliverSlotchangeEvents(self: *Frame) void {
     if (!self._slotchange_delivery_scheduled) {
         return;
     }
@@ -1563,7 +1566,7 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
 
     var i: usize = 0;
     var slots = self.call_arena.alloc(*Element.Html.Slot, pending) catch |err| {
-        log.err(.page, "deliverSlotchange.append", .{ .err = err, .type = self._type, .url = self.url });
+        log.err(.frame, "deliverSlotchange.append", .{ .err = err, .type = self._type, .url = self.url });
         return;
     };
 
@@ -1576,38 +1579,38 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
 
     for (slots) |slot| {
         const event = Event.initTrusted(comptime .wrap("slotchange"), .{ .bubbles = true }, self) catch |err| {
-            log.err(.page, "deliverSlotchange.init", .{ .err = err, .type = self._type, .url = self.url });
+            log.err(.frame, "deliverSlotchange.init", .{ .err = err, .type = self._type, .url = self.url });
             continue;
         };
         const target = slot.asNode().asEventTarget();
         self._event_manager.dispatch(target, event) catch |err| {
-            log.err(.page, "deliverSlotchange.dispatch", .{ .err = err, .type = self._type, .url = self.url });
+            log.err(.frame, "deliverSlotchange.dispatch", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
 
-pub fn notifyNetworkIdle(self: *Page) void {
-    lp.assert(self._notified_network_idle == .done, "Page.notifyNetworkIdle", .{});
-    self._session.notification.dispatch(.page_network_idle, &.{
-        .page_id = self.id,
+pub fn notifyNetworkIdle(self: *Frame) void {
+    lp.assert(self._notified_network_idle == .done, "Frame.notifyNetworkIdle", .{});
+    self._session.notification.dispatch(.frame_network_idle, &.{
         .req_id = self._req_id,
         .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
     });
 }
 
-pub fn notifyNetworkAlmostIdle(self: *Page) void {
-    lp.assert(self._notified_network_almost_idle == .done, "Page.notifyNetworkAlmostIdle", .{});
-    self._session.notification.dispatch(.page_network_almost_idle, &.{
-        .page_id = self.id,
+pub fn notifyNetworkAlmostIdle(self: *Frame) void {
+    lp.assert(self._notified_network_almost_idle == .done, "Frame.notifyNetworkAlmostIdle", .{});
+    self._session.notification.dispatch(.frame_network_almost_idle, &.{
         .req_id = self._req_id,
         .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
     });
 }
 
 // called from the parser
-pub fn appendNew(self: *Page, parent: *Node, child: Node.NodeOrText) !void {
+pub fn appendNew(self: *Frame, parent: *Node, child: Node.NodeOrText) !void {
     const node = switch (child) {
         .node => |n| n,
         .text => |txt| blk: {
@@ -1624,7 +1627,7 @@ pub fn appendNew(self: *Page, parent: *Node, child: Node.NodeOrText) !void {
         },
     };
 
-    lp.assert(node._parent == null, "Page.appendNew", .{});
+    lp.assert(node._parent == null, "Frame.appendNew", .{});
     try self._insertNodeRelative(true, parent, node, .append, .{
         // this opts has no meaning since we're passing `true` as the first
         // parameter, which indicates this comes from the parser, and has its
@@ -1634,7 +1637,7 @@ pub fn appendNew(self: *Page, parent: *Node, child: Node.NodeOrText) !void {
 }
 
 // called from the parser when the node and all its children have been added
-pub fn nodeComplete(self: *Page, node: *Node) !void {
+pub fn nodeComplete(self: *Frame, node: *Node) !void {
     Node.Build.call(node, "complete", .{ node, self }) catch |err| {
         log.err(.bug, "build.complete", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type, .url = self.url });
         return err;
@@ -1643,8 +1646,8 @@ pub fn nodeComplete(self: *Page, node: *Node) !void {
 }
 
 // Sets the owner document for a node. Only stores entries for nodes whose owner
-// is NOT page.document to minimize memory overhead.
-pub fn setNodeOwnerDocument(self: *Page, node: *Node, owner: *Document) !void {
+// is NOT frame.document to minimize memory overhead.
+pub fn setNodeOwnerDocument(self: *Frame, node: *Node, owner: *Document) !void {
     if (owner == self.document) {
         // No need to store if it's the main document - remove if present
         _ = self._node_owner_documents.remove(node);
@@ -1654,7 +1657,7 @@ pub fn setNodeOwnerDocument(self: *Page, node: *Node, owner: *Document) !void {
 }
 
 // Recursively sets the owner document for a node and all its descendants
-pub fn adoptNodeTree(self: *Page, node: *Node, new_owner: *Document) !void {
+pub fn adoptNodeTree(self: *Frame, node: *Node, new_owner: *Document) !void {
     try self.setNodeOwnerDocument(node, new_owner);
     var it = node.childrenIterator();
     while (it.next()) |child| {
@@ -1662,7 +1665,7 @@ pub fn adoptNodeTree(self: *Page, node: *Node, new_owner: *Document) !void {
     }
 }
 
-pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const u8, attribute_iterator: anytype) !*Node {
+pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const u8, attribute_iterator: anytype) !*Node {
     const from_parser = @TypeOf(attribute_iterator) == Parser.AttributeIterator;
 
     switch (namespace) {
@@ -1962,8 +1965,8 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                             .{ ._proto = undefined },
                         );
 
-                        // If page's base url is not already set, fill it with the base
-                        // tag.
+                        // If frames's base url is not already set, fill it with
+                        // the base tag.
                         if (self.base_url == null) {
                             if (n.as(Element).getAttributeSafe(comptime .wrap("href"))) |href| {
                                 self.base_url = try URL.resolve(self.arena, self.url, href, .{});
@@ -2392,7 +2395,7 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
     }
 }
 
-fn createHtmlElementT(self: *Page, comptime E: type, namespace: Element.Namespace, attribute_iterator: anytype, html_element: E) !*Node {
+fn createHtmlElementT(self: *Frame, comptime E: type, namespace: Element.Namespace, attribute_iterator: anytype, html_element: E) !*Node {
     const html_element_ptr = try self._factory.htmlElement(html_element);
     const element = html_element_ptr.asElement();
     element._namespace = namespace;
@@ -2404,14 +2407,14 @@ fn createHtmlElementT(self: *Page, comptime E: type, namespace: Element.Namespac
     const node = element.asNode();
     if (@hasDecl(E, "Build") and @hasDecl(E.Build, "created")) {
         @call(.auto, @field(E.Build, "created"), .{ node, self }) catch |err| {
-            log.err(.page, "build.created", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type, .url = self.url });
+            log.err(.frame, "build.created", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type, .url = self.url });
             return err;
         };
     }
     return node;
 }
 
-fn createHtmlMediaElementT(self: *Page, comptime E: type, namespace: Element.Namespace, attribute_iterator: anytype) !*Node {
+fn createHtmlMediaElementT(self: *Frame, comptime E: type, namespace: Element.Namespace, attribute_iterator: anytype) !*Node {
     const media_element = try self._factory.htmlMediaElement(E{ ._proto = undefined });
     const element = media_element.asElement();
     element._namespace = namespace;
@@ -2419,7 +2422,7 @@ fn createHtmlMediaElementT(self: *Page, comptime E: type, namespace: Element.Nam
     return element.asNode();
 }
 
-fn createSvgElementT(self: *Page, comptime E: type, tag_name: []const u8, attribute_iterator: anytype, svg_element: E) !*Node {
+fn createSvgElementT(self: *Frame, comptime E: type, tag_name: []const u8, attribute_iterator: anytype, svg_element: E) !*Node {
     const svg_element_ptr = try self._factory.svgElement(tag_name, svg_element);
     var element = svg_element_ptr.asElement();
     element._namespace = .svg;
@@ -2427,7 +2430,7 @@ fn createSvgElementT(self: *Page, comptime E: type, tag_name: []const u8, attrib
     return element.asNode();
 }
 
-fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !void {
+fn populateElementAttributes(self: *Frame, element: *Element, list: anytype) !void {
     if (@TypeOf(list) == ?*Element.Attribute.List) {
         // from cloneNode
 
@@ -2456,7 +2459,7 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
     }
 }
 
-pub fn createTextNode(self: *Page, text: []const u8) !*Node {
+pub fn createTextNode(self: *Frame, text: []const u8) !*Node {
     const cd = try self._factory.node(CData{
         ._proto = undefined,
         ._type = .{ .text = .{
@@ -2468,7 +2471,7 @@ pub fn createTextNode(self: *Page, text: []const u8) !*Node {
     return cd.asNode();
 }
 
-pub fn createComment(self: *Page, text: []const u8) !*Node {
+pub fn createComment(self: *Frame, text: []const u8) !*Node {
     const cd = try self._factory.node(CData{
         ._proto = undefined,
         ._type = .{ .comment = .{
@@ -2480,7 +2483,7 @@ pub fn createComment(self: *Page, text: []const u8) !*Node {
     return cd.asNode();
 }
 
-pub fn createCDATASection(self: *Page, data: []const u8) !*Node {
+pub fn createCDATASection(self: *Frame, data: []const u8) !*Node {
     // Validate that the data doesn't contain "]]>"
     if (std.mem.indexOf(u8, data, "]]>") != null) {
         return error.InvalidCharacterError;
@@ -2506,7 +2509,7 @@ pub fn createCDATASection(self: *Page, data: []const u8) !*Node {
     return cd.asNode();
 }
 
-pub fn createProcessingInstruction(self: *Page, target: []const u8, data: []const u8) !*Node {
+pub fn createProcessingInstruction(self: *Frame, target: []const u8, data: []const u8) !*Node {
     // Validate neither target nor data contain "?>"
     if (std.mem.indexOf(u8, target, "?>") != null) {
         return error.InvalidCharacterError;
@@ -2594,21 +2597,21 @@ fn isXmlNameChar(c: u21) bool {
         (c >= 0x203F and c <= 0x2040);
 }
 
-pub fn dupeString(self: *Page, value: []const u8) ![]const u8 {
+pub fn dupeString(self: *Frame, value: []const u8) ![]const u8 {
     if (String.intern(value)) |v| {
         return v;
     }
     return self.arena.dupe(u8, value);
 }
 
-pub fn dupeSSO(self: *Page, value: []const u8) !String {
+pub fn dupeSSO(self: *Frame, value: []const u8) !String {
     return String.init(self.arena, value, .{ .dupe = true });
 }
 
 const RemoveNodeOpts = struct {
     will_be_reconnected: bool,
 };
-pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts) void {
+pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpts) void {
     // Capture siblings before removing
     const previous_sibling = child.previousSibling();
     const next_sibling = child.nextSibling();
@@ -2622,7 +2625,7 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
     const children = parent._children.?;
     switch (children.*) {
         .one => |n| {
-            lp.assert(n == child, "Page.removeNode.one", .{});
+            lp.assert(n == child, "Frame.removeNode.one", .{});
             parent._children = null;
             self._factory.destroy(children);
         },
@@ -2716,11 +2719,11 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
     }
 }
 
-pub fn appendNode(self: *Page, parent: *Node, child: *Node, opts: InsertNodeOpts) !void {
+pub fn appendNode(self: *Frame, parent: *Node, child: *Node, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, .append, opts);
 }
 
-pub fn appendAllChildren(self: *Page, parent: *Node, target: *Node) !void {
+pub fn appendAllChildren(self: *Frame, parent: *Node, target: *Node) !void {
     self.domChanged();
     const dest_connected = target.isConnected();
 
@@ -2735,7 +2738,7 @@ pub fn appendAllChildren(self: *Page, parent: *Node, target: *Node) !void {
     }
 }
 
-pub fn insertAllChildrenBefore(self: *Page, fragment: *Node, parent: *Node, ref_node: *Node) !void {
+pub fn insertAllChildrenBefore(self: *Frame, fragment: *Node, parent: *Node, ref_node: *Node) !void {
     self.domChanged();
     const dest_connected = parent.isConnected();
 
@@ -2764,13 +2767,13 @@ const InsertNodeOpts = struct {
     child_already_connected: bool = false,
     adopting_to_new_document: bool = false,
 };
-pub fn insertNodeRelative(self: *Page, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
+pub fn insertNodeRelative(self: *Frame, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, relative, opts);
 }
-pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
+pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     // caller should have made sure this was the case
 
-    lp.assert(child._parent == null, "Page.insertNodeRelative parent", .{});
+    lp.assert(child._parent == null, "Frame.insertNodeRelative parent", .{});
 
     const children = blk: {
         // expand parent._children so that it can take another child
@@ -2799,14 +2802,14 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
         },
         .after => |ref_node| {
             // caller should have made sure this was the case
-            lp.assert(ref_node._parent.? == parent, "Page.insertNodeRelative after", .{ .url = self.url });
+            lp.assert(ref_node._parent.? == parent, "Frame.insertNodeRelative after", .{ .url = self.url });
             // if ref_node is in parent, and expanded _children above to
             // accommodate another child, then `children` must be a list
             children.list.insertAfter(&ref_node._child_link, &child._child_link);
         },
         .before => |ref_node| {
             // caller should have made sure this was the case
-            lp.assert(ref_node._parent.? == parent, "Page.insertNodeRelative before", .{ .url = self.url });
+            lp.assert(ref_node._parent.? == parent, "Frame.insertNodeRelative before", .{ .url = self.url });
             // if ref_node is in parent, and expanded _children above to
             // accommodate another child, then `children` must be a list
             children.list.insertBefore(&ref_node._child_link, &child._child_link);
@@ -2920,7 +2923,7 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
     }
 }
 
-pub fn attributeChange(self: *Page, element: *Element, name: String, value: String, old_value: ?String) void {
+pub fn attributeChange(self: *Frame, element: *Element, name: String, value: String, old_value: ?String) void {
     _ = Element.Build.call(element, "attributeChange", .{ element, name, value, self }) catch |err| {
         log.err(.bug, "build.attributeChange", .{ .tag = element.getTag(), .name = name, .value = value, .err = err, .type = self._type, .url = self.url });
     };
@@ -2931,7 +2934,7 @@ pub fn attributeChange(self: *Page, element: *Element, name: String, value: Stri
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyAttributeChange(element, name, old_value, self) catch |err| {
-            log.err(.page, "attributeChange.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
+            log.err(.frame, "attributeChange.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 
@@ -2946,7 +2949,7 @@ pub fn attributeChange(self: *Page, element: *Element, name: String, value: Stri
     }
 }
 
-pub fn attributeRemove(self: *Page, element: *Element, name: String, old_value: String) void {
+pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value: String) void {
     _ = Element.Build.call(element, "attributeRemove", .{ element, name, self }) catch |err| {
         log.err(.bug, "build.attributeRemove", .{ .tag = element.getTag(), .name = name, .err = err, .type = self._type, .url = self.url });
     };
@@ -2957,7 +2960,7 @@ pub fn attributeRemove(self: *Page, element: *Element, name: String, old_value: 
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyAttributeChange(element, name, old_value, self) catch |err| {
-            log.err(.page, "attributeRemove.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
+            log.err(.frame, "attributeRemove.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 
@@ -2972,17 +2975,17 @@ pub fn attributeRemove(self: *Page, element: *Element, name: String, old_value: 
     }
 }
 
-fn signalSlotChange(self: *Page, slot: *Element.Html.Slot) void {
+fn signalSlotChange(self: *Frame, slot: *Element.Html.Slot) void {
     self._slots_pending_slotchange.put(self.arena, slot, {}) catch |err| {
-        log.err(.page, "signalSlotChange.put", .{ .err = err, .type = self._type, .url = self.url });
+        log.err(.frame, "signalSlotChange.put", .{ .err = err, .type = self._type, .url = self.url });
         return;
     };
     self.scheduleSlotchangeDelivery() catch |err| {
-        log.err(.page, "signalSlotChange.schedule", .{ .err = err, .type = self._type, .url = self.url });
+        log.err(.frame, "signalSlotChange.schedule", .{ .err = err, .type = self._type, .url = self.url });
     };
 }
 
-fn updateSlotAssignments(self: *Page, element: *Element) void {
+fn updateSlotAssignments(self: *Frame, element: *Element) void {
     // Find all slots in the shadow root that might be affected
     const parent = element.asNode()._parent orelse return;
 
@@ -3004,7 +3007,7 @@ fn updateSlotAssignments(self: *Page, element: *Element) void {
     }
 }
 
-fn updateElementAssignedSlot(self: *Page, element: *Element) void {
+fn updateElementAssignedSlot(self: *Frame, element: *Element) void {
     // Remove old assignment
     _ = self._element_assigned_slots.remove(element);
 
@@ -3018,7 +3021,7 @@ fn updateElementAssignedSlot(self: *Page, element: *Element) void {
     // Recursively search through the shadow root for a matching slot
     if (findMatchingSlot(shadow_root.asNode(), slot_name)) |slot| {
         self._element_assigned_slots.put(self.arena, element, slot) catch |err| {
-            log.err(.page, "updateElementAssignedSlot.put", .{ .err = err, .type = self._type, .url = self.url });
+            log.err(.frame, "updateElementAssignedSlot.put", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -3044,20 +3047,20 @@ fn findMatchingSlot(node: *Node, slot_name: []const u8) ?*Element.Html.Slot {
     return null;
 }
 
-pub fn hasMutationObservers(self: *const Page) bool {
+pub fn hasMutationObservers(self: *const Frame) bool {
     return self._mutation_observers.first != null;
 }
 
-pub fn getCustomizedBuiltInDefinition(self: *Page, element: *Element) ?*CustomElementDefinition {
+pub fn getCustomizedBuiltInDefinition(self: *Frame, element: *Element) ?*CustomElementDefinition {
     return self._customized_builtin_definitions.get(element);
 }
 
-pub fn setCustomizedBuiltInDefinition(self: *Page, element: *Element, definition: *CustomElementDefinition) !void {
+pub fn setCustomizedBuiltInDefinition(self: *Frame, element: *Element, definition: *CustomElementDefinition) !void {
     try self._customized_builtin_definitions.put(self.arena, element, definition);
 }
 
 pub fn characterDataChange(
-    self: *Page,
+    self: *Frame,
     target: *Node,
     old_value: String,
 ) void {
@@ -3065,13 +3068,13 @@ pub fn characterDataChange(
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyCharacterDataChange(target, old_value, self) catch |err| {
-            log.err(.page, "cdataChange.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
+            log.err(.frame, "cdataChange.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
 
 pub fn childListChange(
-    self: *Page,
+    self: *Frame,
     target: *Node,
     added_nodes: []const *Node,
     removed_nodes: []const *Node,
@@ -3092,7 +3095,7 @@ pub fn childListChange(
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyChildListChange(target, added_nodes, removed_nodes, previous_sibling, next_sibling, self) catch |err| {
-            log.err(.page, "childListChange.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
+            log.err(.frame, "childListChange.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -3103,7 +3106,7 @@ pub fn childListChange(
 /// Per DOM spec: insertData = replaceData(offset, 0, data),
 ///               deleteData = replaceData(offset, count, "").
 /// All parameters are in UTF-16 code unit offsets.
-pub fn updateRangesForCharacterDataReplace(self: *Page, target: *Node, offset: u32, count: u32, data_len: u32) void {
+pub fn updateRangesForCharacterDataReplace(self: *Frame, target: *Node, offset: u32, count: u32, data_len: u32) void {
     var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
     while (it) |link| : (it = link.next) {
         const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
@@ -3116,7 +3119,7 @@ pub fn updateRangesForCharacterDataReplace(self: *Page, target: *Node, offset: u
 /// Steps 7d-7e complement (not overlap) updateRangesForNodeInsertion:
 /// the insert update handles offsets > child_index, while 7d/7e handle
 /// offsets == node_index+1 (these are equal values but with > vs == checks).
-pub fn updateRangesForSplitText(self: *Page, target: *Node, new_node: *Node, offset: u32, parent: *Node, node_index: u32) void {
+pub fn updateRangesForSplitText(self: *Frame, target: *Node, new_node: *Node, offset: u32, parent: *Node, node_index: u32) void {
     var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
     while (it) |link| : (it = link.next) {
         const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
@@ -3127,7 +3130,7 @@ pub fn updateRangesForSplitText(self: *Page, target: *Node, new_node: *Node, off
 /// Update all live ranges after a node insertion.
 /// Per DOM spec insert algorithm step 6: only applies when inserting before a
 /// non-null reference node.
-pub fn updateRangesForNodeInsertion(self: *Page, parent: *Node, child_index: u32) void {
+pub fn updateRangesForNodeInsertion(self: *Frame, parent: *Node, child_index: u32) void {
     var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
     while (it) |link| : (it = link.next) {
         const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
@@ -3137,7 +3140,7 @@ pub fn updateRangesForNodeInsertion(self: *Page, parent: *Node, child_index: u32
 
 /// Update all live ranges after a node removal.
 /// Per DOM spec remove algorithm steps 4-7.
-pub fn updateRangesForNodeRemoval(self: *Page, parent: *Node, child: *Node, child_index: u32) void {
+pub fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, child_index: u32) void {
     var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
     while (it) |link| : (it = link.next) {
         const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
@@ -3146,7 +3149,7 @@ pub fn updateRangesForNodeRemoval(self: *Page, parent: *Node, child: *Node, chil
 }
 
 // TODO: optimize and cleanup, this is called a lot (e.g., innerHTML = '')
-pub fn parseHtmlAsChildren(self: *Page, node: *Node, html: []const u8) !void {
+pub fn parseHtmlAsChildren(self: *Frame, node: *Node, html: []const u8) !void {
     const previous_parse_mode = self._parse_mode;
     self._parse_mode = .fragment;
     defer self._parse_mode = previous_parse_mode;
@@ -3157,7 +3160,7 @@ pub fn parseHtmlAsChildren(self: *Page, node: *Node, html: []const u8) !void {
     // https://github.com/servo/html5ever/issues/583
     const children = node._children orelse return;
     const first = children.one;
-    lp.assert(first.is(Element.Html.Html) != null, "Page.parseHtmlAsChildren root", .{ .type = first._type });
+    lp.assert(first.is(Element.Html.Html) != null, "Frame.parseHtmlAsChildren root", .{ .type = first._type });
     node._children = first._children;
 
     if (self.hasMutationObservers()) {
@@ -3178,7 +3181,7 @@ pub fn parseHtmlAsChildren(self: *Page, node: *Node, html: []const u8) !void {
     }
 }
 
-fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
+fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
     if ((comptime from_parser) and self._parse_mode == .fragment) {
         // we don't execute scripts added via innerHTML = '<script...';
         return;
@@ -3194,22 +3197,22 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
         }
 
         self.scriptAddedCallback(from_parser, script) catch |err| {
-            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "script", .type = self._type, .url = self.url });
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "script", .type = self._type, .url = self.url });
             return err;
         };
     } else if (node.is(IFrame)) |iframe| {
         self.iframeAddedCallback(iframe) catch |err| {
-            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "iframe", .type = self._type, .url = self.url });
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "iframe", .type = self._type, .url = self.url });
             return err;
         };
     } else if (node.is(Element.Html.Link)) |link| {
         link.linkAddedCallback(self) catch |err| {
-            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "link", .type = self._type });
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "link", .type = self._type });
             return error.LinkLoadError;
         };
     } else if (node.is(Element.Html.Style)) |style| {
         style.styleAddedCallback(self) catch |err| {
-            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "style", .type = self._type });
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "style", .type = self._type });
             return error.StyleLoadError;
         };
     }
@@ -3237,7 +3240,7 @@ const LoadState = enum {
     // scripts) have been loaded. Corresponds to the DOMContentLoaded event
     load,
 
-    // the page has been loaded and all async scripts (if any) are done
+    // the frame has been loaded and all async scripts (if any) are done
     // Corresponds to the load event
     complete,
 };
@@ -3346,9 +3349,9 @@ const NavigationType = enum {
 };
 
 const Navigation = union(NavigationType) {
-    form: *Page,
-    script: ?*Page,
-    anchor: *Page,
+    form: *Frame,
+    script: ?*Frame,
+    anchor: *Frame,
     iframe: *IFrame,
 };
 
@@ -3361,10 +3364,10 @@ pub const QueuedNavigation = struct {
 };
 
 /// Resolves a target attribute value (e.g., "_self", "_parent", "_top", or frame name)
-/// to the appropriate Page to navigate.
+/// to the appropriateFrame to navigate.
 /// Returns null if the target is "_blank" (which would open a new window/tab).
 /// Note: Callers should handle empty target separately (for owner document resolution).
-pub fn resolveTargetPage(self: *Page, target_name: []const u8) ?*Page {
+fn resolveTargetFrame(self: *Frame, target_name: []const u8) ?*Frame {
     if (std.ascii.eqlIgnoreCase(target_name, "_self")) {
         return self;
     }
@@ -3378,55 +3381,55 @@ pub fn resolveTargetPage(self: *Page, target_name: []const u8) ?*Page {
     }
 
     if (std.ascii.eqlIgnoreCase(target_name, "_top")) {
-        var page = self;
-        while (page.parent) |p| {
-            page = p;
+        var frame = self;
+        while (frame.parent) |f| {
+            frame = f;
         }
-        return page;
+        return frame;
     }
 
-    // Named frame lookup: search current page's descendants first, then from root
+    // Named frame lookup: search current frame's descendants first, then from root
     // This follows the HTML spec's "implementation-defined" search order.
-    if (findFrameByName(self, target_name)) |frame_page| {
-        return frame_page;
+    if (findFrameByName(self, target_name)) |f| {
+        return f;
     }
 
     // If not found in descendants, search from root (catches siblings and ancestors' descendants)
     var root = self;
-    while (root.parent) |p| {
-        root = p;
+    while (root.parent) |f| {
+        root = f;
     }
     if (root != self) {
-        if (findFrameByName(root, target_name)) |frame_page| {
-            return frame_page;
+        if (findFrameByName(root, target_name)) |f| {
+            return f;
         }
     }
 
-    // If no frame found with that name, navigate in current page
+    // If no frame found with that name, navigate in current frame
     // (this matches browser behavior - unknown targets act like _self)
     return self;
 }
 
-fn findFrameByName(page: *Page, name: []const u8) ?*Page {
-    for (page.frames.items) |frame| {
-        if (frame.iframe) |iframe| {
+fn findFrameByName(frame: *Frame, name: []const u8) ?*Frame {
+    for (frame.child_frames.items) |f| {
+        if (f.iframe) |iframe| {
             const frame_name = iframe.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
             if (std.mem.eql(u8, frame_name, name)) {
-                return frame;
+                return f;
             }
         }
         // Recursively search child frames
-        if (findFrameByName(frame, name)) |found| {
+        if (findFrameByName(f, name)) |found| {
             return found;
         }
     }
     return null;
 }
 
-pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
+pub fn triggerMouseClick(self: *Frame, x: f64, y: f64) !void {
     const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
     if (comptime IS_DEBUG) {
-        log.debug(.page, "page mouse click", .{
+        log.debug(.frame, "frame mouse click", .{
             .url = self.url,
             .node = target,
             .x = x,
@@ -3444,8 +3447,8 @@ pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
     try self._event_manager.dispatch(target.asEventTarget(), mouse_event.asEvent());
 }
 
-// callback when the "click" event reaches the pages.
-pub fn handleClick(self: *Page, target: *Node) !void {
+// callback when the "click" event reaches the frame.
+pub fn handleClick(self: *Frame, target: *Node) !void {
     // TODO: Also support <area> elements when implement
     const element = target.is(Element) orelse return;
     const html_element = element.is(Element.Html) orelse return;
@@ -3466,12 +3469,12 @@ pub fn handleClick(self: *Page, target: *Node) !void {
                 return;
             }
 
-            const target_page = blk: {
+            const target_frame = blk: {
                 const target_name = anchor.getTarget();
                 if (target_name.len == 0) {
-                    break :blk target.ownerPage(self);
+                    break :blk target.ownerFrame(self);
                 }
-                break :blk self.resolveTargetPage(target_name) orelse {
+                break :blk self.resolveTargetFrame(target_name) orelse {
                     log.warn(.not_implemented, "target", .{ .type = self._type, .url = self.url, .target = target_name });
                     return;
                 };
@@ -3481,7 +3484,7 @@ pub fn handleClick(self: *Page, target: *Node) !void {
             try self.scheduleNavigation(href, .{
                 .reason = .script,
                 .kind = .{ .push = null },
-            }, .{ .anchor = target_page });
+            }, .{ .anchor = target_frame });
         },
         .input => |input| {
             try element.focus(self);
@@ -3500,7 +3503,7 @@ pub fn handleClick(self: *Page, target: *Node) !void {
     }
 }
 
-pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
+pub fn triggerKeyboard(self: *Frame, keyboard_event: *KeyboardEvent) !void {
     const event = keyboard_event.asEvent();
     const element = self.window._document._active_element orelse {
         event.deinit(self._session);
@@ -3508,7 +3511,7 @@ pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
     };
 
     if (comptime IS_DEBUG) {
-        log.debug(.page, "page keydown", .{
+        log.debug(.frame, "frame keydown", .{
             .url = self.url,
             .node = element,
             .key = keyboard_event._key,
@@ -3518,7 +3521,7 @@ pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
     try self._event_manager.dispatch(element.asEventTarget(), event);
 }
 
-pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
+pub fn handleKeydown(self: *Frame, target: *Node, event: *Event) !void {
     const keyboard_event = event.is(KeyboardEvent) orelse return;
     const key = keyboard_event.getKey();
 
@@ -3559,7 +3562,7 @@ pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
 const SubmitFormOpts = struct {
     fire_event: bool = true,
 };
-pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form, submit_opts: SubmitFormOpts) !void {
+pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.Form, submit_opts: SubmitFormOpts) !void {
     const form = form_ orelse return;
 
     if (submitter_) |submitter| {
@@ -3583,11 +3586,11 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
         break :blk form_element.getAttributeSafe(comptime .wrap("target"));
     };
 
-    const target_page = blk: {
+    const target_frame = blk: {
         const target_name = target_name_ orelse {
-            break :blk form_element.asNode().ownerPage(self);
+            break :blk form_element.asNode().ownerFrame(self);
         };
-        break :blk self.resolveTargetPage(target_name) orelse {
+        break :blk self.resolveTargetFrame(target_name) orelse {
             log.warn(.not_implemented, "target", .{ .type = self._type, .url = self.url, .target = target_name });
             return;
         };
@@ -3650,11 +3653,11 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
         action = try URL.concatQueryString(arena, action, buf.written());
     }
 
-    return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = target_page });
+    return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = target_frame });
 }
 
 // insertText is a shortcut to insert text into the active element.
-pub fn insertText(self: *Page, v: []const u8) !void {
+pub fn insertText(self: *Frame, v: []const u8) !void {
     const html_element = self.document._active_element orelse return;
 
     if (html_element.is(Element.Html.Input)) |input| {
@@ -3685,7 +3688,7 @@ fn asUint(comptime string: anytype) std.meta.Int(
 }
 
 const testing = @import("../testing.zig");
-test "WebApi: Page" {
+test "WebApi:Frame" {
     const filter: testing.LogFilter = .init(&.{.http});
     defer filter.deinit();
     try testing.htmlRunner("page", .{});
@@ -3704,35 +3707,35 @@ test "Page: isSameOrigin" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var page: Page = undefined;
+    var frame: Frame = undefined;
 
-    page.origin = null;
-    try testing.expectEqual(false, page.isSameOrigin("https://origin.com/"));
+    frame.origin = null;
+    try testing.expectEqual(false, frame.isSameOrigin("https://origin.com/"));
 
-    page.origin = try URL.getOrigin(allocator, "https://origin.com/foo/bar") orelse unreachable;
-    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/foo/bar")); // exact same
-    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/bar/bar")); // path differ
-    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/")); // path differ
-    try testing.expectEqual(true, page.isSameOrigin("https://origin.com")); // no path
-    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/foo?q=1"));
-    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/foo#hash"));
-    try testing.expectEqual(true, page.isSameOrigin("https://origin.com/foo?q=1#hash"));
-    // FIXME try testing.expectEqual(true, page.isSameOrigin("https://foo:bar@origin.com"));
-    // FIXME try testing.expectEqual(true, page.isSameOrigin("https://origin.com:443/foo"));
+    frame.origin = try URL.getOrigin(allocator, "https://origin.com/foo/bar") orelse unreachable;
+    try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/foo/bar")); // exact same
+    try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/bar/bar")); // path differ
+    try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/")); // path differ
+    try testing.expectEqual(true, frame.isSameOrigin("https://origin.com")); // no path
+    try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/foo?q=1"));
+    try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/foo#hash"));
+    try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/foo?q=1#hash"));
+    // FIXME try testing.expectEqual(true, frame.isSameOrigin("https://foo:bar@origin.com"));
+    // FIXME try testing.expectEqual(true, frame.isSameOrigin("https://origin.com:443/foo"));
 
-    try testing.expectEqual(false, page.isSameOrigin("http://origin.com/")); // another proto
-    try testing.expectEqual(false, page.isSameOrigin("https://origin.com:123/")); // another port
-    try testing.expectEqual(false, page.isSameOrigin("https://sub.origin.com/")); // another subdomain
-    try testing.expectEqual(false, page.isSameOrigin("https://target.com/")); // different domain
-    try testing.expectEqual(false, page.isSameOrigin("https://origin.com.target.com/")); // different domain
-    try testing.expectEqual(false, page.isSameOrigin("https://target.com/@origin.com"));
+    try testing.expectEqual(false, frame.isSameOrigin("http://origin.com/")); // another proto
+    try testing.expectEqual(false, frame.isSameOrigin("https://origin.com:123/")); // another port
+    try testing.expectEqual(false, frame.isSameOrigin("https://sub.origin.com/")); // another subdomain
+    try testing.expectEqual(false, frame.isSameOrigin("https://target.com/")); // different domain
+    try testing.expectEqual(false, frame.isSameOrigin("https://origin.com.target.com/")); // different domain
+    try testing.expectEqual(false, frame.isSameOrigin("https://target.com/@origin.com"));
 
-    page.origin = try URL.getOrigin(allocator, "https://origin.com:8443/foo") orelse unreachable;
-    try testing.expectEqual(true, page.isSameOrigin("https://origin.com:8443/bar"));
-    try testing.expectEqual(false, page.isSameOrigin("https://origin.com/bar")); // missing port
-    try testing.expectEqual(false, page.isSameOrigin("https://origin.com:9999/bar")); // wrong port
+    frame.origin = try URL.getOrigin(allocator, "https://origin.com:8443/foo") orelse unreachable;
+    try testing.expectEqual(true, frame.isSameOrigin("https://origin.com:8443/bar"));
+    try testing.expectEqual(false, frame.isSameOrigin("https://origin.com/bar")); // missing port
+    try testing.expectEqual(false, frame.isSameOrigin("https://origin.com:9999/bar")); // wrong port
 
-    try testing.expectEqual(false, page.isSameOrigin(""));
-    try testing.expectEqual(false, page.isSameOrigin("not-a-url"));
-    try testing.expectEqual(false, page.isSameOrigin("//origin.com/foo"));
+    try testing.expectEqual(false, frame.isSameOrigin(""));
+    try testing.expectEqual(false, frame.isSameOrigin("not-a-url"));
+    try testing.expectEqual(false, frame.isSameOrigin("//origin.com/foo"));
 }

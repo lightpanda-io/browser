@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 
 const Node = @import("Node.zig");
 pub const Text = @import("cdata/Text.zig");
@@ -226,26 +226,26 @@ pub fn render(self: *const CData, writer: *std.io.Writer, opts: RenderOpts) !boo
     return false;
 }
 
-pub fn setData(self: *CData, value: ?[]const u8, page: *Page) !void {
+pub fn setData(self: *CData, value: ?[]const u8, frame: *Frame) !void {
     const old_value = self._data;
 
     if (value) |v| {
-        self._data = try page.dupeSSO(v);
+        self._data = try frame.dupeSSO(v);
     } else {
         self._data = .empty;
     }
 
-    page.characterDataChange(self.asNode(), old_value);
+    frame.characterDataChange(self.asNode(), old_value);
 }
 
 /// JS bridge wrapper for `data` setter.
 /// Per spec, setting .data runs replaceData(0, this.length, value),
 /// which includes live range updates.
 /// Handles [LegacyNullToEmptyString]: null → "" per spec.
-pub fn _setData(self: *CData, value: js.Value, page: *Page) !void {
+pub fn _setData(self: *CData, value: js.Value, frame: *Frame) !void {
     const new_value: []const u8 = if (value.isNull()) "" else try value.toZig([]const u8);
     const length = self.getLength();
-    try self.replaceData(0, length, new_value, page);
+    try self.replaceData(0, length, new_value, frame);
 }
 
 pub fn format(self: *const CData, writer: *std.io.Writer) !void {
@@ -277,70 +277,70 @@ pub fn isEqualNode(self: *const CData, other: *const CData) bool {
     return self._data.eql(other._data);
 }
 
-pub fn appendData(self: *CData, data: []const u8, page: *Page) !void {
+pub fn appendData(self: *CData, data: []const u8, frame: *Frame) !void {
     // Per DOM spec, appendData(data) is replaceData(length, 0, data).
     const length = self.getLength();
-    try self.replaceData(length, 0, data, page);
+    try self.replaceData(length, 0, data, frame);
 }
 
-pub fn deleteData(self: *CData, offset: usize, count: usize, page: *Page) !void {
+pub fn deleteData(self: *CData, offset: usize, count: usize, frame: *Frame) !void {
     const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
     const range = try utf16RangeToUtf8(self._data.str(), offset, end_utf16);
 
     // Update live ranges per DOM spec replaceData steps (deleteData = replaceData with data="")
     const length = self.getLength();
     const effective_count: u32 = @intCast(@min(count, length - offset));
-    page.updateRangesForCharacterDataReplace(self.asNode(), @intCast(offset), effective_count, 0);
+    frame.updateRangesForCharacterDataReplace(self.asNode(), @intCast(offset), effective_count, 0);
 
     const old_data = self._data;
     const old_value = old_data.str();
     if (range.start == 0) {
-        self._data = try page.dupeSSO(old_value[range.end..]);
+        self._data = try frame.dupeSSO(old_value[range.end..]);
     } else if (range.end >= old_value.len) {
-        self._data = try page.dupeSSO(old_value[0..range.start]);
+        self._data = try frame.dupeSSO(old_value[0..range.start]);
     } else {
         // Deleting from middle - concat prefix and suffix
-        self._data = try String.concat(page.arena, &.{
+        self._data = try String.concat(frame.arena, &.{
             old_value[0..range.start],
             old_value[range.end..],
         });
     }
-    page.characterDataChange(self.asNode(), old_data);
+    frame.characterDataChange(self.asNode(), old_data);
 }
 
-pub fn insertData(self: *CData, offset: usize, data: []const u8, page: *Page) !void {
+pub fn insertData(self: *CData, offset: usize, data: []const u8, frame: *Frame) !void {
     const byte_offset = try utf16OffsetToUtf8(self._data.str(), offset);
 
     // Update live ranges per DOM spec replaceData steps (insertData = replaceData with count=0)
-    page.updateRangesForCharacterDataReplace(self.asNode(), @intCast(offset), 0, @intCast(utf16Len(data)));
+    frame.updateRangesForCharacterDataReplace(self.asNode(), @intCast(offset), 0, @intCast(utf16Len(data)));
 
     const old_value = self._data;
     const existing = old_value.str();
-    self._data = try String.concat(page.arena, &.{
+    self._data = try String.concat(frame.arena, &.{
         existing[0..byte_offset],
         data,
         existing[byte_offset..],
     });
-    page.characterDataChange(self.asNode(), old_value);
+    frame.characterDataChange(self.asNode(), old_value);
 }
 
-pub fn replaceData(self: *CData, offset: usize, count: usize, data: []const u8, page: *Page) !void {
+pub fn replaceData(self: *CData, offset: usize, count: usize, data: []const u8, frame: *Frame) !void {
     const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
     const range = try utf16RangeToUtf8(self._data.str(), offset, end_utf16);
 
     // Update live ranges per DOM spec replaceData steps
     const length = self.getLength();
     const effective_count: u32 = @intCast(@min(count, length - offset));
-    page.updateRangesForCharacterDataReplace(self.asNode(), @intCast(offset), effective_count, @intCast(utf16Len(data)));
+    frame.updateRangesForCharacterDataReplace(self.asNode(), @intCast(offset), effective_count, @intCast(utf16Len(data)));
 
     const old_value = self._data;
     const existing = old_value.str();
-    self._data = try String.concat(page.arena, &.{
+    self._data = try String.concat(frame.arena, &.{
         existing[0..range.start],
         data,
         existing[range.end..],
     });
-    page.characterDataChange(self.asNode(), old_value);
+    frame.characterDataChange(self.asNode(), old_value);
 }
 
 pub fn substringData(self: *const CData, offset: usize, count: usize) ![]const u8 {
@@ -349,49 +349,49 @@ pub fn substringData(self: *const CData, offset: usize, count: usize) ![]const u
     return self._data.str()[range.start..range.end];
 }
 
-pub fn remove(self: *CData, page: *Page) !void {
+pub fn remove(self: *CData, frame: *Frame) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
-    _ = try parent.removeChild(node, page);
+    _ = try parent.removeChild(node, frame);
 }
 
-pub fn before(self: *CData, nodes: []const Node.NodeOrText, page: *Page) !void {
+pub fn before(self: *CData, nodes: []const Node.NodeOrText, frame: *Frame) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(page);
-        _ = try parent.insertBefore(child, node, page);
+        const child = try node_or_text.toNode(frame);
+        _ = try parent.insertBefore(child, node, frame);
     }
 }
 
-pub fn after(self: *CData, nodes: []const Node.NodeOrText, page: *Page) !void {
+pub fn after(self: *CData, nodes: []const Node.NodeOrText, frame: *Frame) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
     const viable_next = Node.NodeOrText.viableNextSibling(node, nodes);
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(page);
-        _ = try parent.insertBefore(child, viable_next, page);
+        const child = try node_or_text.toNode(frame);
+        _ = try parent.insertBefore(child, viable_next, frame);
     }
 }
 
-pub fn replaceWith(self: *CData, nodes: []const Node.NodeOrText, page: *Page) !void {
+pub fn replaceWith(self: *CData, nodes: []const Node.NodeOrText, frame: *Frame) !void {
     const ref_node = self.asNode();
     const parent = ref_node.parentNode() orelse return;
 
     var rm_ref_node = true;
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(page);
+        const child = try node_or_text.toNode(frame);
         if (child == ref_node) {
             rm_ref_node = false;
             continue;
         }
-        _ = try parent.insertBefore(child, ref_node, page);
+        _ = try parent.insertBefore(child, ref_node, frame);
     }
 
     if (rm_ref_node) {
-        _ = try parent.removeChild(ref_node, page);
+        _ = try parent.removeChild(ref_node, frame);
     }
 }
 

@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -51,17 +51,17 @@ pub fn getVideoHeight(_: *const Video) u32 {
     return 0;
 }
 
-pub fn getPoster(self: *const Video, page: *Page) ![]const u8 {
+pub fn getPoster(self: *const Video, frame: *Frame) ![]const u8 {
     const element = self.asConstElement();
     const poster = element.getAttributeSafe(comptime .wrap("poster")) orelse return "";
     if (poster.len == 0) {
         return "";
     }
-    return element.asConstNode().resolveURL(poster, page, .{});
+    return element.asConstNode().resolveURL(poster, frame, .{});
 }
 
-pub fn setPoster(self: *Video, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("poster"), .wrap(value), page);
+pub fn setPoster(self: *Video, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("poster"), .wrap(value), frame);
 }
 
 pub const JsApi = struct {

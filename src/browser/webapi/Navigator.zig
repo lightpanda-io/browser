@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 
 const PluginArray = @import("PluginArray.zig");
 const Permissions = @import("Permissions.zig");
@@ -37,8 +37,8 @@ _storage: StorageManager = .{},
 
 pub const init: Navigator = .{};
 
-pub fn getUserAgent(_: *const Navigator, page: *Page) []const u8 {
-    return page._session.browser.http_client.getUserAgent();
+pub fn getUserAgent(_: *const Navigator, frame: *Frame) []const u8 {
+    return frame._session.browser.http_client.getUserAgent();
 }
 
 pub fn getLanguages(_: *const Navigator) [2][]const u8 {
@@ -72,18 +72,18 @@ pub fn getStorage(self: *Navigator) *StorageManager {
     return &self._storage;
 }
 
-pub fn getBattery(_: *const Navigator, page: *Page) !js.Promise {
+pub fn getBattery(_: *const Navigator, frame: *Frame) !js.Promise {
     log.info(.not_implemented, "navigator.getBattery", .{});
-    return page.js.local.?.rejectErrorPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+    return frame.js.local.?.rejectErrorPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
 }
 
-pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, page: *const Page) !void {
+pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
     try validateProtocolHandlerScheme(scheme);
-    try validateProtocolHandlerURL(url, page);
+    try validateProtocolHandlerURL(url, frame);
 }
-pub fn unregisterProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, page: *const Page) !void {
+pub fn unregisterProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
     try validateProtocolHandlerScheme(scheme);
-    try validateProtocolHandlerURL(url, page);
+    try validateProtocolHandlerURL(url, frame);
 }
 
 fn validateProtocolHandlerScheme(scheme: []const u8) !void {
@@ -136,11 +136,11 @@ fn validateProtocolHandlerScheme(scheme: []const u8) !void {
     }
 }
 
-fn validateProtocolHandlerURL(url: [:0]const u8, page: *const Page) !void {
+fn validateProtocolHandlerURL(url: [:0]const u8, frame: *const Frame) !void {
     if (std.mem.indexOf(u8, url, "%s") == null) {
         return error.SyntaxError;
     }
-    if (page.isSameOrigin(url) == false) {
+    if (frame.isSameOrigin(url) == false) {
         return error.SyntaxError;
     }
 }

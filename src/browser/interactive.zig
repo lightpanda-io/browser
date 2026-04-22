@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const Page = @import("Page.zig");
+const Frame = @import("Frame.zig");
 const URL = @import("URL.zig");
 const TreeWalker = @import("webapi/TreeWalker.zig");
 const Element = @import("webapi/Element.zig");
@@ -142,11 +142,11 @@ pub fn registerNodes(elements: []InteractiveElement, registry: anytype) !void {
 pub fn collectInteractiveElements(
     root: *Node,
     arena: Allocator,
-    page: *Page,
+    frame: *Frame,
 ) ![]InteractiveElement {
     // Pre-build a map of event_target pointer → event type names,
     // so classify and getListenerTypes are both O(1) per element.
-    const listener_targets = try buildListenerTargetMap(page, arena);
+    const listener_targets = try buildListenerTargetMap(frame, arena);
 
     var css_cache: Element.PointerEventsCache = .empty;
 
@@ -163,7 +163,7 @@ pub fn collectInteractiveElements(
             else => {},
         }
 
-        const itype = classifyInteractivity(page, el, html_el, listener_targets, &css_cache) orelse continue;
+        const itype = classifyInteractivity(frame, el, html_el, listener_targets, &css_cache) orelse continue;
 
         const listener_types = getListenerTypes(
             el.asEventTarget(),
@@ -182,7 +182,7 @@ pub fn collectInteractiveElements(
             .id = el.getAttributeSafe(comptime .wrap("id")),
             .class = el.getAttributeSafe(comptime .wrap("class")),
             .href = if (el.getAttributeSafe(comptime .wrap("href"))) |href|
-                URL.resolve(arena, page.base(), href, .{ .encoding = page.charset }) catch href
+                URL.resolve(arena, frame.base(), href, .{ .encoding = frame.charset }) catch href
             else
                 null,
             .input_type = getInputType(el),
@@ -200,11 +200,11 @@ pub const ListenerTargetMap = std.AutoHashMapUnmanaged(usize, std.ArrayList([]co
 /// Pre-build a map from event_target pointer → list of event type names.
 /// This lets both classifyInteractivity (O(1) "has any?") and
 /// getListenerTypes (O(1) "which ones?") avoid re-iterating per element.
-pub fn buildListenerTargetMap(page: *Page, arena: Allocator) !ListenerTargetMap {
+pub fn buildListenerTargetMap(frame: *Frame, arena: Allocator) !ListenerTargetMap {
     var map = ListenerTargetMap{};
 
     // addEventListener registrations
-    var it = page._event_manager.base.lookup.iterator();
+    var it = frame._event_manager.base.lookup.iterator();
     while (it.next()) |entry| {
         const list = entry.value_ptr.*;
         if (list.first != null) {
@@ -215,7 +215,7 @@ pub fn buildListenerTargetMap(page: *Page, arena: Allocator) !ListenerTargetMap 
     }
 
     // Inline handlers (onclick, onmousedown, etc.)
-    var attr_it = page._event_target_attr_listeners.iterator();
+    var attr_it = frame._event_target_attr_listeners.iterator();
     while (attr_it.next()) |entry| {
         const gop = try map.getOrPut(arena, @intFromPtr(entry.key_ptr.target));
         if (!gop.found_existing) gop.value_ptr.* = .empty;
@@ -227,13 +227,13 @@ pub fn buildListenerTargetMap(page: *Page, arena: Allocator) !ListenerTargetMap 
 }
 
 pub fn classifyInteractivity(
-    page: *Page,
+    frame: *Frame,
     el: *Element,
     html_el: *Element.Html,
     listener_targets: ListenerTargetMap,
     cache: ?*Element.PointerEventsCache,
 ) ?InteractivityType {
-    if (el.hasPointerEventsNone(cache, page)) return null;
+    if (el.hasPointerEventsNone(cache, frame)) return null;
 
     // 1. Native interactive by tag
     switch (el.getTag()) {
@@ -451,14 +451,14 @@ fn getListenerTypes(target: *EventTarget, listener_targets: ListenerTargetMap) [
 const testing = @import("../testing.zig");
 
 fn testInteractive(html: []const u8) ![]InteractiveElement {
-    const page = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    const frame = try testing.test_session.createFrame();
+    defer testing.test_session.removeFrame();
 
-    const doc = page.window._document;
-    const div = try doc.createElement("div", null, page);
-    try page.parseHtmlAsChildren(div.asNode(), html);
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try frame.parseHtmlAsChildren(div.asNode(), html);
 
-    return collectInteractiveElements(div.asNode(), page.call_arena, page);
+    return collectInteractiveElements(div.asNode(), frame.call_arena, frame);
 }
 
 test "browser.interactive: button" {

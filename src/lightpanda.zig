@@ -25,7 +25,7 @@ pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
 pub const URL = @import("browser/URL.zig");
 pub const String = @import("string.zig").String;
-pub const Page = @import("browser/Page.zig");
+pub const Frame = @import("browser/Frame.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
 pub const Notification = @import("Notification.zig");
@@ -80,15 +80,15 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
         }
     }
 
-    const page = try session.createPage();
+    const frame = try session.createFrame();
 
     // // Comment this out to get a profile of the JS code in v8/profile.json.
     // // You can open this in Chrome's profiler.
     // // I've seen it generate invalid JSON, but I'm not sure why. It
     // // happens rarely, and I manually fix the file.
-    // page.js.startCpuProfiler();
+    // frame.js.startCpuProfiler();
     // defer {
-    //     if (page.js.stopCpuProfiler()) |profile| {
+    //     if (frame.js.stopCpuProfiler()) |profile| {
     //         std.fs.cwd().writeFile(.{
     //             .sub_path = ".lp-cache/cpu_profile.json",
     //             .data = profile,
@@ -101,9 +101,9 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     // }
 
     // // Comment this out to get a heap V8 heap profil
-    // page.js.startHeapProfiler();
+    // frame.js.startHeapProfiler();
     // defer {
-    //     if (page.js.stopHeapProfiler()) |profile| {
+    //     if (frame.js.stopHeapProfiler()) |profile| {
     //         std.fs.cwd().writeFile(.{
     //             .sub_path = ".lp-cache/allocating.heapprofile",
     //             .data = profile.@"0",
@@ -121,8 +121,8 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     //     }
     // }
 
-    const encoded_url = try URL.ensureEncoded(page.call_arena, url, "UTF-8");
-    _ = try page.navigate(encoded_url, .{
+    const encoded_url = try URL.ensureEncoded(frame.call_arena, url, "UTF-8");
+    _ = try frame.navigate(encoded_url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
     });
@@ -156,17 +156,17 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     const writer = opts.writer orelse return;
     if (opts.dump_mode) |mode| {
         switch (mode) {
-            .html => try dump.root(page.window._document, opts.dump, writer, page),
-            .markdown => try markdown.dump(page.window._document.asNode(), .{}, writer, page),
+            .html => try dump.root(frame.window._document, opts.dump, writer, frame),
+            .markdown => try markdown.dump(frame.window._document.asNode(), .{}, writer, frame),
             .semantic_tree, .semantic_tree_text => {
                 var registry = CDPNode.Registry.init(app.allocator);
                 defer registry.deinit();
 
                 const st: SemanticTree = .{
-                    .dom_node = page.window._document.asNode(),
+                    .dom_node = frame.window._document.asNode(),
                     .registry = &registry,
-                    .page = page,
-                    .arena = page.call_arena,
+                    .frame = frame,
+                    .arena = frame.call_arena,
                     .prune = (mode == .semantic_tree_text),
                 };
 
@@ -176,15 +176,15 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
                     try st.textStringify(writer);
                 }
             },
-            .wpt => try dumpWPT(page, writer),
+            .wpt => try dumpWPT(frame, writer),
         }
     }
     try writer.flush();
 }
 
-fn dumpWPT(page: *Page, writer: *std.Io.Writer) !void {
+fn dumpWPT(frame: *Frame, writer: *std.Io.Writer) !void {
     var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
+    frame.js.localScope(&ls);
     defer ls.deinit();
 
     var try_catch: js.TryCatch = undefined;
@@ -225,11 +225,11 @@ fn dumpWPT(page: *Page, writer: *std.Io.Writer) !void {
         \\ })(), null, 2)
     ;
     const value = ls.local.exec(dump_script, "dump_script") catch |err| {
-        const caught = try_catch.caughtOrError(page.call_arena, err);
+        const caught = try_catch.caughtOrError(frame.call_arena, err);
         return writer.print("Caught error trying to access WPT's report: {f}\n", .{caught});
     };
     try writer.writeAll("== WPT Results==\n");
-    try writer.writeAll(try value.toStringSliceWithAlloc(page.call_arena));
+    try writer.writeAll(try value.toStringSliceWithAlloc(frame.call_arena));
 }
 
 pub inline fn assert(ok: bool, comptime ctx: []const u8, args: anytype) void {

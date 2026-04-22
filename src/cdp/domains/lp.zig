@@ -68,17 +68,17 @@ fn getSemanticTree(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse Params{};
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const dom_node = if (params.backendNodeId) |nodeId|
         (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
     else
-        page.document.asNode();
+        frame.document.asNode();
 
     var st = SemanticTree{
         .dom_node = dom_node,
         .registry = &bc.node_registry,
-        .page = page,
+        .frame = frame,
         .arena = cmd.arena,
         .prune = params.prune orelse true,
         .interactive_only = params.interactiveOnly orelse false,
@@ -109,16 +109,16 @@ fn getMarkdown(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse Params{};
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const dom_node = if (params.nodeId) |nodeId|
         (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
     else
-        page.document.asNode();
+        frame.document.asNode();
 
     var aw: std.Io.Writer.Allocating = .init(cmd.arena);
     defer aw.deinit();
-    try markdown.dump(dom_node, .{}, &aw.writer, page);
+    try markdown.dump(dom_node, .{}, &aw.writer, frame);
 
     return cmd.sendResult(.{
         .markdown = aw.written(),
@@ -132,14 +132,14 @@ fn getInteractiveElements(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse Params{};
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const root = if (params.nodeId) |nodeId|
         (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
     else
-        page.document.asNode();
+        frame.document.asNode();
 
-    const elements = try interactive.collectInteractiveElements(root, cmd.arena, page);
+    const elements = try interactive.collectInteractiveElements(root, cmd.arena, frame);
     try interactive.registerNodes(elements, &bc.node_registry);
 
     return cmd.sendResult(.{
@@ -154,11 +154,11 @@ fn getNodeDetails(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const node = (bc.node_registry.lookup_by_id.get(params.backendNodeId) orelse return error.InvalidNodeId).dom;
 
-    const details = SemanticTree.getNodeDetails(cmd.arena, node, &bc.node_registry, page) catch return error.InternalError;
+    const details = SemanticTree.getNodeDetails(cmd.arena, node, &bc.node_registry, frame) catch return error.InternalError;
 
     return cmd.sendResult(.{
         .nodeDetails = details,
@@ -167,12 +167,12 @@ fn getNodeDetails(cmd: anytype) !void {
 
 fn getStructuredData(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const data = try structured_data.collectStructuredData(
-        page.document.asNode(),
+        frame.document.asNode(),
         cmd.arena,
-        page,
+        frame,
     );
 
     return cmd.sendResult(.{
@@ -182,12 +182,12 @@ fn getStructuredData(cmd: anytype) !void {
 
 fn detectForms(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const forms_data = try lp.forms.collectForms(
         cmd.arena,
-        page.document.asNode(),
-        page,
+        frame.document.asNode(),
+        frame,
     );
 
     try lp.forms.registerNodes(forms_data, &bc.node_registry);
@@ -205,12 +205,12 @@ fn clickNode(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
 
-    lp.actions.click(node.dom, page) catch |err| {
+    lp.actions.click(node.dom, frame) catch |err| {
         if (err == error.InvalidNodeType) return error.InvalidParam;
         return error.InternalError;
     };
@@ -227,12 +227,12 @@ fn fillNode(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
 
-    lp.actions.fill(node.dom, params.text, page) catch |err| {
+    lp.actions.fill(node.dom, params.text, frame) catch |err| {
         if (err == error.InvalidNodeType) return error.InvalidParam;
         return error.InternalError;
     };
@@ -250,7 +250,7 @@ fn scrollNode(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const maybe_node_id = params.nodeId orelse params.backendNodeId;
 
@@ -260,7 +260,7 @@ fn scrollNode(cmd: anytype) !void {
         target_node = node.dom;
     }
 
-    lp.actions.scroll(target_node, params.x, params.y, page) catch |err| {
+    lp.actions.scroll(target_node, params.x, params.y, frame) catch |err| {
         if (err == error.InvalidNodeType) return error.InvalidParam;
         return error.InternalError;
     };
@@ -276,7 +276,7 @@ fn waitForSelector(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    _ = bc.session.currentPage() orelse return error.PageNotLoaded;
+    _ = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
     const timeout_ms = params.timeout orelse 5000;
     const selector_z = try cmd.arena.dupeZ(u8, params.selector);
@@ -299,7 +299,7 @@ test "cdp.lp: getMarkdown" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    _ = try bc.session.createPage();
+    _ = try bc.session.createFrame();
 
     try ctx.processMessage(.{
         .id = 1,
@@ -315,7 +315,7 @@ test "cdp.lp: getInteractiveElements" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    _ = try bc.session.createPage();
+    _ = try bc.session.createFrame();
 
     try ctx.processMessage(.{
         .id = 1,
@@ -331,7 +331,7 @@ test "cdp.lp: getStructuredData" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    _ = try bc.session.createPage();
+    _ = try bc.session.createFrame();
 
     try ctx.processMessage(.{
         .id = 1,
@@ -347,14 +347,14 @@ test "cdp.lp: action tools" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
+    const frame = try bc.session.createFrame();
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
-    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
     var runner = try bc.session.runner(.{});
     try runner.wait(.{ .ms = 2000 });
 
     // Test Click
-    const btn = page.document.getElementById("btn", page).?.asNode();
+    const btn = frame.document.getElementById("btn", frame).?.asNode();
     const btn_id = (try bc.node_registry.register(btn)).id;
     try ctx.processMessage(.{
         .id = 1,
@@ -363,7 +363,7 @@ test "cdp.lp: action tools" {
     });
 
     // Test Fill Input
-    const inp = page.document.getElementById("inp", page).?.asNode();
+    const inp = frame.document.getElementById("inp", frame).?.asNode();
     const inp_id = (try bc.node_registry.register(inp)).id;
     try ctx.processMessage(.{
         .id = 2,
@@ -372,7 +372,7 @@ test "cdp.lp: action tools" {
     });
 
     // Test Fill Select
-    const sel = page.document.getElementById("sel", page).?.asNode();
+    const sel = frame.document.getElementById("sel", frame).?.asNode();
     const sel_id = (try bc.node_registry.register(sel)).id;
     try ctx.processMessage(.{
         .id = 3,
@@ -381,7 +381,7 @@ test "cdp.lp: action tools" {
     });
 
     // Test Scroll
-    const scrollbox = page.document.getElementById("scrollbox", page).?.asNode();
+    const scrollbox = frame.document.getElementById("scrollbox", frame).?.asNode();
     const scrollbox_id = (try bc.node_registry.register(scrollbox)).id;
     try ctx.processMessage(.{
         .id = 4,
@@ -391,7 +391,7 @@ test "cdp.lp: action tools" {
 
     // Evaluate assertions
     var ls: lp.js.Local.Scope = undefined;
-    page.js.localScope(&ls);
+    frame.js.localScope(&ls);
     defer ls.deinit();
 
     var try_catch: lp.js.TryCatch = undefined;
@@ -408,9 +408,9 @@ test "cdp.lp: waitForSelector" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
+    const frame = try bc.session.createFrame();
     const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
-    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
     var runner = try bc.session.runner(.{});
     try runner.wait(.{ .ms = 2000 });
 

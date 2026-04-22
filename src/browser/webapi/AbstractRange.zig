@@ -35,10 +35,10 @@ pub const _prototype_root = true;
 
 _rc: lp.RC(u8) = .{},
 _type: Type,
-_page_id: u32,
 _arena: Allocator,
 _end_offset: u32,
 _start_offset: u32,
+_frame_loader_id: u32,
 _end_container: *Node,
 _start_container: *Node,
 
@@ -50,8 +50,8 @@ pub fn acquireRef(self: *AbstractRange) void {
 }
 
 pub fn deinit(self: *AbstractRange, session: *Session) void {
-    if (session.findPageById(self._page_id)) |page| {
-        page._live_ranges.remove(&self._range_link);
+    if (session.findFrameByLoaderId(self._frame_loader_id)) |frame| {
+        frame._live_ranges.remove(&self._range_link);
     }
     session.releaseArena(self._arena);
 }

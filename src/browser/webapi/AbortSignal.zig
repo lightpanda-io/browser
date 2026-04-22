@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 
 const Event = @import("Event.zig");
 const EventTarget = @import("EventTarget.zig");
@@ -34,8 +34,8 @@ _aborted: bool = false,
 _reason: Reason = .undefined,
 _on_abort: ?js.Function.Global = null,
 
-pub fn init(page: *Page) !*AbortSignal {
-    return page._factory.eventTarget(AbortSignal{
+pub fn init(frame: *Frame) !*AbortSignal {
+    return frame._factory.eventTarget(AbortSignal{
         ._proto = undefined,
     });
 }
@@ -60,7 +60,7 @@ pub fn asEventTarget(self: *AbortSignal) *EventTarget {
     return self._proto;
 }
 
-pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
+pub fn abort(self: *AbortSignal, reason_: ?Reason, frame: *Frame) !void {
     if (self._aborted) {
         return;
     }
@@ -71,7 +71,7 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
     if (reason_) |reason| {
         switch (reason) {
             .js_val => |js_val| self._reason = .{ .js_val = js_val },
-            .string => |str| self._reason = .{ .string = try page.dupeString(str) },
+            .string => |str| self._reason = .{ .string = try frame.dupeString(str) },
             .undefined => self._reason = reason,
         }
     } else {
@@ -80,27 +80,27 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
 
     // Dispatch abort event
     const target = self.asEventTarget();
-    if (page._event_manager.hasDirectListeners(target, "abort", self._on_abort)) {
-        const event = try Event.initTrusted(comptime .wrap("abort"), .{}, page);
-        try page._event_manager.dispatchDirect(target, event, self._on_abort, .{ .context = "abort signal" });
+    if (frame._event_manager.hasDirectListeners(target, "abort", self._on_abort)) {
+        const event = try Event.initTrusted(comptime .wrap("abort"), .{}, frame);
+        try frame._event_manager.dispatchDirect(target, event, self._on_abort, .{ .context = "abort signal" });
     }
 }
 
 // Static method to create an already-aborted signal
-pub fn createAborted(reason_: ?js.Value.Global, page: *Page) !*AbortSignal {
-    const signal = try init(page);
-    try signal.abort(if (reason_) |r| .{ .js_val = r } else null, page);
+pub fn createAborted(reason_: ?js.Value.Global, frame: *Frame) !*AbortSignal {
+    const signal = try init(frame);
+    try signal.abort(if (reason_) |r| .{ .js_val = r } else null, frame);
     return signal;
 }
 
-pub fn createTimeout(delay: u32, page: *Page) !*AbortSignal {
-    const callback = try page.arena.create(TimeoutCallback);
+pub fn createTimeout(delay: u32, frame: *Frame) !*AbortSignal {
+    const callback = try frame.arena.create(TimeoutCallback);
     callback.* = .{
-        .page = page,
-        .signal = try init(page),
+        .frame = frame,
+        .signal = try init(frame),
     };
 
-    try page.js.scheduler.add(callback, TimeoutCallback.run, delay, .{
+    try frame.js.scheduler.add(callback, TimeoutCallback.run, delay, .{
         .name = "AbortSignal.timeout",
     });
 
@@ -111,8 +111,8 @@ const ThrowIfAborted = union(enum) {
     exception: js.Exception,
     undefined: void,
 };
-pub fn throwIfAborted(self: *const AbortSignal, page: *Page) !ThrowIfAborted {
-    const local = page.js.local.?;
+pub fn throwIfAborted(self: *const AbortSignal, frame: *Frame) !ThrowIfAborted {
+    const local = frame.js.local.?;
 
     if (self._aborted) {
         const exception = switch (self._reason) {
@@ -132,12 +132,12 @@ const Reason = union(enum) {
 };
 
 const TimeoutCallback = struct {
-    page: *Page,
+    frame: *Frame,
     signal: *AbortSignal,
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *TimeoutCallback = @ptrCast(@alignCast(ctx));
-        self.signal.abort(.{ .string = "TimeoutError" }, self.page) catch |err| {
+        self.signal.abort(.{ .string = "TimeoutError" }, self.frame) catch |err| {
             log.warn(.app, "abort signal timeout", .{ .err = err });
         };
         return null;

@@ -17,17 +17,17 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const MediaError = @This();
 
 _code: u16,
 _message: []const u8 = "",
 
-pub fn init(code: u16, message: []const u8, page: *Page) !*MediaError {
-    return page.arena.create(MediaError{
+pub fn init(code: u16, message: []const u8, frame: *Frame) !*MediaError {
+    return frame.arena.create(MediaError{
         ._code = code,
-        ._message = try page.dupeString(message),
+        ._message = try frame.dupeString(message),
     });
 }
 

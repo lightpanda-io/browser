@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
@@ -44,10 +44,10 @@ pub fn getLength(self: *RadioNodeList) !u32 {
     return i;
 }
 
-pub fn getAtIndex(self: *RadioNodeList, index: usize, page: *Page) !?*Node {
+pub fn getAtIndex(self: *RadioNodeList, index: usize, frame: *Frame) !?*Node {
     var i: usize = 0;
     var current: usize = 0;
-    while (self._form_collection.getAtIndex(i, page)) |element| : (i += 1) {
+    while (self._form_collection.getAtIndex(i, frame)) |element| : (i += 1) {
         if (!self.matches(element)) {
             continue;
         }
@@ -74,7 +74,7 @@ pub fn getValue(self: *RadioNodeList) ![]const u8 {
     return "";
 }
 
-pub fn setValue(self: *RadioNodeList, value: []const u8, page: *Page) !void {
+pub fn setValue(self: *RadioNodeList, value: []const u8, frame: *Frame) !void {
     var it = try self._form_collection.iterator();
     while (it.next()) |element| {
         const input = element.is(Input) orelse continue;
@@ -92,7 +92,7 @@ pub fn setValue(self: *RadioNodeList, value: []const u8, page: *Page) !void {
         };
 
         if (matches_value) {
-            try input.setChecked(true, page);
+            try input.setChecked(true, frame);
             return;
         }
     }

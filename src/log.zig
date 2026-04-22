@@ -31,7 +31,7 @@ pub const Scope = enum {
     cdp,
     console,
     http,
-    page,
+    frame,
     js,
     event,
     scheduler,
@@ -377,7 +377,7 @@ test "log: data" {
         const string = try testing.allocator.dupe(u8, "spice_must_flow");
         defer testing.allocator.free(string);
 
-        try logTo(.page, .warn, "a msg", .{
+        try logTo(.frame, .warn, "a msg", .{
             .cint = 5,
             .cfloat = 3.43,
             .int = @as(i16, -49),
@@ -392,7 +392,7 @@ test "log: data" {
             .level = Level.warn,
         }, &aw.writer);
 
-        try testing.expectEqual("$time=1739795092929 $scope=page $level=warn $msg=\"a msg\" " ++
+        try testing.expectEqual("$time=1739795092929 $scope=frame $level=warn $msg=\"a msg\" " ++
             "cint=5 cfloat=3.43 int=-49 float=0.0003232 bt=true bf=false " ++
             "nn=33 n=null lit=over9000! slice=spice_must_flow " ++
             "err=Nope level=warn\n", aw.written());

@@ -1,14 +1,14 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const CSSRule = @import("CSSRule.zig");
 
 const CSSRuleList = @This();
 
 _rules: std.ArrayList(*CSSRule) = .empty,
 
-pub fn init(page: *Page) !*CSSRuleList {
-    return page._factory.create(CSSRuleList{});
+pub fn init(frame: *Frame) !*CSSRuleList {
+    return frame._factory.create(CSSRuleList{});
 }
 
 pub fn length(self: *const CSSRuleList) u32 {
@@ -22,11 +22,11 @@ pub fn item(self: *const CSSRuleList, index: usize) ?*CSSRule {
     return self._rules.items[index];
 }
 
-pub fn insert(self: *CSSRuleList, index: u32, rule: *CSSRule, page: *Page) !void {
+pub fn insert(self: *CSSRuleList, index: u32, rule: *CSSRule, frame: *Frame) !void {
     if (index > self._rules.items.len) {
         return error.IndexSizeError;
     }
-    try self._rules.insert(page.arena, index, rule);
+    try self._rules.insert(frame.arena, index, rule);
 }
 
 pub fn remove(self: *CSSRuleList, index: u32) !void {

@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -46,41 +46,41 @@ pub fn asNode(self: *Option) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getValue(self: *Option, page: *Page) []const u8 {
+pub fn getValue(self: *Option, frame: *Frame) []const u8 {
     // If value attribute exists, use that; otherwise use text content (stripped)
     if (self._value) |v| {
         return v;
     }
 
     const node = self.asNode();
-    const text = node.getTextContentAlloc(page.call_arena) catch return "";
+    const text = node.getTextContentAlloc(frame.call_arena) catch return "";
     return std.mem.trim(u8, text, &std.ascii.whitespace);
 }
 
-pub fn setValue(self: *Option, value: []const u8, page: *Page) !void {
-    const owned = try page.dupeString(value);
-    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(owned), page);
+pub fn setValue(self: *Option, value: []const u8, frame: *Frame) !void {
+    const owned = try frame.dupeString(value);
+    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(owned), frame);
     self._value = owned;
 }
 
-pub fn getText(self: *const Option, page: *Page) []const u8 {
+pub fn getText(self: *const Option, frame: *Frame) []const u8 {
     const node: *Node = @constCast(self.asConstElement().asConstNode());
-    return node.getTextContentAlloc(page.call_arena) catch "";
+    return node.getTextContentAlloc(frame.call_arena) catch "";
 }
 
-pub fn setText(self: *Option, value: []const u8, page: *Page) !void {
-    try self.asNode().setTextContent(value, page);
+pub fn setText(self: *Option, value: []const u8, frame: *Frame) !void {
+    try self.asNode().setTextContent(value, frame);
 }
 
 pub fn getSelected(self: *const Option) bool {
     return self._selected;
 }
 
-pub fn setSelected(self: *Option, selected: bool, page: *Page) !void {
+pub fn setSelected(self: *Option, selected: bool, frame: *Frame) !void {
     // TODO: When setting selected=true, may need to unselect other options
     // in the parent <select> if it doesn't have multiple attribute
     self._selected = selected;
-    page.domChanged();
+    frame.domChanged();
 }
 
 pub fn getDefaultSelected(self: *const Option) bool {
@@ -91,12 +91,12 @@ pub fn getDisabled(self: *const Option) bool {
     return self._disabled;
 }
 
-pub fn setDisabled(self: *Option, disabled: bool, page: *Page) !void {
+pub fn setDisabled(self: *Option, disabled: bool, frame: *Frame) !void {
     self._disabled = disabled;
     if (disabled) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), page);
+        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
     }
 }
 
@@ -104,8 +104,8 @@ pub fn getName(self: *const Option) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
-pub fn setName(self: *Option, name: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), page);
+pub fn setName(self: *Option, name: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
 }
 
 pub const JsApi = struct {
@@ -126,7 +126,7 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
-    pub fn created(node: *Node, _: *Page) !void {
+    pub fn created(node: *Node, _: *Frame) !void {
         var self = node.as(Option);
         const element = self.asElement();
 
@@ -141,7 +141,7 @@ pub const Build = struct {
         self._disabled = element.getAttributeSafe(comptime .wrap("disabled")) != null;
     }
 
-    pub fn attributeChange(element: *Element, name: String, value: String, _: *Page) !void {
+    pub fn attributeChange(element: *Element, name: String, value: String, _: *Frame) !void {
         const attribute = std.meta.stringToEnum(enum { value, selected }, name.str()) orelse return;
         const self = element.as(Option);
         switch (attribute) {
@@ -153,7 +153,7 @@ pub const Build = struct {
         }
     }
 
-    pub fn attributeRemove(element: *Element, name: String, _: *Page) !void {
+    pub fn attributeRemove(element: *Element, name: String, _: *Frame) !void {
         const attribute = std.meta.stringToEnum(enum { value, selected }, name.str()) orelse return;
         const self = element.as(Option);
         switch (attribute) {

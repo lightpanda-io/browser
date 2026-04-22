@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -40,32 +40,32 @@ pub fn getName(self: *Meta) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("name")) orelse return "";
 }
 
-pub fn setName(self: *Meta, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), page);
+pub fn setName(self: *Meta, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), frame);
 }
 
 pub fn getHttpEquiv(self: *Meta) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("http-equiv")) orelse return "";
 }
 
-pub fn setHttpEquiv(self: *Meta, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("http-equiv"), .wrap(value), page);
+pub fn setHttpEquiv(self: *Meta, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("http-equiv"), .wrap(value), frame);
 }
 
 pub fn getContent(self: *Meta) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("content")) orelse return "";
 }
 
-pub fn setContent(self: *Meta, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("content"), .wrap(value), page);
+pub fn setContent(self: *Meta, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("content"), .wrap(value), frame);
 }
 
 pub fn getMedia(self: *Meta) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("media")) orelse return "";
 }
 
-pub fn setMedia(self: *Meta, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("media"), .wrap(value), page);
+pub fn setMedia(self: *Meta, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("media"), .wrap(value), frame);
 }
 
 pub const JsApi = struct {

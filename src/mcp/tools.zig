@@ -63,7 +63,7 @@ pub const tool_list = [_]protocol.Tool{
     },
     .{
         .name = "links",
-        .description = "Extract all links in the opened page. If a url is provided, it navigates to that url first.",
+        .description = "Extract all links in the opened frame. If a url is provided, it navigates to that url first.",
         .inputSchema = url_params_schema,
     },
     .{
@@ -107,12 +107,12 @@ pub const tool_list = [_]protocol.Tool{
     },
     .{
         .name = "interactiveElements",
-        .description = "Extract interactive elements from the opened page. If a url is provided, it navigates to that url first.",
+        .description = "Extract interactive elements from the opened frame. If a url is provided, it navigates to that url first.",
         .inputSchema = url_params_schema,
     },
     .{
         .name = "structuredData",
-        .description = "Extract structured data (like JSON-LD, OpenGraph, etc) from the opened page. If a url is provided, it navigates to that url first.",
+        .description = "Extract structured data (like JSON-LD, OpenGraph, etc) from the opened frame. If a url is provided, it navigates to that url first.",
         .inputSchema = url_params_schema,
     },
     .{
@@ -163,7 +163,7 @@ pub const tool_list = [_]protocol.Tool{
     },
     .{
         .name = "waitForSelector",
-        .description = "Wait for an element matching a CSS selector to appear in the page. Returns the backend node ID of the matched element.",
+        .description = "Wait for an element matching a CSS selector to appear in the frame. Returns the backend node ID of the matched element.",
         .inputSchema = protocol.minify(
             \\{
             \\  "type": "object",
@@ -271,7 +271,7 @@ const EvaluateParams = struct {
 };
 
 const ToolStreamingText = struct {
-    page: *lp.Page,
+    frame: *lp.Frame,
     action: enum { markdown, links, semantic_tree },
     registry: ?*CDPNode.Registry = null,
     arena: ?std.mem.Allocator = null,
@@ -285,12 +285,12 @@ const ToolStreamingText = struct {
         const w = &escaped.writer;
 
         switch (self.action) {
-            .markdown => lp.markdown.dump(self.page.document.asNode(), .{}, w, self.page) catch |err| {
+            .markdown => lp.markdown.dump(self.frame.document.asNode(), .{}, w, self.frame) catch |err| {
                 log.err(.mcp, "markdown dump failed", .{ .err = err });
                 return error.WriteFailed;
             },
             .links => {
-                const links = lp.links.collectLinks(self.page.call_arena, self.page.document.asNode(), self.page) catch |err| {
+                const links = lp.links.collectLinks(self.frame.call_arena, self.frame.document.asNode(), self.frame) catch |err| {
                     log.err(.mcp, "query links failed", .{ .err = err });
                     return error.WriteFailed;
                 };
@@ -302,7 +302,7 @@ const ToolStreamingText = struct {
                 }
             },
             .semantic_tree => {
-                var root_node = self.page.document.asNode();
+                var root_node = self.frame.document.asNode();
                 if (self.backendNodeId) |node_id| {
                     if (self.registry) |registry| {
                         if (registry.lookup_by_id.get(node_id)) |n| {
@@ -316,7 +316,7 @@ const ToolStreamingText = struct {
                 const st = lp.SemanticTree{
                     .dom_node = root_node,
                     .registry = self.registry.?,
-                    .page = self.page,
+                    .frame = self.frame,
                     .arena = self.arena.?,
                     .prune = true,
                     .max_depth = self.maxDepth orelse std.math.maxInt(u32) - 1,
@@ -430,10 +430,10 @@ fn handleGoto(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
 
 fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
+    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{ .page = page, .action = .markdown },
+        .text = .{ .frame = frame, .action = .markdown },
     }};
     server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
         return server.sendError(id, .InternalError, "Failed to serialize markdown content");
@@ -442,10 +442,10 @@ fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
 
 fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
+    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{ .page = page, .action = .links },
+        .text = .{ .frame = frame, .action = .links },
     }};
     server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
         return server.sendError(id, .InternalError, "Failed to serialize links content");
@@ -461,11 +461,11 @@ fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Va
         waitUntil: ?lp.Config.WaitUntil = null,
     };
     const args = try parseArgsOrDefault(TreeParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
+    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{
-            .page = page,
+            .frame = frame,
             .action = .semantic_tree,
             .registry = &server.node_registry,
             .arena = arena,
@@ -485,7 +485,7 @@ fn handleNodeDetails(server: *Server, arena: std.mem.Allocator, id: std.json.Val
     const args = try parseArgs(Params, arena, arguments, server, id, "nodeDetails");
     const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    const details = lp.SemanticTree.getNodeDetails(arena, resolved.node, &server.node_registry, resolved.page) catch {
+    const details = lp.SemanticTree.getNodeDetails(arena, resolved.node, &server.node_registry, resolved.frame) catch {
         return server.sendError(id, .InternalError, "Failed to get node details");
     };
 
@@ -498,9 +498,9 @@ fn handleNodeDetails(server: *Server, arena: std.mem.Allocator, id: std.json.Val
 
 fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
+    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
-    const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch |err| {
+    const elements = lp.interactive.collectInteractiveElements(frame.document.asNode(), arena, frame) catch |err| {
         log.err(.mcp, "elements collection failed", .{ .err = err });
         return server.sendError(id, .InternalError, "Failed to collect interactive elements");
     };
@@ -519,9 +519,9 @@ fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.
 
 fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
+    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
-    const data = lp.structured_data.collectStructuredData(page.document.asNode(), arena, page) catch |err| {
+    const data = lp.structured_data.collectStructuredData(frame.document.asNode(), arena, frame) catch |err| {
         log.err(.mcp, "struct data collection failed", .{ .err = err });
         return server.sendError(id, .InternalError, "Failed to collect structured data");
     };
@@ -534,9 +534,9 @@ fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.
 
 fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
+    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
-    const forms_data = lp.forms.collectForms(arena, page.document.asNode(), page) catch |err| {
+    const forms_data = lp.forms.collectForms(arena, frame.document.asNode(), frame) catch |err| {
         log.err(.mcp, "form collection failed", .{ .err = err });
         return server.sendError(id, .InternalError, "Failed to collect forms");
     };
@@ -555,10 +555,10 @@ fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Val
 
 fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArgs(EvaluateParams, arena, arguments, server, id, "evaluate");
-    const page = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
+    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
     var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
+    frame.js.localScope(&ls);
     defer ls.deinit();
 
     var try_catch: js.TryCatch = undefined;
@@ -587,17 +587,17 @@ fn handleClick(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
     const args = try parseArgs(ClickParams, arena, arguments, server, id, "click");
     const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    lp.actions.click(resolved.node, resolved.page) catch |err| {
+    lp.actions.click(resolved.node, resolved.frame) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an HTML element");
         }
         return server.sendError(id, .InternalError, "Failed to click element");
     };
 
-    const page_title = resolved.page.getTitle() catch null;
+    const page_title = resolved.frame.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Clicked element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
         args.backendNodeId,
-        resolved.page.url,
+        resolved.frame.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -612,18 +612,18 @@ fn handleFill(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
     const args = try parseArgs(FillParams, arena, arguments, server, id, "fill");
     const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    lp.actions.fill(resolved.node, args.text, resolved.page) catch |err| {
+    lp.actions.fill(resolved.node, args.text, resolved.frame) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an input, textarea or select");
         }
         return server.sendError(id, .InternalError, "Failed to fill element");
     };
 
-    const page_title = resolved.page.getTitle() catch null;
+    const page_title = resolved.frame.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Filled element (backendNodeId: {d}) with \"{s}\". Page url: {s}, title: {s}", .{
         args.backendNodeId,
         args.text,
-        resolved.page.url,
+        resolved.frame.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -638,8 +638,8 @@ fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
     };
     const args = try parseArgs(ScrollParams, arena, arguments, server, id, "scroll");
 
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    const frame = server.session.currentFrame() orelse {
+        return server.sendError(id, .FrameNotLoaded, "Frame not loaded");
     };
 
     var target_node: ?*DOMNode = null;
@@ -650,18 +650,18 @@ fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
         target_node = node.dom;
     }
 
-    lp.actions.scroll(target_node, args.x, args.y, page) catch |err| {
+    lp.actions.scroll(target_node, args.x, args.y, frame) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an element");
         }
         return server.sendError(id, .InternalError, "Failed to scroll");
     };
 
-    const page_title = page.getTitle() catch null;
+    const page_title = frame.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Scrolled to x: {d}, y: {d}. Page url: {s}, title: {s}", .{
         args.x orelse 0,
         args.y orelse 0,
-        page.url,
+        frame.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -675,8 +675,8 @@ fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json
     };
     const args = try parseArgs(WaitParams, arena, arguments, server, id, "waitForSelector");
 
-    _ = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    _ = server.session.currentFrame() orelse {
+        return server.sendError(id, .FrameNotLoaded, "Frame not loaded");
     };
 
     const timeout_ms = args.timeout orelse 5000;
@@ -704,17 +704,17 @@ fn handleHover(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
     const args = try parseArgs(Params, arena, arguments, server, id, "hover");
     const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    lp.actions.hover(resolved.node, resolved.page) catch |err| {
+    lp.actions.hover(resolved.node, resolved.frame) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an HTML element");
         }
         return server.sendError(id, .InternalError, "Failed to hover element");
     };
 
-    const page_title = resolved.page.getTitle() catch null;
+    const page_title = resolved.frame.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Hovered element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
         args.backendNodeId,
-        resolved.page.url,
+        resolved.frame.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -728,8 +728,8 @@ fn handlePress(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
     };
     const args = try parseArgs(Params, arena, arguments, server, id, "press");
 
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    const frame = server.session.currentFrame() orelse {
+        return server.sendError(id, .FrameNotLoaded, "Frame not loaded");
     };
 
     var target_node: ?*DOMNode = null;
@@ -740,17 +740,17 @@ fn handlePress(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
         target_node = node.dom;
     }
 
-    lp.actions.press(target_node, args.key, page) catch |err| {
+    lp.actions.press(target_node, args.key, frame) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an HTML element");
         }
         return server.sendError(id, .InternalError, "Failed to press key");
     };
 
-    const page_title = page.getTitle() catch null;
+    const page_title = frame.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Pressed key '{s}'. Page url: {s}, title: {s}", .{
         args.key,
-        page.url,
+        frame.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -765,18 +765,18 @@ fn handleSelectOption(server: *Server, arena: std.mem.Allocator, id: std.json.Va
     const args = try parseArgs(Params, arena, arguments, server, id, "selectOption");
     const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| {
+    lp.actions.selectOption(resolved.node, args.value, resolved.frame) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not a <select> element");
         }
         return server.sendError(id, .InternalError, "Failed to select option");
     };
 
-    const page_title = resolved.page.getTitle() catch null;
+    const page_title = resolved.frame.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Selected option '{s}' (backendNodeId: {d}). Page url: {s}, title: {s}", .{
         args.value,
         args.backendNodeId,
-        resolved.page.url,
+        resolved.frame.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -791,7 +791,7 @@ fn handleSetChecked(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     const args = try parseArgs(Params, arena, arguments, server, id, "setChecked");
     const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
 
-    lp.actions.setChecked(resolved.node, args.checked, resolved.page) catch |err| {
+    lp.actions.setChecked(resolved.node, args.checked, resolved.frame) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not a checkbox or radio input");
         }
@@ -799,11 +799,11 @@ fn handleSetChecked(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     };
 
     const state_str = if (args.checked) "checked" else "unchecked";
-    const page_title = resolved.page.getTitle() catch null;
+    const page_title = resolved.frame.getTitle() catch null;
     const result_text = try std.fmt.allocPrint(arena, "Set element (backendNodeId: {d}) to {s}. Page url: {s}, title: {s}", .{
         args.backendNodeId,
         state_str,
-        resolved.page.url,
+        resolved.frame.url,
         page_title orelse "(none)",
     });
     const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
@@ -821,11 +821,11 @@ fn handleFindElement(server: *Server, arena: std.mem.Allocator, id: std.json.Val
         return server.sendError(id, .InvalidParams, "At least one of 'role' or 'name' must be provided");
     }
 
-    const page = server.session.currentPage() orelse {
-        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    const frame = server.session.currentFrame() orelse {
+        return server.sendError(id, .FrameNotLoaded, "Frame not loaded");
     };
 
-    const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch |err| {
+    const elements = lp.interactive.collectInteractiveElements(frame.document.asNode(), arena, frame) catch |err| {
         log.err(.mcp, "elements collection failed", .{ .err = err });
         return server.sendError(id, .InternalError, "Failed to collect interactive elements");
     };
@@ -866,27 +866,27 @@ fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     return false;
 }
 
-const NodeAndPage = struct { node: *DOMNode, page: *lp.Page };
+const NodeAndPage = struct { node: *DOMNode, frame: *lp.Frame };
 
 fn resolveNodeAndPage(server: *Server, id: std.json.Value, node_id: CDPNode.Id) !NodeAndPage {
-    const page = server.session.currentPage() orelse {
-        try server.sendError(id, .PageNotLoaded, "Page not loaded");
-        return error.PageNotLoaded;
+    const frame = server.session.currentFrame() orelse {
+        try server.sendError(id, .FrameNotLoaded, "Frame not loaded");
+        return error.FrameNotLoaded;
     };
     const node = server.node_registry.lookup_by_id.get(node_id) orelse {
         try server.sendError(id, .InvalidParams, "Node not found");
         return error.InvalidParams;
     };
-    return .{ .node = node.dom, .page = page };
+    return .{ .node = node.dom, .frame = frame };
 }
 
-fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !*lp.Page {
+fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !*lp.Frame {
     if (url) |u| {
         try performGoto(server, u, id, timeout, waitUntil);
     }
-    return server.session.currentPage() orelse {
-        try server.sendError(id, .PageNotLoaded, "Page not loaded");
-        return error.PageNotLoaded;
+    return server.session.currentFrame() orelse {
+        try server.sendError(id, .FrameNotLoaded, "Frame not loaded");
+        return error.FrameNotLoaded;
     };
 }
 
@@ -920,14 +920,14 @@ fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Va
 
 fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !void {
     const session = server.session;
-    if (session.page != null) {
-        session.removePage();
+    if (session.frame != null) {
+        session.removeFrame();
     }
-    const page = session.createPage() catch {
+    const frame = session.createFrame() catch {
         try server.sendError(id, .InternalError, "Failed to create page");
         return error.NavigationFailed;
     };
-    page.navigate(url, .{
+    frame.navigate(url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
     }) catch {
@@ -988,11 +988,11 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
-    const page = &server.session.page.?;
+    const frame = &server.session.frame.?;
 
     {
         // Test Click
-        const btn = page.document.getElementById("btn", page).?.asNode();
+        const btn = frame.document.getElementById("btn", frame).?.asNode();
         const btn_id = (try server.node_registry.register(btn)).id;
         var btn_id_buf: [12]u8 = undefined;
         const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
@@ -1005,7 +1005,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test Fill Input
-        const inp = page.document.getElementById("inp", page).?.asNode();
+        const inp = frame.document.getElementById("inp", frame).?.asNode();
         const inp_id = (try server.node_registry.register(inp)).id;
         var inp_id_buf: [12]u8 = undefined;
         const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
@@ -1018,7 +1018,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test Fill Select
-        const sel = page.document.getElementById("sel", page).?.asNode();
+        const sel = frame.document.getElementById("sel", frame).?.asNode();
         const sel_id = (try server.node_registry.register(sel)).id;
         var sel_id_buf: [12]u8 = undefined;
         const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
@@ -1031,7 +1031,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test Scroll
-        const scrollbox = page.document.getElementById("scrollbox", page).?.asNode();
+        const scrollbox = frame.document.getElementById("scrollbox", frame).?.asNode();
         const scrollbox_id = (try server.node_registry.register(scrollbox)).id;
         var scroll_id_buf: [12]u8 = undefined;
         const scroll_id_str = std.fmt.bufPrint(&scroll_id_buf, "{d}", .{scrollbox_id}) catch unreachable;
@@ -1043,7 +1043,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test Hover
-        const el = page.document.getElementById("hoverTarget", page).?.asNode();
+        const el = frame.document.getElementById("hoverTarget", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -1055,7 +1055,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test Press
-        const el = page.document.getElementById("keyTarget", page).?.asNode();
+        const el = frame.document.getElementById("keyTarget", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -1067,7 +1067,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test SelectOption
-        const el = page.document.getElementById("sel2", page).?.asNode();
+        const el = frame.document.getElementById("sel2", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -1079,7 +1079,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test SetChecked (checkbox)
-        const el = page.document.getElementById("chk", page).?.asNode();
+        const el = frame.document.getElementById("chk", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -1091,7 +1091,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         // Test SetChecked (radio)
-        const el = page.document.getElementById("rad", page).?.asNode();
+        const el = frame.document.getElementById("rad", frame).?.asNode();
         const el_id = (try server.node_registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
@@ -1103,7 +1103,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     // Evaluate JS assertions for all actions
     var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
+    frame.js.localScope(&ls);
     defer ls.deinit();
 
     var try_catch: js.TryCatch = undefined;
@@ -1233,8 +1233,8 @@ fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {
     var server = try Server.init(testing.allocator, testing.test_app, writer);
     errdefer server.deinit();
 
-    const page = try server.session.createPage();
-    try page.navigate(url, .{});
+    const frame = try server.session.createFrame();
+    try frame.navigate(url, .{});
 
     var runner = try server.session.runner(.{});
     try runner.wait(.{ .ms = 2000 });

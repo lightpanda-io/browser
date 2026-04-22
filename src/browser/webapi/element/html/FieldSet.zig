@@ -1,5 +1,5 @@
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -19,11 +19,11 @@ pub fn getDisabled(self: *FieldSet) bool {
     return self.asElement().getAttributeSafe(comptime .wrap("disabled")) != null;
 }
 
-pub fn setDisabled(self: *FieldSet, value: bool, page: *Page) !void {
+pub fn setDisabled(self: *FieldSet, value: bool, frame: *Frame) !void {
     if (value) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), page);
+        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
     }
 }
 
@@ -31,8 +31,8 @@ pub fn getName(self: *FieldSet) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
-pub fn setName(self: *FieldSet, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), page);
+pub fn setName(self: *FieldSet, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), frame);
 }
 
 pub const JsApi = struct {

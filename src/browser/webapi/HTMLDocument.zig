@@ -19,7 +19,7 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Node = @import("Node.zig");
 const Document = @import("Document.zig");
 const Element = @import("Element.zig");
@@ -68,7 +68,7 @@ pub fn getBody(self: *HTMLDocument) ?*Element.Html.Body {
     return null;
 }
 
-pub fn getTitle(self: *HTMLDocument, page: *Page) ![]const u8 {
+pub fn getTitle(self: *HTMLDocument, frame: *Frame) ![]const u8 {
     // Search the entire document for the first <title> element
     const root = self._proto.getDocumentElement() orelse return "";
     const title_element = blk: {
@@ -81,7 +81,7 @@ pub fn getTitle(self: *HTMLDocument, page: *Page) ![]const u8 {
         return "";
     };
 
-    var buf = std.Io.Writer.Allocating.init(page.call_arena);
+    var buf = std.Io.Writer.Allocating.init(frame.call_arena);
     try title_element.asNode().getTextContent(&buf.writer);
     const text = buf.written();
 
@@ -92,7 +92,7 @@ pub fn getTitle(self: *HTMLDocument, page: *Page) ![]const u8 {
     var started = false;
     var in_whitespace = false;
     var result: std.ArrayList(u8) = .empty;
-    try result.ensureTotalCapacity(page.call_arena, text.len);
+    try result.ensureTotalCapacity(frame.call_arena, text.len);
 
     for (text) |c| {
         const is_ascii_ws = c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\x0C';
@@ -114,7 +114,7 @@ pub fn getTitle(self: *HTMLDocument, page: *Page) ![]const u8 {
     return result.items;
 }
 
-pub fn setTitle(self: *HTMLDocument, title: []const u8, page: *Page) !void {
+pub fn setTitle(self: *HTMLDocument, title: []const u8, frame: *Frame) !void {
     const head = self.getHead() orelse return;
 
     // Find existing title element in head
@@ -123,47 +123,47 @@ pub fn setTitle(self: *HTMLDocument, title: []const u8, page: *Page) !void {
         if (node.is(Element.Html.Title)) |title_element| {
             // Replace children, but don't create text node for empty string
             if (title.len == 0) {
-                return title_element.asElement().replaceChildren(&.{}, page);
+                return title_element.asElement().replaceChildren(&.{}, frame);
             } else {
-                return title_element.asElement().replaceChildren(&.{.{ .text = title }}, page);
+                return title_element.asElement().replaceChildren(&.{.{ .text = title }}, frame);
             }
         }
     }
 
     // No title element found, create one
-    const title_node = try page.createElementNS(.html, "title", null);
+    const title_node = try frame.createElementNS(.html, "title", null);
     const title_element = title_node.as(Element);
 
     // Only add text if non-empty
     if (title.len > 0) {
-        try title_element.replaceChildren(&.{.{ .text = title }}, page);
+        try title_element.replaceChildren(&.{.{ .text = title }}, frame);
     }
 
-    _ = try head.asNode().appendChild(title_node, page);
+    _ = try head.asNode().appendChild(title_node, frame);
 }
 
-pub fn getImages(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(self.asNode(), .img, page);
+pub fn getImages(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
+    return collections.NodeLive(.tag).init(self.asNode(), .img, frame);
 }
 
-pub fn getScripts(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(self.asNode(), .script, page);
+pub fn getScripts(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
+    return collections.NodeLive(.tag).init(self.asNode(), .script, frame);
 }
 
-pub fn getLinks(self: *HTMLDocument, page: *Page) !collections.NodeLive(.links) {
-    return collections.NodeLive(.links).init(self.asNode(), {}, page);
+pub fn getLinks(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.links) {
+    return collections.NodeLive(.links).init(self.asNode(), {}, frame);
 }
 
-pub fn getAnchors(self: *HTMLDocument, page: *Page) !collections.NodeLive(.anchors) {
-    return collections.NodeLive(.anchors).init(self.asNode(), {}, page);
+pub fn getAnchors(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.anchors) {
+    return collections.NodeLive(.anchors).init(self.asNode(), {}, frame);
 }
 
-pub fn getForms(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(self.asNode(), .form, page);
+pub fn getForms(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
+    return collections.NodeLive(.tag).init(self.asNode(), .form, frame);
 }
 
-pub fn getEmbeds(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(self.asNode(), .embed, page);
+pub fn getEmbeds(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
+    return collections.NodeLive(.tag).init(self.asNode(), .embed, frame);
 }
 
 pub fn getApplets(_: *const HTMLDocument) collections.HTMLCollection {
@@ -178,8 +178,8 @@ pub fn getLocation(self: *const HTMLDocument) ?*@import("Location.zig") {
     return self._proto._location;
 }
 
-pub fn setLocation(self: *HTMLDocument, url: [:0]const u8, page: *Page) !void {
-    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._proto._page });
+pub fn setLocation(self: *HTMLDocument, url: [:0]const u8, frame: *Frame) !void {
+    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._proto._frame });
 }
 
 pub fn getDir(self: *HTMLDocument) []const u8 {
@@ -188,10 +188,10 @@ pub fn getDir(self: *HTMLDocument) []const u8 {
     return html.getDir();
 }
 
-pub fn setDir(self: *HTMLDocument, value: []const u8, page: *Page) !void {
+pub fn setDir(self: *HTMLDocument, value: []const u8, frame: *Frame) !void {
     const el = self._proto.getDocumentElement() orelse return;
     const html = el.is(Element.Html) orelse return;
-    try html.setDir(value, page);
+    try html.setDir(value, frame);
 }
 
 pub fn getLang(self: *HTMLDocument) []const u8 {
@@ -200,30 +200,30 @@ pub fn getLang(self: *HTMLDocument) []const u8 {
     return html.getLang();
 }
 
-pub fn setLang(self: *HTMLDocument, value: []const u8, page: *Page) !void {
+pub fn setLang(self: *HTMLDocument, value: []const u8, frame: *Frame) !void {
     const el = self._proto.getDocumentElement() orelse return;
     const html = el.is(Element.Html) orelse return;
-    try html.setLang(value, page);
+    try html.setLang(value, frame);
 }
 
-pub fn getAll(self: *HTMLDocument, page: *Page) !*collections.HTMLAllCollection {
-    return page._factory.create(collections.HTMLAllCollection.init(self.asNode(), page));
+pub fn getAll(self: *HTMLDocument, frame: *Frame) !*collections.HTMLAllCollection {
+    return frame._factory.create(collections.HTMLAllCollection.init(self.asNode(), frame));
 }
 
-pub fn getCookie(_: *HTMLDocument, page: *Page) ![]const u8 {
+pub fn getCookie(_: *HTMLDocument, frame: *Frame) ![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
-    try page._session.cookie_jar.forRequest(page.url, buf.writer(page.call_arena), .{
+    try frame._session.cookie_jar.forRequest(frame.url, buf.writer(frame.call_arena), .{
         .is_http = false,
         .is_navigation = true,
     });
     return buf.items;
 }
 
-pub fn setCookie(_: *HTMLDocument, cookie_str: []const u8, page: *Page) ![]const u8 {
+pub fn setCookie(_: *HTMLDocument, cookie_str: []const u8, frame: *Frame) ![]const u8 {
     // we use the cookie jar's allocator to parse the cookie because it
-    // outlives the page's arena.
+    // outlives the frame's arena.
     const Cookie = @import("storage/Cookie.zig");
-    const c = Cookie.parse(page._session.cookie_jar.allocator, page.url, cookie_str) catch {
+    const c = Cookie.parse(frame._session.cookie_jar.allocator, frame.url, cookie_str) catch {
         // Invalid cookies should be silently ignored, not throw errors
         return "";
     };
@@ -232,11 +232,11 @@ pub fn setCookie(_: *HTMLDocument, cookie_str: []const u8, page: *Page) ![]const
         c.deinit();
         return ""; // HttpOnly cookies cannot be set from JS
     }
-    try page._session.cookie_jar.add(c, std.time.timestamp());
+    try frame._session.cookie_jar.add(c, std.time.timestamp());
     return cookie_str;
 }
 
-pub fn getDocType(self: *HTMLDocument, page: *Page) !*DocumentType {
+pub fn getDocType(self: *HTMLDocument, frame: *Frame) !*DocumentType {
     if (self._document_type) |dt| {
         return dt;
     }
@@ -249,7 +249,7 @@ pub fn getDocType(self: *HTMLDocument, page: *Page) !*DocumentType {
         }
     }
 
-    self._document_type = try page._factory.node(DocumentType{
+    self._document_type = try frame._factory.node(DocumentType{
         ._proto = undefined,
         ._name = "html",
         ._public_id = "",
@@ -268,8 +268,8 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(_constructor, .{});
-    fn _constructor(page: *Page) !*HTMLDocument {
-        return page._factory.document(HTMLDocument{
+    fn _constructor(frame: *Frame) !*HTMLDocument {
+        return frame._factory.document(HTMLDocument{
             ._proto = undefined,
         });
     }

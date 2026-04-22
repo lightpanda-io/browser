@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Performance = @import("Performance.zig");
 
 const log = lp.log;
@@ -45,8 +45,8 @@ _entries: std.ArrayList(*Performance.Entry),
 const DefaultDurationThreshold: f64 = 104;
 
 /// Creates a new PerformanceObserver object with the given observer callback.
-pub fn init(callback: js.Function.Global, page: *Page) !*PerformanceObserver {
-    return page._factory.create(PerformanceObserver{
+pub fn init(callback: js.Function.Global, frame: *Frame) !*PerformanceObserver {
+    return frame._factory.create(PerformanceObserver{
         ._callback = callback,
         ._duration_threshold = DefaultDurationThreshold,
         ._interests = 0,
@@ -65,7 +65,7 @@ const ObserveOptions = struct {
 pub fn observe(
     self: *PerformanceObserver,
     maybe_options: ?ObserveOptions,
-    page: *Page,
+    frame: *Frame,
 ) !void {
     const options: ObserveOptions = maybe_options orelse .{};
     // Update threshold.
@@ -109,7 +109,7 @@ pub fn observe(
     // If we had no interests before, it means Page is not aware of
     // this observer.
     if (self._interests == 0) {
-        try page.registerPerformanceObserver(self);
+        try frame.registerPerformanceObserver(self);
     }
 
     // Update interests.
@@ -119,19 +119,19 @@ pub fn observe(
     // Per spec, buffered is only valid with the type option, not entryTypes.
     // Delivery is async via a queued task, not synchronous.
     if (options.buffered and options.type != null and !self.hasRecords()) {
-        for (page.window._performance._entries.items) |entry| {
+        for (frame.window._performance._entries.items) |entry| {
             if (self.interested(entry)) {
-                try self._entries.append(page.arena, entry);
+                try self._entries.append(frame.arena, entry);
             }
         }
         if (self.hasRecords()) {
-            try page.schedulePerformanceObserverDelivery();
+            try frame.schedulePerformanceObserverDelivery();
         }
     }
 }
 
-pub fn disconnect(self: *PerformanceObserver, page: *Page) void {
-    page.unregisterPerformanceObserver(self);
+pub fn disconnect(self: *PerformanceObserver, frame: *Frame) void {
+    frame.unregisterPerformanceObserver(self);
     // Reset observer.
     self._duration_threshold = DefaultDurationThreshold;
     self._interests = 0;
@@ -140,10 +140,10 @@ pub fn disconnect(self: *PerformanceObserver, page: *Page) void {
 
 /// Returns the current list of PerformanceEntry objects
 /// stored in the performance observer, emptying it out.
-pub fn takeRecords(self: *PerformanceObserver, page: *Page) ![]*Performance.Entry {
-    // Use page.arena instead of call_arena because this slice is wrapped in EntryList
+pub fn takeRecords(self: *PerformanceObserver, frame: *Frame) ![]*Performance.Entry {
+    // Use frame.arena instead of call_arena because this slice is wrapped in EntryList
     // and may be accessed later.
-    const records = try page.arena.dupe(*Performance.Entry, self._entries.items);
+    const records = try frame.arena.dupe(*Performance.Entry, self._entries.items);
     self._entries.clearRetainingCapacity();
     return records;
 }
@@ -166,16 +166,16 @@ pub inline fn hasRecords(self: *const PerformanceObserver) bool {
 }
 
 /// Runs the PerformanceObserver's callback with records; emptying it out.
-pub fn dispatch(self: *PerformanceObserver, page: *Page) !void {
-    const records = try self.takeRecords(page);
+pub fn dispatch(self: *PerformanceObserver, frame: *Frame) !void {
+    const records = try self.takeRecords(frame);
 
     var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
+    frame.js.localScope(&ls);
     defer ls.deinit();
 
     var caught: js.TryCatch.Caught = undefined;
     ls.toLocal(self._callback).tryCall(void, .{ EntryList{ ._entries = records }, self }, &caught) catch |err| {
-        log.err(.page, "PerfObserver.dispatch", .{ .err = err, .caught = caught });
+        log.err(.frame, "PerfObserver.dispatch", .{ .err = err, .caught = caught });
         return err;
     };
 }

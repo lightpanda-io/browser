@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 
 const Node = @import("Node.zig");
 const NodeFilter = @import("NodeFilter.zig");
@@ -33,9 +33,9 @@ _reference_node: *Node,
 _pointer_before_reference_node: bool,
 _active: bool = false,
 
-pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, page: *Page) !*DOMNodeIterator {
+pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, frame: *Frame) !*DOMNodeIterator {
     const node_filter = try NodeFilter.init(filter);
-    return page._factory.create(DOMNodeIterator{
+    return frame._factory.create(DOMNodeIterator{
         ._root = root,
         ._filter = node_filter,
         ._reference_node = root,
@@ -64,7 +64,7 @@ pub fn getFilter(self: *const DOMNodeIterator) ?FilterOpts {
     return self._filter._original_filter;
 }
 
-pub fn nextNode(self: *DOMNodeIterator, page: *Page) !?*Node {
+pub fn nextNode(self: *DOMNodeIterator, frame: *Frame) !?*Node {
     if (self._active) {
         return error.InvalidStateError;
     }
@@ -78,7 +78,7 @@ pub fn nextNode(self: *DOMNodeIterator, page: *Page) !?*Node {
     while (true) {
         if (before_node) {
             before_node = false;
-            const result = try self.filterNode(node, page);
+            const result = try self.filterNode(node, frame);
             if (result == NodeFilter.FILTER_ACCEPT) {
                 self._reference_node = node;
                 self._pointer_before_reference_node = false;
@@ -92,7 +92,7 @@ pub fn nextNode(self: *DOMNodeIterator, page: *Page) !?*Node {
             }
             node = next.?;
 
-            const result = try self.filterNode(node, page);
+            const result = try self.filterNode(node, frame);
             if (result == NodeFilter.FILTER_ACCEPT) {
                 self._reference_node = node;
                 self._pointer_before_reference_node = false;
@@ -102,7 +102,7 @@ pub fn nextNode(self: *DOMNodeIterator, page: *Page) !?*Node {
     }
 }
 
-pub fn previousNode(self: *DOMNodeIterator, page: *Page) !?*Node {
+pub fn previousNode(self: *DOMNodeIterator, frame: *Frame) !?*Node {
     if (self._active) {
         return error.InvalidStateError;
     }
@@ -115,7 +115,7 @@ pub fn previousNode(self: *DOMNodeIterator, page: *Page) !?*Node {
 
     while (true) {
         if (!before_node) {
-            const result = try self.filterNode(node, page);
+            const result = try self.filterNode(node, frame);
             if (result == NodeFilter.FILTER_ACCEPT) {
                 self._reference_node = node;
                 self._pointer_before_reference_node = true;
@@ -138,7 +138,7 @@ pub fn detach(_: *const DOMNodeIterator) void {
     // no-op legacy
 }
 
-fn filterNode(self: *const DOMNodeIterator, node: *Node, page: *Page) !i32 {
+fn filterNode(self: *const DOMNodeIterator, node: *Node, frame: *Frame) !i32 {
     // First check whatToShow
     if (!NodeFilter.shouldShow(node, self._what_to_show)) {
         return NodeFilter.FILTER_SKIP;
@@ -147,7 +147,7 @@ fn filterNode(self: *const DOMNodeIterator, node: *Node, page: *Page) !i32 {
     // Then check the filter callback
     // For NodeIterator, REJECT and SKIP are equivalent - both skip the node
     // but continue with its descendants
-    const result = try self._filter.acceptNode(node, page.js.local.?);
+    const result = try self._filter.acceptNode(node, frame.js.local.?);
     return result;
 }
 

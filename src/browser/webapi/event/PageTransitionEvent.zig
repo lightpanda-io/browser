@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
 
@@ -39,23 +39,23 @@ const PageTransitionEventOptions = struct {
 
 const Options = Event.inheritOptions(PageTransitionEvent, PageTransitionEventOptions);
 
-pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*PageTransitionEvent {
-    const arena = try page.getArena(.tiny, "PageTransitionEvent");
-    errdefer page.releaseArena(arena);
+pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*PageTransitionEvent {
+    const arena = try frame.getArena(.tiny, "PageTransitionEvent");
+    errdefer frame.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
-    return initWithTrusted(arena, type_string, _opts, false, page);
+    return initWithTrusted(arena, type_string, _opts, false, frame);
 }
 
-pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*PageTransitionEvent {
-    const arena = try page.getArena(.tiny, "PageTransitionEvent.trusted");
-    errdefer page.releaseArena(arena);
-    return initWithTrusted(arena, typ, _opts, true, page);
+pub fn initTrusted(typ: String, _opts: ?Options, frame: *Frame) !*PageTransitionEvent {
+    const arena = try frame.getArena(.tiny, "PageTransitionEvent.trusted");
+    errdefer frame.releaseArena(arena);
+    return initWithTrusted(arena, typ, _opts, true, frame);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, page: *Page) !*PageTransitionEvent {
+fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, frame: *Frame) !*PageTransitionEvent {
     const opts = _opts orelse Options{};
 
-    const event = try page._factory.event(
+    const event = try frame._factory.event(
         arena,
         typ,
         PageTransitionEvent{

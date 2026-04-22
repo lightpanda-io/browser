@@ -20,15 +20,15 @@ const DOMRect = @This();
 
 const std = @import("std");
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 
 _x: f64,
 _y: f64,
 _width: f64,
 _height: f64,
 
-pub fn init(x: f64, y: f64, width: f64, height: f64, page: *Page) !*DOMRect {
-    return page._factory.create(DOMRect{
+pub fn init(x: f64, y: f64, width: f64, height: f64, frame: *Frame) !*DOMRect {
+    return frame._factory.create(DOMRect{
         ._x = x,
         ._y = y,
         ._width = width,

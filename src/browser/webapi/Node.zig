@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const URL = @import("../URL.zig");
 const reflect = @import("../reflect.zig");
 
@@ -49,7 +49,7 @@ _parent: ?*Node = null,
 _children: ?*Children = null,
 _child_link: LinkedList.Node = .{},
 
-// Lookup for nodes that have a different owner document than page.document
+// Lookup for nodes that have a different owner document than frame.document
 pub const OwnerDocumentLookup = std.AutoHashMapUnmanaged(*Node, *Document);
 
 pub const Type = union(enum) {
@@ -218,15 +218,15 @@ fn validateNodeInsertion(parent: *Node, node: *Node) !void {
     }
 }
 
-pub fn appendChild(self: *Node, child: *Node, page: *Page) !*Node {
+pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
     if (child.is(DocumentFragment)) |_| {
-        try page.appendAllChildren(child, self);
+        try frame.appendAllChildren(child, self);
         return child;
     }
 
     try validateNodeInsertion(self, child);
 
-    page.domChanged();
+    frame.domChanged();
 
     // If the child is currently connected, and if its new parent is connected,
     // then we can remove + add a bit more efficiently (we don't have to fully
@@ -234,30 +234,30 @@ pub fn appendChild(self: *Node, child: *Node, page: *Page) !*Node {
     const child_connected = child.isConnected();
 
     // Check if we're adopting the node to a different document
-    const child_owner = child.ownerDocument(page);
-    const parent_owner = self.ownerDocument(page) orelse self.as(Document);
+    const child_owner = child.ownerDocument(frame);
+    const parent_owner = self.ownerDocument(frame) orelse self.as(Document);
     const adopting_to_new_document = child_owner != null and child_owner.? != parent_owner;
 
     if (child._parent) |parent| {
         // we can signal removeNode that the child will remain connected
         // (when it's appended to self) so that it can be a bit more efficient.
-        page.removeNode(parent, child, .{ .will_be_reconnected = self.isConnected() });
+        frame.removeNode(parent, child, .{ .will_be_reconnected = self.isConnected() });
     }
 
     // Adopt the node tree if moving between documents
     if (adopting_to_new_document) {
-        try page.adoptNodeTree(child, parent_owner);
+        try frame.adoptNodeTree(child, parent_owner);
     }
 
-    try page.appendNode(self, child, .{
+    try frame.appendNode(self, child, .{
         .child_already_connected = child_connected,
         .adopting_to_new_document = adopting_to_new_document,
     });
     return child;
 }
 
-pub fn childNodes(self: *Node, page: *Page) !*collections.ChildNodes {
-    return collections.ChildNodes.init(self, page);
+pub fn childNodes(self: *Node, frame: *Frame) !*collections.ChildNodes {
+    return collections.ChildNodes.init(self, frame);
 }
 
 pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!void {
@@ -300,25 +300,25 @@ pub fn getChildTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFaile
     }
 }
 
-pub fn setTextContent(self: *Node, data: []const u8, page: *Page) !void {
+pub fn setTextContent(self: *Node, data: []const u8, frame: *Frame) !void {
     switch (self._type) {
         .element => |el| {
             if (data.len == 0) {
-                return el.replaceChildren(&.{}, page);
+                return el.replaceChildren(&.{}, frame);
             }
-            return el.replaceChildren(&.{.{ .text = data }}, page);
+            return el.replaceChildren(&.{.{ .text = data }}, frame);
         },
         // Per spec, setting textContent on CharacterData runs replaceData(0, length, value)
-        .cdata => |c| try c.replaceData(0, c.getLength(), data, page),
+        .cdata => |c| try c.replaceData(0, c.getLength(), data, frame),
         .document => {},
         .document_type => {},
         .document_fragment => |frag| {
             if (data.len == 0) {
-                return frag.replaceChildren(&.{}, page);
+                return frag.replaceChildren(&.{}, frame);
             }
-            return frag.replaceChildren(&.{.{ .text = data }}, page);
+            return frag.replaceChildren(&.{.{ .text = data }}, frame);
         },
-        .attribute => |attr| return attr.setValue(.wrap(data), page),
+        .attribute => |attr| return attr.setValue(.wrap(data), frame),
     }
 }
 
@@ -354,30 +354,30 @@ pub fn getNodeType(self: *const Node) u8 {
     };
 }
 
-pub fn lookupNamespaceURI(self: *Node, prefix_arg: ?[]const u8, page: *Page) ?[]const u8 {
+pub fn lookupNamespaceURI(self: *Node, prefix_arg: ?[]const u8, frame: *Frame) ?[]const u8 {
     const prefix: ?[]const u8 = if (prefix_arg) |p| (if (p.len == 0) null else p) else null;
 
     switch (self._type) {
-        .element => |el| return el.lookupNamespaceURIForElement(prefix, page),
+        .element => |el| return el.lookupNamespaceURIForElement(prefix, frame),
         .document => |doc| {
             const de = doc.getDocumentElement() orelse return null;
-            return de.lookupNamespaceURIForElement(prefix, page);
+            return de.lookupNamespaceURIForElement(prefix, frame);
         },
         .document_type, .document_fragment => return null,
         .attribute => |attr| {
             const owner = attr.getOwnerElement() orelse return null;
-            return owner.lookupNamespaceURIForElement(prefix, page);
+            return owner.lookupNamespaceURIForElement(prefix, frame);
         },
         .cdata => {
             const parent = self.parentElement() orelse return null;
-            return parent.lookupNamespaceURIForElement(prefix, page);
+            return parent.lookupNamespaceURIForElement(prefix, frame);
         },
     }
 }
 
-pub fn isDefaultNamespace(self: *Node, namespace_arg: ?[]const u8, page: *Page) bool {
+pub fn isDefaultNamespace(self: *Node, namespace_arg: ?[]const u8, frame: *Frame) bool {
     const namespace: ?[]const u8 = if (namespace_arg) |ns| (if (ns.len == 0) null else ns) else null;
-    const default_ns = self.lookupNamespaceURI(null, page);
+    const default_ns = self.lookupNamespaceURI(null, frame);
     if (default_ns == null and namespace == null) return true;
     if (default_ns != null and namespace != null) return std.mem.eql(u8, default_ns.?, namespace.?);
     return false;
@@ -481,7 +481,7 @@ pub fn contains(self: *const Node, child_: ?*const Node) bool {
     return false;
 }
 
-pub fn ownerDocument(self: *const Node, page: *const Page) ?*Document {
+pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
     // A document node does not have an owner.
     if (self._type == .document) {
         return null;
@@ -500,17 +500,17 @@ pub fn ownerDocument(self: *const Node, page: *const Page) ?*Document {
 
     // Otherwise, this is a detached node. Check if it has a specific owner
     // document registered (for nodes created via non-main documents).
-    if (page._node_owner_documents.get(@constCast(self))) |owner| {
+    if (frame._node_owner_documents.get(@constCast(self))) |owner| {
         return owner;
     }
 
     // Default to the main document for detached nodes without a specific owner.
-    return page.document;
+    return frame.document;
 }
 
-pub fn ownerPage(self: *const Node, default: *Page) *Page {
+pub fn ownerFrame(self: *const Node, default: *Frame) *Frame {
     const doc = self.ownerDocument(default) orelse return default;
-    return doc._page orelse default;
+    return doc._frame orelse default;
 }
 
 pub const ResolveURLOpts = struct {
@@ -519,16 +519,16 @@ pub const ResolveURLOpts = struct {
 
 // Resolve a URL relative to this node's owning document.
 // Uses the document's charset for query string encoding (with NCR fallback for unmappable chars).
-pub fn resolveURL(self: *const Node, url: anytype, page: *Page, opts: ResolveURLOpts) ![:0]const u8 {
-    const owner_page = self.ownerPage(page);
-    const allocator = opts.allocator orelse page.call_arena;
-    return URL.resolve(allocator, owner_page.base(), url, .{ .encoding = owner_page.charset });
+pub fn resolveURL(self: *const Node, url: anytype, frame: *Frame, opts: ResolveURLOpts) ![:0]const u8 {
+    const owner_frame = self.ownerFrame(frame);
+    const allocator = opts.allocator orelse frame.call_arena;
+    return URL.resolve(allocator, owner_frame.base(), url, .{ .encoding = owner_frame.charset });
 }
 
-pub fn isSameDocumentAs(self: *const Node, other: *const Node, page: *const Page) bool {
+pub fn isSameDocumentAs(self: *const Node, other: *const Node, frame: *const Frame) bool {
     // Get the root document for each node
-    const self_doc = if (self._type == .document) self._type.document else self.ownerDocument(page);
-    const other_doc = if (other._type == .document) other._type.document else other.ownerDocument(page);
+    const self_doc = if (self._type == .document) self._type.document else self.ownerDocument(frame);
+    const other_doc = if (other._type == .document) other._type.document else other.ownerDocument(frame);
     return self_doc == other_doc;
 }
 
@@ -540,33 +540,33 @@ pub fn isSameNode(self: *const Node, other: ?*Node) bool {
     return self == other;
 }
 
-pub fn removeChild(self: *Node, child: *Node, page: *Page) !*Node {
+pub fn removeChild(self: *Node, child: *Node, frame: *Frame) !*Node {
     var it = self.childrenIterator();
     while (it.next()) |n| {
         if (n == child) {
-            page.domChanged();
-            page.removeNode(self, child, .{ .will_be_reconnected = false });
+            frame.domChanged();
+            frame.removeNode(self, child, .{ .will_be_reconnected = false });
             return child;
         }
     }
     return error.NotFound;
 }
 
-pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, page: *Page) !*Node {
+pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Frame) !*Node {
     const ref_node = ref_node_ orelse {
-        return self.appendChild(new_node, page);
+        return self.appendChild(new_node, frame);
     };
 
     // special case: if nodes are the same, ignore the change.
     if (new_node == ref_node_) {
-        page.domChanged();
+        frame.domChanged();
 
-        if (page.hasMutationObservers()) {
+        if (frame.hasMutationObservers()) {
             const parent = new_node._parent.?;
             const previous_sibling = new_node.previousSibling();
             const next_sibling = new_node.nextSibling();
             const replaced = [_]*Node{new_node};
-            page.childListChange(parent, &replaced, &replaced, previous_sibling, next_sibling);
+            frame.childListChange(parent, &replaced, &replaced, previous_sibling, next_sibling);
         }
 
         return new_node;
@@ -577,7 +577,7 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, page: *Page
     }
 
     if (new_node.is(DocumentFragment)) |_| {
-        try page.insertAllChildrenBefore(new_node, self, ref_node);
+        try frame.insertAllChildrenBefore(new_node, self, ref_node);
         return new_node;
     }
 
@@ -586,22 +586,22 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, page: *Page
     const child_already_connected = new_node.isConnected();
 
     // Check if we're adopting the node to a different document
-    const child_owner = new_node.ownerDocument(page);
-    const parent_owner = self.ownerDocument(page) orelse self.as(Document);
+    const child_owner = new_node.ownerDocument(frame);
+    const parent_owner = self.ownerDocument(frame) orelse self.as(Document);
     const adopting_to_new_document = child_owner != null and child_owner.? != parent_owner;
 
-    page.domChanged();
+    frame.domChanged();
     const will_be_reconnected = self.isConnected();
     if (new_node._parent) |parent| {
-        page.removeNode(parent, new_node, .{ .will_be_reconnected = will_be_reconnected });
+        frame.removeNode(parent, new_node, .{ .will_be_reconnected = will_be_reconnected });
     }
 
     // Adopt the node tree if moving between documents
     if (adopting_to_new_document) {
-        try page.adoptNodeTree(new_node, parent_owner);
+        try frame.adoptNodeTree(new_node, parent_owner);
     }
 
-    try page.insertNodeRelative(
+    try frame.insertNodeRelative(
         self,
         new_node,
         .{ .before = ref_node },
@@ -614,21 +614,21 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, page: *Page
     return new_node;
 }
 
-pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, page: *Page) !*Node {
+pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Frame) !*Node {
     if (old_child._parent == null or old_child._parent.? != self) {
         return error.HierarchyError;
     }
 
     try validateNodeInsertion(self, new_child);
 
-    _ = try self.insertBefore(new_child, old_child, page);
+    _ = try self.insertBefore(new_child, old_child, frame);
 
     // Special case: if we replace a node by itself, we don't remove it.
     // insertBefore is an noop in this case.
     // Re-check parent after insertBefore since callbacks (e.g. connectedCallback)
     // could have already removed old_child from self.
     if (new_child != old_child and old_child._parent == self) {
-        page.removeNode(self, old_child, .{ .will_be_reconnected = false });
+        frame.removeNode(self, old_child, .{ .will_be_reconnected = false });
     }
 
     return old_child;
@@ -645,14 +645,14 @@ pub fn getNodeValue(self: *const Node) ?String {
     };
 }
 
-pub fn setNodeValue(self: *const Node, value: ?String, page: *Page) !void {
+pub fn setNodeValue(self: *const Node, value: ?String, frame: *Frame) !void {
     switch (self._type) {
         // Per spec, setting nodeValue on CharacterData runs replaceData(0, length, value)
         .cdata => |c| {
             const new_value: []const u8 = if (value) |v| v.str() else "";
-            try c.replaceData(0, c.getLength(), new_value, page);
+            try c.replaceData(0, c.getLength(), new_value, frame);
         },
-        .attribute => |attr| try attr.setValue(value, page),
+        .attribute => |attr| try attr.setValue(value, frame),
         .element => {},
         .document => {},
         .document_type => {},
@@ -740,16 +740,16 @@ pub fn getData(self: *const Node) String {
     };
 }
 
-pub fn setData(self: *Node, data: []const u8, page: *Page) !void {
+pub fn setData(self: *Node, data: []const u8, frame: *Frame) !void {
     switch (self._type) {
-        .cdata => |c| try c.setData(data, page),
+        .cdata => |c| try c.setData(data, frame),
         else => {},
     }
 }
 
-pub fn normalize(self: *Node, page: *Page) !void {
+pub fn normalize(self: *Node, frame: *Frame) !void {
     var buffer: std.ArrayList(u8) = .empty;
-    return self._normalize(page.call_arena, &buffer, page);
+    return self._normalize(frame.call_arena, &buffer, frame);
 }
 
 const CloneError = error{
@@ -767,27 +767,27 @@ const CloneError = error{
     CompilationError,
     JsException,
 };
-pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) CloneError!*Node {
+pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
     const deep = deep_ orelse false;
     switch (self._type) {
         .cdata => |cd| {
             const data = cd.getData().str();
             return switch (cd._type) {
-                .text => page.createTextNode(data),
-                .cdata_section => page.createCDATASection(data),
-                .comment => page.createComment(data),
-                .processing_instruction => |pi| page.createProcessingInstruction(pi._target, data),
+                .text => frame.createTextNode(data),
+                .cdata_section => frame.createCDATASection(data),
+                .comment => frame.createComment(data),
+                .processing_instruction => |pi| frame.createProcessingInstruction(pi._target, data),
             };
         },
-        .element => |el| return el.clone(deep, page),
+        .element => |el| return el.clone(deep, frame),
         .document => return error.NotSupported,
         .document_type => |dt| {
-            const cloned = dt.clone(page) catch return error.CloneError;
+            const cloned = dt.clone(frame) catch return error.CloneError;
             return cloned.asNode();
         },
-        .document_fragment => |frag| return frag.cloneFragment(deep, page),
+        .document_fragment => |frag| return frag.cloneFragment(deep, frame),
         .attribute => |attr| {
-            const cloned = attr.clone(page) catch return error.CloneError;
+            const cloned = attr.clone(frame) catch return error.CloneError;
             return cloned._proto;
         },
     }
@@ -799,8 +799,8 @@ pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) CloneError!*Node {
 ///
 /// This helper is used when iterating over children to clone them. The typical pattern is:
 ///   while (child_it.next()) |child| {
-///       if (try child.cloneNodeForAppending(true, page)) |cloned| {
-///           try page.appendNode(parent, cloned, opts);
+///       if (try child.cloneNodeForAppending(true, frame)) |cloned| {
+///           try frame.appendNode(parent, cloned, opts);
 ///       }
 ///   }
 ///
@@ -808,8 +808,8 @@ pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) CloneError!*Node {
 /// constructor (which runs during cloning per the HTML spec) explicitly attaches the element
 /// somewhere. In that case, we respect the constructor's decision and return null to signal
 /// that the cloned node should not be appended to our intended parent.
-pub fn cloneNodeForAppending(self: *Node, deep: bool, page: *Page) CloneError!?*Node {
-    const cloned = try self.cloneNode(deep, page);
+pub fn cloneNodeForAppending(self: *Node, deep: bool, frame: *Frame) CloneError!?*Node {
+    const cloned = try self.cloneNode(deep, frame);
     if (cloned._parent != null) {
         return null;
     }
@@ -916,10 +916,10 @@ fn isNodeBefore(node1: *const Node, node2: *const Node) bool {
     return false;
 }
 
-fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), page: *Page) !void {
+fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), frame: *Frame) !void {
     var it = self.childrenIterator();
     while (it.next()) |child| {
-        try child._normalize(allocator, buffer, page);
+        try child._normalize(allocator, buffer, frame);
     }
 
     var child = self.firstChild();
@@ -932,7 +932,7 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), pag
         };
 
         if (text_node._proto.getData().len == 0) {
-            page.removeNode(self, current_node, .{ .will_be_reconnected = false });
+            frame.removeNode(self, current_node, .{ .will_be_reconnected = false });
             child = next_node;
             continue;
         }
@@ -947,9 +947,9 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), pag
 
                     const to_remove = node_to_merge;
                     next_node = node_to_merge.nextSibling();
-                    page.removeNode(self, to_remove, .{ .will_be_reconnected = false });
+                    frame.removeNode(self, to_remove, .{ .will_be_reconnected = false });
                 }
-                text_node._proto._data = try page.dupeSSO(buffer.items);
+                text_node._proto._data = try frame.dupeSSO(buffer.items);
                 buffer.clearRetainingCapacity();
             }
         }
@@ -964,7 +964,7 @@ pub const GetElementsByTagNameResult = union(enum) {
     all_elements: collections.NodeLive(.all_elements),
 };
 // Not exposed in the WebAPI, but used by both Element and Document
-pub fn getElementsByTagName(self: *Node, tag_name: []const u8, page: *Page) !GetElementsByTagNameResult {
+pub fn getElementsByTagName(self: *Node, tag_name: []const u8, frame: *Frame) !GetElementsByTagNameResult {
     if (tag_name.len > 256) {
         // 256 seems generous.
         return error.InvalidTagName;
@@ -972,25 +972,25 @@ pub fn getElementsByTagName(self: *Node, tag_name: []const u8, page: *Page) !Get
 
     if (std.mem.eql(u8, tag_name, "*")) {
         return .{
-            .all_elements = collections.NodeLive(.all_elements).init(self, {}, page),
+            .all_elements = collections.NodeLive(.all_elements).init(self, {}, frame),
         };
     }
 
-    const lower = std.ascii.lowerString(&page.buf, tag_name);
+    const lower = std.ascii.lowerString(&frame.buf, tag_name);
     if (Node.Element.Tag.parseForMatch(lower)) |known| {
         // optimized for known tag names, comparis
         return .{
-            .tag = collections.NodeLive(.tag).init(self, known, page),
+            .tag = collections.NodeLive(.tag).init(self, known, frame),
         };
     }
 
-    const arena = page.arena;
+    const arena = frame.arena;
     const filter = try String.init(arena, lower, .{});
-    return .{ .tag_name = collections.NodeLive(.tag_name).init(self, filter, page) };
+    return .{ .tag_name = collections.NodeLive(.tag_name).init(self, filter, frame) };
 }
 
 // Not exposed in the WebAPI, but used by both Element and Document
-pub fn getElementsByTagNameNS(self: *Node, namespace: ?[]const u8, local_name: []const u8, page: *Page) !collections.NodeLive(.tag_name_ns) {
+pub fn getElementsByTagNameNS(self: *Node, namespace: ?[]const u8, local_name: []const u8, frame: *Frame) !collections.NodeLive(.tag_name_ns) {
     if (local_name.len > 256) {
         return error.InvalidTagName;
     }
@@ -1003,53 +1003,53 @@ pub fn getElementsByTagNameNS(self: *Node, namespace: ?[]const u8, local_name: [
 
     return collections.NodeLive(.tag_name_ns).init(self, .{
         .namespace = ns,
-        .local_name = try String.init(page.arena, local_name, .{}),
-    }, page);
+        .local_name = try String.init(frame.arena, local_name, .{}),
+    }, frame);
 }
 
 // Not exposed in the WebAPI, but used by both Element and Document
-pub fn getElementsByClassName(self: *Node, class_name: []const u8, page: *Page) !collections.NodeLive(.class_name) {
-    const arena = page.arena;
+pub fn getElementsByClassName(self: *Node, class_name: []const u8, frame: *Frame) !collections.NodeLive(.class_name) {
+    const arena = frame.arena;
 
     // Parse space-separated class names
     var class_names: std.ArrayList([]const u8) = .empty;
     var it = std.mem.tokenizeAny(u8, class_name, "\t\n\x0C\r ");
     while (it.next()) |name| {
-        try class_names.append(arena, try page.dupeString(name));
+        try class_names.append(arena, try frame.dupeString(name));
     }
 
-    return collections.NodeLive(.class_name).init(self, class_names.items, page);
+    return collections.NodeLive(.class_name).init(self, class_names.items, frame);
 }
 
 /// Shared implementation of replaceChildren for Element, Document, and DocumentFragment.
 /// Validates all nodes, removes existing children, then appends new children.
-pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, page: *Page) !void {
+pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void {
     // First pass: validate all nodes and collect them
     // We need to collect because DocumentFragments contribute their children, not themselves
     var children_to_add: std.ArrayList(*Node) = .empty;
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(page);
+        const child = try node_or_text.toNode(frame);
 
         // DocumentFragments contribute their children, not themselves
         if (child.is(DocumentFragment)) |frag| {
             var frag_it = frag.asNode().childrenIterator();
             while (frag_it.next()) |frag_child| {
                 try validateNodeInsertion(self, frag_child);
-                try children_to_add.append(page.call_arena, frag_child);
+                try children_to_add.append(frame.call_arena, frag_child);
             }
         } else {
             try validateNodeInsertion(self, child);
-            try children_to_add.append(page.call_arena, child);
+            try children_to_add.append(frame.call_arena, child);
         }
     }
 
-    page.domChanged();
+    frame.domChanged();
 
     // Remove all existing children
     var it = self.childrenIterator();
     while (it.next()) |child| {
-        page.removeNode(self, child, .{ .will_be_reconnected = false });
+        frame.removeNode(self, child, .{ .will_be_reconnected = false });
     }
 
     // Append new children
@@ -1058,9 +1058,9 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, page: *Page) !voi
         var child_connected = false;
         if (child._parent) |previous_parent| {
             child_connected = child.isConnected();
-            page.removeNode(previous_parent, child, .{ .will_be_reconnected = parent_is_connected });
+            frame.removeNode(previous_parent, child, .{ .will_be_reconnected = parent_is_connected });
         }
-        try page.appendNode(self, child, .{ .child_already_connected = child_connected });
+        try frame.appendNode(self, child, .{ .child_already_connected = child_connected });
     }
 }
 
@@ -1121,18 +1121,18 @@ pub const JsApi = struct {
     pub const DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC = bridge.property(0x20, .{ .template = true });
 
     pub const nodeName = bridge.accessor(struct {
-        fn wrap(self: *const Node, page: *Page) []const u8 {
-            return self.getNodeName(&page.buf);
+        fn wrap(self: *const Node, frame: *Frame) []const u8 {
+            return self.getNodeName(&frame.buf);
         }
     }.wrap, null, .{});
     pub const nodeType = bridge.accessor(Node.getNodeType, null, .{});
 
     pub const textContent = bridge.accessor(_textContext, Node.setTextContent, .{});
-    fn _textContext(self: *Node, page: *const Page) !?[]const u8 {
+    fn _textContext(self: *Node, frame: *const Frame) !?[]const u8 {
         // cdata and attributes can return value directly, avoiding the copy
         switch (self._type) {
             .element, .document_fragment => {
-                var buf = std.Io.Writer.Allocating.init(page.call_arena);
+                var buf = std.Io.Writer.Allocating.init(frame.call_arena);
                 try self.getTextContent(&buf.writer);
                 return buf.written();
             },
@@ -1168,8 +1168,8 @@ pub const JsApi = struct {
     pub const lookupNamespaceURI = bridge.function(Node.lookupNamespaceURI, .{});
     pub const isDefaultNamespace = bridge.function(Node.isDefaultNamespace, .{});
 
-    fn _baseURI(_: *Node, page: *const Page) []const u8 {
-        return page.base();
+    fn _baseURI(_: *Node, frame: *const Frame) []const u8 {
+        return frame.base();
     }
     pub const baseURI = bridge.accessor(_baseURI, null, .{});
 };
@@ -1219,10 +1219,10 @@ pub const NodeOrText = union(enum) {
         }
     }
 
-    pub fn toNode(self: *const NodeOrText, page: *Page) !*Node {
+    pub fn toNode(self: *const NodeOrText, frame: *Frame) !*Node {
         return switch (self.*) {
             .node => |n| n,
-            .text => |txt| page.createTextNode(txt),
+            .text => |txt| frame.createTextNode(txt),
         };
     }
 

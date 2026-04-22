@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 
 pub fn registerTypes() []const type {
     return &.{ StorageManager, StorageEstimate };
@@ -27,12 +27,12 @@ const StorageManager = @This();
 
 _pad: bool = false,
 
-pub fn estimate(_: *const StorageManager, page: *Page) !js.Promise {
-    const est = try page._factory.create(StorageEstimate{
+pub fn estimate(_: *const StorageManager, frame: *Frame) !js.Promise {
+    const est = try frame._factory.create(StorageEstimate{
         ._usage = 0,
         ._quota = 1024 * 1024 * 1024, // 1 GiB
     });
-    return page.js.local.?.resolvePromise(est);
+    return frame.js.local.?.resolvePromise(est);
 }
 
 const StorageEstimate = struct {

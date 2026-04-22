@@ -7,7 +7,7 @@
 //
 // This is pretty straightforward, with the only complexity coming from "eventually"
 // assertions, which are assertions we lazily check in `getStatus()`. We
-// do this because, by the time `getStatus()`, `page.wait()` will have been called
+// do this because, by the time `getStatus()`, `frame.wait()` will have been called
 // and any timer (setTimeout, requestAnimation, MutationObserver, etc...) will
 // have been evaluated. Test which use/test these behavior will use `eventually`.
 (() => {
@@ -87,7 +87,7 @@
   }
 
   // Set expectations to happen at some point in the future. Necessary for
-  // testing callbacks which will only be executed after page.wait is called.
+  // testing callbacks which will only be executed after frame.wait is called.
   function eventually(fn) {
     // capture the current state (script id, stack) so that, when we do run this
     // we can display more meaningful details on failure.

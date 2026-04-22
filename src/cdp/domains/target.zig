@@ -170,21 +170,21 @@ fn createTarget(cmd: *CDP.Command) !void {
         }
     }
 
-    // if target_id is null, we should never have a page
-    lp.assert(bc.session.page == null, "CDP.target.createTarget not null page", .{});
+    // if target_id is null, we should never have a blank frame
+    lp.assert(bc.session.frame == null, "CDP.target.createTarget not null page", .{});
 
     // if target_id is null, we should never have a session_id
     lp.assert(bc.session_id == null, "CDP.target.createTarget not null session_id", .{});
 
-    const page = try bc.session.createPage();
+    const frame = try bc.session.createFrame();
 
-    // the target_id == the frame_id of the "root" page
-    const frame_id = id.toFrameId(page._frame_id);
+    // the target_id == the frame_id of the "root" frame
+    const frame_id = id.toFrameId(frame._frame_id);
     bc.target_id = frame_id;
     const target_id = &bc.target_id.?;
     {
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
@@ -192,7 +192,7 @@ fn createTarget(cmd: *CDP.Command) !void {
             &ls.local,
             "",
             "", // @ZIGDOM
-            // try page.origin(arena),
+            // try frame.origin(arena),
             aux_data,
             true,
         );
@@ -221,8 +221,8 @@ fn createTarget(cmd: *CDP.Command) !void {
     }
 
     if (!std.mem.eql(u8, "about:blank", params.url)) {
-        const encoded_url = try URL.ensureEncoded(page.call_arena, params.url, "UTF-8");
-        try page.navigate(
+        const encoded_url = try URL.ensureEncoded(frame.call_arena, params.url, "UTF-8");
+        try frame.navigate(
             encoded_url,
             .{ .reason = .address_bar, .kind = .{ .push = null } },
         );
@@ -284,7 +284,7 @@ fn closeTarget(cmd: *CDP.Command) !void {
     }
 
     // can't be null if we have a target_id
-    lp.assert(bc.session.page != null, "CDP.target.closeTarget null page", .{});
+    lp.assert(bc.session.frame != null, "CDP.target.closeTarget null frame", .{});
 
     try cmd.sendResult(.{ .success = true }, .{ .include_session_id = false });
 
@@ -305,7 +305,7 @@ fn closeTarget(cmd: *CDP.Command) !void {
         bc.session_id = null;
     }
 
-    bc.session.removePage();
+    bc.session.removeFrame();
     for (bc.isolated_worlds.items) |world| {
         world.deinit();
     }
@@ -426,9 +426,9 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     // autoAttach is set to true, we must attach to all existing targets.
     if (cmd.browser_context) |bc| {
         if (bc.target_id == null) {
-            if (bc.session.currentPage()) |page| {
-                // the target_id == the frame_id of the "root" page
-                bc.target_id = id.toFrameId(page._frame_id);
+            if (bc.session.currentFrame()) |frame| {
+                // the target_id == the frame_id of the "root" frame
+                bc.target_id = id.toFrameId(frame._frame_id);
                 try doAttachtoTarget(cmd, &bc.target_id.?);
             }
         }
@@ -438,7 +438,7 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
 
     // This is a hack. Puppeteer, and probably others, expect the Browser to
     // automatically started creating targets. Things like an empty tab, or
-    // a blank page. And they block until this happens. So we send an event
+    // a blank frame. And they block until this happens. So we send an event
     // telling them that they've been attached to our Browser. Hopefully, the
     // first thing they'll do is create a real BrowserContext and progress from
     // there.
@@ -463,8 +463,8 @@ fn doAttachtoTarget(cmd: *CDP.Command, target_id: []const u8) !void {
     const session_id = bc.session_id orelse cmd.cdp.session_id_gen.next();
 
     if (bc.session_id == null) {
-        // extra_headers should not be kept on a new page or tab,
-        // currently we have only 1 page, we clear it just in case
+        // extra_headers should not be kept on a new frame or tab,
+        // currently we have only 1 frame, we clear it just in case
         bc.extra_headers.clearRetainingCapacity();
     }
 
@@ -626,7 +626,7 @@ test "cdp.target: closeTarget" {
     }
 
     // pretend we createdTarget first
-    _ = try bc.session.createPage();
+    _ = try bc.session.createFrame();
     bc.target_id = "TID-000000000A".*;
     {
         try ctx.processMessage(.{ .id = 10, .method = "Target.closeTarget", .params = .{ .targetId = "TID-8" } });
@@ -636,7 +636,7 @@ test "cdp.target: closeTarget" {
     {
         try ctx.processMessage(.{ .id = 11, .method = "Target.closeTarget", .params = .{ .targetId = "TID-000000000A" } });
         try ctx.expectSentResult(.{ .success = true }, .{ .id = 11 });
-        try testing.expectEqual(null, bc.session.page);
+        try testing.expectEqual(null, bc.session.frame);
         try testing.expectEqual(null, bc.target_id);
     }
 }
@@ -657,7 +657,7 @@ test "cdp.target: attachToTarget" {
     }
 
     // pretend we createdTarget first
-    _ = try bc.session.createPage();
+    _ = try bc.session.createFrame();
     bc.target_id = "TID-000000000B".*;
     {
         try ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-8" } });
@@ -701,7 +701,7 @@ test "cdp.target: getTargetInfo" {
     }
 
     // pretend we createdTarget first
-    _ = try bc.session.createPage();
+    _ = try bc.session.createFrame();
     bc.target_id = "TID-000000000C".*;
     {
         try ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-8" } });

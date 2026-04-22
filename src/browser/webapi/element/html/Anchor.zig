@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const URL = @import("../../../URL.zig");
 const Node = @import("../../Node.zig");
@@ -38,33 +38,33 @@ pub fn asNode(self: *Anchor) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getHref(self: *Anchor, page: *Page) ![]const u8 {
+pub fn getHref(self: *Anchor, frame: *Frame) ![]const u8 {
     const href = self.asElement().getAttributeSafe(comptime .wrap("href")) orelse return "";
     if (href.len == 0) {
         return "";
     }
-    return self.asNode().resolveURL(href, page, .{});
+    return self.asNode().resolveURL(href, frame, .{});
 }
 
-pub fn setHref(self: *Anchor, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("href"), .wrap(value), page);
+pub fn setHref(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("href"), .wrap(value), frame);
 }
 
 pub fn getTarget(self: *Anchor) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("target")) orelse "";
 }
 
-pub fn setTarget(self: *Anchor, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), page);
+pub fn setTarget(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), frame);
 }
 
-pub fn getOrigin(self: *Anchor, page: *Page) ![]const u8 {
-    const href = try getResolvedHref(self, page) orelse return "";
-    return (try URL.getOrigin(page.call_arena, href)) orelse "null";
+pub fn getOrigin(self: *Anchor, frame: *Frame) ![]const u8 {
+    const href = try getResolvedHref(self, frame) orelse return "";
+    return (try URL.getOrigin(frame.call_arena, href)) orelse "null";
 }
 
-pub fn getHost(self: *Anchor, page: *Page) ![]const u8 {
-    const href = try getResolvedHref(self, page) orelse return "";
+pub fn getHost(self: *Anchor, frame: *Frame) ![]const u8 {
+    const href = try getResolvedHref(self, frame) orelse return "";
     const host = URL.getHost(href);
     const protocol = URL.getProtocol(href);
     const port = URL.getPort(href);
@@ -81,25 +81,25 @@ pub fn getHost(self: *Anchor, page: *Page) ![]const u8 {
     return host;
 }
 
-pub fn setHost(self: *Anchor, value: []const u8, page: *Page) !void {
-    const href = try getResolvedHref(self, page) orelse return;
-    const new_href = try URL.setHost(href, value, page.call_arena);
-    try setHref(self, new_href, page);
+pub fn setHost(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    const href = try getResolvedHref(self, frame) orelse return;
+    const new_href = try URL.setHost(href, value, frame.call_arena);
+    try setHref(self, new_href, frame);
 }
 
-pub fn getHostname(self: *Anchor, page: *Page) ![]const u8 {
-    const href = try getResolvedHref(self, page) orelse return "";
+pub fn getHostname(self: *Anchor, frame: *Frame) ![]const u8 {
+    const href = try getResolvedHref(self, frame) orelse return "";
     return URL.getHostname(href);
 }
 
-pub fn setHostname(self: *Anchor, value: []const u8, page: *Page) !void {
-    const href = try getResolvedHref(self, page) orelse return;
-    const new_href = try URL.setHostname(href, value, page.call_arena);
-    try setHref(self, new_href, page);
+pub fn setHostname(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    const href = try getResolvedHref(self, frame) orelse return;
+    const new_href = try URL.setHostname(href, value, frame.call_arena);
+    try setHref(self, new_href, frame);
 }
 
-pub fn getPort(self: *Anchor, page: *Page) ![]const u8 {
-    const href = try getResolvedHref(self, page) orelse return "";
+pub fn getPort(self: *Anchor, frame: *Frame) ![]const u8 {
+    const href = try getResolvedHref(self, frame) orelse return "";
     const port = URL.getPort(href);
     const protocol = URL.getProtocol(href);
 
@@ -115,94 +115,94 @@ pub fn getPort(self: *Anchor, page: *Page) ![]const u8 {
     return port;
 }
 
-pub fn setPort(self: *Anchor, value: ?[]const u8, page: *Page) !void {
-    const href = try getResolvedHref(self, page) orelse return;
-    const new_href = try URL.setPort(href, value, page.call_arena);
-    try setHref(self, new_href, page);
+pub fn setPort(self: *Anchor, value: ?[]const u8, frame: *Frame) !void {
+    const href = try getResolvedHref(self, frame) orelse return;
+    const new_href = try URL.setPort(href, value, frame.call_arena);
+    try setHref(self, new_href, frame);
 }
 
-pub fn getSearch(self: *Anchor, page: *Page) ![]const u8 {
-    const href = try getResolvedHref(self, page) orelse return "";
+pub fn getSearch(self: *Anchor, frame: *Frame) ![]const u8 {
+    const href = try getResolvedHref(self, frame) orelse return "";
     return URL.getSearch(href);
 }
 
-pub fn setSearch(self: *Anchor, value: []const u8, page: *Page) !void {
-    const href = try getResolvedHref(self, page) orelse return;
-    const new_href = try URL.setSearch(href, value, page.call_arena);
-    try setHref(self, new_href, page);
+pub fn setSearch(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    const href = try getResolvedHref(self, frame) orelse return;
+    const new_href = try URL.setSearch(href, value, frame.call_arena);
+    try setHref(self, new_href, frame);
 }
 
-pub fn getHash(self: *Anchor, page: *Page) ![]const u8 {
-    const href = try getResolvedHref(self, page) orelse return "";
+pub fn getHash(self: *Anchor, frame: *Frame) ![]const u8 {
+    const href = try getResolvedHref(self, frame) orelse return "";
     return URL.getHash(href);
 }
 
-pub fn setHash(self: *Anchor, value: []const u8, page: *Page) !void {
-    const href = try getResolvedHref(self, page) orelse return;
-    const new_href = try URL.setHash(href, value, page.call_arena);
-    try setHref(self, new_href, page);
+pub fn setHash(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    const href = try getResolvedHref(self, frame) orelse return;
+    const new_href = try URL.setHash(href, value, frame.call_arena);
+    try setHref(self, new_href, frame);
 }
 
-pub fn getPathname(self: *Anchor, page: *Page) ![]const u8 {
-    const href = try getResolvedHref(self, page) orelse return "";
+pub fn getPathname(self: *Anchor, frame: *Frame) ![]const u8 {
+    const href = try getResolvedHref(self, frame) orelse return "";
     return URL.getPathname(href);
 }
 
-pub fn setPathname(self: *Anchor, value: []const u8, page: *Page) !void {
-    const href = try getResolvedHref(self, page) orelse return;
-    const new_href = try URL.setPathname(href, value, page.call_arena);
-    try setHref(self, new_href, page);
+pub fn setPathname(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    const href = try getResolvedHref(self, frame) orelse return;
+    const new_href = try URL.setPathname(href, value, frame.call_arena);
+    try setHref(self, new_href, frame);
 }
 
-pub fn getProtocol(self: *Anchor, page: *Page) ![]const u8 {
-    const href = try getResolvedHref(self, page) orelse return "";
+pub fn getProtocol(self: *Anchor, frame: *Frame) ![]const u8 {
+    const href = try getResolvedHref(self, frame) orelse return "";
     return URL.getProtocol(href);
 }
 
-pub fn setProtocol(self: *Anchor, value: []const u8, page: *Page) !void {
-    const href = try getResolvedHref(self, page) orelse return;
-    const new_href = try URL.setProtocol(href, value, page.call_arena);
-    try setHref(self, new_href, page);
+pub fn setProtocol(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    const href = try getResolvedHref(self, frame) orelse return;
+    const new_href = try URL.setProtocol(href, value, frame.call_arena);
+    try setHref(self, new_href, frame);
 }
 
 pub fn getType(self: *Anchor) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("type")) orelse "";
 }
 
-pub fn setType(self: *Anchor, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), page);
+pub fn setType(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), frame);
 }
 
 pub fn getRel(self: *Anchor) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("rel")) orelse "";
 }
 
-pub fn setRel(self: *Anchor, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("rel"), .wrap(value), page);
+pub fn setRel(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("rel"), .wrap(value), frame);
 }
 
 pub fn getName(self: *const Anchor) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
-pub fn setName(self: *Anchor, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), page);
+pub fn setName(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), frame);
 }
 
-pub fn getText(self: *Anchor, page: *Page) ![:0]const u8 {
-    return self.asNode().getTextContentAlloc(page.call_arena);
+pub fn getText(self: *Anchor, frame: *Frame) ![:0]const u8 {
+    return self.asNode().getTextContentAlloc(frame.call_arena);
 }
 
-pub fn setText(self: *Anchor, value: []const u8, page: *Page) !void {
-    try self.asNode().setTextContent(value, page);
+pub fn setText(self: *Anchor, value: []const u8, frame: *Frame) !void {
+    try self.asNode().setTextContent(value, frame);
 }
 
-fn getResolvedHref(self: *Anchor, page: *Page) !?[:0]const u8 {
+fn getResolvedHref(self: *Anchor, frame: *Frame) !?[:0]const u8 {
     const href = self.asElement().getAttributeSafe(comptime .wrap("href")) orelse return null;
     if (href.len == 0) {
         return null;
     }
-    return try self.asNode().resolveURL(href, page, .{});
+    return try self.asNode().resolveURL(href, frame, .{});
 }
 
 pub const JsApi = struct {
@@ -231,14 +231,14 @@ pub const JsApi = struct {
     pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
     pub const toString = bridge.function(Anchor.getHref, .{});
 
-    fn _getRelList(self: *Anchor, page: *Page) !?*@import("../../collections.zig").DOMTokenList {
+    fn _getRelList(self: *Anchor, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {
         const element = self.asElement();
         // relList is only valid for HTML and SVG <a> elements
         const namespace = element._namespace;
         if (namespace != .html and namespace != .svg) {
             return null;
         }
-        return element.getRelList(page);
+        return element.getRelList(frame);
     }
 };
 

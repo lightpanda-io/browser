@@ -25,7 +25,7 @@ const http = @import("../network/http.zig");
 
 const js = @import("js/js.zig");
 const URL = @import("URL.zig");
-const Page = @import("Page.zig");
+const Frame = @import("Frame.zig");
 
 const Element = @import("webapi/Element.zig");
 
@@ -36,7 +36,7 @@ const IS_DEBUG = builtin.mode == .Debug;
 
 const ScriptManager = @This();
 
-page: *Page,
+frame: *Frame,
 
 // used to prevent recursive evaluation
 is_evaluating: bool,
@@ -79,13 +79,13 @@ imported_modules: std.StringHashMapUnmanaged(ImportedModule),
 // importmap contains resolved urls.
 importmap: std.StringHashMapUnmanaged([:0]const u8),
 
-// have we notified the page that all scripts are loaded (used to fire the "load"
+// have we notified the frame that all scripts are loaded (used to fire the "load"
 // event).
-page_notified_of_completion: bool,
+frame_notified_of_completion: bool,
 
-pub fn init(allocator: Allocator, http_client: *HttpClient, page: *Page) ScriptManager {
+pub fn init(allocator: Allocator, http_client: *HttpClient, frame: *Frame) ScriptManager {
     return .{
-        .page = page,
+        .frame = frame,
         .async_scripts = .{},
         .defer_scripts = .{},
         .ready_scripts = .{},
@@ -95,7 +95,7 @@ pub fn init(allocator: Allocator, http_client: *HttpClient, page: *Page) ScriptM
         .imported_modules = .empty,
         .client = http_client,
         .static_scripts_done = false,
-        .page_notified_of_completion = false,
+        .frame_notified_of_completion = false,
     };
 }
 
@@ -104,7 +104,7 @@ pub fn deinit(self: *ScriptManager) void {
     self.reset();
 
     self.imported_modules.deinit(self.allocator);
-    // we don't deinit self.importmap b/c we use the page's arena for its
+    // we don't deinit self.importmap b/c we use the frame's arena for its
     // allocations.
 }
 
@@ -118,7 +118,7 @@ pub fn reset(self: *ScriptManager) void {
     }
     self.imported_modules.clearRetainingCapacity();
 
-    // Our allocator is the page arena, it's been reset. We cannot use
+    // Our allocator is the frame arena, it's been reset. We cannot use
     // clearAndRetainCapacity, since that space is no longer ours
     self.importmap = .empty;
 
@@ -137,7 +137,7 @@ fn clearList(list: *std.DoublyLinkedList) void {
 
 fn getHeaders(self: *ScriptManager) !http.Headers {
     var headers = try self.client.newHeaders();
-    try self.page.headersForRequest(&headers);
+    try self.frame.headersForRequest(&headers);
     return headers;
 }
 
@@ -185,16 +185,16 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     };
 
     var handover = false;
-    const page = self.page;
+    const frame = self.frame;
 
-    const arena = try page.getArena(.large, "SM.addFromElement");
+    const arena = try frame.getArena(.large, "SM.addFromElement");
     errdefer if (!handover) {
-        page.releaseArena(arena);
+        frame.releaseArena(arena);
     };
 
     var source: Script.Source = undefined;
     var remote_url: ?[:0]const u8 = null;
-    const base_url = page.base();
+    const base_url = frame.base();
     if (element.getAttributeSafe(comptime .wrap("src"))) |src| {
         if (try parseDataURI(arena, src)) |data_uri| {
             source = .{ .@"inline" = data_uri };
@@ -211,7 +211,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         if (inline_source.len == 0) {
             // we haven't set script_element._executed = true yet, which is good.
             // If content is appended to the script, we will execute it then.
-            page.releaseArena(arena);
+            frame.releaseArena(arena);
             return;
         }
         source = .{ .@"inline" = inline_source };
@@ -274,7 +274,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
 
         if (comptime IS_DEBUG) {
             var ls: js.Local.Scope = undefined;
-            page.js.localScope(&ls);
+            frame.js.localScope(&ls);
             defer ls.deinit();
 
             log.debug(.http, "script queue", .{
@@ -294,14 +294,14 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 .url = url,
                 .ctx = script,
                 .method = .GET,
-                .page_id = page.id,
-                .frame_id = page._frame_id,
+                .frame_id = frame._frame_id,
+                .loader_id = frame._loader_id,
                 .headers = try self.getHeaders(),
                 .blocking = is_blocking,
-                .cookie_jar = &page._session.cookie_jar,
-                .cookie_origin = page.url,
+                .cookie_jar = &frame._session.cookie_jar,
+                .cookie_origin = frame.url,
                 .resource_type = .script,
-                .notification = page._session.notification,
+                .notification = frame._session.notification,
                 .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
                 .header_callback = Script.headerCallback,
                 .data_callback = Script.dataCallback,
@@ -338,7 +338,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             self.is_evaluating = was_evaluating;
             script.deinit();
         }
-        return script.eval(page);
+        return script.eval(frame);
     }
 }
 
@@ -368,9 +368,9 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
     }
     errdefer _ = self.imported_modules.remove(url);
 
-    const page = self.page;
-    const arena = try page.getArena(.large, "SM.preloadImport");
-    errdefer page.releaseArena(arena);
+    const frame = self.frame;
+    const arena = try frame.getArena(.large, "SM.preloadImport");
+    errdefer frame.releaseArena(arena);
 
     const script = try arena.create(Script);
     script.* = .{
@@ -389,7 +389,7 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
 
     if (comptime IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         log.debug(.http, "script queue", .{
@@ -410,13 +410,13 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .url = url,
         .ctx = script,
         .method = .GET,
-        .page_id = page.id,
-        .frame_id = page._frame_id,
+        .frame_id = frame._frame_id,
+        .loader_id = frame._loader_id,
         .headers = try self.getHeaders(),
-        .cookie_jar = &page._session.cookie_jar,
-        .cookie_origin = page.url,
+        .cookie_jar = &frame._session.cookie_jar,
+        .cookie_origin = frame.url,
         .resource_type = .script,
-        .notification = page._session.notification,
+        .notification = frame._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,
@@ -469,9 +469,9 @@ pub fn waitForImport(self: *ScriptManager, url: [:0]const u8) !ModuleSource {
 }
 
 pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.Callback, cb_data: *anyopaque, referrer: []const u8) !void {
-    const page = self.page;
-    const arena = try page.getArena(.large, "SM.getAsyncImport");
-    errdefer page.releaseArena(arena);
+    const frame = self.frame;
+    const arena = try frame.getArena(.large, "SM.getAsyncImport");
+    errdefer frame.releaseArena(arena);
 
     const script = try arena.create(Script);
     script.* = .{
@@ -491,7 +491,7 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
 
     if (comptime IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         log.debug(.http, "script queue", .{
@@ -515,14 +515,14 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
     self.client.request(.{
         .url = url,
         .method = .GET,
-        .page_id = page.id,
-        .frame_id = page._frame_id,
+        .frame_id = frame._frame_id,
+        .loader_id = frame._loader_id,
         .headers = try self.getHeaders(),
         .ctx = script,
         .resource_type = .script,
-        .cookie_jar = &page._session.cookie_jar,
-        .cookie_origin = page.url,
-        .notification = page._session.notification,
+        .cookie_jar = &frame._session.cookie_jar,
+        .cookie_origin = frame.url,
+        .notification = frame._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,
@@ -548,7 +548,7 @@ fn evaluate(self: *ScriptManager) void {
         return;
     }
 
-    const page = self.page;
+    const frame = self.frame;
     self.is_evaluating = true;
     defer self.is_evaluating = false;
 
@@ -557,7 +557,7 @@ fn evaluate(self: *ScriptManager) void {
         switch (script.mode) {
             .async => {
                 defer script.deinit();
-                script.eval(page);
+                script.eval(frame);
             },
             .import_async => |ia| {
                 if (script.status < 200 or script.status > 299) {
@@ -595,21 +595,21 @@ fn evaluate(self: *ScriptManager) void {
             _ = self.defer_scripts.popFirst();
             script.deinit();
         }
-        script.eval(page);
+        script.eval(frame);
     }
 
     // At this point all normal scripts and deferred scripts are done, PLUS
-    // the page has signaled that it's done parsing HTML (static_scripts_done == true).
+    // the frame has signaled that it's done parsing HTML (static_scripts_done == true).
     //
 
     // When all scripts (normal and deferred) are done loading, the document
     // state changes (this ultimately triggers the DOMContentLoaded event).
     // Page makes this safe to call multiple times.
-    page.documentIsLoaded();
+    frame.documentIsLoaded();
 
-    if (self.async_scripts.first == null and self.page_notified_of_completion == false) {
-        self.page_notified_of_completion = true;
-        page.scriptsCompletedLoading();
+    if (self.async_scripts.first == null and self.frame_notified_of_completion == false) {
+        self.frame_notified_of_completion = true;
+        frame.scriptsCompletedLoading();
     }
 }
 
@@ -622,7 +622,7 @@ fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
 
     const imports = try std.json.parseFromSliceLeaky(
         Imports,
-        self.page.arena,
+        self.frame.arena,
         content,
         .{ .allocate = .alloc_always },
     );
@@ -633,13 +633,13 @@ fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
         // > base URL of the document containing the import map.
         // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules#importing_modules_using_import_maps
         const resolved_url = try URL.resolve(
-            self.page.arena,
-            self.page.base(),
+            self.frame.arena,
+            self.frame.base(),
             entry.value_ptr.*,
             .{},
         );
 
-        try self.importmap.put(self.page.arena, entry.key_ptr.*, resolved_url);
+        try self.importmap.put(self.frame.arena, entry.key_ptr.*, resolved_url);
     }
 }
 
@@ -700,7 +700,7 @@ pub const Script = struct {
     };
 
     fn deinit(self: *Script) void {
-        self.manager.page.releaseArena(self.arena);
+        self.manager.frame.releaseArena(self.arena);
     }
 
     fn startCallback(response: HttpClient.Response) !void {
@@ -843,7 +843,7 @@ pub const Script = struct {
         manager.evaluate();
     }
 
-    fn eval(self: *Script, page: *Page) void {
+    fn eval(self: *Script, frame: *Frame) void {
         // never evaluated, source is passed back to v8, via callbacks.
         if (comptime IS_DEBUG) {
             std.debug.assert(self.mode != .import_async);
@@ -852,21 +852,21 @@ pub const Script = struct {
             std.debug.assert(self.mode != .import);
         }
 
-        if (page.isGoingAway()) {
-            // don't evaluate scripts for a dying page.
+        if (frame.isGoingAway()) {
+            // don't evaluate scripts for a dying frame.
             return;
         }
 
         const script_element = self.script_element.?;
 
-        const previous_script = page.document._current_script;
-        page.document._current_script = script_element;
-        defer page.document._current_script = previous_script;
+        const previous_script = frame.document._current_script;
+        frame.document._current_script = script_element;
+        defer frame.document._current_script = previous_script;
 
         // Clear the document.write insertion point for this script
-        const previous_write_insertion_point = page.document._write_insertion_point;
-        page.document._write_insertion_point = null;
-        defer page.document._write_insertion_point = previous_write_insertion_point;
+        const previous_write_insertion_point = frame.document._write_insertion_point;
+        frame.document._write_insertion_point = null;
+        defer frame.document._write_insertion_point = previous_write_insertion_point;
 
         // inline scripts aren't cached. remote ones are.
         const cacheable = self.source == .remote;
@@ -880,7 +880,7 @@ pub const Script = struct {
         });
 
         var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         const local = &ls.local;
@@ -888,21 +888,21 @@ pub const Script = struct {
         // Handle importmap special case here: the content is a JSON containing
         // imports.
         if (self.kind == .importmap) {
-            page._script_manager.parseImportmap(self) catch |err| {
+            frame._script_manager.parseImportmap(self) catch |err| {
                 log.err(.browser, "parse importmap script", .{
                     .err = err,
                     .src = url,
                     .kind = self.kind,
                     .cacheable = cacheable,
                 });
-                self.executeCallback(comptime .wrap("error"), page);
+                self.executeCallback(comptime .wrap("error"), frame);
                 return;
             };
-            self.executeCallback(comptime .wrap("load"), page);
+            self.executeCallback(comptime .wrap("load"), frame);
             return;
         }
 
-        defer page._event_manager.clearIgnoreList();
+        defer frame._event_manager.clearIgnoreList();
 
         var try_catch: js.TryCatch = undefined;
         try_catch.init(local);
@@ -914,7 +914,7 @@ pub const Script = struct {
                 .javascript => _ = local.eval(content, url) catch break :blk false,
                 .module => {
                     // We don't care about waiting for the evaluation here.
-                    page.js.module(false, local, content, url, cacheable) catch break :blk false;
+                    frame.js.module(false, local, content, url, cacheable) catch break :blk false;
                 },
                 .importmap => unreachable, // handled before the try/catch.
             }
@@ -927,29 +927,29 @@ pub const Script = struct {
 
         defer {
             local.runMacrotasks(); // also runs microtasks
-            _ = page.js.scheduler.run() catch |err| {
-                log.err(.page, "scheduler", .{ .err = err });
+            _ = frame.js.scheduler.run() catch |err| {
+                log.err(.frame, "scheduler", .{ .err = err });
             };
         }
 
         if (success) {
-            self.executeCallback(comptime .wrap("load"), page);
+            self.executeCallback(comptime .wrap("load"), frame);
             return;
         }
 
-        const caught = try_catch.caughtOrError(page.call_arena, error.Unknown);
+        const caught = try_catch.caughtOrError(frame.call_arena, error.Unknown);
         log.warn(.js, "eval script", .{
             .url = url,
             .caught = caught,
             .cacheable = cacheable,
         });
 
-        self.executeCallback(comptime .wrap("error"), page);
+        self.executeCallback(comptime .wrap("error"), frame);
     }
 
-    fn executeCallback(self: *const Script, typ: String, page: *Page) void {
+    fn executeCallback(self: *const Script, typ: String, frame: *Frame) void {
         const Event = @import("webapi/Event.zig");
-        const event = Event.initTrusted(typ, .{}, page) catch |err| {
+        const event = Event.initTrusted(typ, .{}, frame) catch |err| {
             log.warn(.js, "script internal callback", .{
                 .url = self.url,
                 .type = typ,
@@ -957,7 +957,7 @@ pub const Script = struct {
             });
             return;
         };
-        page._event_manager.dispatchOpts(self.script_element.?.asNode().asEventTarget(), event, .{ .apply_ignore = true }) catch |err| {
+        frame._event_manager.dispatchOpts(self.script_element.?.asNode().asEventTarget(), event, .{ .apply_ignore = true }) catch |err| {
             log.warn(.js, "script callback", .{
                 .url = self.url,
                 .type = typ,

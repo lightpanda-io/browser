@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -44,7 +44,7 @@ pub fn asConstNode(self: *const Select) *const Node {
     return self.asConstElement().asConstNode();
 }
 
-pub fn getValue(self: *Select, page: *Page) []const u8 {
+pub fn getValue(self: *Select, frame: *Frame) []const u8 {
     // Return value of first selected option, or first option if none selected
     var first_option: ?*Option = null;
     var iter = self.asNode().childrenIterator();
@@ -55,7 +55,7 @@ pub fn getValue(self: *Select, page: *Page) []const u8 {
         }
 
         if (option.getSelected()) {
-            return option.getValue(page);
+            return option.getValue(frame);
         }
         if (first_option == null) {
             first_option = option;
@@ -63,19 +63,19 @@ pub fn getValue(self: *Select, page: *Page) []const u8 {
     }
     // No explicitly selected option, return first option's value
     if (first_option) |opt| {
-        return opt.getValue(page);
+        return opt.getValue(frame);
     }
     return "";
 }
 
-pub fn setValue(self: *Select, value: []const u8, page: *Page) !void {
+pub fn setValue(self: *Select, value: []const u8, frame: *Frame) !void {
     // Find option with matching value and select it
     // Note: This updates the current state (_selected), not the default state (attribute)
     // Setting value always deselects all others, even for multiple selects
     var iter = self.asNode().childrenIterator();
     while (iter.next()) |child| {
         const option = child.is(Option) orelse continue;
-        option._selected = std.mem.eql(u8, option.getValue(page), value);
+        option._selected = std.mem.eql(u8, option.getValue(frame), value);
     }
 }
 
@@ -124,11 +124,11 @@ pub fn getMultiple(self: *const Select) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("multiple")) != null;
 }
 
-pub fn setMultiple(self: *Select, multiple: bool, page: *Page) !void {
+pub fn setMultiple(self: *Select, multiple: bool, frame: *Frame) !void {
     if (multiple) {
-        try self.asElement().setAttributeSafe(comptime .wrap("multiple"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("multiple"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("multiple"), page);
+        try self.asElement().removeAttribute(comptime .wrap("multiple"), frame);
     }
 }
 
@@ -136,11 +136,11 @@ pub fn getDisabled(self: *const Select) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
 }
 
-pub fn setDisabled(self: *Select, disabled: bool, page: *Page) !void {
+pub fn setDisabled(self: *Select, disabled: bool, frame: *Frame) !void {
     if (disabled) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), page);
+        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
     }
 }
 
@@ -148,8 +148,8 @@ pub fn getName(self: *const Select) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
-pub fn setName(self: *Select, name: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), page);
+pub fn setName(self: *Select, name: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
 }
 
 pub fn getSize(self: *const Select) u32 {
@@ -170,30 +170,30 @@ pub fn getSize(self: *const Select) u32 {
     return std.fmt.parseInt(u32, trimmed[0..end], 10) catch 0;
 }
 
-pub fn setSize(self: *Select, size: u32, page: *Page) !void {
-    const size_string = try std.fmt.allocPrint(page.call_arena, "{d}", .{size});
-    try self.asElement().setAttributeSafe(comptime .wrap("size"), .wrap(size_string), page);
+pub fn setSize(self: *Select, size: u32, frame: *Frame) !void {
+    const size_string = try std.fmt.allocPrint(frame.call_arena, "{d}", .{size});
+    try self.asElement().setAttributeSafe(comptime .wrap("size"), .wrap(size_string), frame);
 }
 
 pub fn getRequired(self: *const Select) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
 }
 
-pub fn setRequired(self: *Select, required: bool, page: *Page) !void {
+pub fn setRequired(self: *Select, required: bool, frame: *Frame) !void {
     if (required) {
-        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), page);
+        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("required"), page);
+        try self.asElement().removeAttribute(comptime .wrap("required"), frame);
     }
 }
 
-pub fn getOptions(self: *Select, page: *Page) !*collections.HTMLOptionsCollection {
+pub fn getOptions(self: *Select, frame: *Frame) !*collections.HTMLOptionsCollection {
     // For options, we use the child_tag mode to filter only <option> elements
-    const node_live = collections.NodeLive(.child_tag).init(self.asNode(), .option, page);
-    const html_collection = try node_live.runtimeGenericWrap(page);
+    const node_live = collections.NodeLive(.child_tag).init(self.asNode(), .option, frame);
+    const html_collection = try node_live.runtimeGenericWrap(frame);
 
     // Create and return HTMLOptionsCollection
-    return page._factory.create(collections.HTMLOptionsCollection{
+    return frame._factory.create(collections.HTMLOptionsCollection{
         ._proto = html_collection,
         ._select = self,
     });
@@ -210,16 +210,16 @@ pub fn getLength(self: *Select) u32 {
     return i;
 }
 
-pub fn getSelectedOptions(self: *Select, page: *Page) !collections.NodeLive(.selected_options) {
-    return collections.NodeLive(.selected_options).init(self.asNode(), {}, page);
+pub fn getSelectedOptions(self: *Select, frame: *Frame) !collections.NodeLive(.selected_options) {
+    return collections.NodeLive(.selected_options).init(self.asNode(), {}, frame);
 }
 
-pub fn getForm(self: *Select, page: *Page) ?*Form {
+pub fn getForm(self: *Select, frame: *Frame) ?*Form {
     const element = self.asElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
     if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
-        if (page.document.getElementById(form_id, page)) |form_element| {
+        if (frame.document.getElementById(form_id, frame)) |form_element| {
             return form_element.is(Form);
         }
         // form attribute present but invalid - no form owner
@@ -238,8 +238,8 @@ pub fn getForm(self: *Select, page: *Page) ?*Form {
     return null;
 }
 
-pub fn getLabels(self: *Select, page: *Page) !js.Array {
-    return @import("Label.zig").getControlLabels(self.asElement(), page);
+pub fn getLabels(self: *Select, frame: *Frame) !js.Array {
+    return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
 pub const JsApi = struct {
@@ -266,7 +266,7 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
-    pub fn created(_: *Node, _: *Page) !void {
+    pub fn created(_: *Node, _: *Frame) !void {
         // No initialization needed - disabled is lazy from attribute
     }
 };

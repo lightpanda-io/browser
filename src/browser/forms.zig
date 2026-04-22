@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const Page = @import("Page.zig");
+const Frame = @import("Frame.zig");
 const TreeWalker = @import("webapi/TreeWalker.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
@@ -157,7 +157,7 @@ pub fn registerNodes(forms_data: []FormInfo, registry: anytype) !void {
 pub fn collectForms(
     arena: Allocator,
     root: *Node,
-    page: *Page,
+    frame: *Frame,
 ) ![]FormInfo {
     var forms: std.ArrayList(FormInfo) = .empty;
 
@@ -166,7 +166,7 @@ pub fn collectForms(
         const form = node.is(Element.Html.Form) orelse continue;
         const el = form.asElement();
 
-        const fields = try collectFormFields(arena, form, page);
+        const fields = try collectFormFields(arena, form, frame);
         if (fields.len == 0) continue;
 
         const action_attr = el.getAttributeSafe(comptime .wrap("action"));
@@ -186,11 +186,11 @@ pub fn collectForms(
 fn collectFormFields(
     arena: Allocator,
     form: *Element.Html.Form,
-    page: *Page,
+    frame: *Frame,
 ) ![]FormField {
     var fields: std.ArrayList(FormField) = .empty;
 
-    var elements = try form.getElements(page);
+    var elements = try form.getElements(frame);
     var it = try elements.iterator();
     while (it.next()) |el| {
         const node = el.asNode();
@@ -231,7 +231,7 @@ fn collectFormFields(
         }
 
         if (el.is(Element.Html.Select)) |select| {
-            const options = try collectSelectOptions(arena, node, page);
+            const options = try collectSelectOptions(arena, node, frame);
 
             try fields.append(arena, .{
                 .node = node,
@@ -240,7 +240,7 @@ fn collectFormFields(
                 .input_type = null,
                 .required = el.getAttributeSafe(comptime .wrap("required")) != null,
                 .disabled = is_disabled,
-                .value = select.getValue(page),
+                .value = select.getValue(frame),
                 .placeholder = null,
                 .options = options,
             });
@@ -256,7 +256,7 @@ fn collectFormFields(
 fn collectSelectOptions(
     arena: Allocator,
     select_node: *Node,
-    page: *Page,
+    frame: *Frame,
 ) ![]SelectOption {
     var options: std.ArrayList(SelectOption) = .empty;
     const Option = Element.Html.Option;
@@ -267,8 +267,8 @@ fn collectSelectOptions(
         const option = el.is(Option) orelse continue;
 
         try options.append(arena, .{
-            .value = option.getValue(page),
-            .text = option.getText(page),
+            .value = option.getValue(frame),
+            .text = option.getText(frame),
         });
     }
 
@@ -278,18 +278,18 @@ fn collectSelectOptions(
 const testing = @import("../testing.zig");
 
 fn testForms(html: []const u8) ![]FormInfo {
-    const page = try testing.test_session.createPage();
+    const frame = try testing.test_session.createFrame();
 
-    const doc = page.window._document;
-    const div = try doc.createElement("div", null, page);
-    try page.parseHtmlAsChildren(div.asNode(), html);
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try frame.parseHtmlAsChildren(div.asNode(), html);
 
-    return collectForms(page.call_arena, div.asNode(), page);
+    return collectForms(frame.call_arena, div.asNode(), frame);
 }
 
 test "browser.forms: login form" {
     defer testing.reset();
-    defer testing.test_session.removePage();
+    defer testing.test_session.removeFrame();
     const forms = try testForms(
         \\<form action="/login" method="POST">
         \\  <input type="email" name="email" required placeholder="Email">
@@ -310,7 +310,7 @@ test "browser.forms: login form" {
 
 test "browser.forms: form with select" {
     defer testing.reset();
-    defer testing.test_session.removePage();
+    defer testing.test_session.removeFrame();
     const forms = try testForms(
         \\<form>
         \\  <select name="color">
@@ -329,7 +329,7 @@ test "browser.forms: form with select" {
 
 test "browser.forms: form with textarea" {
     defer testing.reset();
-    defer testing.test_session.removePage();
+    defer testing.test_session.removeFrame();
     const forms = try testForms(
         \\<form method="POST">
         \\  <textarea name="message" placeholder="Your message"></textarea>
@@ -343,7 +343,7 @@ test "browser.forms: form with textarea" {
 
 test "browser.forms: empty form skipped" {
     defer testing.reset();
-    defer testing.test_session.removePage();
+    defer testing.test_session.removeFrame();
     const forms = try testForms(
         \\<form action="/empty">
         \\  <p>No fields here</p>
@@ -354,7 +354,7 @@ test "browser.forms: empty form skipped" {
 
 test "browser.forms: hidden inputs excluded" {
     defer testing.reset();
-    defer testing.test_session.removePage();
+    defer testing.test_session.removeFrame();
     const forms = try testForms(
         \\<form>
         \\  <input type="hidden" name="csrf" value="token123">
@@ -368,7 +368,7 @@ test "browser.forms: hidden inputs excluded" {
 
 test "browser.forms: multiple forms" {
     defer testing.reset();
-    defer testing.test_session.removePage();
+    defer testing.test_session.removeFrame();
     const forms = try testForms(
         \\<form action="/search" method="GET">
         \\  <input type="text" name="q" placeholder="Search">
@@ -385,7 +385,7 @@ test "browser.forms: multiple forms" {
 
 test "browser.forms: disabled fields flagged" {
     defer testing.reset();
-    defer testing.test_session.removePage();
+    defer testing.test_session.removeFrame();
     const forms = try testForms(
         \\<form>
         \\  <input type="text" name="enabled_field">
@@ -400,7 +400,7 @@ test "browser.forms: disabled fields flagged" {
 
 test "browser.forms: disabled fieldset" {
     defer testing.reset();
-    defer testing.test_session.removePage();
+    defer testing.test_session.removeFrame();
     const forms = try testForms(
         \\<form>
         \\  <fieldset disabled>
@@ -417,7 +417,7 @@ test "browser.forms: disabled fieldset" {
 
 test "browser.forms: external field via form attribute" {
     defer testing.reset();
-    defer testing.test_session.removePage();
+    defer testing.test_session.removeFrame();
     const forms = try testForms(
         \\<input type="text" name="external" form="myform">
         \\<form id="myform" action="/submit">
@@ -430,7 +430,7 @@ test "browser.forms: external field via form attribute" {
 
 test "browser.forms: checkbox and radio return value attribute" {
     defer testing.reset();
-    defer testing.test_session.removePage();
+    defer testing.test_session.removeFrame();
     const forms = try testForms(
         \\<form>
         \\  <input type="checkbox" name="agree" value="yes" checked>
@@ -447,7 +447,7 @@ test "browser.forms: checkbox and radio return value attribute" {
 
 test "browser.forms: form without action or method" {
     defer testing.reset();
-    defer testing.test_session.removePage();
+    defer testing.test_session.removeFrame();
     const forms = try testForms(
         \\<form>
         \\  <input type="text" name="q">

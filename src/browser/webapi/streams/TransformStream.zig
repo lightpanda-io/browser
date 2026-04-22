@@ -82,7 +82,6 @@ pub fn initWithZigTransform(zig_transform: ZigTransformFn, exec: *const Executio
     self._controller = transform_controller;
 
     self._writable = try WritableStream.initForTransform(self, exec);
-
     return self;
 }
 

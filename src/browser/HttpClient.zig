@@ -47,14 +47,14 @@ const CachedResponse = Cache.CachedResponse;
 
 // This is loosely tied to a browser Page. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
-// currently supports 1 browser and 1 page at-a-time, we only have 1 Client and
-// re-use it from page to page. This allows us better re-use of the various
+// currently supports 1 browser and 1 frame at-a-time, we only have 1 Client and
+// re-use it from frame to frame. This allows us better re-use of the various
 // buffers/caches (including keepalive connections) that libcurl has.
 //
 // The app has other secondary http needs, like telemetry. While we want to
 // share some things (namely the ca blob, and maybe some configuration
 // (TODO: ??? should proxy settings be global ???)), we're able to do call
-// client.abort() to abort the transfers being made by a page, without impacting
+// client.abort() to abort the transfers being made by a frame, without impacting
 // those other http requests.
 pub const Client = @This();
 
@@ -329,7 +329,7 @@ fn abortConnections(list: std.DoublyLinkedList, comptime abort_all: bool, frame_
                 }
             },
             .websocket => |ws| {
-                if ((comptime abort_all) or ws._page._frame_id == frame_id) {
+                if ((comptime abort_all) or ws._frame._frame_id == frame_id) {
                     ws.kill();
                 }
             },
@@ -517,8 +517,8 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
             .method = .GET,
             .headers = headers,
             .blocking = false,
-            .page_id = req.page_id,
             .frame_id = req.frame_id,
+            .loader_id = req.loader_id,
             .cookie_jar = req.cookie_jar,
             .cookie_origin = req.cookie_origin,
             .notification = req.notification,
@@ -1157,8 +1157,8 @@ fn ensureNoActiveConnection(self: *const Client) !void {
 }
 
 pub const Request = struct {
-    page_id: u32,
     frame_id: u32,
+    loader_id: u32,
     method: Method,
     url: [:0]const u8,
     headers: http.Headers,
@@ -1376,7 +1376,7 @@ pub const Transfer = struct {
         self.deinit();
     }
 
-    // internal, when the page is shutting down. Doesn't have the same ceremony
+    // internal, when the frame is shutting down. Doesn't have the same ceremony
     // as abort (doesn't send a notification, doesn't invoke an error callback)
     fn kill(self: *Transfer) void {
         if (self.req.shutdown_callback) |cb| {

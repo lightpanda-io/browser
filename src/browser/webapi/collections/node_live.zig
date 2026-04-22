@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
@@ -79,7 +79,7 @@ const Filters = union(Mode) {
 // But, if the version hasn't changed, then we can leverage other stateful data
 // to improve performance. For example, we cache the length property. So once
 // we've walked the tree to figure the length, we can re-use the cached property
-// if the DOM is unchanged (i.e. if our _cached_version == page.version).
+// if the DOM is unchanged (i.e. if our _cached_version == frame.version).
 //
 // We do something similar for indexed getter (e.g. coll[4]), by preserving the
 // last node visited in the tree (implicitly by not resetting the TreeWalker).
@@ -102,18 +102,18 @@ pub fn NodeLive(comptime mode: Mode) type {
 
         const Self = @This();
 
-        pub fn init(root: *Node, filter: Filter, page: *Page) Self {
+        pub fn init(root: *Node, filter: Filter, frame: *Frame) Self {
             return .{
                 ._last_index = 0,
                 ._last_length = null,
                 ._filter = filter,
                 ._tw = TW.init(root, .{}),
-                ._cached_version = page.version,
+                ._cached_version = frame.version,
             };
         }
 
-        pub fn length(self: *Self, page: *const Page) u32 {
-            if (self.versionCheck(page)) {
+        pub fn length(self: *Self, frame: *const Frame) u32 {
+            if (self.versionCheck(frame)) {
                 // the DOM version hasn't changed, use the cached version if
                 // we have one
                 if (self._last_length) |cached_length| {
@@ -148,19 +148,19 @@ pub fn NodeLive(comptime mode: Mode) type {
 
         // This API supports indexing by both numeric index and id/name
         // i.e. a combination of getAtIndex and getByName
-        pub fn getIndexed(self: *Self, value: js.Atom, page: *Page) !?*Element {
+        pub fn getIndexed(self: *Self, value: js.Atom, frame: *Frame) !?*Element {
             if (value.isUint()) |n| {
-                return self.getAtIndex(n, page);
+                return self.getAtIndex(n, frame);
             }
 
             const name = value.toString();
             defer value.freeString(name);
 
-            return self.getByName(name, page) orelse return error.NotHandled;
+            return self.getByName(name, frame) orelse return error.NotHandled;
         }
 
-        pub fn getAtIndex(self: *Self, index: usize, page: *const Page) ?*Element {
-            _ = self.versionCheck(page);
+        pub fn getAtIndex(self: *Self, index: usize, frame: *const Frame) ?*Element {
+            _ = self.versionCheck(frame);
             var current = self._last_index;
             if (index <= current) {
                 current = 0;
@@ -178,8 +178,8 @@ pub fn NodeLive(comptime mode: Mode) type {
             return null;
         }
 
-        pub fn getByName(self: *Self, name: []const u8, page: *Page) ?*Element {
-            if (page.document.getElementById(name, page)) |element| {
+        pub fn getByName(self: *Self, name: []const u8, frame: *Frame) ?*Element {
+            if (frame.document.getElementById(name, frame)) |element| {
                 const node = element.asNode();
                 if (self._tw.contains(node) and self.matches(node)) {
                     return element;
@@ -342,8 +342,8 @@ pub fn NodeLive(comptime mode: Mode) type {
             };
         }
 
-        fn versionCheck(self: *Self, page: *const Page) bool {
-            const current = page.version;
+        fn versionCheck(self: *Self, frame: *const Frame) bool {
+            const current = frame.version;
             if (current == self._cached_version) {
                 return true;
             }
@@ -358,9 +358,9 @@ pub fn NodeLive(comptime mode: Mode) type {
         const HTMLCollection = @import("HTMLCollection.zig");
         const NodeList = @import("NodeList.zig");
 
-        pub fn runtimeGenericWrap(self: Self, page: *Page) !if (mode == .name) *NodeList else *HTMLCollection {
+        pub fn runtimeGenericWrap(self: Self, frame: *Frame) !if (mode == .name) *NodeList else *HTMLCollection {
             const collection = switch (mode) {
-                .name => return page._factory.create(NodeList{ ._data = .{ .name = self } }),
+                .name => return frame._factory.create(NodeList{ ._data = .{ .name = self } }),
                 .tag => HTMLCollection{ ._data = .{ .tag = self } },
                 .tag_name => HTMLCollection{ ._data = .{ .tag_name = self } },
                 .tag_name_ns => HTMLCollection{ ._data = .{ .tag_name_ns = self } },
@@ -373,7 +373,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .anchors => HTMLCollection{ ._data = .{ .anchors = self } },
                 .form => HTMLCollection{ ._data = .{ .form = self } },
             };
-            return page._factory.create(collection);
+            return frame._factory.create(collection);
         }
     };
 }

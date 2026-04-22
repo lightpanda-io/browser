@@ -19,7 +19,7 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 const TextTrackCue = @import("TextTrackCue.zig");
 
 const VTTCue = @This();
@@ -34,10 +34,10 @@ _position: ?f64 = null, // null represents "auto"
 _size: f64 = 100,
 _align: []const u8 = "center",
 
-pub fn constructor(start_time: f64, end_time: f64, text: []const u8, page: *Page) !*VTTCue {
-    const cue = try page._factory.textTrackCue(VTTCue{
+pub fn constructor(start_time: f64, end_time: f64, text: []const u8, frame: *Frame) !*VTTCue {
+    const cue = try frame._factory.textTrackCue(VTTCue{
         ._proto = undefined,
-        ._text = try page.dupeString(text),
+        ._text = try frame.dupeString(text),
         ._region = null,
         ._vertical = "",
         ._snap_to_lines = true,
@@ -61,8 +61,8 @@ pub fn getText(self: *const VTTCue) []const u8 {
     return self._text;
 }
 
-pub fn setText(self: *VTTCue, value: []const u8, page: *Page) !void {
-    self._text = try page.dupeString(value);
+pub fn setText(self: *VTTCue, value: []const u8, frame: *Frame) !void {
+    self._text = try frame.dupeString(value);
 }
 
 pub fn getRegion(self: *const VTTCue) ?js.Object.Global {
@@ -77,9 +77,9 @@ pub fn getVertical(self: *const VTTCue) []const u8 {
     return self._vertical;
 }
 
-pub fn setVertical(self: *VTTCue, value: []const u8, page: *Page) !void {
+pub fn setVertical(self: *VTTCue, value: []const u8, frame: *Frame) !void {
     // Valid values: "", "rl", "lr"
-    self._vertical = try page.dupeString(value);
+    self._vertical = try frame.dupeString(value);
 }
 
 pub fn getSnapToLines(self: *const VTTCue) bool {
@@ -135,16 +135,15 @@ pub fn getAlign(self: *const VTTCue) []const u8 {
     return self._align;
 }
 
-pub fn setAlign(self: *VTTCue, value: []const u8, page: *Page) !void {
+pub fn setAlign(self: *VTTCue, value: []const u8, frame: *Frame) !void {
     // Valid values: "start", "center", "end", "left", "right"
-    self._align = try page.dupeString(value);
+    self._align = try frame.dupeString(value);
 }
 
-pub fn getCueAsHTML(self: *const VTTCue, page: *Page) !js.Object {
+pub fn getCueAsHTML(self: *const VTTCue) !js.Object {
     // Minimal implementation: return a document fragment
     // In a full implementation, this would parse the VTT text into HTML nodes
     _ = self;
-    _ = page;
     return error.NotImplemented;
 }
 

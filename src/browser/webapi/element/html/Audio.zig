@@ -19,7 +19,7 @@
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
-const Page = @import("../../../Page.zig");
+const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -31,16 +31,16 @@ const Audio = @This();
 
 _proto: *Media,
 
-pub fn constructor(maybe_url: ?String, page: *Page) !*Media {
-    const node = try page.createElementNS(.html, "audio", null);
+pub fn constructor(maybe_url: ?String, frame: *Frame) !*Media {
+    const node = try frame.createElementNS(.html, "audio", null);
     const el = node.as(Element);
 
-    const list = try el.getOrCreateAttributeList(page);
+    const list = try el.getOrCreateAttributeList(frame);
     // Always set to "auto" initially.
-    _ = try list.putSafe(comptime .wrap("preload"), comptime .wrap("auto"), el, page);
+    _ = try list.putSafe(comptime .wrap("preload"), comptime .wrap("auto"), el, frame);
     // Set URL if provided.
     if (maybe_url) |url| {
-        _ = try list.putSafe(comptime .wrap("src"), url, el, page);
+        _ = try list.putSafe(comptime .wrap("src"), url, el, frame);
     }
 
     return node.as(Media);

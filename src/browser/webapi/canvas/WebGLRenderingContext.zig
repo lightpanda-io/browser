@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const Frame = @import("../../Frame.zig");
 
 pub fn registerTypes() []const type {
     return &.{
@@ -168,16 +168,16 @@ pub fn getParameter(_: *const WebGLRenderingContext, pname: u32) []const u8 {
 }
 
 /// Enables a WebGL extension.
-pub fn getExtension(_: *const WebGLRenderingContext, name: []const u8, page: *Page) !?Extension {
+pub fn getExtension(_: *const WebGLRenderingContext, name: []const u8, frame: *Frame) !?Extension {
     const tag = Extension.find(name) orelse return null;
 
     return switch (tag) {
         .WEBGL_debug_renderer_info => {
-            const info = try page._factory.create(Extension.Type.WEBGL_debug_renderer_info{});
+            const info = try frame._factory.create(Extension.Type.WEBGL_debug_renderer_info{});
             return .{ .WEBGL_debug_renderer_info = info };
         },
         .WEBGL_lose_context => {
-            const ctx = try page._factory.create(Extension.Type.WEBGL_lose_context{});
+            const ctx = try frame._factory.create(Extension.Type.WEBGL_lose_context{});
             return .{ .WEBGL_lose_context = ctx };
         },
         inline else => |comptime_enum| @unionInit(Extension, @tagName(comptime_enum), {}),

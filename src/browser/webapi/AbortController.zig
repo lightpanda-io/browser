@@ -19,16 +19,16 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
-const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const AbortSignal = @import("AbortSignal.zig");
 
 const AbortController = @This();
 
 _signal: *AbortSignal,
 
-pub fn init(page: *Page) !*AbortController {
-    const signal = try AbortSignal.init(page);
-    return page._factory.create(AbortController{
+pub fn init(frame: *Frame) !*AbortController {
+    const signal = try AbortSignal.init(frame);
+    return frame._factory.create(AbortController{
         ._signal = signal,
     });
 }
@@ -37,8 +37,8 @@ pub fn getSignal(self: *const AbortController) *AbortSignal {
     return self._signal;
 }
 
-pub fn abort(self: *AbortController, reason_: ?js.Value.Global, page: *Page) !void {
-    try self._signal.abort(if (reason_) |r| .{ .js_val = r } else null, page);
+pub fn abort(self: *AbortController, reason_: ?js.Value.Global, frame: *Frame) !void {
+    try self._signal.abort(if (reason_) |r| .{ .js_val = r } else null, frame);
 }
 
 pub const JsApi = struct {
