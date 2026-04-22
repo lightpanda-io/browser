@@ -574,6 +574,9 @@ pub fn Builder(comptime commands: anytype) type {
                         },
                         inline else => @compileError("not supported"),
                     }
+                } else {
+                    log.fatal(.app, "unknown argument", .{ .mode = command.name, .arg = option_name });
+                    return error.UnknownOption;
                 }
             }
 
