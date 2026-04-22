@@ -78,6 +78,8 @@ const CommonOptions = .{
     .{ .name = "block_cidrs", .type = ?[]const u8 },
     .{ .name = "cookie", .type = ?[]const u8 },
     .{ .name = "cookie_jar", .type = ?[]const u8 },
+    .{ .name = "storage_engine", .type = ?Storage.EngineType },
+    .{ .name = "storage_sqlite_path", .type = ?[:0]const u8 },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -357,14 +359,14 @@ pub fn maxPendingConnections(self: *const Config) u31 {
 
 pub fn storageEngine(self: *const Config) ?Storage.EngineType {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.storage_engine,
+        inline .serve, .fetch, .mcp => |opts| opts.storage_engine,
         else => unreachable,
-}
     };
+}
 
 pub fn storageSqlitePath(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.common.storage_sqlite_path,
+        inline .serve, .fetch, .mcp => |opts| opts.storage_sqlite_path,
         else => unreachable,
     };
 }
