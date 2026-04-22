@@ -102,6 +102,11 @@ pub fn build(b: *Build) !void {
     });
     check.dependOn(&check_lib.step);
 
+    // Extras (snapshot_creator, legacy_test) are off the default install to
+    // avoid paying for three exe compiles on every edit. Build explicitly
+    // with `zig build extras`.
+    const extras_step = b.step("extras", "Build snapshot_creator and legacy_test");
+
     {
         // browser
         const exe = b.addExecutable(.{
@@ -153,7 +158,7 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
-        b.installArtifact(exe);
+        extras_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
 
         const exe_check = b.addLibrary(.{
             .name = "snapshot_creator_check",
@@ -197,7 +202,7 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
-        b.installArtifact(exe);
+        extras_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
 
         const exe_check = b.addLibrary(.{
             .name = "legacy_test_check",
