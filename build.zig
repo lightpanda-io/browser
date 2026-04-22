@@ -91,26 +91,7 @@ pub fn build(b: *Build) !void {
         break :blk mod;
     };
 
-    lightpanda_module.addCSourceFile(.{
-        .file = b.path("lib/sqlite3/sqlite3.c"),
-        .flags = &[_][]const u8{
-            "-DSQLITE_DQS=0",
-            "-DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1",
-            "-DSQLITE_USE_ALLOCA=1",
-            "-DSQLITE_THREADSAFE=1",
-            "-DSQLITE_TEMP_STORE=3",
-            "-DSQLITE_ENABLE_API_ARMOR=1",
-            "-DSQLITE_ENABLE_UNLOCK_NOTIFY",
-            "-DSQLITE_DEFAULT_FILE_PERMISSIONS=0600",
-            "-DSQLITE_OMIT_DECLTYPE=1",
-            "-DSQLITE_OMIT_DEPRECATED=1",
-            "-DSQLITE_OMIT_LOAD_EXTENSION=1",
-            "-DSQLITE_OMIT_PROGRESS_CALLBACK=1",
-            "-DSQLITE_OMIT_SHARED_CACHE",
-            "-DSQLITE_OMIT_TRACE=1",
-            "-DSQLITE_OMIT_UTF16=1",
-        },
-    });
+    linkSqlite(b, lightpanda_module, enable_csan, enable_tsan);
 
     // Check compilation
     const check = b.step("check", "Check if lightpanda compiles");
@@ -285,6 +266,38 @@ fn linkHtml5Ever(b: *Build, mod: *Build.Module) !void {
 
     const obj = out_dir.path(b, if (is_debug) "debug" else "release").path(b, "liblitefetch_html5ever.a");
     mod.addObjectFile(obj);
+}
+
+fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is_tsan: bool) void {
+    const dep = b.dependency("sqlite3", .{
+        .target = mod.resolved_target.?,
+        .optimize = mod.optimize.?,
+    });
+
+    const lib = dep.artifact("sqlite3");
+    lib.root_module.sanitize_c = enable_csan;
+    lib.root_module.sanitize_thread = is_tsan;
+
+    const macros = [_]struct { []const u8, []const u8 }{
+        .{ "SQLITE_DQS", "0" },
+        .{ "SQLITE_DEFAULT_WAL_SYNCHRONOUS", "1" },
+        .{ "SQLITE_USE_ALLOCA", "1" },
+        .{ "SQLITE_THREADSAFE", "1" },
+        .{ "SQLITE_TEMP_STORE", "3" },
+        .{ "SQLITE_ENABLE_API_ARMOR", "1" },
+        .{ "SQLITE_ENABLE_UNLOCK_NOTIFY", "1" },
+        .{ "SQLITE_DEFAULT_FILE_PERMISSIONS", "0600" },
+        .{ "SQLITE_OMIT_DECLTYPE", "1" },
+        .{ "SQLITE_OMIT_DEPRECATED", "1" },
+        .{ "SQLITE_OMIT_LOAD_EXTENSION", "1" },
+        .{ "SQLITE_OMIT_PROGRESS_CALLBACK", "1" },
+        .{ "SQLITE_OMIT_SHARED_CACHE", "1" },
+        .{ "SQLITE_OMIT_TRACE", "1" },
+        .{ "SQLITE_OMIT_UTF16", "1" },
+    };
+    for (macros) |m| lib.root_module.addCMacro(m[0], m[1]);
+
+    mod.linkLibrary(lib);
 }
 
 fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) !void {
