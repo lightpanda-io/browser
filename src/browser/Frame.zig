@@ -411,7 +411,7 @@ pub fn deinit(self: *Frame, abort_http: bool) void {
     const browser = page.session.browser;
     browser.env.destroyContext(self.js);
 
-    self._script_manager.shutdown = true;
+    self._script_manager.base.shutdown = true;
 
     if (self.parent == null) {
         browser.http_client.abort();

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<body></body>
+<script src="../testing.js"></script>
+
+<script id="worker_module_imports" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./module-test-worker.js');
+
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+
+    await state.done((response) => {
+      testing.expectTrue(response.ok, 'worker module error: ' + response.err);
+      const r = response.results;
+
+      // basic dynamic import
+      testing.expectEqual('from-base', r.basic_baseValue);
+
+      // transitive (static-from-dynamic) imports
+      testing.expectEqual('from-base', r.transitive_importedValue);
+      testing.expectEqual('local', r.transitive_localValue);
+
+      // re-exports
+      testing.expectEqual('from-base', r.reexport_baseValue);
+      testing.expectEqual('from-base', r.reexport_importedValue);
+      testing.expectEqual('local', r.reexport_localValue);
+
+      // module identity is preserved across two import() calls in the
+      // same worker — counter state persists.
+      testing.expectEqual(1, r.shared_first_inc);
+      testing.expectEqual(1, r.shared_first_count);
+      testing.expectEqual(2, r.shared_second_inc);
+      testing.expectEqual(2, r.shared_second_count);
+      testing.expectTrue(r.shared_same_module);
+
+      // circular static imports between two dynamically-imported modules
+      testing.expectEqual('a', r.circular_aValue);
+      testing.expectEqual('b', r.circular_bValue);
+      testing.expectEqual('b', r.circular_getFromB);
+      testing.expectEqual('a', r.circular_getFromA);
+
+      // import.meta.url resolves to the imported module's URL
+      testing.expectTrue(r.meta_url_endsWith);
+
+      // missing module surfaces FailedToLoad to the import() caller
+      testing.expectTrue(r.import_404_threw);
+    });
+  }
+</script>
