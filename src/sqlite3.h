@@ -1781,6 +1781,10 @@ SQLITE_API int sqlite3_db_config(sqlite3*, int op, ...);
 ** Every memory allocation request coming in through [sqlite3_malloc()]
 ** or [sqlite3_realloc()] first calls xRoundup.  If xRoundup returns 0,
 ** that causes the corresponding memory allocation to fail.
+** ^Size arguments to [sqlite3_malloc()] and [sqlite3_realloc()] must be
+** non-negative integers less than or equal to 0x7fffff00 (2147483392).
+** If the requested size is outside of this range, the memory allocation
+** will fail and xRoundup will not be called, preventing integer overflow.
 **
 ** The xInit method initializes the memory allocator.  For example,
 ** it might allocate any required mutexes or initialize internal data
