@@ -18,6 +18,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const lp = @import("lightpanda");
+const log = lp.log;
 
 /// Comptime CLI builder that generates a tagged union parser from a
 /// declarative command recipe. Each command becomes a union variant whose
@@ -355,22 +357,19 @@ pub fn Builder(comptime commands: anytype) type {
             };
             iter_args: while (args.next()) |option_name| {
                 inline for (options) |option| {
-                    // Match an option.
-                    const match = blk: {
-                        // We allow both `--my-option` and `--my_option` variants;
-                        // assuming given `option` struct prefer snake_case for `name`.
-                        const kebab_cased = comptime casing: {
-                            var output: [option.name.len]u8 = undefined;
-                            @memcpy(&output, option.name);
-                            std.mem.replaceScalar(u8, &output, '_', '-');
-                            break :casing output;
-                        };
-
-                        const match =
-                            std.mem.eql(u8, option_name, "--" ++ option.name) or
-                            std.mem.eql(u8, option_name, "--" ++ kebab_cased);
-                        break :blk match;
+                    // We allow both `--my-option` and `--my_option` variants;
+                    // assuming given `option` struct prefer snake_case for `name`.
+                    const kebab_cased = comptime casing: {
+                        var output: [option.name.len]u8 = undefined;
+                        @memcpy(&output, option.name);
+                        std.mem.replaceScalar(u8, &output, '_', '-');
+                        break :casing "--" ++ output;
                     };
+
+                    // Match an option.
+                    const match =
+                        std.mem.eql(u8, option_name, "--" ++ option.name) or
+                        std.mem.eql(u8, option_name, kebab_cased);
 
                     if (match) {
                         const T = option.type;
@@ -399,7 +398,15 @@ pub fn Builder(comptime commands: anytype) type {
                             switch (option_info) {
                                 .int => |int| {
                                     const Int = std.meta.Int(int.signedness, int.bits);
-                                    const v = try std.fmt.parseInt(Int, args.next() orelse return error.MissingArgument, 10);
+
+                                    const str = args.next() orelse return error.MissingArgument;
+                                    const v = std.fmt.parseInt(Int, str, 10) catch |err| {
+                                        switch (err) {
+                                            error.Overflow => log.fatal(.app, "range overflow", .{ .arg = kebab_cased, .value = str }),
+                                            error.InvalidCharacter => log.fatal(.app, "invalid character", .{ .arg = kebab_cased, .value = str }),
+                                        }
+                                        continue :iter_args;
+                                    };
 
                                     if (is_multiple) {
                                         // Push to ArrayList.
@@ -461,7 +468,10 @@ pub fn Builder(comptime commands: anytype) type {
                                             const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
 
                                             inline for (_struct.fields) |f| {
-                                                std.debug.assert(f.type == bool);
+                                                lp.assert(f.type == bool, "all fields of packed struct must be boolean", .{
+                                                    .option = option.name,
+                                                    .field = f.name,
+                                                });
 
                                                 if (std.mem.eql(u8, trimmed, @as([]const u8, f.name))) {
                                                     @field(@field(c, option.name), f.name) = true;
@@ -469,8 +479,8 @@ pub fn Builder(comptime commands: anytype) type {
                                                 }
                                             }
 
-                                            // Not equal to any of the fields.
-                                            return error.UnknownArgument;
+                                            // Invalid option choice.
+                                            log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = trimmed });
                                         }
                                     }
                                 },
@@ -480,8 +490,10 @@ pub fn Builder(comptime commands: anytype) type {
                                         inline else => T,
                                     };
 
-                                    const v = std.meta.stringToEnum(E, args.next() orelse return error.MissingArgument) orelse {
-                                        return error.UnknownArgument;
+                                    const str = args.next() orelse return error.MissingArgument;
+                                    const v = std.meta.stringToEnum(E, str) orelse {
+                                        log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = str });
+                                        continue :iter_args;
                                     };
 
                                     if (is_multiple) {
@@ -512,6 +524,12 @@ pub fn Builder(comptime commands: anytype) type {
 
                         continue :iter_args;
                     }
+                }
+
+                // Encountered an option we don't know of.
+                if (std.mem.startsWith(u8, option_name, "--")) {
+                    log.fatal(.app, "unknown argument", .{ .mode = command.name, .arg = option_name });
+                    return error.UnknownOption;
                 }
 
                 // Parse positional arg if provided; can be given out of order:
@@ -556,9 +574,6 @@ pub fn Builder(comptime commands: anytype) type {
                         },
                         inline else => @compileError("not supported"),
                     }
-                } else {
-                    // An option we don't know of.
-                    return error.UnknownOption;
                 }
             }
 
