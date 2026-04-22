@@ -24,7 +24,6 @@ const http = @import("../../network/http.zig");
 
 const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
-const Session = @import("../Session.zig");
 const HttpClient = @import("../HttpClient.zig");
 
 const Blob = @import("Blob.zig");
@@ -71,7 +70,7 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
     errdefer session.releaseArena(arena);
 
     const resolved_url = try URL.resolve(arena, exec.url.*, url, .{});
-    const self = try session.factory.eventTargetWithAllocator(arena, Worker{
+    const self = try frame._page.factory.eventTargetWithAllocator(arena, Worker{
         ._arena = arena,
         ._proto = undefined,
         ._frame = frame,
@@ -216,7 +215,6 @@ fn fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Tem
 
 fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Temp) !void {
     const frame = self._frame;
-    const session = frame._session;
     const target = self.asEventTarget();
     const on_error = self._on_error;
 
@@ -232,7 +230,7 @@ fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Te
         .filename = self._url,
         .bubbles = false,
         .cancelable = true,
-    }, session);
+    }, frame._page);
 
     try frame._event_manager.dispatchDirect(target, error_event.asEvent(), on_error, .{
         .context = "Worker.onerror",
@@ -354,7 +352,7 @@ const ReceiveMessageCallback = struct {
                 .data = .{ .string = @errorName(err) },
                 .bubbles = false,
                 .cancelable = false,
-            }, frame._session)).asEvent();
+            }, frame._page)).asEvent();
             try frame._event_manager.dispatchDirect(target, event, on_messageerror, .{ .context = "Worker.messageerror" });
             return null;
         };
@@ -371,7 +369,7 @@ const ReceiveMessageCallback = struct {
             .data = .{ .value = data },
             .bubbles = false,
             .cancelable = false,
-        }, frame._session)).asEvent();
+        }, frame._page)).asEvent();
 
         try frame._event_manager.dispatchDirect(target, event, on_message, .{ .context = "Worker.receiveMessage" });
 

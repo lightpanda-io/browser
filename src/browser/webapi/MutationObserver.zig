@@ -20,8 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
-const Session = @import("../Session.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
@@ -86,18 +86,18 @@ pub fn init(callback: js.Function.Temp, frame: *Frame) !*MutationObserver {
     return self;
 }
 
-pub fn deinit(self: *MutationObserver, session: *Session) void {
+pub fn deinit(self: *MutationObserver, page: *Page) void {
     for (self._pending_records.items) |record| {
         // These were never handed to v8, they do not have a corresponding
         // FinalizerCallback. We 100% own them.
-        record.deinit(session);
+        record.deinit(page);
     }
     self._callback.release();
-    session.releaseArena(self._arena);
+    page.releaseArena(self._arena);
 }
 
-pub fn releaseRef(self: *MutationObserver, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *MutationObserver, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *MutationObserver) void {
@@ -178,7 +178,7 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
 
 pub fn disconnect(self: *MutationObserver, frame: *Frame) void {
     for (self._pending_records.items) |record| {
-        record.deinit(frame._session);
+        record.deinit(frame._page);
     }
     self._pending_records.clearRetainingCapacity();
 
@@ -375,11 +375,11 @@ pub const MutationRecord = struct {
         characterData,
     };
 
-    pub fn deinit(self: *MutationRecord, session: *Session) void {
+    pub fn deinit(self: *MutationRecord, session: *Page) void {
         session.releaseArena(self._arena);
     }
 
-    pub fn releaseRef(self: *MutationRecord, session: *Session) void {
+    pub fn releaseRef(self: *MutationRecord, session: *Page) void {
         self._rc.release(self, session);
     }
 

@@ -726,7 +726,7 @@ test "SemanticTree backendDOMNodeId" {
 
     var frame = try testing.pageTest("cdp/registry1.html", .{});
     defer testing.reset();
-    defer frame._session.removeFrame();
+    defer frame._session.removePage();
 
     const st: Self = .{
         .dom_node = frame.window._document.asNode(),
@@ -750,7 +750,7 @@ test "SemanticTree max_depth" {
 
     var frame = try testing.pageTest("cdp/registry1.html", .{});
     defer testing.reset();
-    defer frame._session.removeFrame();
+    defer frame._session.removePage();
 
     const st: Self = .{
         .dom_node = frame.window._document.asNode(),

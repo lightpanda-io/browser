@@ -24,6 +24,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const JS = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 const Factory = @import("../Factory.zig");
 const Session = @import("../Session.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
@@ -48,6 +49,7 @@ const WorkerGlobalScope = @This();
 // can access these the same for a Page of a WGS.
 // These fields represent the "Page"-like component of the WGS
 _session: *Session,
+_page: *Page,
 _factory: *Factory,
 _identity: JS.Identity = .{},
 arena: Allocator,
@@ -83,12 +85,12 @@ _on_messageerror: ?JS.Function.Global = null,
 pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
     const arena = worker._arena;
     const parent = worker._frame;
-    const session = parent._session;
-    const factory = &session.factory;
+    const session = worker._frame._session;
 
     const call_arena = try session.getArena(.small, "WorkerGlobalScope.call_arena");
     errdefer session.releaseArena(call_arena);
 
+    const factory = parent._factory;
     const self = try factory.eventTargetWithAllocator(arena, WorkerGlobalScope{
         .url = url,
         .arena = arena,
@@ -96,6 +98,7 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
         .js = undefined,
         .call_arena = call_arena,
         ._session = session,
+        ._page = parent._page,
         ._identity = .{},
         ._proto = undefined,
         ._factory = factory,
@@ -115,13 +118,13 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
 
 pub fn deinit(self: *WorkerGlobalScope) void {
     self._identity.deinit();
-    const session = self._session;
+    const page = self._page;
     var it = self._blob_urls.valueIterator();
     while (it.next()) |blob| {
-        blob.*.releaseRef(session);
+        blob.*.releaseRef(page);
     }
-    session.browser.env.destroyContext(self.js);
-    session.releaseArena(self.call_arena);
+    page.session.browser.env.destroyContext(self.js);
+    page.releaseArena(self.call_arena);
 }
 
 pub fn base(self: *const WorkerGlobalScope) [:0]const u8 {
@@ -148,7 +151,7 @@ pub fn dispatch(
         target,
         event,
         handler,
-        self._session,
+        self._page,
         opts,
     );
 }
@@ -282,7 +285,7 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rej
         const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
             .reason = if (rejection.reason()) |r| try r.temp() else null,
             .promise = try rejection.promise().temp(),
-        }, self._session)).asEvent();
+        }, self._page)).asEvent();
         try self.dispatch(target, event, attribute_callback, .{});
     }
 }
@@ -299,7 +302,7 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
         .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
-    }, self._session);
+    }, self._page);
 
     // Invoke onerror callback if set (per WHATWG spec, this is called
     // with 5 arguments: message, source, lineno, colno, error)
@@ -392,7 +395,7 @@ const ReceiveMessageCallback = struct {
             const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
                 .bubbles = false,
                 .cancelable = false,
-            }, worker_scope._session)).asEvent();
+            }, worker_scope._page)).asEvent();
             try worker_scope.dispatch(target, event, on_messageerror, .{});
             return null;
         }
@@ -409,7 +412,7 @@ const ReceiveMessageCallback = struct {
             .data = .{ .value = self.data.? },
             .bubbles = false,
             .cancelable = false,
-        }, worker_scope._session)).asEvent();
+        }, worker_scope._page)).asEvent();
         try worker_scope.dispatch(target, event, on_message, .{});
         return null;
     }

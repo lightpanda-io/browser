@@ -166,7 +166,7 @@ pub fn load(self: *Media, frame: *Frame) !void {
 }
 
 fn dispatchEvent(self: *Media, name: []const u8, frame: *Frame) !void {
-    const event = try Event.init(name, .{ .bubbles = false, .cancelable = false }, frame);
+    const event = try Event.init(name, .{ .bubbles = false, .cancelable = false }, frame._page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 

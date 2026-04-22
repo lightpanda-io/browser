@@ -274,7 +274,7 @@ pub fn revokeObjectURL(url: []const u8, exec: *const Execution) void {
     switch (exec.context.global) {
         inline else => |g| {
             if (g._blob_urls.fetchRemove(url)) |entry| {
-                entry.value.releaseRef(g._session);
+                entry.value.releaseRef(g._page);
             }
         },
     }

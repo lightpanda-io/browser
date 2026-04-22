@@ -275,9 +275,9 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     const context_id = self.context_id;
     self.context_id = context_id + 1;
 
-    const session = global._session;
-    const origin = try session.getOrCreateOrigin(null);
-    errdefer session.releaseOrigin(origin);
+    const page = global._page;
+    const origin = try page.getOrCreateOrigin(null);
+    errdefer page.releaseOrigin(origin);
 
     const context = try context_arena.create(Context);
     context.* = .{
@@ -285,7 +285,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .global = if (comptime is_frame) .{ .frame = global } else .{ .worker = global },
         .origin = origin,
         .id = context_id,
-        .session = session,
+        .page = page,
         .isolate = isolate,
         .arena = context_arena,
         .handle = context_global,
@@ -558,8 +558,8 @@ const PrivateSymbols = struct {
 const testing = @import("../../testing.zig");
 test "Env: Worker context " {
     const session = testing.test_session;
-    const frame = try session.createFrame();
-    defer session.removeFrame();
+    const frame = try session.createPage();
+    defer session.removePage();
 
     const worker = try @import("../webapi/Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", &frame.js.execution);
 
@@ -573,8 +573,8 @@ test "Env: Worker context " {
 
 test "Env: Frame context" {
     const session = testing.test_session;
-    const frame = try session.createFrame();
-    defer session.removeFrame();
+    const frame = try session.createPage();
+    defer session.removePage();
 
     // Frame already has a context created, use it directly
     const ctx = frame.js;

@@ -20,8 +20,8 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 
+const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
-const Session = @import("../Session.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
@@ -110,18 +110,18 @@ pub fn init(callback: js.Function.Temp, options: ?ObserverInit, frame: *Frame) !
     return self;
 }
 
-pub fn deinit(self: *IntersectionObserver, session: *Session) void {
+pub fn deinit(self: *IntersectionObserver, page: *Page) void {
     self._callback.release();
     for (self._pending_entries.items) |entry| {
         // These were never handed to v8, they do not have a corresponding
         // FinalizerCallback. We 100% own them.
-        entry.deinit(session);
+        entry.deinit(page);
     }
-    session.releaseArena(self._arena);
+    page.releaseArena(self._arena);
 }
 
-pub fn releaseRef(self: *IntersectionObserver, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *IntersectionObserver, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *IntersectionObserver) void {
@@ -164,7 +164,7 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) v
             while (j < self._pending_entries.items.len) {
                 if (self._pending_entries.items[j]._target == target) {
                     const entry = self._pending_entries.swapRemove(j);
-                    entry.deinit(frame._session);
+                    entry.deinit(frame._page);
                 } else {
                     j += 1;
                 }
@@ -180,7 +180,7 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) v
 
 pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
     for (self._pending_entries.items) |entry| {
-        entry.deinit(frame._session);
+        entry.deinit(frame._page);
     }
     self._pending_entries.clearRetainingCapacity();
     self._previous_states.clearRetainingCapacity();
@@ -330,12 +330,12 @@ pub const IntersectionObserverEntry = struct {
     _intersection_ratio: f64,
     _is_intersecting: bool,
 
-    pub fn deinit(self: *IntersectionObserverEntry, session: *Session) void {
-        session.releaseArena(self._arena);
+    pub fn deinit(self: *IntersectionObserverEntry, page: *Page) void {
+        page.releaseArena(self._arena);
     }
 
-    pub fn releaseRef(self: *IntersectionObserverEntry, session: *Session) void {
-        self._rc.release(self, session);
+    pub fn releaseRef(self: *IntersectionObserverEntry, page: *Page) void {
+        self._rc.release(self, page);
     }
 
     pub fn acquireRef(self: *IntersectionObserverEntry) void {

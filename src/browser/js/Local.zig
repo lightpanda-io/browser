@@ -20,7 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const string = @import("../../string.zig");
 
-const Session = @import("../Session.zig");
+const Page = @import("../Page.zig");
+const FinalizerCallback = @import("../Session.zig").FinalizerCallback;
 
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
@@ -270,19 +271,21 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
             if (resolved.finalizer) |finalizer| {
                 const finalizer_ptr_id = finalizer.ptr_id;
 
-                const session = ctx.session;
-                const finalizer_gop = try session.finalizer_callbacks.getOrPut(session.frame_arena, finalizer_ptr_id);
+                const page = ctx.page;
+                const session = page.session;
+                const finalizer_gop = try page.finalizer_callbacks.getOrPut(page.frame_arena, finalizer_ptr_id);
                 if (finalizer_gop.found_existing == false) {
                     // This is the first context (and very likely only one) to
                     // see this Zig instance. We need to create the FinalizerCallback
-                    // so that we can cleanup on frame reset if v8 doesn't finalize.
-                    errdefer _ = session.finalizer_callbacks.remove(finalizer_ptr_id);
+                    // so that we can cleanup on Page teardown if v8 doesn't finalize.
+                    errdefer _ = page.finalizer_callbacks.remove(finalizer_ptr_id);
                     finalizer.acquire_ref(finalizer_ptr_id);
                     finalizer_gop.value_ptr.* = try self.createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.release_ref_from_zig);
                 }
                 const fc = finalizer_gop.value_ptr.*;
                 const identity_finalizer = try session.fc_identity_pool.create();
                 identity_finalizer.* = .{
+                    .page = page,
                     .session = session,
                     .identity = ctx.identity,
                     .finalizer_ptr_id = finalizer_ptr_id,
@@ -1178,7 +1181,7 @@ const Resolved = struct {
         ptr_id: usize,
         acquire_ref: *const fn (ptr_id: usize) void,
         release_ref: *const fn (handle: ?*const v8.WeakCallbackInfo) callconv(.c) void,
-        release_ref_from_zig: *const fn (ptr_id: usize, session: *Session) void,
+        release_ref_from_zig: *const fn (ptr_id: usize, page: *Page) void,
     };
 };
 pub fn resolveValue(value: anytype) Resolved {
@@ -1224,12 +1227,12 @@ fn resolveT(comptime T: type, value: *T) Resolved {
 
                 fn releaseRef(handle: ?*const v8.WeakCallbackInfo) callconv(.c) void {
                     const ptr = v8.v8__WeakCallbackInfo__GetParameter(handle.?).?;
-                    const identity_finalizer: *Session.FinalizerCallback.Identity = @ptrCast(@alignCast(ptr));
+                    const identity_finalizer: *FinalizerCallback.Identity = @ptrCast(@alignCast(ptr));
 
                     // Identity is allocated from pool, so it's valid even after frame reset.
-                    const session = identity_finalizer.session;
+                    const page = identity_finalizer.page;
                     const resolved_ptr_id = identity_finalizer.resolved_ptr_id;
-                    defer session.fc_identity_pool.destroy(identity_finalizer);
+                    defer page.session.fc_identity_pool.destroy(identity_finalizer);
 
                     // Always clean up the identity map entry
                     if (identity_finalizer.identity.identity_map.fetchRemove(resolved_ptr_id)) |kv| {
@@ -1237,28 +1240,29 @@ fn resolveT(comptime T: type, value: *T) Resolved {
                         v8.v8__Global__Reset(&global);
                     }
 
-                    // If done, FC was already cleaned up during frame reset. The
-                    // finalizer_ptr_id may have been reused for a new object, so
-                    // we must not look it up in the map.
+                    // If done, FC was already cleaned up during Page teardown.
+                    // The finalizer_ptr_id may have been reused for a new object,
+                    // so we must not look it up in the map. It's also unsafe to
+                    // dereference identity_finalizer.page after done is true.
                     if (identity_finalizer.done) return;
 
                     const finalizer_ptr_id = identity_finalizer.finalizer_ptr_id;
-                    const fc = session.finalizer_callbacks.get(finalizer_ptr_id) orelse return;
+                    const fc = page.finalizer_callbacks.get(finalizer_ptr_id) orelse return;
 
                     const identity_count = fc.identity_count;
                     if (identity_count == 1) {
                         // Last identity - clean up the FC.
                         // Remove from map before releaseRef to prevent address reuse issues.
-                        _ = session.finalizer_callbacks.remove(finalizer_ptr_id);
-                        FT.releaseRef(@ptrFromInt(finalizer_ptr_id), session);
-                        session.releaseArena(fc.arena);
+                        _ = page.finalizer_callbacks.remove(finalizer_ptr_id);
+                        FT.releaseRef(@ptrFromInt(finalizer_ptr_id), page);
+                        page.releaseArena(fc.arena);
                     } else {
                         fc.identity_count = identity_count - 1;
                     }
                 }
 
-                fn releaseRefFromZig(ptr_id: usize, session: *Session) void {
-                    FT.releaseRef(@ptrFromInt(ptr_id), session);
+                fn releaseRefFromZig(ptr_id: usize, page: *Page) void {
+                    FT.releaseRef(@ptrFromInt(ptr_id), page);
                 }
             };
             break :blk .{
@@ -1524,17 +1528,17 @@ fn createFinalizerCallback(
     // The most specific value where finalizers are defined
     // What actually gets acquired / released / deinit
     finalizer_ptr_id: usize,
-    release_ref: *const fn (ptr_id: usize, session: *Session) void,
-) !*Session.FinalizerCallback {
-    const session = self.ctx.session;
+    release_ref: *const fn (ptr_id: usize, page: *Page) void,
+) !*FinalizerCallback {
+    const page = self.ctx.page;
 
-    const arena = try session.getArena(.tiny, "FinalizerCallback");
-    errdefer session.releaseArena(arena);
+    const arena = try page.getArena(.tiny, "FinalizerCallback");
+    errdefer page.releaseArena(arena);
 
-    const fc = try arena.create(Session.FinalizerCallback);
+    const fc = try arena.create(FinalizerCallback);
     fc.* = .{
+        .page = page,
         .arena = arena,
-        .session = session,
         .release_ref = release_ref,
         .resolved_ptr_id = resolved_ptr_id,
         .finalizer_ptr_id = finalizer_ptr_id,

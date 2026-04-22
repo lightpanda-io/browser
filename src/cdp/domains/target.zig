@@ -171,12 +171,12 @@ fn createTarget(cmd: *CDP.Command) !void {
     }
 
     // if target_id is null, we should never have a blank frame
-    lp.assert(bc.session.frame == null, "CDP.target.createTarget not null page", .{});
+    lp.assert(bc.session.page == null, "CDP.target.createTarget not null page", .{});
 
     // if target_id is null, we should never have a session_id
     lp.assert(bc.session_id == null, "CDP.target.createTarget not null session_id", .{});
 
-    const frame = try bc.session.createFrame();
+    const frame = try bc.session.createPage();
 
     // the target_id == the frame_id of the "root" frame
     const frame_id = id.toFrameId(frame._frame_id);
@@ -284,7 +284,7 @@ fn closeTarget(cmd: *CDP.Command) !void {
     }
 
     // can't be null if we have a target_id
-    lp.assert(bc.session.frame != null, "CDP.target.closeTarget null frame", .{});
+    lp.assert(bc.session.page != null, "CDP.target.closeTarget null frame", .{});
 
     try cmd.sendResult(.{ .success = true }, .{ .include_session_id = false });
 
@@ -305,7 +305,7 @@ fn closeTarget(cmd: *CDP.Command) !void {
         bc.session_id = null;
     }
 
-    bc.session.removeFrame();
+    bc.session.removePage();
     for (bc.isolated_worlds.items) |world| {
         world.deinit();
     }
@@ -626,7 +626,7 @@ test "cdp.target: closeTarget" {
     }
 
     // pretend we createdTarget first
-    _ = try bc.session.createFrame();
+    _ = try bc.session.createPage();
     bc.target_id = "TID-000000000A".*;
     {
         try ctx.processMessage(.{ .id = 10, .method = "Target.closeTarget", .params = .{ .targetId = "TID-8" } });
@@ -636,7 +636,7 @@ test "cdp.target: closeTarget" {
     {
         try ctx.processMessage(.{ .id = 11, .method = "Target.closeTarget", .params = .{ .targetId = "TID-000000000A" } });
         try ctx.expectSentResult(.{ .success = true }, .{ .id = 11 });
-        try testing.expectEqual(null, bc.session.frame);
+        try testing.expectEqual(null, bc.session.page);
         try testing.expectEqual(null, bc.target_id);
     }
 }
@@ -657,7 +657,7 @@ test "cdp.target: attachToTarget" {
     }
 
     // pretend we createdTarget first
-    _ = try bc.session.createFrame();
+    _ = try bc.session.createPage();
     bc.target_id = "TID-000000000B".*;
     {
         try ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-8" } });
@@ -701,7 +701,7 @@ test "cdp.target: getTargetInfo" {
     }
 
     // pretend we createdTarget first
-    _ = try bc.session.createFrame();
+    _ = try bc.session.createPage();
     bc.target_id = "TID-000000000C".*;
     {
         try ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-8" } });

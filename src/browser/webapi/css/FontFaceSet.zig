@@ -18,12 +18,15 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
-const Session = @import("../../Session.zig");
-const FontFace = @import("FontFace.zig");
-const EventTarget = @import("../EventTarget.zig");
+
 const Event = @import("../Event.zig");
+const EventTarget = @import("../EventTarget.zig");
+
+const FontFace = @import("FontFace.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -43,12 +46,12 @@ pub fn init(frame: *Frame) !*FontFaceSet {
     });
 }
 
-pub fn deinit(self: *FontFaceSet, session: *Session) void {
-    session.releaseArena(self._arena);
+pub fn deinit(self: *FontFaceSet, page: *Page) void {
+    page.releaseArena(self._arena);
 }
 
-pub fn releaseRef(self: *FontFaceSet, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *FontFaceSet, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *FontFaceSet) void {
@@ -80,13 +83,13 @@ pub fn load(self: *FontFaceSet, font: []const u8, frame: *Frame) !js.Promise {
     // Dispatch loading event
     const target = self.asEventTarget();
     if (frame._event_manager.hasDirectListeners(target, "loading", null)) {
-        const event = try Event.initTrusted(comptime .wrap("loading"), .{}, frame._session);
+        const event = try Event.initTrusted(comptime .wrap("loading"), .{}, frame._page);
         try frame._event_manager.dispatchDirect(target, event, null, .{ .context = "load font face set" });
     }
 
     // Dispatch loadingdone event
     if (frame._event_manager.hasDirectListeners(target, "loadingdone", null)) {
-        const event = try Event.initTrusted(comptime .wrap("loadingdone"), .{}, frame._session);
+        const event = try Event.initTrusted(comptime .wrap("loadingdone"), .{}, frame._page);
         try frame._event_manager.dispatchDirect(target, event, null, .{ .context = "load font face set" });
     }
 

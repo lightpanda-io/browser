@@ -837,7 +837,7 @@ const IsolatedWorld = struct {
     // The isolate world must share at least some of the state with the related frame, specifically the DocumentHTML
     // (assuming grantUniversalAccess will be set to True!).
     // We just created the world and the frame. The frame's state lives in the session, but is update on navigation.
-    // This also means this pointer becomes invalid after removeFrame until a new frame is created.
+    // This also means this pointer becomes invalid after removePage until a new frame is created.
     // Currently we have only 1 frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, frame: *Frame) !*js.Context {
         if (self.context == null) {

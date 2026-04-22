@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Session = @import("../../Session.zig");
+const Page = @import("../../Page.zig");
 const HttpClient = @import("../../HttpClient.zig");
 
 const Blob = @import("../Blob.zig");
@@ -72,7 +72,7 @@ pub const BodyInit = union(enum) {
 };
 
 pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Response {
-    const session = exec.context.session;
+    const session = exec.context.page.session;
     const arena = try session.getArena(.large, "Response");
     errdefer session.releaseArena(arena);
 
@@ -109,16 +109,16 @@ pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Respon
     return self;
 }
 
-pub fn deinit(self: *Response, session: *Session) void {
+pub fn deinit(self: *Response, page: *Page) void {
     if (self._http_response) |resp| {
         resp.abort(error.Abort);
         self._http_response = null;
     }
-    session.releaseArena(self._arena);
+    page.releaseArena(self._arena);
 }
 
-pub fn releaseRef(self: *Response, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *Response, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *Response) void {
@@ -321,7 +321,7 @@ pub fn blob(self: *const Response, exec: *const Execution) !js.Promise {
         .stream => return local.rejectPromise(.{ .type_error = "Cannot read blob from stream body" }),
     };
     const content_type = try self._headers.get("content-type", exec) orelse "";
-    const b = try Blob.initFromBytes(body, content_type, true, exec.context.session);
+    const b = try Blob.initFromBytes(body, content_type, true, exec.context.page);
     return local.resolvePromise(b);
 }
 
@@ -336,7 +336,7 @@ pub fn bytes(self: *const Response, exec: *const Execution) !js.Promise {
 }
 
 pub fn clone(self: *const Response, exec: *const Execution) !*Response {
-    const session = exec.context.session;
+    const session = exec.context.page.session;
     const body_len = switch (self._body) {
         .bytes => |b| b.len,
         .empty => 0,

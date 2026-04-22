@@ -31,7 +31,7 @@ pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]const []con
     var links: std.ArrayList([]const u8) = .empty;
 
     if (Selector.querySelectorAll(root, "a[href]", frame)) |list| {
-        defer list.deinit(frame._session);
+        defer list.deinit(frame._page);
 
         for (list._nodes) |node| {
             if (node.is(Element.Html.Anchor)) |anchor| {

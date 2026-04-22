@@ -18,10 +18,12 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
+
 const html5ever = @import("../../parser/html5ever.zig");
 
-const Session = @import("../../Session.zig");
 const Allocator = std.mem.Allocator;
 
 const TextDecoder = @This();
@@ -41,7 +43,7 @@ const InitOpts = struct {
     ignoreBOM: bool = false,
 };
 
-pub fn init(label_: ?[]const u8, opts_: ?InitOpts, session: *Session) !*TextDecoder {
+pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*TextDecoder {
     const label = label_ orelse "utf-8";
 
     const info = html5ever.encoding_for_label(label.ptr, label.len);
@@ -55,8 +57,8 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, session: *Session) !*TextDeco
         return error.RangeError;
     }
 
-    const arena = try session.getArena(.large, "TextDecoder");
-    errdefer session.releaseArena(arena);
+    const arena = try page.getArena(.large, "TextDecoder");
+    errdefer page.releaseArena(arena);
 
     const opts = opts_ orelse InitOpts{};
     const self = try arena.create(TextDecoder);
@@ -73,15 +75,15 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, session: *Session) !*TextDeco
     return self;
 }
 
-pub fn deinit(self: *TextDecoder, session: *Session) void {
+pub fn deinit(self: *TextDecoder, page: *Page) void {
     if (self._decoder) |decoder| {
         html5ever.encoding_decoder_free(decoder);
     }
-    session.releaseArena(self._arena);
+    page.releaseArena(self._arena);
 }
 
-pub fn releaseRef(self: *TextDecoder, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *TextDecoder, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *TextDecoder) void {

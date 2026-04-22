@@ -93,7 +93,7 @@ const TestContext = struct {
             if (bc.target_id == null) {
                 bc.target_id = "TID-000000000Z".*;
             }
-            const frame = try bc.session.createFrame();
+            const frame = try bc.session.createPage();
             const full_url = try std.fmt.allocPrintSentinel(
                 base.arena_allocator,
                 "http://127.0.0.1:9582/src/browser/tests/{s}",
@@ -204,7 +204,7 @@ const TestContext = struct {
 
             if (self.cdp_) |*cdp__| {
                 if (cdp__.browser_context) |*bc| {
-                    if (bc.session.frame != null) {
+                    if (bc.session.page != null) {
                         var runner = try bc.session.runner(.{});
                         _ = try runner.tick(.{ .ms = 1000 });
                     }

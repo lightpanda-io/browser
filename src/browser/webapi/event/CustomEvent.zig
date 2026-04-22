@@ -20,8 +20,9 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
-const Session = @import("../../Session.zig");
+
 const Event = @import("../Event.zig");
 
 const String = lp.String;
@@ -39,13 +40,13 @@ const CustomEventOptions = struct {
 
 const Options = Event.inheritOptions(CustomEvent, CustomEventOptions);
 
-pub fn init(typ: []const u8, opts_: ?Options, frame: *Frame) !*CustomEvent {
-    const arena = try frame.getArena(.tiny, "CustomEvent");
-    errdefer frame.releaseArena(arena);
+pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
+    const arena = try page.getArena(.tiny, "CustomEvent");
+    errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 
     const opts = opts_ orelse Options{};
-    const event = try frame._factory.event(
+    const event = try page.factory.event(
         arena,
         type_string,
         CustomEvent{
@@ -75,20 +76,21 @@ pub fn initCustomEvent(
     self._detail = detail_;
 }
 
-pub fn deinit(self: *CustomEvent, session: *Session) void {
+pub fn deinit(self: *CustomEvent, page: *Page) void {
     if (self._detail) |d| {
         d.release();
     }
-    self._proto.deinit(session);
+    self._proto.deinit(page);
+}
+
+pub fn releaseRef(self: *CustomEvent, page: *Page) void {
+    self._proto._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *CustomEvent) void {
     self._proto.acquireRef();
 }
 
-pub fn releaseRef(self: *CustomEvent, session: *Session) void {
-    self._proto._rc.release(self, session);
-}
 
 pub fn asEvent(self: *CustomEvent) *Event {
     return self._proto;

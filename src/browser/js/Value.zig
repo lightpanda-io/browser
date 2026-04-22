@@ -398,7 +398,7 @@ fn _persist(self: *const Value, comptime is_global: bool) !(if (is_global) Globa
         return .{ .handle = global, .temps = {} };
     }
     try ctx.trackTemp(global);
-    return .{ .handle = global, .temps = &ctx.session.temps };
+    return .{ .handle = global, .temps = &ctx.page.temps };
 }
 
 pub fn toZig(self: Value, comptime T: type) !T {
