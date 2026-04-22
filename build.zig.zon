@@ -30,13 +30,17 @@
             .url = "https://github.com/curl/curl/releases/download/curl-8_18_0/curl-8.18.0.tar.gz",
             .hash = "N-V-__8AALp9QAGn6CCHZ6fK_FfMyGtG824LSHYHHasM3w-y",
         },
-        .zenai = .{
-            .url = "git+https://github.com/lightpanda-io/zenai.git#c1f5841d13c67ab401be06ddd13dbff8f4cc4d25",
-            .hash = "zenai-0.0.0-iOY_VB4aAwBrp27u8iFroHFXjNcUjMmZ4dkdr4Uel7rG",
+        .sqlite3 = .{
+            .url = "https://github.com/allyourcodebase/sqlite3/archive/8f840560eae88ab66668c6827c64ffbd0d74ef37.tar.gz",
+            .hash = "sqlite3-3.51.0-DMxLWssOAABZ8cAvU_LfBIbp0kZjm824PU8sSLXpEDdr",
         },
         .linenoise = .{
             .url = "https://github.com/antirez/linenoise/archive/refs/tags/2.0.tar.gz",
             .hash = "N-V-__8AAJ4HAgCX79UDBfNwhqAqUVoGC44ib6UYa18q6oa_",
+        },
+        .zenai = .{
+            .url = "git+https://github.com/lightpanda-io/zenai.git#c1f5841d13c67ab401be06ddd13dbff8f4cc4d25",
+            .hash = "zenai-0.0.0-iOY_VB4aAwBrp27u8iFroHFXjNcUjMmZ4dkdr4Uel7rG",
         },
     },
     .paths = .{""},

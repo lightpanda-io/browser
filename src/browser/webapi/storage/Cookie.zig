@@ -316,7 +316,15 @@ pub fn parseDomain(arena: Allocator, url_: ?[:0]const u8, explicit_domain: ?[]co
             }
 
             if (encoded_host) |host| {
-                if (std.mem.endsWith(u8, host, owned_domain[1..]) == false) {
+                // The host must match the requested domain exactly or as a
+                // proper subdomain. A raw suffix check would incorrectly
+                // accept "attackerexample.com" as matching "example.com",
+                // letting a lookalike origin overwrite cookies on the victim
+                // domain. `owned_domain` always has a leading dot, so
+                // endsWith against it enforces the label boundary.
+                const exact_match = std.mem.eql(u8, host, owned_domain[1..]);
+                const subdomain_match = std.mem.endsWith(u8, host, owned_domain);
+                if (exact_match == false and subdomain_match == false) {
                     return error.InvalidDomain;
                 }
             }
@@ -1121,6 +1129,11 @@ test "Cookie: parse domain" {
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.lightpanda.io");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.lightpanda.com");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.example.com");
+
+    try expectError(error.InvalidDomain, "http://attackerexample.com/", "b;domain=example.com");
+    try expectError(error.InvalidDomain, "http://attackerexample.com/", "b;domain=.example.com");
+    try expectError(error.InvalidDomain, "http://xyzlightpanda.io/", "b;domain=lightpanda.io");
+    try expectError(error.InvalidDomain, "http://notlocalhost/", "b;domain=localhost");
 
     // Public suffixes should be rejected (test PSL entries: "gov.uk", "api.gov.uk")
     try expectError(error.InvalidDomain, "http://example.gov.uk/", "b;domain=gov.uk");
