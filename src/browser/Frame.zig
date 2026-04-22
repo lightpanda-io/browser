@@ -35,6 +35,7 @@ const URL = @import("URL.zig");
 const Blob = @import("webapi/Blob.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
+const EventTarget = @import("webapi/EventTarget.zig");
 const CData = @import("webapi/CData.zig");
 const Element = @import("webapi/Element.zig");
 const HtmlElement = @import("webapi/element/Html.zig");
@@ -806,7 +807,7 @@ pub fn documentIsLoaded(self: *Frame) void {
 }
 
 pub fn _documentIsLoaded(self: *Frame) !void {
-    const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self);
+    const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self._session);
     try self._event_manager.dispatch(
         self.document.asEventTarget(),
         event,
@@ -833,7 +834,7 @@ pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame) void {
     defer entered.exit();
 
     blk: {
-        const event = Event.initTrusted(comptime .wrap("load"), .{}, self) catch |err| {
+        const event = Event.initTrusted(comptime .wrap("load"), .{}, self._session) catch |err| {
             log.err(.frame, "iframe event init", .{ .err = err, .url = iframe._src });
             break :blk;
         };
@@ -887,7 +888,7 @@ fn _documentIsComplete(self: *Frame) !void {
     // Dispatch window.load event.
     const window_target = self.window.asEventTarget();
     if (self._event_manager.hasDirectListeners(window_target, "load", self.window._on_load)) {
-        const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
+        const event = try Event.initTrusted(comptime .wrap("load"), .{}, self._session);
         // This event is weird, it's dispatched directly on the window, but
         // with the document as the target.
         event._target = self.document.asEventTarget();
@@ -1467,7 +1468,7 @@ pub fn dispatchLoad(self: *Frame) !void {
 
     for (to_process.items) |html_element| {
         if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, self)) {
-            const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
+            const event = try Event.initTrusted(comptime .wrap("load"), .{}, self._session);
             try self._event_manager.dispatch(html_element.asEventTarget(), event);
         }
     }
@@ -1578,7 +1579,7 @@ pub fn deliverSlotchangeEvents(self: *Frame) void {
     self._slots_pending_slotchange.clearRetainingCapacity();
 
     for (slots) |slot| {
-        const event = Event.initTrusted(comptime .wrap("slotchange"), .{ .bubbles = true }, self) catch |err| {
+        const event = Event.initTrusted(comptime .wrap("slotchange"), .{ .bubbles = true }, self._session) catch |err| {
             log.err(.frame, "deliverSlotchange.init", .{ .err = err, .type = self._type, .url = self.url });
             continue;
         };
@@ -2602,6 +2603,19 @@ pub fn dupeString(self: *Frame, value: []const u8) ![]const u8 {
         return v;
     }
     return self.arena.dupe(u8, value);
+}
+
+// Direct (non-propagating) dispatch of an event. Mirrors WorkerGlobalScope.dispatch
+// so worker-compatible APIs can uniformly call `global.dispatch(...)` across both
+// Frame and Worker contexts.
+pub fn dispatch(
+    self: *Frame,
+    target: *EventTarget,
+    event: *Event,
+    handler: anytype,
+    comptime opts: EventManager.DispatchDirectOptions,
+) !void {
+    return self._event_manager.dispatchDirect(target, event, handler, opts);
 }
 
 pub fn dupeSSO(self: *Frame, value: []const u8) !String {

@@ -933,10 +933,10 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/streams/WritableStreamDefaultController.zig"),
     @import("../webapi/encoding/TextEncoderStream.zig"),
     @import("../webapi/encoding/TextDecoderStream.zig"),
-    // @import("../webapi/URL.zig"),
+    @import("../webapi/AbortSignal.zig"),
+    @import("../webapi/AbortController.zig"),
+    @import("../webapi/URL.zig"),
     // @import("../webapi/Performance.zig"),
-    // @import("../webapi/AbortSignal.zig"),
-    // @import("../webapi/AbortController.zig"),
 });
 
 // Master list of ALL JS APIs across all contexts.

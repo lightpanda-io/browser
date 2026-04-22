@@ -26,10 +26,13 @@
 //! whether it's a Page context or a Worker context.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const Context = @import("Context.zig");
 const Scheduler = @import("Scheduler.zig");
 const Factory = @import("../Factory.zig");
 
+const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 const Execution = @This();
@@ -52,4 +55,11 @@ charset: *[]const u8,
 // Returns the current base URL of the global scope.
 pub fn base(self: *const Execution) [:0]const u8 {
     return self.context.global.base();
+}
+
+pub fn dupeString(self: *const Execution, value: []const u8) ![]const u8 {
+    if (String.intern(value)) |v| {
+        return v;
+    }
+    return self.arena.dupe(u8, value);
 }

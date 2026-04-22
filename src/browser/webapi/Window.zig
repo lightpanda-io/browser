@@ -538,7 +538,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
                     return null;
                 }
 
-                const event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, p);
+                const event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, p._session);
                 try p._event_manager.dispatch(p.document.asEventTarget(), event);
 
                 pos.state = .end;
@@ -565,7 +565,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
                     .end => {},
                     .done => return null,
                 }
-                const event = try Event.initTrusted(comptime .wrap("scrollend"), .{ .bubbles = true }, p);
+                const event = try Event.initTrusted(comptime .wrap("scrollend"), .{ .bubbles = true }, p._session);
                 try p._event_manager.dispatch(p.document.asEventTarget(), event);
 
                 pos.state = .done;

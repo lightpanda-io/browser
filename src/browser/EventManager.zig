@@ -124,7 +124,7 @@ pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, co
 // property is just a shortcut for calling addEventListener, but they are distinct.
 // An event set via property cannot be removed by removeEventListener. If you
 // set both the property and add a listener, they both execute.
-const DispatchDirectOptions = EventManagerBase.DispatchDirectOptions;
+pub const DispatchDirectOptions = EventManagerBase.DispatchDirectOptions;
 
 // Direct dispatch for non-DOM targets (Window, XHR, AbortSignal) or DOM nodes with
 // property handlers. No propagation - just calls the handler and registered listeners.
@@ -617,7 +617,7 @@ const ActivationState = struct {
         const event = try Event.initTrusted(comptime .wrap(typ), .{
             .bubbles = true,
             .cancelable = false,
-        }, frame);
+        }, frame._session);
 
         const target = input.asElement().asEventTarget();
         try frame._event_manager.dispatch(target, event);
