@@ -91,7 +91,6 @@ pub fn acquireRef(self: *CustomEvent) void {
     self._proto.acquireRef();
 }
 
-
 pub fn asEvent(self: *CustomEvent) *Event {
     return self._proto;
 }
