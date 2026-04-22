@@ -36,6 +36,22 @@
             Wrap
             <input type="text" id="wrapped-input">
         </label>
+
+        <!-- CSS-hidden checkbox with visible styled label (toggle switch pattern) -->
+        <input type="checkbox" id="toggle-switch" class="display-none" checked>
+        <label for="toggle-switch" id="toggle-label">Enable feature</label>
+
+        <!-- CSS-hidden radio group with visible labels -->
+        <input type="radio" name="opt" id="opt-a" class="display-none" checked>
+        <label for="opt-a" id="opt-a-label">Option A</label>
+        <input type="radio" name="opt" id="opt-b" class="visibility-hidden">
+        <label for="opt-b" id="opt-b-label">Option B</label>
+
+        <!-- Wrapping label with CSS-hidden checkbox inside -->
+        <label id="wrap-toggle">
+            Accept terms
+            <input type="checkbox" class="display-none">
+        </label>
     </main>
 </body>
 </html>

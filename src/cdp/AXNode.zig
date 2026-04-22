@@ -477,8 +477,18 @@ pub const Writer = struct {
         try w.objectField("backendDOMNodeId");
         try w.write(id);
 
+        const promoted_input = labelPromotionTarget(axn, self.frame, self.visibility_cache);
+
         try w.objectField("role");
-        try self.writeAXValue(.{ .role = try axn.getRole() }, w);
+        if (promoted_input) |input| {
+            try self.writeAXValue(.{ .role = switch (input._input_type) {
+                .checkbox => "checkbox",
+                .radio => "radio",
+                else => unreachable,
+            } }, w);
+        } else {
+            try self.writeAXValue(.{ .role = try axn.getRole() }, w);
+        }
 
         const ignore = axn.isIgnore(self.frame, self.visibility_cache, in_aria_hidden);
         try w.objectField("ignored");
@@ -515,6 +525,18 @@ pub const Writer = struct {
             try w.objectField("properties");
             try w.beginArray();
             try self.writeAXProperties(axn, w);
+            if (promoted_input) |input| {
+                const input_el = input.asElement();
+                const is_disabled = input_el.isDisabled();
+                if (is_disabled) {
+                    try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
+                }
+                try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                if (!is_disabled) {
+                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                }
+                try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = if (input._checked) "true" else "false" } }, w);
+            }
             try w.endArray();
         }
 
@@ -1018,6 +1040,43 @@ fn isLabellableTag(tag: DOMNode.Element.Tag) bool {
     };
 }
 
+// CSS-only toggle switches and custom radios commonly visually-style a
+// `<label>` while `display:none`-ing the real `<input>`. Chromium matches
+// this by pruning the input from the AX tree, which leaves the label as a
+// generic role=none element and an agent walking the tree has nothing
+// interactive to click.
+//
+// When a `<label>` targets a hidden checkbox or radio, promote it: emit
+// the label with the input's role and state. Browsers already forward
+// label clicks to the associated input, so the label's backendDOMNodeId
+// is a valid click target.
+fn labelPromotionTarget(
+    axn: AXNode,
+    frame: *Frame,
+    cache: *DOMNode.Element.VisibilityCache,
+) ?*DOMNode.Element.Html.Input {
+    // Respect an explicit role= on the label.
+    if (axn.role_attr != null) return null;
+
+    const node = axn.dom;
+    const el = node.is(DOMNode.Element) orelse return null;
+    if (el.getTag() != .label) return null;
+
+    const label = el.as(DOMNode.Element.Html.Label);
+    const control = label.getControl(frame) orelse return null;
+
+    // Only promote when the control is hidden; otherwise it appears
+    // normally and the label stays as-is.
+    if (!isHidden(control, frame, cache)) return null;
+
+    if (control.getTag() != .input) return null;
+    const input = control.as(DOMNode.Element.Html.Input);
+    return switch (input._input_type) {
+        .checkbox, .radio => input,
+        else => null,
+    };
+}
+
 fn writeLabelName(
     temp_arena: ?std.mem.Allocator,
     node: *DOMNode,
@@ -1460,4 +1519,51 @@ test "AXNode: writer prunes hidden and resolves labels" {
         }
     }
     try testing.expect(wrapped_named);
+
+    // Labels associated with CSS-hidden checkboxes/radios are promoted:
+    // the label appears with the control's role + state so agents can
+    // interact with CSS-only toggle switches.
+    const Expected = struct {
+        name_needle: []const u8,
+        role: []const u8,
+        checked: []const u8,
+    };
+    const expected = [_]Expected{
+        // `for=`-associated: CSS display:none checkbox with `checked`.
+        .{ .name_needle = "Enable feature", .role = "checkbox", .checked = "true" },
+        // `for=`-associated: display:none radio with `checked`.
+        .{ .name_needle = "Option A", .role = "radio", .checked = "true" },
+        // `for=`-associated: visibility:hidden radio, unchecked.
+        .{ .name_needle = "Option B", .role = "radio", .checked = "false" },
+        // Wrapping label pattern, checkbox hidden, unchecked.
+        .{ .name_needle = "Accept terms", .role = "checkbox", .checked = "false" },
+    };
+    for (expected) |exp| {
+        var found = false;
+        for (nodes) |node_val| {
+            const obj = node_val.object;
+            const role_obj = obj.get("role") orelse continue;
+            const role_val = role_obj.object.get("value") orelse continue;
+            if (!std.mem.eql(u8, role_val.string, exp.role)) continue;
+            const name_obj = obj.get("name") orelse continue;
+            const name_value = name_obj.object.get("value") orelse continue;
+            if (name_value != .string) continue;
+            if (std.mem.indexOf(u8, name_value.string, exp.name_needle) == null) continue;
+
+            // Verify the `checked` property was emitted with the right value.
+            const props = obj.get("properties").?.array.items;
+            var checked_matches = false;
+            for (props) |prop| {
+                const prop_obj = prop.object;
+                if (!std.mem.eql(u8, prop_obj.get("name").?.string, "checked")) continue;
+                const val = prop_obj.get("value").?.object.get("value").?.string;
+                if (std.mem.eql(u8, val, exp.checked)) checked_matches = true;
+                break;
+            }
+            try testing.expect(checked_matches);
+            found = true;
+            break;
+        }
+        try testing.expect(found);
+    }
 }
