@@ -90,8 +90,48 @@ fn onAccept(ctx: *anyopaque, socket: posix.socket_t) void {
     };
 }
 
+// Liveness is enforced at the TCP layer via keepalive probes sent by the
+// kernel. This is transparent to CDP clients (unlike a WebSocket ping, which
+// some clients — go-rod panics, chromedp logs spurious "malformed" — handle
+// incorrectly). Detection window is roughly `timeout_s`:
+//   keepidle = timeout_s - keepcnt * keepintvl   (clamped >= 1s)
+//   keepintvl = 2s, keepcnt = 3   → 6s of probe escalation.
+// timeout_ms == 0 leaves keepalive off (OS defaults apply — typically 2h).
+fn setTcpKeepalive(socket: posix.socket_t, timeout_ms: u32) void {
+    if (timeout_ms == 0) return;
+
+    posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.KEEPALIVE, &std.mem.toBytes(@as(c_int, 1))) catch |err| {
+        log.warn(.app, "SO_KEEPALIVE", .{ .err = err });
+        return;
+    };
+
+    const keepcnt: u32 = 3;
+    const keepintvl: u32 = 2;
+    const timeout_s: u32 = @max(timeout_ms / 1000, 1);
+    const probe_window: u32 = keepcnt * keepintvl;
+    const keepidle: u32 = if (timeout_s > probe_window) timeout_s - probe_window else 1;
+
+    if (@hasDecl(posix.TCP, "KEEPIDLE")) {
+        posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPIDLE, &std.mem.toBytes(@as(c_int, @intCast(keepidle)))) catch |err| {
+            log.warn(.app, "TCP_KEEPIDLE", .{ .err = err });
+        };
+    }
+    if (@hasDecl(posix.TCP, "KEEPINTVL")) {
+        posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPINTVL, &std.mem.toBytes(@as(c_int, @intCast(keepintvl)))) catch |err| {
+            log.warn(.app, "TCP_KEEPINTVL", .{ .err = err });
+        };
+    }
+    if (@hasDecl(posix.TCP, "KEEPCNT")) {
+        posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPCNT, &std.mem.toBytes(@as(c_int, @intCast(keepcnt)))) catch |err| {
+            log.warn(.app, "TCP_KEEPCNT", .{ .err = err });
+        };
+    }
+}
+
 fn handleConnection(self: *Server, socket: posix.socket_t, timeout_ms: u32) void {
     defer posix.close(socket);
+
+    setTcpKeepalive(socket, timeout_ms);
 
     // Client is HUGE (> 512KB) because it has a large read buffer.
     // V8 crashes if this is on the stack (likely related to its size).
@@ -106,7 +146,6 @@ fn handleConnection(self: *Server, socket: posix.socket_t, timeout_ms: u32) void
         self.allocator,
         self.app,
         self.json_version_response,
-        timeout_ms,
     ) catch |err| {
         log.err(.app, "CDP client init", .{ .err = err });
         return;
@@ -216,9 +255,8 @@ pub const Client = struct {
         allocator: Allocator,
         app: *App,
         json_version_response: []const u8,
-        timeout_ms: u32,
     ) !Client {
-        var ws = try Net.WsConnection.init(socket, allocator, json_version_response, timeout_ms);
+        var ws = try Net.WsConnection.init(socket, allocator, json_version_response);
         errdefer ws.deinit();
 
         if (log.enabled(.app, .info)) {
@@ -277,15 +315,19 @@ pub const Client = struct {
     fn httpLoop(self: *Client, http: *HttpClient) !void {
         lp.assert(self.mode == .http, "Client.httpLoop invalid mode", .{});
 
+        // Liveness is enforced by TCP keepalive configured in
+        // Server.setTcpKeepalive; the kernel closes dead sockets, which
+        // surfaces as EOF/error from readSocket. The loop blocks for ~24 days
+        // on each poll rather than tracking app-level timeouts. Capped at
+        // i32-max because HttpClient.tick narrows to c_int.
+        const wait_ms: u32 = std.math.maxInt(i32);
+
         while (true) {
-            const status = http.tick(self.ws.timeout_ms) catch |err| {
+            const status = http.tick(wait_ms) catch |err| {
                 log.err(.app, "http tick", .{ .err = err });
                 return;
             };
-            if (status != .cdp_socket) {
-                log.info(.app, "CDP timeout", .{});
-                return;
-            }
+            if (status != .cdp_socket) continue;
 
             if (self.readSocket() == false) {
                 return;
@@ -297,19 +339,15 @@ pub const Client = struct {
         }
 
         var cdp = &self.mode.cdp;
-        const timeout_ms = self.ws.timeout_ms;
 
         while (true) {
-            const result = cdp.pageWait(timeout_ms) catch |wait_err| switch (wait_err) {
+            const result = cdp.pageWait(wait_ms) catch |wait_err| switch (wait_err) {
                 error.NoPage => {
-                    const status = http.tick(timeout_ms) catch |err| {
+                    const status = http.tick(wait_ms) catch |err| {
                         log.err(.app, "http tick", .{ .err = err });
                         return;
                     };
-                    if (status != .cdp_socket) {
-                        log.info(.app, "CDP timeout", .{});
-                        return;
-                    }
+                    if (status != .cdp_socket) continue;
                     if (self.readSocket() == false) {
                         return;
                     }
@@ -324,10 +362,7 @@ pub const Client = struct {
                         return;
                     }
                 },
-                .done => {
-                    log.info(.app, "CDP timeout", .{});
-                    return;
-                },
+                .done => {},
             }
         }
     }

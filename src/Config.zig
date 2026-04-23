@@ -637,7 +637,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Useful, for example, when --host is 0.0.0.0.
         \\                Defaults to --host value
         \\
-        \\--timeout       Inactivity timeout in seconds before disconnecting clients
+        \\--timeout       Approximate time in seconds after which a dead client
+        \\                is dropped. Implemented via TCP keepalive: the kernel
+        \\                probes silent peers and closes the socket if they do
+        \\                not respond. Does not affect clients that are actively
+        \\                sending or receiving data, or waiting on a slow page
+        \\                load. 0 disables keepalive (OS defaults apply).
         \\                Defaults to 10 (seconds). Limited to 604800 (1 week).
         \\
         \\--cdp-max-connections
