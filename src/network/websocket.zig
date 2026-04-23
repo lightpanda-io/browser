@@ -25,6 +25,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const log = @import("lightpanda").log;
 const assert = @import("lightpanda").assert;
 const CDP_MAX_MESSAGE_SIZE = @import("../Config.zig").CDP_MAX_MESSAGE_SIZE;
+const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
 const Fragments = struct {
     type: Message.Type,
@@ -49,6 +50,7 @@ pub const Message = struct {
 const OpCode = enum(u8) {
     text = 128 | 1,
     close = 128 | 8,
+    ping = 128 | 9,
     pong = 128 | 10,
 };
 
@@ -320,6 +322,7 @@ pub const WsConnection = struct {
     send_arena: ArenaAllocator,
     json_version_response: []const u8,
     timeout_ms: u32,
+    last_pong_ms: u64,
 
     pub fn init(socket: posix.socket_t, allocator: Allocator, json_version_response: []const u8, timeout_ms: u32) !WsConnection {
         const socket_flags = try posix.fcntl(socket, posix.F.GETFL, 0);
@@ -338,6 +341,7 @@ pub const WsConnection = struct {
             .send_arena = ArenaAllocator.init(allocator),
             .json_version_response = json_version_response,
             .timeout_ms = timeout_ms,
+            .last_pong_ms = milliTimestamp(.monotonic),
         };
     }
 
@@ -383,6 +387,12 @@ pub const WsConnection = struct {
             }
             pos += written;
         }
+    }
+
+    const EMPTY_PING = [_]u8{ 137, 0 };
+
+    pub fn sendPing(self: *WsConnection) !void {
+        return self.send(&EMPTY_PING);
     }
 
     const EMPTY_PONG = [_]u8{ 138, 0 };
@@ -453,7 +463,7 @@ pub const WsConnection = struct {
             } orelse break;
 
             switch (msg.type) {
-                .pong => {},
+                .pong => self.last_pong_ms = milliTimestamp(.monotonic),
                 .ping => try self.sendPong(msg.data),
                 .close => {
                     self.send(&CLOSE_NORMAL) catch {};

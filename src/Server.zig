@@ -277,8 +277,14 @@ pub const Client = struct {
     fn httpLoop(self: *Client, http: *HttpClient) !void {
         lp.assert(self.mode == .http, "Client.httpLoop invalid mode", .{});
 
+        const timeout_ms = self.ws.timeout_ms;
+        const timeout_disabled = timeout_ms == 0;
+        // When the timeout is disabled, fall back to a huge wait value so
+        // http.tick/pageWait block until activity rather than spinning.
+        const io_wait_ms: u32 = if (timeout_disabled) std.math.maxInt(u32) else timeout_ms;
+
         while (true) {
-            const status = http.tick(self.ws.timeout_ms) catch |err| {
+            const status = http.tick(io_wait_ms) catch |err| {
                 log.err(.app, "http tick", .{ .err = err });
                 return;
             };
@@ -287,7 +293,7 @@ pub const Client = struct {
                 return;
             }
 
-            if (self.readSocket() == false) {
+            if (!self.readSocket()) {
                 return;
             }
 
@@ -297,22 +303,26 @@ pub const Client = struct {
         }
 
         var cdp = &self.mode.cdp;
-        const timeout_ms = self.ws.timeout_ms;
+        // How long we block inside pageWait before yielding back to send a
+        // ping and check the pong deadline. Clamped so huge --timeout values
+        // still get timely liveness checks, and tiny ones don't busy-loop.
+        const quantum_ms: u32 = if (timeout_disabled)
+            std.math.maxInt(u32)
+        else
+            @max(@min(timeout_ms / 2, 30_000), 100);
+        self.ws.last_pong_ms = milliTimestamp(.monotonic);
 
         while (true) {
-            const result = cdp.pageWait(timeout_ms) catch |wait_err| switch (wait_err) {
+            const result = cdp.pageWait(quantum_ms) catch |wait_err| switch (wait_err) {
                 error.NoPage => {
-                    const status = http.tick(timeout_ms) catch |err| {
+                    const status = http.tick(quantum_ms) catch |err| {
                         log.err(.app, "http tick", .{ .err = err });
                         return;
                     };
-                    if (status != .cdp_socket) {
-                        log.info(.app, "CDP timeout", .{});
+                    if (status == .cdp_socket and !self.readSocket()) {
                         return;
                     }
-                    if (self.readSocket() == false) {
-                        return;
-                    }
+                    if (!self.heartbeat()) return;
                     continue;
                 },
                 else => return wait_err,
@@ -320,16 +330,30 @@ pub const Client = struct {
 
             switch (result) {
                 .cdp_socket => {
-                    if (self.readSocket() == false) {
+                    if (!self.readSocket()) {
                         return;
                     }
                 },
                 .done => {
-                    log.info(.app, "CDP timeout", .{});
-                    return;
+                    if (!self.heartbeat()) return;
                 },
             }
         }
+    }
+
+    fn heartbeat(self: *Client) bool {
+        if (self.ws.timeout_ms == 0) return true;
+        self.ws.sendPing() catch |err| {
+            log.warn(.app, "CDP ping", .{ .err = err });
+            return false;
+        };
+        const now = milliTimestamp(.monotonic);
+        const elapsed = now -| self.ws.last_pong_ms;
+        if (elapsed > self.ws.timeout_ms) {
+            log.info(.app, "CDP timeout", .{ .since_last_pong_ms = elapsed });
+            return false;
+        }
+        return true;
     }
 
     fn blockingReadStart(ctx: *anyopaque) bool {

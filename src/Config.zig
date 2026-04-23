@@ -504,7 +504,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--http-timeout
         \\                The maximum time, in milliseconds, the transfer is allowed
         \\                to complete. 0 means it never times out.
-        \\                Defaults to 10000.
+        \\                Defaults to 5000.
         \\
         \\--http-max-response-size
         \\                Limits the acceptable response size for any request
@@ -631,7 +631,10 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Useful, for example, when --host is 0.0.0.0.
         \\                Defaults to --host value
         \\
-        \\--timeout       Inactivity timeout in seconds before disconnecting clients
+        \\--timeout       Maximum time in seconds without a liveness response from
+        \\                the client before disconnecting. Does not affect clients
+        \\                that are simply idle or waiting on a slow page load.
+        \\                0 means it never times out.
         \\                Defaults to 10 (seconds). Limited to 604800 (1 week).
         \\
         \\--cdp-max-connections
