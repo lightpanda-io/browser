@@ -223,6 +223,7 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
         5 => switch (@as(u40, @bitCast(domain[0..5].*))) {
             asUint(u40, "Fetch") => return @import("domains/fetch.zig").processMessage(command),
             asUint(u40, "Input") => return @import("domains/input.zig").processMessage(command),
+            asUint(u40, "Audit") => return @import("domains/audit.zig").processMessage(command),
             else => {},
         },
         6 => switch (@as(u48, @bitCast(domain[0..6].*))) {
