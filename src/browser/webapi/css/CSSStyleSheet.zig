@@ -79,7 +79,7 @@ pub fn getOwnerRule(self: *const CSSStyleSheet) ?*CSSRule {
 }
 
 pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, frame: *Frame) !u32 {
-    const index = maybe_index orelse 0;
+    const requested_index = maybe_index orelse 0;
     var it = Parser.parseStylesheet(rule);
     const parsed_rule = it.next() orelse {
         if (it.has_skipped_at_rule) {
@@ -88,7 +88,7 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, fra
             // CSS parser. To prevent JS apps (like Expo/Reanimated) from crashing
             // during initialization, we simulate a successful insertion by returning
             // the requested index.
-            return index;
+            return requested_index;
         }
         return error.SyntaxError;
     };
@@ -103,6 +103,16 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, fra
     try style.setCssText(parsed_rule.block, frame);
 
     const rules = try self.getCssRules(frame);
+
+    // Per spec, an index > rules.length should throw IndexSizeError. But because
+    // we don't process @import and @font-face, indexes that code hard-codes can
+    // be off. As a workaround, we clamp to the tail.
+    // See #2214 (and the sibling #1970 / #1972 tolerance for at-rules).
+    const length = rules.length();
+    const index = if (requested_index > length) length else requested_index;
+    if (index != requested_index) {
+        log.debug(.not_implemented, "insertRule clamped index", .{});
+    }
     try rules.insert(index, style_rule._proto, frame);
 
     // Notify StyleManager that rules have changed
