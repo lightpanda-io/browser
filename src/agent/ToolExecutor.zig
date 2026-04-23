@@ -55,7 +55,7 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self);
 }
 
-pub const CallError = browser_tools.ToolError || error{ InvalidJsonArguments, OutOfMemory };
+pub const CallError = browser_tools.ToolError || error{InvalidJsonArguments};
 
 pub fn getTools(self: *Self) ![]const zenai.provider.Tool {
     const arena = self.tool_schema_arena.allocator();
@@ -89,11 +89,11 @@ pub fn callEval(self: *Self, arena: std.mem.Allocator, script: []const u8) ?[]co
 }
 
 pub fn call(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments_json: []const u8) CallError![]const u8 {
-    const arguments = if (arguments_json.len > 0) blk: {
-        const parsed = std.json.parseFromSlice(std.json.Value, arena, arguments_json, .{}) catch
-            return error.InvalidJsonArguments;
-        break :blk parsed.value;
-    } else null;
+    const arguments: ?std.json.Value = if (arguments_json.len > 0)
+        std.json.parseFromSliceLeaky(std.json.Value, arena, arguments_json, .{}) catch
+            return error.InvalidJsonArguments
+    else
+        null;
 
     return browser_tools.call(self.session, &self.node_registry, arena, tool_name, arguments);
 }

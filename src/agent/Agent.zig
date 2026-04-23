@@ -390,7 +390,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                             "Command succeeded but verification failed, attempting self-healing...";
                         self.terminal.printInfo(msg);
 
-                        if (self.attemptSelfHeal(entry.raw_line, verification.reason, last_comment, sa)) |healed_cmds| {
+                        if (self.attemptSelfHeal(sa, entry.raw_line, verification.reason, last_comment)) |healed_cmds| {
                             if (formatReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds)) |replacement| {
                                 replacements.append(sa, replacement) catch {};
                             }
@@ -597,7 +597,7 @@ fn dupeParts(alloc: std.mem.Allocator, parts: []const zenai.provider.ContentPart
 /// Runs a single LLM turn and returns the commands it executed, without
 /// recording them to the Recorder.  Used by attemptSelfHeal so that the
 /// caller can capture healed commands for script rewriting.
-fn runHealTurn(self: *Self, prompt: []const u8, arena: std.mem.Allocator) ![]Command.Command {
+fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Command.Command {
     const ma = self.message_arena.allocator();
 
     try self.ensureSystemPrompt();
@@ -643,7 +643,7 @@ fn runHealTurn(self: *Self, prompt: []const u8, arena: std.mem.Allocator) ![]Com
     return cmds.toOwnedSlice(arena) catch &.{};
 }
 
-fn attemptSelfHeal(self: *Self, failed_command: []const u8, verify_context: ?[]const u8, context_comment: ?[]const u8, arena: std.mem.Allocator) ?[]Command.Command {
+fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []const u8, verify_context: ?[]const u8, context_comment: ?[]const u8) ?[]Command.Command {
     const ha = self.message_arena.allocator();
 
     const verify_section = if (verify_context) |ctx|
@@ -672,7 +672,7 @@ fn attemptSelfHeal(self: *Self, failed_command: []const u8, verify_context: ?[]c
 
     var attempt: u8 = 0;
     while (attempt < self_heal_max_attempts) : (attempt += 1) {
-        const cmds = self.runHealTurn(prompt, arena) catch |err| {
+        const cmds = self.runHealTurn(arena, prompt) catch |err| {
             self.terminal.printErrorFmt("self-heal attempt {d}/{d} failed: {s}", .{
                 attempt + 1,
                 self_heal_max_attempts,
