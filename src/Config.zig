@@ -389,7 +389,27 @@ pub const WaitUntil = enum {
 /// Must be initialized with an allocator that outlives all HTTP connections.
 pub const HttpHeaders = struct {
     const user_agent_base: [:0]const u8 = "Lightpanda/1.0";
-    pub const sec_ch_ua: [:0]const u8 = "Sec-Ch-Ua: \"Lightpanda\";v=\"1\"";
+
+    const Brand = struct {
+        brand: [:0]const u8,
+        version: [:0]const u8,
+    };
+
+    /// Source of truth for client-hints brand data. Both the Sec-Ch-Ua
+    /// HTTP header and navigator.userAgentData.brands derive from this
+    /// list, so the two sides cannot drift.
+    pub const brands = [_]Brand{
+        .{ .brand = "Lightpanda", .version = "1" },
+    };
+
+    pub const sec_ch_ua: [:0]const u8 = blk: {
+        var out: [:0]const u8 = "Sec-Ch-Ua:";
+        for (brands, 0..) |b, i| {
+            const sep = if (i == 0) " " else ", ";
+            out = out ++ sep ++ "\"" ++ b.brand ++ "\";v=\"" ++ b.version ++ "\"";
+        }
+        break :blk out;
+    };
 
     user_agent: [:0]const u8, // User agent value (e.g. "Lightpanda/1.0")
     user_agent_header: [:0]const u8,
