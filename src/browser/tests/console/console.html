@@ -1,6 +1,16 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
+<script id=entries>
+    {
+        const entries = Object.entries(console);
+        testing.expectEqual(true, entries.length > 10);
+
+        const log_entry = entries.find((e) => e[0] == 'log');
+        testing.expectEqual(true, log_entry[1] === console.log);
+    }
+</script>
+
 <script id="time">
     // should not crash
     console.time();

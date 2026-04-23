@@ -7,6 +7,11 @@
   testing.expectEqual('function', typeof CSS.supports);
 </script>
 
+<script id="entries">
+  const entries = Object.entries(CSS);
+  testing.expectEqual(true, entries.length >= 2);
+</script>
+
 <script id="escape_basic">
   {
     testing.expectEqual('hello', CSS.escape('hello'));

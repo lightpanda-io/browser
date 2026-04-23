@@ -588,6 +588,12 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
     const prototype = v8.v8__FunctionTemplate__PrototypeTemplate(template);
     const signature = v8.v8__Signature__New(isolate, template);
 
+    // Namespace objects (e.g. console) expose their members as own properties
+    // of each instance rather than via the prototype, so Object.entries(...)
+    // returns them. See https://console.spec.whatwg.org/#console-namespace.
+    const own_properties = @hasDecl(JsApi.Meta, "own_properties") and JsApi.Meta.own_properties;
+    const member_template = if (own_properties) instance else prototype;
+
     const declarations = @typeInfo(JsApi).@"struct".decls;
     var has_named_index_getter = false;
 
@@ -653,7 +659,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
                 if (value.static) {
                     v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
                 } else {
-                    v8.v8__Template__Set(@ptrCast(prototype), js_name, @ptrCast(function_template), v8.None);
+                    v8.v8__Template__Set(@ptrCast(member_template), js_name, @ptrCast(function_template), v8.None);
                 }
             },
             bridge.Indexed => {
