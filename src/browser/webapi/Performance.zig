@@ -1,14 +1,15 @@
+const std = @import("std");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const datetime = @import("../../datetime.zig");
 
 const EventCounts = @import("EventCounts.zig");
 
+const Allocator = std.mem.Allocator;
+
 pub fn registerTypes() []const type {
     return &.{ Performance, Entry, Mark, Measure, PerformanceTiming, PerformanceNavigation };
 }
-
-const std = @import("std");
 
 const Performance = @This();
 
@@ -188,32 +189,34 @@ pub fn getEntries(self: *const Performance) []*Entry {
 }
 
 pub fn getEntriesByType(self: *const Performance, entry_type: []const u8, frame: *Frame) ![]const *Entry {
-    var result: std.ArrayList(*Entry) = .empty;
-
-    for (self._entries.items) |entry| {
-        if (std.mem.eql(u8, entry.getEntryType(), entry_type)) {
-            try result.append(frame.call_arena, entry);
-        }
-    }
-
-    return result.items;
+    return filterEntriesByType(frame.call_arena, self._entries.items, entry_type);
 }
 
 pub fn getEntriesByName(self: *const Performance, name: []const u8, entry_type: ?[]const u8, frame: *Frame) ![]const *Entry {
+    return filterEntriesByName(frame.call_arena, self._entries.items, name, entry_type);
+}
+
+// Also used by PerformanceObserver
+pub fn filterEntriesByType(arena: Allocator, list: []*Entry, entry_type: []const u8) ![]const *Entry {
+    var result: std.ArrayList(*Entry) = .empty;
+    for (list) |entry| {
+        if (std.mem.eql(u8, entry.getEntryType(), entry_type)) {
+            try result.append(arena, entry);
+        }
+    }
+    return result.items;
+}
+
+// Also used by PerformanceObserver
+pub fn filterEntriesByName(arena: Allocator, list: []*Entry, name: []const u8, entry_type: ?[]const u8) ![]const *Entry {
     var result: std.ArrayList(*Entry) = .empty;
 
-    for (self._entries.items) |entry| {
+    for (list) |entry| {
         if (!std.mem.eql(u8, entry._name, name)) {
             continue;
         }
-
-        const et = entry_type orelse {
-            try result.append(frame.call_arena, entry);
-            continue;
-        };
-
-        if (std.mem.eql(u8, entry.getEntryType(), et)) {
-            try result.append(frame.call_arena, entry);
+        if (entry_type == null or std.mem.eql(u8, entry.getEntryType(), entry_type.?)) {
+            try result.append(arena, entry);
         }
     }
 
