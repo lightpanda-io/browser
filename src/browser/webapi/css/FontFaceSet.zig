@@ -80,13 +80,13 @@ pub fn load(self: *FontFaceSet, font: []const u8, frame: *Frame) !js.Promise {
     // Dispatch loading event
     const target = self.asEventTarget();
     if (frame._event_manager.hasDirectListeners(target, "loading", null)) {
-        const event = try Event.initTrusted(comptime .wrap("loading"), .{}, frame);
+        const event = try Event.initTrusted(comptime .wrap("loading"), .{}, frame._session);
         try frame._event_manager.dispatchDirect(target, event, null, .{ .context = "load font face set" });
     }
 
     // Dispatch loadingdone event
     if (frame._event_manager.hasDirectListeners(target, "loadingdone", null)) {
-        const event = try Event.initTrusted(comptime .wrap("loadingdone"), .{}, frame);
+        const event = try Event.initTrusted(comptime .wrap("loadingdone"), .{}, frame._session);
         try frame._event_manager.dispatchDirect(target, event, null, .{ .context = "load font face set" });
     }
 

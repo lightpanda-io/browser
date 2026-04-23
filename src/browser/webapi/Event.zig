@@ -96,9 +96,9 @@ pub fn init(typ: []const u8, opts_: ?Options, frame: *Frame) !*Event {
     return initWithTrusted(arena, str, opts_, false);
 }
 
-pub fn initTrusted(typ: String, opts_: ?Options, frame: *Frame) !*Event {
-    const arena = try frame.getArena(.tiny, "Event.trusted");
-    errdefer frame.releaseArena(arena);
+pub fn initTrusted(typ: String, opts_: ?Options, session: *Session) !*Event {
+    const arena = try session.getArena(.tiny, "Event.trusted");
+    errdefer session.releaseArena(arena);
     return initWithTrusted(arena, typ, opts_, true);
 }
 

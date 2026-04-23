@@ -28,12 +28,12 @@ const Session = @import("Session.zig");
 const Selector = @import("webapi/selector/Selector.zig");
 
 fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
-    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame);
+    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame._session);
     frame._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
         lp.log.err(.app, "dispatch input event failed", .{ .err = err });
     };
 
-    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame);
+    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame._session);
     frame._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
         lp.log.err(.app, "dispatch change event failed", .{ .err = err });
     };
@@ -196,7 +196,7 @@ pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, frame: *Frame) !void {
             };
         }
 
-        const scroll_evt: *Event = try .initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, frame);
+        const scroll_evt: *Event = try .initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, frame._session);
         frame._event_manager.dispatch(el.asEventTarget(), scroll_evt) catch |err| {
             lp.log.err(.app, "dispatch scroll event failed", .{ .err = err });
         };

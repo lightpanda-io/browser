@@ -588,7 +588,7 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, frame: *Frame) !void {
 
     const target = self.asEventTarget();
     if (frame._event_manager.hasDirectListeners(target, "readystatechange", self._on_ready_state_change)) {
-        const event = try Event.initTrusted(.wrap("readystatechange"), .{}, frame);
+        const event = try Event.initTrusted(.wrap("readystatechange"), .{}, frame._session);
         try frame._event_manager.dispatchDirect(target, event, self._on_ready_state_change, .{ .context = "XHR state change" });
     }
 }

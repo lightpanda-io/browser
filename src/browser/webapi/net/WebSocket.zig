@@ -452,7 +452,7 @@ fn dispatchOpenEvent(self: *WebSocket) !void {
     const target = self.asEventTarget();
 
     if (frame._event_manager.hasDirectListeners(target, "open", self._on_open)) {
-        const event = try Event.initTrusted(comptime .wrap("open"), .{}, frame);
+        const event = try Event.initTrusted(comptime .wrap("open"), .{}, frame._session);
         try frame._event_manager.dispatchDirect(target, event, self._on_open, .{ .context = "WebSocket open" });
     }
 }
@@ -487,7 +487,7 @@ fn dispatchErrorEvent(self: *WebSocket) !void {
     const target = self.asEventTarget();
 
     if (frame._event_manager.hasDirectListeners(target, "error", self._on_error)) {
-        const event = try Event.initTrusted(comptime .wrap("error"), .{}, frame);
+        const event = try Event.initTrusted(comptime .wrap("error"), .{}, frame._session);
         try frame._event_manager.dispatchDirect(target, event, self._on_error, .{ .context = "WebSocket error" });
     }
 }

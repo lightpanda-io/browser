@@ -209,6 +209,17 @@
       testing.expectEqual('text/plain', r.response_headers_content_type);
       testing.expectEqual('response body', r.response_body_text);
       testing.expectEqual('response body', r.response_clone_text);
+
+      // AbortController / AbortSignal
+      testing.expectEqual(false, r.ac_aborted_before);
+      testing.expectEqual(true, r.ac_aborted_after);
+      testing.expectEqual(true, r.ac_listener_fired);
+      testing.expectEqual('cancelled', r.ac_reason);
+      testing.expectEqual(true, r.pre_aborted);
+      testing.expectEqual(true, r.pre_threw);
+
+      // URL.createObjectURL / revokeObjectURL
+      testing.expectEqual(true, r.blob_url_is_blob);
     });
   }
 </script>
