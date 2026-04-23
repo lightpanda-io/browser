@@ -411,6 +411,12 @@ pub const HttpHeaders = struct {
         break :blk out;
     };
 
+    // Some bot-protection frontends (e.g. Akamai on canada.ca) RST the HTTP/2
+    // stream when a client sends Accept-Encoding without Accept-Language,
+    // treating it as a bot signal. Ship a neutral default so we look like a
+    // normal client.
+    pub const accept_language: [:0]const u8 = "Accept-Language: en-US,en;q=0.9";
+
     user_agent: [:0]const u8, // User agent value (e.g. "Lightpanda/1.0")
     user_agent_header: [:0]const u8,
 
