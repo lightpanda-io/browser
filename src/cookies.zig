@@ -20,7 +20,6 @@ const Session = @import("browser/Session.zig");
 const Cookie = @import("browser/webapi/storage/Cookie.zig");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 
 /// Load cookies from a JSON file into the cookie jar.
 /// The file format is an array of objects with: name, value, domain, path,

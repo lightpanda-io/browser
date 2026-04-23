@@ -21,10 +21,8 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const URL = @import("URL.zig");
-const Config = @import("../Config.zig");
 const Notification = @import("../Notification.zig");
 const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
-const WebSocket = @import("webapi/net/WebSocket.zig");
 
 const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");

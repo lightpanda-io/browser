@@ -30,7 +30,6 @@ const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
 
 const log = lp.log;
-const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 // Re-export types from EventManagerBase for API compatibility

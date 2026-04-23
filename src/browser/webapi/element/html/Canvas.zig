@@ -31,8 +31,6 @@ const Canvas = @This();
 _proto: *HtmlElement,
 _cached: ?DrawingContext = null,
 
-const ContextType = enum { none, @"2d", webgl };
-
 pub fn asElement(self: *Canvas) *Element {
     return self._proto._proto;
 }

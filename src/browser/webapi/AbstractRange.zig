@@ -26,7 +26,6 @@ const Node = @import("Node.zig");
 const Range = @import("Range.zig");
 
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const AbstractRange = @This();
 
