@@ -1,0 +1,7 @@
+<html>
+<body><div>original</div></body>
+<script>
+  // Author wraps contents in their own <html><body>. Fragment parsing
+  // should unwrap these so the resulting body holds just the <p>.
+  document.body = '<html><body><p>unwrapped</p></body></html>';
+</script>

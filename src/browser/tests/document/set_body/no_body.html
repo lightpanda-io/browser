@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<html>
+<head><title>no_body</title></head>
+<body><!-- this body is removed before setBody runs --></body>
+<script>
+  document.body.remove();
+  document.body = '<p>appended</p>';
+</script>
+</html>

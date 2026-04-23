@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<iframe id=isimple src=set_body/simple.html></iframe>
+<script id=simple>
+  {
+    testing.onload(() => {
+      testing.expectEqual(
+        '<head></head><body><p>replaced</p></body>',
+        isimple.contentDocument.documentElement.innerHTML,
+      );
+      // The original body element is gone; a fresh one is in place.
+      testing.expectEqual(null, isimple.contentDocument.getElementById('orig'));
+      testing.expectEqual(true, isimple.contentDocument.body instanceof isimple.contentWindow.HTMLBodyElement);
+    });
+  }
+</script>
+
+<iframe id=inone src=set_body/no_body.html></iframe>
+<script id=no_body>
+  {
+    testing.onload(() => {
+      // Document only had a <head>; setting body should append a fresh body.
+      testing.expectEqual(
+        '<head><title>no_body</title></head>\n<body><p>appended</p></body>',
+        inone.contentDocument.documentElement.innerHTML,
+      );
+    });
+  }
+</script>
+
+<iframe id=iempty src=set_body/empty.html></iframe>
+<script id=empty>
+  {
+    testing.onload(() => {
+      // Setting body to the empty string yields an empty <body>.
+      testing.expectEqual(
+        '<head></head><body></body>',
+        iempty.contentDocument.documentElement.innerHTML,
+      );
+    });
+  }
+</script>
+
+<iframe id=icomplex src=set_body/complex.html></iframe>
+<script id=complex>
+  {
+    testing.onload(() => {
+      const doc = icomplex.contentDocument;
+      // Multiple siblings + text node + attributes survive as body children.
+      testing.expectEqual(
+        '<body><h1>title</h1>text node<div id="d" class="x"><span>nested</span></div></body>',
+        doc.documentElement.querySelector('body').outerHTML,
+      );
+      // The replacement body can still be located via document.body.
+      testing.expectEqual('d', doc.body.querySelector('div').id);
+    });
+  }
+</script>
+
+<iframe id=iframeset src=set_body/frameset.html></iframe>
+<script id=html_wrapper_stripped>
+  {
+    testing.onload(() => {
+      // Author wrapped content in <html><body>…</body></html>; the parser
+      // should unwrap those so the new body contains just the <p>.
+      testing.expectEqual(
+        '<body><p>unwrapped</p></body>',
+        iframeset.contentDocument.body.outerHTML,
+      );
+    });
+  }
+</script>
+
+<script id=no_document_element>
+  // Build a detached HTMLDocument, strip its documentElement, and verify
+  // setting body throws HierarchyRequestError.
+  {
+    const doc = document.implementation.createHTMLDocument('x');
+    doc.documentElement.remove();
+    testing.expectEqual(null, doc.documentElement);
+
+    let err = null;
+    try {
+      doc.body = '<p>hi</p>';
+    } catch (e) {
+      err = e;
+    }
+    testing.expectEqual(true, err instanceof DOMException);
+    testing.expectEqual('HierarchyRequestError', err.name);
+  }
+</script>
+
+<script id=detached_html_document>
+  // Fresh HTMLDocument with both head and body: replacing body should leave
+  // head untouched and install a new body.
+  {
+    const doc = document.implementation.createHTMLDocument('x');
+    const originalBody = doc.body;
+    doc.body = '<span>new</span>';
+
+    testing.expectEqual(true, doc.body !== originalBody);
+    testing.expectEqual('<span>new</span>', doc.body.innerHTML);
+    // Head (including the auto-created <title>) is preserved.
+    testing.expectEqual('<title>x</title>', doc.head.innerHTML);
+  }
+</script>
