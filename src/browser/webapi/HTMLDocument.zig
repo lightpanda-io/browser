@@ -57,8 +57,30 @@ pub fn getHead(self: *HTMLDocument) ?*Element.Html.Head {
 }
 
 pub fn getBody(self: *HTMLDocument) ?*Element.Html.Body {
-    const doc_el = self._proto.getDocumentElement() orelse return null;
-    var child = doc_el.asNode().firstChild();
+    const document_element = self._proto.getDocumentElement() orelse return null;
+    return findBodyForDoc(document_element);
+}
+
+pub fn setBody(self: *HTMLDocument, html: []const u8, frame: *Frame) !void {
+    const document_element = self._proto.getDocumentElement() orelse return error.HierarchyError;
+
+    // Build a fresh <body> holding the parsed HTML as its children. Fragment
+    // parsing strips any <html>/<body>/<head> wrappers the author included.
+    const new_body_node = try frame.createElementNS(.html, "body", null);
+    if (html.len > 0) {
+        try frame.parseHtmlAsChildren(new_body_node, html);
+    }
+
+    const document_node = document_element.asNode();
+    if (findBodyForDoc(document_element)) |current| {
+        _ = try document_node.replaceChild(new_body_node, current.asNode(), frame);
+    } else {
+        _ = try document_node.appendChild(new_body_node, frame);
+    }
+}
+
+fn findBodyForDoc(document_element: *Element) ?*Element.Html.Body {
+    var child = document_element.asNode().firstChild();
     while (child) |node| {
         if (node.is(Element.Html.Body)) |body| {
             return body;
@@ -276,7 +298,7 @@ pub const JsApi = struct {
 
     pub const dir = bridge.accessor(HTMLDocument.getDir, HTMLDocument.setDir, .{});
     pub const head = bridge.accessor(HTMLDocument.getHead, null, .{});
-    pub const body = bridge.accessor(HTMLDocument.getBody, null, .{});
+    pub const body = bridge.accessor(HTMLDocument.getBody, HTMLDocument.setBody, .{ .dom_exception = true });
     pub const lang = bridge.accessor(HTMLDocument.getLang, HTMLDocument.setLang, .{});
     pub const title = bridge.accessor(HTMLDocument.getTitle, HTMLDocument.setTitle, .{});
     pub const images = bridge.accessor(HTMLDocument.getImages, null, .{});
