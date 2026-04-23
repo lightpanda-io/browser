@@ -394,8 +394,8 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
 }
 
 fn runWebApiTest(test_file: [:0]const u8) !void {
-    const frame = try test_session.createFrame();
-    defer test_session.removeFrame();
+    const frame = try test_session.createPage();
+    defer test_session.removePage();
 
     const url = try std.fmt.allocPrintSentinel(
         arena_allocator,
@@ -453,8 +453,8 @@ const PageTestOpts = struct {
     wait_until_done: bool = true,
 };
 pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Frame {
-    const frame = try test_session.createFrame();
-    errdefer test_session.removeFrame();
+    const frame = try test_session.createPage();
+    errdefer test_session.removePage();
 
     const url = try std.fmt.allocPrintSentinel(
         arena_allocator,
@@ -491,11 +491,9 @@ test "tests:beforeAll" {
     const test_allocator = @import("root").tracking_allocator;
 
     test_config = try Config.init(test_allocator, "test", .{ .serve = .{
-        .common = .{
-            .tls_verify_host = false,
-            .user_agent_suffix = "internal-tester",
-            .ws_max_concurrent = 50,
-        },
+        .insecure_disable_tls_host_verification = true,
+        .user_agent_suffix = "internal-tester",
+        .ws_max_concurrent = 50,
     } });
 
     test_app = try App.init(test_allocator, &test_config);

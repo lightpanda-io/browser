@@ -24,14 +24,15 @@ const http = @import("../../../network/http.zig");
 const js = @import("../../js/js.zig");
 const Blob = @import("../Blob.zig");
 const URL = @import("../../URL.zig");
+
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
-const Session = @import("../../Session.zig");
 const HttpClient = @import("../../HttpClient.zig");
 
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
-const MessageEvent = @import("../event/MessageEvent.zig");
 const CloseEvent = @import("../event/CloseEvent.zig");
+const MessageEvent = @import("../event/MessageEvent.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -160,7 +161,7 @@ pub fn init(url: []const u8, protocols: [][]const u8, frame: *Frame) !*WebSocket
     return self;
 }
 
-pub fn deinit(self: *WebSocket, session: *Session) void {
+pub fn deinit(self: *WebSocket, page: *Page) void {
     self.cleanup();
 
     if (self._on_open) |func| {
@@ -177,14 +178,14 @@ pub fn deinit(self: *WebSocket, session: *Session) void {
     }
 
     for (self._send_queue.items) |msg| {
-        msg.deinit(session);
+        msg.deinit(page);
     }
 
-    session.releaseArena(self._arena);
+    page.releaseArena(self._arena);
 }
 
-pub fn releaseRef(self: *WebSocket, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *WebSocket, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *WebSocket) void {
@@ -235,7 +236,7 @@ fn cleanup(self: *WebSocket) void {
         self._http_client.removeConn(conn);
         self._req_headers.deinit();
         self._conn = null;
-        self.releaseRef(self._frame._session);
+        self.releaseRef(self._frame._page);
         self._send_queue.clearRetainingCapacity();
     }
 }
@@ -303,8 +304,8 @@ pub fn send(self: *WebSocket, data: SendData) !void {
 
     switch (data) {
         .blob => |blob| {
-            const arena = try self._frame._session.getArena(blob._slice.len, "WebSocket.message");
-            errdefer self._frame._session.releaseArena(arena);
+            const arena = try self._frame.getArena(blob._slice.len, "WebSocket.message");
+            errdefer self._frame.releaseArena(arena);
             try self.queueMessage(.{ .binary = .{
                 .arena = arena,
                 .data = try arena.dupe(u8, blob._slice),
@@ -312,8 +313,8 @@ pub fn send(self: *WebSocket, data: SendData) !void {
         },
         .js_val => |js_val| {
             if (js_val.isString()) |str| {
-                const arena = try self._frame._session.getArena(str.len(), "WebSocket.message");
-                errdefer self._frame._session.releaseArena(arena);
+                const arena = try self._frame.getArena(str.len(), "WebSocket.message");
+                errdefer self._frame.releaseArena(arena);
                 try self.queueMessage(.{ .text = .{
                     .arena = arena,
                     .data = try str.toSliceWithAlloc(arena),
@@ -322,8 +323,8 @@ pub fn send(self: *WebSocket, data: SendData) !void {
                 const binary = try js_val.toZig(BinaryData);
                 const buffer = binary.asBuffer();
 
-                const arena = try self._frame._session.getArena(buffer.len, "WebSocket.message");
-                errdefer self._frame._session.releaseArena(arena);
+                const arena = try self._frame.getArena(buffer.len, "WebSocket.message");
+                errdefer self._frame.releaseArena(arena);
                 try self.queueMessage(.{ .binary = .{
                     .arena = arena,
                     .data = try arena.dupe(u8, buffer),
@@ -452,7 +453,7 @@ fn dispatchOpenEvent(self: *WebSocket) !void {
     const target = self.asEventTarget();
 
     if (frame._event_manager.hasDirectListeners(target, "open", self._on_open)) {
-        const event = try Event.initTrusted(comptime .wrap("open"), .{}, frame);
+        const event = try Event.initTrusted(comptime .wrap("open"), .{}, frame._page);
         try frame._event_manager.dispatchDirect(target, event, self._on_open, .{ .context = "WebSocket open" });
     }
 }
@@ -466,7 +467,7 @@ fn dispatchMessageEvent(self: *WebSocket, data: []const u8, frame_type: http.WsF
             switch (self._binary_type) {
                 .arraybuffer => .{ .arraybuffer = .{ .values = data } },
                 .blob => blk: {
-                    const blob = try Blob.initFromBytes(data, "", false, frame._session);
+                    const blob = try Blob.initFromBytes(data, "", false, frame._page);
                     blob.acquireRef();
                     break :blk .{ .blob = blob };
                 },
@@ -477,7 +478,7 @@ fn dispatchMessageEvent(self: *WebSocket, data: []const u8, frame_type: http.WsF
         const event = try MessageEvent.initTrusted(comptime .wrap("message"), .{
             .data = msg_data,
             .origin = "",
-        }, frame._session);
+        }, frame._page);
         try frame._event_manager.dispatchDirect(target, event.asEvent(), self._on_message, .{ .context = "WebSocket message" });
     }
 }
@@ -487,7 +488,7 @@ fn dispatchErrorEvent(self: *WebSocket) !void {
     const target = self.asEventTarget();
 
     if (frame._event_manager.hasDirectListeners(target, "error", self._on_error)) {
-        const event = try Event.initTrusted(comptime .wrap("error"), .{}, frame);
+        const event = try Event.initTrusted(comptime .wrap("error"), .{}, frame._page);
         try frame._event_manager.dispatchDirect(target, event, self._on_error, .{ .context = "WebSocket error" });
     }
 }
@@ -575,7 +576,7 @@ fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: M
 
     if (self._send_offset >= byte_msg.data.len) {
         const removed = self._send_queue.orderedRemove(0);
-        removed.deinit(self._frame._session);
+        removed.deinit(self._frame._page);
         if (comptime IS_DEBUG) {
             log.debug(.websocket, "send complete", .{ .url = self._url, .len = byte_msg.data.len, .queue = self._send_queue.items.len });
         }
@@ -718,9 +719,9 @@ const Message = union(enum) {
         arena: Allocator,
         data: []const u8,
     };
-    fn deinit(self: Message, session: *Session) void {
+    fn deinit(self: Message, page: *Page) void {
         switch (self) {
-            .text, .binary => |msg| session.releaseArena(msg.arena),
+            .text, .binary => |msg| page.releaseArena(msg.arena),
             .close => {},
         }
     }

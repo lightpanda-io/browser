@@ -19,7 +19,7 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
-const Session = @import("../Session.zig");
+const Page = @import("../Page.zig");
 const EventManager = @import("../EventManager.zig");
 
 const Event = @import("Event.zig");
@@ -52,8 +52,8 @@ pub const Type = union(enum) {
     websocket: *@import("net/WebSocket.zig"),
 };
 
-pub fn init(session: *Session) !*EventTarget {
-    return session.factory.create(EventTarget{
+pub fn init(page: *Page) !*EventTarget {
+    return page.factory.create(EventTarget{
         ._type = .generic,
     });
 }
@@ -67,10 +67,10 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
     switch (exec.context.global) {
         .frame => |frame| {
             event.acquireRef();
-            defer _ = event.releaseRef(frame._session);
+            defer _ = event.releaseRef(frame._page);
             try frame._event_manager.dispatch(self, event);
         },
-        .worker => |wgs| try wgs.dispatch(self, event, null),
+        .worker => |wgs| try wgs.dispatch(self, event, null, .{}),
     }
     return !event._cancelable or !event._prevent_default;
 }
@@ -101,8 +101,7 @@ pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventLi
     };
 
     switch (exec.context.global) {
-        .frame => |frame| _ = try frame._event_manager.register(self, typ, em_callback, options),
-        .worker => |wgs| _ = try wgs._event_manager.register(self, typ, em_callback, options),
+        inline else => |g| _ = try g._event_manager.register(self, typ, em_callback, options),
     }
 }
 
@@ -138,8 +137,7 @@ pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: ?Even
     };
 
     switch (exec.context.global) {
-        .frame => |frame| frame._event_manager.remove(self, typ, em_callback, use_capture),
-        .worker => |wgs| wgs._event_manager.remove(self, typ, em_callback, use_capture),
+        inline else => |g| g._event_manager.remove(self, typ, em_callback, use_capture),
     }
 }
 

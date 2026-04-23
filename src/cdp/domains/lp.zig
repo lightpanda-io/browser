@@ -299,7 +299,7 @@ test "cdp.lp: getMarkdown" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    _ = try bc.session.createFrame();
+    _ = try bc.session.createPage();
 
     try ctx.processMessage(.{
         .id = 1,
@@ -315,7 +315,7 @@ test "cdp.lp: getInteractiveElements" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    _ = try bc.session.createFrame();
+    _ = try bc.session.createPage();
 
     try ctx.processMessage(.{
         .id = 1,
@@ -331,7 +331,7 @@ test "cdp.lp: getStructuredData" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    _ = try bc.session.createFrame();
+    _ = try bc.session.createPage();
 
     try ctx.processMessage(.{
         .id = 1,
@@ -347,7 +347,7 @@ test "cdp.lp: action tools" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    const frame = try bc.session.createFrame();
+    const frame = try bc.session.createPage();
     const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
     var runner = try bc.session.runner(.{});
@@ -408,7 +408,7 @@ test "cdp.lp: waitForSelector" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{});
-    const frame = try bc.session.createFrame();
+    const frame = try bc.session.createPage();
     const url = "http://localhost:9582/src/browser/tests/mcp_wait_for_selector.html";
     try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
     var runner = try bc.session.runner(.{});

@@ -106,7 +106,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
-    const frame = &server.session.frame.?;
+    const frame = server.session.currentFrame().?;
 
     {
         // Test Click
@@ -424,7 +424,7 @@ fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {
     var server = try Server.init(testing.allocator, testing.test_app, writer);
     errdefer server.deinit();
 
-    const frame = try server.session.createFrame();
+    const frame = try server.session.createPage();
     try frame.navigate(url, .{});
 
     var runner = try server.session.runner(.{});

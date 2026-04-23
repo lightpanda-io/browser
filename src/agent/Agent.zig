@@ -172,7 +172,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .self_heal = opts.self_heal,
         .interactive = opts.interactive,
         .one_shot_task = opts.task,
-        .one_shot_attachments = opts.task_attachments,
+        .one_shot_attachments = if (opts.task_attachments.items.len == 0) null else opts.task_attachments.items,
     };
 
     self.cmd_executor = CommandExecutor.init(allocator, tool_executor, &self.terminal);

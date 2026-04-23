@@ -858,6 +858,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/EventTarget.zig"),
     @import("../webapi/Location.zig"),
     @import("../webapi/Navigator.zig"),
+    @import("../webapi/NavigatorUAData.zig"),
     @import("../webapi/net/FormData.zig"),
     @import("../webapi/net/Headers.zig"),
     @import("../webapi/net/Request.zig"),
@@ -933,10 +934,11 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/streams/WritableStreamDefaultController.zig"),
     @import("../webapi/encoding/TextEncoderStream.zig"),
     @import("../webapi/encoding/TextDecoderStream.zig"),
-    // @import("../webapi/URL.zig"),
+    @import("../webapi/AbortSignal.zig"),
+    @import("../webapi/AbortController.zig"),
+    @import("../webapi/URL.zig"),
+    @import("../webapi/canvas/OffscreenCanvas.zig"),
     // @import("../webapi/Performance.zig"),
-    // @import("../webapi/AbortSignal.zig"),
-    // @import("../webapi/AbortController.zig"),
 });
 
 // Master list of ALL JS APIs across all contexts.

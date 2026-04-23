@@ -18,9 +18,11 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
-const Session = @import("../../Session.zig");
+
 const Execution = js.Execution;
 
 pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
@@ -48,15 +50,15 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
             return self;
         }
 
-        pub fn deinit(self: *Self, session: *Session) void {
+        pub fn deinit(self: *Self, page: *Page) void {
             if (@hasDecl(Inner, "releaseRef")) {
-                self._inner.releaseRef(session);
+                self._inner.releaseRef(page);
             }
-            session.factory.destroy(self);
+            page.factory.destroy(self);
         }
 
-        pub fn releaseRef(self: *Self, session: *Session) void {
-            self._rc.release(self, session);
+        pub fn releaseRef(self: *Self, page: *Page) void {
+            self._rc.release(self, page);
         }
 
         pub fn acquireRef(self: *Self) void {

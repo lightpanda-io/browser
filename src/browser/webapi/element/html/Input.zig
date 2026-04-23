@@ -102,7 +102,7 @@ pub fn setOnSelectionChange(self: *Input, listener: ?js.Function) !void {
 }
 
 fn dispatchSelectionChangeEvent(self: *Input, frame: *Frame) !void {
-    const event = try Event.init("selectionchange", .{ .bubbles = true }, frame);
+    const event = try Event.init("selectionchange", .{ .bubbles = true }, frame._page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
@@ -372,7 +372,7 @@ pub fn setAutocomplete(self: *Input, autocomplete: []const u8, frame: *Frame) !v
 pub fn select(self: *Input, frame: *Frame) !void {
     const len = if (self._value) |v| @as(u32, @intCast(v.len)) else 0;
     try self.setSelectionRange(0, len, null, frame);
-    const event = try Event.init("select", .{ .bubbles = true }, frame);
+    const event = try Event.init("select", .{ .bubbles = true }, frame._page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 

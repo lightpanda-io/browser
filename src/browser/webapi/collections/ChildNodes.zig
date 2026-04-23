@@ -19,9 +19,10 @@
 const std = @import("std");
 
 const js = @import("../../js/js.zig");
-const Node = @import("../Node.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
-const Session = @import("../../Session.zig");
+
+const Node = @import("../Node.zig");
 const GenericIterator = @import("iterator.zig").Entry;
 
 // Optimized for node.childNodes, which has to be a live list.
@@ -55,8 +56,8 @@ pub fn init(node: *Node, frame: *Frame) !*ChildNodes {
     return self;
 }
 
-pub fn deinit(self: *const ChildNodes, session: *Session) void {
-    session.releaseArena(self._arena);
+pub fn deinit(self: *const ChildNodes, page: *Page) void {
+    page.releaseArena(self._arena);
 }
 
 pub fn length(self: *ChildNodes, frame: *Frame) !u32 {

@@ -18,9 +18,10 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
-const Session = @import("../Session.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -56,12 +57,12 @@ const PermissionStatus = struct {
     _name: []const u8,
     _state: []const u8,
 
-    pub fn deinit(self: *PermissionStatus, session: *Session) void {
-        session.releaseArena(self._arena);
+    pub fn deinit(self: *PermissionStatus, page: *Page) void {
+        page.releaseArena(self._arena);
     }
 
-    pub fn releaseRef(self: *PermissionStatus, session: *Session) void {
-        self._rc.release(self, session);
+    pub fn releaseRef(self: *PermissionStatus, page: *Page) void {
+        self._rc.release(self, page);
     }
 
     pub fn acquireRef(self: *PermissionStatus) void {

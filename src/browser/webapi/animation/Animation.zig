@@ -19,8 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
-const Session = @import("../../Session.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -64,12 +64,12 @@ pub fn init(frame: *Frame) !*Animation {
     return self;
 }
 
-pub fn deinit(self: *Animation, session: *Session) void {
-    session.releaseArena(self._arena);
+pub fn deinit(self: *Animation, page: *Page) void {
+    page.releaseArena(self._arena);
 }
 
-pub fn releaseRef(self: *Animation, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *Animation, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *Animation) void {
@@ -211,7 +211,7 @@ fn update(ctx: *anyopaque) !?u32 {
     }
 
     // No future change scheduled, set the object weak for garbage collection.
-    self.releaseRef(self._frame._session);
+    self.releaseRef(self._frame._page);
     return null;
 }
 

@@ -160,8 +160,8 @@ pub fn TreeWalker(comptime mode: Mode) type {
 
 test "TreeWalker: skipChildren" {
     const testing = @import("../../testing.zig");
-    const frame = try testing.test_session.createFrame();
-    defer testing.test_session.removeFrame();
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
     const doc = frame.window._document;
 
     // <div>

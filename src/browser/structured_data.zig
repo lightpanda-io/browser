@@ -318,8 +318,8 @@ fn collectLink(
 const testing = @import("../testing.zig");
 
 fn testStructuredData(html: []const u8) !StructuredData {
-    const frame = try testing.test_session.createFrame();
-    defer testing.test_session.removeFrame();
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);

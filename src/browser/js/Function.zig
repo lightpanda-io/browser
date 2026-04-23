@@ -215,7 +215,7 @@ fn _persist(self: *const Function, comptime is_global: bool) !(if (is_global) Gl
         return .{ .handle = global, .temps = {} };
     }
     try ctx.trackTemp(global);
-    return .{ .handle = global, .temps = &ctx.session.temps };
+    return .{ .handle = global, .temps = &ctx.page.temps };
 }
 
 pub fn tempWithThis(self: *const Function, value: anytype) !Temp {

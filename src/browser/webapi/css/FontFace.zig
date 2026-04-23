@@ -18,9 +18,10 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
-const Session = @import("../../Session.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -44,12 +45,12 @@ pub fn init(family: []const u8, source: []const u8, frame: *Frame) !*FontFace {
     return self;
 }
 
-pub fn deinit(self: *FontFace, session: *Session) void {
-    session.releaseArena(self._arena);
+pub fn deinit(self: *FontFace, page: *Page) void {
+    page.releaseArena(self._arena);
 }
 
-pub fn releaseRef(self: *FontFace, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *FontFace, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *FontFace) void {

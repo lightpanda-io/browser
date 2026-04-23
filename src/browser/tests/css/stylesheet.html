@@ -498,6 +498,28 @@
 }
 </script>
 
+<script id="CSSStyleSheet_insertRule_out_of_range_index">
+{
+    // Our lack of fully processing sources (e.g. @import, @font-face) means that
+    // our indexes are sometimes not what libraries expect. As a workaround we
+    // clamp the index to the end of the rule list. See #2214.
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    const returned = sheet.insertRule('.out-of-range { color: red; }', 99);
+    testing.expectEqual(0, returned);
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual('.out-of-range', sheet.cssRules[0].selectorText);
+
+    // And at the tail of a non-empty sheet
+    const tail = sheet.insertRule('.tail { color: blue; }', 99);
+    testing.expectEqual(1, tail);
+    testing.expectEqual(2, sheet.cssRules.length);
+    testing.expectEqual('.tail', sheet.cssRules[1].selectorText);
+}
+</script>
+
 <script id="CSSStyleSheet_replaceSync">
 {
     const sheet = new CSSStyleSheet();

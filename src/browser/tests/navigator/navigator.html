@@ -65,6 +65,49 @@
   testing.expectEqual(8, navigator.deviceMemory);
 </script>
 
+<script id=userAgentData>
+  testing.expectEqual(true, navigator.userAgentData !== undefined);
+  testing.expectEqual(false, navigator.userAgentData.mobile);
+  testing.expectEqual(true, navigator.userAgentData.platform.length > 0);
+
+  const validUAPlatforms = ['macOS', 'Windows', 'Linux', 'FreeBSD', 'Unknown'];
+  testing.expectEqual(true, validUAPlatforms.includes(navigator.userAgentData.platform));
+
+  testing.expectEqual(1, navigator.userAgentData.brands.length);
+  testing.expectEqual({brand: 'Lightpanda', version: "1"}, navigator.userAgentData.brands[0]);
+
+  // Same instance returned on repeated access
+  testing.expectEqual(true, navigator.userAgentData === navigator.userAgentData);
+
+  const json = navigator.userAgentData.toJSON();
+  testing.expectEqual(false, json.mobile);
+  testing.expectEqual(navigator.userAgentData.platform, json.platform);
+  testing.expectEqual(true, Array.isArray(json.brands));
+  testing.expectEqual('Lightpanda', json.brands[0].brand);
+</script>
+
+<script id=userAgentData_highEntropy type=module>
+  {
+    const state = await testing.async();
+    const p = navigator.userAgentData.getHighEntropyValues(['architecture', 'platformVersion', 'fullVersionList']);
+    testing.expectTrue(p instanceof Promise);
+    const v = await p;
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(false, v.mobile);
+      testing.expectEqual(navigator.userAgentData.platform, v.platform);
+      testing.expectEqual(true, Array.isArray(v.brands));
+      testing.expectEqual(true, Array.isArray(v.fullVersionList));
+      testing.expectEqual('Lightpanda', v.fullVersionList[0].brand);
+      testing.expectEqual('1.0.0.0', v.uaFullVersion);
+      testing.expectEqual(false, v.wow64);
+      testing.expectEqual(true, Array.isArray(v.formFactor));
+      testing.expectEqual('Desktop', v.formFactor[0]);
+    });
+  }
+</script>
+
 <script id=getBattery type=module>
   {
     const state = await testing.async();

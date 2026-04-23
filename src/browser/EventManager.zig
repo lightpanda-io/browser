@@ -104,7 +104,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
 
 pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, comptime opts: DispatchOpts) DispatchError!void {
     event.acquireRef();
-    defer _ = event.releaseRef(self.frame._session);
+    defer _ = event.releaseRef(self.frame._page);
 
     // Increment event count for Event Timing API
     self.frame.window._performance._event_counts.increment(event._type_string.str());
@@ -124,7 +124,7 @@ pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, co
 // property is just a shortcut for calling addEventListener, but they are distinct.
 // An event set via property cannot be removed by removeEventListener. If you
 // set both the property and add a listener, they both execute.
-const DispatchDirectOptions = EventManagerBase.DispatchDirectOptions;
+pub const DispatchDirectOptions = EventManagerBase.DispatchDirectOptions;
 
 // Direct dispatch for non-DOM targets (Window, XHR, AbortSignal) or DOM nodes with
 // property handlers. No propagation - just calls the handler and registered listeners.
@@ -138,7 +138,7 @@ pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, 
     window._current_event = event;
     defer window._current_event = prev_event;
 
-    try self.base.dispatchDirect(frame.call_arena, frame.js, target, event, handler, frame._session, opts);
+    try self.base.dispatchDirect(frame.call_arena, frame.js, target, event, handler, frame._page, opts);
 }
 
 /// Check if there are any listeners for a direct dispatch (non-DOM target).
@@ -617,7 +617,7 @@ const ActivationState = struct {
         const event = try Event.initTrusted(comptime .wrap(typ), .{
             .bubbles = true,
             .cancelable = false,
-        }, frame);
+        }, frame._page);
 
         const target = input.asElement().asEventTarget();
         try frame._event_manager.dispatch(target, event);

@@ -346,7 +346,7 @@ test "cdp Node: Registry register" {
     try testing.expectEqual(0, registry.lookup_by_node.count());
 
     var frame = try testing.pageTest("cdp/registry1.html", .{});
-    defer frame._session.removeFrame();
+    defer frame._session.removePage();
     var doc = frame.window._document;
 
     {
@@ -403,12 +403,12 @@ test "cdp Node: search list" {
 
     {
         var frame = try testing.pageTest("cdp/registry2.html", .{});
-        defer frame._session.removeFrame();
+        defer frame._session.removePage();
         var doc = frame.window._document;
 
         {
             const l1 = try doc.querySelectorAll(.wrap("a"), frame);
-            defer l1.deinit(frame._session);
+            defer l1.deinit(frame._page);
             const s1 = try search_list.create(l1._nodes);
             try testing.expectEqual("1", s1.name);
             try testing.expectEqualSlices(u32, &.{ 1, 2 }, s1.node_ids);
@@ -419,7 +419,7 @@ test "cdp Node: search list" {
 
         {
             const l2 = try doc.querySelectorAll(.wrap("#a1"), frame);
-            defer l2.deinit(frame._session);
+            defer l2.deinit(frame._page);
             const s2 = try search_list.create(l2._nodes);
             try testing.expectEqual("2", s2.name);
             try testing.expectEqualSlices(u32, &.{1}, s2.node_ids);
@@ -427,7 +427,7 @@ test "cdp Node: search list" {
 
         {
             const l3 = try doc.querySelectorAll(.wrap("#a2"), frame);
-            defer l3.deinit(frame._session);
+            defer l3.deinit(frame._page);
             const s3 = try search_list.create(l3._nodes);
             try testing.expectEqual("3", s3.name);
             try testing.expectEqualSlices(u32, &.{2}, s3.node_ids);
@@ -443,7 +443,7 @@ test "cdp Node: Writer" {
     defer registry.deinit();
 
     var frame = try testing.pageTest("cdp/registry3.html", .{});
-    defer frame._session.removeFrame();
+    defer frame._session.removePage();
     var doc = frame.window._document;
 
     {

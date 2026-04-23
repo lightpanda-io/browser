@@ -553,9 +553,11 @@ fn execClick(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
 
     // If the click triggered a navigation (e.g. form submission, link click),
     // wait for it to complete.
-    if (session.queued_navigation.items.len != 0) {
-        var runner = session.runner(.{}) catch return ToolError.InternalError;
-        runner.wait(.{ .ms = 10000, .until = .done }) catch return ToolError.NavigationFailed;
+    if (session.currentPage()) |page| {
+        if (page.queued_navigation.items.len != 0) {
+            var runner = session.runner(.{}) catch return ToolError.InternalError;
+            runner.wait(.{ .ms = 10000, .until = .done }) catch return ToolError.NavigationFailed;
+        }
     }
 
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
@@ -711,9 +713,11 @@ fn execPress(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
     };
 
     // Pressing Enter on a form input triggers implicit form submission.
-    if (session.queued_navigation.items.len != 0) {
-        var runner = session.runner(.{}) catch return ToolError.InternalError;
-        runner.wait(.{ .ms = 10000, .until = .done }) catch return ToolError.NavigationFailed;
+    if (session.currentPage()) |p| {
+        if (p.queued_navigation.items.len != 0) {
+            var runner = session.runner(.{}) catch return ToolError.InternalError;
+            runner.wait(.{ .ms = 10000, .until = .done }) catch return ToolError.NavigationFailed;
+        }
     }
 
     const current_page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
@@ -882,11 +886,11 @@ fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const
 }
 
 fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!void {
-    if (session.frame != null) {
+    if (session.page != null) {
         registry.reset();
-        session.removeFrame();
+        session.removePage();
     }
-    const page = session.createFrame() catch return ToolError.NavigationFailed;
+    const page = session.createPage() catch return ToolError.NavigationFailed;
     _ = page.navigate(url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },

@@ -33,10 +33,8 @@ pub fn main() !void {
     }
     lp.log.opts.level = .warn;
     const config = try lp.Config.init(allocator, "legacy-test", .{ .serve = .{
-        .common = .{
-            .tls_verify_host = false,
-            .user_agent_suffix = "internal-tester",
-        },
+        .insecure_disable_tls_host_verification = true,
+        .user_agent_suffix = "internal-tester",
     } });
     defer config.deinit(allocator);
 
@@ -94,8 +92,8 @@ pub fn main() !void {
 pub fn run(allocator: Allocator, file: []const u8, session: *lp.Session) !void {
     const url = try std.fmt.allocPrintSentinel(allocator, "http://localhost:9589/{s}", .{file}, 0);
 
-    const frame = try session.createFrame();
-    defer session.removeFrame();
+    const frame = try session.createPage();
+    defer session.removePage();
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);

@@ -55,7 +55,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
     switch (args.mode) {
         .help => {
-            args.printUsageAndExit(args.mode.help);
+            args.printUsageAndExit(true);
             return std.process.cleanExit();
         },
         .version => {
@@ -72,9 +72,9 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
     if (args.logFormat()) |lf| {
         log.opts.format = lf;
     }
-    if (args.logFilterScopes()) |lfs| {
-        log.opts.filter_scopes = lfs;
-    }
+
+    // Set log filter scopes.
+    log.opts.filter_scopes = args.logFilterScopes().items;
 
     // must be installed before any other threads
     const sighandler = try main_arena.create(SigHandler);
@@ -118,16 +118,16 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
         },
         .fetch => |opts| {
             const url = opts.url;
-            log.debug(.app, "startup", .{ .mode = "fetch", .dump_mode = opts.dump_mode, .url = url, .snapshot = app.snapshot.fromEmbedded() });
+            log.debug(.app, "startup", .{ .mode = "fetch", .dump_mode = opts.dump, .url = url, .snapshot = app.snapshot.fromEmbedded() });
 
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = opts.wait_ms,
                 .wait_until = opts.wait_until,
                 .wait_script = opts.wait_script,
                 .wait_selector = opts.wait_selector,
-                .dump_mode = opts.dump_mode,
+                .dump_mode = opts.dump,
                 .dump = .{
-                    .strip = opts.strip,
+                    .strip = opts.strip_mode,
                     .with_base = opts.with_base,
                     .with_frames = opts.with_frames,
                 },
@@ -135,11 +135,11 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
             var stdout = std.fs.File.stdout();
             var writer = stdout.writer(&.{});
-            if (opts.dump_mode != null) {
+            if (opts.dump != null) {
                 fetch_opts.writer = &writer.interface;
             }
 
-            var worker_thread = try std.Thread.spawn(.{}, fetchThread, .{ app, url, fetch_opts });
+            var worker_thread = try std.Thread.spawn(.{}, fetchThread, .{ app, url.?, fetch_opts });
             defer worker_thread.join();
 
             app.network.run();

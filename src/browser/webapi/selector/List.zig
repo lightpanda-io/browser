@@ -18,8 +18,8 @@
 
 const std = @import("std");
 
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
-const Session = @import("../../Session.zig");
 
 const Node = @import("../Node.zig");
 const Part = @import("Selector.zig").Part;
@@ -41,8 +41,8 @@ pub const EntryIterator = GenericIterator(Iterator, null);
 pub const KeyIterator = GenericIterator(Iterator, "0");
 pub const ValueIterator = GenericIterator(Iterator, "1");
 
-pub fn deinit(self: *const List, session: *Session) void {
-    session.releaseArena(self._arena);
+pub fn deinit(self: *const List, page: *Page) void {
+    page.releaseArena(self._arena);
 }
 
 pub fn collect(

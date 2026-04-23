@@ -212,7 +212,7 @@ fn close(cmd: *CDP.Command) !void {
     const target_id = bc.target_id orelse return error.TargetNotLoaded;
 
     // can't be null if we have a target_id
-    lp.assert(bc.session.frame != null, "CDP.frame.close null frame", .{});
+    lp.assert(bc.session.page != null, "CDP.frame.close null frame", .{});
 
     try cmd.sendResult(.{}, .{});
 
@@ -235,7 +235,7 @@ fn close(cmd: *CDP.Command) !void {
         bc.session_id = null;
     }
 
-    bc.session.removeFrame();
+    bc.session.removePage();
     for (bc.isolated_worlds.items) |world| {
         world.deinit();
     }
@@ -307,7 +307,7 @@ fn navigate(cmd: *CDP.Command) !void {
             isolated_world.identity.deinit();
             isolated_world.identity = .{};
         }
-        frame = try session.replaceFrame();
+        frame = try session.replacePage();
     }
 
     const encoded_url = try URL.ensureEncoded(frame.call_arena, params.url, "UTF-8");
@@ -333,7 +333,7 @@ fn doReload(cmd: *CDP.Command) !void {
     const session = bc.session;
     var frame = session.currentFrame() orelse return error.FrameNotLoaded;
 
-    // Dupe URL before replaceFrame() frees the old frame's arena.
+    // Dupe URL before replacePage() frees the old frame's arena.
     const reload_url = try cmd.arena.dupeZ(u8, frame.url);
 
     if (frame._load_state != .waiting) {
@@ -343,7 +343,7 @@ fn doReload(cmd: *CDP.Command) !void {
             isolated_world.identity.deinit();
             isolated_world.identity = .{};
         }
-        frame = try session.replaceFrame();
+        frame = try session.replacePage();
     }
 
     try frame.navigate(reload_url, .{

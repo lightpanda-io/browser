@@ -353,12 +353,12 @@ pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*
     const normalized = std.ascii.lowerString(&frame.buf, event_type);
 
     if (std.mem.eql(u8, normalized, "event") or std.mem.eql(u8, normalized, "events") or std.mem.eql(u8, normalized, "htmlevents")) {
-        return Event.init("", null, frame);
+        return Event.init("", null, frame._page);
     }
 
     if (std.mem.eql(u8, normalized, "customevent") or std.mem.eql(u8, normalized, "customevents")) {
         const CustomEvent = @import("event/CustomEvent.zig");
-        return (try CustomEvent.init("", null, frame)).asEvent();
+        return (try CustomEvent.init("", null, frame._page)).asEvent();
     }
 
     if (std.mem.eql(u8, normalized, "keyboardevent")) {
@@ -378,7 +378,7 @@ pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*
 
     if (std.mem.eql(u8, normalized, "messageevent")) {
         const MessageEvent = @import("event/MessageEvent.zig");
-        return (try MessageEvent.init("", null, frame._session)).asEvent();
+        return (try MessageEvent.init("", null, frame._page)).asEvent();
     }
 
     if (std.mem.eql(u8, normalized, "uievent") or std.mem.eql(u8, normalized, "uievents")) {

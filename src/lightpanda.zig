@@ -23,12 +23,14 @@ pub const App = @import("App.zig");
 pub const Network = @import("network/Network.zig");
 pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
-pub const URL = @import("browser/URL.zig");
 pub const String = @import("string.zig").String;
+pub const Notification = @import("Notification.zig");
+
+pub const URL = @import("browser/URL.zig");
+pub const Page = @import("browser/Page.zig");
 pub const Frame = @import("browser/Frame.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
-pub const Notification = @import("Notification.zig");
 
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
@@ -41,13 +43,13 @@ pub const forms = @import("browser/forms.zig");
 pub const actions = @import("browser/actions.zig");
 pub const structured_data = @import("browser/structured_data.zig");
 pub const tools = @import("browser/tools.zig");
+pub const HttpClient = @import("browser/HttpClient.zig");
+
 pub const mcp = @import("mcp.zig");
 pub const agent = @import("agent.zig");
 pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
-
-pub const HttpClient = @import("browser/HttpClient.zig");
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -82,7 +84,7 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
         }
     }
 
-    const frame = try session.createFrame();
+    const frame = try session.createPage();
 
     // // Comment this out to get a profile of the JS code in v8/profile.json.
     // // You can open this in Chrome's profiler.
@@ -264,7 +266,7 @@ pub fn RC(comptime T: type) type {
             self._refs += 1;
         }
 
-        pub fn release(self: *@This(), value: anytype, session: *Session) void {
+        pub fn release(self: *@This(), value: anytype, page: *Page) void {
             assert(self._refs > 0, "release overflow", .{ .type = @typeName(@TypeOf(value)) });
 
             const refs = self._refs - 1;
@@ -272,7 +274,7 @@ pub fn RC(comptime T: type) type {
             if (refs > 0) {
                 return;
             }
-            value.deinit(session);
+            value.deinit(page);
         }
 
         pub fn format(self: @This(), writer: *std.Io.Writer) !void {

@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Session = @import("../Session.zig");
+const Page = @import("../Page.zig");
 
 const Mime = @import("../Mime.zig");
 
@@ -61,7 +61,8 @@ const InitOptions = struct {
 
 /// Creates a new Blob from JS values with optional MIME validation.
 /// This is the JS Constructor
-pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, session: *Session) !*Blob {
+pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob {
+    const session = page.session;
     const arena = try session.getArena(.large, "Blob");
     errdefer session.releaseArena(arena);
 
@@ -94,9 +95,9 @@ pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, session: *Session) !
 }
 
 /// Creates a new Blob from raw byte slices (for internal Zig use).
-pub fn initFromBytes(data: []const u8, content_type: []const u8, validate_mime: bool, session: *Session) !*Blob {
-    const arena = try session.getArena(.large, "Blob");
-    errdefer session.releaseArena(arena);
+pub fn initFromBytes(data: []const u8, content_type: []const u8, validate_mime: bool, page: *Page) !*Blob {
+    const arena = try page.getArena(.large, "Blob");
+    errdefer page.releaseArena(arena);
 
     const mime = try validateMimeType(arena, content_type, validate_mime);
 
@@ -137,12 +138,12 @@ fn validateMimeType(arena: Allocator, mime_type: []const u8, full_validation: bo
     return buf;
 }
 
-pub fn deinit(self: *Blob, session: *Session) void {
-    session.releaseArena(self._arena);
+pub fn deinit(self: *Blob, page: *Page) void {
+    page.releaseArena(self._arena);
 }
 
-pub fn releaseRef(self: *Blob, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *Blob, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *Blob) void {
@@ -291,7 +292,7 @@ pub fn slice(
     start_: ?i32,
     end_: ?i32,
     content_type_: ?[]const u8,
-    session: *Session,
+    page: *Page,
 ) !*Blob {
     const data = self._slice;
 
@@ -312,7 +313,7 @@ pub fn slice(
         break :blk @min(data.len, @max(start, @as(u31, @intCast(requested_end))));
     };
 
-    return Blob.initFromBytes(data[start..end], content_type_ orelse "", false, session);
+    return Blob.initFromBytes(data[start..end], content_type_ orelse "", false, page);
 }
 
 /// Returns the size of the Blob in bytes.

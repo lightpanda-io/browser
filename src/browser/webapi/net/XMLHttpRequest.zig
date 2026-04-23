@@ -25,8 +25,8 @@ const http = @import("../../../network/http.zig");
 
 const URL = @import("../../URL.zig");
 const Mime = @import("../../Mime.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
-const Session = @import("../../Session.zig");
 
 const Node = @import("../Node.zig");
 const Event = @import("../Event.zig");
@@ -100,7 +100,7 @@ pub fn init(frame: *Frame) !*XMLHttpRequest {
     return self;
 }
 
-pub fn deinit(self: *XMLHttpRequest, session: *Session) void {
+pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
     if (self._http_response) |resp| {
         resp.abort(error.Abort);
         self._http_response = null;
@@ -135,19 +135,19 @@ pub fn deinit(self: *XMLHttpRequest, session: *Session) void {
         }
     }
 
-    session.releaseArena(self._arena);
+    page.releaseArena(self._arena);
 }
 
 fn releaseSelfRef(self: *XMLHttpRequest) void {
     if (self._active_request == false) {
         return;
     }
-    self.releaseRef(self._frame._session);
+    self.releaseRef(self._frame._page);
     self._active_request = false;
 }
 
-pub fn releaseRef(self: *XMLHttpRequest, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *XMLHttpRequest, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *XMLHttpRequest) void {
@@ -588,7 +588,7 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, frame: *Frame) !void {
 
     const target = self.asEventTarget();
     if (frame._event_manager.hasDirectListeners(target, "readystatechange", self._on_ready_state_change)) {
-        const event = try Event.initTrusted(.wrap("readystatechange"), .{}, frame);
+        const event = try Event.initTrusted(.wrap("readystatechange"), .{}, frame._page);
         try frame._event_manager.dispatchDirect(target, event, self._on_ready_state_change, .{ .context = "XHR state change" });
     }
 }

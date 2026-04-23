@@ -19,7 +19,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Session = @import("../../Session.zig");
+const Page = @import("../../Page.zig");
 
 const Event = @import("../Event.zig");
 
@@ -38,13 +38,13 @@ const PromiseRejectionEventOptions = struct {
 
 const Options = Event.inheritOptions(PromiseRejectionEvent, PromiseRejectionEventOptions);
 
-pub fn init(typ: []const u8, opts_: ?Options, session: *Session) !*PromiseRejectionEvent {
-    const arena = try session.getArena(.tiny, "PromiseRejectionEvent");
-    errdefer session.releaseArena(arena);
+pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*PromiseRejectionEvent {
+    const arena = try page.getArena(.tiny, "PromiseRejectionEvent");
+    errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 
     const opts = opts_ orelse Options{};
-    const event = try session.factory.event(
+    const event = try page.factory.event(
         arena,
         type_string,
         PromiseRejectionEvent{
@@ -58,22 +58,22 @@ pub fn init(typ: []const u8, opts_: ?Options, session: *Session) !*PromiseReject
     return event;
 }
 
-pub fn deinit(self: *PromiseRejectionEvent, session: *Session) void {
+pub fn deinit(self: *PromiseRejectionEvent, page: *Page) void {
     if (self._reason) |r| {
         r.release();
     }
     if (self._promise) |p| {
         p.release();
     }
-    self._proto.deinit(session);
+    self._proto.deinit(page);
+}
+
+pub fn releaseRef(self: *PromiseRejectionEvent, page: *Page) void {
+    self._proto._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *PromiseRejectionEvent) void {
     self._proto.acquireRef();
-}
-
-pub fn releaseRef(self: *PromiseRejectionEvent, session: *Session) void {
-    self._proto._rc.release(self, session);
 }
 
 pub fn asEvent(self: *PromiseRejectionEvent) *Event {
