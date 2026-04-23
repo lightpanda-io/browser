@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Cache = @import("Cache.zig");
-const Http = @import("../http.zig");
 
 const log = lp.log;
 const CacheRequest = Cache.CacheRequest;
@@ -89,7 +88,7 @@ pub fn deinit(self: *FsCache) void {
     self.dir.close();
 }
 
-pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?Cache.CachedResponse {
+pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?CachedResponse {
     const hashed_key = hashKey(req.url);
     const cache_p = cachePath(&hashed_key);
 

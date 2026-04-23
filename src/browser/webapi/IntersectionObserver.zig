@@ -29,7 +29,6 @@ const DOMRect = @import("DOMRect.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub fn registerTypes() []const type {
     return &.{

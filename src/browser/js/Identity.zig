@@ -29,8 +29,6 @@
 const std = @import("std");
 const js = @import("js.zig");
 
-const Session = @import("../Session.zig");
-
 const v8 = js.v8;
 
 const Identity = @This();

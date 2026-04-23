@@ -20,7 +20,6 @@ const std = @import("std");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 
-const URL = @import("../../URL.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");

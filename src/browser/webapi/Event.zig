@@ -28,7 +28,6 @@ const EventTarget = @import("EventTarget.zig");
 
 const String = lp.String;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const Event = @This();
 

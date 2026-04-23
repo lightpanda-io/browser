@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const http = @import("../../network/http.zig");
 
 const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");

@@ -23,7 +23,6 @@ const Document = @import("../../Document.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
-const URL = @import("../../URL.zig");
 
 const IFrame = @This();
 _proto: *HtmlElement,

@@ -18,8 +18,6 @@
 
 const std = @import("std");
 
-const Frame = @import("../../Frame.zig");
-
 const Node = @import("../Node.zig");
 const Attribute = @import("../element/Attribute.zig");
 

@@ -23,7 +23,6 @@ const string = @import("../../string.zig");
 const Frame = @import("../Frame.zig");
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
-const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 
 const js = @import("js.zig");
 const Local = @import("Local.zig");
