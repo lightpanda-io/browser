@@ -19,7 +19,7 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
-const Session = @import("../Session.zig");
+const Page = @import("../Page.zig");
 const EventManager = @import("../EventManager.zig");
 
 const Event = @import("Event.zig");
@@ -52,8 +52,8 @@ pub const Type = union(enum) {
     websocket: *@import("net/WebSocket.zig"),
 };
 
-pub fn init(session: *Session) !*EventTarget {
-    return session.factory.create(EventTarget{
+pub fn init(page: *Page) !*EventTarget {
+    return page.factory.create(EventTarget{
         ._type = .generic,
     });
 }
@@ -67,7 +67,7 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
     switch (exec.context.global) {
         .frame => |frame| {
             event.acquireRef();
-            defer _ = event.releaseRef(frame._session);
+            defer _ = event.releaseRef(frame._page);
             try frame._event_manager.dispatch(self, event);
         },
         .worker => |wgs| try wgs.dispatch(self, event, null, .{}),

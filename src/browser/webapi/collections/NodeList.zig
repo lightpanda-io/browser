@@ -20,8 +20,9 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
-const Session = @import("../../Session.zig");
+
 const Node = @import("../Node.zig");
 
 const ChildNodes = @import("ChildNodes.zig");
@@ -41,16 +42,16 @@ _data: union(enum) {
 },
 _rc: lp.RC(u32) = .{},
 
-pub fn deinit(self: *NodeList, session: *Session) void {
+pub fn deinit(self: *NodeList, page: *Page) void {
     switch (self._data) {
-        .child_nodes => |cn| cn.deinit(session),
-        .selector_list => |list| list.deinit(session),
+        .child_nodes => |cn| cn.deinit(page),
+        .selector_list => |list| list.deinit(page),
         else => {},
     }
 }
 
-pub fn releaseRef(self: *NodeList, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *NodeList, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *NodeList) void {
@@ -115,12 +116,12 @@ const Iterator = struct {
 
     const Entry = struct { u32, *Node };
 
-    pub fn deinit(self: *Iterator, session: *Session) void {
-        self.list.deinit(session);
+    pub fn deinit(self: *Iterator, page: *Page) void {
+        self.list.deinit(page);
     }
 
-    pub fn releaseRef(self: *Iterator, session: *Session) void {
-        self.list.releaseRef(session);
+    pub fn releaseRef(self: *Iterator, page: *Page) void {
+        self.list.releaseRef(page);
     }
 
     pub fn acquireRef(self: *Iterator) void {

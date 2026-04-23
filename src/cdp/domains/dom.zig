@@ -101,7 +101,7 @@ fn performSearch(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
     const list = try Selector.querySelectorAll(frame.window._document.asNode(), params.query, frame);
-    defer list.deinit(frame._session);
+    defer list.deinit(frame._page);
 
     const search = try bc.node_search_list.create(list._nodes);
 
@@ -252,7 +252,7 @@ fn querySelectorAll(cmd: *CDP.Command) !void {
     };
 
     const selected_nodes = try Selector.querySelectorAll(node.dom, params.selector, frame);
-    defer selected_nodes.deinit(frame._session);
+    defer selected_nodes.deinit(frame._page);
 
     const nodes = selected_nodes._nodes;
 

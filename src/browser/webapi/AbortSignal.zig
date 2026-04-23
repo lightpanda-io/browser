@@ -83,7 +83,7 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !void
     switch (exec.context.global) {
         inline else => |g| {
             if (g._event_manager.hasDirectListeners(target, "abort", on_abort)) {
-                const event = try Event.initTrusted(comptime .wrap("abort"), .{}, g._session);
+                const event = try Event.initTrusted(comptime .wrap("abort"), .{}, g._page);
                 try g.dispatch(target, event, on_abort, .{ .context = "abort signal" });
             }
         },

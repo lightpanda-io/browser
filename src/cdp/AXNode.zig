@@ -1366,7 +1366,7 @@ test "AXNode: writer" {
     defer registry.deinit();
 
     var frame = try testing.pageTest("cdp/dom3.html", .{});
-    defer frame._session.removeFrame();
+    defer frame._session.removePage();
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
@@ -1440,7 +1440,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
     defer registry.deinit();
 
     var frame = try testing.pageTest("cdp/ax_tree.html", .{});
-    defer frame._session.removeFrame();
+    defer frame._session.removePage();
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());

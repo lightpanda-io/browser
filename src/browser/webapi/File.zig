@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Session = @import("../Session.zig");
+const Page = @import("../Page.zig");
 
 const Blob = @import("Blob.zig");
 
@@ -29,10 +29,11 @@ const File = @This();
 _proto: *Blob,
 
 // TODO: Implement File API.
-pub fn init(session: *Session) !*File {
+pub fn init(page: *Page) !*File {
+    const session = page.session;
     const arena = try session.getArena(.tiny, "File");
     errdefer session.releaseArena(arena);
-    return session.factory.blob(arena, File{ ._proto = undefined });
+    return page.factory.blob(arena, File{ ._proto = undefined });
 }
 
 pub const JsApi = struct {

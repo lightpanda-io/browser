@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Session = @import("../../Session.zig");
+const Page = @import("../../Page.zig");
 
 const Event = @import("../Event.zig");
 
@@ -47,23 +47,23 @@ pub const ErrorEventOptions = struct {
 
 const Options = Event.inheritOptions(ErrorEvent, ErrorEventOptions);
 
-pub fn init(typ: []const u8, opts_: ?Options, session: *Session) !*ErrorEvent {
-    const arena = try session.getArena(.small, "ErrorEvent");
-    errdefer session.releaseArena(arena);
+pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*ErrorEvent {
+    const arena = try page.getArena(.small, "ErrorEvent");
+    errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
-    return initWithTrusted(arena, type_string, opts_, false, session);
+    return initWithTrusted(arena, type_string, opts_, false, page);
 }
 
-pub fn initTrusted(typ: String, opts_: ?Options, session: *Session) !*ErrorEvent {
-    const arena = try session.getArena(.small, "ErrorEvent.trusted");
-    errdefer session.releaseArena(arena);
-    return initWithTrusted(arena, typ, opts_, true, session);
+pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*ErrorEvent {
+    const arena = try page.getArena(.small, "ErrorEvent.trusted");
+    errdefer page.releaseArena(arena);
+    return initWithTrusted(arena, typ, opts_, true, page);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, session: *Session) !*ErrorEvent {
+fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, page: *Page) !*ErrorEvent {
     const opts = opts_ orelse Options{};
 
-    const event = try session.factory.event(
+    const event = try page.factory.event(
         arena,
         typ,
         ErrorEvent{
@@ -81,19 +81,19 @@ fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool
     return event;
 }
 
-pub fn deinit(self: *ErrorEvent, session: *Session) void {
+pub fn deinit(self: *ErrorEvent, page: *Page) void {
     if (self._error) |e| {
         e.release();
     }
-    self._proto.deinit(session);
+    self._proto.deinit(page);
+}
+
+pub fn releaseRef(self: *ErrorEvent, page: *Page) void {
+    self._proto._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *ErrorEvent) void {
     self._proto.acquireRef();
-}
-
-pub fn releaseRef(self: *ErrorEvent, session: *Session) void {
-    self._proto._rc.release(self, session);
 }
 
 pub fn asEvent(self: *ErrorEvent) *Event {

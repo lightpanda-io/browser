@@ -20,8 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
-const Session = @import("../Session.zig");
 
 const Range = @import("Range.zig");
 const AbstractRange = @import("AbstractRange.zig");
@@ -39,15 +39,15 @@ _direction: SelectionDirection = .none,
 
 pub const init: Selection = .{};
 
-pub fn deinit(self: *Selection, session: *Session) void {
+pub fn deinit(self: *Selection, page: *Page) void {
     if (self._range) |r| {
-        r.asAbstractRange().releaseRef(session);
+        r.asAbstractRange().releaseRef(page);
         self._range = null;
     }
 }
 
-pub fn releaseRef(self: *Selection, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *Selection, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *Selection) void {
@@ -55,7 +55,7 @@ pub fn acquireRef(self: *Selection) void {
 }
 
 fn dispatchSelectionChangeEvent(frame: *Frame) !void {
-    const event = try Event.init("selectionchange", .{}, frame);
+    const event = try Event.init("selectionchange", .{}, frame._page);
     try frame._event_manager.dispatch(frame.document.asEventTarget(), event);
 }
 
@@ -703,7 +703,7 @@ pub fn toString(self: *const Selection, frame: *Frame) ![]const u8 {
 
 fn setRange(self: *Selection, new_range: ?*Range, frame: *Frame) void {
     if (self._range) |existing| {
-        _ = existing.asAbstractRange().releaseRef(frame._session);
+        _ = existing.asAbstractRange().releaseRef(frame._page);
     }
     if (new_range) |nr| {
         nr.asAbstractRange().acquireRef();

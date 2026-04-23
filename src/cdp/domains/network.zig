@@ -187,7 +187,7 @@ fn getCookies(cmd: *CDP.Command) !void {
     const params = (try cmd.params(GetCookiesParam)) orelse GetCookiesParam{};
 
     // If not specified, use the URLs of the page and all of its subframes. TODO subframes
-    const frame_url = if (bc.session.frame) |frame| frame.url else null;
+    const frame_url = if (bc.session.currentFrame()) |frame| frame.url else null;
     const param_urls = params.urls orelse &[_][:0]const u8{frame_url orelse return error.InvalidParams};
 
     var urls = try std.ArrayList(CdpStorage.PreparedUri).initCapacity(cmd.arena, param_urls.len);
@@ -239,7 +239,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
 
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a frame.
-    lp.assert(bc.session.frame != null, "CDP.network.httpRequestFail null frame", .{});
+    lp.assert(bc.session.page != null, "CDP.network.httpRequestFail null frame", .{});
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{

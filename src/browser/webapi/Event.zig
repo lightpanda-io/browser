@@ -20,8 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
-const Session = @import("../Session.zig");
 
 const Node = @import("Node.zig");
 const EventTarget = @import("EventTarget.zig");
@@ -89,16 +89,16 @@ pub const Options = struct {
     composed: bool = false,
 };
 
-pub fn init(typ: []const u8, opts_: ?Options, frame: *Frame) !*Event {
-    const arena = try frame.getArena(.tiny, "Event");
-    errdefer frame.releaseArena(arena);
+pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
+    const arena = try page.getArena(.tiny, "Event");
+    errdefer page.releaseArena(arena);
     const str = try String.init(arena, typ, .{});
     return initWithTrusted(arena, str, opts_, false);
 }
 
-pub fn initTrusted(typ: String, opts_: ?Options, session: *Session) !*Event {
-    const arena = try session.getArena(.tiny, "Event.trusted");
-    errdefer session.releaseArena(arena);
+pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*Event {
+    const arena = try page.getArena(.tiny, "Event.trusted");
+    errdefer page.releaseArena(arena);
     return initWithTrusted(arena, typ, opts_, true);
 }
 
@@ -145,13 +145,12 @@ pub fn acquireRef(self: *Event) void {
     self._rc.acquire();
 }
 
-/// Force cleanup on Session shutdown.
-pub fn deinit(self: *Event, session: *Session) void {
-    session.releaseArena(self._arena);
+pub fn deinit(self: *Event, page: *Page) void {
+    page.releaseArena(self._arena);
 }
 
-pub fn releaseRef(self: *Event, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *Event, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn as(self: *Event, comptime T: type) *T {

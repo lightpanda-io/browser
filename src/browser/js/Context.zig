@@ -27,6 +27,7 @@ const Scheduler = @import("Scheduler.zig");
 const Execution = @import("Execution.zig");
 
 const Frame = @import("../Frame.zig");
+const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
 const ScriptManager = @import("../ScriptManager.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
@@ -69,7 +70,14 @@ pub const GlobalScope = union(enum) {
 id: usize,
 env: *Env,
 global: GlobalScope,
-session: *Session,
+
+// The Page this Context belongs to. For main-world frame contexts, this is
+// the Page of the frame. For worker contexts, this is the Page of the
+// worker's parent frame — a worker's v8 globals and identity tracking live
+// on the same Page as its owning frame (worker dies with its page). The
+// Session is always reachable via `page.session`.
+page: *Page,
+
 isolate: js.Isolate,
 
 // Per-context microtask queue for isolation between contexts
@@ -114,7 +122,7 @@ origin: *Origin,
 identity: *js.Identity,
 
 // Allocator to use for identity map operations. For main world contexts this is
-// session.frame_arena, for isolated worlds it's the isolated world's arena.
+// page.frame_arena, for isolated worlds it's the isolated world's arena.
 identity_arena: Allocator,
 
 // Unlike other v8 types, like functions or objects, modules are not shared
@@ -207,7 +215,7 @@ pub fn deinit(self: *Context) void {
         v8.v8__Global__Reset(global);
     }
 
-    self.session.releaseOrigin(self.origin);
+    self.page.releaseOrigin(self.origin);
 
     // Clear the embedder data so that if V8 keeps this context alive
     // (because objects created in it are still referenced), we don't
@@ -234,9 +242,9 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
         lp.assert(self.origin.rc == 1, "Ref opaque origin", .{ .rc = self.origin.rc });
     }
 
-    const origin = try self.session.getOrCreateOrigin(key);
+    const origin = try self.page.getOrCreateOrigin(key);
 
-    self.session.releaseOrigin(self.origin);
+    self.page.releaseOrigin(self.origin);
     self.origin = origin;
 
     {
@@ -252,11 +260,11 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
 }
 
 pub fn trackGlobal(self: *Context, global: v8.Global) !void {
-    return self.session.globals.append(self.session.frame_arena, global);
+    return self.page.globals.append(self.page.frame_arena, global);
 }
 
 pub fn trackTemp(self: *Context, global: v8.Global) !void {
-    return self.session.temps.put(self.session.frame_arena, global.data_ptr, global);
+    return self.page.temps.put(self.page.frame_arena, global.data_ptr, global);
 }
 
 pub const IdentityResult = struct {

@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
-const Session = @import("Session.zig");
+const Page = @import("Page.zig");
 
 const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
@@ -216,7 +216,7 @@ pub fn dispatchDirect(
     target: *EventTarget,
     event: *Event,
     handler: anytype,
-    session: *Session,
+    page: *Page,
     comptime opts: DispatchDirectOptions,
 ) DispatchError!void {
     if (comptime IS_DEBUG) {
@@ -224,7 +224,7 @@ pub fn dispatchDirect(
     }
 
     event.acquireRef();
-    defer _ = event.releaseRef(session);
+    defer _ = event.releaseRef(page);
 
     if (comptime opts.inject_target) {
         event._target = target;

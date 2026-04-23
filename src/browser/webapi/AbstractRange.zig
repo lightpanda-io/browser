@@ -20,8 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-
-const Session = @import("../Session.zig");
+const Page = @import("../Page.zig");
 
 const Node = @import("Node.zig");
 const Range = @import("Range.zig");
@@ -49,15 +48,15 @@ pub fn acquireRef(self: *AbstractRange) void {
     self._rc.acquire();
 }
 
-pub fn deinit(self: *AbstractRange, session: *Session) void {
-    if (session.findFrameByLoaderId(self._frame_loader_id)) |frame| {
+pub fn deinit(self: *AbstractRange, page: *Page) void {
+    if (page.findFrameByLoaderId(self._frame_loader_id)) |frame| {
         frame._live_ranges.remove(&self._range_link);
     }
-    session.releaseArena(self._arena);
+    page.releaseArena(self._arena);
 }
 
-pub fn releaseRef(self: *AbstractRange, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *AbstractRange, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub const Type = union(enum) {

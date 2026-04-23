@@ -474,8 +474,8 @@ pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !voi
 
 fn testMarkdownHTML(html: []const u8, expected: []const u8) !void {
     const testing = @import("../testing.zig");
-    const frame = try testing.test_session.createFrame();
-    defer testing.test_session.removeFrame();
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
     frame.url = "http://localhost/";
 
     const doc = frame.window._document;
@@ -677,8 +677,8 @@ test "browser.markdown: skip empty links" {
 
 test "browser.markdown: resolve links" {
     const testing = @import("../testing.zig");
-    const frame = try testing.test_session.createFrame();
-    defer testing.test_session.removeFrame();
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
     frame.url = "https://example.com/a/index.html";
 
     const doc = frame.window._document;

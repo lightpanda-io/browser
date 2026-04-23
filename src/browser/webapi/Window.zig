@@ -362,7 +362,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
         .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
-    }, frame._session);
+    }, frame._page);
 
     // Invoke window.onerror callback if set (per WHATWG spec, this is called
     // with 5 arguments: message, source, lineno, colno, error)
@@ -530,17 +530,16 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
         frame,
         struct {
             fn dispatch(_frame: *anyopaque) anyerror!?u32 {
-                const p: *Frame = @ptrCast(@alignCast(_frame));
-                const pos = &p.window._scroll_pos;
+                const f: *Frame = @ptrCast(@alignCast(_frame));
+                const pos = &f.window._scroll_pos;
                 // If the state isn't scroll, we can ignore safely to throttle
                 // the events.
                 if (pos.state != .scroll) {
                     return null;
                 }
 
-                const event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, p._session);
-                try p._event_manager.dispatch(p.document.asEventTarget(), event);
-
+                const event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, f._page);
+                try f._event_manager.dispatch(f.document.asEventTarget(), event);
                 pos.state = .end;
 
                 return null;
@@ -554,8 +553,8 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
         frame,
         struct {
             fn dispatch(_frame: *anyopaque) anyerror!?u32 {
-                const p: *Frame = @ptrCast(@alignCast(_frame));
-                const pos = &p.window._scroll_pos;
+                const f: *Frame = @ptrCast(@alignCast(_frame));
+                const pos = &f.window._scroll_pos;
                 // Dispatch only if the state is .end.
                 // If a scroll is pending, retry in 10ms.
                 // If the state is .end, the event has been dispatched, so
@@ -565,9 +564,8 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
                     .end => {},
                     .done => return null,
                 }
-                const event = try Event.initTrusted(comptime .wrap("scrollend"), .{ .bubbles = true }, p._session);
-                try p._event_manager.dispatch(p.document.asEventTarget(), event);
-
+                const event = try Event.initTrusted(comptime .wrap("scrollend"), .{ .bubbles = true }, f._page);
+                try f._event_manager.dispatch(f.document.asEventTarget(), event);
                 pos.state = .done;
 
                 return null;
@@ -622,7 +620,7 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.
         const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
             .reason = if (rejection.reason()) |r| try r.temp() else null,
             .promise = try rejection.promise().temp(),
-        }, frame._session)).asEvent();
+        }, frame._page)).asEvent();
         try frame._event_manager.dispatchDirect(target, event, attribute_callback, .{ .context = "window.unhandledrejection" });
     }
 }
@@ -811,7 +809,7 @@ const PostMessageCallback = struct {
                 .source = self.source,
                 .bubbles = false,
                 .cancelable = false,
-            }, frame._session)).asEvent();
+            }, frame._page)).asEvent();
             try frame._event_manager.dispatchDirect(event_target, event, window._on_message, .{ .context = "window.postMessage" });
         }
 

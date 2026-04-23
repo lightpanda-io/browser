@@ -40,7 +40,7 @@ http_client: *HttpClient,
 pub const Opts = struct {};
 
 pub fn init(session: *Session, _: Opts) !Runner {
-    const frame = &(session.frame orelse return error.NoPage);
+    const frame = session.currentFrame() orelse return error.NoPage;
 
     return .{
         .frame = frame,
@@ -150,10 +150,12 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
         },
         .html, .complete => {
             const session = self.session;
-            if (session.queued_navigation.items.len != 0) {
-                try session.processQueuedNavigation();
-                self.frame = &session.frame.?; // might have changed
-                return .{ .ok = 0 };
+            if (session.currentPage()) |page| {
+                if (page.queued_navigation.items.len != 0) {
+                    try session.processQueuedNavigation();
+                    self.frame = session.currentFrame().?; // might have changed
+                    return .{ .ok = 0 };
+                }
             }
             const browser = session.browser;
 
@@ -323,7 +325,7 @@ test "Runner: no page" {
 
 test "Runner: waitForSelector timeout" {
     const frame = try testing.pageTest("runner/runner1.html", .{});
-    defer frame._session.removeFrame();
+    defer frame._session.removePage();
 
     var runner = try frame._session.runner(.{});
     try testing.expectError(error.Timeout, runner.waitForSelector("#nope", 10));
@@ -332,7 +334,7 @@ test "Runner: waitForSelector timeout" {
 test "Runner: waitForSelector" {
     defer testing.reset();
     const frame = try testing.pageTest("runner/runner1.html", .{});
-    defer frame._session.removeFrame();
+    defer frame._session.removePage();
 
     var runner = try frame._session.runner(.{});
     const el = try runner.waitForSelector("#sel1", 10);
@@ -341,7 +343,7 @@ test "Runner: waitForSelector" {
 
 test "Runner: waitForScript timeout" {
     const frame = try testing.pageTest("runner/runner1.html", .{});
-    defer frame._session.removeFrame();
+    defer frame._session.removePage();
 
     var runner = try frame._session.runner(.{});
     try testing.expectError(error.Timeout, runner.waitForScript("document.querySelector('#nope')", 10));
@@ -349,7 +351,7 @@ test "Runner: waitForScript timeout" {
 
 test "Runner: waitForScript" {
     const frame = try testing.pageTest("runner/runner1.html", .{});
-    defer frame._session.removeFrame();
+    defer frame._session.removePage();
 
     var runner = try frame._session.runner(.{});
     try runner.waitForScript("document.querySelector('#sel1')", 10);

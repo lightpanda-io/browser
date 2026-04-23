@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const string = @import("../../string.zig");
 
 const Frame = @import("../Frame.zig");
+const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 
@@ -447,8 +448,12 @@ fn tupleFieldName(comptime i: usize) [:0]const u8 {
     };
 }
 
-fn isPage(comptime T: type) bool {
+fn isFrame(comptime T: type) bool {
     return T == *Frame or T == *const Frame;
+}
+
+fn isPage(comptime T: type) bool {
+    return T == *Page or T == *const Page;
 }
 
 fn isSession(comptime T: type) bool {
@@ -460,19 +465,19 @@ fn isExecution(comptime T: type) bool {
 }
 
 fn getGlobalArg(comptime T: type, ctx: *Context) T {
-    if (comptime isPage(T)) {
+    if (comptime isFrame(T)) {
         return switch (ctx.global) {
             .frame => |frame| frame,
             .worker => unreachable,
         };
     }
 
-    if (comptime isExecution(T)) {
-        return &ctx.execution;
+    if (comptime isPage(T)) {
+        return ctx.page;
     }
 
-    if (comptime isSession(T)) {
-        return ctx.session;
+    if (comptime isExecution(T)) {
+        return &ctx.execution;
     }
 
     @compileError("Unsupported global arg type: " ++ @typeName(T));
@@ -761,17 +766,17 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             return args;
         }
 
-        // If the last parameter is the Page or Worker, set it, and exclude it
-        // from our params slice, because we don't want to bind it to
-        // a JS argument
+        // If the last parameter is Frame/Page/Session/Execution, set it from
+        // context and exclude it from our params slice, because we don't want
+        // to bind it to a JS argument.
         const LastParamType = params[params.len - 1].type.?;
-        if (comptime isPage(LastParamType) or isExecution(LastParamType) or isSession(LastParamType)) {
+        if (comptime isFrame(LastParamType) or isPage(LastParamType) or isExecution(LastParamType) or isSession(LastParamType)) {
             @field(args, tupleFieldName(params.len - 1 + offset)) = getGlobalArg(LastParamType, local.ctx);
             break :blk params[0 .. params.len - 1];
         }
 
-        // we have neither a Page, Execution, nor a JsObject. All params must be
-        // bound to a JavaScript value.
+        // we have neither a Frame/Page/Session/Execution nor a JsObject.
+        // All params must be bound to a JavaScript value.
         break :blk params;
     };
 
@@ -818,7 +823,9 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             }
         }
 
-        if (comptime isPage(param.type.?)) {
+        if (comptime isFrame(param.type.?)) {
+            @compileError("Frame must be the last parameter: " ++ @typeName(F));
+        } else if (comptime isPage(param.type.?)) {
             @compileError("Page must be the last parameter: " ++ @typeName(F));
         } else if (comptime isExecution(param.type.?)) {
             @compileError("Execution must be the last parameter: " ++ @typeName(F));

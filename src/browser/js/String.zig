@@ -57,7 +57,7 @@ fn _toSlice(self: String, comptime null_terminate: bool, allocator: Allocator) !
 
 pub fn toSSO(self: String, comptime global: bool) !(if (global) lp.String.Global else lp.String) {
     if (comptime global) {
-        return .{ .str = try self.toSSOWithAlloc(self.local.ctx.session.frame_arena) };
+        return .{ .str = try self.toSSOWithAlloc(self.local.ctx.page.frame_arena) };
     }
     return self.toSSOWithAlloc(self.local.call_arena);
 }

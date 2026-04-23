@@ -22,6 +22,7 @@ const builtin = @import("builtin");
 
 const JS = @import("js/js.zig");
 const Mime = @import("Mime.zig");
+const Page = @import("Page.zig");
 const Factory = @import("Factory.zig");
 const Session = @import("Session.zig");
 const EventManager = @import("EventManager.zig");
@@ -86,6 +87,8 @@ _frame_id: u32,
 // This is the "id" of this specific instance of the frame. It changes on every
 // navigate.
 _loader_id: u32,
+
+_page: *Page,
 
 _session: *Session,
 
@@ -255,35 +258,39 @@ _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
 
-pub fn init(self: *Frame, frame_id: u32, session: *Session, parent: ?*Frame) !void {
+pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
     if (comptime IS_DEBUG) {
         log.debug(.frame, "frame.init", .{});
     }
 
+    const session = page.session;
     const call_arena = try session.getArena(.medium, "call_arena");
     errdefer session.releaseArena(call_arena);
 
-    const factory = &session.factory;
+    const factory = &page.factory;
     const document = (try factory.document(Node.Document.HTMLDocument{
         ._proto = undefined,
     })).asDocument();
 
+    const arena = page.frame_arena;
+
     self.* = .{
         .js = undefined,
+        .arena = arena,
         .parent = parent,
-        .arena = session.frame_arena,
         .document = document,
         .window = undefined,
         .call_arena = call_arena,
         ._frame_id = frame_id,
-        ._loader_id = session.nextLoaderId(),
+        ._page = page,
         ._session = session,
+        ._loader_id = session.nextLoaderId(),
         ._factory = factory,
         ._pending_loads = 1, // always 1 for the ScriptManager
         ._type = if (parent == null) .root else .frame,
         ._style_manager = undefined,
         ._script_manager = undefined,
-        ._event_manager = EventManager.init(session.frame_arena, self),
+        ._event_manager = EventManager.init(arena, self),
     };
     self._to_load = &self._to_load_1;
 
@@ -322,8 +329,8 @@ pub fn init(self: *Frame, frame_id: u32, session: *Session, parent: ?*Frame) !vo
     errdefer self._script_manager.deinit();
 
     self.js = try browser.env.createContext(self, .{
-        .identity = &session.identity,
-        .identity_arena = session.frame_arena,
+        .identity = &page.identity,
+        .identity_arena = arena,
         .call_arena = self.call_arena,
     });
     errdefer browser.env.destroyContext(self.js);
@@ -363,10 +370,10 @@ pub fn deinit(self: *Frame, abort_http: bool) void {
         // stats.print(&stream) catch unreachable;
     }
 
-    const session = self._session;
+    const page = self._page;
 
     if (self._queued_navigation) |qn| {
-        session.releaseArena(qn.arena);
+        page.releaseArena(qn.arena);
     }
 
     {
@@ -374,7 +381,7 @@ pub fn deinit(self: *Frame, abort_http: bool) void {
         {
             var it = self._blob_urls.valueIterator();
             while (it.next()) |blob| {
-                blob.*.releaseRef(session);
+                blob.*.releaseRef(page);
             }
         }
 
@@ -383,39 +390,40 @@ pub fn deinit(self: *Frame, abort_http: bool) void {
             while (node) |n| {
                 node = n.next; // capture before we potentially delete observer
                 const observer: *MutationObserver = @fieldParentPtr("node", n);
-                observer.releaseRef(session);
+                observer.releaseRef(page);
             }
         }
 
         for (self._intersection_observers.items) |observer| {
-            observer.releaseRef(session);
+            observer.releaseRef(page);
         }
 
         var document = self.window._document;
-        document._selection.releaseRef(session);
+        document._selection.releaseRef(page);
 
         if (document._fonts) |f| {
-            f.releaseRef(session);
+            f.releaseRef(page);
         }
     }
 
-    session.browser.env.destroyContext(self.js);
+    const browser = page.session.browser;
+    browser.env.destroyContext(self.js);
 
     self._script_manager.shutdown = true;
 
     if (self.parent == null) {
-        session.browser.http_client.abort();
+        browser.http_client.abort();
     } else if (abort_http) {
         // a small optimization, it's faster to abort _everything_ on the root
         // frame, so we prefer that. But if it's just the frame that's going
         // away (a frame navigation) then we'll abort the frame-related requests
-        session.browser.http_client.abortFrame(self._frame_id);
+        browser.http_client.abortFrame(self._frame_id);
     }
 
     self._script_manager.deinit();
     self._style_manager.deinit();
 
-    session.releaseArena(self.call_arena);
+    page.releaseArena(self.call_arena);
 }
 
 pub fn trackWorker(self: *Frame, worker: *Worker) !void {
@@ -807,7 +815,7 @@ pub fn documentIsLoaded(self: *Frame) void {
 }
 
 pub fn _documentIsLoaded(self: *Frame) !void {
-    const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self._session);
+    const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self._page);
     try self._event_manager.dispatch(
         self.document.asEventTarget(),
         event,
@@ -834,7 +842,7 @@ pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame) void {
     defer entered.exit();
 
     blk: {
-        const event = Event.initTrusted(comptime .wrap("load"), .{}, self._session) catch |err| {
+        const event = Event.initTrusted(comptime .wrap("load"), .{}, self._page) catch |err| {
             log.err(.frame, "iframe event init", .{ .err = err, .url = iframe._src });
             break :blk;
         };
@@ -888,7 +896,7 @@ fn _documentIsComplete(self: *Frame) !void {
     // Dispatch window.load event.
     const window_target = self.window.asEventTarget();
     if (self._event_manager.hasDirectListeners(window_target, "load", self.window._on_load)) {
-        const event = try Event.initTrusted(comptime .wrap("load"), .{}, self._session);
+        const event = try Event.initTrusted(comptime .wrap("load"), .{}, self._page);
         // This event is weird, it's dispatched directly on the window, but
         // with the document as the target.
         event._target = self.document.asEventTarget();
@@ -1213,7 +1221,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     const new_frame = try self.arena.create(Frame);
     const frame_id = session.nextFrameId();
 
-    try Frame.init(new_frame, frame_id, session, self);
+    try Frame.init(new_frame, frame_id, self._page, self);
     errdefer new_frame.deinit(true);
 
     self._pending_loads += 1;
@@ -1431,7 +1439,7 @@ pub fn registerMutationObserver(self: *Frame, observer: *MutationObserver) !void
 }
 
 pub fn unregisterMutationObserver(self: *Frame, observer: *MutationObserver) void {
-    observer.releaseRef(self._session);
+    observer.releaseRef(self._page);
     self._mutation_observers.remove(&observer.node);
 }
 
@@ -1443,7 +1451,7 @@ pub fn registerIntersectionObserver(self: *Frame, observer: *IntersectionObserve
 pub fn unregisterIntersectionObserver(self: *Frame, observer: *IntersectionObserver) void {
     for (self._intersection_observers.items, 0..) |obs, i| {
         if (obs == observer) {
-            observer.releaseRef(self._session);
+            observer.releaseRef(self._page);
             _ = self._intersection_observers.swapRemove(i);
             return;
         }
@@ -1468,7 +1476,7 @@ pub fn dispatchLoad(self: *Frame) !void {
 
     for (to_process.items) |html_element| {
         if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, self)) {
-            const event = try Event.initTrusted(comptime .wrap("load"), .{}, self._session);
+            const event = try Event.initTrusted(comptime .wrap("load"), .{}, self._page);
             try self._event_manager.dispatch(html_element.asEventTarget(), event);
         }
     }
@@ -1579,7 +1587,7 @@ pub fn deliverSlotchangeEvents(self: *Frame) void {
     self._slots_pending_slotchange.clearRetainingCapacity();
 
     for (slots) |slot| {
-        const event = Event.initTrusted(comptime .wrap("slotchange"), .{ .bubbles = true }, self._session) catch |err| {
+        const event = Event.initTrusted(comptime .wrap("slotchange"), .{ .bubbles = true }, self._page) catch |err| {
             log.err(.frame, "deliverSlotchange.init", .{ .err = err, .type = self._type, .url = self.url });
             continue;
         };
@@ -3520,7 +3528,7 @@ pub fn handleClick(self: *Frame, target: *Node) !void {
 pub fn triggerKeyboard(self: *Frame, keyboard_event: *KeyboardEvent) !void {
     const event = keyboard_event.asEvent();
     const element = self.window._document._active_element orelse {
-        event.deinit(self._session);
+        event.deinit(self._page);
         return;
     };
 
@@ -3616,7 +3624,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 
         // so submit_event is still valid when we check _prevent_default
         submit_event.acquireRef();
-        defer _ = submit_event.releaseRef(self._session);
+        defer _ = submit_event.releaseRef(self._page);
 
         try self._event_manager.dispatch(form_element.asEventTarget(), submit_event);
         // If the submit event was prevented, don't submit the form

@@ -21,8 +21,8 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 
+const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
-const Session = @import("../Session.zig");
 const EventTarget = @import("EventTarget.zig");
 const ProgressEvent = @import("event/ProgressEvent.zig");
 const Blob = @import("Blob.zig");
@@ -73,7 +73,7 @@ pub fn init(frame: *Frame) !*FileReader {
     });
 }
 
-pub fn deinit(self: *FileReader, session: *Session) void {
+pub fn deinit(self: *FileReader, page: *Page) void {
     if (self._on_abort) |func| func.release();
     if (self._on_error) |func| func.release();
     if (self._on_load) |func| func.release();
@@ -81,11 +81,11 @@ pub fn deinit(self: *FileReader, session: *Session) void {
     if (self._on_load_start) |func| func.release();
     if (self._on_progress) |func| func.release();
 
-    session.releaseArena(self._arena);
+    page.releaseArena(self._arena);
 }
 
-pub fn releaseRef(self: *FileReader, session: *Session) void {
-    self._rc.release(self, session);
+pub fn releaseRef(self: *FileReader, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn acquireRef(self: *FileReader) void {
