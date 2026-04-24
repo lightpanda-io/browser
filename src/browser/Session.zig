@@ -281,6 +281,13 @@ pub fn processQueuedNavigation(self: *Session) !void {
 }
 
 fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) !void {
+    // Popups live on the Page as top-level browsing contexts without a
+    // parent or iframe element. Their re-navigation path is simpler than
+    // iframes — no parent bookkeeping to patch.
+    if (frame.parent == null and frame.iframe == null) {
+        return self.processPopupNavigation(frame, qn);
+    }
+
     lp.assert(frame.parent != null, "root queued navigation", .{});
 
     const iframe = frame.iframe.?;
@@ -327,6 +334,45 @@ fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
 
     frame.navigate(qn.url, qn.opts) catch |err| {
         log.err(.browser, "queued frame navigation error", .{ .err = err });
+        return err;
+    };
+}
+
+// Re-navigates a popup Frame in place. The Frame pointer stays stable
+// (scripts in the opener may hold a cached Window ref — though the Window
+// object inside is replaced, matching how iframes behave on navigation).
+fn processPopupNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) !void {
+    frame._queued_navigation = null;
+    defer self.releaseArena(qn.arena);
+
+    // Preserve popup identity fields. _name lives in the Page arena and
+    // survives Frame.deinit; _opener is just a pointer.
+    const saved_name = frame.window._name;
+    const saved_opener = frame.window._opener;
+    const frame_id = frame._frame_id;
+    const page = self.currentPage().?;
+
+    frame.deinit(true);
+    frame.* = undefined;
+
+    errdefer {
+        // If re-init fails, drop from popups so we don't leave a corpse.
+        for (page.popups.items, 0..) |p, i| {
+            if (p == frame) {
+                _ = page.popups.swapRemove(i);
+                break;
+            }
+        }
+    }
+
+    try Frame.init(frame, frame_id, page, null);
+    errdefer frame.deinit(true);
+
+    frame.window._name = saved_name;
+    frame.window._opener = saved_opener;
+
+    frame.navigate(qn.url, qn.opts) catch |err| {
+        log.err(.browser, "queued popup navigation error", .{ .err = err });
         return err;
     };
 }

@@ -88,6 +88,14 @@ queued_queued_navigation: std.ArrayList(*Frame) = .empty,
 // The root Frame of this Page. Non-optional — a Page always has a root frame.
 frame: Frame,
 
+// Popup Frames opened by window.open. They are top-level browsing contexts
+// (parent == null, no iframe element) but share this Page's factory, arena,
+// and identity map.
+// Their lifetime is bound to the Page: on Page.deinit they
+// are torn down. TODO: this is far from correct. An new window shouldn't be tied
+// to the original page like this.
+popups: std.ArrayList(*Frame) = .empty,
+
 // Initialize a Page and its root Frame.
 pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
     const frame_arena = try session.arena_pool.acquire(.large, "Page.frame_arena");
@@ -107,6 +115,11 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
 // Tear down the Page and its root Frame. Equivalent to the old
 // Session.removePage + Session.resetFrameResources.
 pub fn deinit(self: *Page, abort_http: bool) void {
+    for (self.popups.items) |popup| {
+        popup.deinit(abort_http);
+    }
+    self.popups = .empty;
+
     self.frame.deinit(abort_http);
 
     const session = self.session;
@@ -215,6 +228,16 @@ pub fn scheduleNavigation(self: *Page, frame: *Frame) !void {
 
 pub fn findFrameByFrameId(self: *Page, frame_id: u32) ?*Frame {
     return findFrameBy(&self.frame, "_frame_id", frame_id);
+}
+
+// Returns the popup Frame registered under `name`, or null.
+pub fn findPopupByName(self: *Page, name: []const u8) ?*Frame {
+    for (self.popups.items) |popup| {
+        if (std.mem.eql(u8, popup.window._name, name)) {
+            return popup;
+        }
+    }
+    return null;
 }
 
 pub fn findFrameByLoaderId(self: *Page, loader_id: u32) ?*Frame {
