@@ -110,16 +110,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         return error.TaskWithoutProvider;
     }
 
-    // An API key is only required when an LLM turn will actually run.
-    const api_key: ?[:0]const u8 = if (opts.provider) |p|
-        getEnvApiKey(p) orelse if (needs_llm) {
-            log.fatal(.app, "missing API key", .{
-                .hint = "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY",
-            });
-            return error.MissingApiKey;
-        } else null
-    else
-        null;
+    const api_key = try resolveApiKey(opts.provider, needs_llm);
 
     const tool_executor = try ToolExecutor.init(allocator, app);
     errdefer tool_executor.deinit();
@@ -437,12 +428,9 @@ fn formatReplacement(arena: std.mem.Allocator, original_span: []const u8, raw_li
 fn flushReplacements(self: *Self, path: []const u8, content: []const u8, replacements: []const Replacement) void {
     if (replacements.len == 0) return;
 
-    // Write .bak backup of the original script.
     const bak_path = std.fmt.allocPrint(self.allocator, "{s}.bak", .{path}) catch return;
     defer self.allocator.free(bak_path);
-    if (std.fs.cwd().createFile(bak_path, .{})) |bak_file| {
-        defer bak_file.close();
-        bak_file.writeAll(content) catch {};
+    if (std.fs.cwd().writeFile(.{ .sub_path = bak_path, .data = content })) {
         self.terminal.printInfoFmt("Backup saved to {s}", .{bak_path});
     } else |_| {}
 
@@ -879,6 +867,18 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     };
     self.terminal.printToolResult(tool_name, tool_result);
     return tool_result;
+}
+
+/// An API key is only required when an LLM turn will actually run. Without a
+/// provider, no key is needed.
+fn resolveApiKey(provider: ?Config.AiProvider, needs_llm: bool) !?[:0]const u8 {
+    const p = provider orelse return null;
+    if (getEnvApiKey(p)) |key| return key;
+    if (!needs_llm) return null;
+    log.fatal(.app, "missing API key", .{
+        .hint = "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY",
+    });
+    return error.MissingApiKey;
 }
 
 fn getEnvApiKey(provider_type: Config.AiProvider) ?[:0]const u8 {

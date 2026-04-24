@@ -545,6 +545,14 @@ fn resolveTarget(
     return ToolError.InvalidParams;
 }
 
+/// Look up an optional DOM node by backendNodeId. Returns null when no id was
+/// supplied, errors when the id doesn't resolve.
+fn resolveOptionalNode(registry: *CDPNode.Registry, backend_node_id: ?CDPNode.Id) ToolError!?*DOMNode {
+    const id = backend_node_id orelse return null;
+    const node = registry.lookup_by_id.get(id) orelse return ToolError.NodeNotFound;
+    return node.dom;
+}
+
 /// Render `"{prefix} ({target}){suffix}. Page url: X, title: Y"`, where target
 /// is either `"selector: X"` or `"backendNodeId: N"`.
 fn formatActionResult(
@@ -556,13 +564,14 @@ fn formatActionResult(
     page: *lp.Frame,
 ) ToolError![]const u8 {
     const page_title = page.getTitle() catch null;
-    const target = if (selector) |sel|
-        std.fmt.allocPrint(arena, "selector: {s}", .{sel}) catch return ToolError.InternalError
+    return if (selector) |sel|
+        std.fmt.allocPrint(arena, "{s} (selector: {s}){s}. Page url: {s}, title: {s}", .{
+            prefix, sel, suffix, page.url, page_title orelse "(none)",
+        }) catch ToolError.InternalError
     else
-        std.fmt.allocPrint(arena, "backendNodeId: {d}", .{backend_node_id.?}) catch return ToolError.InternalError;
-    return std.fmt.allocPrint(arena, "{s} ({s}){s}. Page url: {s}, title: {s}", .{
-        prefix, target, suffix, page.url, page_title orelse "(none)",
-    }) catch ToolError.InternalError;
+        std.fmt.allocPrint(arena, "{s} (backendNodeId: {d}){s}. Page url: {s}, title: {s}", .{
+            prefix, backend_node_id.?, suffix, page.url, page_title orelse "(none)",
+        }) catch ToolError.InternalError;
 }
 
 fn execClick(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -587,7 +596,6 @@ fn execClick(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.
         }
     }
 
-    // Report the post-click frame — navigation may have swapped in a new page.
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
     return formatActionResult(arena, "Clicked element", args.selector, args.backendNodeId, "", page);
 }
@@ -623,12 +631,7 @@ fn execScroll(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
-
-    var target_node: ?*DOMNode = null;
-    if (args.backendNodeId) |node_id| {
-        const node = registry.lookup_by_id.get(node_id) orelse return ToolError.NodeNotFound;
-        target_node = node.dom;
-    }
+    const target_node = try resolveOptionalNode(registry, args.backendNodeId);
 
     lp.actions.scroll(target_node, args.x, args.y, page) catch |err| {
         if (err == error.InvalidNodeType) return ToolError.InvalidParams;
@@ -688,12 +691,7 @@ fn execPress(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.
     const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
 
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
-
-    var target_node: ?*DOMNode = null;
-    if (args.backendNodeId) |node_id| {
-        const node = registry.lookup_by_id.get(node_id) orelse return ToolError.NodeNotFound;
-        target_node = node.dom;
-    }
+    const target_node = try resolveOptionalNode(registry, args.backendNodeId);
 
     lp.actions.press(target_node, args.key, page) catch |err| {
         if (err == error.InvalidNodeType) return ToolError.InvalidParams;
