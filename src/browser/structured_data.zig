@@ -317,9 +317,12 @@ fn collectLink(
 
 const testing = @import("../testing.zig");
 
+// Caller is responsible for `defer testing.test_session.removePage()` after a
+// successful call — the returned StructuredData's slices live in the page's
+// call_arena, which is released when the page is removed.
 fn testStructuredData(html: []const u8) !StructuredData {
     const frame = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
+    errdefer testing.test_session.removePage();
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
@@ -341,6 +344,7 @@ test "structured_data: json-ld" {
         \\{"@context":"https://schema.org","@type":"Article","headline":"Test"}
         \\</script>
     );
+    defer testing.test_session.removePage();
     try testing.expectEqual(1, data.json_ld.len);
     try testing.expect(std.mem.indexOf(u8, data.json_ld[0], "Article") != null);
 }
@@ -351,6 +355,7 @@ test "structured_data: multiple json-ld" {
         \\<script type="application/ld+json">{"@type":"BreadcrumbList"}</script>
         \\<script type="text/javascript">var x = 1;</script>
     );
+    defer testing.test_session.removePage();
     try testing.expectEqual(2, data.json_ld.len);
 }
 
@@ -363,6 +368,7 @@ test "structured_data: open graph" {
         \\<meta property="og:type" content="article">
         \\<meta property="article:published_time" content="2026-03-10">
     );
+    defer testing.test_session.removePage();
     try testing.expectEqual(6, data.open_graph.len);
     try testing.expectEqual("My Page", findProperty(data.open_graph, "title").?);
     try testing.expectEqual("article", findProperty(data.open_graph, "type").?);
@@ -376,6 +382,7 @@ test "structured_data: open graph duplicate keys" {
         \\<meta property="og:image" content="https://example.com/img2.jpg">
         \\<meta property="og:image" content="https://example.com/img3.jpg">
     );
+    defer testing.test_session.removePage();
     // Duplicate keys are preserved as separate Property entries.
     try testing.expectEqual(4, data.open_graph.len);
 
@@ -404,6 +411,7 @@ test "structured_data: twitter card" {
         \\<meta name="twitter:site" content="@example">
         \\<meta name="twitter:title" content="My Page">
     );
+    defer testing.test_session.removePage();
     try testing.expectEqual(3, data.twitter_card.len);
     try testing.expectEqual("summary_large_image", findProperty(data.twitter_card, "card").?);
     try testing.expectEqual("@example", findProperty(data.twitter_card, "site").?);
@@ -417,6 +425,7 @@ test "structured_data: meta tags" {
         \\<meta name="keywords" content="test, example">
         \\<meta name="robots" content="index, follow">
     );
+    defer testing.test_session.removePage();
     try testing.expectEqual("Page Title", findProperty(data.meta, "title").?);
     try testing.expectEqual("A test page", findProperty(data.meta, "description").?);
     try testing.expectEqual("Test Author", findProperty(data.meta, "author").?);
@@ -431,6 +440,7 @@ test "structured_data: link elements" {
         \\<link rel="manifest" href="/manifest.json">
         \\<link rel="stylesheet" href="/style.css">
     );
+    defer testing.test_session.removePage();
     try testing.expectEqual(3, data.links.len);
     try testing.expectEqual("https://example.com/page", findProperty(data.links, "canonical").?);
     // stylesheet should be filtered out
@@ -442,6 +452,7 @@ test "structured_data: alternate links" {
         \\<link rel="alternate" href="https://example.com/fr" hreflang="fr" title="French">
         \\<link rel="alternate" href="https://example.com/de" hreflang="de">
     );
+    defer testing.test_session.removePage();
     try testing.expectEqual(2, data.alternate.len);
     try testing.expectEqual("fr", data.alternate[0].hreflang.?);
     try testing.expectEqual("French", data.alternate[0].title.?);
@@ -455,6 +466,7 @@ test "structured_data: non-metadata elements ignored" {
         \\<p>More text</p>
         \\<a href="/link">Link</a>
     );
+    defer testing.test_session.removePage();
     try testing.expectEqual(0, data.json_ld.len);
     try testing.expectEqual(0, data.open_graph.len);
     try testing.expectEqual(0, data.twitter_card.len);
@@ -467,6 +479,7 @@ test "structured_data: charset and http-equiv" {
         \\<meta charset="utf-8">
         \\<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     );
+    defer testing.test_session.removePage();
     try testing.expectEqual("utf-8", findProperty(data.meta, "charset").?);
     try testing.expectEqual("text/html; charset=utf-8", findProperty(data.meta, "Content-Type").?);
 }
@@ -480,6 +493,7 @@ test "structured_data: mixed content" {
         \\<link rel="canonical" href="https://example.com">
         \\<script type="application/ld+json">{"@type":"WebSite"}</script>
     );
+    defer testing.test_session.removePage();
     try testing.expectEqual(1, data.json_ld.len);
     try testing.expectEqual(1, data.open_graph.len);
     try testing.expectEqual(1, data.twitter_card.len);
