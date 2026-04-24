@@ -614,7 +614,7 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
 
     var cmds: std.ArrayList(Command.Command) = .empty;
     for (result.tool_calls_made) |tc| {
-        if (!std.mem.startsWith(u8, tc.result, "Error:")) {
+        if (!tc.is_error) {
             if (Command.fromToolCall(ma, tc.name, tc.arguments)) |cmd| {
                 cmds.append(arena, cmd) catch {};
             }
@@ -728,7 +728,7 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
 
     var recorded_any = false;
     for (result.tool_calls_made) |tc| {
-        if (!std.mem.startsWith(u8, tc.result, "Error:")) {
+        if (!tc.is_error) {
             if (Command.fromToolCall(ma, tc.name, tc.arguments)) |cmd| {
                 if (!recorded_any) {
                     if (record_comment) |c| self.recorder.recordComment(c);
@@ -859,14 +859,17 @@ fn buildUserMessageParts(
     return parts.toOwnedSlice(ma);
 }
 
-fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) []const u8 {
+fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) zenai.provider.Client.ToolHandler.Result {
     const self: *Self = @ptrCast(@alignCast(ctx));
     self.terminal.printToolCall(tool_name, arguments);
-    const tool_result = self.tool_executor.call(allocator, tool_name, arguments) catch |err| blk: {
-        break :blk std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
-    };
-    self.terminal.printToolResult(tool_name, tool_result);
-    return tool_result;
+    if (self.tool_executor.call(allocator, tool_name, arguments)) |output| {
+        self.terminal.printToolResult(tool_name, output);
+        return .{ .content = output };
+    } else |err| {
+        const msg = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
+        self.terminal.printToolResult(tool_name, msg);
+        return .{ .content = msg, .is_error = true };
+    }
 }
 
 /// An API key is only required when an LLM turn will actually run. Without a
