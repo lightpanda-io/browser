@@ -224,7 +224,7 @@ pub const Writer = struct {
                 break :blk "relatedElement";
             },
             .aria_label, .alt, .title, .placeholder, .value => blk: {
-                // No sure if it's correct for .value case.
+                // Not sure if it's correct for .value case.
                 try w.objectField("attribute");
                 try w.write(@tagName(source));
                 break :blk "attribute";
@@ -1292,7 +1292,7 @@ fn writeString(s: []const u8, w: anytype) !void {
 fn stripWhitespaces(s: []const u8, writer: anytype) !void {
     var start: usize = 0;
     var prev_w: ?bool = null;
-    var is_w: bool = undefined;
+    var is_w: bool = false;
 
     for (s, 0..) |c, i| {
         is_w = std.ascii.isWhitespace(c);

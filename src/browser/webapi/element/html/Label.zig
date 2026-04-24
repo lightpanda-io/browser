@@ -95,6 +95,11 @@ pub const LabelByForIndex = struct {
         }
         return self.map.get(id);
     }
+
+    pub fn deinit(self: *LabelByForIndex) void {
+        self.map.deinit();
+        self.populated = false;
+    }
 };
 
 /// Collects the `<label>` elements associated with a labellable form control.

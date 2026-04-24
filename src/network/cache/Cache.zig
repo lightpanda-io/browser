@@ -77,8 +77,8 @@ pub const CacheControl = struct {
             }
 
             if (std.mem.startsWith(u8, directive, "max-age=")) {
-                if (!max_s_age_set) {
-                    if (std.fmt.parseInt(u64, directive[8..], 10) catch null) |max_age| {
+                if (std.fmt.parseInt(u64, directive[8..], 10) catch null) |max_age| {
+                    if (!max_s_age_set) {
                         cc.max_age = max_age;
                         max_age_set = true;
                     }
@@ -86,8 +86,8 @@ pub const CacheControl = struct {
             } else if (std.mem.startsWith(u8, directive, "s-maxage=")) {
                 if (std.fmt.parseInt(u64, directive[9..], 10) catch null) |max_age| {
                     cc.max_age = max_age;
-                    max_age_set = true;
                     max_s_age_set = true;
+                    max_age_set = true;
                 }
             }
         }

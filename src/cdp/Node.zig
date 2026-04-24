@@ -84,6 +84,9 @@ pub const Registry = struct {
 
         const id = self.node_id;
         self.node_id = id + 1;
+        if (self.node_id == 0) {
+            return error.NodeIdOverflow;
+        }
 
         node.* = .{
             .id = id,
@@ -199,7 +202,7 @@ pub const Search = struct {
 };
 
 // Need a custom writer, because we can't just serialize the node as-is.
-// Sometimes we want to serializ the node without children, sometimes with just
+// Sometimes we want to serialize the node without children, sometimes with just
 // its direct children, and sometimes the entire tree.
 // (For now, we only support direct children)
 

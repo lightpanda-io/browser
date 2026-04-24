@@ -128,6 +128,9 @@ const ZigToCurlAllocator = struct {
         std.debug.assert(@sizeOf(Block) == alignment);
     }
 
+    // SAFETY: instance is set once during early initialization before any
+    // threads exist, and is only read afterward. ZigToCurlAllocator is passed
+    // to libcurl which uses it only from the same thread that initialized it.
     var instance: ?ZigToCurlAllocator = null;
 
     allocator: Allocator,
@@ -643,7 +646,9 @@ pub fn releaseConnection(self: *Network, conn: *http.Connection) void {
         },
         else => {
             conn.reset(self.config, self.ca_blob, self.ip_filter) catch |err| {
-                lp.assert(false, "couldn't reset curl easy", .{ .err = err });
+                lp.log.err(.network, "couldn't reset curl easy", .{ .err = err });
+                conn.deinit();
+                return;
             };
             self.conn_mutex.lock();
             defer self.conn_mutex.unlock();
@@ -703,7 +708,7 @@ const LineWriter = struct {
         while (remain.len > 64) {
             try writer.writeAll(remain[0..64]);
             try writer.writeByte('\n');
-            remain = data[len..];
+            remain = remain[64..];
         }
         try writer.writeAll(remain);
         self.col = col + remain.len;

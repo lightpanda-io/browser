@@ -257,6 +257,7 @@ pub fn put(self: *FsCache, meta: CachedMetadata, body: []const u8) !void {
     };
     self.dir.rename(&cache_tmp_p, &cache_p) catch |e| {
         log.err(.cache, "rename", .{ .url = meta.url, .from = &cache_tmp_p, .to = &cache_p, .err = e });
+        self.dir.deleteFile(&cache_tmp_p) catch |_| {};
         return e;
     };
 

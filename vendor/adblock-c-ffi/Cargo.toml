@@ -1,0 +1,13 @@
+[package]
+name = "adblock-c-ffi"
+version = "1.0.0"
+edition = "2021"
+license = "MPL-2.0"
+
+[dependencies]
+adblock = { version = "0.12.2", features = ["full-regex-handling", "debug-info", "css-validation", "single-thread"] }
+serde_json = "1.0"
+
+[lib]
+name = "adblock_c_ffi"
+crate-type = ["staticlib"]

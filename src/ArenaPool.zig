@@ -88,6 +88,7 @@ pub fn deinit(self: *ArenaPool) void {
             }
         }
         if (has_leaks) {
+            self.entry_pool.deinit();
             @panic("ArenaPool: leaked arenas detected");
         }
         self._leak_track.deinit(self.allocator);

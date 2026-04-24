@@ -217,12 +217,13 @@ pub fn scheduleNavigation(self: *Session, frame: *Frame) !void {
 }
 
 pub fn processQueuedNavigation(self: *Session) !void {
-    const page = self.currentPage() orelse return;
-    const navigations = page.queued_navigation;
-    if (page.queued_navigation == &page.queued_navigation_1) {
-        page.queued_navigation = &page.queued_navigation_2;
+    lp.assert(self.page != null, "Session.processQueuedNavigation - page is null", .{});
+
+    const navigations = self.queued_navigation;
+    if (self.queued_navigation == &self.queued_navigation_1) {
+        self.queued_navigation = &self.queued_navigation_2;
     } else {
-        page.queued_navigation = &page.queued_navigation_1;
+        self.queued_navigation = &self.queued_navigation_1;
     }
 
     if (page.frame._queued_navigation != null) {

@@ -170,7 +170,7 @@ pub fn dispatch(self: *CDP, arena: Allocator, sender: Command.Sender, str: []con
         };
     } else {
         dispatchCommand(&command, input.method) catch |err| {
-            command.sendError(-31998, @errorName(err), .{}) catch return err;
+            command.sendError(-31999, @errorName(err), .{}) catch return err;
         };
     }
 }
@@ -754,9 +754,7 @@ pub const BrowserContext = struct {
     // we should be.
     fn sendInspectorMessage(self: *BrowserContext, msg: []const u8) !void {
         const session_id = self.session_id orelse {
-            // We no longer have an active session. What should we do
-            // in this case?
-            return;
+            return error.NoActiveSession;
         };
 
         const cdp = self.cdp;

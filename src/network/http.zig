@@ -264,6 +264,10 @@ fn opensocketCallback(
         @intCast(address.socktype),
         @intCast(address.protocol),
     ) catch return libcurl.CURL_SOCKET_BAD;
+    posix.fcntl(fd, posix.F.SETFL, posix.O.NONBLOCK) catch {
+        posix.close(fd);
+        return libcurl.CURL_SOCKET_BAD;
+    };
     return fd;
 }
 
