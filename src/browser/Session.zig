@@ -113,6 +113,9 @@ pub fn createPage(self: *Session) !*Frame {
 
     self.page = @as(Page, undefined);
     const page = &self.page.?;
+
+    errdefer self.page = null;
+
     try Page.init(page, self, self.nextFrameId());
     const frame = &page.frame;
 
@@ -184,6 +187,9 @@ pub fn replacePage(self: *Session) !*Frame {
 
     self.page = @as(Page, undefined);
     const page = &self.page.?;
+
+    errdefer self.page = null;
+
     try Page.init(page, self, frame_id);
     return &page.frame;
 }
@@ -296,8 +302,9 @@ fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
     frame.deinit(true);
     frame.* = undefined;
 
-    try Frame.init(frame, frame_id, page, parent);
     errdefer {
+        // If anything fails from this point on, frame.deinit will be called
+        // and we need to remove the frame from the parent's frame list.
         for (parent.child_frames.items, 0..) |f, i| {
             if (f == frame) {
                 parent.child_frames_sorted = false;
@@ -305,6 +312,10 @@ fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
                 break;
             }
         }
+    }
+
+    try Frame.init(frame, frame_id, page, parent);
+    errdefer {
         if (parent_notified) {
             parent._pending_loads -= 1;
         }
@@ -343,11 +354,16 @@ fn processRootQueuedNavigation(self: *Session) !void {
 
     self.page = @as(Page, undefined);
     const page = &self.page.?;
+
+    errdefer self.page = null;
+
     try Page.init(page, self, frame_id);
     const new_frame = &page.frame;
 
     // Creates a new NavigationEventTarget for this frame.
-    try self.navigation.onNewFrame(new_frame);
+    self.navigation.onNewFrame(new_frame) catch |err| {
+        log.err(.browser, "createPage onNewNewFrame", .{ .err = err });
+    };
 
     // start JS env
     // Inform CDP the main frame has been created such that additional context for other Worlds can be created as well
