@@ -21,9 +21,6 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
-const Frame = @import("../../Frame.zig");
-
-const Execution = js.Execution;
 
 pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
     const R = reflect(Inner, field);

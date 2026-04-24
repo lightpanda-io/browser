@@ -23,7 +23,6 @@ const Page = @import("../Page.zig");
 const EventManager = @import("../EventManager.zig");
 
 const Event = @import("Event.zig");
-const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 
 const RegisterOptions = EventManager.RegisterOptions;
 

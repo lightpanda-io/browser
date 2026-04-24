@@ -25,7 +25,6 @@ const MouseEvent = @import("webapi/event/MouseEvent.zig");
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
-const Selector = @import("webapi/selector/Selector.zig");
 
 fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
     const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame._page);

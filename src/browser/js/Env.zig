@@ -25,7 +25,6 @@ const bridge = @import("bridge.zig");
 const Context = @import("Context.zig");
 const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");
-const Snapshot = @import("Snapshot.zig");
 const Inspector = @import("Inspector.zig");
 
 const App = @import("../../App.zig");

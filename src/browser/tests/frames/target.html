@@ -8,10 +8,7 @@
   $('#l1').click();
 
   $('#frame1').onload = () => {
-    // awful! this test is flaky in CI. Not sure why. Let's see if this helps.
-    setTimeout(() => {
-      state.resolve();
-    }, 10);
+    state.resolve();
   }
 
   await state.done(() => {
@@ -19,8 +16,9 @@
   });
 </script>
 
-<script id=form>
+<script id=form type=module>
   {
+    const state = await testing.async();
     let frame2 = document.createElement('iframe');
     frame2.name = 'frame2';
     document.documentElement.appendChild(frame2);
@@ -30,7 +28,11 @@
     form.action = 'support/page.html';
     form.submit();
 
-    testing.onload(() => {
+    frame2.onload = () => {
+      state.resolve();
+    }
+
+    await state.done(() => {
       testing.expectEqual('<html><head></head><body>a-page\n</body></html>', frame2.contentDocument.documentElement.outerHTML);
     });
   }
@@ -41,10 +43,15 @@
   <input type=submit id=submit1 formtarget="frame3">
 </form>
 
-<script id=formtarget>
+<script id=formtarget type=module>
   {
+    const state = await testing.async();
     $('#submit1').click();
-    testing.onload(() => {
+    $('#f3').onload = () => {
+      state.resolve();
+    };
+
+    await state.done(() => {
       testing.expectEqual('<html><head></head><body>a-page\n</body></html>', $('#f3').contentDocument.documentElement.outerHTML);
     });
   }

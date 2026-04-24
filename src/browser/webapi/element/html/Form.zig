@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const js = @import("../../../js/js.zig");
-const URL = @import("../../../URL.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");

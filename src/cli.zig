@@ -264,7 +264,7 @@ pub fn Builder(comptime commands: anytype) type {
 
             const exec_name = std.fs.path.basename(args.next().?);
 
-            const cmd_str: []const u8 = args.next() orelse return error.MissingCommand;
+            const cmd_str: []const u8 = args.next() orelse "serve";
             inline for (commands) |command| {
                 // Match a command.
                 if (std.mem.eql(u8, cmd_str, command.name)) {
