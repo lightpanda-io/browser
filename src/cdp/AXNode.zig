@@ -67,6 +67,14 @@ pub const Writer = struct {
         return w.endArray();
     }
 
+    // CDP spec defines AXNodeId as a string, so nodeId/parentId/childIds must
+    // be serialized as JSON strings even though we track them internally as u32.
+    fn writeIdString(id: u32, w: anytype) !void {
+        var buf: [10]u8 = undefined;
+        const s = try std.fmt.bufPrint(&buf, "{d}", .{id});
+        try w.write(s);
+    }
+
     fn writeNodeChildren(self: *const Writer, parent: AXNode, in_aria_hidden: bool, w: anytype) !void {
         // Add ListMarker for listitem elements
         if (parent.dom.is(DOMNode.Element)) |parent_el| {
@@ -131,7 +139,7 @@ pub const Writer = struct {
         try w.objectField("nodeId");
         const marker_id = self.registry.node_id;
         self.registry.node_id += 1;
-        try w.write(marker_id);
+        try writeIdString(marker_id, w);
 
         try w.objectField("backendDOMNodeId");
         try w.write(marker_id);
@@ -189,7 +197,7 @@ pub const Writer = struct {
         // Get the parent node ID for the parentId field
         const li_registered = try self.registry.register(li_node);
         try w.objectField("parentId");
-        try w.write(li_registered.id);
+        try writeIdString(li_registered.id, w);
 
         try w.objectField("childIds");
         try w.beginArray();
@@ -472,7 +480,7 @@ pub const Writer = struct {
         try w.beginObject();
 
         try w.objectField("nodeId");
-        try w.write(id);
+        try writeIdString(id, w);
 
         try w.objectField("backendDOMNodeId");
         try w.write(id);
@@ -546,7 +554,7 @@ pub const Writer = struct {
         if (n._parent) |p| {
             const parent_node = try self.registry.register(p);
             try w.objectField("parentId");
-            try w.write(parent_node.id);
+            try writeIdString(parent_node.id, w);
         }
 
         // Children
@@ -578,7 +586,7 @@ pub const Writer = struct {
                 }
 
                 const child_node = try registry.register(child);
-                try w.write(child_node.id);
+                try writeIdString(child_node.id, w);
             }
         }
         try w.endArray();
@@ -1393,7 +1401,8 @@ test "AXNode: writer" {
 
     // First node should be the document
     const doc_node = nodes[0].object;
-    try testing.expectEqual(1, doc_node.get("nodeId").?.integer);
+    // CDP spec: AXNodeId is a string; backendDOMNodeId (DOM.BackendNodeId) is an integer.
+    try testing.expectEqual("1", doc_node.get("nodeId").?.string);
     try testing.expectEqual(1, doc_node.get("backendDOMNodeId").?.integer);
     try testing.expectEqual(false, doc_node.get("ignored").?.bool);
 
@@ -1412,6 +1421,21 @@ test "AXNode: writer" {
     // Check childIds array exists
     const child_ids = doc_node.get("childIds").?.array.items;
     try testing.expect(child_ids.len > 0);
+    // CDP spec: childIds entries are AXNodeId (strings).
+    for (child_ids) |cid| {
+        try testing.expect(cid == .string);
+    }
+
+    // A non-root node must have parentId serialized as a string.
+    var saw_parent_id = false;
+    for (nodes[1..]) |node_val| {
+        if (node_val.object.get("parentId")) |pid| {
+            try testing.expect(pid == .string);
+            saw_parent_id = true;
+            break;
+        }
+    }
+    try testing.expect(saw_parent_id);
 
     // Find the h1 node and verify its level property is serialized as a string
     for (nodes) |node_val| {
