@@ -178,6 +178,10 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "Console";
 
+        // Per the console spec, members are own properties of the namespace
+        // object, so Object.entries(console) returns them.
+        pub const own_properties = true;
+
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };

@@ -197,7 +197,8 @@ pub fn getCurrentScript(self: *const HTMLDocument) ?*Element.Html.Script {
 }
 
 pub fn getLocation(self: *const HTMLDocument) ?*@import("Location.zig") {
-    return self._proto._location;
+    const frame = self._proto._frame orelse return null;
+    return frame.window._location;
 }
 
 pub fn setLocation(self: *HTMLDocument, url: [:0]const u8, frame: *Frame) !void {

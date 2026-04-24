@@ -170,12 +170,12 @@ pub fn getOrigin(self: *const Window) []const u8 {
     return self._frame.origin orelse "null";
 }
 
-pub fn getLocation(self: *const Window) *Location {
-    return self._location;
-}
-
 pub fn getSelection(self: *const Window) *Selection {
     return &self._document._selection;
+}
+
+pub fn getLocation(self: *const Window) *Location {
+    return self._location;
 }
 
 pub fn setLocation(self: *Window, url: [:0]const u8, frame: *Frame) !void {
