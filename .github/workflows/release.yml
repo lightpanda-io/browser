@@ -63,6 +63,13 @@ jobs:
           tag: ${{ env.RELEASE }}
           makeLatest: true
 
+      - name: Share binary with packaging jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          path: lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          retention-days: 1
+
   build-linux-aarch64:
     env:
       ARCH: aarch64
@@ -102,6 +109,13 @@ jobs:
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           tag: ${{ env.RELEASE }}
           makeLatest: true
+
+      - name: Share binary with packaging jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          path: lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          retention-days: 1
 
   build-macos-aarch64:
     env:
@@ -182,5 +196,77 @@ jobs:
         with:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          tag: ${{ env.RELEASE }}
+          makeLatest: true
+
+  package-archlinux:
+    if: github.ref_type == 'tag'
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+
+    env:
+      ARCH: ${{ matrix.arch }}
+      OS: linux
+
+    needs:
+      - build-linux-x86_64
+      - build-linux-aarch64
+    runs-on: ubuntu-22.04
+    container: archlinux:latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install packaging deps
+        run: pacman -Syu --noconfirm --needed base-devel sudo
+
+      - name: Download linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          path: .
+
+      - name: Build Arch package
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+          RAW_VERSION="${{ env.RELEASE }}"
+          PKGVER="${RAW_VERSION#v}"
+          PKGREL="1"
+          echo "PKGVER=${PKGVER}" >> "$GITHUB_ENV"
+          echo "PKGREL=${PKGREL}" >> "$GITHUB_ENV"
+
+          mkdir -p pkg
+          cp lightpanda-${{ env.ARCH }}-${{ env.OS }} pkg/
+          cp LICENSE pkg/
+
+          cat > pkg/PKGBUILD <<EOF
+          pkgname=lightpanda
+          pkgver=${PKGVER}
+          pkgrel=${PKGREL}
+          pkgdesc="Lightpanda, headless browser built for AI and automation"
+          arch=('x86_64' 'aarch64')
+          url="https://lightpanda.io"
+          license=('AGPL-3.0-or-later')
+          options=(!strip !debug)
+          package() {
+              install -Dm755 "\$startdir/lightpanda-\$CARCH-linux" "\$pkgdir/usr/bin/lightpanda"
+              install -Dm644 "\$startdir/LICENSE" "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE"
+          }
+          EOF
+
+          chown -R builder:builder pkg
+          cd pkg
+          sudo -u builder env CARCH=${{ env.ARCH }} makepkg -f --noconfirm -A
+
+      - name: Upload Arch package to release
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          artifacts: pkg/lightpanda-${{ env.PKGVER }}-${{ env.PKGREL }}-${{ env.ARCH }}.pkg.tar.zst
           tag: ${{ env.RELEASE }}
           makeLatest: true
