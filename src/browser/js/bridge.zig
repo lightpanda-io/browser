@@ -111,6 +111,10 @@ pub const Constructor = struct {
 
     const Opts = struct {
         dom_exception: bool = false,
+        // When true, the constructor function receives `new.target` (as a
+        // js.Function) as its first parameter. Used by HTMLElement to support
+        // direct instantiation of custom elements via `new MyElement()`.
+        new_target: bool = false,
     };
 
     fn init(comptime T: type, comptime func: anytype, comptime opts: Opts) Constructor {
@@ -125,6 +129,7 @@ pub const Constructor = struct {
 
                 caller.constructor(T, func, handle.?, .{
                     .dom_exception = opts.dom_exception,
+                    .new_target = opts.new_target,
                 });
             }
         }.wrap };

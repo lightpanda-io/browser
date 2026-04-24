@@ -110,6 +110,10 @@ pub const CallOpts = struct {
     dom_exception: bool = false,
     null_as_undefined: bool = false,
     as_typed_array: bool = false,
+    // Constructor-only. When true, `new.target` is pulled from the
+    // FunctionCallbackInfo and passed as the first argument to the Zig
+    // function (as a js.Function). See bridge.Constructor.Opts.
+    new_target: bool = false,
 };
 
 pub fn constructor(self: *Caller, comptime T: type, func: anytype, handle: *const v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
@@ -126,15 +130,20 @@ pub fn constructor(self: *Caller, comptime T: type, func: anytype, handle: *cons
         return;
     }
 
-    self._constructor(func, info) catch |err| {
+    self._constructor(func, info, opts) catch |err| {
         handleError(T, @TypeOf(func), local, err, info, opts);
     };
 }
 
-fn _constructor(self: *Caller, func: anytype, info: FunctionCallbackInfo) !void {
+fn _constructor(self: *Caller, func: anytype, info: FunctionCallbackInfo, comptime opts: CallOpts) !void {
     const F = @TypeOf(func);
     const local = &self.local;
-    const args = try getArgs(F, 0, local, info);
+    const offset: comptime_int = if (opts.new_target) 1 else 0;
+    var args = try getArgs(F, offset, local, info);
+    if (comptime opts.new_target) {
+        const new_target_handle = v8.v8__FunctionCallbackInfo__NewTarget(info.handle).?;
+        @field(args, "0") = js.Function{ .local = local, .handle = @ptrCast(new_target_handle) };
+    }
     const res = @call(.auto, func, args);
 
     const ReturnType = @typeInfo(F).@"fn".return_type orelse {

@@ -66,12 +66,12 @@ pub fn invokeDisconnectedCallback(self: *Custom, frame: *Frame) void {
     self.invokeCallback("disconnectedCallback", .{}, frame);
 }
 
-pub fn invokeAttributeChangedCallback(self: *Custom, name: String, old_value: ?String, new_value: ?String, frame: *Frame) void {
+pub fn invokeAttributeChangedCallback(self: *Custom, name: String, old_value: ?String, new_value: ?String, namespace: ?String, frame: *Frame) void {
     const definition = self._definition orelse return;
     if (!definition.isAttributeObserved(name)) {
         return;
     }
-    self.invokeCallback("attributeChangedCallback", .{ name, old_value, new_value }, frame);
+    self.invokeCallback("attributeChangedCallback", .{ name, old_value, new_value, namespace }, frame);
 }
 
 pub fn invokeConnectedCallbackOnElement(comptime from_parser: bool, element: *Element, frame: *Frame) !void {
@@ -146,17 +146,17 @@ pub fn invokeDisconnectedCallbackOnElement(element: *Element, frame: *Frame) voi
     invokeCallbackOnElement(element, definition, "disconnectedCallback", .{}, frame);
 }
 
-pub fn invokeAttributeChangedCallbackOnElement(element: *Element, name: String, old_value: ?String, new_value: ?String, frame: *Frame) void {
+pub fn invokeAttributeChangedCallbackOnElement(element: *Element, name: String, old_value: ?String, new_value: ?String, namespace: ?String, frame: *Frame) void {
     // Autonomous custom element
     if (element.is(Custom)) |custom| {
-        custom.invokeAttributeChangedCallback(name, old_value, new_value, frame);
+        custom.invokeAttributeChangedCallback(name, old_value, new_value, namespace, frame);
         return;
     }
 
     // Customized built-in element - check if attribute is observed
     const definition = frame.getCustomizedBuiltInDefinition(element) orelse return;
     if (!definition.isAttributeObserved(name)) return;
-    invokeCallbackOnElement(element, definition, "attributeChangedCallback", .{ name, old_value, new_value }, frame);
+    invokeCallbackOnElement(element, definition, "attributeChangedCallback", .{ name, old_value, new_value, namespace }, frame);
 }
 
 fn invokeCallbackOnElement(element: *Element, definition: *CustomElementDefinition, comptime callback_name: [:0]const u8, args: anytype, frame: *Frame) void {

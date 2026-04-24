@@ -103,10 +103,17 @@ const HtmlElement = @This();
 _type: Type,
 _proto: *Element,
 
-// Special constructor for custom elements
-pub fn construct(frame: *Frame) !*Element {
-    const node = frame._upgrading_element orelse return error.IllegalConstructor;
-    return node.is(Element) orelse return error.IllegalConstructor;
+// Special constructor for custom elements.
+// Two paths:
+//  - Upgrade path: customElements.define / createElement / upgrade set
+//    `_upgrading_element` before calling newInstance, and we just return it.
+//  - Direct path: `new MyElement()` from user code. `new.target` tells us
+//    which custom element class was invoked; look it up in the registry.
+pub fn construct(new_target: js.Function, frame: *Frame) !*Element {
+    if (frame._upgrading_element) |node| {
+        return node.is(Element) orelse return error.IllegalConstructor;
+    }
+    return frame.constructCustomElement(new_target);
 }
 
 pub const Type = union(enum) {
@@ -1225,7 +1232,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(HtmlElement.construct, .{});
+    pub const constructor = bridge.constructor(HtmlElement.construct, .{ .new_target = true });
 
     pub const innerText = bridge.accessor(_innerText, HtmlElement.setInnerText, .{});
     fn _innerText(self: *HtmlElement, frame: *const Frame) ![]const u8 {
