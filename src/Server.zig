@@ -111,11 +111,15 @@ fn setTcpKeepalive(socket: posix.socket_t, timeout_ms: u32) void {
     const probe_window: u32 = keepcnt * keepintvl;
     const keepidle: u32 = if (timeout_s > probe_window) timeout_s - probe_window else 1;
 
-    if (@hasDecl(posix.TCP, "KEEPIDLE")) {
-        posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPIDLE, &std.mem.toBytes(@as(c_int, @intCast(keepidle)))) catch |err| {
-            log.warn(.app, "TCP_KEEPIDLE", .{ .err = err });
-        };
-    }
+    const option = switch (@import("builtin").os.tag) {
+        .macos, .ios => posix.TCP.KEEPALIVE,
+        else => posix.TCP.KEEPIDLE,
+    };
+
+    posix.setsockopt(socket, posix.IPPROTO.TCP, option, &std.mem.toBytes(@as(c_int, @intCast(keepidle)))) catch |err| {
+        log.warn(.app, "TCP_KEEPIDLE", .{ .err = err });
+    };
+
     if (@hasDecl(posix.TCP, "KEEPINTVL")) {
         posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPINTVL, &std.mem.toBytes(@as(c_int, @intCast(keepintvl)))) catch |err| {
             log.warn(.app, "TCP_KEEPINTVL", .{ .err = err });
