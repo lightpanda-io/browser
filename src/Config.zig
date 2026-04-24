@@ -37,6 +37,12 @@ pub const CDP_MAX_HTTP_REQUEST_SIZE = 4096;
 // +140 for the max control packet that might be interleaved in a message
 pub const CDP_MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
 
+// TCP keepalive parameters applied to accepted CDP connections.
+// Detection window ≈ IDLE + CNT * INTVL = 4 + 3*2 = 10s.
+pub const CDP_KEEPALIVE_IDLE_S: c_int = 4;
+pub const CDP_KEEPALIVE_INTVL_S: c_int = 2;
+pub const CDP_KEEPALIVE_CNT: c_int = 3;
+
 const Config = @This();
 
 fn logFilterScopesValidator(allocator: Allocator, args: *std.process.ArgIterator, list: *std.ArrayList(log.Scope)) !void {
@@ -108,7 +114,7 @@ const Commands = cli.Builder(.{
             .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
             .{ .name = "port", .type = u16, .default = 9222 },
             .{ .name = "advertise_host", .type = ?[]const u8 },
-            .{ .name = "timeout", .type = u31, .default = 10 },
+            .{ .name = "timeout", .type = ?u31 },
             .{ .name = "cdp_max_connections", .type = u16, .default = 16 },
             .{ .name = "cdp_max_pending_connections", .type = u16, .default = 128 },
         },
@@ -289,14 +295,6 @@ pub fn cookieJarFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .fetch, .mcp => |opts| opts.cookie_jar,
         else => null,
-    };
-}
-
-pub fn cdpTimeout(self: *const Config) usize {
-    return switch (self.mode) {
-        .serve => |opts| if (opts.timeout > 604_800) 604_800_000 else @as(usize, opts.timeout) * 1_000,
-        .mcp => 10_000, // Default timeout for MCP-CDP
-        else => unreachable,
     };
 }
 
@@ -637,9 +635,6 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Useful, for example, when --host is 0.0.0.0.
         \\                Defaults to --host value
         \\
-        \\--timeout       Inactivity timeout in seconds before disconnecting clients
-        \\                Defaults to 10 (seconds). Limited to 604800 (1 week).
-        \\
         \\--cdp-max-connections
         \\                Maximum number of simultaneous CDP connections.
         \\                Defaults to 16.
@@ -682,6 +677,9 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
 
 pub fn parseArgs(allocator: Allocator) !Config {
     const exec_name, const command = try Commands.parse(allocator);
+    if (command == .serve and command.serve.timeout != null) {
+        log.warn(.app, "--timeout is deprecated", .{});
+    }
     return .init(allocator, exec_name, command);
 }
 

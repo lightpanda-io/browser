@@ -315,7 +315,7 @@ pub fn context() !TestContext {
     try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.RCVBUF, &std.mem.toBytes(@as(c_int, 32_768)));
     try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.SNDBUF, &std.mem.toBytes(@as(c_int, 32_768)));
 
-    const client = try Server.Client.init(pair[1], base.arena_allocator, base.test_app, "json-version", 2000);
+    const client = try Server.Client.init(pair[1], base.arena_allocator, base.test_app, "json-version");
 
     return .{
         .client = client,
