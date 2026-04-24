@@ -1,4 +1,4 @@
-name: nightly build
+name: release build
 
 env:
   AWS_ACCESS_KEY_ID: ${{ vars.NIGHTLY_BUILD_AWS_ACCESS_ID }}
