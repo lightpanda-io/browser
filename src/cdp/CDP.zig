@@ -170,7 +170,7 @@ pub fn dispatch(self: *CDP, arena: Allocator, sender: Command.Sender, str: []con
         };
     } else {
         dispatchCommand(&command, input.method) catch |err| {
-            command.sendError(-31999, @errorName(err), .{}) catch return err;
+            command.sendError(-31998, @errorName(err), .{}) catch return err;
         };
     }
 }
