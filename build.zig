@@ -87,6 +87,7 @@ pub fn build(b: *Build) !void {
         try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
         try linkCurl(b, mod, enable_tsan);
         try linkHtml5Ever(b, mod);
+        try linkAdblock(b, mod);
 
         break :blk mod;
     };
@@ -270,6 +271,32 @@ fn linkHtml5Ever(b: *Build, mod: *Build.Module) !void {
     html5ever_step.dependOn(&exec_cargo.step);
 
     const obj = out_dir.path(b, if (is_debug) "debug" else "release").path(b, "liblitefetch_html5ever.a");
+    mod.addObjectFile(obj);
+}
+
+fn linkAdblock(b: *Build, mod: *Build.Module) !void {
+    const is_debug = if (mod.optimize.? == .Debug) true else false;
+
+    const exec_cargo = b.addSystemCommand(&.{
+        "cargo",           "build",
+        "--profile",       if (is_debug) "dev" else "release",
+        "--manifest-path", "vendor/brave-adblock-ffi/rs/c-ffi/Cargo.toml",
+    });
+
+    for ([_][]const u8{
+        "vendor/brave-adblock-ffi/rs/c-ffi/Cargo.toml",
+        "vendor/brave-adblock-ffi/rs/c-ffi/src/lib.rs",
+        "vendor/brave-adblock-ffi/rs/c-ffi/src/c_convert.rs",
+    }) |path| {
+        exec_cargo.addFileInput(b.path(path));
+    }
+
+    const out_dir = exec_cargo.addPrefixedOutputDirectoryArg("--target-dir=", "adblock-c-ffi");
+
+    const adblock_step = b.step("adblock", "Install adblock-c-ffi dependency (requires cargo)");
+    adblock_step.dependOn(&exec_cargo.step);
+
+    const obj = out_dir.path(b, if (is_debug) "debug" else "release").path(b, "libadblock_c_ffi.a");
     mod.addObjectFile(obj);
 }
 

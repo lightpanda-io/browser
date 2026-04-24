@@ -219,8 +219,8 @@ pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, opt
 
         // Store in cache
         if (cache) |c| {
-            c.put(self.page.call_arena, elem, hidden) catch |e| {
-                log.debug(.style, "isElementHidden cache put failed: {}", .{e});
+            c.put(self.frame.call_arena, elem, hidden) catch {
+                log.debug(.browser, "elemHidden cache err", .{});
             };
         }
 
@@ -427,8 +427,8 @@ pub fn hasPointerEventsNone(self: *StyleManager, el: *Element, cache: ?*PointerE
         const pe_none = self.elementHasPointerEventsNone(elem);
 
         if (cache) |c| {
-            c.put(self.page.call_arena, elem, pe_none) catch |e| {
-                log.debug(.style, "elementHasPointerEventsNone cache put failed: {}", .{e});
+            c.put(self.frame.call_arena, elem, pe_none) catch {
+                log.debug(.browser, "elemPtrEvtsNone cache err", .{});
             };
         }
 

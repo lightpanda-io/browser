@@ -646,7 +646,7 @@ pub fn releaseConnection(self: *Network, conn: *http.Connection) void {
         },
         else => {
             conn.reset(self.config, self.ca_blob, self.ip_filter) catch |err| {
-                lp.log.err(.network, "couldn't reset curl easy", .{ .err = err });
+                lp.log.err(.http, "could not reset curl easy", .{ .err = err });
                 conn.deinit();
                 return;
             };

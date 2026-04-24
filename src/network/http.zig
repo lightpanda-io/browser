@@ -264,7 +264,8 @@ fn opensocketCallback(
         @intCast(address.socktype),
         @intCast(address.protocol),
     ) catch return libcurl.CURL_SOCKET_BAD;
-    posix.fcntl(fd, posix.F.SETFL, posix.O.NONBLOCK) catch {
+    const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
+    _ = posix.fcntl(fd, posix.F.SETFL, nonblocking) catch {
         posix.close(fd);
         return libcurl.CURL_SOCKET_BAD;
     };

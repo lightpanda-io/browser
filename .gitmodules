@@ -1,3 +1,4 @@
 [submodule "vendor/brave-adblock-ffi"]
 	path = vendor/brave-adblock-ffi
 	url = https://github.com/codeandsolder/brave-adblock-ffi
+	branch = c-ffi

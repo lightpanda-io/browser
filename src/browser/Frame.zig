@@ -1359,8 +1359,8 @@ pub fn removeElementId(self: *Frame, element: *Element, id: []const u8) void {
 pub fn removeElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, id: []const u8) void {
     if (id_maps.lookup.remove(id)) {
         const str = self.dupeString(id) catch return;
-        id_maps.removed_ids.put(self.arena, str) catch |e| {
-            log.debug(.page, "removeElementIdWithMaps: failed to track removed id: {}", .{e});
+        id_maps.removed_ids.put(self.arena, str, {}) catch {
+            log.debug(.frame, "ElemIdMaps track failed", .{});
         };
     }
 }
