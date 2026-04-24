@@ -298,7 +298,7 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
 
     // Verify the underlying actions actually fired their handlers
     var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
+    page.frame.js.localScope(&ls);
     defer ls.deinit();
 
     var try_catch: js.TryCatch = undefined;

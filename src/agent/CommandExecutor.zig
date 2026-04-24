@@ -62,17 +62,12 @@ fn callTool(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, argume
 fn execExtract(self: *Self, arena: std.mem.Allocator, raw_selector: []const u8) ExecResult {
     const selector = browser_tools.substituteEnvVars(arena, raw_selector);
 
-    // `std.json.Stringify.value` emits a quoted, JS-safe string literal, which
-    // is also a valid JS string literal — reuse it to splice the selector into
-    // the querySelectorAll call.
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    std.json.Stringify.value(selector, .{}, &aw.writer) catch
-        return .{ .output = "failed to encode selector", .failed = true };
-
+    // A JSON-quoted string is also a valid JS string literal, so reuse
+    // `buildJson` to splice the selector into the querySelectorAll call.
     const script = std.fmt.allocPrint(
         arena,
         "JSON.stringify(Array.from(document.querySelectorAll({s})).map(el => el.textContent.trim()))",
-        .{aw.written()},
+        .{Command.buildJson(arena, selector)},
     ) catch return .{ .output = "failed to build extract script", .failed = true };
 
     const tc = Command.toToolCall(arena, .{ .eval_js = script }, Command.noSubstitute) orelse unreachable;

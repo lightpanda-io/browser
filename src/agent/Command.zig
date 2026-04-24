@@ -246,7 +246,6 @@ pub const ScriptIterator = struct {
         command: Command,
     };
 
-    /// Returns the next command from the script, or null at EOF.
     /// Multi-line EVAL blocks are assembled into a single eval_js command.
     pub fn next(self: *ScriptIterator) ?Entry {
         while (self.lines.next()) |line| {
@@ -508,7 +507,7 @@ fn getJsonString(o: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     };
 }
 
-fn buildJson(arena: std.mem.Allocator, value: anytype) []const u8 {
+pub fn buildJson(arena: std.mem.Allocator, value: anytype) []const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     std.json.Stringify.value(value, .{}, &aw.writer) catch return "{}";
     return aw.written();

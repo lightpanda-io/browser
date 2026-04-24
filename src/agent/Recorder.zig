@@ -38,23 +38,10 @@ pub fn record(self: *Self, cmd: Command.Command) void {
     const f = self.file orelse return;
     if (!cmd.isRecorded()) return;
 
-    var buf: [8192]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buf);
-    var aw: std.Io.Writer.Allocating = .init(fba.allocator());
-
-    cmd.format(&aw.writer) catch {
-        // Fixed buffer overflow — fall back to heap allocation.
-        var fallback_arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer fallback_arena.deinit();
-        var dyn_aw: std.Io.Writer.Allocating = .init(fallback_arena.allocator());
-        cmd.format(&dyn_aw.writer) catch return;
-        dyn_aw.writer.writeByte('\n') catch return;
-        _ = f.write(dyn_aw.written()) catch return;
-        self.needs_separator = true;
-        return;
-    };
+    var aw: std.Io.Writer.Allocating = .init(self.allocator);
+    defer aw.deinit();
+    cmd.format(&aw.writer) catch return;
     aw.writer.writeByte('\n') catch return;
-
     _ = f.write(aw.written()) catch return;
     self.needs_separator = true;
 }
@@ -62,14 +49,8 @@ pub fn record(self: *Self, cmd: Command.Command) void {
 pub fn recordComment(self: *Self, comment: []const u8) void {
     const f = self.file orelse return;
     const prefix: []const u8 = if (self.needs_separator) "\n# " else "# ";
-
-    var buf: [8192]u8 = undefined;
-    const line = std.fmt.bufPrint(&buf, "{s}{s}\n", .{ prefix, comment }) catch blk: {
-        // Fixed buffer overflow — fall back to heap allocation.
-        var fallback_arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer fallback_arena.deinit();
-        break :blk std.fmt.allocPrint(fallback_arena.allocator(), "{s}{s}\n", .{ prefix, comment }) catch return;
-    };
+    const line = std.fmt.allocPrint(self.allocator, "{s}{s}\n", .{ prefix, comment }) catch return;
+    defer self.allocator.free(line);
     _ = f.write(line) catch return;
     self.needs_separator = true;
 }

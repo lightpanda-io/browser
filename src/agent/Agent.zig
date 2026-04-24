@@ -92,14 +92,10 @@ one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
-    // `--task` is one-shot and bypasses both REPL and script replay.
     const is_one_shot = opts.task != null;
-    // Pure replay (positional script, no -i) skips the REPL.
     const will_repl = !is_one_shot and (opts.interactive or opts.script_file == null);
-    // REPL or one-shot both drive the LLM and require a provider + API key.
     const needs_llm = will_repl or is_one_shot;
 
-    // --self-heal needs a provider to heal through.
     if (opts.self_heal and opts.provider == null) {
         log.fatal(.app, "missing --provider", .{
             .hint = "--self-heal requires --provider; drop one or add the other",
@@ -142,6 +138,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
             break :blk @unionInit(ProviderClient, @tagName(tag), client);
         },
     } else null;
+    errdefer if (ai_client) |c| switch (c) {
+        inline else => |client| {
+            client.deinit();
+            allocator.destroy(client);
+        },
+    };
 
     const tools = tool_executor.getTools() catch {
         log.fatal(.app, "failed to initialize tools", .{});
@@ -213,7 +215,7 @@ pub fn run(self: *Self) bool {
 /// info go to stderr via `std.debug.print`, so callers can capture stdout
 /// as the clean answer.
 fn runOneShot(self: *Self, task: []const u8) bool {
-    self.processUserMessage(task, "") catch |err| switch (err) {
+    self.processUserMessage(task, null) catch |err| switch (err) {
         error.UnsupportedAttachment, error.AttachmentReadFailed => {
             // Already logged in buildUserMessageParts with detail.
             return false;
@@ -331,7 +333,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                     return false;
                 }
                 const prompt = if (entry.command == .login) login_prompt else accept_cookies_prompt;
-                self.processUserMessage(prompt, "") catch |err| {
+                self.processUserMessage(prompt, null) catch |err| {
                     self.terminal.printErrorFmt("line {d}: {s} failed: {s}", .{
                         entry.line_num,
                         entry.raw_line,
@@ -447,18 +449,14 @@ fn flushReplacements(self: *Self, path: []const u8, content: []const u8, replace
     const new_content = applyReplacements(self.allocator, content, replacements) catch return;
     defer self.allocator.free(new_content);
 
-    // Atomic write: tmp file then rename.
-    const tmp_path = std.fmt.allocPrint(self.allocator, "{s}.tmp", .{path}) catch return;
-    defer self.allocator.free(tmp_path);
-
-    const tmp_file = std.fs.cwd().createFile(tmp_path, .{}) catch return;
-    tmp_file.writeAll(new_content) catch {
-        tmp_file.close();
+    var write_buf: [4096]u8 = undefined;
+    var af = std.fs.cwd().atomicFile(path, .{ .write_buffer = &write_buf }) catch |err| {
+        self.terminal.printErrorFmt("Failed to update script: {s}", .{@errorName(err)});
         return;
     };
-    tmp_file.close();
-
-    std.fs.cwd().rename(tmp_path, path) catch |err| {
+    defer af.deinit();
+    af.file_writer.interface.writeAll(new_content) catch return;
+    af.finish() catch |err| {
         self.terminal.printErrorFmt("Failed to update script: {s}", .{@errorName(err)});
         return;
     };
@@ -594,9 +592,8 @@ fn dupeParts(alloc: std.mem.Allocator, parts: []const zenai.provider.ContentPart
     return out;
 }
 
-/// Runs a single LLM turn and returns the commands it executed, without
-/// recording them to the Recorder.  Used by attemptSelfHeal so that the
-/// caller can capture healed commands for script rewriting.
+/// Runs a single LLM turn, captures the commands it called without recording
+/// them — so the caller can splice healed commands into the script directly.
 fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Command.Command {
     const ma = self.message_arena.allocator();
 
@@ -690,7 +687,7 @@ fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []cons
     return null;
 }
 
-fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []const u8) !void {
+fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]const u8) !void {
     const ma = self.message_arena.allocator();
 
     try self.ensureSystemPrompt();
@@ -746,7 +743,7 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: []con
         if (!std.mem.startsWith(u8, tc.result, "Error:")) {
             if (Command.fromToolCall(ma, tc.name, tc.arguments)) |cmd| {
                 if (!recorded_any) {
-                    if (record_comment.len > 0) self.recorder.recordComment(record_comment);
+                    if (record_comment) |c| self.recorder.recordComment(c);
                     recorded_any = true;
                 }
                 self.recorder.record(cmd);

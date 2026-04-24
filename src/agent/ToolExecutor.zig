@@ -83,9 +83,11 @@ pub fn getCurrentUrl(self: *Self) []const u8 {
 
 /// Run a JavaScript expression and return the result, or null on error.
 pub fn callEval(self: *Self, arena: std.mem.Allocator, script: []const u8) ?[]const u8 {
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    std.json.Stringify.value(.{ .script = script }, .{}, &aw.writer) catch return null;
-    return self.call(arena, "eval", aw.written()) catch null;
+    var obj: std.json.ObjectMap = .init(arena);
+    obj.put("script", .{ .string = script }) catch return null;
+    const result = browser_tools.callEval(self.session, &self.node_registry, arena, .{ .object = obj });
+    if (result.is_error) return null;
+    return result.text;
 }
 
 pub fn call(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments_json: []const u8) CallError![]const u8 {
