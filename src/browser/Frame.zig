@@ -722,7 +722,6 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     if (!opts.force and URL.eqlDocument(target.url, resolved_url)) {
         target.url = try target.arena.dupeZ(u8, resolved_url);
         target.window._location = try Location.init(target.url, target);
-        target.document._location = target.window._location;
         if (target.parent == null) {
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
         }

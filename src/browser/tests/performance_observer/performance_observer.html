@@ -69,6 +69,77 @@
   testing.expectEqual(['mark', 'measure'], PerformanceObserver.supportedEntryTypes);
 </script>
 
+<script id="list_get_entries_by_type">
+{
+  performance.clearMarks();
+  performance.clearMeasures();
+
+  const observer = new PerformanceObserver((list) => {
+    const marks = list.getEntriesByType("mark");
+    testing.expectEqual(true, marks instanceof Array);
+    testing.expectEqual(2, marks.length);
+    testing.expectEqual("lbt1", marks[0].name);
+    testing.expectEqual("mark", marks[0].entryType);
+    testing.expectEqual("lbt2", marks[1].name);
+
+    const measures = list.getEntriesByType("measure");
+    testing.expectEqual(1, measures.length);
+    testing.expectEqual("lbtMeasure", measures[0].name);
+    testing.expectEqual("measure", measures[0].entryType);
+
+    // A type that's observed but has no entries returns an empty array.
+    const resources = list.getEntriesByType("resource");
+    testing.expectEqual(true, resources instanceof Array);
+    testing.expectEqual(0, resources.length);
+
+    observer.disconnect();
+  });
+
+  observer.observe({ entryTypes: ["mark", "measure"] });
+  performance.mark("lbt1");
+  performance.mark("lbt2");
+  performance.measure("lbtMeasure");
+}
+</script>
+
+<script id="list_get_entries_by_name">
+{
+  performance.clearMarks();
+  performance.clearMeasures();
+
+  const observer = new PerformanceObserver((list) => {
+    // Without entryType, any type matching the name is returned.
+    const shared = list.getEntriesByName("lbnShared");
+    testing.expectEqual(true, shared instanceof Array);
+    testing.expectEqual(2, shared.length);
+
+    // With entryType, only entries of that type are returned.
+    const sharedMark = list.getEntriesByName("lbnShared", "mark");
+    testing.expectEqual(1, sharedMark.length);
+    testing.expectEqual("mark", sharedMark[0].entryType);
+
+    const sharedMeasure = list.getEntriesByName("lbnShared", "measure");
+    testing.expectEqual(1, sharedMeasure.length);
+    testing.expectEqual("measure", sharedMeasure[0].entryType);
+
+    // Name mismatch -> empty array.
+    const missing = list.getEntriesByName("lbnMissing");
+    testing.expectEqual(0, missing.length);
+
+    // Name matches but type doesn't -> empty array.
+    const wrongType = list.getEntriesByName("lbnOnlyMark", "measure");
+    testing.expectEqual(0, wrongType.length);
+
+    observer.disconnect();
+  });
+
+  observer.observe({ entryTypes: ["mark", "measure"] });
+  performance.mark("lbnShared");
+  performance.measure("lbnShared");
+  performance.mark("lbnOnlyMark");
+}
+</script>
+
 <script id="buffered_option">
 {
   // Clear marks from previous tests so we get a precise count

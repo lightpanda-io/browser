@@ -19,15 +19,15 @@
 const std = @import("std");
 
 const js = @import("../js/js.zig");
-const Session = @import("../Session.zig");
+const Page = @import("../Page.zig");
 
 // This type is only included when the binary is built with the -Dwpt_extensions flag
 const WebDriver = @This();
 
 _pad: bool = false,
 
-pub fn deleteAllCookies(_: *const WebDriver, session: *Session) void {
-    session.cookie_jar.clearRetainingCapacity();
+pub fn deleteAllCookies(_: *const WebDriver, page: *Page) void {
+    page.session.cookie_jar.clearRetainingCapacity();
 }
 
 pub const JsApi = struct {
