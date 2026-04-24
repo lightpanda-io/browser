@@ -533,18 +533,45 @@ fn execEval(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Al
     return .{ .text = js_result.toStringSliceWithAlloc(arena) catch "undefined" };
 }
 
+/// Resolve a target element from either a CSS selector or a backendNodeId.
+fn resolveTarget(
+    session: *lp.Session,
+    registry: *CDPNode.Registry,
+    selector: ?[]const u8,
+    backend_node_id: ?CDPNode.Id,
+) ToolError!NodeAndPage {
+    if (selector) |sel| return resolveBySelector(session, sel);
+    if (backend_node_id) |nid| return resolveNodeAndPage(session, registry, nid);
+    return ToolError.InvalidParams;
+}
+
+/// Render `"{prefix} ({target}){suffix}. Page url: X, title: Y"`, where target
+/// is either `"selector: X"` or `"backendNodeId: N"`.
+fn formatActionResult(
+    arena: std.mem.Allocator,
+    prefix: []const u8,
+    selector: ?[]const u8,
+    backend_node_id: ?CDPNode.Id,
+    suffix: []const u8,
+    page: *lp.Frame,
+) ToolError![]const u8 {
+    const page_title = page.getTitle() catch null;
+    const target = if (selector) |sel|
+        std.fmt.allocPrint(arena, "selector: {s}", .{sel}) catch return ToolError.InternalError
+    else
+        std.fmt.allocPrint(arena, "backendNodeId: {d}", .{backend_node_id.?}) catch return ToolError.InternalError;
+    return std.fmt.allocPrint(arena, "{s} ({s}){s}. Page url: {s}, title: {s}", .{
+        prefix, target, suffix, page.url, page_title orelse "(none)",
+    }) catch ToolError.InternalError;
+}
+
 fn execClick(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         backendNodeId: ?CDPNode.Id = null,
         selector: ?[]const u8 = null,
     };
     const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
-    const resolved = if (args.selector) |sel|
-        try resolveBySelector(session, sel)
-    else if (args.backendNodeId) |nid|
-        try resolveNodeAndPage(session, registry, nid)
-    else
-        return ToolError.InvalidParams;
+    const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
     lp.actions.click(resolved.node, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) return ToolError.InvalidParams;
@@ -560,18 +587,9 @@ fn execClick(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
         }
     }
 
+    // Report the post-click frame — navigation may have swapped in a new page.
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
-    const page_title = page.getTitle() catch null;
-    if (args.selector) |sel| {
-        return std.fmt.allocPrint(arena, "Clicked element (selector: {s}). Page url: {s}, title: {s}", .{
-            sel, page.url, page_title orelse "(none)",
-        }) catch return ToolError.InternalError;
-    }
-    return std.fmt.allocPrint(arena, "Clicked element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
-        args.backendNodeId.?,
-        page.url,
-        page_title orelse "(none)",
-    }) catch return ToolError.InternalError;
+    return formatActionResult(arena, "Clicked element", args.selector, args.backendNodeId, "", page);
 }
 
 fn execFill(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -584,12 +602,7 @@ fn execFill(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Al
     if (args.value.len == 0) return ToolError.InvalidParams;
     const raw_text = args.value;
     const text = substituteEnvVars(arena, raw_text);
-    const resolved = if (args.selector) |sel|
-        try resolveBySelector(session, sel)
-    else if (args.backendNodeId) |nid|
-        try resolveNodeAndPage(session, registry, nid)
-    else
-        return ToolError.InvalidParams;
+    const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
     lp.actions.fill(resolved.node, text, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) return ToolError.InvalidParams;
@@ -598,18 +611,8 @@ fn execFill(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Al
 
     // Show the original reference (e.g. $LP_PASSWORD) in the result, not the resolved value
     const display_text = if (text.ptr != raw_text.ptr) raw_text else text;
-    const page_title = resolved.page.getTitle() catch null;
-    if (args.selector) |sel| {
-        return std.fmt.allocPrint(arena, "Filled element (selector: {s}) with \"{s}\". Page url: {s}, title: {s}", .{
-            sel, display_text, resolved.page.url, page_title orelse "(none)",
-        }) catch return ToolError.InternalError;
-    }
-    return std.fmt.allocPrint(arena, "Filled element (backendNodeId: {d}) with \"{s}\". Page url: {s}, title: {s}", .{
-        args.backendNodeId.?,
-        display_text,
-        resolved.page.url,
-        page_title orelse "(none)",
-    }) catch return ToolError.InternalError;
+    const suffix = std.fmt.allocPrint(arena, " with \"{s}\"", .{display_text}) catch return ToolError.InternalError;
+    return formatActionResult(arena, "Filled element", args.selector, args.backendNodeId, suffix, resolved.page);
 }
 
 fn execScroll(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -667,29 +670,14 @@ fn execHover(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
         selector: ?[]const u8 = null,
     };
     const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
-    const resolved = if (args.selector) |sel|
-        try resolveBySelector(session, sel)
-    else if (args.backendNodeId) |nid|
-        try resolveNodeAndPage(session, registry, nid)
-    else
-        return ToolError.InvalidParams;
+    const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
     lp.actions.hover(resolved.node, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) return ToolError.InvalidParams;
         return ToolError.InternalError;
     };
 
-    const page_title = resolved.page.getTitle() catch null;
-    if (args.selector) |sel| {
-        return std.fmt.allocPrint(arena, "Hovered element (selector: {s}). Page url: {s}, title: {s}", .{
-            sel, resolved.page.url, page_title orelse "(none)",
-        }) catch return ToolError.InternalError;
-    }
-    return std.fmt.allocPrint(arena, "Hovered element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
-        args.backendNodeId.?,
-        resolved.page.url,
-        page_title orelse "(none)",
-    }) catch return ToolError.InternalError;
+    return formatActionResult(arena, "Hovered element", args.selector, args.backendNodeId, "", resolved.page);
 }
 
 fn execPress(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -736,30 +724,15 @@ fn execSelectOption(session: *lp.Session, registry: *CDPNode.Registry, arena: st
         value: []const u8,
     };
     const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
-    const resolved = if (args.selector) |sel|
-        try resolveBySelector(session, sel)
-    else if (args.backendNodeId) |nid|
-        try resolveNodeAndPage(session, registry, nid)
-    else
-        return ToolError.InvalidParams;
+    const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
     lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) return ToolError.InvalidParams;
         return ToolError.InternalError;
     };
 
-    const page_title = resolved.page.getTitle() catch null;
-    if (args.selector) |sel| {
-        return std.fmt.allocPrint(arena, "Selected option '{s}' (selector: {s}). Page url: {s}, title: {s}", .{
-            args.value, sel, resolved.page.url, page_title orelse "(none)",
-        }) catch return ToolError.InternalError;
-    }
-    return std.fmt.allocPrint(arena, "Selected option '{s}' (backendNodeId: {d}). Page url: {s}, title: {s}", .{
-        args.value,
-        args.backendNodeId.?,
-        resolved.page.url,
-        page_title orelse "(none)",
-    }) catch return ToolError.InternalError;
+    const prefix = std.fmt.allocPrint(arena, "Selected option '{s}'", .{args.value}) catch return ToolError.InternalError;
+    return formatActionResult(arena, prefix, args.selector, args.backendNodeId, "", resolved.page);
 }
 
 fn execSetChecked(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -769,31 +742,16 @@ fn execSetChecked(session: *lp.Session, registry: *CDPNode.Registry, arena: std.
         checked: bool,
     };
     const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
-    const resolved = if (args.selector) |sel|
-        try resolveBySelector(session, sel)
-    else if (args.backendNodeId) |nid|
-        try resolveNodeAndPage(session, registry, nid)
-    else
-        return ToolError.InvalidParams;
+    const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
     lp.actions.setChecked(resolved.node, args.checked, resolved.page) catch |err| {
         if (err == error.InvalidNodeType) return ToolError.InvalidParams;
         return ToolError.InternalError;
     };
 
-    const state_str = if (args.checked) "checked" else "unchecked";
-    const page_title = resolved.page.getTitle() catch null;
-    if (args.selector) |sel| {
-        return std.fmt.allocPrint(arena, "Set element (selector: {s}) to {s}. Page url: {s}, title: {s}", .{
-            sel, state_str, resolved.page.url, page_title orelse "(none)",
-        }) catch return ToolError.InternalError;
-    }
-    return std.fmt.allocPrint(arena, "Set element (backendNodeId: {d}) to {s}. Page url: {s}, title: {s}", .{
-        args.backendNodeId.?,
-        state_str,
-        resolved.page.url,
-        page_title orelse "(none)",
-    }) catch return ToolError.InternalError;
+    const state_str: []const u8 = if (args.checked) "checked" else "unchecked";
+    const suffix = std.fmt.allocPrint(arena, " to {s}", .{state_str}) catch return ToolError.InternalError;
+    return formatActionResult(arena, "Set element", args.selector, args.backendNodeId, suffix, resolved.page);
 }
 
 fn execFindElement(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
