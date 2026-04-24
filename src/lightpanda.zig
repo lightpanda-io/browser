@@ -55,6 +55,7 @@ pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     wait_until: ?Config.WaitUntil = null,
     wait_script: ?[:0]const u8 = null,
+    script: ?[:0]const u8 = null,
     wait_selector: ?[:0]const u8 = null,
     dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
@@ -147,6 +148,10 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
         const remaining = opts.wait_ms -| elapsed;
         if (remaining == 0) return error.Timeout;
         try runner.waitForScript(script, remaining);
+    }
+
+    if (opts.script) |script| {
+        try runner.runScriptFile(app.allocator, script);
     }
 
     const writer = opts.writer orelse return;

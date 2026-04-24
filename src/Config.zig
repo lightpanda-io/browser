@@ -163,6 +163,7 @@ const Commands = cli.Builder(.{
                 },
             },
             .{ .name = "wait_selector", .type = ?[:0]const u8 },
+            .{ .name = "script", .type = ?[:0]const u8 },
             .{ .name = "terminate_ms", .type = ?u32 },
         },
         .shared_options = CommonOptions,
@@ -640,6 +641,9 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--wait-script-file
         \\                Like --wait-script, but reads the script from a file.
+        \\
+        \\--script        Path to a JavaScript file to execute in the page context
+        \\                once the --wait- conditions have been met, before the dump.
         \\
         \\--terminate-ms  Hard deadline in milliseconds. After this time elapses,
         \\                JavaScript execution is forcibly terminated (e.g. for
