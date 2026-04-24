@@ -36,13 +36,8 @@ jobs:
           os: ${{env.OS}}
           arch: ${{env.ARCH}}
 
-      - uses: ./.github/actions/v8-snapshot
-        with:
-          os: ${{env.OS}}
-          arch: ${{env.ARCH}}
-
       - name: zig build release
-        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=generic
+        run: zig build -Dwpt_extensions -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=generic
 
       - name: upload artifact
         uses: actions/upload-artifact@v7
