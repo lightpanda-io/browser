@@ -23,12 +23,23 @@ permissions:
   contents: write
 
 jobs:
-  build-linux-x86_64:
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            cpu_flag: -Dcpu=x86_64
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+            cpu_flag: -Dcpu=generic
+
     env:
-      ARCH: x86_64
+      ARCH: ${{ matrix.arch }}
       OS: linux
 
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
 
     steps:
@@ -45,7 +56,7 @@ jobs:
         run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
 
       - name: zig build
-        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64 ${{ env.VERSION_FLAG }}
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ env.VERSION_FLAG }}
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
@@ -70,101 +81,23 @@ jobs:
           path: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           retention-days: 1
 
-  build-linux-aarch64:
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-14 runs on arm CPU. see
+          # https://github.com/actions/runner-images?tab=readme-ov-file
+          - arch: aarch64
+            runner: macos-14
+          - arch: x86_64
+            runner: macos-14-large
+
     env:
-      ARCH: aarch64
-      OS: linux
-
-    runs-on: ubuntu-22.04-arm
-    timeout-minutes: 20
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - uses: ./.github/actions/install
-        with:
-          os: ${{env.OS}}
-          arch: ${{env.ARCH}}
-
-      - name: v8 snapshot
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
-
-      - name: zig build
-        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=generic ${{ env.VERSION_FLAG }}
-
-      - name: Rename binary
-        run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
-
-      - name: upload on s3
-        run: |
-          export DIR=`git show --no-patch --no-notes --pretty='%cs_%h'`
-          aws s3 cp --storage-class=GLACIER_IR lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
-
-      - name: Upload the build
-        uses: ncipollo/release-action@v1
-        with:
-          allowUpdates: true
-          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          tag: ${{ env.RELEASE }}
-          makeLatest: true
-
-      - name: Share binary with packaging jobs
-        uses: actions/upload-artifact@v4
-        with:
-          name: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          path: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          retention-days: 1
-
-  build-macos-aarch64:
-    env:
-      ARCH: aarch64
+      ARCH: ${{ matrix.arch }}
       OS: macos
 
-    # macos-14 runs on arm CPU. see
-    # https://github.com/actions/runner-images?tab=readme-ov-file
-    runs-on: macos-14
-    timeout-minutes: 20
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - uses: ./.github/actions/install
-        with:
-          os: ${{env.OS}}
-          arch: ${{env.ARCH}}
-
-      - name: v8 snapshot
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
-
-      - name: zig build
-        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast ${{ env.VERSION_FLAG }}
-
-      - name: Rename binary
-        run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
-
-      - name: upload on s3
-        run: |
-          export DIR=`git show --no-patch --no-notes --pretty='%cs_%h'`
-          aws s3 cp --storage-class=GLACIER_IR lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
-
-      - name: Upload the build
-        uses: ncipollo/release-action@v1
-        with:
-          allowUpdates: true
-          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          tag: ${{ env.RELEASE }}
-          makeLatest: true
-
-  build-macos-x86_64:
-    env:
-      ARCH: x86_64
-      OS: macos
-
-    runs-on: macos-14-large
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
 
     steps:
@@ -210,9 +143,7 @@ jobs:
       ARCH: ${{ matrix.arch }}
       OS: linux
 
-    needs:
-      - build-linux-x86_64
-      - build-linux-aarch64
+    needs: build-linux
     runs-on: ubuntu-22.04
     container: archlinux:latest
     timeout-minutes: 10
