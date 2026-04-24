@@ -83,59 +83,46 @@ pub fn deinit(self: *Server) void {
 
 fn onAccept(ctx: *anyopaque, socket: posix.socket_t) void {
     const self: *Server = @ptrCast(@alignCast(ctx));
-    const timeout_ms: u32 = @intCast(self.app.config.cdpTimeout());
-    self.spawnWorker(socket, timeout_ms) catch |err| {
+    self.spawnWorker(socket) catch |err| {
         log.err(.app, "CDP spawn", .{ .err = err });
         posix.close(socket);
     };
 }
 
 // Liveness is enforced at the TCP layer via keepalive probes sent by the
-// kernel. This is transparent to CDP clients (unlike a WebSocket ping, which
-// some clients — go-rod panics, chromedp logs spurious "malformed" — handle
-// incorrectly). Detection window is roughly `timeout_s`:
-//   keepidle = timeout_s - keepcnt * keepintvl   (clamped >= 1s)
-//   keepintvl = 2s, keepcnt = 3   → 6s of probe escalation.
-// timeout_ms == 0 leaves keepalive off (OS defaults apply — typically 2h).
-fn setTcpKeepalive(socket: posix.socket_t, timeout_ms: u32) void {
-    if (timeout_ms == 0) return;
-
+// kernel. This is transparent to CDP clients — unlike a WebSocket ping, which
+// go-rod panics on and chromedp logs as "malformed". Tunables in Config.zig.
+fn setTcpKeepalive(socket: posix.socket_t) void {
     posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.KEEPALIVE, &std.mem.toBytes(@as(c_int, 1))) catch |err| {
         log.warn(.app, "SO_KEEPALIVE", .{ .err = err });
         return;
     };
-
-    const keepcnt: u32 = 3;
-    const keepintvl: u32 = 2;
-    const timeout_s: u32 = @max(timeout_ms / 1000, 1);
-    const probe_window: u32 = keepcnt * keepintvl;
-    const keepidle: u32 = if (timeout_s > probe_window) timeout_s - probe_window else 1;
 
     const option = switch (@import("builtin").os.tag) {
         .macos, .ios => posix.TCP.KEEPALIVE,
         else => posix.TCP.KEEPIDLE,
     };
 
-    posix.setsockopt(socket, posix.IPPROTO.TCP, option, &std.mem.toBytes(@as(c_int, @intCast(keepidle)))) catch |err| {
+    posix.setsockopt(socket, posix.IPPROTO.TCP, option, &std.mem.toBytes(Config.CDP_KEEPALIVE_IDLE_S)) catch |err| {
         log.warn(.app, "TCP_KEEPIDLE", .{ .err = err });
     };
 
     if (@hasDecl(posix.TCP, "KEEPINTVL")) {
-        posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPINTVL, &std.mem.toBytes(@as(c_int, @intCast(keepintvl)))) catch |err| {
+        posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPINTVL, &std.mem.toBytes(Config.CDP_KEEPALIVE_INTVL_S)) catch |err| {
             log.warn(.app, "TCP_KEEPINTVL", .{ .err = err });
         };
     }
     if (@hasDecl(posix.TCP, "KEEPCNT")) {
-        posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPCNT, &std.mem.toBytes(@as(c_int, @intCast(keepcnt)))) catch |err| {
+        posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPCNT, &std.mem.toBytes(Config.CDP_KEEPALIVE_CNT)) catch |err| {
             log.warn(.app, "TCP_KEEPCNT", .{ .err = err });
         };
     }
 }
 
-fn handleConnection(self: *Server, socket: posix.socket_t, timeout_ms: u32) void {
+fn handleConnection(self: *Server, socket: posix.socket_t) void {
     defer posix.close(socket);
 
-    setTcpKeepalive(socket, timeout_ms);
+    setTcpKeepalive(socket);
 
     // Client is HUGE (> 512KB) because it has a large read buffer.
     // V8 crashes if this is on the stack (likely related to its size).
@@ -198,7 +185,7 @@ fn unregisterClient(self: *Server, client: *Client) void {
     }
 }
 
-fn spawnWorker(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
+fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
     if (self.app.shutdown()) {
         return error.ShuttingDown;
     }
@@ -225,13 +212,13 @@ fn spawnWorker(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
     }
     errdefer _ = self.active_threads.fetchSub(1, .monotonic);
 
-    const thread = try std.Thread.spawn(.{}, runWorker, .{ self, socket, timeout_ms });
+    const thread = try std.Thread.spawn(.{}, runWorker, .{ self, socket });
     thread.detach();
 }
 
-fn runWorker(self: *Server, socket: posix.socket_t, timeout_ms: u32) void {
+fn runWorker(self: *Server, socket: posix.socket_t) void {
     defer _ = self.active_threads.fetchSub(1, .monotonic);
-    handleConnection(self, socket, timeout_ms);
+    handleConnection(self, socket);
 }
 
 fn joinThreads(self: *Server) void {
