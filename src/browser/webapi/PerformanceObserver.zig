@@ -24,6 +24,7 @@ const Frame = @import("../Frame.zig");
 const Performance = @import("Performance.zig");
 
 const log = lp.log;
+const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
     return &.{ PerformanceObserver, EntryList };
@@ -203,8 +204,16 @@ pub const JsApi = struct {
 pub const EntryList = struct {
     _entries: []*Performance.Entry,
 
-    pub fn getEntries(self: *const EntryList) []*Performance.Entry {
+    pub fn getEntries(self: *const EntryList) []const *Performance.Entry {
         return self._entries;
+    }
+
+    pub fn getEntriesByType(self: *const EntryList, entry_type: []const u8, exec: *Execution) ![]const *Performance.Entry {
+        return Performance.filterEntriesByType(exec.call_arena, self._entries, entry_type);
+    }
+
+    pub fn getEntriesByName(self: *const EntryList, name: []const u8, entry_type: ?[]const u8, exec: *Execution) ![]const *Performance.Entry {
+        return Performance.filterEntriesByName(exec.call_arena, self._entries, name, entry_type);
     }
 
     pub const JsApi = struct {
@@ -217,6 +226,8 @@ pub const EntryList = struct {
         };
 
         pub const getEntries = bridge.function(EntryList.getEntries, .{});
+        pub const getEntriesByType = bridge.function(EntryList.getEntriesByType, .{});
+        pub const getEntriesByName = bridge.function(EntryList.getEntriesByName, .{});
     };
 };
 
