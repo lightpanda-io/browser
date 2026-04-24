@@ -1048,8 +1048,18 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     return true;
 }
 
+// Cap on HTTP completions processed per `perform()` call. Without this bound,
+// a burst of many simultaneous response completions can run parser / JS work
+// synchronously for seconds inside a single `Runner._tick` — allocating GBs
+// before control returns to the wait loop, blocking GC hints and memory
+// checks. 16 leaves throughput high for typical pages while keeping per-tick
+// work bounded. Messages over the cap stay in curl's queue and are picked up
+// on the next tick.
+const max_messages_per_tick: u32 = 16;
+
 fn processMessages(self: *Client) !bool {
     var processed = false;
+    var count: u32 = 0;
     while (try self.handles.readMessage()) |msg| {
         switch (msg.conn.transport) {
             .http => |transfer| {
@@ -1085,6 +1095,8 @@ fn processMessages(self: *Client) !bool {
             },
             .none => unreachable,
         }
+        count += 1;
+        if (count >= max_messages_per_tick) break;
     }
     return processed;
 }
