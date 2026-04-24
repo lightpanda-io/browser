@@ -356,43 +356,43 @@ pub const Action = enum {
 
 pub fn call(
     session: *lp.Session,
-    registry: *CDPNode.Registry,
     arena: std.mem.Allocator,
+    registry: *CDPNode.Registry,
     tool_name: []const u8,
     arguments: ?std.json.Value,
 ) ToolError![]const u8 {
     const action = std.meta.stringToEnum(Action, tool_name) orelse return ToolError.InvalidParams;
 
     return switch (action) {
-        .eval => execEval(session, registry, arena, arguments).text,
+        .eval => execEval(session, arena, registry, arguments).text,
         .getEnv => execGetEnv(arena, arguments),
         .consoleLogs => execConsoleLogs(session, arena),
         .getUrl => execGetUrl(session),
         .getCookies => execGetCookies(session, arena),
-        inline else => |tag| @field(@This(), "exec" ++ [1]u8{std.ascii.toUpper(@tagName(tag)[0])} ++ @tagName(tag)[1..])(session, registry, arena, arguments),
+        inline else => |tag| @field(@This(), "exec" ++ [1]u8{std.ascii.toUpper(@tagName(tag)[0])} ++ @tagName(tag)[1..])(session, arena, registry, arguments),
     };
 }
 
 pub fn callEval(
     session: *lp.Session,
-    registry: *CDPNode.Registry,
     arena: std.mem.Allocator,
+    registry: *CDPNode.Registry,
     arguments: ?std.json.Value,
 ) EvalResult {
-    return execEval(session, registry, arena, arguments);
+    return execEval(session, arena, registry, arguments);
 }
 
 pub fn isKnownTool(tool_name: []const u8) bool {
     return std.meta.stringToEnum(Action, tool_name) != null;
 }
 
-fn execGoto(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execGoto(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrErr(GotoParams, arena, arguments) orelse return ToolError.InvalidParams;
     try performGoto(session, registry, args.url, args.timeout, args.waitUntil);
     return "Navigated successfully.";
 }
 
-fn execMarkdown(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execMarkdown(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
@@ -402,7 +402,7 @@ fn execMarkdown(session: *lp.Session, registry: *CDPNode.Registry, arena: std.me
     return aw.written();
 }
 
-fn execLinks(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execLinks(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
@@ -417,7 +417,7 @@ fn execLinks(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
     return aw.written();
 }
 
-fn execTree(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execTree(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const TreeParams = struct {
         url: ?[:0]const u8 = null,
         backendNodeId: ?u32 = null,
@@ -449,7 +449,7 @@ fn execTree(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Al
     return aw.written();
 }
 
-fn execNodeDetails(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execNodeDetails(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct { backendNodeId: CDPNode.Id };
     const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
 
@@ -465,7 +465,7 @@ fn execNodeDetails(session: *lp.Session, registry: *CDPNode.Registry, arena: std
     return aw.written();
 }
 
-fn execInteractiveElements(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execInteractiveElements(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
@@ -479,7 +479,7 @@ fn execInteractiveElements(session: *lp.Session, registry: *CDPNode.Registry, ar
     return aw.written();
 }
 
-fn execStructuredData(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execStructuredData(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
@@ -490,7 +490,7 @@ fn execStructuredData(session: *lp.Session, registry: *CDPNode.Registry, arena: 
     return aw.written();
 }
 
-fn execDetectForms(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execDetectForms(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
 
@@ -504,7 +504,7 @@ fn execDetectForms(session: *lp.Session, registry: *CDPNode.Registry, arena: std
     return aw.written();
 }
 
-fn execEval(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) EvalResult {
+fn execEval(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) EvalResult {
     const Params = struct {
         script: [:0]const u8,
         url: ?[:0]const u8 = null,
@@ -565,7 +565,7 @@ fn formatActionResult(
     }) catch ToolError.InternalError;
 }
 
-fn execClick(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execClick(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         backendNodeId: ?CDPNode.Id = null,
         selector: ?[]const u8 = null,
@@ -592,7 +592,7 @@ fn execClick(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
     return formatActionResult(arena, "Clicked element", args.selector, args.backendNodeId, "", page);
 }
 
-fn execFill(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execFill(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         backendNodeId: ?CDPNode.Id = null,
         selector: ?[]const u8 = null,
@@ -615,7 +615,7 @@ fn execFill(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Al
     return formatActionResult(arena, "Filled element", args.selector, args.backendNodeId, suffix, resolved.page);
 }
 
-fn execScroll(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execScroll(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         backendNodeId: ?CDPNode.Id = null,
         x: ?i32 = null,
@@ -644,7 +644,7 @@ fn execScroll(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.
     }) catch return ToolError.InternalError;
 }
 
-fn execWaitForSelector(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execWaitForSelector(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         selector: [:0]const u8,
         timeout: ?u32 = null,
@@ -664,7 +664,7 @@ fn execWaitForSelector(session: *lp.Session, registry: *CDPNode.Registry, arena:
     return std.fmt.allocPrint(arena, "Element found. backendNodeId: {d}", .{registered.id}) catch return ToolError.InternalError;
 }
 
-fn execHover(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execHover(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         backendNodeId: ?CDPNode.Id = null,
         selector: ?[]const u8 = null,
@@ -680,7 +680,7 @@ fn execHover(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
     return formatActionResult(arena, "Hovered element", args.selector, args.backendNodeId, "", resolved.page);
 }
 
-fn execPress(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execPress(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         key: []const u8,
         backendNodeId: ?CDPNode.Id = null,
@@ -717,7 +717,7 @@ fn execPress(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.A
     }) catch return ToolError.InternalError;
 }
 
-fn execSelectOption(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execSelectOption(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         backendNodeId: ?CDPNode.Id = null,
         selector: ?[]const u8 = null,
@@ -735,7 +735,7 @@ fn execSelectOption(session: *lp.Session, registry: *CDPNode.Registry, arena: st
     return formatActionResult(arena, prefix, args.selector, args.backendNodeId, "", resolved.page);
 }
 
-fn execSetChecked(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execSetChecked(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         backendNodeId: ?CDPNode.Id = null,
         selector: ?[]const u8 = null,
@@ -754,7 +754,7 @@ fn execSetChecked(session: *lp.Session, registry: *CDPNode.Registry, arena: std.
     return formatActionResult(arena, "Set element", args.selector, args.backendNodeId, suffix, resolved.page);
 }
 
-fn execFindElement(session: *lp.Session, registry: *CDPNode.Registry, arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execFindElement(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         role: ?[]const u8 = null,
         name: ?[]const u8 = null,
