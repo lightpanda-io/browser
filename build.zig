@@ -185,6 +185,13 @@ pub fn build(b: *Build) !void {
         const run_tests = b.addRunArtifact(tests);
         const test_step = b.step("test", "Run unit tests");
         test_step.dependOn(&run_tests.step);
+
+        const run_adblock_live_tests = b.addRunArtifact(tests);
+        run_adblock_live_tests.setEnvironmentVariable("LIGHTPANDA_ADBLOCK_LIVE", "true");
+        run_adblock_live_tests.setEnvironmentVariable("TEST_FILTER", "AdFilter live:");
+
+        const adblock_live_test_step = b.step("test-adblock-live", "Run adblock tests against real filter lists");
+        adblock_live_test_step.dependOn(&run_adblock_live_tests.step);
     }
 
     {
@@ -285,6 +292,7 @@ fn linkAdblock(b: *Build, mod: *Build.Module) !void {
 
     for ([_][]const u8{
         "vendor/brave-adblock-ffi/rs/c-ffi/Cargo.toml",
+        "vendor/brave-adblock-ffi/rs/c-ffi/Cargo.lock",
         "vendor/brave-adblock-ffi/rs/c-ffi/src/lib.rs",
         "vendor/brave-adblock-ffi/rs/c-ffi/src/c_convert.rs",
     }) |path| {

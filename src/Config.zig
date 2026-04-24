@@ -39,6 +39,12 @@ pub const CDP_MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
 
 const Config = @This();
 
+pub const AdblockConfig = struct {
+    enable: bool = false,
+    update_interval: u32 = 0,
+    lists: []const []const u8 = &.{},
+};
+
 fn logFilterScopesValidator(allocator: Allocator, args: *std.process.ArgIterator, list: *std.ArrayList(log.Scope)) !void {
     const str = args.next() orelse return error.InvalidOption;
 
@@ -80,6 +86,9 @@ const CommonOptions = .{
     .{ .name = "cookie_jar", .type = ?[]const u8 },
     .{ .name = "storage_engine", .type = ?Storage.EngineType },
     .{ .name = "storage_sqlite_path", .type = ?[:0]const u8 },
+    .{ .name = "enable_adblock", .type = bool },
+    .{ .name = "adblock_update_interval", .type = u32, .default = 0 },
+    .{ .name = "adblock_lists", .type = ?[]const u8 },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -370,6 +379,28 @@ pub fn storageSqlitePath(self: *const Config) ?[:0]const u8 {
         else => unreachable,
     };
 }
+
+pub fn adblockEnabled(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.enable_adblock,
+        .help, .version => false,
+    };
+}
+
+pub fn adblockUpdateInterval(self: *const Config) u32 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.adblock_update_interval,
+        .help, .version => 0,
+    };
+}
+
+pub fn adblockListsStr(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.adblock_lists,
+        .help, .version => null,
+    };
+}
+
 pub const DumpFormat = enum {
     html,
     markdown,

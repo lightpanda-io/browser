@@ -1,412 +1,218 @@
-// Copyright (C) 2025  Lightpanda (Selecy SAS)
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 const std = @import("std");
 const testing = std.testing;
 
-const AdFilterModule = @import("network/AdFilter.zig");
+const Config = @import("../Config.zig");
+const AdFilterModule = @import("AdFilter.zig");
 const AdFilter = AdFilterModule.AdFilter;
-const CosmeticFilter = @import("browser/CosmeticFilter.zig");
-const Config = @import("Config.zig");
-const UpdateScheduler = @import("UpdateScheduler.zig");
-const App = @import("App.zig");
-const HttpClient = @import("browser/HttpClient.zig");
-const Session = @import("browser/Session.zig");
-const Page = @import("browser/Page.zig");
-const Notification = @import("Notification.zig");
-const Browser = @import("browser/Browser.zig");
+const RequestType = AdFilterModule.RequestType;
 
-const testing_base = @import("testing.zig");
-const expectError = testing_base.expectError;
-const expect = testing_base.expect;
-const expectEqual = testing_base.expectEqual;
-const expectString = testing_base.expectString;
-const expectEqualSlices = testing_base.expectEqualSlices;
-const pageTest = testing_base.pageTest;
-const newString = testing_base.newString;
-const LogFilter = testing_base.LogFilter;
+const network_rules =
+    \\||ads.example.test^
+    \\||tracker.example.test^$script
+    \\@@||ads.example.test/allowed.js
+;
 
-const test_session = testing_base.test_session;
-const test_app = testing_base.test_app;
-const test_http = testing_base.test_http;
-const test_browser = testing_base.test_browser;
+const image_rules =
+    \\||images.example.test^$image
+;
 
-test "AdFilter: should block ad network requests" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+const replacement_rules =
+    \\||replacement.example.test^
+;
 
-    var config = try Config.init(allocator, "test", .{
-        .adblock = .{
-            .enable = true,
-            .update_interval = 3600,
-            .lists = &.{"https://easylist.to/easylist/easylist.txt"},
-        },
-    });
-    defer config.deinit(allocator);
+const replacement_image_rules =
+    \\||media.example.test^$image
+;
 
-    var adfilter = try AdFilter.init(&config);
-    defer adfilter.deinit();
+const cosmetic_rules =
+    \\example.test##.ad-banner
+    \\example.test##.sponsored
+;
 
-    const ad_requests = [_][]const u8{
-        "https://doubleclick.net/ad",
-        "https://googleadservices.com/pagead/ads",
-        "https://www.googletagmanager.com/gtag/js",
-        "https://www.facebook.com/tr",
-        "https://cdn.adsrvr.org/",
+const easylist_url = "https://easylist.to/easylist/easylist.txt";
+const easyprivacy_url = "https://easylist.to/easylist/easyprivacy.txt";
+
+fn initFilter(lists: []const []const u8) !AdFilter {
+    const config = Config.AdblockConfig{
+        .enable = true,
+        .lists = lists,
     };
+    return AdFilter.init(&config);
+}
 
-    for (ad_requests) |url| {
-        const should_block = adfilter.shouldBlock(url, .network_request);
-        try testing.expect(should_block);
-    }
-
-    const non_ad_requests = [_][]const u8{
-        "https://example.com",
-        "https://api.github.com/users",
-        "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js",
-        "https://fonts.googleapis.com/css",
+fn requireLiveAdblockTests() !void {
+    const value = std.process.getEnvVarOwned(testing.allocator, "LIGHTPANDA_ADBLOCK_LIVE") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return error.SkipZigTest,
+        else => return err,
     };
+    defer testing.allocator.free(value);
 
-    for (non_ad_requests) |url| {
-        const should_block = adfilter.shouldBlock(url, .network_request);
-        try testing.expect(!should_block);
+    if (!std.ascii.eqlIgnoreCase(value, "true")) {
+        return error.SkipZigTest;
     }
 }
 
-test "AdFilter: should block ad image requests" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+fn fetchFilterList(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
+    var client: std.http.Client = .{ .allocator = allocator };
+    defer client.deinit();
 
-    var config = try Config.init(allocator, "test", .{
-        .adblock = .{
-            .enable = true,
-            .update_interval = 3600,
-            .lists = &.{"https://easylist.to/easylist/easylist.txt"},
-        },
+    var body = std.Io.Writer.Allocating.init(allocator);
+    errdefer body.deinit();
+
+    const result = try client.fetch(.{
+        .location = .{ .url = url },
+        .response_writer = &body.writer,
     });
-    defer config.deinit(allocator);
-
-    var adfilter = try AdFilter.init(&config);
-    defer adfilter.deinit();
-
-    const ad_image_requests = [_][]const u8{
-        "https://cdn.ayads.co/",
-        "https://cdn.taboola.com/",
-        "https://cdn.outbrain.com/",
-    };
-
-    for (ad_image_requests) |url| {
-        const should_block = adfilter.shouldBlock(url, .image_request);
-        try testing.expect(should_block);
+    if (result.status != .ok) {
+        return error.UnexpectedHttpStatus;
     }
 
-    const non_ad_image_requests = [_][]const u8{
-        "https://example.com/logo.png",
-        "https://picsum.photos/200/300",
-        "https://via.placeholder.com/150",
-    };
-
-    for (non_ad_image_requests) |url| {
-        const should_block = adfilter.shouldBlock(url, .image_request);
-        try testing.expect(!should_block);
-    }
+    return try body.toOwnedSlice();
 }
 
-test "AdFilter: should block tracking scripts" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+test "AdFilter: loads all configured filter lists" {
+    var filter = try initFilter(&.{ network_rules, image_rules });
+    defer filter.deinit();
 
-    var config = try Config.init(allocator, "test", .{
-        .adblock = .{
-            .enable = true,
-            .update_interval = 3600,
-            .lists = &.{"https://easylist.to/easylist/easylist.txt"},
-        },
-    });
-    defer config.deinit(allocator);
+    try testing.expect(filter.shouldBlock(
+        "https://ads.example.test/banner.js",
+        "https://page.example.test/",
+        .script,
+    ));
+    try testing.expect(filter.shouldBlock(
+        "https://images.example.test/ad.png",
+        "https://page.example.test/",
+        .image,
+    ));
+    try testing.expect(!filter.shouldBlock(
+        "https://content.example.test/app.js",
+        "https://page.example.test/",
+        .script,
+    ));
+}
 
-    var adfilter = try AdFilter.init(&config);
-    defer adfilter.deinit();
+test "AdFilter: delegates request type and exception matching to adblock engine" {
+    var filter = try initFilter(&.{network_rules});
+    defer filter.deinit();
 
-    const tracking_requests = [_][]const u8{
+    try testing.expect(filter.shouldBlock(
+        "https://tracker.example.test/pixel.js",
+        "https://page.example.test/",
+        .script,
+    ));
+    try testing.expect(!filter.shouldBlock(
+        "https://tracker.example.test/pixel.png",
+        "https://page.example.test/",
+        .image,
+    ));
+    try testing.expect(!filter.shouldBlock(
+        "https://ads.example.test/allowed.js",
+        "https://page.example.test/",
+        .script,
+    ));
+}
+
+test "AdFilter: replaces filter lists atomically through FFI-owned state" {
+    var filter = try initFilter(&.{ network_rules, image_rules });
+    defer filter.deinit();
+
+    try filter.replaceFilterLists(&.{ replacement_rules, replacement_image_rules });
+
+    try testing.expect(!filter.shouldBlock(
+        "https://ads.example.test/banner.js",
+        "https://page.example.test/",
+        .script,
+    ));
+    try testing.expect(filter.shouldBlock(
+        "https://replacement.example.test/banner.js",
+        "https://page.example.test/",
+        .script,
+    ));
+    try testing.expect(filter.shouldBlock(
+        "https://media.example.test/ad.png",
+        "https://page.example.test/",
+        .image,
+    ));
+}
+
+test "AdFilter: copies and frees cosmetic filter JSON returned by FFI" {
+    var filter = try initFilter(&.{cosmetic_rules});
+    defer filter.deinit();
+
+    const json = (try filter.getCosmeticFilters(testing.allocator, "https://example.test/article")) orelse
+        return error.ExpectedCosmeticFilters;
+    defer testing.allocator.free(json);
+
+    try testing.expect(std.mem.indexOf(u8, json, ".ad-banner") != null);
+    try testing.expect(std.mem.indexOf(u8, json, ".sponsored") != null);
+}
+
+test "AdFilter: disabled config has no engine and does not block" {
+    const config = Config.AdblockConfig{ .enable = false };
+    var filter = try AdFilter.init(&config);
+    defer filter.deinit();
+
+    try testing.expect(!filter.shouldBlock(
+        "https://ads.example.test/banner.js",
+        "https://page.example.test/",
+        RequestType.script,
+    ));
+}
+
+test "AdFilter live: EasyList and EasyPrivacy block representative requests" {
+    try requireLiveAdblockTests();
+
+    const easylist = try fetchFilterList(testing.allocator, easylist_url);
+    defer testing.allocator.free(easylist);
+    const easyprivacy = try fetchFilterList(testing.allocator, easyprivacy_url);
+    defer testing.allocator.free(easyprivacy);
+
+    var filter = try initFilter(&.{ easylist, easyprivacy });
+    defer filter.deinit();
+
+    try testing.expect(filter.shouldBlock(
+        "https://securepubads.g.doubleclick.net/tag/js/gpt.js",
+        "https://www.example.com/",
+        .script,
+    ));
+    try testing.expect(filter.shouldBlock(
         "https://www.google-analytics.com/analytics.js",
-        "https://connect.facebook.net/en_US/fbevents.js",
-        "https://www.googleadservices.com/pagead/conversion_async.js",
-        "https://www.google.com/recaptcha/api.js",
-    };
-
-    for (tracking_requests) |url| {
-        const should_block = adfilter.shouldBlock(url, .script_request);
-        try testing.expect(should_block);
-    }
-
-    const non_tracking_requests = [_][]const u8{
-        "https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js",
-        "https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js",
-        "https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js",
-    };
-
-    for (non_tracking_requests) |url| {
-        const should_block = adfilter.shouldBlock(url, .script_request);
-        try testing.expect(!should_block);
-    }
+        "https://www.example.com/",
+        .script,
+    ));
+    try testing.expect(filter.shouldBlock(
+        "https://pagead2.googlesyndication.com/pagead/imgad?id=123",
+        "https://www.example.com/",
+        .image,
+    ));
+    try testing.expect(!filter.shouldBlock(
+        "https://www.example.com/assets/application.js",
+        "https://www.example.com/",
+        .script,
+    ));
 }
 
-test "AdFilter: should handle edge cases correctly" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+test "AdFilter live: replacing real lists keeps the new complete set active" {
+    try requireLiveAdblockTests();
 
-    var config = try Config.init(allocator, "test", .{
-        .adblock = .{
-            .enable = true,
-            .update_interval = 3600,
-            .lists = &.{"https://easylist.to/easylist/easylist.txt"},
-        },
-    });
-    defer config.deinit(allocator);
+    const easylist = try fetchFilterList(testing.allocator, easylist_url);
+    defer testing.allocator.free(easylist);
+    const easyprivacy = try fetchFilterList(testing.allocator, easyprivacy_url);
+    defer testing.allocator.free(easyprivacy);
 
-    var adfilter = try AdFilter.init(&config);
-    defer adfilter.deinit();
+    var filter = try initFilter(&.{easylist});
+    defer filter.deinit();
 
-    const edge_cases = [_][]const u8{
-        "",
-        "https://example.com/" ++ "a" ** 2000,
-        "https://example.com/path?query=with%20spaces&special=characters",
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==",
-        "file:///path/to/local/file.html",
-    };
+    try filter.replaceFilterLists(&.{ easylist, easyprivacy });
 
-    for (edge_cases) |url| {
-        const should_block = adfilter.shouldBlock(url, .network_request);
-        try testing.expect(!should_block);
-    }
-}
-
-test "CosmeticFilter: should hide ad elements" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var config = try Config.init(allocator, "test", .{
-        .adblock = .{
-            .enable = true,
-            .update_interval = 3600,
-            .lists = &.{"https://easylist.to/easylist/easylist.txt"},
-        },
-    });
-    defer config.deinit(allocator);
-
-    var cosmetic_filter = try CosmeticFilter.CosmeticFilter.init(allocator, &config);
-    defer cosmetic_filter.deinit();
-
-    const html_with_ads =
-        "<!DOCTYPE html>\n" ++
-        "<html>\n" ++
-        "<head>\n" ++
-        "    <title>Test Page</title>\n" ++
-        "</head>\n" ++
-        "<body>\n" ++
-        "    <div class=\"ad-banner\">This is an ad banner</div>\n" ++
-        "    <div class=\"advertisement\">Advertisement</div>\n" ++
-        "    <div class=\"content\">This is real content</div>\n" ++
-        "    <iframe src=\"https://ad.example.com\" class=\"ad-iframe\"></iframe>\n" ++
-        "    <div id=\"main-content\">Main content area</div>\n" ++
-        "</body>\n" ++
-        "</html>";
-
-    var page = try test_session.createPage();
-    defer _ = test_session.removePage();
-
-    try cosmetic_filter.apply(page);
-
-    try expectAdElementHidden(page, "ad-banner");
-    try expectAdElementHidden(page, "advertisement");
-    try expectAdElementHidden(page, "ad-iframe");
-    try expectElementVisible(page, "content");
-    try expectElementVisible(page, "main-content");
-}
-
-test "CosmeticFilter: should handle dynamic content" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var config = try Config.init(allocator, "test", .{
-        .adblock = .{
-            .enable = true,
-            .update_interval = 3600,
-            .lists = &.{"https://easylist.to/easylist/easylist.txt"},
-        },
-    });
-    defer config.deinit(allocator);
-
-    var cosmetic_filter = try CosmeticFilter.CosmeticFilter.init(allocator, &config);
-    defer cosmetic_filter.deinit();
-
-    const initial_html =
-        "<!DOCTYPE html>\n" ++
-        "<html>\n" ++
-        "<head>\n" ++
-        "    <title>Test Page</title>\n" ++
-        "</head>\n" ++
-        "<body>\n" ++
-        "    <div id=\"main-content\">Main content</div>\n" ++
-        "</body>\n" ++
-        "</html>";
-
-    var page = try test_session.createPage();
-    defer _ = test_session.removePage();
-
-    try cosmetic_filter.apply(page);
-
-    try cosmetic_filter.applyDynamicContent(page, "<div class=\"ad-banner\">New ad banner</div>");
-
-    try expectAdElementHidden(page, "ad-banner");
-    try expectElementVisible(page, "main-content");
-}
-
-test "UpdateScheduler: should initialize with config" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var config = try Config.init(allocator, "test", .{
-        .adblock = .{
-            .enable = true,
-            .update_interval = 1,
-            .lists = &.{"https://easylist.to/easylist/easylist.txt"},
-        },
-    });
-    defer config.deinit(allocator);
-
-    var scheduler = try UpdateScheduler.init(allocator, &config);
-    defer scheduler.deinit();
-
-    try testing.expect(scheduler.getFilterCount() == 0);
-}
-
-test "HttpClient: adblock integration should block requests" {
-    test_app.config.enable_adblock = true;
-    test_app.config.adblock_lists = &.{"https://easylist.to/easylist/easylist.txt"};
-    test_app.config.adblock_update_interval = 3600;
-
-    try expectError(error.RequestBlocked, test_http.processRequest("https://doubleclick.net/ad", .{}, .{}));
-}
-
-test "HttpClient: adblock integration should allow non-ad requests" {
-    test_app.config.enable_adblock = true;
-    test_app.config.adblock_lists = &.{"https://easylist.to/easylist/easylist.txt"};
-    test_app.config.adblock_update_interval = 3600;
-
-    const result = try test_http.processRequest("https://example.com", .{}, .{});
-    try testing.expect(result.status_code == 200);
-}
-
-test "Config: adblock settings should be configurable" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var config = try Config.init(allocator, "test", .{
-        .adblock = .{
-            .enable = true,
-            .update_interval = 7200,
-            .lists = &.{
-                "https://easylist.to/easylist/easylist.txt",
-                "https://easylist.to/easylist/easyprivacy.txt",
-            },
-        },
-    });
-    defer config.deinit(allocator);
-
-    try testing.expect(config.enable_adblock == true);
-    try testing.expect(config.adblock_update_interval == 7200);
-    try testing.expect(config.adblock_lists.len == 2);
-}
-
-test "Config: adblock can be disabled" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var config = try Config.init(allocator, "test", .{
-        .adblock = .{
-            .enable = false,
-            .update_interval = 3600,
-            .lists = &.{},
-        },
-    });
-    defer config.deinit(allocator);
-
-    try testing.expect(config.enable_adblock == false);
-}
-
-test "AdFilter: null engine should not crash" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var config = try Config.init(allocator, "test", .{
-        .adblock = .{
-            .enable = false,
-            .update_interval = 3600,
-            .lists = &.{},
-        },
-    });
-    defer config.deinit(allocator);
-
-    var adfilter = try AdFilter.init(&config);
-    defer adfilter.deinit();
-
-    const result = adfilter.shouldBlock("https://example.com", .network_request);
-    try testing.expect(!result);
-}
-
-test "CosmeticFilter: disabled adblock should not crash" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var config = try Config.init(allocator, "test", .{
-        .adblock = .{
-            .enable = false,
-            .update_interval = 3600,
-            .lists = &.{},
-        },
-    });
-    defer config.deinit(allocator);
-
-    var cosmetic_filter = try CosmeticFilter.CosmeticFilter.init(allocator, &config);
-    defer cosmetic_filter.deinit();
-
-    var page = try test_session.createPage();
-    defer _ = test_session.removePage();
-
-    try cosmetic_filter.apply(page);
-}
-
-fn expectAdElementHidden(page: *Page, selector: [:0]const u8) !void {
-    _ = page;
-    _ = selector;
-}
-
-fn expectElementVisible(page: *Page, selector: [:0]const u8) !void {
-    _ = page;
-    _ = selector;
+    try testing.expect(filter.shouldBlock(
+        "https://securepubads.g.doubleclick.net/tag/js/gpt.js",
+        "https://www.example.com/",
+        .script,
+    ));
+    try testing.expect(filter.shouldBlock(
+        "https://www.google-analytics.com/analytics.js",
+        "https://www.example.com/",
+        .script,
+    ));
 }

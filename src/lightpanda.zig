@@ -49,6 +49,10 @@ pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 
+test {
+    _ = @import("network/adblock_tests.zig");
+}
+
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const FetchOpts = struct {

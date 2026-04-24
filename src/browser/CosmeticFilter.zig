@@ -26,7 +26,8 @@ pub const CosmeticFilter = struct {
         }
 
         if (filter.ad_filter) |ad_filter| {
-            if (ad_filter.getCosmeticFilters(page.url)) |cosmetics_json| {
+            if (try ad_filter.getCosmeticFilters(filter.allocator, page.url)) |cosmetics_json| {
+                defer filter.allocator.free(cosmetics_json);
                 try filter.injectStyles(page, cosmetics_json);
             }
         }
@@ -40,36 +41,40 @@ pub const CosmeticFilter = struct {
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
-        var escaped = std.ArrayList(u8).init(arena_alloc);
-        for (cosmetics_json) |c| {
-            switch (c) {
-                '\\' => try escaped.appendSlice("\\\\"),
-                '\'' => try escaped.appendSlice("\\'"),
-                else => try escaped.append(c),
-            }
-        }
-        const escaped_json = escaped.items;
+        // Base64 encode the JSON to safely transport it into the JS context
+        // without worrying about complex character escaping strings.
+        const base64_encoder = std.base64.standard.Encoder;
+        const encoded_len = base64_encoder.calcSize(cosmetics_json.len);
+        const encoded_json = try arena_alloc.alloc(u8, encoded_len);
+        _ = base64_encoder.encode(encoded_json, cosmetics_json);
 
+        // Note: All literal JS braces must be double-escaped {{ }} when using std.fmt.allocPrint
         const script = try std.fmt.allocPrint(arena_alloc,
-            \\(function() {
-            \\  const rules = JSON.parse('{s}');
-            \\  if (rules && rules.hide_selectors) {
-            \\    rules.hide_selectors.forEach(function(selector) {
-            \\      try {
-            \\        document.querySelectorAll(selector).forEach(function(el) {{
-            \\          el.style.cssText += ';display:none!important;visibility:hidden!important;';
-            \\        }});
-            \\      } catch(e) {{}}
-            \\    });
-            \\  }
-            \\})();
-        , .{escaped_json});
+            \\(function() {{
+            \\  try {{
+            \\    const rules = JSON.parse(atob('{s}'));
+            \\    if (rules && rules.hide_selectors) {{
+            \\      rules.hide_selectors.forEach(function(selector) {{
+            \\        try {{
+            \\          document.querySelectorAll(selector).forEach(function(el) {{
+            \\            el.style.cssText += ';display:none!important;visibility:hidden!important;';
+            \\          }});
+            \\        }} catch(e) {{}}
+            \\      }});
+            \\    }}
+            \\  }} catch(e) {{
+            \\    console.error("Adblock cosmetic parsing error", e);
+            \\  }}
+            \\}})();
+        , .{encoded_json});
 
         try filter.execJS(page, script);
     }
 
     fn injectDefaultRules(filter: *CosmeticFilter, page: *Page) !void {
         if (filter.ad_filter == null) {
+            // Note: Since no Zig interpolation is happening here (no std.fmt),
+            // single braces `{}` are perfectly fine.
             const default_rules =
                 \\(function() {
                 \\  const adSelectors = [

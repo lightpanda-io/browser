@@ -26,6 +26,7 @@ pub const RequestType = enum(u32) {
             std.mem.endsWith(u8, url, ".gif") or
             std.mem.endsWith(u8, url, ".webp") or
             std.mem.endsWith(u8, url, ".svg")) return .image;
+
         if (std.mem.endsWith(u8, url, ".woff") or
             std.mem.endsWith(u8, url, ".woff2") or
             std.mem.endsWith(u8, url, ".ttf") or
@@ -46,18 +47,19 @@ pub const RequestType = enum(u32) {
         return .other;
     }
 
-    pub fn toString(self: RequestType) []const u8 {
+    // Return null-terminated strings for safe C FFI usage
+    pub fn toString(self: RequestType) [:0]const u8 {
         return switch (self) {
-            .document => "DOCUMENT",
-            .stylesheet => "STYLESHEET",
-            .image => "IMAGE",
-            .script => "SCRIPT",
-            .subdocument => "SUBDOCUMENT",
-            .xmlhttprequest => "XMLHTTPREQUEST",
-            .websocket => "WEBSOCKET",
-            .ping => "PING",
-            .font => "FONT",
-            .other => "OTHER",
+            .document => "document",
+            .stylesheet => "stylesheet",
+            .image => "image",
+            .script => "script",
+            .subdocument => "subdocument",
+            .xmlhttprequest => "xmlhttprequest",
+            .websocket => "websocket",
+            .ping => "ping",
+            .font => "font",
+            .other => "other",
         };
     }
 };
@@ -73,12 +75,18 @@ const AdblockResult = extern struct {
     matched: bool,
     important: bool,
     has_exception: bool,
-    redirect: [*:0]u8,
-    rewritten_url: [*:0]u8,
+    redirect: ?[*:0]u8,
+    rewritten_url: ?[*:0]u8,
+};
+
+const CFilterList = extern struct {
+    data: [*]const u8,
+    len: usize,
 };
 
 pub const AdFilter = struct {
     engine: ?*anyopaque = null,
+    lock: std.Thread.RwLock = .{},
 
     pub fn init(config: *const Config.AdblockConfig) !AdFilter {
         if (!config.enable) {
@@ -92,49 +100,41 @@ pub const AdFilter = struct {
     fn createEngine(config: *const Config.AdblockConfig) !AdFilter {
         const lists = config.lists;
         if (lists.len == 0) {
-            log.info(.http, "No filter lists configured, adblock disabled", .{});
+            log.info(.http, "adblock no lists", .{});
             return AdFilter{ .engine = null };
         }
 
-        const allocator = std.heap.c_allocator;
-
-        const first_list = lists[0];
-        const first_list_z = try allocator.dupeZ(u8, first_list);
-        defer allocator.free(first_list_z);
-
-        const engine = c_adblock_create_engine_with_rules(first_list_z.ptr, first_list_z.len);
+        const engine = try createEngineFromLists(lists);
         if (engine == null) {
             log.err(.http, "Adblock engine creation failed", .{});
             return error.EngineCreationFailed;
         }
 
-        for (lists[1..]) |list_url| {
-            const list_z = try allocator.dupeZ(u8, list_url);
-            errdefer allocator.free(list_z);
-            _ = c_adblock_add_filter_list(engine, list_z.ptr, list_z.len);
-            allocator.free(list_z);
-        }
-
-        log.info(.http, "Adblock engine created with {d} filter lists", .{lists.len});
+        log.info(.http, "adblock engine created", .{ .lists = lists.len });
         return AdFilter{ .engine = engine };
     }
 
     pub fn shouldBlock(self: *const AdFilter, url: [:0]const u8, source_url: [:0]const u8, request_type: RequestType) bool {
-        if (self.engine == null) {
+        // Safe const casting because locking is an internal thread-safety mechanic
+        // that shouldn't pollute the logical const-ness of the AdFilter.
+        var m_self = @constCast(self);
+        m_self.lock.lockShared();
+        defer m_self.lock.unlockShared();
+
+        if (m_self.engine == null) {
             return false;
         }
 
-        const hostname = extractHostname(url) catch return false;
-        const source_hostname = if (source_url.len > 0) extractHostname(source_url) catch "" else "";
-
         const result = c_adblock_matches(
-            self.engine,
+            m_self.engine,
             url.ptr,
-            hostname.ptr,
-            source_hostname.ptr,
             request_type.toString().ptr,
-            0,
+            source_url.ptr,
         );
+        defer {
+            if (result.redirect) |redirect| c_adblock_free_string(redirect);
+            if (result.rewritten_url) |rewritten_url| c_adblock_free_string(rewritten_url);
+        }
 
         if (result.matched) {
             log.debug(.http, "adblock blocked url", .{ .url = url });
@@ -143,55 +143,79 @@ pub const AdFilter = struct {
         return result.matched;
     }
 
-    pub fn getCosmeticFilters(self: *const AdFilter, url: [:0]const u8) ?[]const u8 {
+    pub fn getCosmeticFilters(self: *const AdFilter, allocator: Allocator, url: [:0]const u8) !?[]u8 {
+        var m_self = @constCast(self);
+        m_self.lock.lockShared();
+        defer m_self.lock.unlockShared();
+
+        if (m_self.engine == null) {
+            return null;
+        }
+
+        const json_ptr = c_adblock_get_cosmetic_filters(m_self.engine, url.ptr) orelse return null;
+        defer c_adblock_free_string(json_ptr);
+
+        return try allocator.dupe(u8, std.mem.span(json_ptr));
+    }
+
+    pub fn replaceFilterLists(self: *AdFilter, lists: []const []const u8) !void {
+        self.lock.lock();
+        defer self.lock.unlock();
+
         if (self.engine == null) {
-            return null;
+            return;
         }
 
-        const json_ptr = c_adblock_get_cosmetic_filters(self.engine, url.ptr);
-        if (json_ptr == null) {
-            return null;
-        }
+        const ffi_lists = try makeCFilterLists(lists);
+        defer std.heap.c_allocator.free(ffi_lists);
 
-        const json_str = std.mem.span(json_ptr);
-        return json_str;
+        const result = c_adblock_replace_filter_lists(self.engine, ffi_lists.ptr, ffi_lists.len);
+        if (!result) {
+            return error.FilterListLoadFailed;
+        }
     }
 
     pub fn deinit(self: *AdFilter) void {
+        self.lock.lock();
+        defer self.lock.unlock();
+
         if (self.engine) |engine| {
             c_adblock_destroy_engine(engine);
+            self.engine = null;
         }
     }
 };
 
-fn extractHostname(url: []const u8) ![]const u8 {
-    if (std.mem.startsWith(u8, url, "https://")) {
-        const rest = url[8..];
-        if (std.mem.indexOf(u8, rest, "/")) |idx| {
-            return rest[0..idx];
-        }
-        return rest;
+fn createEngineFromLists(lists: []const []const u8) !?*anyopaque {
+    const ffi_lists = try makeCFilterLists(lists);
+    defer std.heap.c_allocator.free(ffi_lists);
+    return c_adblock_create_engine_from_lists(ffi_lists.ptr, ffi_lists.len);
+}
+
+fn makeCFilterLists(lists: []const []const u8) ![]CFilterList {
+    const allocator = std.heap.c_allocator;
+    const ffi_lists = try allocator.alloc(CFilterList, lists.len);
+    errdefer allocator.free(ffi_lists);
+
+    for (lists, ffi_lists) |list, *ffi_list| {
+        ffi_list.* = .{
+            .data = list.ptr,
+            .len = list.len,
+        };
     }
-    if (std.mem.startsWith(u8, url, "http://")) {
-        const rest = url[7..];
-        if (std.mem.indexOf(u8, rest, "/")) |idx| {
-            return rest[0..idx];
-        }
-        return rest;
-    }
-    return error.InvalidURL;
+
+    return ffi_lists;
 }
 
 extern fn c_adblock_create_engine() ?*anyopaque;
-extern fn c_adblock_create_engine_with_rules(rules: [*]const u8, rules_len: usize) ?*anyopaque;
-extern fn c_adblock_add_filter_list(engine: ?*anyopaque, rules: [*]const u8, rules_len: usize) bool;
+extern fn c_adblock_create_engine_from_lists(rules: [*]const CFilterList, rules_len: usize) ?*anyopaque;
+extern fn c_adblock_replace_filter_lists(engine: ?*anyopaque, rules: [*]const CFilterList, rules_len: usize) bool;
 extern fn c_adblock_matches(
     engine: ?*anyopaque,
     url: [*]const u8,
-    hostname: [*]const u8,
-    source_hostname: [*]const u8,
     request_type: [*]const u8,
-    third_party: i32,
+    source_url: [*]const u8,
 ) AdblockResult;
 extern fn c_adblock_destroy_engine(engine: ?*anyopaque) void;
-extern fn c_adblock_get_cosmetic_filters(engine: ?*anyopaque, url: [*]const u8) [*:0]u8;
+extern fn c_adblock_get_cosmetic_filters(engine: ?*anyopaque, url: [*]const u8) ?[*:0]u8;
+extern fn c_adblock_free_string(s: ?[*:0]u8) void;
