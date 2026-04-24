@@ -1116,7 +1116,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
             self._parse_state = .{ .raw_done = buf.items };
 
             // Use empty an empty HTML document.
-            parser.parse("<html><head><meta charset=\"utf-8\"></head><body></body></htm>");
+            parser.parse("<html><head><meta charset=\"utf-8\"></head><body></body></html>");
             self.documentIsComplete();
         },
         .pre => {
@@ -1126,7 +1126,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
             self._parse_state = .{ .complete = {} };
 
             // Use empty an empty HTML document.
-            parser.parse("<html><head><meta charset=\"utf-8\"></head><body></body></htm>");
+            parser.parse("<html><head><meta charset=\"utf-8\"></head><body></body></html>");
             self.documentIsComplete();
         },
         .err => |err| {
