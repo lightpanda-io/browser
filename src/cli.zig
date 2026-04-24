@@ -580,10 +580,12 @@ pub fn Builder(comptime commands: anytype) type {
                 }
             }
 
-            // Parsing is complete and positional is null.
-            const positional_is_null = @hasField(@TypeOf(command), "positional") and @field(c, command.positional.name) == null;
-            if (positional_is_null) {
-                return error.MissingArgument;
+            // A non-optional positional that is still null after parsing is missing.
+            if (comptime @hasField(@TypeOf(command), "positional")) {
+                const is_optional = @typeInfo(command.positional.type) == .optional;
+                if (!is_optional and @field(c, command.positional.name) == null) {
+                    return error.MissingArgument;
+                }
             }
 
             return @unionInit(Union, command.name, c);
