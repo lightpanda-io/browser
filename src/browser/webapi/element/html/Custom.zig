@@ -24,6 +24,7 @@ const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const Document = @import("../../Document.zig");
 const HtmlElement = @import("../Html.zig");
 const CustomElementDefinition = @import("../../CustomElementDefinition.zig");
 
@@ -72,6 +73,19 @@ pub fn invokeAttributeChangedCallback(self: *Custom, name: String, old_value: ?S
         return;
     }
     self.invokeCallback("attributeChangedCallback", .{ name, old_value, new_value, namespace }, frame);
+}
+
+pub fn invokeAdoptedCallback(self: *Custom, old_document: *Document, new_document: *Document, frame: *Frame) void {
+    self.invokeCallback("adoptedCallback", .{ old_document, new_document }, frame);
+}
+
+pub fn invokeAdoptedCallbackOnElement(element: *Element, old_document: *Document, new_document: *Document, frame: *Frame) void {
+    if (element.is(Custom)) |custom| {
+        custom.invokeAdoptedCallback(old_document, new_document, frame);
+        return;
+    }
+    const definition = frame.getCustomizedBuiltInDefinition(element) orelse return;
+    invokeCallbackOnElement(element, definition, "adoptedCallback", .{ old_document, new_document }, frame);
 }
 
 pub fn invokeConnectedCallbackOnElement(comptime from_parser: bool, element: *Element, frame: *Frame) !void {

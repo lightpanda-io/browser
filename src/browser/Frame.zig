@@ -1668,11 +1668,17 @@ pub fn setNodeOwnerDocument(self: *Frame, node: *Node, owner: *Document) !void {
 }
 
 // Recursively sets the owner document for a node and all its descendants
-pub fn adoptNodeTree(self: *Frame, node: *Node, new_owner: *Document) !void {
+pub fn adoptNodeTree(self: *Frame, node: *Node, old_owner: *Document, new_owner: *Document) !void {
     try self.setNodeOwnerDocument(node, new_owner);
+
+    // Per spec, adopted steps run on each element after its document is set.
+    if (node.is(Element)) |el| {
+        Element.Html.Custom.invokeAdoptedCallbackOnElement(el, old_owner, new_owner, self);
+    }
+
     var it = node.childrenIterator();
     while (it.next()) |child| {
-        try self.adoptNodeTree(child, new_owner);
+        try self.adoptNodeTree(child, old_owner, new_owner);
     }
 }
 
@@ -2945,7 +2951,10 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
     }
 
     if (opts.child_already_connected and !opts.adopting_to_new_document) {
-        // The child is already connected in the same document, we don't have to reconnect it
+        // The child is already connected in the same document, we don't have to reconnect it.
+        // On cross-document adoption the child has already fired
+        // disconnectedCallback against the old tree and must re-fire
+        // connectedCallback for the new tree, so we fall through.
         return;
     }
 
@@ -2963,7 +2972,10 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
     // Only invoke connectedCallback if the root child is transitioning from
     // disconnected to connected. When that happens, all descendants should also
     // get connectedCallback invoked (they're becoming connected as a group).
-    const should_invoke_connected = parent_is_connected and !opts.child_already_connected;
+    // Cross-document adoption also counts as a transition: the element fired
+    // disconnectedCallback against the old tree during removeNode and must
+    // now fire connectedCallback against the new tree.
+    const should_invoke_connected = parent_is_connected and (!opts.child_already_connected or opts.adopting_to_new_document);
 
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
     while (tw.next()) |el| {
