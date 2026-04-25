@@ -52,6 +52,40 @@
     const el = document.createElement('no-constructor-element');
     testing.expectEqual('NO-CONSTRUCTOR-ELEMENT', el.tagName);
 }
+
+{
+    // Direct instantiation: `new MyElement()` should work for a registered
+    // autonomous custom element.
+    class DirectInstantiation extends HTMLElement {
+        constructor() {
+            super();
+            this.init = 'direct';
+        }
+    }
+    customElements.define('direct-instantiation', DirectInstantiation);
+
+    const el = new DirectInstantiation();
+    testing.expectEqual(true, el instanceof DirectInstantiation);
+    testing.expectEqual(true, el instanceof HTMLElement);
+    testing.expectEqual('direct-instantiation', el.localName);
+    testing.expectEqual('DIRECT-INSTANTIATION', el.tagName);
+    testing.expectEqual('direct', el.init);
+}
+
+{
+    // `new HTMLElement()` directly is illegal (no registered constructor).
+    let threw = false;
+    try { new HTMLElement(); } catch (e) { threw = true; }
+    testing.expectEqual(true, threw);
+}
+
+{
+    // Unregistered subclass of HTMLElement is also illegal.
+    class Unregistered extends HTMLElement {}
+    let threw = false;
+    try { new Unregistered(); } catch (e) { threw = true; }
+    testing.expectEqual(true, threw);
+}
 </script>
 
 <div id=clone_container></div>

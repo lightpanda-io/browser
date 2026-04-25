@@ -24,6 +24,7 @@ const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const Document = @import("../../Document.zig");
 const HtmlElement = @import("../Html.zig");
 const CustomElementDefinition = @import("../../CustomElementDefinition.zig");
 
@@ -66,12 +67,25 @@ pub fn invokeDisconnectedCallback(self: *Custom, frame: *Frame) void {
     self.invokeCallback("disconnectedCallback", .{}, frame);
 }
 
-pub fn invokeAttributeChangedCallback(self: *Custom, name: String, old_value: ?String, new_value: ?String, frame: *Frame) void {
+pub fn invokeAttributeChangedCallback(self: *Custom, name: String, old_value: ?String, new_value: ?String, namespace: ?String, frame: *Frame) void {
     const definition = self._definition orelse return;
     if (!definition.isAttributeObserved(name)) {
         return;
     }
-    self.invokeCallback("attributeChangedCallback", .{ name, old_value, new_value }, frame);
+    self.invokeCallback("attributeChangedCallback", .{ name, old_value, new_value, namespace }, frame);
+}
+
+pub fn invokeAdoptedCallback(self: *Custom, old_document: *Document, new_document: *Document, frame: *Frame) void {
+    self.invokeCallback("adoptedCallback", .{ old_document, new_document }, frame);
+}
+
+pub fn invokeAdoptedCallbackOnElement(element: *Element, old_document: *Document, new_document: *Document, frame: *Frame) void {
+    if (element.is(Custom)) |custom| {
+        custom.invokeAdoptedCallback(old_document, new_document, frame);
+        return;
+    }
+    const definition = frame.getCustomizedBuiltInDefinition(element) orelse return;
+    invokeCallbackOnElement(element, definition, "adoptedCallback", .{ old_document, new_document }, frame);
 }
 
 pub fn invokeConnectedCallbackOnElement(comptime from_parser: bool, element: *Element, frame: *Frame) !void {
@@ -146,17 +160,17 @@ pub fn invokeDisconnectedCallbackOnElement(element: *Element, frame: *Frame) voi
     invokeCallbackOnElement(element, definition, "disconnectedCallback", .{}, frame);
 }
 
-pub fn invokeAttributeChangedCallbackOnElement(element: *Element, name: String, old_value: ?String, new_value: ?String, frame: *Frame) void {
+pub fn invokeAttributeChangedCallbackOnElement(element: *Element, name: String, old_value: ?String, new_value: ?String, namespace: ?String, frame: *Frame) void {
     // Autonomous custom element
     if (element.is(Custom)) |custom| {
-        custom.invokeAttributeChangedCallback(name, old_value, new_value, frame);
+        custom.invokeAttributeChangedCallback(name, old_value, new_value, namespace, frame);
         return;
     }
 
     // Customized built-in element - check if attribute is observed
     const definition = frame.getCustomizedBuiltInDefinition(element) orelse return;
     if (!definition.isAttributeObserved(name)) return;
-    invokeCallbackOnElement(element, definition, "attributeChangedCallback", .{ name, old_value, new_value }, frame);
+    invokeCallbackOnElement(element, definition, "attributeChangedCallback", .{ name, old_value, new_value, namespace }, frame);
 }
 
 fn invokeCallbackOnElement(element: *Element, definition: *CustomElementDefinition, comptime callback_name: [:0]const u8, args: anytype, frame: *Frame) void {

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<body>
+<script src="../testing.js"></script>
+<script id="adopted">
+{
+    let calls = [];
+
+    class MyElement extends HTMLElement {
+        connectedCallback() { calls.push('connected'); }
+        adoptedCallback(oldDoc, newDoc) {
+            calls.push('adopted');
+            calls.push(oldDoc === document);
+            calls.push(newDoc === otherDoc);
+        }
+        disconnectedCallback() { calls.push('disconnected'); }
+    }
+    customElements.define('my-adopted-element', MyElement);
+
+    const otherDoc = document.implementation.createHTMLDocument('other');
+
+    // Case 1: adopting a detached element into another document
+    {
+        const el = document.createElement('my-adopted-element');
+        calls = [];
+        otherDoc.body.appendChild(el);
+        testing.expectEqual('adopted,true,true,connected', calls.join(','));
+    }
+
+    // Case 2: moving a connected element into another document fires
+    // disconnected -> adopted -> connected in order.
+    {
+        const el = document.createElement('my-adopted-element');
+        document.body.appendChild(el);
+        calls = [];
+        otherDoc.body.appendChild(el);
+        testing.expectEqual('disconnected,adopted,true,true,connected', calls.join(','));
+    }
+
+    // Case 3: appending into the same document does NOT fire adopted.
+    {
+        const el = document.createElement('my-adopted-element');
+        calls = [];
+        document.body.appendChild(el);
+        testing.expectEqual('connected', calls.join(','));
+    }
+}
+</script>
+</body>
