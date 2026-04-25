@@ -1364,8 +1364,22 @@ pub fn removeElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, id: []const
 
 pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Element {
     if (node.isConnected() or node.isInShadowTree()) {
-        const lookup = self.getElementIdMap(node).lookup;
-        return lookup.get(id);
+        var current = node;
+        while (true) {
+            if (current.is(ShadowRoot)) |shadow_root| {
+                return shadow_root.getElementById(id, self);
+            }
+            const parent = current._parent orelse {
+                if (current._type == .document) {
+                    return current._type.document.getElementById(id, self);
+                }
+                if (IS_DEBUG) {
+                    std.debug.assert(false);
+                }
+                return null;
+            };
+            current = parent;
+        }
     }
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
     while (tw.next()) |el| {
