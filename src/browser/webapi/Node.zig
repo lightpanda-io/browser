@@ -241,12 +241,16 @@ pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
     if (child._parent) |parent| {
         // we can signal removeNode that the child will remain connected
         // (when it's appended to self) so that it can be a bit more efficient.
-        frame.removeNode(parent, child, .{ .will_be_reconnected = self.isConnected() });
+        // But on cross-document moves the child must fully disconnect from the
+        // source document (firing disconnectedCallback) before adoption.
+        frame.removeNode(parent, child, .{
+            .will_be_reconnected = self.isConnected() and !adopting_to_new_document,
+        });
     }
 
     // Adopt the node tree if moving between documents
     if (adopting_to_new_document) {
-        try frame.adoptNodeTree(child, parent_owner);
+        try frame.adoptNodeTree(child, child_owner.?, parent_owner);
     }
 
     try frame.appendNode(self, child, .{
@@ -591,14 +595,14 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fra
     const adopting_to_new_document = child_owner != null and child_owner.? != parent_owner;
 
     frame.domChanged();
-    const will_be_reconnected = self.isConnected();
+    const will_be_reconnected = self.isConnected() and !adopting_to_new_document;
     if (new_node._parent) |parent| {
         frame.removeNode(parent, new_node, .{ .will_be_reconnected = will_be_reconnected });
     }
 
     // Adopt the node tree if moving between documents
     if (adopting_to_new_document) {
-        try frame.adoptNodeTree(new_node, parent_owner);
+        try frame.adoptNodeTree(new_node, child_owner.?, parent_owner);
     }
 
     try frame.insertNodeRelative(

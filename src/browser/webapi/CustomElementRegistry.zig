@@ -195,7 +195,7 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     while (attr_it.next()) |attr| {
         const name = attr._name;
         if (definition.isAttributeObserved(name)) {
-            custom.invokeAttributeChangedCallback(name, null, attr._value, frame);
+            custom.invokeAttributeChangedCallback(name, null, attr._value, null, frame);
         }
     }
 

@@ -1564,10 +1564,18 @@ pub const Transfer = struct {
             return error.LocationNotFound;
         };
 
-        const base_url = try conn.getEffectiveUrl();
-        const url = try URL.resolve(arena, std.mem.span(base_url), location.value, .{});
-        try transfer.updateURL(url);
+        const url: [:0]const u8 = blk: {
+            if (location.value.len == 0) {
+                // Might seem silly, but URL.resovle will return location.value as-is
+                // if empty, and location.value is memory owned by libcurl.
+                break :blk "";
+            }
 
+            const base_url = try conn.getEffectiveUrl();
+            break :blk try URL.resolve(arena, std.mem.span(base_url), location.value, .{});
+        };
+
+        try transfer.updateURL(url);
         // 301, 302, 303 → change to GET, drop body.
         // 307, 308 → keep method and body.
         const status = try conn.getResponseCode();

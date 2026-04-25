@@ -103,10 +103,17 @@ const HtmlElement = @This();
 _type: Type,
 _proto: *Element,
 
-// Special constructor for custom elements
-pub fn construct(frame: *Frame) !*Element {
-    const node = frame._upgrading_element orelse return error.IllegalConstructor;
-    return node.is(Element) orelse return error.IllegalConstructor;
+// Special constructor for custom elements.
+// Two paths:
+//  - Upgrade path: customElements.define / createElement / upgrade set
+//    `_upgrading_element` before calling newInstance, and we just return it.
+//  - Direct path: `new MyElement()` from user code. `new.target` tells us
+//    which custom element class was invoked; look it up in the registry.
+pub fn construct(new_target: js.Function, frame: *Frame) !*Element {
+    if (frame._upgrading_element) |node| {
+        return node.is(Element) orelse return error.IllegalConstructor;
+    }
+    return frame.constructCustomElement(new_target);
 }
 
 pub const Type = union(enum) {
@@ -286,42 +293,15 @@ pub fn insertAdjacentHTML(
     html: []const u8,
     frame: *Frame,
 ) !void {
-
-    // Create a new HTMLDocument.
-    const doc = try frame._factory.document(@import("../HTMLDocument.zig"){
-        ._proto = undefined,
-    });
-    const doc_node = doc.asNode();
-
-    const arena = try frame.getArena(.medium, "HTML.insertAdjacentHTML");
-    defer frame.releaseArena(arena);
-
-    const Parser = @import("../../parser/Parser.zig");
-    var parser = Parser.init(arena, doc_node, frame);
-    parser.parse(html);
-
-    // Check if there's parsing error.
-    if (parser.err) |_| {
-        return error.Invalid;
-    }
-
-    // The parser wraps content in a document structure:
-    // - Typical: <html><head>...</head><body>...</body></html>
-    // - Head-only: <html><head><meta></head></html> (no body)
-    // - Empty/comments: May have no <html> element at all
-    const html_node = doc_node.firstChild() orelse return;
+    const DocumentFragment = @import("../DocumentFragment.zig");
+    const fragment = (try DocumentFragment.init(frame)).asNode();
+    try frame.parseHtmlAsChildren(fragment, html);
 
     const target_node, const prev_node = try self.asElement().asNode().findAdjacentNodes(position);
 
-    // Iterate through all children of <html> (typically <head> and/or <body>)
-    // and insert their children (not the containers themselves) into the target.
-    // This handles both body content AND head-only elements like <meta>, <title>, etc.
-    var html_children = html_node.childrenIterator();
-    while (html_children.next()) |container| {
-        var iter = container.childrenIterator();
-        while (iter.next()) |child_node| {
-            _ = try target_node.insertBefore(child_node, prev_node, frame);
-        }
+    var iter = fragment.childrenIterator();
+    while (iter.next()) |child_node| {
+        _ = try target_node.insertBefore(child_node, prev_node, frame);
     }
 }
 
@@ -1225,7 +1205,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(HtmlElement.construct, .{});
+    pub const constructor = bridge.constructor(HtmlElement.construct, .{ .new_target = true });
 
     pub const innerText = bridge.accessor(_innerText, HtmlElement.setInnerText, .{});
     fn _innerText(self: *HtmlElement, frame: *const Frame) ![]const u8 {

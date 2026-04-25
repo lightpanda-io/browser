@@ -1668,11 +1668,17 @@ pub fn setNodeOwnerDocument(self: *Frame, node: *Node, owner: *Document) !void {
 }
 
 // Recursively sets the owner document for a node and all its descendants
-pub fn adoptNodeTree(self: *Frame, node: *Node, new_owner: *Document) !void {
+pub fn adoptNodeTree(self: *Frame, node: *Node, old_owner: *Document, new_owner: *Document) !void {
     try self.setNodeOwnerDocument(node, new_owner);
+
+    // Per spec, adopted steps run on each element after its document is set.
+    if (node.is(Element)) |el| {
+        Element.Html.Custom.invokeAdoptedCallbackOnElement(el, old_owner, new_owner, self);
+    }
+
     var it = node.childrenIterator();
     while (it.next()) |child| {
-        try self.adoptNodeTree(child, new_owner);
+        try self.adoptNodeTree(child, old_owner, new_owner);
     }
 }
 
@@ -2374,6 +2380,7 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                             attr._name,
                             null, // old_value is null for initial attributes
                             attr._value,
+                            null,
                             self,
                         );
                     }
@@ -2468,6 +2475,35 @@ fn populateElementAttributes(self: *Frame, element: *Element, list: anytype) !vo
     while (list.next()) |attr| {
         try attributes.putNew(attr.name.local.slice(), attr.value.slice(), self);
     }
+}
+
+// Called when `new MyElement()` is invoked directly in JS (not via the
+// customElements.define/upgrade path). `new_target` is the constructor
+// function that was used with `new`. We find the matching definition in the
+// registry by function identity and allocate a detached Custom element with
+// the registered tag name.
+pub fn constructCustomElement(self: *Frame, new_target: JS.Function) !*Element {
+    var it = self.window._custom_elements._definitions.iterator();
+    const definition = while (it.next()) |entry| {
+        if (entry.value_ptr.*.constructor.isEqual(new_target)) {
+            break entry.value_ptr.*;
+        }
+    } else return error.IllegalConstructor;
+
+    // Customized built-ins (`class Foo extends HTMLDivElement`, etc.) would
+    // need to allocate the extended HTML type rather than Custom. Not yet
+    // supported via direct `new` — upgrade path still works for those.
+    if (definition.isCustomizedBuiltIn()) {
+        return error.IllegalConstructor;
+    }
+
+    const tag_name = try String.init(self.arena, definition.name, .{});
+    const node = try self.createHtmlElementT(Element.Html.Custom, .html, @as(?*Element.Attribute.List, null), .{
+        ._proto = undefined,
+        ._tag_name = tag_name,
+        ._definition = definition,
+    });
+    return node.as(Element);
 }
 
 pub fn createTextNode(self: *Frame, text: []const u8) !*Node {
@@ -2935,7 +2971,10 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
     }
 
     if (opts.child_already_connected and !opts.adopting_to_new_document) {
-        // The child is already connected in the same document, we don't have to reconnect it
+        // The child is already connected in the same document, we don't have to reconnect it.
+        // On cross-document adoption the child has already fired
+        // disconnectedCallback against the old tree and must re-fire
+        // connectedCallback for the new tree, so we fall through.
         return;
     }
 
@@ -2953,7 +2992,10 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
     // Only invoke connectedCallback if the root child is transitioning from
     // disconnected to connected. When that happens, all descendants should also
     // get connectedCallback invoked (they're becoming connected as a group).
-    const should_invoke_connected = parent_is_connected and !opts.child_already_connected;
+    // Cross-document adoption also counts as a transition: the element fired
+    // disconnectedCallback against the old tree during removeNode and must
+    // now fire connectedCallback against the new tree.
+    const should_invoke_connected = parent_is_connected and (!opts.child_already_connected or opts.adopting_to_new_document);
 
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
     while (tw.next()) |el| {
@@ -2972,7 +3014,7 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
         log.err(.bug, "build.attributeChange", .{ .tag = element.getTag(), .name = name, .value = value, .err = err, .type = self._type, .url = self.url });
     };
 
-    Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, value, self);
+    Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, value, null, self);
 
     var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
     while (it) |node| : (it = node.next) {
@@ -2998,7 +3040,7 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
         log.err(.bug, "build.attributeRemove", .{ .tag = element.getTag(), .name = name, .err = err, .type = self._type, .url = self.url });
     };
 
-    Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, null, self);
+    Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, null, null, self);
 
     var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
     while (it) |node| : (it = node.next) {

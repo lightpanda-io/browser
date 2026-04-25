@@ -72,7 +72,21 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
         .ms = 200,
         .until = opts.until,
     };
+
+    // Periodic V8 GC hint during long waits. V8 is otherwise only nudged on
+    // session/page teardown (Browser.zig, Page.zig), so a page that stays
+    // alive for seconds while running heavy JS accumulates wrappers and
+    // external-ref'd Zig allocations V8 has no reason to drop. `.moderate`
+    // speeds up incremental GC without stalling the tick.
+    const gc_hint_period_ns: u64 = std.time.ns_per_s;
+    var gc_hint_timer = std.time.Timer.start() catch unreachable;
+
     while (true) {
+        if (gc_hint_timer.read() >= gc_hint_period_ns) {
+            gc_hint_timer.reset();
+            self.session.browser.env.memoryPressureNotification(.moderate);
+        }
+
         const tick_result = self._tick(is_cdp, tick_opts) catch |err| {
             switch (err) {
                 error.JsError => {}, // already logged (with hopefully more context)

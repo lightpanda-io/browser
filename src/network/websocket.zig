@@ -319,9 +319,8 @@ pub const WsConnection = struct {
     reader: Reader(true),
     send_arena: ArenaAllocator,
     json_version_response: []const u8,
-    timeout_ms: u32,
 
-    pub fn init(socket: posix.socket_t, allocator: Allocator, json_version_response: []const u8, timeout_ms: u32) !WsConnection {
+    pub fn init(socket: posix.socket_t, allocator: Allocator, json_version_response: []const u8) !WsConnection {
         const socket_flags = try posix.fcntl(socket, posix.F.GETFL, 0);
         const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
         if (builtin.is_test == false) {
@@ -337,7 +336,6 @@ pub const WsConnection = struct {
             .reader = reader,
             .send_arena = ArenaAllocator.init(allocator),
             .json_version_response = json_version_response,
-            .timeout_ms = timeout_ms,
         };
     }
 
