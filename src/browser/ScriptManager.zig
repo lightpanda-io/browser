@@ -265,13 +265,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     }
 
     if (remote_url) |url| {
-        errdefer {
-            if (is_blocking == false) {
-                self.scriptList(script).remove(&script.node);
-            }
-            // Let the outer errdefer handle releasing the arena if client.request fails
-        }
-
         if (comptime IS_DEBUG) {
             var ls: js.Local.Scope = undefined;
             frame.js.localScope(&ls);
@@ -285,10 +278,35 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             });
         }
 
-        {
-            const was_evaluating = self.is_evaluating;
-            self.is_evaluating = true;
-            defer self.is_evaluating = was_evaluating;
+        const was_evaluating = self.is_evaluating;
+        self.is_evaluating = true;
+        defer self.is_evaluating = was_evaluating;
+
+        const headers = try self.getHeaders();
+        errdefer headers.deinit();
+
+        if (is_blocking) {
+            const response = try self.client.syncRequest(arena, .{
+                .url = url,
+                .method = .GET,
+                .frame_id = frame._frame_id,
+                .loader_id = frame._loader_id,
+                .headers = headers,
+                .blocking = true,
+                .cookie_jar = &frame._session.cookie_jar,
+                .cookie_origin = frame.url,
+                .resource_type = .script,
+                .notification = frame._session.notification,
+            });
+
+            script.source = .{ .remote = response.body };
+            script.status = response.status;
+            script.complete = true;
+        } else {
+            errdefer {
+                self.scriptList(script).remove(&script.node);
+                // Let the outer errdefer handle releasing the arena if client.request fails
+            }
 
             try self.client.request(.{
                 .ctx = script,
@@ -297,8 +315,8 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                     .method = .GET,
                     .frame_id = frame._frame_id,
                     .loader_id = frame._loader_id,
-                    .headers = try self.getHeaders(),
-                    .blocking = is_blocking,
+                    .headers = headers,
+                    .blocking = false,
                     .cookie_jar = &frame._session.cookie_jar,
                     .cookie_origin = frame.url,
                     .resource_type = .script,
@@ -319,29 +337,21 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         return;
     }
 
-    // this is <script src="..."></script>, it needs to block the caller
-    // until it's evaluated
-    var client = self.client;
-    while (true) {
-        if (!script.complete) {
-            _ = try client.tick(200);
-            continue;
-        }
-        if (script.status == 0) {
-            // an error (that we already logged)
-            script.deinit();
-            return;
-        }
-
-        // could have already been evaluating if this is dynamically added
-        const was_evaluating = self.is_evaluating;
-        self.is_evaluating = true;
-        defer {
-            self.is_evaluating = was_evaluating;
-            script.deinit();
-        }
-        return script.eval(frame);
+    if (script.status == 0) {
+        // an error (that we already logged)
+        script.deinit();
+        return;
     }
+
+    // could have already been evaluating if this is dynamically added
+    const was_evaluating = self.is_evaluating;
+    self.is_evaluating = true;
+    defer {
+        self.is_evaluating = was_evaluating;
+        script.deinit();
+    }
+
+    script.eval(frame);
 }
 
 fn scriptList(self: *ScriptManager, script: *const Script) *std.DoublyLinkedList {
