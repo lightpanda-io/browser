@@ -703,7 +703,7 @@ const LineWriter = struct {
         while (remain.len > 64) {
             try writer.writeAll(remain[0..64]);
             try writer.writeByte('\n');
-            remain = data[len..];
+            remain = remain[64..];
         }
         try writer.writeAll(remain);
         self.col = col + remain.len;
