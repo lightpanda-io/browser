@@ -370,6 +370,8 @@ pub fn deinit(self: *Frame, abort_http: bool) void {
         // stats.print(&stream) catch unreachable;
     }
 
+    self._parse_state.deinit(self);
+
     const page = self._page;
 
     if (self._queued_navigation) |qn| {
@@ -1020,7 +1022,10 @@ fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
                 if (info.isValid()) {
                     self.charset = info.name();
                 }
-                self._parse_state = .{ .html = .empty };
+                self._parse_state = .{ .html = .{
+                    .buffer = .empty,
+                    .arena = try self.getArena(.large, "Frame.navigate"),
+                } };
             },
             .application_json, .text_javascript, .text_css, .text_plain => {
                 var arr: std.ArrayList(u8) = .empty;
@@ -1035,7 +1040,7 @@ fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
     }
 
     switch (self._parse_state) {
-        .html => |*html| try html.appendSlice(self.arena, data),
+        .html => |*html| try html.buffer.appendSlice(html.arena, data),
         .text => |*buf| {
             // we have to escape the data...
             var v = data;
@@ -1084,16 +1089,22 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
     var parser = Parser.init(parse_arena, self.document.asNode(), self);
 
     switch (self._parse_state) {
-        .html => |*html_buf| {
-            const raw_html = html_buf.items;
+        .html => |*html| {
+            {
+                defer {
+                    self.releaseArena(html.arena);
+                    self._parse_state = .complete;
+                }
 
-            if (std.mem.eql(u8, self.charset, "UTF-8")) {
-                parser.parse(raw_html);
-            } else {
-                parser.parseWithEncoding(raw_html, self.charset);
+                const raw_html = html.buffer.items;
+
+                if (std.mem.eql(u8, self.charset, "UTF-8")) {
+                    parser.parse(raw_html);
+                } else {
+                    parser.parseWithEncoding(raw_html, self.charset);
+                }
             }
             self._script_manager.staticScriptsDone();
-            self._parse_state = .complete;
         },
         .text => |*buf| {
             try buf.appendSlice(self.arena, "</pre></body></html>");
@@ -1149,6 +1160,7 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
     var self: *Frame = @ptrCast(@alignCast(ctx));
 
     log.err(.frame, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
+    self._parse_state.deinit(self);
     self._parse_state = .{ .err = err };
 
     // In case of error, we want to complete the frame with a custom HTML
@@ -3290,11 +3302,21 @@ const ParseState = union(enum) {
     pre,
     complete,
     err: anyerror,
-    html: std.ArrayList(u8),
+    html: struct {
+        arena: Allocator,
+        buffer: std.ArrayList(u8),
+    },
     text: std.ArrayList(u8),
     image: std.ArrayList(u8),
     raw: std.ArrayList(u8),
     raw_done: []const u8,
+
+    fn deinit(self: *ParseState, frame: *Frame) void {
+        switch (self.*) {
+            .html => |html| frame.releaseArena(html.arena),
+            else => {},
+        }
+    }
 };
 
 const LoadState = enum {
