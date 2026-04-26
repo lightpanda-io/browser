@@ -338,7 +338,7 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
             const transfer: *Transfer = @fieldParentPtr("_node", node);
             if (comptime abort_all) {
                 transfer.kill();
-            } else if (transfer.req.frame_id == frame_id) {
+            } else if (transfer.req.params.frame_id == frame_id) {
                 q.remove(node);
                 transfer.kill();
             }
@@ -375,7 +375,7 @@ fn abortConnections(list: std.DoublyLinkedList, comptime abort_all: bool, frame_
         const conn: *http.Connection = @fieldParentPtr("node", node);
         switch (conn.transport) {
             .http => |transfer| {
-                if ((comptime abort_all) or transfer.req.frame_id == frame_id) {
+                if ((comptime abort_all) or transfer.req.params.frame_id == frame_id) {
                     transfer.kill();
                 }
             },
@@ -402,20 +402,15 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
     return self.perform(@intCast(timeout_ms));
 }
 
-pub fn request(self: *Client, req: Request) !void {
-    const ctx = Context{ .network = self.network };
-    return self.entry_layer.request(ctx, req);
-}
-
 pub fn _request(ptr: *anyopaque, _: Context, req: Request) !void {
     const self: *Client = @ptrCast(@alignCast(ptr));
 
     const transfer = try self.makeTransfer(req);
 
-    transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
+    transfer.req.params.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
 
     var wait_for_interception = false;
-    transfer.req.notification.dispatch(.http_request_intercept, &.{
+    transfer.req.params.notification.dispatch(.http_request_intercept, &.{
         .transfer = transfer,
         .wait_for_interception = &wait_for_interception,
     });
@@ -430,7 +425,7 @@ pub fn _request(ptr: *anyopaque, _: Context, req: Request) !void {
     }
     transfer._intercept_state = .pending;
 
-    if (req.blocking == false) {
+    if (req.params.blocking == false) {
         // The request was interecepted, but it isn't a blocking request, so we
         // dont' need to block this call. The request will be unblocked
         // asynchronously via either continueTransfer or abortTransfer
@@ -439,6 +434,81 @@ pub fn _request(ptr: *anyopaque, _: Context, req: Request) !void {
 
     if (try self.waitForInterceptedResponse(transfer)) {
         return self.process(transfer);
+    }
+}
+
+pub fn request(self: *Client, req: Request) !void {
+    const ctx = Context{ .network = self.network };
+    return self.entry_layer.request(ctx, req);
+}
+
+const SyncContext = struct {
+    allocator: Allocator,
+    completion: union(enum) {
+        in_progress: void,
+        done: void,
+        err: anyerror,
+        shutdown: void,
+    } = .in_progress,
+
+    status: u16 = 0,
+    body: std.ArrayList(u8),
+
+    fn headerCallback(response: Response) anyerror!bool {
+        const self: *SyncContext = @ptrCast(@alignCast(response.ctx));
+        self.status = response.status().?;
+        if (response.contentLength()) |cl| {
+            try self.body.ensureTotalCapacity(self.allocator, cl);
+        }
+        return true;
+    }
+
+    fn dataCallback(response: Response, data: []const u8) anyerror!void {
+        const self: *SyncContext = @ptrCast(@alignCast(response.ctx));
+        try self.body.appendSlice(self.allocator, data);
+    }
+
+    fn doneCallback(ctx: *anyopaque) anyerror!void {
+        const self: *SyncContext = @ptrCast(@alignCast(ctx));
+        self.completion = .done;
+    }
+
+    fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+        const self: *SyncContext = @ptrCast(@alignCast(ctx));
+        self.completion = .{ .err = err };
+    }
+
+    fn shutdownCallback(ctx: *anyopaque) void {
+        const self: *SyncContext = @ptrCast(@alignCast(ctx));
+        self.completion = .shutdown;
+    }
+};
+
+pub fn syncRequest(self: *Client, allocator: Allocator, params: RequestParams) !SyncResponse {
+    var sync_ctx = SyncContext{ .allocator = allocator, .body = .empty };
+    errdefer sync_ctx.body.deinit(allocator);
+
+    try self.request(.{
+        .params = params,
+        .ctx = &sync_ctx,
+        .header_callback = SyncContext.headerCallback,
+        .data_callback = SyncContext.dataCallback,
+        .done_callback = SyncContext.doneCallback,
+        .error_callback = SyncContext.errorCallback,
+        .shutdown_callback = SyncContext.shutdownCallback,
+    });
+
+    while (sync_ctx.completion == .in_progress) {
+        _ = try self.tick(200);
+    }
+
+    switch (sync_ctx.completion) {
+        .in_progress => @panic("Impossible to be in progress here."),
+        .done, .shutdown => return .{
+            .status = sync_ctx.status,
+            .body = sync_ctx.body,
+        },
+        .err => |e| return e,
     }
 }
 
@@ -507,7 +577,7 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
     }
     self.intercepted -= 1;
 
-    if (!transfer.req.blocking) {
+    if (!transfer.req.params.blocking) {
         return self.process(transfer);
     }
     transfer._intercept_state = .@"continue";
@@ -521,7 +591,7 @@ pub fn abortTransfer(self: *Client, transfer: *Transfer) void {
     }
     self.intercepted -= 1;
 
-    if (!transfer.req.blocking) {
+    if (!transfer.req.params.blocking) {
         transfer.abort(error.Abort);
     }
     transfer._intercept_state = .{ .abort = error.Abort };
@@ -536,7 +606,7 @@ pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers:
     self.intercepted -= 1;
 
     try transfer.fulfill(status, headers, body);
-    if (!transfer.req.blocking) {
+    if (!transfer.req.params.blocking) {
         transfer.deinit();
         return;
     }
@@ -554,7 +624,7 @@ pub fn incrReqId(self: *Client) u32 {
 }
 
 fn makeTransfer(self: *Client, req: Request) !*Transfer {
-    errdefer req.headers.deinit();
+    errdefer req.params.headers.deinit();
 
     const transfer = try self.transfer_pool.create();
     errdefer self.transfer_pool.destroy(transfer);
@@ -564,7 +634,7 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
         .start_time = timestamp(.monotonic),
         .arena = ArenaAllocator.init(self.allocator),
         .id = id,
-        .url = req.url,
+        .url = req.params.url,
         .req = req,
         .client = self,
     };
@@ -581,7 +651,7 @@ fn requestFailed(transfer: *Transfer, err: anyerror, comptime execute_callback: 
 
     transfer._notified_fail = true;
 
-    transfer.req.notification.dispatch(.http_request_fail, &.{
+    transfer.req.params.notification.dispatch(.http_request_fail, &.{
         .transfer = transfer,
         .err = err,
     });
@@ -704,7 +774,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // TODO give a way to configure the number of auth retries.
     if (transfer._auth_challenge != null and transfer._tries < 10) {
         var wait_for_interception = false;
-        transfer.req.notification.dispatch(
+        transfer.req.params.notification.dispatch(
             .http_request_auth_required,
             &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception },
         );
@@ -720,7 +790,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             // release the easy handle back into the pool. The transfer
             // is still valid/alive (just has no handle).
             transfer.releaseConn();
-            if (!transfer.req.blocking) {
+            if (!transfer.req.params.blocking) {
                 // In the case of an async request, we can just "forget"
                 // about this transfer until it gets updated asynchronously
                 // from some CDP command.
@@ -810,7 +880,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     if (transfer._stream_buffer.items.len > 0) {
         try transfer.req.data_callback(Response.fromTransfer(transfer), body);
 
-        transfer.req.notification.dispatch(.http_response_data, &.{
+        transfer.req.params.notification.dispatch(.http_response_data, &.{
             .data = body,
             .transfer = transfer,
         });
@@ -827,7 +897,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 
     try transfer.req.done_callback(transfer.req.ctx);
 
-    transfer.req.notification.dispatch(.http_request_done, &.{
+    transfer.req.params.notification.dispatch(.http_request_done, &.{
         .transfer = transfer,
     });
 
@@ -940,14 +1010,7 @@ fn ensureNoActiveConnection(self: *const Client) !void {
     }
 }
 
-pub const Request = struct {
-    pub const StartCallback = *const fn (response: Response) anyerror!void;
-    pub const HeaderCallback = *const fn (response: Response) anyerror!bool;
-    pub const DataCallback = *const fn (response: Response, data: []const u8) anyerror!void;
-    pub const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
-    pub const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
-    pub const ShutdownCallback = *const fn (ctx: *anyopaque) void;
-
+pub const RequestParams = struct {
     frame_id: u32,
     loader_id: u32,
     method: Method,
@@ -967,16 +1030,6 @@ pub const Request = struct {
     // but it's harder for our caller (ScriptManager) to deal with this. One
     // reason for that is the Http Client is already a bit CDP-aware.
     blocking: bool = false,
-
-    // arbitrary data that can be associated with this request
-    ctx: *anyopaque = undefined,
-
-    start_callback: ?StartCallback = null,
-    header_callback: HeaderCallback,
-    data_callback: DataCallback,
-    done_callback: DoneCallback,
-    error_callback: ErrorCallback,
-    shutdown_callback: ?ShutdownCallback = null,
 
     const ResourceType = enum {
         document,
@@ -998,8 +1051,32 @@ pub const Request = struct {
         }
     };
 
-    pub fn deinit(self: *const Request) void {
+    pub fn deinit(self: *const RequestParams) void {
         self.headers.deinit();
+    }
+};
+
+pub const Request = struct {
+    pub const StartCallback = *const fn (response: Response) anyerror!void;
+    pub const HeaderCallback = *const fn (response: Response) anyerror!bool;
+    pub const DataCallback = *const fn (response: Response, data: []const u8) anyerror!void;
+    pub const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
+    pub const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
+    pub const ShutdownCallback = *const fn (ctx: *anyopaque) void;
+
+    params: RequestParams,
+    // arbitrary data that can be associated with this request
+    ctx: *anyopaque = undefined,
+
+    start_callback: ?StartCallback = null,
+    header_callback: HeaderCallback,
+    data_callback: DataCallback,
+    done_callback: DoneCallback,
+    error_callback: ErrorCallback,
+    shutdown_callback: ?ShutdownCallback = null,
+
+    pub fn deinit(self: *const Request) void {
+        self.params.deinit();
     }
 };
 
@@ -1078,6 +1155,15 @@ pub const Response = struct {
     }
 };
 
+pub const SyncResponse = struct {
+    status: u16,
+    body: std.ArrayList(u8),
+
+    pub fn deinit(self: *SyncResponse, allocator: Allocator) void {
+        self.body.deinit(allocator);
+    }
+};
+
 pub const Transfer = struct {
     arena: ArenaAllocator,
     id: u32 = 0,
@@ -1146,7 +1232,7 @@ pub const Transfer = struct {
             self._conn = null;
         }
 
-        self.req.headers.deinit();
+        self.req.deinit();
         self.arena.deinit();
         self.client.transfer_pool.destroy(self);
     }
@@ -1204,7 +1290,7 @@ pub const Transfer = struct {
         if (self._notified_fail) return;
         self._notified_fail = true;
 
-        self.req.notification.dispatch(.http_request_fail, &.{
+        self.req.params.notification.dispatch(.http_request_fail, &.{
             .transfer = self,
             .err = err,
         });
@@ -1226,15 +1312,15 @@ pub const Transfer = struct {
         try conn.setProxy(client.http_proxy);
         try conn.setTlsVerify(client.tls_verify, client.use_proxy);
 
-        try conn.setURL(req.url);
-        try conn.setMethod(req.method);
-        if (req.body) |b| {
+        try conn.setURL(req.params.url);
+        try conn.setMethod(req.params.method);
+        if (req.params.body) |b| {
             try conn.setBody(b);
         } else {
             try conn.setGetMode();
         }
 
-        var header_list = req.headers;
+        var header_list = req.params.headers;
         try conn.secretHeaders(&header_list, &client.network.config.http_headers);
         try conn.setHeaders(&header_list);
 
@@ -1246,12 +1332,12 @@ pub const Transfer = struct {
         conn.transport = .{ .http = self };
 
         // Per-request timeout override (e.g. XHR timeout)
-        if (req.timeout_ms > 0) {
-            try conn.setTimeout(req.timeout_ms);
+        if (req.params.timeout_ms > 0) {
+            try conn.setTimeout(req.params.timeout_ms);
         }
 
         // add credentials
-        if (req.credentials) |creds| {
+        if (req.params.credentials) |creds| {
             if (self._auth_challenge != null and self._auth_challenge.?.source == .proxy) {
                 try conn.setProxyCredentials(creds);
             } else {
@@ -1301,12 +1387,12 @@ pub const Transfer = struct {
     }
 
     pub fn getCookieString(self: *Transfer) !?[:0]const u8 {
-        const jar = self.req.cookie_jar orelse return null;
+        const jar = self.req.params.cookie_jar orelse return null;
         var aw: std.Io.Writer.Allocating = .init(self.arena.allocator());
-        try jar.forRequest(self.req.url, &aw.writer, .{
+        try jar.forRequest(self.req.params.url, &aw.writer, .{
             .is_http = true,
-            .origin_url = self.req.cookie_origin,
-            .is_navigation = self.req.resource_type == .document,
+            .origin_url = self.req.params.cookie_origin,
+            .is_navigation = self.req.params.resource_type == .document,
         });
         const written = aw.written();
         if (written.len == 0) return null;
@@ -1316,7 +1402,7 @@ pub const Transfer = struct {
 
     pub fn format(self: *Transfer, writer: *std.Io.Writer) !void {
         const req = self.req;
-        return writer.print("{s} {s}", .{ @tagName(req.method), req.url });
+        return writer.print("{s} {s}", .{ @tagName(req.params.method), req.params.url });
     }
 
     pub fn updateURL(self: *Transfer, url: [:0]const u8) !void {
@@ -1324,7 +1410,7 @@ pub const Transfer = struct {
         self.url = url;
 
         // for the request itself
-        self.req.url = url;
+        self.req.params.url = url;
     }
 
     fn handleRedirect(transfer: *Transfer) !void {
@@ -1338,7 +1424,7 @@ pub const Transfer = struct {
         }
 
         // retrieve cookies from the redirect's response.
-        if (req.cookie_jar) |jar| {
+        if (req.params.cookie_jar) |jar| {
             var i: usize = 0;
             while (conn.getResponseHeader("set-cookie", i)) |ct| : (i += 1) {
                 try jar.populateFromResponse(transfer.url, ct.value);
@@ -1382,8 +1468,8 @@ pub const Transfer = struct {
         // 307, 308 → keep method and body.
         const status = try conn.getResponseCode();
         if (status == 301 or status == 302 or status == 303) {
-            req.method = .GET;
-            req.body = null;
+            req.params.method = .GET;
+            req.params.body = null;
         }
     }
 
@@ -1410,11 +1496,11 @@ pub const Transfer = struct {
     }
 
     pub fn updateCredentials(self: *Transfer, userpwd: [:0]const u8) void {
-        self.req.credentials = userpwd;
+        self.req.params.credentials = userpwd;
     }
 
     pub fn replaceRequestHeaders(self: *Transfer, allocator: Allocator, headers: []const http.Header) !void {
-        self.req.headers.deinit();
+        self.req.params.headers.deinit();
 
         var buf: std.ArrayList(u8) = .empty;
         var new_headers = try self.client.newHeaders();
@@ -1426,7 +1512,7 @@ pub const Transfer = struct {
             try buf.append(allocator, 0); // null terminated
             try new_headers.add(buf.items[0 .. buf.items.len - 1 :0]);
         }
-        self.req.headers = new_headers;
+        self.req.params.headers = new_headers;
     }
 
     // abortAuthChallenge is called when an auth challenge interception is
@@ -1438,7 +1524,7 @@ pub const Transfer = struct {
             log.debug(.http, "abort auth transfer", .{ .intercepted = self.client.intercepted });
         }
         self.client.intercepted -= 1;
-        if (!self.req.blocking) {
+        if (!self.req.params.blocking) {
             self.abort(error.AbortAuthChallenge);
             return;
         }
@@ -1454,7 +1540,7 @@ pub const Transfer = struct {
 
         try transfer.buildResponseHeader(conn);
 
-        if (transfer.req.cookie_jar) |jar| {
+        if (transfer.req.params.cookie_jar) |jar| {
             var i: usize = 0;
             while (true) {
                 const ct = conn.getResponseHeader("set-cookie", i);
@@ -1474,7 +1560,7 @@ pub const Transfer = struct {
             }
         }
 
-        transfer.req.notification.dispatch(.http_response_header_done, &.{
+        transfer.req.params.notification.dispatch(.http_response_header_done, &.{
             .transfer = transfer,
         });
 
@@ -1574,7 +1660,7 @@ pub const Transfer = struct {
 
         transfer.response_header = .{
             .status = status,
-            .url = req.url,
+            .url = req.params.url,
             .redirect_count = 0,
             ._injected_headers = headers,
         };

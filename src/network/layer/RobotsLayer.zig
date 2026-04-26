@@ -56,17 +56,17 @@ fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
     const arena = try ctx.network.app.arena_pool.acquire(.small, "RobotsLayer");
     errdefer ctx.network.app.arena_pool.release(arena);
 
-    const robots_url = try URL.getRobotsUrl(arena, req.url);
+    const robots_url = try URL.getRobotsUrl(arena, req.params.url);
 
     if (ctx.network.robot_store.get(robots_url)) |robot_entry| {
         defer ctx.network.app.arena_pool.release(arena);
 
         switch (robot_entry) {
             .present => |robots| {
-                const path = URL.getPathname(req.url);
+                const path = URL.getPathname(req.params.url);
 
                 if (!robots.isAllowed(path)) {
-                    log.warn(.http, "blocked by robots", .{ .url = req.url });
+                    log.warn(.http, "blocked by robots", .{ .url = req.params.url });
                     req.error_callback(req.ctx, error.RobotsBlocked);
                     return;
                 }
@@ -108,16 +108,18 @@ fn fetchRobotsThenRequest(
 
         try self.next.request(ctx, .{
             .ctx = robots_ctx,
-            .url = robots_url,
-            .method = .GET,
-            .headers = headers,
-            .blocking = false,
-            .frame_id = req.frame_id,
-            .loader_id = req.loader_id,
-            .cookie_jar = req.cookie_jar,
-            .cookie_origin = req.cookie_origin,
-            .notification = req.notification,
-            .resource_type = .fetch,
+            .params = .{
+                .url = robots_url,
+                .method = .GET,
+                .headers = headers,
+                .blocking = false,
+                .frame_id = req.params.frame_id,
+                .loader_id = req.params.loader_id,
+                .cookie_jar = req.params.cookie_jar,
+                .cookie_origin = req.params.cookie_origin,
+                .notification = req.params.notification,
+                .resource_type = .fetch,
+            },
             .header_callback = RobotsContext.headerCallback,
             .data_callback = RobotsContext.dataCallback,
             .done_callback = RobotsContext.doneCallback,
@@ -138,7 +140,7 @@ fn flushPending(self: *RobotsLayer, ctx: Context, robots_url: [:0]const u8, allo
 
     for (queued.value.items) |queued_req| {
         if (!allowed) {
-            log.warn(.http, "blocked by robots", .{ .url = queued_req.url });
+            log.warn(.http, "blocked by robots", .{ .url = queued_req.params.url });
             defer queued_req.deinit();
             queued_req.error_callback(queued_req.ctx, error.RobotsBlocked);
         } else {
@@ -219,7 +221,7 @@ const RobotsContext = struct {
                     };
                     if (robots) |r| {
                         try network.robot_store.put(robots_url, r);
-                        const path = URL.getPathname(l.pending.get(robots_url).?.items[0].url);
+                        const path = URL.getPathname(l.pending.get(robots_url).?.items[0].params.url);
                         allowed = r.isAllowed(path);
                     }
                 }
