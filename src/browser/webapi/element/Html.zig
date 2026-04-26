@@ -47,6 +47,7 @@ pub const Embed = @import("html/Embed.zig");
 pub const FieldSet = @import("html/FieldSet.zig");
 pub const Font = @import("html/Font.zig");
 pub const Form = @import("html/Form.zig");
+pub const FrameSet = @import("html/FrameSet.zig");
 pub const Generic = @import("html/Generic.zig");
 pub const Head = @import("html/Head.zig");
 pub const Heading = @import("html/Heading.zig");
@@ -136,6 +137,7 @@ pub const Type = union(enum) {
     fieldset: *FieldSet,
     font: *Font,
     form: *Form,
+    frameset: *FrameSet,
     generic: *Generic,
     heading: *Heading,
     head: *Head,
