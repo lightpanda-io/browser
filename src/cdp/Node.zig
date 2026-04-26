@@ -199,7 +199,7 @@ pub const Search = struct {
 };
 
 // Need a custom writer, because we can't just serialize the node as-is.
-// Sometimes we want to serializ the node without children, sometimes with just
+// Sometimes we want to serialize the node without children, sometimes with just
 // its direct children, and sometimes the entire tree.
 // (For now, we only support direct children)
 

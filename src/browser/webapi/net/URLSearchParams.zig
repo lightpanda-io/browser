@@ -203,7 +203,7 @@ fn paramsFromString(allocator: Allocator, input_: []const u8, buf: []u8) !KeyVal
             value = try unescape(allocator, entry[idx + 1 ..], buf);
         } else {
             name = try unescape(allocator, entry, buf);
-            value = String.init(undefined, "", .{}) catch unreachable;
+            value = comptime .wrap("");
         }
 
         // optimized, unescape returns a String directly (Because unescape may
@@ -219,7 +219,7 @@ fn paramsFromString(allocator: Allocator, input_: []const u8, buf: []u8) !KeyVal
 
 fn unescape(arena: Allocator, value: []const u8, buf: []u8) !String {
     if (value.len == 0) {
-        return String.init(undefined, "", .{});
+        return comptime .wrap("");
     }
 
     var has_plus = false;

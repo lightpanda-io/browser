@@ -117,7 +117,11 @@ pub extern "C" fn html5ever_parse_document_with_encoding(
     }
 
     let input = unsafe { std::slice::from_raw_parts(html, len) };
-    let charset_bytes = unsafe { std::slice::from_raw_parts(charset, charset_len) };
+    let charset_bytes = if charset.is_null() {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(charset, charset_len) }
+    };
 
     // Decode to UTF-8. Returns Cow<str> - no allocation if already valid UTF-8.
     let encoding = Encoding::for_label(charset_bytes).unwrap_or(encoding_rs::UTF_8);

@@ -371,6 +371,8 @@ pub fn deinit(self: *Frame, abort_http: bool) void {
         // stats.print(&stream) catch unreachable;
     }
 
+    self._parse_state.deinit(self);
+
     const page = self._page;
 
     if (self._queued_navigation) |qn| {
@@ -1021,7 +1023,10 @@ fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
                 if (info.isValid()) {
                     self.charset = info.name();
                 }
-                self._parse_state = .{ .html = .empty };
+                self._parse_state = .{ .html = .{
+                    .buffer = .empty,
+                    .arena = try self.getArena(.large, "Frame.navigate"),
+                } };
             },
             .application_json, .text_javascript, .text_css, .text_plain => {
                 var arr: std.ArrayList(u8) = .empty;
@@ -1036,7 +1041,7 @@ fn frameDataCallback(response: HttpClient.Response, data: []const u8) !void {
     }
 
     switch (self._parse_state) {
-        .html => |*html| try html.appendSlice(self.arena, data),
+        .html => |*html| try html.buffer.appendSlice(html.arena, data),
         .text => |*buf| {
             // we have to escape the data...
             var v = data;
@@ -1085,16 +1090,22 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
     var parser = Parser.init(parse_arena, self.document.asNode(), self);
 
     switch (self._parse_state) {
-        .html => |*html_buf| {
-            const raw_html = html_buf.items;
+        .html => |*html| {
+            {
+                defer {
+                    self.releaseArena(html.arena);
+                    self._parse_state = .complete;
+                }
 
-            if (std.mem.eql(u8, self.charset, "UTF-8")) {
-                parser.parse(raw_html);
-            } else {
-                parser.parseWithEncoding(raw_html, self.charset);
+                const raw_html = html.buffer.items;
+
+                if (std.mem.eql(u8, self.charset, "UTF-8")) {
+                    parser.parse(raw_html);
+                } else {
+                    parser.parseWithEncoding(raw_html, self.charset);
+                }
             }
             self._script_manager.staticScriptsDone();
-            self._parse_state = .complete;
         },
         .text => |*buf| {
             try buf.appendSlice(self.arena, "</pre></body></html>");
@@ -1108,7 +1119,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
             const html = try std.mem.concat(parse_arena, u8, &.{
                 "<html><head><meta charset=\"utf-8\"></head><body><img src=\"",
                 self.url,
-                "\"></body></htm>",
+                "\"></body></html>",
             });
             parser.parse(html);
             self.documentIsComplete();
@@ -1117,7 +1128,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
             self._parse_state = .{ .raw_done = buf.items };
 
             // Use empty an empty HTML document.
-            parser.parse("<html><head><meta charset=\"utf-8\"></head><body></body></htm>");
+            parser.parse("<html><head><meta charset=\"utf-8\"></head><body></body></html>");
             self.documentIsComplete();
         },
         .pre => {
@@ -1127,7 +1138,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
             self._parse_state = .{ .complete = {} };
 
             // Use empty an empty HTML document.
-            parser.parse("<html><head><meta charset=\"utf-8\"></head><body></body></htm>");
+            parser.parse("<html><head><meta charset=\"utf-8\"></head><body></body></html>");
             self.documentIsComplete();
         },
         .err => |err| {
@@ -1135,7 +1146,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
             const html = try std.mem.concat(parse_arena, u8, &.{
                 "<html><head><meta charset=\"utf-8\"></head><body><h1>Navigation failed</h1><p>Reason: ",
                 @errorName(err),
-                "</p></body></htm>",
+                "</p></body></html>",
             });
 
             parser.parse(html);
@@ -1150,6 +1161,7 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
     var self: *Frame = @ptrCast(@alignCast(ctx));
 
     log.err(.frame, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
+    self._parse_state.deinit(self);
     self._parse_state = .{ .err = err };
 
     // In case of error, we want to complete the frame with a custom HTML
@@ -1359,7 +1371,10 @@ pub fn removeElementId(self: *Frame, element: *Element, id: []const u8) void {
 
 pub fn removeElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, id: []const u8) void {
     if (id_maps.lookup.remove(id)) {
-        id_maps.removed_ids.put(self.arena, self.dupeString(id) catch return, {}) catch {};
+        const owned_id = self.dupeString(id) catch return;
+        id_maps.removed_ids.put(self.arena, owned_id, {}) catch |err| {
+            log.warn(.frame, "removeElementIdWithMaps", .{ .err = err });
+        };
     }
 }
 
@@ -1705,25 +1720,25 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "b", .{}) catch unreachable, ._tag = .b },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("b"), ._tag = .b },
                     ),
                     'i' => return self.createHtmlElementT(
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "i", .{}) catch unreachable, ._tag = .i },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("i"), ._tag = .i },
                     ),
                     'q' => return self.createHtmlElementT(
                         Element.Html.Quote,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "q", .{}) catch unreachable, ._tag = .quote },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("q"), ._tag = .quote },
                     ),
                     's' => return self.createHtmlElementT(
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "s", .{}) catch unreachable, ._tag = .s },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("s"), ._tag = .s },
                     ),
                     else => {},
                 },
@@ -1756,37 +1771,37 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Heading,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "h1", .{}) catch unreachable, ._tag = .h1 },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("h1"), ._tag = .h1 },
                     ),
                     asUint("h2") => return self.createHtmlElementT(
                         Element.Html.Heading,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "h2", .{}) catch unreachable, ._tag = .h2 },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("h2"), ._tag = .h2 },
                     ),
                     asUint("h3") => return self.createHtmlElementT(
                         Element.Html.Heading,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "h3", .{}) catch unreachable, ._tag = .h3 },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("h3"), ._tag = .h3 },
                     ),
                     asUint("h4") => return self.createHtmlElementT(
                         Element.Html.Heading,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "h4", .{}) catch unreachable, ._tag = .h4 },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("h4"), ._tag = .h4 },
                     ),
                     asUint("h5") => return self.createHtmlElementT(
                         Element.Html.Heading,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "h5", .{}) catch unreachable, ._tag = .h5 },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("h5"), ._tag = .h5 },
                     ),
                     asUint("h6") => return self.createHtmlElementT(
                         Element.Html.Heading,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "h6", .{}) catch unreachable, ._tag = .h6 },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("h6"), ._tag = .h6 },
                     ),
                     asUint("hr") => return self.createHtmlElementT(
                         Element.Html.HR,
@@ -1798,13 +1813,13 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "em", .{}) catch unreachable, ._tag = .em },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("em"), ._tag = .em },
                     ),
                     asUint("dd") => return self.createHtmlElementT(
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "dd", .{}) catch unreachable, ._tag = .dd },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("dd"), ._tag = .dd },
                     ),
                     asUint("dl") => return self.createHtmlElementT(
                         Element.Html.DList,
@@ -1816,19 +1831,19 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "dt", .{}) catch unreachable, ._tag = .dt },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("dt"), ._tag = .dt },
                     ),
                     asUint("td") => return self.createHtmlElementT(
                         Element.Html.TableCell,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "td", .{}) catch unreachable, ._tag = .td },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("td"), ._tag = .td },
                     ),
                     asUint("th") => return self.createHtmlElementT(
                         Element.Html.TableCell,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "th", .{}) catch unreachable, ._tag = .th },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("th"), ._tag = .th },
                     ),
                     asUint("tr") => return self.createHtmlElementT(
                         Element.Html.TableRow,
@@ -1855,25 +1870,25 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "nav", .{}) catch unreachable, ._tag = .nav },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("nav"), ._tag = .nav },
                     ),
                     asUint("del") => return self.createHtmlElementT(
                         Element.Html.Mod,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "del", .{}) catch unreachable, ._tag = .del },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("del"), ._tag = .del },
                     ),
                     asUint("ins") => return self.createHtmlElementT(
                         Element.Html.Mod,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "ins", .{}) catch unreachable, ._tag = .ins },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("ins"), ._tag = .ins },
                     ),
                     asUint("col") => return self.createHtmlElementT(
                         Element.Html.TableCol,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "col", .{}) catch unreachable, ._tag = .col },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("col"), ._tag = .col },
                     ),
                     asUint("dir") => return self.createHtmlElementT(
                         Element.Html.Directory,
@@ -1897,19 +1912,19 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "sub", .{}) catch unreachable, ._tag = .sub },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("sub"), ._tag = .sub },
                     ),
                     asUint("sup") => return self.createHtmlElementT(
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "sup", .{}) catch unreachable, ._tag = .sup },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("sup"), ._tag = .sup },
                     ),
                     asUint("dfn") => return self.createHtmlElementT(
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "dfn", .{}) catch unreachable, ._tag = .dfn },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("dfn"), ._tag = .dfn },
                     ),
                     else => {},
                 },
@@ -1966,7 +1981,7 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "main", .{}) catch unreachable, ._tag = .main },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("main"), ._tag = .main },
                     ),
                     asUint("data") => return self.createHtmlElementT(
                         Element.Html.Data,
@@ -1996,7 +2011,7 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "menu", .{}) catch unreachable, ._tag = .menu },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("menu"), ._tag = .menu },
                     ),
                     asUint("area") => return self.createHtmlElementT(
                         Element.Html.Area,
@@ -2014,7 +2029,7 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "code", .{}) catch unreachable, ._tag = .code },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("code"), ._tag = .code },
                     ),
                     asUint("time") => return self.createHtmlElementT(
                         Element.Html.Time,
@@ -2063,7 +2078,7 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "aside", .{}) catch unreachable, ._tag = .aside },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("aside"), ._tag = .aside },
                     ),
                     asUint("label") => return self.createHtmlElementT(
                         Element.Html.Label,
@@ -2093,19 +2108,19 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.TableSection,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "thead", .{}) catch unreachable, ._tag = .thead },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("thead"), ._tag = .thead },
                     ),
                     asUint("tbody") => return self.createHtmlElementT(
                         Element.Html.TableSection,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "tbody", .{}) catch unreachable, ._tag = .tbody },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("tbody"), ._tag = .tbody },
                     ),
                     asUint("tfoot") => return self.createHtmlElementT(
                         Element.Html.TableSection,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "tfoot", .{}) catch unreachable, ._tag = .tfoot },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("tfoot"), ._tag = .tfoot },
                     ),
                     asUint("track") => return self.createHtmlElementT(
                         Element.Html.Track,
@@ -2168,19 +2183,19 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "strong", .{}) catch unreachable, ._tag = .strong },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("strong"), ._tag = .strong },
                     ),
                     asUint("header") => return self.createHtmlElementT(
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "header", .{}) catch unreachable, ._tag = .header },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("header"), ._tag = .header },
                     ),
                     asUint("footer") => return self.createHtmlElementT(
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "footer", .{}) catch unreachable, ._tag = .footer },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("footer"), ._tag = .footer },
                     ),
                     asUint("select") => return self.createHtmlElementT(
                         Element.Html.Select,
@@ -2204,13 +2219,13 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "figure", .{}) catch unreachable, ._tag = .figure },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("figure"), ._tag = .figure },
                     ),
                     asUint("hgroup") => return self.createHtmlElementT(
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "hgroup", .{}) catch unreachable, ._tag = .hgroup },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("hgroup"), ._tag = .hgroup },
                     ),
                     else => {},
                 },
@@ -2219,13 +2234,13 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "section", .{}) catch unreachable, ._tag = .section },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("section"), ._tag = .section },
                     ),
                     asUint("article") => return self.createHtmlElementT(
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "article", .{}) catch unreachable, ._tag = .article },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("article"), ._tag = .article },
                     ),
                     asUint("details") => return self.createHtmlElementT(
                         Element.Html.Details,
@@ -2237,7 +2252,7 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "summary", .{}) catch unreachable, ._tag = .summary },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("summary"), ._tag = .summary },
                     ),
                     asUint("caption") => return self.createHtmlElementT(
                         Element.Html.TableCaption,
@@ -2249,13 +2264,13 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "marquee", .{}) catch unreachable, ._tag = .marquee },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("marquee"), ._tag = .marquee },
                     ),
                     asUint("address") => return self.createHtmlElementT(
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "address", .{}) catch unreachable, ._tag = .address },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("address"), ._tag = .address },
                     ),
                     asUint("picture") => return self.createHtmlElementT(
                         Element.Html.Picture,
@@ -2282,7 +2297,7 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.TableCol,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "colgroup", .{}) catch unreachable, ._tag = .colgroup },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("colgroup"), ._tag = .colgroup },
                     ),
                     asUint("fieldset") => return self.createHtmlElementT(
                         Element.Html.FieldSet,
@@ -2312,7 +2327,7 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Generic,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "noscript", .{}) catch unreachable, ._tag = .noscript },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("noscript"), ._tag = .noscript },
                     ),
                     else => {},
                 },
@@ -2321,7 +2336,7 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         Element.Html.Quote,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "blockquote", .{}) catch unreachable, ._tag = .blockquote },
+                        .{ ._proto = undefined, ._tag_name = comptime .wrap("blockquote"), ._tag = .blockquote },
                     ),
                     else => {},
                 },
@@ -3308,11 +3323,21 @@ const ParseState = union(enum) {
     pre,
     complete,
     err: anyerror,
-    html: std.ArrayList(u8),
+    html: struct {
+        arena: Allocator,
+        buffer: std.ArrayList(u8),
+    },
     text: std.ArrayList(u8),
     image: std.ArrayList(u8),
     raw: std.ArrayList(u8),
     raw_done: []const u8,
+
+    fn deinit(self: *ParseState, frame: *Frame) void {
+        switch (self.*) {
+            .html => |html| frame.releaseArena(html.arena),
+            else => {},
+        }
+    }
 };
 
 const LoadState = enum {

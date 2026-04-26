@@ -226,6 +226,7 @@ pub fn put(self: *FsCache, meta: CachedMetadata, body: []const u8) !void {
         log.err(.cache, "create file", .{ .url = meta.url, .file = &cache_tmp_p, .err = e });
         return e;
     };
+    errdefer self.dir.deleteFile(&cache_tmp_p) catch {};
     defer file.close();
 
     var writer_buf: [1024]u8 = undefined;

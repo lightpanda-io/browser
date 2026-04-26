@@ -1,5 +1,6 @@
 /.zig-cache/
 /.lp-cache/
+/zig-pkg/
 zig-out
 lightpanda.id
 /src/html5ever/target/
