@@ -557,8 +557,8 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Defaults to no caching.
         \\
         \\--storage-engine
-        \\                The storage engine to use. Choices are: sqlite.
-        \\                Default to sqlite.
+        \\                The storage engine to use. Choices are: none, sqlite.
+        \\                Default to none.
         \\
         \\--storage-sqlite-path
         \\                Path to SQLite database file for persistent storage.

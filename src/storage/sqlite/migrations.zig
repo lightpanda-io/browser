@@ -22,9 +22,9 @@ const Sqlite = @import("Sqlite.zig");
 
 const log = lp.log;
 
-pub fn run(conn: Sqlite.Conn) !void {
+pub fn run(conn: Sqlite.Conn) !i64 {
     const version = try getVersion(conn);
-    log.info(.storage, "migration version", .{ .engine = "sqlite", .version = version });
+    return version;
 }
 
 fn getVersion(conn: Sqlite.Conn) !i64 {
