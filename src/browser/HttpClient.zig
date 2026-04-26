@@ -27,7 +27,6 @@ const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
 const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");
 const Robots = @import("../network/Robots.zig");
-const Cache = @import("../network/cache/Cache.zig");
 const timestamp = @import("../datetime.zig").timestamp;
 
 const log = lp.log;
@@ -40,8 +39,11 @@ pub const Method = http.Method;
 pub const Headers = http.Headers;
 pub const ResponseHead = http.ResponseHead;
 pub const HeaderIterator = http.HeaderIterator;
-const CacheMetadata = Cache.CachedMetadata;
-const CachedResponse = Cache.CachedResponse;
+const CachedResponse = @import("../network/cache/Cache.zig").CachedResponse;
+
+pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
+pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
+pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
 
 // This is loosely tied to a browser Page. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -101,10 +103,6 @@ allocator: Allocator,
 
 network: *Network,
 
-// Queue of requests that depend on a robots.txt.
-// Allows us to fetch the robots.txt just once.
-pending_robots_queue: std.StringHashMapUnmanaged(std.ArrayList(Request)) = .empty,
-
 // Once we have a handle/easy to process a request with, we create a Transfer
 // which contains the Request as well as any state we need to process the
 // request. These will come and go with each request.
@@ -133,6 +131,37 @@ user_agent_header_override: ?[:0]const u8 = null,
 cdp_client: ?CDPClient = null,
 
 max_response_size: usize,
+
+cache_layer: CacheLayer,
+robots_layer: RobotsLayer,
+web_bot_auth_layer: WebBotAuthLayer,
+entry_layer: Layer,
+
+pub const Context = struct {
+    network: *Network,
+
+    pub fn newHeaders(self: Context) !http.Headers {
+        return http.Headers.init(self.network.config.http_headers.user_agent_header);
+    }
+};
+
+pub const Layer = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        request: *const fn (*anyopaque, Context, Request) anyerror!void,
+    };
+
+    pub fn request(self: Layer, ctx: Context, req: Request) !void {
+        return self.vtable.request(self.ptr, ctx, req);
+    }
+};
+
+fn layerWith(self: anytype, next: Layer) Layer {
+    self.next = next;
+    return self.layer();
+}
 
 // libcurl can monitor arbitrary sockets, this lets us use libcurl to poll
 // both HTTP data as well as messages from an CDP connection.
@@ -175,7 +204,28 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
         .tls_verify = network.config.tlsVerifyHost(),
         .obey_robots = network.config.obeyRobots(),
         .max_response_size = network.config.httpMaxResponseSize() orelse std.math.maxInt(u32),
+
+        .cache_layer = .{},
+        .robots_layer = .{ .allocator = allocator },
+        .web_bot_auth_layer = .{},
+        .entry_layer = undefined,
     };
+
+    var next = client.layer();
+
+    if (network.config.webBotAuth() != null) {
+        next = layerWith(&client.web_bot_auth_layer, next);
+    }
+
+    if (network.config.obeyRobots()) {
+        next = layerWith(&client.robots_layer, next);
+    }
+
+    if (network.config.httpCacheDir() != null) {
+        next = layerWith(&client.cache_layer, next);
+    }
+
+    client.entry_layer = next;
 
     return client;
 }
@@ -185,15 +235,18 @@ pub fn deinit(self: *Client) void {
     self.handles.deinit();
 
     self.transfer_pool.deinit();
-
-    var robots_iter = self.pending_robots_queue.iterator();
-    while (robots_iter.next()) |entry| {
-        entry.value_ptr.deinit(self.allocator);
-    }
-    self.pending_robots_queue.deinit(self.allocator);
-
     self.clearUserAgentOverride();
+
+    self.robots_layer.deinit(self.allocator);
+
     self.allocator.destroy(self);
+}
+
+pub fn layer(self: *Client) Layer {
+    return .{
+        .ptr = self,
+        .vtable = &.{ .request = _request },
+    };
 }
 
 // Set a user agent override. Both the raw UA string and the pre-formatted
@@ -350,102 +403,12 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
 }
 
 pub fn request(self: *Client, req: Request) !void {
-    if (self.obey_robots == false) {
-        return self.processRequest(req);
-    }
-
-    const robots_url = try URL.getRobotsUrl(self.allocator, req.url);
-    errdefer self.allocator.free(robots_url);
-
-    // If we have this robots cached, we can take a fast path.
-    if (self.network.robot_store.get(robots_url)) |robot_entry| {
-        defer self.allocator.free(robots_url);
-
-        switch (robot_entry) {
-            // If we have a found robots entry, we check it.
-            .present => |robots| {
-                const path = URL.getPathname(req.url);
-                if (!robots.isAllowed(path)) {
-                    req.error_callback(req.ctx, error.RobotsBlocked);
-                    return;
-                }
-            },
-            // Otherwise, we assume we won't find it again.
-            .absent => {},
-        }
-
-        return self.processRequest(req);
-    }
-    return self.fetchRobotsThenProcessRequest(robots_url, req);
+    const ctx = Context{ .network = self.network };
+    return self.entry_layer.request(ctx, req);
 }
 
-fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
-    const response = Response.fromCached(req.ctx, cached);
-    defer switch (cached.data) {
-        .buffer => |_| {},
-        .file => |f| f.file.close(),
-    };
-
-    if (req.start_callback) |cb| {
-        try cb(response);
-    }
-
-    const proceed = try req.header_callback(response);
-    if (!proceed) {
-        req.error_callback(req.ctx, error.Abort);
-        return;
-    }
-
-    switch (cached.data) {
-        .buffer => |data| {
-            if (data.len > 0) {
-                try req.data_callback(response, data);
-            }
-        },
-        .file => |f| {
-            const file = f.file;
-
-            var buf: [1024]u8 = undefined;
-            var file_reader = file.reader(&buf);
-            try file_reader.seekTo(f.offset);
-            const reader = &file_reader.interface;
-
-            var read_buf: [1024]u8 = undefined;
-            var remaining = f.len;
-
-            while (remaining > 0) {
-                const read_len = @min(read_buf.len, remaining);
-                const n = try reader.readSliceShort(read_buf[0..read_len]);
-                if (n == 0) break;
-                remaining -= n;
-                try req.data_callback(response, read_buf[0..n]);
-            }
-        },
-    }
-
-    try req.done_callback(req.ctx);
-}
-
-fn processRequest(self: *Client, req: Request) !void {
-    if (self.network.cache) |*cache| {
-        if (req.method == .GET) {
-            // cache is only used to read the meta data
-            const arena = try self.network.app.arena_pool.acquire(.small, "HttpClient.cache");
-            defer self.network.app.arena_pool.release(arena);
-
-            var iter = req.headers.iterator();
-            const req_header_list = try iter.collect(arena);
-
-            if (cache.get(arena, .{
-                .url = req.url,
-                .timestamp = std.time.timestamp(),
-                .request_headers = req_header_list.items,
-            })) |cached| {
-                defer req.headers.deinit();
-                return serveFromCache(req, &cached);
-            }
-        }
-    }
+pub fn _request(ptr: *anyopaque, _: Context, req: Request) !void {
+    const self: *Client = @ptrCast(@alignCast(ptr));
 
     const transfer = try self.makeTransfer(req);
 
@@ -476,176 +439,6 @@ fn processRequest(self: *Client, req: Request) !void {
 
     if (try self.waitForInterceptedResponse(transfer)) {
         return self.process(transfer);
-    }
-}
-
-const RobotsRequestContext = struct {
-    client: *Client,
-    req: Request,
-    robots_url: [:0]const u8,
-    buffer: std.ArrayList(u8),
-    status: u16 = 0,
-
-    pub fn deinit(self: *RobotsRequestContext) void {
-        self.client.allocator.free(self.robots_url);
-        self.buffer.deinit(self.client.allocator);
-        self.client.allocator.destroy(self);
-    }
-};
-
-fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: Request) !void {
-    const entry = try self.pending_robots_queue.getOrPut(self.allocator, robots_url);
-
-    if (!entry.found_existing) {
-        errdefer self.allocator.free(robots_url);
-
-        // If we aren't already fetching this robots,
-        // we want to create a new queue for it and add this request into it.
-        entry.value_ptr.* = .empty;
-
-        const ctx = try self.allocator.create(RobotsRequestContext);
-        errdefer self.allocator.destroy(ctx);
-        ctx.* = .{ .client = self, .req = req, .robots_url = robots_url, .buffer = .empty };
-        const headers = try self.newHeaders();
-
-        log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
-        try self.processRequest(.{
-            .ctx = ctx,
-            .url = robots_url,
-            .method = .GET,
-            .headers = headers,
-            .blocking = false,
-            .frame_id = req.frame_id,
-            .loader_id = req.loader_id,
-            .cookie_jar = req.cookie_jar,
-            .cookie_origin = req.cookie_origin,
-            .notification = req.notification,
-            .resource_type = .fetch,
-            .header_callback = robotsHeaderCallback,
-            .data_callback = robotsDataCallback,
-            .done_callback = robotsDoneCallback,
-            .error_callback = robotsErrorCallback,
-            .shutdown_callback = robotsShutdownCallback,
-        });
-    } else {
-        // Not using our own robots URL, only using the one from the first request.
-        self.allocator.free(robots_url);
-    }
-
-    try entry.value_ptr.append(self.allocator, req);
-}
-
-fn robotsHeaderCallback(response: Response) !bool {
-    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(response.ctx));
-    // Robots callbacks only happen on real live requests.
-    const transfer = response.inner.transfer;
-
-    if (transfer.response_header) |hdr| {
-        log.debug(.browser, "robots status", .{ .status = hdr.status, .robots_url = ctx.robots_url });
-        ctx.status = hdr.status;
-    }
-
-    if (transfer.getContentLength()) |cl| {
-        try ctx.buffer.ensureTotalCapacity(ctx.client.allocator, cl);
-    }
-
-    return true;
-}
-
-fn robotsDataCallback(response: Response, data: []const u8) !void {
-    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(response.ctx));
-    try ctx.buffer.appendSlice(ctx.client.allocator, data);
-}
-
-fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
-    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(ctx_ptr));
-    defer ctx.deinit();
-
-    var allowed = true;
-
-    switch (ctx.status) {
-        200 => {
-            if (ctx.buffer.items.len > 0) {
-                const robots: ?Robots = ctx.client.network.robot_store.robotsFromBytes(
-                    ctx.client.getUserAgent(),
-                    ctx.buffer.items,
-                ) catch blk: {
-                    log.warn(.browser, "failed to parse robots", .{ .robots_url = ctx.robots_url });
-                    // If we fail to parse, we just insert it as absent and ignore.
-                    try ctx.client.network.robot_store.putAbsent(ctx.robots_url);
-                    break :blk null;
-                };
-
-                if (robots) |r| {
-                    try ctx.client.network.robot_store.put(ctx.robots_url, r);
-                    const path = URL.getPathname(ctx.req.url);
-                    allowed = r.isAllowed(path);
-                }
-            }
-        },
-        404 => {
-            log.debug(.http, "robots not found", .{ .url = ctx.robots_url });
-            // If we get a 404, we just insert it as absent.
-            try ctx.client.network.robot_store.putAbsent(ctx.robots_url);
-        },
-        else => {
-            log.debug(.http, "unexpected status on robots", .{ .url = ctx.robots_url, .status = ctx.status });
-            // If we get an unexpected status, we just insert as absent.
-            try ctx.client.network.robot_store.putAbsent(ctx.robots_url);
-        },
-    }
-
-    var queued = ctx.client.pending_robots_queue.fetchRemove(
-        ctx.robots_url,
-    ) orelse @panic("Client.robotsDoneCallbacke empty queue");
-    defer queued.value.deinit(ctx.client.allocator);
-
-    for (queued.value.items) |queued_req| {
-        if (!allowed) {
-            log.warn(.http, "blocked by robots", .{ .url = queued_req.url });
-            queued_req.error_callback(queued_req.ctx, error.RobotsBlocked);
-        } else {
-            ctx.client.processRequest(queued_req) catch |e| {
-                queued_req.error_callback(queued_req.ctx, e);
-            };
-        }
-    }
-}
-
-fn robotsErrorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
-    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(ctx_ptr));
-    defer ctx.deinit();
-
-    log.warn(.http, "robots fetch failed", .{ .err = err });
-
-    var queued = ctx.client.pending_robots_queue.fetchRemove(
-        ctx.robots_url,
-    ) orelse @panic("Client.robotsErrorCallback empty queue");
-    defer queued.value.deinit(ctx.client.allocator);
-
-    // On error, allow all queued requests to proceed
-    for (queued.value.items) |queued_req| {
-        ctx.client.processRequest(queued_req) catch |e| {
-            queued_req.error_callback(queued_req.ctx, e);
-        };
-    }
-}
-
-fn robotsShutdownCallback(ctx_ptr: *anyopaque) void {
-    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(ctx_ptr));
-    defer ctx.deinit();
-
-    log.debug(.http, "robots fetch shutdown", .{});
-
-    var queued = ctx.client.pending_robots_queue.fetchRemove(
-        ctx.robots_url,
-    ) orelse @panic("Client.robotsErrorCallback empty queue");
-    defer queued.value.deinit(ctx.client.allocator);
-
-    for (queued.value.items) |queued_req| {
-        if (queued_req.shutdown_callback) |shutdown_cb| {
-            shutdown_cb(queued_req.ctx);
-        }
     }
 }
 
@@ -1028,13 +821,6 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         }
     }
 
-    if (transfer._pending_cache_metadata) |metadata| {
-        const cache = &self.network.cache.?;
-        cache.put(metadata.*, body) catch |err| {
-            log.warn(.cache, "cache put failed", .{ .err = err });
-        };
-    }
-
     // release conn ASAP so that it's available; some done_callbacks
     // will load more resources.
     transfer.releaseConn();
@@ -1155,6 +941,13 @@ fn ensureNoActiveConnection(self: *const Client) !void {
 }
 
 pub const Request = struct {
+    pub const StartCallback = *const fn (response: Response) anyerror!void;
+    pub const HeaderCallback = *const fn (response: Response) anyerror!bool;
+    pub const DataCallback = *const fn (response: Response, data: []const u8) anyerror!void;
+    pub const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
+    pub const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
+    pub const ShutdownCallback = *const fn (ctx: *anyopaque) void;
+
     frame_id: u32,
     loader_id: u32,
     method: Method,
@@ -1178,12 +971,12 @@ pub const Request = struct {
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
 
-    start_callback: ?*const fn (response: Response) anyerror!void = null,
-    header_callback: *const fn (response: Response) anyerror!bool,
-    data_callback: *const fn (response: Response, data: []const u8) anyerror!void,
-    done_callback: *const fn (ctx: *anyopaque) anyerror!void,
-    error_callback: *const fn (ctx: *anyopaque, err: anyerror) void,
-    shutdown_callback: ?*const fn (ctx: *anyopaque) void = null,
+    start_callback: ?StartCallback = null,
+    header_callback: HeaderCallback,
+    data_callback: DataCallback,
+    done_callback: DoneCallback,
+    error_callback: ErrorCallback,
+    shutdown_callback: ?ShutdownCallback = null,
 
     const ResourceType = enum {
         document,
@@ -1204,6 +997,10 @@ pub const Request = struct {
             };
         }
     };
+
+    pub fn deinit(self: *const Request) void {
+        self.headers.deinit();
+    }
 };
 
 pub const Response = struct {
@@ -1290,7 +1087,6 @@ pub const Transfer = struct {
     // total bytes received in the response, including the response status line,
     // the headers, and the [encoded] body.
     bytes_received: usize = 0,
-    _pending_cache_metadata: ?*CacheMetadata = null,
 
     start_time: u64,
     aborted: bool = false,
@@ -1441,12 +1237,6 @@ pub const Transfer = struct {
         var header_list = req.headers;
         try conn.secretHeaders(&header_list, &client.network.config.http_headers);
         try conn.setHeaders(&header_list);
-
-        // If we have WebBotAuth, sign our request.
-        if (client.network.web_bot_auth) |*wba| {
-            const authority = URL.getHost(req.url);
-            try wba.signRequest(self.arena.allocator(), &header_list, authority);
-        }
 
         // Add cookies from cookie jar.
         if (try self.getCookieString()) |cookies| {
@@ -1692,56 +1482,6 @@ pub const Transfer = struct {
             log.err(.http, "header_callback", .{ .err = err, .req = transfer });
             return err;
         };
-
-        if (transfer.client.network.cache != null and transfer.req.method == .GET) {
-            const rh = &transfer.response_header.?;
-            const allocator = transfer.arena.allocator();
-
-            const vary = if (conn.getResponseHeader("vary", 0)) |h| h.value else null;
-
-            const maybe_cm = try Cache.tryCache(
-                allocator,
-                std.time.timestamp(),
-                transfer.url,
-                rh.status,
-                rh.contentType(),
-                if (conn.getResponseHeader("cache-control", 0)) |h| h.value else null,
-                vary,
-                if (conn.getResponseHeader("age", 0)) |h| h.value else null,
-                conn.getResponseHeader("set-cookie", 0) != null,
-                conn.getResponseHeader("authorization", 0) != null,
-            );
-
-            if (maybe_cm) |cm| {
-                var iter = transfer.responseHeaderIterator();
-                var header_list = try iter.collect(allocator);
-                const end_of_response = header_list.items.len;
-
-                if (vary) |vary_str| {
-                    var req_it = transfer.req.headers.iterator();
-
-                    while (req_it.next()) |hdr| {
-                        var vary_iter = std.mem.splitScalar(u8, vary_str, ',');
-
-                        while (vary_iter.next()) |part| {
-                            const name = std.mem.trim(u8, part, &std.ascii.whitespace);
-                            if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
-                                try header_list.append(allocator, .{
-                                    .name = try allocator.dupe(u8, hdr.name),
-                                    .value = try allocator.dupe(u8, hdr.value),
-                                });
-                            }
-                        }
-                    }
-                }
-
-                const metadata = try transfer.arena.allocator().create(CacheMetadata);
-                metadata.* = cm;
-                metadata.headers = header_list.items[0..end_of_response];
-                metadata.vary_headers = header_list.items[end_of_response..];
-                transfer._pending_cache_metadata = metadata;
-            }
-        }
 
         return proceed and transfer.aborted == false;
     }
