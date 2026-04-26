@@ -42,12 +42,12 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 
     const id = req.id.?;
 
-    if (!browser_tools.isKnownTool(call_params.name)) {
+    const action = std.meta.stringToEnum(browser_tools.Action, call_params.name) orelse {
         return server.sendError(id, .MethodNotFound, "Tool not found");
-    }
+    };
 
     // JS errors are returned as isError tool results, not protocol errors
-    if (std.mem.eql(u8, call_params.name, "eval")) {
+    if (action == .eval) {
         const result = browser_tools.callEval(server.session, arena, &server.node_registry, call_params.arguments);
         const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
         return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });

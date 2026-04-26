@@ -19,16 +19,16 @@ node_registry: CDPNode.Registry,
 tool_schema_arena: std.heap.ArenaAllocator,
 
 pub fn init(allocator: std.mem.Allocator, app: *App) !*Self {
-    const http_client = try HttpClient.init(allocator, &app.network);
+    const http_client: *HttpClient = try .init(allocator, &app.network);
     errdefer http_client.deinit();
 
-    const notification = try lp.Notification.init(allocator);
+    const notification: *lp.Notification = try .init(allocator);
     errdefer notification.deinit();
 
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
-    var browser = try lp.Browser.init(app, .{ .http_client = http_client });
+    var browser: lp.Browser = try .init(app, .{ .http_client = http_client });
     errdefer browser.deinit();
 
     self.* = .{
@@ -81,13 +81,11 @@ pub fn getCurrentUrl(self: *Self) []const u8 {
     return page.url;
 }
 
-/// Run a JavaScript expression and return the result, or null on error.
-pub fn callEval(self: *Self, arena: std.mem.Allocator, script: []const u8) ?[]const u8 {
+/// Run a JavaScript expression and return the full result (text + error flag).
+pub fn callEval(self: *Self, arena: std.mem.Allocator, script: []const u8) browser_tools.EvalResult {
     var obj: std.json.ObjectMap = .init(arena);
-    obj.put("script", .{ .string = script }) catch return null;
-    const result = browser_tools.callEval(self.session, arena, &self.node_registry, .{ .object = obj });
-    if (result.is_error) return null;
-    return result.text;
+    obj.put("script", .{ .string = script }) catch return .{ .text = "out of memory", .is_error = true };
+    return browser_tools.callEval(self.session, arena, &self.node_registry, .{ .object = obj });
 }
 
 pub fn call(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments_json: []const u8) CallError![]const u8 {

@@ -382,10 +382,6 @@ pub fn callEval(
     return execEval(session, arena, registry, arguments);
 }
 
-pub fn isKnownTool(tool_name: []const u8) bool {
-    return std.meta.stringToEnum(Action, tool_name) != null;
-}
-
 fn execGoto(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrErr(GotoParams, arena, arguments) orelse return ToolError.InvalidParams;
     try performGoto(session, registry, args.url, args.timeout, args.waitUntil);

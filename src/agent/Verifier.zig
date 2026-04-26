@@ -50,7 +50,7 @@ fn verifyFill(self: *Self, arena: std.mem.Allocator, selector: []const u8, expec
         if (actual.len == 0 or std.mem.eql(u8, actual, "null"))
             return .{
                 .result = .failed,
-                .reason = std.fmt.allocPrint(arena, "element value is empty after fill (expected non-empty for secret)", .{}) catch null,
+                .reason = "element value is empty after fill (expected non-empty for secret)",
             };
         return .{ .result = .passed };
     }
@@ -83,7 +83,9 @@ fn queryElementProperty(self: *Self, arena: std.mem.Allocator, selector: []const
         "(function(){{ var el = document.querySelector({s}); return el ? {s} : null; }})()",
         .{ Command.buildJson(arena, selector), js_property },
     ) catch return null;
-    return self.tool_executor.callEval(arena, script);
+    const result = self.tool_executor.callEval(arena, script);
+    if (result.is_error) return null;
+    return result.text;
 }
 
 fn verifyClick(self: *Self, arena: std.mem.Allocator, pre: PreState) VerifyResult {
@@ -100,6 +102,7 @@ fn verifyClick(self: *Self, arena: std.mem.Allocator, pre: PreState) VerifyResul
 }
 
 fn getDomElementCount(self: *Self, arena: std.mem.Allocator) ?u32 {
-    const result = self.tool_executor.callEval(arena, "document.querySelectorAll('*').length") orelse return null;
-    return std.fmt.parseInt(u32, result, 10) catch null;
+    const result = self.tool_executor.callEval(arena, "document.querySelectorAll('*').length");
+    if (result.is_error) return null;
+    return std.fmt.parseInt(u32, result.text, 10) catch null;
 }

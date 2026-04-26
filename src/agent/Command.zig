@@ -224,15 +224,15 @@ pub fn parse(line: []const u8) Command {
 
 /// Iterator for parsing a script file, handling multi-line EVAL """ ... """ blocks.
 pub const ScriptIterator = struct {
+    allocator: std.mem.Allocator,
     lines: std.mem.SplitIterator(u8, .scalar),
     line_num: u32,
-    allocator: std.mem.Allocator,
 
-    pub fn init(content: []const u8, allocator: std.mem.Allocator) ScriptIterator {
+    pub fn init(allocator: std.mem.Allocator, content: []const u8) ScriptIterator {
         return .{
+            .allocator = allocator,
             .lines = std.mem.splitScalar(u8, content, '\n'),
             .line_num = 0,
-            .allocator = allocator,
         };
     }
 
@@ -756,7 +756,7 @@ test "ScriptIterator basic commands" {
         \\TREE
         \\CLICK "Login"
     ;
-    var iter = ScriptIterator.init(script, std.testing.allocator);
+    var iter: ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = iter.next().?;
     try std.testing.expectEqualStrings("https://example.com", e1.command.goto);
@@ -779,7 +779,7 @@ test "ScriptIterator skips blank lines and comments" {
         \\# Extract
         \\TREE
     ;
-    var iter = ScriptIterator.init(script, std.testing.allocator);
+    var iter: ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = iter.next().?;
     try std.testing.expect(e1.command == .comment);
@@ -806,7 +806,7 @@ test "ScriptIterator multi-line EVAL" {
         \\"""
         \\TREE
     ;
-    var iter = ScriptIterator.init(script, std.testing.allocator);
+    var iter: ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = iter.next().?;
     try std.testing.expect(e1.command == .goto);
@@ -828,7 +828,7 @@ test "ScriptIterator unterminated EVAL" {
         \\EVAL """
         \\  const x = 1;
     ;
-    var iter = ScriptIterator.init(script, std.testing.allocator);
+    var iter: ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = iter.next().?;
     try std.testing.expect(e1.command == .natural_language);
@@ -842,7 +842,7 @@ test "ScriptIterator inline triple-quoted EVAL stays single-line" {
         \\EVAL '''console.log("x")'''
         \\CLICK '.btn'
     ;
-    var iter: ScriptIterator = .init(script, std.testing.allocator);
+    var iter: ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = iter.next().?;
     try std.testing.expect(e1.command == .eval_js);
@@ -862,7 +862,7 @@ test "ScriptIterator multi-line EVAL mismatched triple quote" {
         \\  console.log(s);
         \\"""
     ;
-    var iter: ScriptIterator = .init(script, std.testing.allocator);
+    var iter: ScriptIterator = .init(std.testing.allocator, script);
 
     const e1 = iter.next().?;
     try std.testing.expect(e1.command == .eval_js);
@@ -987,7 +987,7 @@ test "format TYPE with both quote types round-trip" {
 // variant, extend both `toToolCall` and `fromToolCall` and add a case here.
 
 fn expectRoundTrip(cmd: Command) !void {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     const tc = toToolCall(a, cmd, noSubstitute) orelse return error.NoToolMapping;
@@ -1034,7 +1034,7 @@ test "toToolCall/fromToolCall round-trip: eval_js" {
 }
 
 test "toToolCall: variants without tool mapping return null" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     try std.testing.expect(toToolCall(a, .{ .extract = ".x" }, noSubstitute) == null);
@@ -1046,19 +1046,19 @@ test "toToolCall: variants without tool mapping return null" {
 }
 
 test "fromToolCall: unknown tool returns null" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     try std.testing.expect(fromToolCall(arena.allocator(), "no_such_tool", "{}") == null);
 }
 
 test "fromToolCall: missing required field returns null" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     try std.testing.expect(fromToolCall(arena.allocator(), "click", "{}") == null);
 }
 
 test "toToolCall: substitute callback applied to selector fields" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
@@ -1076,7 +1076,7 @@ test "toToolCall: substitute callback applied to selector fields" {
 }
 
 test "toToolCall: type_cmd value is NOT substituted" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
 

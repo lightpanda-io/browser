@@ -35,7 +35,7 @@ pub fn executeWithResult(self: *Self, a: std.mem.Allocator, cmd: Command.Command
 }
 
 pub fn execute(self: *Self, cmd: Command.Command) void {
-    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
 
     const result = self.executeWithResult(arena.allocator(), cmd);
@@ -70,6 +70,6 @@ fn execExtract(self: *Self, arena: std.mem.Allocator, raw_selector: []const u8) 
         .{Command.buildJson(arena, selector)},
     ) catch return .{ .output = "failed to build extract script", .failed = true };
 
-    const tc = Command.toToolCall(arena, .{ .eval_js = script }, Command.noSubstitute) orelse unreachable;
-    return self.callTool(arena, tc.name, tc.args_json);
+    const result = self.tool_executor.callEval(arena, script);
+    return .{ .output = result.text, .failed = result.is_error };
 }

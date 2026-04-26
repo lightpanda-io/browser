@@ -141,7 +141,7 @@ test "init appends to an existing file without truncating" {
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_path = tmp.dir.realpath("script.panda", &path_buf) catch unreachable;
 
-    var recorder = init(std.testing.allocator, abs_path);
+    var recorder: Self = .init(std.testing.allocator, abs_path);
     defer recorder.deinit();
     recorder.record(Command.parse("CLICK 'Login'"));
 
@@ -169,7 +169,7 @@ test "init creates the file if missing" {
     var full_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_path = std.fmt.bufPrint(&full_buf, "{s}/fresh.panda", .{dir_path}) catch unreachable;
 
-    var recorder = init(std.testing.allocator, abs_path);
+    var recorder: Self = .init(std.testing.allocator, abs_path);
     defer recorder.deinit();
     recorder.record(Command.parse("GOTO https://example.com"));
 

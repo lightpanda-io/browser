@@ -136,7 +136,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
 
     const api_key = try resolveApiKey(opts.provider, needs_llm);
 
-    const tool_executor = try ToolExecutor.init(allocator, app);
+    const tool_executor: *ToolExecutor = try .init(allocator, app);
     errdefer tool_executor.deinit();
 
     const self = try allocator.create(Self);
@@ -165,7 +165,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         return error.ToolInitFailed;
     };
 
-    // Persist REPL history in a cwd-relative `.lp-history`; skipped in pure replay.
     const history_path: ?[:0]const u8 = if (will_repl) ".lp-history" else null;
 
     // `-i <file>` means "replay then grow this file"; a script path alone is
@@ -225,9 +224,8 @@ pub fn run(self: *Self) bool {
     return true;
 }
 
-/// Drive a single natural-language turn and exit. The final assistant text
-/// lands on stdout via `Terminal.printAssistant`; tool calls, errors, and
-/// info go to stderr via `std.debug.print`, so callers can capture stdout
+/// Final assistant text lands on stdout via `Terminal.printAssistant`;
+/// tool calls, errors, and info go to stderr, so callers can capture stdout
 /// as the clean answer.
 fn runOneShot(self: *Self, task: []const u8) bool {
     self.processUserMessage(task, null) catch |err| switch (err) {
@@ -309,11 +307,11 @@ fn runScript(self: *Self, path: []const u8) bool {
 
     self.terminal.printInfoFmt("Running script: {s}", .{path});
 
-    var script_arena = std.heap.ArenaAllocator.init(self.allocator);
+    var script_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer script_arena.deinit();
     const sa = script_arena.allocator();
 
-    var iter: Command.ScriptIterator = .init(content, sa);
+    var iter: Command.ScriptIterator = .init(sa, content);
     var last_comment: ?[]const u8 = null;
     var replacements: std.ArrayList(Replacement) = .empty;
 
@@ -361,7 +359,7 @@ fn runScript(self: *Self, path: []const u8) bool {
             else => {
                 self.terminal.printInfoFmt("[{d}] {s}", .{ entry.line_num, entry.raw_line });
 
-                var cmd_arena = std.heap.ArenaAllocator.init(self.allocator);
+                var cmd_arena: std.heap.ArenaAllocator = .init(self.allocator);
                 defer cmd_arena.deinit();
 
                 const pre_state: ?Verifier.PreState = if (self.self_heal)
@@ -531,25 +529,22 @@ fn pruneMessages(self: *Self) void {
     const msgs = self.messages.items;
     if (msgs.len <= prune_high) return;
 
-    // Keep system prompt (index 0) + the last `prune_keep` messages.
     const tail_start = msgs.len - prune_keep;
 
-    var new_arena = std.heap.ArenaAllocator.init(self.allocator);
+    var new_arena: std.heap.ArenaAllocator = .init(self.allocator);
     const na = new_arena.allocator();
 
-    // The system prompt's content points into system_prompt (not the arena),
-    // so only the tail messages need deep-copying.
+    // System prompt content points outside the arena, so only the tail needs copying.
     var i: usize = 0;
     for (msgs[tail_start..]) |msg| {
         msgs[1 + i] = dupeMessage(na, msg) orelse {
-            // On OOM, abandon the prune — the old arena stays intact.
             new_arena.deinit();
             return;
         };
         i += 1;
     }
 
-    self.messages.shrinkRetainingCapacity(1 + i); // system prompt + copied tail
+    self.messages.shrinkRetainingCapacity(1 + i);
     self.message_arena.deinit();
     self.message_arena = new_arena;
 }
@@ -704,10 +699,8 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
 
     try self.ensureSystemPrompt();
 
-    // First user turn of a one-shot run may bring attached files along.
-    // `ensureSystemPrompt` already appended the system message, so "first
-    // user turn" means `messages.items.len == 1`. Those attachments are
-    // wired into the message's rich `parts` (text + inline data).
+    // Attachments only ride on the very first user turn (just after the
+    // system prompt) — wired into the message's rich `parts`.
     const attachments: ?[]const []const u8 =
         if (self.messages.items.len == 1) self.one_shot_attachments else null;
 
@@ -1036,14 +1029,14 @@ test "applyReplacements: single-line span replaced with multi-line content" {
 }
 
 test "formatReplacement: empty cmds returns null" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
     try std.testing.expect(formatReplacement(arena.allocator(), "CLICK '#x'\n", "CLICK '#x'", &.{}) == null);
 }
 
 test "formatReplacement: single command produces one-line replacement" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
     const cmds = [_]Command.Command{.{ .click = "#submit-v2" }};
@@ -1062,7 +1055,7 @@ test "formatReplacement: single command produces one-line replacement" {
 }
 
 test "formatReplacement: multiple commands produce multi-line replacement" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
     const cmds = [_]Command.Command{
