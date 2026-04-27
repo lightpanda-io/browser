@@ -1380,8 +1380,22 @@ pub fn removeElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, id: []const
 
 pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Element {
     if (node.isConnected() or node.isInShadowTree()) {
-        const lookup = self.getElementIdMap(node).lookup;
-        return lookup.get(id);
+        var current = node;
+        while (true) {
+            if (current.is(ShadowRoot)) |shadow_root| {
+                return shadow_root.getElementById(id, self);
+            }
+            const parent = current._parent orelse {
+                if (current._type == .document) {
+                    return current._type.document.getElementById(id, self);
+                }
+                if (IS_DEBUG) {
+                    std.debug.assert(false);
+                }
+                return null;
+            };
+            current = parent;
+        }
     }
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
     while (tw.next()) |el| {
@@ -3715,7 +3729,15 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     };
 
     if (submit_opts.fire_event) {
-        const submitter_html: ?*HtmlElement = if (submitter_) |s| s.is(HtmlElement) else null;
+        // Per HTML spec "submit a form element" algorithm: SubmitEvent.submitter
+        // must be null when the submitter is the form itself, which is what
+        // Form.requestSubmit() passes when called with no submitter argument.
+        // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
+        const submitter_html: ?*HtmlElement = blk: {
+            const s = submitter_ orelse break :blk null;
+            if (s == form_element) break :blk null;
+            break :blk s.is(HtmlElement);
+        };
         const submit_event = (try SubmitEvent.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true, .submitter = submitter_html }, self)).asEvent();
 
         // so submit_event is still valid when we check _prevent_default

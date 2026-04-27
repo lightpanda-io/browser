@@ -22,11 +22,11 @@
 //! The structure does not clear the memory allocated in the arena,
 //! clear the entire arena when exiting the program.
 const std = @import("std");
-const assert = std.debug.assert;
-const Allocator = std.mem.Allocator;
 const lp = @import("lightpanda");
 
 const log = lp.log;
+const assert = std.debug.assert;
+const Allocator = std.mem.Allocator;
 
 const SigHandler = @This();
 
@@ -44,15 +44,39 @@ pub const Listener = struct {
 };
 
 pub fn install(self: *SigHandler) !void {
-    // Block SIGINT and SIGTERM for the current thread and all created from it
+    // Block these signals for the current thread and all created from it.
+    // SIGALRM is included so arm() can wake the sighandler thread on a deadline.
     self.sigset = std.posix.sigemptyset();
     std.posix.sigaddset(&self.sigset, std.posix.SIG.INT);
     std.posix.sigaddset(&self.sigset, std.posix.SIG.TERM);
     std.posix.sigaddset(&self.sigset, std.posix.SIG.QUIT);
+    std.posix.sigaddset(&self.sigset, std.posix.SIG.ALRM);
     std.posix.sigprocmask(std.posix.SIG.BLOCK, &self.sigset, null);
 
     self.handle_thread = try std.Thread.spawn(.{ .allocator = self.arena }, SigHandler.sighandle, .{self});
     self.handle_thread.?.detach();
+}
+
+const itimerval = extern struct {
+    interval: std.c.timeval,
+    value: std.c.timeval,
+};
+const ITIMER_REAL: c_int = 0;
+extern "c" fn setitimer(which: c_int, new_value: *const itimerval, old_value: ?*itimerval) c_int;
+
+/// Schedule a SIGALRM after `ms` milliseconds, which wakes the sighandler
+/// thread and runs the registered listeners. Used to enforce --terminate-ms.
+pub fn deadline(_: *SigHandler, ms: u32) !void {
+    const it = itimerval{
+        .interval = .{ .sec = 0, .usec = 0 },
+        .value = .{
+            .sec = @intCast(ms / std.time.ms_per_s),
+            .usec = @intCast((ms % std.time.ms_per_s) * std.time.us_per_ms),
+        },
+    };
+    if (setitimer(ITIMER_REAL, &it, null) != 0) {
+        return error.SetItimerFailed;
+    }
 }
 
 pub fn on(self: *SigHandler, func: anytype, args: std.meta.ArgsTuple(@TypeOf(func))) !void {
@@ -96,6 +120,16 @@ fn sighandle(self: *SigHandler) noreturn {
                 self.attempt += 1;
 
                 log.info(.app, "Received termination signal...", .{});
+                for (self.listeners.items) |*item| {
+                    item.start(item.args.ptr);
+                }
+                continue;
+            },
+            std.posix.SIG.ALRM => {
+                // Deadline tripped (e.g. --terminate-ms). Run the same listeners,
+                // but don't bump `attempt` — a subsequent ctrl-c should still get
+                // the normal first-attempt graceful path before hard-exiting.
+                log.info(.app, "Deadline reached ", .{});
                 for (self.listeners.items) |*item| {
                     item.start(item.args.ptr);
                 }

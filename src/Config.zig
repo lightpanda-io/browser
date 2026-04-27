@@ -140,6 +140,7 @@ const Commands = cli.Builder(.{
             .{ .name = "wait_until", .type = ?WaitUntil },
             .{ .name = "wait_script", .type = ?[:0]const u8 },
             .{ .name = "wait_selector", .type = ?[:0]const u8 },
+            .{ .name = "terminate_ms", .type = ?u32 },
         },
         .shared_options = CommonOptions,
     },
@@ -637,6 +638,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--wait-script-file
         \\                Like --wait-script, but reads the script from a file.
+        \\
+        \\--terminate-ms  Hard deadline in milliseconds. After this time elapses,
+        \\                JavaScript execution is forcibly terminated (e.g. for
+        \\                pages with endless scripts). Unlike --wait-ms, which
+        \\                only stops waiting, --terminate-ms aborts the page.
+        \\                Defaults to no terminate.
         \\
         \\--cookie        Path to a JSON file to load cookies from (read-only).
         \\                Defaults to no cookie loading.

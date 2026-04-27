@@ -17,3 +17,24 @@
 
   // testing.expectEqual(null, document.getElementById('test'));
 </script>
+
+<div id="qs-test">first</div>
+<div id="qs-test">second</div>
+
+<script id=duplicateIdsQuerySelector>
+{
+  // Regression test: querySelector('#id') must agree with getElementById('id')
+  // when the first duplicate is removed. Selector engine fast path goes through
+  // Frame.getElementByIdFromNode, which previously only checked the lookup map
+  // and missed the _removed_ids recovery, so it returned null.
+  const first = document.querySelector('#qs-test');
+  testing.expectEqual('first', first.textContent);
+
+  first.remove();
+
+  testing.expectEqual('second', document.querySelector('#qs-test').textContent);
+  testing.expectEqual('second', document.body.querySelector('#qs-test').textContent);
+  testing.expectEqual(1, document.querySelectorAll('#qs-test').length);
+  testing.expectEqual('second', document.getElementById('qs-test').textContent);
+}
+</script>

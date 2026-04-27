@@ -362,6 +362,10 @@ pub fn runMicrotasks(self: *Env) void {
     if (self.microtask_queues_are_running == false) {
         const v8_isolate = self.isolate.handle;
 
+        if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate)) {
+            return;
+        }
+
         self.microtask_queues_are_running = true;
         defer self.microtask_queues_are_running = false;
 
@@ -374,6 +378,10 @@ pub fn runMicrotasks(self: *Env) void {
 }
 
 pub fn runMacrotasks(self: *Env) !void {
+    if (v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle)) {
+        return;
+    }
+
     for (self.contexts[0..self.context_count]) |ctx| {
         if (comptime builtin.is_test == false) {
             // I hate this comptime check as much as you do. But we have tests
@@ -483,6 +491,13 @@ pub fn dumpMemoryStats(self: *Env) void {
 
 pub fn terminate(self: *const Env) void {
     v8.v8__Isolate__TerminateExecution(self.isolate.handle);
+}
+
+/// Clears a pending termination so V8 calls (e.g. those made during cleanup)
+/// don't keep tripping over the terminating-state asserts. Safe to call
+/// unconditionally; a no-op if termination wasn't pending.
+pub fn cancelTerminate(self: *const Env) void {
+    v8.v8__Isolate__CancelTerminateExecution(self.isolate.handle);
 }
 
 fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) void {
