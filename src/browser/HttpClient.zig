@@ -400,7 +400,10 @@ pub fn request(self: *Client, req: Request) !void {
     // Assign Request Id.
     var our_req = req;
     our_req.params.request_id = self.incrReqId();
-    our_req.params.arena = ArenaAllocator.init(self.allocator);
+
+    const arena = try self.network.app.arena_pool.acquire(.small, "Request.arena");
+    errdefer self.network.app.arena_pool.release(arena);
+    our_req.params.arena = arena;
 
     return self.entry_layer.request(self, our_req);
 }
@@ -854,7 +857,7 @@ fn ensureNoActiveConnection(self: *const Client) !void {
 
 pub const RequestParams = struct {
     /// This is unsafe to access until you pass it to `Client.request()` where it gets assigned.
-    arena: ArenaAllocator = undefined,
+    arena: Allocator = undefined,
     /// This is unsafe to access until you pass it to `Client.request()` where it gets assigned.
     request_id: u32 = undefined,
 
@@ -893,7 +896,6 @@ pub const RequestParams = struct {
 
     pub fn deinit(self: *const RequestParams) void {
         self.headers.deinit();
-        self.arena.deinit();
     }
 };
 
@@ -918,7 +920,7 @@ pub const Request = struct {
 
     pub fn getCookieString(self: *Request) !?[:0]const u8 {
         const jar = self.params.cookie_jar orelse return null;
-        var aw: std.Io.Writer.Allocating = .init(self.params.arena.allocator());
+        var aw: std.Io.Writer.Allocating = .init(self.params.arena);
         try jar.forRequest(self.params.url, &aw.writer, .{
             .is_http = true,
             .origin_url = self.params.cookie_origin,
@@ -1102,7 +1104,7 @@ pub const Transfer = struct {
             self._conn = null;
         }
 
-        self.req.deinit();
+        self.client.deinitRequest(self.req);
         self.client.transfer_pool.destroy(self);
     }
 
@@ -1266,7 +1268,7 @@ pub const Transfer = struct {
     fn handleRedirect(transfer: *Transfer) !void {
         const req = &transfer.req;
         const conn = transfer._conn.?;
-        const arena = transfer.req.params.arena.allocator();
+        const arena = transfer.req.params.arena;
 
         transfer._redirect_count += 1;
         if (transfer._redirect_count > transfer.client.network.config.httpMaxRedirects()) {
@@ -1443,7 +1445,7 @@ pub const Transfer = struct {
                     transfer._callback_error = error.ResponseTooLarge;
                     return http.writefunc_error;
                 }
-                transfer._stream_buffer.ensureTotalCapacity(transfer.req.params.arena.allocator(), cl) catch {};
+                transfer._stream_buffer.ensureTotalCapacity(transfer.req.params.arena, cl) catch {};
             }
         }
 
@@ -1456,7 +1458,7 @@ pub const Transfer = struct {
         }
 
         const chunk = buffer[0..chunk_len];
-        transfer._stream_buffer.appendSlice(transfer.req.params.arena.allocator(), chunk) catch |err| {
+        transfer._stream_buffer.appendSlice(transfer.req.params.arena, chunk) catch |err| {
             transfer._callback_error = err;
             return http.writefunc_error;
         };
@@ -1566,6 +1568,11 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
 
     self.interception_layer.intercepted -= 1;
     return self.process(transfer);
+}
+
+pub fn deinitRequest(self: *Client, req: Request) void {
+    req.deinit();
+    self.network.app.arena_pool.release(req.params.arena);
 }
 
 const Noop = struct {

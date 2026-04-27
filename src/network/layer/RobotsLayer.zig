@@ -66,7 +66,7 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
                 const path = URL.getPathname(req.params.url);
 
                 if (!robots.isAllowed(path)) {
-                    defer req.deinit();
+                    defer client.deinitRequest(req);
 
                     log.warn(.http, "blocked by robots", .{ .url = req.params.url });
                     req.error_callback(req.ctx, error.RobotsBlocked);
@@ -108,11 +108,14 @@ fn fetchRobotsThenRequest(
         const headers = try client.newHeaders();
         log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
 
+        const new_arena = try client.network.app.arena_pool.acquire(.small, "RobotsLayer.fetchRobots");
+        errdefer client.network.app.arena_pool.release(new_arena);
+
         try self.next.request(client, .{
             .ctx = robots_ctx,
             .params = .{
                 // We have to do this ourselves because we are not going through the top level `request`.
-                .arena = std.heap.ArenaAllocator.init(client.allocator),
+                .arena = new_arena,
                 .request_id = client.incrReqId(),
                 .url = robots_url,
                 .method = .GET,
@@ -145,24 +148,24 @@ fn flushPending(self: *RobotsLayer, client: *Client, robots_url: [:0]const u8, a
     for (queued.value.items) |queued_req| {
         if (!allowed) {
             log.warn(.http, "blocked by robots", .{ .url = queued_req.params.url });
-            defer queued_req.deinit();
+            defer client.deinitRequest(queued_req);
             queued_req.error_callback(queued_req.ctx, error.RobotsBlocked);
         } else {
             self.next.request(client, queued_req) catch |e| {
-                defer queued_req.deinit();
+                defer client.deinitRequest(queued_req);
                 queued_req.error_callback(queued_req.ctx, e);
             };
         }
     }
 }
 
-fn flushPendingShutdown(self: *RobotsLayer, robots_url: [:0]const u8) void {
+fn flushPendingShutdown(self: *RobotsLayer, robots_url: [:0]const u8, client: *Client) void {
     var queued = self.pending.fetchRemove(robots_url) orelse
         @panic("RobotsLayer.flushPendingShutdown: missing queue");
     defer queued.value.deinit(self.allocator);
 
     for (queued.value.items) |queued_req| {
-        defer queued_req.deinit();
+        defer client.deinitRequest(queued_req);
         if (queued_req.shutdown_callback) |cb| cb(queued_req.ctx);
     }
 }
@@ -265,6 +268,6 @@ const RobotsContext = struct {
         defer client.network.app.arena_pool.release(self.arena);
 
         log.debug(.http, "robots fetch shutdown", .{});
-        l.flushPendingShutdown(robots_url);
+        l.flushPendingShutdown(robots_url, client);
     }
 };

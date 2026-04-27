@@ -255,7 +255,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
         .new_url = params.url,
     });
 
-    const arena = request.params.arena.allocator();
+    const arena = request.params.arena;
     // Update the request with the new parameters
     if (params.url) |url| {
         request.params.url = try arena.dupeZ(u8, url);
@@ -313,7 +313,7 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
     const request_id = try idFromRequestId(params.requestId);
     const pending = intercept_state.remove(request_id) orelse return error.RequestNotFound;
     const transfer = pending.transfer;
-    var request = transfer.req;
+    const request = transfer.req;
 
     log.debug(.cdp, "request intercept", .{
         .state = "continue with auth",
@@ -331,7 +331,7 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
     // cancel the request, deinit the transfer on error.
     errdefer transfer.abortAuthChallenge();
 
-    const arena = request.params.arena.allocator();
+    const arena = request.params.arena;
     transfer.updateCredentials(try std.fmt.allocPrintSentinel(
         arena,
         "{s}:{s}",
@@ -380,7 +380,7 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
     var body: ?[]const u8 = null;
     if (params.body) |b| {
         const decoder = std.base64.standard.Decoder;
-        const buf = try request.params.arena.allocator().alloc(u8, try decoder.calcSizeForSlice(b));
+        const buf = try request.params.arena.alloc(u8, try decoder.calcSizeForSlice(b));
         try decoder.decode(buf, b);
         body = buf;
     }

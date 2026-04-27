@@ -209,14 +209,12 @@ pub fn continueRequest(self: *InterceptionLayer, client: *Client, req: Request) 
 }
 
 pub fn abortRequest(self: *InterceptionLayer, client: *Client, req: Request) void {
-    _ = client;
-
     if (comptime IS_DEBUG) {
         log.debug(.http, "abort transfer", .{ .intercepted = self.intercepted });
     }
     self.intercepted -= 1;
 
-    defer req.deinit();
+    defer client.deinitRequest(req);
     req.error_callback(req.ctx, error.Abort);
 }
 
@@ -253,7 +251,7 @@ fn fulfillInner(
 
 pub fn fulfillRequest(
     self: *InterceptionLayer,
-    _: *Client,
+    client: *Client,
     req: Request,
     status: u16,
     headers: []const http.Header,
@@ -264,21 +262,10 @@ pub fn fulfillRequest(
     }
 
     self.intercepted -= 1;
-    defer req.deinit();
+    defer client.deinitRequest(req);
 
     fulfillInner(req, status, headers, body) catch |err| {
         req.error_callback(req.ctx, err);
         return err;
     };
-}
-
-pub fn abortAuthChallenge(self: *InterceptionLayer, req: Request) void {
-    if (comptime IS_DEBUG) {
-        log.debug(.http, "abort auth transfer", .{ .intercepted = self.intercepted });
-    }
-
-    self.intercepted -= 1;
-    defer req.deinit();
-    req.error_callback(req.ctx, error.AbortAuthChallenge);
-    return;
 }
