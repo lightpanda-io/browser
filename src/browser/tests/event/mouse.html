@@ -52,3 +52,67 @@
   document.dispatchEvent(new MouseEvent('mousetest'));
   testing.expectEqual(false, mouseIsTrusted);
 </script>
+
+<script id=which>
+  {
+    testing.expectEqual(1, new MouseEvent('click').which);
+    testing.expectEqual(2, new MouseEvent('click', {button: 1}).which);
+    testing.expectEqual(3, new MouseEvent('click', {button: 2}).which);
+  }
+</script>
+
+<script id=layerXY>
+  {
+    let evt = new MouseEvent('click', {clientX: 11, clientY: 22});
+    testing.expectEqual(11, evt.layerX);
+    testing.expectEqual(22, evt.layerY);
+  }
+</script>
+
+<script id=getModifierState>
+  {
+    let evt = new MouseEvent('click', {altKey: true, ctrlKey: true, shiftKey: true, metaKey: true});
+    testing.expectEqual(true, evt.getModifierState('Alt'));
+    testing.expectEqual(true, evt.getModifierState('AltGraph'));
+    testing.expectEqual(true, evt.getModifierState('Control'));
+    testing.expectEqual(true, evt.getModifierState('Shift'));
+    testing.expectEqual(true, evt.getModifierState('Meta'));
+    testing.expectEqual(true, evt.getModifierState('Accel'));
+    testing.expectEqual(false, evt.getModifierState('NumLock'));
+
+    let none = new MouseEvent('click');
+    testing.expectEqual(false, none.getModifierState('Shift'));
+  }
+</script>
+
+<script id=initMouseEvent>
+  {
+    let evt = document.createEvent('MouseEvent');
+    evt.initMouseEvent('click', true, true, window, 1, 10, 20, 30, 40, true, false, true, false, 2, null);
+    testing.expectEqual('click', evt.type);
+    testing.expectEqual(true, evt.bubbles);
+    testing.expectEqual(true, evt.cancelable);
+    testing.expectEqual(1, evt.detail);
+    testing.expectEqual(10, evt.screenX);
+    testing.expectEqual(20, evt.screenY);
+    testing.expectEqual(30, evt.clientX);
+    testing.expectEqual(40, evt.clientY);
+    testing.expectEqual(true, evt.ctrlKey);
+    testing.expectEqual(false, evt.altKey);
+    testing.expectEqual(true, evt.shiftKey);
+    testing.expectEqual(false, evt.metaKey);
+    testing.expectEqual(2, evt.button);
+  }
+</script>
+
+<script id=initMouseEventOptional>
+  {
+    let evt = document.createEvent('MouseEvent');
+    evt.initMouseEvent('mousedown');
+    testing.expectEqual('mousedown', evt.type);
+    testing.expectEqual(false, evt.bubbles);
+    testing.expectEqual(false, evt.cancelable);
+    testing.expectEqual(0, evt.clientX);
+    testing.expectEqual(0, evt.button);
+  }
+</script>
