@@ -103,7 +103,13 @@ pub fn printToolCall(_: *Self, name: []const u8, args: []const u8) void {
     std.debug.print("\n{s}{s}[tool: {s}]{s} {s}\n", .{ ansi_dim, ansi_cyan, name, ansi_reset, args });
 }
 
-const max_result_display_len = 500;
+// 2000 keeps stderr readable while exposing the full window the LLM-judge
+// actually consumes (SNAPSHOT_MAX_CHARS=900 in benchmarks/llm_judge.py); the
+// 500 cap was the binding upstream limit and silently starved the judge of
+// grounding evidence on tasks where the agent had observed the answer.
+// Does NOT affect the agent's own LLM, which gets up to tool_output_max_bytes
+// (1 MiB) via Agent.zig:capToolOutput.
+const max_result_display_len = 2000;
 
 pub fn printToolResult(_: *Self, name: []const u8, result: []const u8) void {
     const truncated = result[0..@min(result.len, max_result_display_len)];

@@ -37,6 +37,10 @@ const default_system_prompt =
     \\- Be decisive and concise. Prefer few, well-chosen tool calls over many
     \\  probes. If extraction repeatedly fails or the site errors, commit to a
     \\  best-effort answer rather than thrashing.
+    \\- If a page returns 403/404/access-denied, shows only a cookie consent
+    \\  wall, or appears blank after loading, report that observation literally
+    \\  in your answer rather than guessing what the page would have contained.
+    \\  An honest "the site blocked access" beats a fabricated answer every time.
     \\
     \\Selector rules:
     \\- NEVER use backendNodeId with click, fill, hover, selectOption, or setChecked.
@@ -772,21 +776,28 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
 
         // The tool-use loop exhausted max_turns or returned an empty turn
         // with no final text. Ask the model for a synthesis answer without
-        // letting it call more tools — using what it has gathered plus its
-        // own prior knowledge. This rescues benchmark tasks where the
-        // exploration was fine but the model never committed to a reply.
+        // letting it call more tools, grounded ONLY in what it observed.
+        // The earlier prompt licensed pretraining fallback, which on
+        // benchmark sites that returned 403 / cookie walls / blank bodies
+        // produced fabricated answers instead of honest "couldn't access"
+        // reports. Here we forbid the fallback and authorize a brief
+        // honest failure description as a valid final answer.
         log.info(.app, "synthesizing final answer", .{});
         try self.messages.append(self.allocator, .{
             .role = .user,
             .content = try ma.dupe(
                 u8,
                 "You have used your tool budget or cannot finish the exploration. " ++
-                    "Based on what you have already gathered (and your own prior knowledge as a fallback), " ++
-                    "give your best final answer NOW. Do not call any more tools. " ++
-                    "Respond with ONLY the answer — one word, one number, or one short phrase. " ++
-                    "No sentence, no explanation, no prose, no prefix, no markdown. " ++
-                    "If the answer is a name, output only the name. " ++
-                    "If the answer is a title, output only the title, complete and verbatim.",
+                    "Give your best final answer NOW based ONLY on what you actually observed " ++
+                    "via tool calls in this conversation. Do NOT fall back to prior knowledge — " ++
+                    "if your snapshots show only cookie banners, 403/access-denied pages, " ++
+                    "blocked search results, or empty bodies, say that explicitly " ++
+                    "(e.g. \"the page was blocked by a cookie wall and I could not extract X\"). " ++
+                    "Do not invent details that are not visible in the tool outputs above. " ++
+                    "Do not call any more tools. " ++
+                    "Respond with ONLY the answer — one word, one number, one short phrase, " ++
+                    "or a brief honest explanation of why the page could not be read. " ++
+                    "No prefix, no markdown.",
             ),
         });
 
