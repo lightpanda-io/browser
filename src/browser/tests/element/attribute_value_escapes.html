@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<p data-random="abc\def" id="backslash-target">backslash</p>
+<p data-random='it"s ok' id="quote-target">embedded quote</p>
+
+<script id=attributeValueEscapes>
+{
+  // CSS Syntax Level 3 §4.3.5: escape sequences inside quoted attribute selector
+  // values must be decoded before matching against the attribute's literal value.
+  // https://drafts.csswg.org/css-syntax/#consume-string-token
+
+  // Escaped backslash: '\\' in source => one literal '\' in the matched value.
+  testing.expectEqual('backslash',
+    document.querySelector('p[data-random="abc\\\\def"]').textContent);
+  testing.expectEqual(1,
+    document.querySelectorAll('p[data-random="abc\\\\def"]').length);
+
+  // Escaped double quote inside a double-quoted value.
+  testing.expectEqual('embedded quote',
+    document.querySelector('p[data-random="it\\"s ok"]').textContent);
+
+  // Hex escape \5C (backslash) reaches the same backslash element.
+  testing.expectEqual('backslash',
+    document.querySelector('p[data-random="abc\\5C def"]').textContent);
+
+  // A bare newline inside a string token is a parse error.
+  testing.expectError("Error: InvalidAttributeSelector",
+    () => document.querySelector('p[data-random="line one\nline two"]'));
+}
+</script>
