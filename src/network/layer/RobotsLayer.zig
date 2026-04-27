@@ -72,13 +72,12 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
         return self.next.request(client, req);
     }
 
-    return self.fetchRobotsThenRequest(client, arena, robots_url, req);
+    return self.fetchRobotsThenRequest(client, robots_url, req);
 }
 
 fn fetchRobotsThenRequest(
     self: *RobotsLayer,
     client: *Client,
-    arena: std.mem.Allocator,
     robots_url: [:0]const u8,
     req: Request,
 ) !void {
@@ -88,20 +87,22 @@ fn fetchRobotsThenRequest(
         errdefer std.debug.assert(self.pending.remove(robots_url));
         entry.value_ptr.* = .empty;
 
-        const robots_ctx = try arena.create(RobotsContext);
+        // This arena is later owned by the Request. It does not need to be cleaned up by us because
+        // it will be cleaned up by the `Transfer.deinit()` or any `Request.deinit()` called on any sublayers.
+        const new_arena = try client.network.app.arena_pool.acquire(.small, "RobotsLayer.RobotsContext");
+        errdefer client.network.app.arena_pool.release(new_arena);
+
+        const robots_ctx = try new_arena.create(RobotsContext);
         robots_ctx.* = .{
             .layer = self,
             .client = client,
-            .arena = arena,
+            .arena = new_arena,
             .robots_url = robots_url,
             .buffer = .empty,
         };
 
         const headers = try client.newHeaders();
         log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
-
-        const new_arena = try client.network.app.arena_pool.acquire(.small, "RobotsLayer.fetchRobots");
-        errdefer client.network.app.arena_pool.release(new_arena);
 
         try self.next.request(client, .{
             .ctx = robots_ctx,
@@ -125,8 +126,6 @@ fn fetchRobotsThenRequest(
             .error_callback = RobotsContext.errorCallback,
             .shutdown_callback = RobotsContext.shutdownCallback,
         });
-    } else {
-        client.network.app.arena_pool.release(arena);
     }
 
     try entry.value_ptr.append(self.allocator, req);
@@ -202,7 +201,6 @@ const RobotsContext = struct {
         const l = self.layer;
         const client = self.client;
         const robots_url = self.robots_url;
-        defer client.network.app.arena_pool.release(self.arena);
 
         var allowed = true;
         const network = client.network;
@@ -246,7 +244,6 @@ const RobotsContext = struct {
         const l = self.layer;
         const client = self.client;
         const robots_url = self.robots_url;
-        defer client.network.app.arena_pool.release(self.arena);
 
         log.warn(.http, "robots fetch failed", .{ .err = err });
         l.flushPending(client, robots_url, true);
@@ -257,7 +254,6 @@ const RobotsContext = struct {
         const l = self.layer;
         const client = self.client;
         const robots_url = self.robots_url;
-        defer client.network.app.arena_pool.release(self.arena);
 
         log.debug(.http, "robots fetch shutdown", .{});
         l.flushPendingShutdown(robots_url, client);
