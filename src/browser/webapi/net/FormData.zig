@@ -196,6 +196,17 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, frame: *F
 
             if (element.is(Form.Select)) |select| {
                 if (select.getMultiple() == false) {
+                    // Per the HTML spec, a single-select's selectedness comes
+                    // from an explicitly-selected option, falling back to the
+                    // first non-disabled option in tree order. With no options
+                    // (or only disabled ones), nothing is selected and no
+                    // entry is appended.
+                    var children = select.asNode().childrenIterator();
+                    const has_candidate = while (children.next()) |child| {
+                        const option = child.is(Form.Select.Option) orelse continue;
+                        if (!option.getDisabled()) break true;
+                    } else false;
+                    if (!has_candidate) continue;
                     break :blk select.getValue(frame);
                 }
 
