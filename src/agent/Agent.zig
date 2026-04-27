@@ -529,7 +529,7 @@ fn pruneMessages(self: *Self) void {
     const msgs = self.messages.items;
     if (msgs.len <= prune_high) return;
 
-    const tail_start = msgs.len - prune_keep;
+    const tail_start = zenai.provider.safeTruncationStart(msgs, msgs.len - prune_keep) orelse return;
 
     var new_arena: std.heap.ArenaAllocator = .init(self.allocator);
     const na = new_arena.allocator();
