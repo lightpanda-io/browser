@@ -129,8 +129,10 @@
     testing.expectEqual('1.5', r3.value);
     r3.value = '0';
     testing.expectEqual('0.5', r3.value);
-    r3.value = '1';
-    testing.expectEqual('1', r3.value);
+    // Note: in-range pass-through under clamping alone is exercised by r1/r4.
+    // An assertion like `r3.value = '1' -> '1'` would conflict with WHATWG step
+    // matching (default step=1, base=min=0.5 -> nearest valid is '1.5'), which
+    // is intentionally out of scope for this PR; tracking separately.
 
     // Default min/max (0..100) when attributes absent
     const r4 = document.createElement('input');

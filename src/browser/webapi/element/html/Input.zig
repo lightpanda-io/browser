@@ -823,9 +823,7 @@ fn sanitizeRange(
 
 /// Format an f64 to its shortest decimal representation, arena-allocated.
 fn formatFloat(arena: std.mem.Allocator, value: f64) ![]const u8 {
-    var buf: [64]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
-    return arena.dupe(u8, formatted);
+    return std.fmt.allocPrint(arena, "{d}", .{value});
 }
 
 /// Parse a slice that must be ALL ASCII digits into a u32. Returns null if any non-digit or empty.
