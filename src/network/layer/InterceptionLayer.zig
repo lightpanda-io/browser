@@ -90,11 +90,7 @@ fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
     });
 
     if (!wait_for_interception) {
-        return self.next.request(client, req) catch |err| {
-            req.error_callback(req.ctx, err);
-            client.deinitRequest(req);
-            return err;
-        };
+        return self.next.request(client, req);
     }
 
     self.intercepted += 1;
@@ -214,8 +210,8 @@ pub fn abortRequest(self: *InterceptionLayer, client: *Client, req: Request) voi
     }
     self.intercepted -= 1;
 
-    defer client.deinitRequest(req);
     req.error_callback(req.ctx, error.Abort);
+    client.deinitRequest(req);
 }
 
 fn fulfillInner(

@@ -63,11 +63,8 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
                 const path = URL.getPathname(req.params.url);
 
                 if (!robots.isAllowed(path)) {
-                    defer client.deinitRequest(req);
-
                     log.warn(.http, "blocked by robots", .{ .url = req.params.url });
-                    req.error_callback(req.ctx, error.RobotsBlocked);
-                    return;
+                    return error.RobotsBlocked;
                 }
             },
             .absent => {},
@@ -85,8 +82,6 @@ fn fetchRobotsThenRequest(
     robots_url: [:0]const u8,
     req: Request,
 ) !void {
-    errdefer client.network.app.arena_pool.release(arena);
-
     const entry = try self.pending.getOrPut(self.allocator, robots_url);
 
     if (!entry.found_existing) {

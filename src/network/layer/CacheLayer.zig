@@ -63,7 +63,6 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
         .timestamp = std.time.timestamp(),
         .request_headers = req_header_list.items,
     })) |cached| {
-        defer client.deinitRequest(req);
         return serveFromCache(req, &cached);
     }
 
@@ -104,8 +103,7 @@ fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
 
     const proceed = try req.header_callback(response);
     if (!proceed) {
-        req.error_callback(req.ctx, error.Abort);
-        return;
+        return error.Abort;
     }
 
     switch (cached.data) {

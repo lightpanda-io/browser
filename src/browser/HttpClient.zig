@@ -402,10 +402,13 @@ pub fn request(self: *Client, req: Request) !void {
     our_req.params.request_id = self.incrReqId();
 
     const arena = try self.network.app.arena_pool.acquire(.small, "Request.arena");
-    errdefer self.network.app.arena_pool.release(arena);
     our_req.params.arena = arena;
 
-    return self.entry_layer.request(self, our_req);
+    return self.entry_layer.request(self, our_req) catch |err| {
+        our_req.error_callback(our_req.ctx, err);
+        self.deinitRequest(our_req);
+        return err;
+    };
 }
 
 const SyncContext = struct {
