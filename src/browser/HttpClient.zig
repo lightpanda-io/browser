@@ -1563,6 +1563,7 @@ pub const Transfer = struct {
 
 pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
     if (comptime IS_DEBUG) {
+        lp.assert(self.interception_layer.intercepted > 0, "HttpClient.continueTransfer", .{ .value = self.interception_layer.intercepted });
         log.debug(.http, "continue transfer", .{ .intercepted = self.interception_layer.intercepted });
     }
 

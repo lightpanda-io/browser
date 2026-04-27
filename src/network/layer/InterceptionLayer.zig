@@ -190,6 +190,7 @@ pub const InterceptContext = struct {
 
 pub fn continueRequest(self: *InterceptionLayer, client: *Client, req: Request) anyerror!void {
     if (comptime IS_DEBUG) {
+        lp.assert(self.intercepted > 0, "InterceptionLayer.continueRequest", .{ .value = self.intercepted });
         log.debug(.http, "continue transfer", .{ .intercepted = self.intercepted });
     }
 
@@ -203,6 +204,7 @@ pub fn continueRequest(self: *InterceptionLayer, client: *Client, req: Request) 
 
 pub fn abortRequest(self: *InterceptionLayer, client: *Client, req: Request) void {
     if (comptime IS_DEBUG) {
+        lp.assert(self.intercepted > 0, "InterceptionLayer.abortRequest", .{ .value = self.intercepted });
         log.debug(.http, "abort transfer", .{ .intercepted = self.intercepted });
     }
     self.intercepted -= 1;
@@ -251,6 +253,7 @@ pub fn fulfillRequest(
     body: ?[]const u8,
 ) !void {
     if (comptime IS_DEBUG) {
+        lp.assert(self.intercepted > 0, "InterceptionLayer.fulfillRequest", .{ .value = self.intercepted });
         log.debug(.http, "fulfill transfer", .{ .intercepted = self.intercepted });
     }
 
