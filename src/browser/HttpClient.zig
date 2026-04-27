@@ -425,6 +425,7 @@ const SyncContext = struct {
 
     fn headerCallback(response: Response) anyerror!bool {
         const self: *SyncContext = @ptrCast(@alignCast(response.ctx));
+        lp.assert(response.status() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = response.status() });
         self.status = response.status().?;
         if (response.contentLength()) |cl| {
             try self.body.ensureTotalCapacity(self.allocator, cl);
