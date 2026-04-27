@@ -1089,14 +1089,6 @@ pub const Transfer = struct {
     // for when a Transfer is queued in the client.queue
     _node: std.DoublyLinkedList.Node = .{},
 
-    const InterceptState = union(enum) {
-        not_intercepted,
-        pending,
-        @"continue",
-        abort: anyerror,
-        fulfilled,
-    };
-
     fn releaseConn(self: *Transfer) void {
         if (self._conn) |conn| {
             self.client.removeConn(conn);
