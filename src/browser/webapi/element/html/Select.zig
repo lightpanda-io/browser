@@ -44,8 +44,13 @@ pub fn asConstNode(self: *const Select) *const Node {
     return self.asConstElement().asConstNode();
 }
 
-pub fn getValue(self: *Select, frame: *Frame) []const u8 {
-    // Return value of first selected option, or first option if none selected
+// Resolves the option whose selectedness contributes to the select's value
+// per HTML §form-elements§selectedness-setting-algorithm: an explicitly
+// selected non-disabled option, falling back to the first non-disabled
+// option in tree order. Returns null if there is no candidate (zero options
+// or every option disabled), in which case the select has no selectedness
+// and contributes no entry to a FormData set.
+pub fn effectiveOption(self: *Select) ?*Option {
     var first_option: ?*Option = null;
     var iter = self.asNode().childrenIterator();
     while (iter.next()) |child| {
@@ -55,14 +60,17 @@ pub fn getValue(self: *Select, frame: *Frame) []const u8 {
         }
 
         if (option.getSelected()) {
-            return option.getValue(frame);
+            return option;
         }
         if (first_option == null) {
             first_option = option;
         }
     }
-    // No explicitly selected option, return first option's value
-    if (first_option) |opt| {
+    return first_option;
+}
+
+pub fn getValue(self: *Select, frame: *Frame) []const u8 {
+    if (self.effectiveOption()) |opt| {
         return opt.getValue(frame);
     }
     return "";
