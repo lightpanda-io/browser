@@ -85,3 +85,77 @@
     testing.expectEqual('', i3.autocomplete);
   }
 </script>
+
+<script id="range-clamp">
+  {
+    // Per WHATWG HTML spec, value sanitization for `type=range` clamps to
+    // [min, max] with defaults of 0 and 100.
+    // https://html.spec.whatwg.org/multipage/input.html#range-state-(type=range)
+    const r = document.createElement('input');
+    r.type = 'range';
+    r.min = '0';
+    r.max = '100';
+
+    // Above max -> max
+    r.value = '999';
+    testing.expectEqual('100', r.value);
+
+    // Below min -> min
+    r.value = '-10';
+    testing.expectEqual('0', r.value);
+
+    // In range -> unchanged
+    r.value = '50';
+    testing.expectEqual('50', r.value);
+
+    // Negative range
+    const r2 = document.createElement('input');
+    r2.type = 'range';
+    r2.min = '-50';
+    r2.max = '50';
+    r2.value = '0';
+    testing.expectEqual('0', r2.value);
+    r2.value = '100';
+    testing.expectEqual('50', r2.value);
+    r2.value = '-100';
+    testing.expectEqual('-50', r2.value);
+
+    // Fractional bounds
+    const r3 = document.createElement('input');
+    r3.type = 'range';
+    r3.min = '0.5';
+    r3.max = '1.5';
+    r3.value = '2';
+    testing.expectEqual('1.5', r3.value);
+    r3.value = '0';
+    testing.expectEqual('0.5', r3.value);
+    // Note: in-range pass-through under clamping alone is exercised by r1/r4.
+    // An assertion like `r3.value = '1' -> '1'` would conflict with WHATWG step
+    // matching (default step=1, base=min=0.5 -> nearest valid is '1.5'), which
+    // is intentionally out of scope for this PR; tracking separately.
+
+    // Default min/max (0..100) when attributes absent
+    const r4 = document.createElement('input');
+    r4.type = 'range';
+    r4.value = '999';
+    testing.expectEqual('100', r4.value);
+    r4.value = '-1';
+    testing.expectEqual('0', r4.value);
+
+    // Non-numeric value falls back to spec default `min + (max - min) / 2`
+    const r5 = document.createElement('input');
+    r5.type = 'range';
+    r5.min = '0';
+    r5.max = '100';
+    r5.value = 'garbage';
+    testing.expectEqual('50', r5.value);
+
+    // Spec default is the midpoint, not a hardcoded "50"
+    const r6 = document.createElement('input');
+    r6.type = 'range';
+    r6.min = '20';
+    r6.max = '40';
+    r6.value = 'garbage';
+    testing.expectEqual('30', r6.value);
+  }
+</script>
