@@ -430,7 +430,10 @@ pub fn _request(ptr: *anyopaque, _: *Client, req: Request) !void {
 }
 
 pub fn request(self: *Client, req: Request) !void {
-    return self.entry_layer.request(self, req);
+    // Assign Request Id.
+    var our_req = req;
+    our_req.params.request_id = self.incrReqId();
+    return self.entry_layer.request(self, our_req);
 }
 
 const SyncContext = struct {
@@ -620,11 +623,10 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
     const transfer = try self.transfer_pool.create();
     errdefer self.transfer_pool.destroy(transfer);
 
-    const id = self.incrReqId();
     transfer.* = .{
         .start_time = timestamp(.monotonic),
         .arena = ArenaAllocator.init(self.allocator),
-        .id = id,
+        .id = req.params.request_id,
         .url = req.params.url,
         .req = req,
         .client = self,
@@ -1002,6 +1004,8 @@ fn ensureNoActiveConnection(self: *const Client) !void {
 }
 
 pub const RequestParams = struct {
+    /// This is unsafe to access until you pass it to `Client.request()` where it gets assigned.
+    request_id: u32 = undefined,
     frame_id: u32,
     loader_id: u32,
     method: Method,
