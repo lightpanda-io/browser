@@ -3701,7 +3701,15 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     };
 
     if (submit_opts.fire_event) {
-        const submitter_html: ?*HtmlElement = if (submitter_) |s| s.is(HtmlElement) else null;
+        // Per HTML spec "submit a form element" algorithm: SubmitEvent.submitter
+        // must be null when the submitter is the form itself, which is what
+        // Form.requestSubmit() passes when called with no submitter argument.
+        // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
+        const submitter_html: ?*HtmlElement = blk: {
+            const s = submitter_ orelse break :blk null;
+            if (s == form_element) break :blk null;
+            break :blk s.is(HtmlElement);
+        };
         const submit_event = (try SubmitEvent.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true, .submitter = submitter_html }, self)).asEvent();
 
         // so submit_event is still valid when we check _prevent_default
