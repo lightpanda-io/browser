@@ -21,7 +21,7 @@ const log = @import("../../log.zig");
 
 const URL = @import("../../browser/URL.zig");
 const WebBotAuth = @import("../WebBotAuth.zig");
-const Context = @import("../../browser/HttpClient.zig").Context;
+const Client = @import("../../browser/HttpClient.zig").Client;
 const Request = @import("../../browser/HttpClient.zig").Request;
 const Layer = @import("../../browser/HttpClient.zig").Layer;
 
@@ -36,17 +36,17 @@ pub fn layer(self: *WebBotAuthLayer) Layer {
     };
 }
 
-fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
+fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
     const self: *WebBotAuthLayer = @ptrCast(@alignCast(ptr));
     var our_req = req;
 
-    const wba = ctx.network.web_bot_auth orelse @panic("WebBotAuthLayer shouldn't be active without WebBotAuth");
+    const wba = client.network.web_bot_auth orelse @panic("WebBotAuthLayer shouldn't be active without WebBotAuth");
 
-    const arena = try ctx.network.app.arena_pool.acquire(.small, "WebBotAuthLayer");
-    defer ctx.network.app.arena_pool.release(arena);
+    const arena = try client.network.app.arena_pool.acquire(.small, "WebBotAuthLayer");
+    defer client.network.app.arena_pool.release(arena);
 
     const authority = URL.getHost(req.params.url);
     try wba.signRequest(arena, &our_req.params.headers, authority);
 
-    return self.next.request(ctx, our_req);
+    return self.next.request(client, our_req);
 }

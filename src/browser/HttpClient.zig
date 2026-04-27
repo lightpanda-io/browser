@@ -137,24 +137,16 @@ robots_layer: RobotsLayer,
 web_bot_auth_layer: WebBotAuthLayer,
 entry_layer: Layer,
 
-pub const Context = struct {
-    network: *Network,
-
-    pub fn newHeaders(self: Context) !http.Headers {
-        return http.Headers.init(self.network.config.http_headers.user_agent_header);
-    }
-};
-
 pub const Layer = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
 
     pub const VTable = struct {
-        request: *const fn (*anyopaque, Context, Request) anyerror!void,
+        request: *const fn (*anyopaque, *Client, Request) anyerror!void,
     };
 
-    pub fn request(self: Layer, ctx: Context, req: Request) !void {
-        return self.vtable.request(self.ptr, ctx, req);
+    pub fn request(self: Layer, client: *Client, req: Request) !void {
+        return self.vtable.request(self.ptr, client, req);
     }
 };
 
@@ -402,7 +394,7 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
     return self.perform(@intCast(timeout_ms));
 }
 
-pub fn _request(ptr: *anyopaque, _: Context, req: Request) !void {
+pub fn _request(ptr: *anyopaque, _: *Client, req: Request) !void {
     const self: *Client = @ptrCast(@alignCast(ptr));
 
     const transfer = try self.makeTransfer(req);
@@ -438,8 +430,7 @@ pub fn _request(ptr: *anyopaque, _: Context, req: Request) !void {
 }
 
 pub fn request(self: *Client, req: Request) !void {
-    const ctx = Context{ .network = self.network };
-    return self.entry_layer.request(ctx, req);
+    return self.entry_layer.request(self, req);
 }
 
 const SyncContext = struct {

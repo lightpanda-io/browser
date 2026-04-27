@@ -21,7 +21,7 @@ const log = @import("../../log.zig");
 
 const URL = @import("../../browser/URL.zig");
 const Robots = @import("../Robots.zig");
-const Context = @import("../../browser/HttpClient.zig").Context;
+const Client = @import("../../browser/HttpClient.zig").Client;
 const Request = @import("../../browser/HttpClient.zig").Request;
 const Response = @import("../../browser/HttpClient.zig").Response;
 const Layer = @import("../../browser/HttpClient.zig").Layer;
@@ -50,16 +50,16 @@ pub fn deinit(self: *RobotsLayer, allocator: std.mem.Allocator) void {
     self.pending.deinit(allocator);
 }
 
-fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
+fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
     const self: *RobotsLayer = @ptrCast(@alignCast(ptr));
 
-    const arena = try ctx.network.app.arena_pool.acquire(.small, "RobotsLayer");
-    errdefer ctx.network.app.arena_pool.release(arena);
+    const arena = try client.network.app.arena_pool.acquire(.small, "RobotsLayer");
+    errdefer client.network.app.arena_pool.release(arena);
 
     const robots_url = try URL.getRobotsUrl(arena, req.params.url);
 
-    if (ctx.network.robot_store.get(robots_url)) |robot_entry| {
-        defer ctx.network.app.arena_pool.release(arena);
+    if (client.network.robot_store.get(robots_url)) |robot_entry| {
+        defer client.network.app.arena_pool.release(arena);
 
         switch (robot_entry) {
             .present => |robots| {
@@ -73,20 +73,20 @@ fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
             },
             .absent => {},
         }
-        return self.next.request(ctx, req);
+        return self.next.request(client, req);
     }
 
-    return self.fetchRobotsThenRequest(ctx, arena, robots_url, req);
+    return self.fetchRobotsThenRequest(client, arena, robots_url, req);
 }
 
 fn fetchRobotsThenRequest(
     self: *RobotsLayer,
-    ctx: Context,
+    client: *Client,
     arena: std.mem.Allocator,
     robots_url: [:0]const u8,
     req: Request,
 ) !void {
-    errdefer ctx.network.app.arena_pool.release(arena);
+    errdefer client.network.app.arena_pool.release(arena);
 
     const entry = try self.pending.getOrPut(self.allocator, robots_url);
 
@@ -97,16 +97,16 @@ fn fetchRobotsThenRequest(
         const robots_ctx = try arena.create(RobotsContext);
         robots_ctx.* = .{
             .layer = self,
-            .ctx = ctx,
+            .client = client,
             .arena = arena,
             .robots_url = robots_url,
             .buffer = .empty,
         };
 
-        const headers = try ctx.newHeaders();
+        const headers = try client.newHeaders();
         log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
 
-        try self.next.request(ctx, .{
+        try self.next.request(client, .{
             .ctx = robots_ctx,
             .params = .{
                 .url = robots_url,
@@ -127,13 +127,13 @@ fn fetchRobotsThenRequest(
             .shutdown_callback = RobotsContext.shutdownCallback,
         });
     } else {
-        ctx.network.app.arena_pool.release(arena);
+        client.network.app.arena_pool.release(arena);
     }
 
     try entry.value_ptr.append(self.allocator, req);
 }
 
-fn flushPending(self: *RobotsLayer, ctx: Context, robots_url: [:0]const u8, allowed: bool) void {
+fn flushPending(self: *RobotsLayer, client: *Client, robots_url: [:0]const u8, allowed: bool) void {
     var queued = self.pending.fetchRemove(robots_url) orelse
         @panic("RobotsLayer.flushPending: missing queue");
     defer queued.value.deinit(self.allocator);
@@ -144,7 +144,7 @@ fn flushPending(self: *RobotsLayer, ctx: Context, robots_url: [:0]const u8, allo
             defer queued_req.deinit();
             queued_req.error_callback(queued_req.ctx, error.RobotsBlocked);
         } else {
-            self.next.request(ctx, queued_req) catch |e| {
+            self.next.request(client, queued_req) catch |e| {
                 defer queued_req.deinit();
                 queued_req.error_callback(queued_req.ctx, e);
             };
@@ -166,7 +166,7 @@ fn flushPendingShutdown(self: *RobotsLayer, robots_url: [:0]const u8) void {
 const RobotsContext = struct {
     layer: *RobotsLayer,
     arena: std.mem.Allocator,
-    ctx: Context,
+    client: *Client,
     robots_url: [:0]const u8,
     buffer: std.ArrayListUnmanaged(u8),
     status: u16 = 0,
@@ -201,12 +201,12 @@ const RobotsContext = struct {
     fn doneCallback(ctx_ptr: *anyopaque) anyerror!void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
         const l = self.layer;
-        const ctx = self.ctx;
+        const client = self.client;
         const robots_url = self.robots_url;
-        defer ctx.network.app.arena_pool.release(self.arena);
+        defer client.network.app.arena_pool.release(self.arena);
 
         var allowed = true;
-        const network = ctx.network;
+        const network = client.network;
 
         switch (self.status) {
             200 => {
@@ -239,26 +239,26 @@ const RobotsContext = struct {
             },
         }
 
-        l.flushPending(ctx, robots_url, allowed);
+        l.flushPending(client, robots_url, allowed);
     }
 
     fn errorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
         const l = self.layer;
-        const ctx = self.ctx;
+        const client = self.client;
         const robots_url = self.robots_url;
-        defer ctx.network.app.arena_pool.release(self.arena);
+        defer client.network.app.arena_pool.release(self.arena);
 
         log.warn(.http, "robots fetch failed", .{ .err = err });
-        l.flushPending(ctx, robots_url, true);
+        l.flushPending(client, robots_url, true);
     }
 
     fn shutdownCallback(ctx_ptr: *anyopaque) void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
         const l = self.layer;
-        const ctx = self.ctx;
+        const client = self.client;
         const robots_url = self.robots_url;
-        defer ctx.network.app.arena_pool.release(self.arena);
+        defer client.network.app.arena_pool.release(self.arena);
 
         log.debug(.http, "robots fetch shutdown", .{});
         l.flushPendingShutdown(robots_url);

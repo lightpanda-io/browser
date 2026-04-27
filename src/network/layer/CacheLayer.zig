@@ -20,8 +20,8 @@ const std = @import("std");
 const log = @import("../../log.zig");
 
 const http = @import("../http.zig");
+const Client = @import("../../browser/HttpClient.zig").Client;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
-const Context = @import("../../browser/HttpClient.zig").Context;
 const Request = @import("../../browser/HttpClient.zig").Request;
 const Response = @import("../../browser/HttpClient.zig").Response;
 const Layer = @import("../../browser/HttpClient.zig").Layer;
@@ -44,12 +44,12 @@ pub fn layer(self: *CacheLayer) Layer {
     };
 }
 
-fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
+fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
     const self: *CacheLayer = @ptrCast(@alignCast(ptr));
-    const network = ctx.network;
+    const network = client.network;
 
     if (req.params.method != .GET) {
-        return self.next.request(ctx, req);
+        return self.next.request(client, req);
     }
 
     const arena = try network.app.arena_pool.acquire(.small, "CacheLayer");
@@ -71,7 +71,7 @@ fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
     const cache_ctx = try arena.create(CacheContext);
     cache_ctx.* = .{
         .arena = arena,
-        .context = ctx,
+        .client = client,
         .forward = Forward.fromRequest(req),
         .req_url = req.params.url,
         .req_headers = req.params.headers,
@@ -89,7 +89,7 @@ fn request(ptr: *anyopaque, ctx: Context, req: Request) anyerror!void {
         },
     );
 
-    return self.next.request(ctx, wrapped);
+    return self.next.request(client, wrapped);
 }
 
 fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
@@ -138,7 +138,7 @@ fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
 
 const CacheContext = struct {
     arena: std.mem.Allocator,
-    context: Context,
+    client: *Client,
     transfer: ?*Transfer = null,
     forward: Forward,
     req_url: [:0]const u8,
@@ -208,12 +208,12 @@ const CacheContext = struct {
 
     fn doneCallback(ctx: *anyopaque) anyerror!void {
         const self: *CacheContext = @ptrCast(@alignCast(ctx));
-        defer self.context.network.app.arena_pool.release(self.arena);
+        defer self.client.network.app.arena_pool.release(self.arena);
 
         const transfer = self.transfer orelse @panic("Start Callback didn't set CacheLayer.transfer");
 
         if (self.pending_metadata) |metadata| {
-            const cache = &self.context.network.cache.?;
+            const cache = &self.client.network.cache.?;
 
             log.debug(.browser, "http cache", .{ .key = self.req_url, .metadata = metadata });
             cache.put(metadata.*, transfer._stream_buffer.items) catch |err| {
@@ -227,13 +227,13 @@ const CacheContext = struct {
 
     fn shutdownCallback(ctx: *anyopaque) void {
         const self: *CacheContext = @ptrCast(@alignCast(ctx));
-        defer self.context.network.app.arena_pool.release(self.arena);
+        defer self.client.network.app.arena_pool.release(self.arena);
         self.forward.forwardShutdown();
     }
 
     fn errorCallback(ctx: *anyopaque, e: anyerror) void {
         const self: *CacheContext = @ptrCast(@alignCast(ctx));
-        defer self.context.network.app.arena_pool.release(self.arena);
+        defer self.client.network.app.arena_pool.release(self.arena);
         self.forward.forwardErr(e);
     }
 };
