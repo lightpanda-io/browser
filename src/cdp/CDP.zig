@@ -386,6 +386,13 @@ pub const BrowserContext = struct {
 
     notification: *Notification,
 
+    // Pre-armed response for the next JS dialog (alert/confirm/prompt).
+    // Set by Page.handleJavaScriptDialog; consumed (and cleared) when the
+    // next javascript_dialog_opening notification is dispatched. Strings
+    // are duplicated into self.arena so they outlive the CDP command's
+    // own message arena.
+    pending_dialog_response: ?Notification.DialogResponse = null,
+
     fn init(self: *BrowserContext, id: []const u8, cdp: *CDP) !void {
         const allocator = cdp.allocator;
 

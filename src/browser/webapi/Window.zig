@@ -44,6 +44,7 @@ const Element = @import("Element.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
 const Selection = @import("Selection.zig");
+const Notification = @import("../../Notification.zig");
 
 const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
@@ -918,31 +919,42 @@ pub const JsApi = struct {
 
     pub const alert = bridge.function(struct {
         fn alert(_: *const Window, message: ?[]const u8, frame: *Frame) void {
+            var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "alert",
+                .response = &response,
             });
+            // Return value is void; we still pop a pre-armed response so the
+            // CDP client's pre-arm doesn't leak across to the next dialog.
         }
     }.alert, .{});
     pub const confirm = bridge.function(struct {
         fn confirm(_: *const Window, message: ?[]const u8, frame: *Frame) bool {
+            var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "confirm",
+                .response = &response,
             });
-            return false;
+            return response.accept;
         }
     }.confirm, .{});
     pub const prompt = bridge.function(struct {
         fn prompt(_: *const Window, message: ?[]const u8, _: ?[]const u8, frame: *Frame) ?[]const u8 {
+            var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "prompt",
+                .response = &response,
             });
-            return null;
+            if (!response.accept) return null;
+            // promptText omitted with accept=true is "" per CDP spec
+            // (https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-handleJavaScriptDialog).
+            return response.prompt_text orelse "";
         }
     }.prompt, .{});
 
