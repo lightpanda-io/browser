@@ -93,7 +93,7 @@ next_request_id: u32 = 0,
 // Transfers waiting for a free Connection from Network.getConnection.
 queue: std.DoublyLinkedList = .{},
 
-// The main app allocator
+// The main app allocator.
 allocator: Allocator,
 
 network: *Network,
@@ -180,11 +180,20 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
 pub fn deinit(self: *Client) void {
     self.abort();
 
-    // If Network has already stopped, drive its queues ourselves so the
-    // cancelations from abort() deliver before we close the slot.
-    if (self.network.shutdown.load(.acquire)) {
-        self.network.drainPendingForShutdown();
+    // Cancel completions can be delivered by the Network thread after abort().
+    // Drain them before closing the slot pipe; otherwise the Network thread can
+    // still push into a deinitialized Slot.
+    var spins: usize = 0;
+    while (self.in_use.first != null and spins < 1000) : (spins += 1) {
+        if (self.network.shutdown.load(.acquire)) {
+            self.network.drainPendingForShutdown();
+        }
         self.drainCompletions();
+        if (self.in_use.first == null) break;
+        std.Thread.sleep(std.time.ns_per_ms);
+    }
+    if (self.in_use.first != null) {
+        log.warn(.http, "deinit active conns", .{ .count = self.http_active + self.ws_active });
     }
 
     self.slot.deinit();
@@ -324,7 +333,7 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
         while (it) |node| : (it = node.next) {
             const conn: *http.Connection = @fieldParentPtr("_worker_node", node);
             switch (conn.transport) {
-                .http => |transfer| std.debug.assert(transfer.aborted),
+                .http => |transfer| std.debug.assert(transfer.isAborted()),
                 .websocket => {},
                 .none => {},
             }
@@ -1002,7 +1011,7 @@ fn processOneMessage(self: *Client, conn: *http.Connection, maybe_err: ?anyerror
             .transfer = transfer,
         });
 
-        if (transfer.aborted) {
+        if (transfer.isAborted()) {
             transfer.requestFailed(error.Abort, true);
             return true;
         }
@@ -1224,7 +1233,7 @@ pub const Transfer = struct {
     _pending_cache_metadata: ?*CacheMetadata = null,
 
     start_time: u64,
-    aborted: bool = false,
+    aborted: std.atomic.Value(bool) = .init(false),
 
     // We'll store the response header here
     response_header: ?ResponseHead = null,
@@ -1246,7 +1255,8 @@ pub const Transfer = struct {
     _skip_body: bool = false,
     _first_data_received: bool = false,
 
-    // Buffered response body. Filled by dataCallback, consumed in processMessages.
+    // Buffered response body. Filled by dataCallback on the Network thread,
+    // consumed on the worker thread after completion delivery.
     _stream_buffer: std.ArrayList(u8) = .{},
 
     // Error captured in dataCallback to be reported in processMessages.
@@ -1278,13 +1288,26 @@ pub const Transfer = struct {
         }
 
         self.req.headers.deinit();
+        self._stream_buffer.deinit(self.callbackAllocator());
         self.arena.deinit();
         self.client.transfer_pool.destroy(self);
     }
 
+    fn callbackAllocator(self: *Transfer) Allocator {
+        return self.client.network.callbackAllocator();
+    }
+
+    pub fn isAborted(self: *Transfer) bool {
+        return self.aborted.load(.acquire);
+    }
+
+    fn setAborted(self: *Transfer) void {
+        self.aborted.store(true, .release);
+    }
+
     pub fn abort(self: *Transfer, err: anyerror) void {
         self.requestFailed(err, true);
-        self.aborted = true;
+        self.setAborted();
 
         if (self._performing) return;
 
@@ -1309,7 +1332,7 @@ pub const Transfer = struct {
             cb(self.req.ctx);
         }
 
-        self.aborted = true;
+        self.setAborted();
         self.req.start_callback = null;
         self.req.shutdown_callback = null;
         self.req.header_callback = Noop.headerCallback;
@@ -1669,7 +1692,7 @@ pub const Transfer = struct {
             }
         }
 
-        return proceed and transfer.aborted == false;
+        return proceed and !transfer.isAborted();
     }
 
     fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) usize {
@@ -1700,7 +1723,7 @@ pub const Transfer = struct {
                     transfer._callback_error = error.ResponseTooLarge;
                     return http.writefunc_error;
                 }
-                transfer._stream_buffer.ensureTotalCapacity(transfer.arena.allocator(), cl) catch {};
+                transfer._stream_buffer.ensureTotalCapacity(transfer.callbackAllocator(), cl) catch {};
             }
         }
 
@@ -1713,12 +1736,12 @@ pub const Transfer = struct {
         }
 
         const chunk = buffer[0..chunk_len];
-        transfer._stream_buffer.appendSlice(transfer.arena.allocator(), chunk) catch |err| {
+        transfer._stream_buffer.appendSlice(transfer.callbackAllocator(), chunk) catch |err| {
             transfer._callback_error = err;
             return http.writefunc_error;
         };
 
-        if (transfer.aborted) {
+        if (transfer.isAborted()) {
             return http.writefunc_error;
         }
 

@@ -51,6 +51,7 @@ const PSEUDO_POLLFDS = 2;
 const MAX_TICK_CALLBACKS = 16;
 
 allocator: Allocator,
+callback_allocator: std.heap.ThreadSafeAllocator,
 
 app: *App,
 config: *const Config,
@@ -292,6 +293,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 
     return .{
         .allocator = allocator,
+        .callback_allocator = .{ .child_allocator = allocator },
         .config = config,
         .ca_blob = ca_blob,
 
@@ -312,6 +314,10 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 
         .ip_filter = ip_filter,
     };
+}
+
+pub fn callbackAllocator(self: *Network) Allocator {
+    return self.callback_allocator.allocator();
 }
 
 pub fn deinit(self: *Network) void {
@@ -631,8 +637,10 @@ fn drainQueue(self: *Network) void {
     // *under* the lock — that's what keeps the conn alive (every path
     // that releases a WS conn first transitions out of .in_multi here).
     // pause/setopt only flip internal libcurl flags, no callbacks fire.
-    var to_add: std.DoublyLinkedList = .{};
-    var to_remove: std.DoublyLinkedList = .{};
+    var to_add: std.ArrayList(*http.Connection) = .empty;
+    defer to_add.deinit(self.allocator);
+    var to_remove: std.ArrayList(*http.Connection) = .empty;
+    defer to_remove.deinit(self.allocator);
     {
         self.submission_mutex.lock();
         defer self.submission_mutex.unlock();
@@ -642,7 +650,7 @@ fn drainQueue(self: *Network) void {
             lp.assert(conn._submission == .pending_remove, "drainQueue: conn not in pending_remove", .{});
             conn._submission = .idle;
             self.removeFromOpsLocked(conn);
-            to_remove.append(node);
+            to_remove.append(self.allocator, conn) catch @panic("OOM");
         }
         while (self.pending_add.popFirst()) |node| {
             const conn: *http.Connection = @fieldParentPtr("node", node);
@@ -650,7 +658,7 @@ fn drainQueue(self: *Network) void {
             // `in_multi` is the target state; handleAdd may downgrade to
             // idle on failure and release the conn.
             conn._submission = .in_multi;
-            to_add.append(node);
+            to_add.append(self.allocator, conn) catch @panic("OOM");
         }
         while (self.pending_ops.popFirst()) |node| {
             const conn: *http.Connection = @fieldParentPtr("_op_node", node);
@@ -678,12 +686,10 @@ fn drainQueue(self: *Network) void {
 
     // Process removes before adds: cancellations should take effect before
     // we admit new transfers.
-    while (to_remove.popFirst()) |node| {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
+    for (to_remove.items) |conn| {
         self.handleRemove(conn);
     }
-    while (to_add.popFirst()) |node| {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
+    for (to_add.items) |conn| {
         self.handleAdd(conn);
     }
 }

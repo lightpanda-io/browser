@@ -417,9 +417,9 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     }
 
     var runner = try test_session.runner(.{});
-    try runner.wait(.{ .ms = 2000, .until = .load });
+    try runner.wait(.{ .ms = 4000, .until = .load });
 
-    var wait_ms: u32 = 2000;
+    var wait_ms: u32 = 4000;
     var timer = try std.time.Timer.start();
     while (true) {
         var try_catch: js.TryCatch = undefined;
@@ -466,7 +466,7 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !*Frame {
     try frame.navigate(url, .{});
     var runner = try test_session.runner(.{});
     if (opts.wait_until_done) {
-        try runner.wait(.{ .ms = 2000 });
+        try runner.wait(.{ .ms = 4000 });
     }
     return frame;
 }

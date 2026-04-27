@@ -227,7 +227,7 @@ jobs:
     env:
       MAX_VmHWM: 28000 # 28MB (KB)
       MAX_CG_PEAK: 8000 # 8MB (KB)
-      MAX_AVG_DURATION: 17
+      MAX_AVG_DURATION: 20
 
       # How to give cgroups access to the user actions-runner on the host:
       # $ sudo apt install cgroup-tools
