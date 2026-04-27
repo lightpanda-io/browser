@@ -42,9 +42,7 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
 
     const wba = client.network.web_bot_auth orelse @panic("WebBotAuthLayer shouldn't be active without WebBotAuth");
 
-    const arena = try client.network.app.arena_pool.acquire(.small, "WebBotAuthLayer");
-    defer client.network.app.arena_pool.release(arena);
-
+    const arena = req.params.arena;
     const authority = URL.getHost(req.params.url);
     try wba.signRequest(arena, &our_req.params.headers, authority);
 
