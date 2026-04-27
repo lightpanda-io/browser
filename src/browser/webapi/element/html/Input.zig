@@ -564,7 +564,7 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
         .time => return if (isValidTime(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
         .@"datetime-local" => return try sanitizeDatetimeLocal(dupe, value, frame.arena),
         .number => return if (isValidFloatingPoint(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
-        .range => return if (isValidFloatingPoint(value)) if (comptime dupe) try frame.dupeString(value) else value else "50",
+        .range => return try sanitizeRange(dupe, value, self.getMin(), self.getMax(), frame),
         .color => {
             if (value.len == 7 and value[0] == '#') {
                 var needs_lower = false;
@@ -784,6 +784,48 @@ fn sanitizeDatetimeLocal(comptime dupe: bool, value: []const u8, arena: std.mem.
         }
     }
     return result[0..total_len];
+}
+
+/// Sanitize value for `<input type=range>` per WHATWG HTML spec:
+/// https://html.spec.whatwg.org/multipage/input.html#range-state-(type=range)
+///   1. If value is not a valid floating-point number, set it to
+///      `min + (max - min) / 2`.
+///   2. If value < min, set it to min.
+///   3. If value > max, set it to max.
+/// `min`/`max` default to 0 and 100 respectively when the attribute is missing
+/// or fails to parse as a valid floating-point number. Step matching is not
+/// applied here.
+fn sanitizeRange(
+    comptime dupe: bool,
+    value: []const u8,
+    min_attr: []const u8,
+    max_attr: []const u8,
+    frame: *Frame,
+) ![]const u8 {
+    const min: f64 = if (isValidFloatingPoint(min_attr))
+        std.fmt.parseFloat(f64, min_attr) catch 0
+    else
+        0;
+    const max: f64 = if (isValidFloatingPoint(max_attr))
+        std.fmt.parseFloat(f64, max_attr) catch 100
+    else
+        100;
+
+    if (!isValidFloatingPoint(value)) {
+        return try formatFloat(frame.arena, min + (max - min) / 2);
+    }
+
+    const v = std.fmt.parseFloat(f64, value) catch unreachable; // grammar already validated
+    if (v < min) return try formatFloat(frame.arena, min);
+    if (v > max) return try formatFloat(frame.arena, max);
+    return if (comptime dupe) try frame.dupeString(value) else value;
+}
+
+/// Format an f64 to its shortest decimal representation, arena-allocated.
+fn formatFloat(arena: std.mem.Allocator, value: f64) ![]const u8 {
+    var buf: [64]u8 = undefined;
+    const formatted = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    return arena.dupe(u8, formatted);
 }
 
 /// Parse a slice that must be ALL ASCII digits into a u32. Returns null if any non-digit or empty.
