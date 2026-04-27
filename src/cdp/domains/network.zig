@@ -600,12 +600,11 @@ test "cdp.Network: clearBrowserCookies accepts empty params object" {
 
     // Most CDP clients (chrome-remote-interface, chromedp, etc.) always include
     // a `params` field on every command, even for methods that take none.
-    // Chrome ignores the empty object; we should too.
-    try ctx.processMessage(.{
-        .id = 2,
-        .method = "Network.clearBrowserCookies",
-        .params = .{},
-    });
+    // Chrome ignores the empty object; we should too. Sent as raw JSON because
+    // an empty Zig anonymous struct serializes as `[]`, not `{}`.
+    try ctx.processMessage(
+        \\{"id":2,"method":"Network.clearBrowserCookies","params":{}}
+    );
     try ctx.expectSentResult(null, .{ .id = 2 });
 
     try ctx.processMessage(.{
@@ -639,11 +638,11 @@ test "cdp.Network: getAllCookies returns whole jar regardless of current origin"
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
 
-    try ctx.processMessage(.{
-        .id = 2,
-        .method = "Network.getAllCookies",
-        .params = .{},
-    });
+    // Empty params object — sent as raw JSON because an empty Zig anonymous
+    // struct serializes as `[]`, not `{}`.
+    try ctx.processMessage(
+        \\{"id":2,"method":"Network.getAllCookies","params":{}}
+    );
     try ctx.expectSentResult(.{
         .cookies = &[_]ResCookie{
             .{ .name = "a", .value = "1", .domain = "example.com", .path = "/", .size = 2, .secure = true },
