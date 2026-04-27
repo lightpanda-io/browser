@@ -52,8 +52,7 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
         return self.next.request(client, req);
     }
 
-    const arena = try network.app.arena_pool.acquire(.small, "CacheLayer");
-    errdefer network.app.arena_pool.release(arena);
+    const arena = req.params.arena;
 
     var iter = req.params.headers.iterator();
     const req_header_list = try iter.collect(arena);
@@ -63,8 +62,7 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
         .timestamp = std.time.timestamp(),
         .request_headers = req_header_list.items,
     })) |cached| {
-        defer req.deinit();
-        defer network.app.arena_pool.release(arena);
+        defer client.deinitRequest(req);
         return serveFromCache(req, &cached);
     }
 
@@ -208,8 +206,6 @@ const CacheContext = struct {
 
     fn doneCallback(ctx: *anyopaque) anyerror!void {
         const self: *CacheContext = @ptrCast(@alignCast(ctx));
-        defer self.client.network.app.arena_pool.release(self.arena);
-
         const transfer = self.transfer orelse @panic("Start Callback didn't set CacheLayer.transfer");
 
         if (self.pending_metadata) |metadata| {
@@ -227,13 +223,11 @@ const CacheContext = struct {
 
     fn shutdownCallback(ctx: *anyopaque) void {
         const self: *CacheContext = @ptrCast(@alignCast(ctx));
-        defer self.client.network.app.arena_pool.release(self.arena);
         self.forward.forwardShutdown();
     }
 
     fn errorCallback(ctx: *anyopaque, e: anyerror) void {
         const self: *CacheContext = @ptrCast(@alignCast(ctx));
-        defer self.client.network.app.arena_pool.release(self.arena);
         self.forward.forwardErr(e);
     }
 };
