@@ -956,6 +956,18 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
     }
     try self.js.setOrigin(self.origin);
 
+    // After any redirect, drop the original method/body/header so a later
+    // Page.reload doesn't re-POST form data to the redirect target. Conservative
+    // default — 307/308 technically preserve the method per RFC 7231, but
+    // resubmitting form data is the more dangerous failure mode.
+    if ((response.redirectCount() orelse 0) > 0) {
+        if (self._navigated_options) |*no| {
+            no.method = .GET;
+            no.body = null;
+            no.header = null;
+        }
+    }
+
     self.window._location = try Location.init(self.url, self);
     self.document._location = self.window._location;
 
