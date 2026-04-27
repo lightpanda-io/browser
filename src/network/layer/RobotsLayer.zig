@@ -53,14 +53,10 @@ pub fn deinit(self: *RobotsLayer, allocator: std.mem.Allocator) void {
 fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
     const self: *RobotsLayer = @ptrCast(@alignCast(ptr));
 
-    const arena = try client.network.app.arena_pool.acquire(.small, "RobotsLayer");
-    errdefer client.network.app.arena_pool.release(arena);
-
+    const arena = req.params.arena;
     const robots_url = try URL.getRobotsUrl(arena, req.params.url);
 
     if (client.network.robot_store.get(robots_url)) |robot_entry| {
-        defer client.network.app.arena_pool.release(arena);
-
         switch (robot_entry) {
             .present => |robots| {
                 const path = URL.getPathname(req.params.url);
