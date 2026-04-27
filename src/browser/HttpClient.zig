@@ -1475,64 +1475,13 @@ pub const Transfer = struct {
     }
 
     pub fn responseHeaderIterator(self: *Transfer) HeaderIterator {
-        if (self._conn) |conn| {
-            // If we have a connection, than this is a real curl request and we
-            // iterate through the header that curl maintains.
-            return .{ .curl = .{ .conn = conn } };
-        }
-        // If there's no handle, it either means this is being called before
-        // the request is even being made (which would be a bug in the code)
-        // or when a response was injected via transfer.fulfill. The injected
-        // header should be iterated, since there is no handle/easy.
-        return .{ .list = .{ .list = self.response_header.?._injected_headers } };
-    }
+        // We always have a real curl request here. We handle injection up in InterceptionLayer.
+        lp.assert(self._conn != null, "Transfer.responseHeaderIterator", .{ .value = self._conn != null });
+        const conn = self._conn.?;
 
-    pub fn fulfill(transfer: *Transfer, status: u16, headers: []const http.Header, body: ?[]const u8) !void {
-        if (transfer._conn != null) {
-            // should never happen, should have been intercepted/paused, and then
-            // either continued, aborted or fulfilled once.
-            @branchHint(.unlikely);
-            return error.RequestInProgress;
-        }
-
-        transfer._fulfill(status, headers, body) catch |err| {
-            transfer.req.error_callback(transfer.req.ctx, err);
-            return err;
-        };
-    }
-
-    fn _fulfill(transfer: *Transfer, status: u16, headers: []const http.Header, body: ?[]const u8) !void {
-        const req = &transfer.req;
-        if (req.start_callback) |cb| {
-            try cb(Response.fromTransfer(transfer));
-        }
-
-        transfer.response_header = .{
-            .status = status,
-            .url = req.params.url,
-            .redirect_count = 0,
-            ._injected_headers = headers,
-        };
-        for (headers) |hdr| {
-            if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) {
-                const len = @min(hdr.value.len, ResponseHead.MAX_CONTENT_TYPE_LEN);
-                @memcpy(transfer.response_header.?._content_type[0..len], hdr.value[0..len]);
-                transfer.response_header.?._content_type_len = len;
-                break;
-            }
-        }
-
-        lp.assert(transfer._header_done_called == false, "Transfer.fulfill header_done_called", .{});
-        if (try req.header_callback(Response.fromTransfer(transfer)) == false) {
-            transfer.abort(error.Abort);
-            return;
-        }
-
-        if (body) |b| {
-            try req.data_callback(Response.fromTransfer(transfer), b);
-        }
-
-        try req.done_callback(req.ctx);
+        // If we have a connection, than this is a real curl request and we
+        // iterate through the header that curl maintains.
+        return .{ .curl = .{ .conn = conn } };
     }
 
     // This function should be called during the dataCallback. Calling it after
