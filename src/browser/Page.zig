@@ -102,6 +102,16 @@ popups: std.ArrayList(*Frame) = .empty,
 // from a script eval whose parser still holds the Frame).
 queued_close: std.ArrayList(*Frame) = .empty,
 
+// Lifecycle state. A Page is `.pending` while we hold it as the in-flight
+// destination of a root navigation — its V8 context exists but is not yet the
+// session's active context. Flipped to `.active` by Session.commitPendingPage
+// when response headers arrive. Frame.navigate / frameHeaderDoneCallback
+// branch on this to: (a) stamp `is_pending_root` on the frame_navigate
+// notification (so CDP doesn't reset its node registry yet) and
+// (b) flag the HTTP request `protect_from_abort` (so the old page's deinit
+// can't kill the transfer we're sitting inside).
+_state: enum { active, pending } = .active,
+
 // Initialize a Page and its root Frame.
 pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
     const frame_arena = try session.arena_pool.acquire(.large, "Page.frame_arena");

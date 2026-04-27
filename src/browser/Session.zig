@@ -65,9 +65,31 @@ arena_pool: *ArenaPool,
 // teardowns so V8 weak callbacks can validate the FC before dereferencing it.
 fc_identity_pool: std.heap.MemoryPool(FinalizerCallback.Identity),
 
-// The currently-active Page. Null when no Page exists (between removePage
-// and createPage, or at startup).
-page: ?Page,
+// Two physical slots for Pages, both stored inline in the Session struct.
+// Each slot has a stable address, so Frame self-pointers (window._frame,
+// document._frame, EventManager.frame, etc.) — which point inside the
+// slot's Page — remain valid across the pending → active promotion done
+// by commitPendingPage. We never move a Page; we only flip the index that
+// names the active vs pending slot.
+//
+// Why two slots: at any given moment we may need to hold one active Page
+// (the user-visible page) AND one pending Page (the in-flight destination
+// of a root navigation, kept alive across the HTTP round-trip per Chrome's
+// behavior). After commit, the OLD active slot is freed and becomes
+// available for the next pending allocation.
+//
+// Convention: a slot is "occupied" iff its `?Page` is non-null.
+_pages: [2]?Page = .{ null, null },
+
+// Index into `_pages` for the currently-active page, or null when no Page
+// exists (between removePage and createPage, or at startup).
+_active_idx: ?u1 = null,
+
+// Index into `_pages` for an in-flight root navigation, or null when no
+// pending navigation is in flight. CDP commands and the rest of the
+// codebase MUST NOT see this as the current page; it is invisible to
+// Target.* / DOM.* / Runtime.* until commit promotes it to `_active_idx`.
+_pending_idx: ?u1 = null,
 
 // IDs. Kept at Session level so IDs can remain unique across Page replacements.
 frame_id_gen: u32 = 0,
@@ -81,7 +103,9 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     errdefer arena_pool.release(arena);
 
     self.* = .{
-        .page = null,
+        ._pages = .{ null, null },
+        ._active_idx = null,
+        ._pending_idx = null,
         .arena = arena,
         .arena_pool = arena_pool,
         .history = .{},
@@ -96,7 +120,13 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
 }
 
 pub fn deinit(self: *Session) void {
-    if (self.page != null) {
+    // Tear down a pending navigation first so its in-flight transfer is
+    // aborted before we shutter the active Page (which calls
+    // http_client.abort() unconditionally from frame.deinit).
+    if (self._pending_idx != null) {
+        self.discardPendingPage();
+    }
+    if (self._active_idx != null) {
         self.removePage();
     }
     self.cookie_jar.deinit();
@@ -106,17 +136,56 @@ pub fn deinit(self: *Session) void {
     self.arena_pool.release(self.arena);
 }
 
+// True iff there is an active Page. CDP / external callers should use this
+// (or `currentPage()`) rather than poking at the underlying slots.
+pub fn hasPage(self: *const Session) bool {
+    return self._active_idx != null;
+}
+
+// Pick a free slot index — i.e. one whose `_pages` entry is null.
+// In normal operation we always have at most one of (active, pending), so
+// at least one slot is free. Returns null only if both slots are occupied,
+// which is an invariant violation.
+fn findFreeSlot(self: *const Session) !u1 {
+    if (self._pages[0] == null) return 0;
+    if (self._pages[1] == null) return 1;
+
+    return error.NoFreePageSlot;
+}
+
+// Initialize a Page in the given inline slot and return a stable pointer
+// to it. The slot must be currently empty. The returned Page is in the
+// .active state by default; callers that want a pending page
+// (initiateRootNavigation) must flip _state themselves.
+fn pageInit(self: *Session, slot: u1, frame_id: u32) !*Page {
+    lp.assert(self._pages[slot] == null, "Session.pageInit - slot occupied", .{});
+    self._pages[slot] = @as(Page, undefined);
+    const page = &self._pages[slot].?;
+    errdefer self._pages[slot] = null;
+    try Page.init(page, self, frame_id);
+    return page;
+}
+
+// Free the inline slot whose Page has already been Page.deinit'd. After
+// this, the slot is available for a future allocation.
+fn freeSlot(self: *Session, slot: u1) void {
+    self._pages[slot] = null;
+}
+
 // NOTE: the caller is not the owner of the returned value,
 // the pointer on Frame is just returned as a convenience
 pub fn createPage(self: *Session) !*Frame {
-    lp.assert(self.page == null, "Session.createPage - page not null", .{});
+    lp.assert(self._active_idx == null, "Session.createPage - page not null", .{});
 
-    self.page = @as(Page, undefined);
-    const page = &self.page.?;
+    const slot = try self.findFreeSlot();
+    const page = try self.pageInit(slot, self.nextFrameId());
+    errdefer {
+        page.deinit(false);
+        self.freeSlot(slot);
+    }
+    self._active_idx = slot;
+    errdefer self._active_idx = null;
 
-    errdefer self.page = null;
-
-    try Page.init(page, self, self.nextFrameId());
     const frame = &page.frame;
 
     // Creates a new NavigationEventTarget for this frame.
@@ -133,18 +202,31 @@ pub fn createPage(self: *Session) !*Frame {
 }
 
 pub fn removePage(self: *Session) void {
-    lp.assert(self.page != null, "Session.removePage - page is null", .{});
-    if (self.page.?.frame._script_manager.base.is_evaluating) {
+    const idx = self._active_idx orelse {
+        lp.assert(false, "Session.removePage - page is null", .{});
+        return;
+    };
+
+    if (self._pages[idx].?.frame._script_manager.base.is_evaluating) {
         // Reentrant teardown from a CDP message drained inside syncRequest;
         // Session.deinit reclaims the page when the connection closes.
         return;
     }
 
+    // If a navigation is in flight, drop the pending Page first. Its
+    // transfer was protected from abort to survive commitPendingPage's
+    // teardown of the old page, but we are now permanently removing the
+    // session's page state — the pending transfer should die with it.
+    if (self._pending_idx != null) {
+        self.discardPendingPage();
+    }
+
     // Inform CDP the frame is going to be removed, allowing other worlds to remove themselves before the main one
     self.notification.dispatch(.frame_remove, .{});
 
-    self.page.?.deinit(false);
-    self.page = null;
+    self._pages[idx].?.deinit(false);
+    self.freeSlot(idx);
+    self._active_idx = null;
 
     self.navigation.onRemoveFrame();
 
@@ -166,11 +248,11 @@ pub fn releaseArena(self: *Session, allocator: Allocator) void {
 }
 
 pub fn getOrCreateOrigin(self: *Session, key_: ?[]const u8) !*js.Origin {
-    return self.page.?.getOrCreateOrigin(key_);
+    return self.currentPage().?.getOrCreateOrigin(key_);
 }
 
 pub fn releaseOrigin(self: *Session, origin: *js.Origin) void {
-    return self.page.?.releaseOrigin(origin);
+    self.currentPage().?.releaseOrigin(origin);
 }
 
 pub fn replacePage(self: *Session) !*Frame {
@@ -178,30 +260,44 @@ pub fn replacePage(self: *Session) !*Frame {
         log.debug(.browser, "replace page", .{});
     }
 
-    lp.assert(self.page != null, "Session.replacePage null page", .{});
-    const current = &self.page.?;
-    lp.assert(current.frame.parent == null, "Session.replacePage with parent", .{});
+    const old_idx = self._active_idx orelse {
+        lp.assert(false, "Session.replacePage null page", .{});
+        return error.NoActivePage;
+    };
+    const old_page = &self._pages[old_idx].?;
+    lp.assert(old_page.frame.parent == null, "Session.replacePage with parent", .{});
 
-    const frame_id = current.frame._frame_id;
-    current.deinit(true);
-    self.page = null;
+    const frame_id = old_page.frame._frame_id;
+    old_page.deinit(true);
+    self.freeSlot(old_idx);
+    self._active_idx = null;
 
     // Preserve prior behavior: frame_id_gen reset on root replacement so a
     // subsequent createPage starts from id 1. The captured frame_id is
     // passed into Page.init explicitly, so it isn't affected.
     self.frame_id_gen = 0;
 
-    self.page = @as(Page, undefined);
-    const page = &self.page.?;
-
-    errdefer self.page = null;
-
-    try Page.init(page, self, frame_id);
+    const new_slot = try self.findFreeSlot();
+    const page = try self.pageInit(new_slot, frame_id);
+    errdefer {
+        page.deinit(false);
+        self.freeSlot(new_slot);
+    }
+    self._active_idx = new_slot;
     return &page.frame;
 }
 
 pub fn currentPage(self: *Session) ?*Page {
-    return &(self.page orelse return null);
+    const idx = self._active_idx orelse return null;
+    return &self._pages[idx].?;
+}
+
+// Returns the pending Page if a root navigation is in flight. CDP / DOM /
+// Runtime callers MUST NOT use this; it is only for the navigation
+// machinery (Frame.navigate / commitPendingPage).
+pub fn pendingPage(self: *Session) ?*Page {
+    const idx = self._pending_idx orelse return null;
+    return &self._pages[idx].?;
 }
 
 pub fn currentFrame(self: *Session) ?*Frame {
@@ -219,7 +315,7 @@ pub fn runner(self: *Session, opts: Runner.Opts) !Runner {
 }
 
 pub fn scheduleNavigation(self: *Session, frame: *Frame) !void {
-    return self.page.?.scheduleNavigation(frame);
+    return self.currentPage().?.scheduleNavigation(frame);
 }
 
 pub fn processQueuedNavigation(self: *Session) !void {
@@ -384,32 +480,62 @@ fn processPopupNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
 }
 
 fn processRootQueuedNavigation(self: *Session) !void {
-    const current_frame = &self.page.?.frame;
-    const frame_id = current_frame._frame_id;
+    const active_idx = self._active_idx orelse {
+        lp.assert(false, "Session.processRootQueuedNavigation - no active page", .{});
+        return;
+    };
+    const current_frame = &self._pages[active_idx].?.frame;
 
-    // create a copy before the frame is cleared
+    // Detach the QueuedNavigation. Whether we keep it on the active frame
+    // (synthetic path) or transfer it to the pending frame (HTTP path), the
+    // current frame must no longer claim it.
     const qn = current_frame._queued_navigation.?;
     current_frame._queued_navigation = null;
 
+    // Synthetic navigations (about:blank, blob:) commit instantly — no HTTP,
+    // so there is no in-flight window to worry about. Use the legacy
+    // immediate-swap path for them.
+    const is_synthetic = std.mem.eql(u8, qn.url, "about:blank") or
+        std.mem.startsWith(u8, qn.url, "blob:");
+
+    if (is_synthetic) {
+        return self.replaceRootImmediate(current_frame._frame_id, qn);
+    }
+
+    return self.initiateRootNavigation(current_frame._frame_id, qn);
+}
+
+// Legacy immediate-swap path: tear down the active page and create a new one
+// in its place before issuing the navigation. Used for synthetic navigations
+// (about:blank, blob:) where there is no in-flight HTTP and therefore no
+// "pending" window to span.
+fn replaceRootImmediate(self: *Session, frame_id: u32, qn: *QueuedNavigation) !void {
     defer self.arena_pool.release(qn.arena);
 
-    // Dispatch frame_remove (same as removePage) then replace the Page
-    // in-place, keeping the frame_id stable.
+    const old_idx = self._active_idx orelse {
+        lp.assert(false, "Session.replaceRootImmediate - no active page", .{});
+        return;
+    };
+
+    // Dispatch frame_remove (same as removePage) then tear down the OLD
+    // page's slot.
     self.notification.dispatch(.frame_remove, .{});
-    self.page.?.deinit(true);
-    self.page = null;
+    self._pages[old_idx].?.deinit(true);
+    self.freeSlot(old_idx);
+    self._active_idx = null;
 
     self.navigation.onRemoveFrame();
 
     // Preserve prior behavior: the old resetFrameResources reset frame_id_gen.
     self.frame_id_gen = 0;
 
-    self.page = @as(Page, undefined);
-    const page = &self.page.?;
-
-    errdefer self.page = null;
-
-    try Page.init(page, self, frame_id);
+    const new_slot = try self.findFreeSlot();
+    const page = try self.pageInit(new_slot, frame_id);
+    errdefer {
+        page.deinit(false);
+        self.freeSlot(new_slot);
+    }
+    self._active_idx = new_slot;
     const new_frame = &page.frame;
 
     // Creates a new NavigationEventTarget for this frame.
@@ -425,6 +551,131 @@ fn processRootQueuedNavigation(self: *Session) !void {
         log.err(.browser, "queued navigation error", .{ .err = err });
         return err;
     };
+}
+
+// Real HTTP root navigation: allocate a pending Page, leave the active Page
+// alive, and dispatch the navigation HTTP request against the pending frame.
+// The active Page (and its V8 context) stays addressable across the round-
+// trip — Runtime.evaluate, DOM.*, etc. continue to operate on the OLD page
+// until commitPendingPage swaps the pointer when response headers arrive.
+fn initiateRootNavigation(self: *Session, frame_id: u32, qn: *QueuedNavigation) !void {
+    lp.assert(self._pending_idx == null, "Session.initiateRootNavigation - pending already set", .{});
+
+    // The qn arena is consumed here regardless of success — frame.navigate
+    // dupes the URL into the page's own arena, so we can release the qn
+    // arena as soon as navigate returns.
+    defer self.arena_pool.release(qn.arena);
+
+    // Pick the slot NOT occupied by the active page.
+    const slot = try self.findFreeSlot();
+    const page = try self.pageInit(slot, frame_id);
+    errdefer {
+        page.deinit(false);
+        self.freeSlot(slot);
+    }
+
+    page._state = .pending;
+    self._pending_idx = slot;
+    errdefer self._pending_idx = null;
+
+    if (comptime IS_DEBUG) {
+        log.debug(.browser, "initiate root navigation", .{ .url = qn.url });
+    }
+
+    // No frame_created notification yet — CDP must not see the pending page
+    // (no isolated worlds, no Target.* visibility). Both the pending main
+    // world and the isolated worlds get registered with the V8 inspector at
+    // commit, after frame_remove tears down the OLD page's context group.
+
+    page.frame.navigate(qn.url, qn.opts) catch |err| {
+        log.err(.browser, "pending navigation start", .{ .err = err, .url = qn.url });
+        return err;
+    };
+}
+
+// Promote the pending Page to be the active Page. Called from
+// frameHeaderDoneCallback when the in-flight pending root navigation's
+// response headers arrive.
+//
+// Order matters here:
+//   1. frame_remove dispatch — CDP's frameRemove resets the V8 inspector
+//      context group (emits Runtime.executionContextsCleared) and clears
+//      isolated world contexts plus the node_registry. The OLD page's
+//      memory is still alive at this point (intentional: CDP teardown can
+//      walk old-page state without UAF).
+//   2. Pointer flip and _state = .active. session.page now points at the
+//      pending page.
+//   3. frame_created dispatch — CDP creates fresh isolated world contexts
+//      against the new (now active) frame. While pending_page is still
+//      non-null at this point, CDP's frameCreated handler skips its
+//      frame_arena reset and captured_responses zeroing (the captured_
+//      response for the request we are committing was just inserted by
+//      onHttpResponseHeadersDone moments earlier and must survive).
+//   4. pending_page = null. Order matters: step 3 reads it.
+//   5. OLD Page.deinit + free LAST. Its frame.deinit calls
+//      http_client.abort() unconditionally — the in-flight navigation
+//      transfer (whose callback we are inside) is shielded by
+//      protect_from_abort, which the caller clears AFTER we return.
+pub fn commitPendingPage(self: *Session) !void {
+    const pending_idx = self._pending_idx orelse {
+        lp.assert(false, "Session.commitPendingPage - no pending page", .{});
+        return error.NoPendingPage;
+    };
+    const old_idx = self._active_idx orelse {
+        lp.assert(false, "Session.commitPendingPage - no active page", .{});
+        return error.NoActivePage;
+    };
+
+    if (comptime IS_DEBUG) {
+        log.debug(.browser, "commit pending page", .{});
+    }
+
+    const pending = &self._pages[pending_idx].?;
+
+    // Step 1: clear the OLD page's CDP / V8 inspector state.
+    self.notification.dispatch(.frame_remove, .{});
+    self.navigation.onRemoveFrame();
+
+    // Step 2: index flip. Page slot addresses are stable (inline in
+    // Session), so every self-pointer inside `pending` (window._frame,
+    // document._frame, EventManager.frame, etc.) remains valid.
+    self._active_idx = pending_idx;
+    pending._state = .active;
+
+    // Step 3: register the new page with CDP. _pending_idx is still set at
+    // this point — CDP's frameCreated handler reads `pendingPage() != null`
+    // to skip the captured_responses / frame_arena resets that would wipe
+    // the in-flight response we just received.
+    self.navigation.onNewFrame(&pending.frame) catch |err| {
+        log.err(.browser, "commitPendingPage onNewFrame", .{ .err = err });
+    };
+    self.notification.dispatch(.frame_created, &pending.frame);
+
+    // Step 4: _pending_idx = null AFTER frame_created so step 3 saw it.
+    self._pending_idx = null;
+
+    // Step 5: tear down the OLD page LAST. Anything in steps 1-4 that
+    // needed to walk the OLD page's state (CDP node_registry, inspector
+    // context group, isolated worlds) has already done so. The OLD page's
+    // frame.deinit calls http_client.abort() unconditionally; the in-flight
+    // transfer survives via protect_from_abort.
+    self._pages[old_idx].?.deinit(false);
+    self.freeSlot(old_idx);
+}
+
+// Discard a pending Page without committing. Used for failure paths
+// (HTTP error before commit, session deinit during pending, etc.). The
+// active page is untouched.
+pub fn discardPendingPage(self: *Session) void {
+    const idx = self._pending_idx orelse return;
+
+    if (comptime IS_DEBUG) {
+        log.debug(.browser, "discard pending page", .{});
+    }
+
+    self._pending_idx = null;
+    self._pages[idx].?.deinit(false);
+    self.freeSlot(idx);
 }
 
 pub fn nextFrameId(self: *Session) u32 {

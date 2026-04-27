@@ -920,7 +920,7 @@ fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Va
 
 fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !void {
     const session = server.session;
-    if (session.page != null) {
+    if (session.hasPage()) {
         session.removePage();
     }
     const frame = session.createPage() catch {

@@ -340,13 +340,14 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
 
     if (comptime IS_DEBUG and abort_all) {
         // Even after an abort_all, we could still have transfers, but, at the
-        // very least, they should all be flagged as aborted.
+        // very least, they should all be flagged as aborted (or be a transfer
+        // we explicitly protected with protect_from_abort).
         var it = self.in_use.first;
         var leftover: usize = 0;
         while (it) |node| : (it = node.next) {
             const conn: *http.Connection = @fieldParentPtr("node", node);
             switch (conn.transport) {
-                .http => |transfer| std.debug.assert(transfer.aborted),
+                .http => |transfer| std.debug.assert(transfer.aborted or transfer.req.params.protect_from_abort),
                 .websocket => {},
                 .none => {},
             }
@@ -363,7 +364,8 @@ fn abortConnections(list: std.DoublyLinkedList, comptime abort_all: bool, frame_
         const conn: *http.Connection = @fieldParentPtr("node", node);
         switch (conn.transport) {
             .http => |transfer| {
-                if ((comptime abort_all) or transfer.req.params.frame_id == frame_id) {
+                const matches = (comptime abort_all) or transfer.req.params.frame_id == frame_id;
+                if (matches and !transfer.req.params.protect_from_abort) {
                     transfer.kill();
                 }
             },
@@ -877,6 +879,13 @@ pub const RequestParams = struct {
     credentials: ?[:0]const u8 = null,
     notification: *Notification,
     timeout_ms: u32 = 0,
+
+    // Set on an in-flight root-navigation transfer that was issued against a
+    // pending Page. The old Page's frame.deinit (called from Session.commit
+    // PendingPage when response headers arrive) calls http_client.abort() —
+    // that abort_all path skips transfers with this flag so the callback
+    // chain we are sitting inside isn't killed mid-flight.
+    protect_from_abort: bool = false,
 
     const ResourceType = enum {
         document,
