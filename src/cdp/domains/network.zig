@@ -258,7 +258,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
 
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a frame.
-    lp.assert(bc.session.page != null, "CDP.network.httpRequestFail null frame", .{});
+    lp.assert(bc.session.hasPage(), "CDP.network.httpRequestFail null frame", .{});
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{

@@ -212,7 +212,7 @@ fn close(cmd: *CDP.Command) !void {
     const target_id = bc.target_id orelse return error.TargetNotLoaded;
 
     // can't be null if we have a target_id
-    lp.assert(bc.session.page != null, "CDP.frame.close null frame", .{});
+    lp.assert(bc.session.hasPage(), "CDP.frame.close null frame", .{});
 
     try cmd.sendResult(.{}, .{});
 
@@ -372,7 +372,14 @@ pub fn frameNavigate(bc: *CDP.BrowserContext, event: *const Notification.FrameNa
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
-    bc.reset();
+
+    // is_pending_root means this navigation is in flight against a pending
+    // Page while the OLD page is still alive and addressable. Don't blow
+    // away the node_registry — the OLD page's nodes are still referenced
+    // by client-held objectIds. The reset moves to frameRemove (commit).
+    if (!event.is_pending_root) {
+        bc.reset();
+    }
 
     const frame_id = &id.toFrameId(event.frame_id);
     const loader_id = &id.toLoaderId(event.loader_id);
@@ -429,18 +436,39 @@ pub fn frameRemove(bc: *CDP.BrowserContext) void {
     for (bc.isolated_worlds.items) |isolated_world| {
         isolated_world.removeContext();
     }
+
+    // node_registry / node_search_list reference Nodes that live in the page
+    // about to be torn down. Clear them now — for legacy navigations this is
+    // a no-op-equivalent of the bc.reset() that frameNavigate used to do up
+    // front; for pending root commits this is the moment that registry was
+    // deferred to (frameNavigate skipped it because the OLD page was still
+    // live during the in-flight HTTP).
+    bc.reset();
 }
 
 pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
-    _ = bc.cdp.frame_arena.reset(.{ .retain_with_limit = 1024 * 512 });
+    // Detect "in commit" mode: Session.commitPendingPage dispatches frame_
+    // created BEFORE clearing pending_page (deliberate ordering — see
+    // Session.commitPendingPage). The captured_response for the request we
+    // just committed was inserted by onHttpResponseHeadersDone moments ago
+    // and lives in cdp.frame_arena; resetting either would lose it.
+    const in_commit = bc.session.pendingPage() != null;
+
+    if (!in_commit) {
+        _ = bc.cdp.frame_arena.reset(.{ .retain_with_limit = 1024 * 512 });
+    }
 
     for (bc.isolated_worlds.items) |isolated_world| {
         _ = try isolated_world.createContext(frame);
     }
-    // Only retain captured responses until a navigation event. In CDP term,
-    // this is called a "renderer" and the cache-duration can be controlled via
-    // the Network.configureDurableMessages message (which we don't support)
-    bc.captured_responses = .empty;
+
+    if (!in_commit) {
+        // Only retain captured responses until a navigation event. In CDP
+        // terms, this is called a "renderer" and the cache-duration can be
+        // controlled via Network.configureDurableMessages (which we don't
+        // support).
+        bc.captured_responses = .empty;
+    }
 }
 
 pub fn frameChildFrameCreated(bc: *CDP.BrowserContext, event: *const Notification.FrameChildFrameCreated) !void {
