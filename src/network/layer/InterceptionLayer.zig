@@ -90,7 +90,11 @@ fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
     });
 
     if (!wait_for_interception) {
-        return self.next.request(client, req);
+        return self.next.request(client, req) catch |err| {
+            req.error_callback(req.ctx, err);
+            client.deinitRequest(req);
+            return err;
+        };
     }
 
     self.intercepted += 1;
@@ -197,6 +201,7 @@ pub fn continueRequest(self: *InterceptionLayer, client: *Client, req: Request) 
     self.intercepted -= 1;
     self.next.request(client, req) catch |err| {
         const ctx: *InterceptContext = @ptrCast(@alignCast(req.ctx));
+        req.error_callback(req.ctx, err);
         ctx.client.deinitRequest(req);
         return err;
     };
