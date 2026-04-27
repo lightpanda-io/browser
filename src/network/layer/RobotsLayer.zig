@@ -111,6 +111,9 @@ fn fetchRobotsThenRequest(
         try self.next.request(client, .{
             .ctx = robots_ctx,
             .params = .{
+                // We have to do this ourselves because we are not going through the top level `request`.
+                .arena = std.heap.ArenaAllocator.init(client.allocator),
+                .request_id = client.incrReqId(),
                 .url = robots_url,
                 .method = .GET,
                 .headers = headers,
