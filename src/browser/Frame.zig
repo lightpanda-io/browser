@@ -720,7 +720,10 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     };
 
     const session = target._session;
-    if (!opts.force and URL.eqlDocument(target.url, resolved_url)) {
+    // Short-circuit only true fragment-only navigations (same path/query, different
+    // fragment). Identical URLs fall through and trigger a real reload.
+    const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
+    if (!opts.force and is_fragment_navigation) {
         target.url = try target.arena.dupeZ(u8, resolved_url);
         target.window._location = try Location.init(target.url, target);
         if (target.parent == null) {
