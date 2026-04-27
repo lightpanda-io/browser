@@ -400,53 +400,48 @@ fn failRequest(cmd: *CDP.Command) !void {
 }
 
 pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notification.RequestAuthRequired) !void {
-    _ = bc;
-    _ = intercept;
-    return error.NullAuthChallenge;
+    // detachTarget could be called, in which case, we still have a frame doing
+    // things, but no session.
+    const session_id = bc.session_id orelse return;
+
+    // We keep it around to wait for modifications to the request.
+    // NOTE: we assume whomever created the request created it with a lifetime of the Page.
+    // TODO: What to do when receiving replies for a previous frame's requests?
+
+    const intercept_ctx = intercept.intercept_ctx;
+    const request = intercept.request;
+    try bc.intercept_state.put(request.*);
+
+    const challenge = intercept_ctx.auth_challenge orelse return error.NullAuthChallenge;
+
+    try bc.cdp.sendEvent("Fetch.authRequired", .{
+        .requestId = &id.toInterceptId(request.params.request_id),
+        .frameId = &id.toFrameId(request.params.frame_id),
+        .request = network.RequestWriter.init(request),
+        .resourceType = switch (request.params.resource_type) {
+            .script => "Script",
+            .xhr => "XHR",
+            .document => "Document",
+            .fetch => "Fetch",
+        },
+        .authChallenge = .{
+            .origin = "", // TODO get origin, could be the proxy address for example.
+            .source = if (challenge.source) |s| (if (s == .server) "Server" else "Proxy") else "",
+            .scheme = if (challenge.scheme) |s| (if (s == .digest) "digest" else "basic") else "",
+            .realm = challenge.realm orelse "",
+        },
+        .networkId = &id.toRequestId2(request),
+    }, .{ .session_id = session_id });
+
+    log.debug(.cdp, "request auth required", .{
+        .state = "paused",
+        .id = request.params.request_id,
+        .url = request.params.url,
+    });
+    // Await continueWithAuth
+
+    intercept.wait_for_interception.* = true;
 }
-
-// pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notification.RequestAuthRequired) !void {
-//     // detachTarget could be called, in which case, we still have a frame doing
-//     // things, but no session.
-//     const session_id = bc.session_id orelse return;
-
-//     // We keep it around to wait for modifications to the request.
-//     // NOTE: we assume whomever created the request created it with a lifetime of the Page.
-//     // TODO: What to do when receiving replies for a previous frame's requests?
-
-//     const transfer = intercept.transfer;
-//     try bc.intercept_state.put(transfer);
-
-//     const challenge = transfer._auth_challenge orelse return error.NullAuthChallenge;
-
-//     try bc.cdp.sendEvent("Fetch.authRequired", .{
-//         .requestId = &id.toInterceptId(transfer.id),
-//         .frameId = &id.toFrameId(transfer.req.params.frame_id),
-//         .request = network.TransferAsRequestWriter.init(transfer),
-//         .resourceType = switch (transfer.req.params.resource_type) {
-//             .script => "Script",
-//             .xhr => "XHR",
-//             .document => "Document",
-//             .fetch => "Fetch",
-//         },
-//         .authChallenge = .{
-//             .origin = "", // TODO get origin, could be the proxy address for example.
-//             .source = if (challenge.source) |s| (if (s == .server) "Server" else "Proxy") else "",
-//             .scheme = if (challenge.scheme) |s| (if (s == .digest) "digest" else "basic") else "",
-//             .realm = challenge.realm orelse "",
-//         },
-//         .networkId = &id.toRequestId(transfer),
-//     }, .{ .session_id = session_id });
-
-//     log.debug(.cdp, "request auth required", .{
-//         .state = "paused",
-//         .id = transfer.id,
-//         .url = transfer.url,
-//     });
-//     // Await continueWithAuth
-
-//     intercept.wait_for_interception.* = true;
-// }
 
 // Get u32 from requestId which is formatted as: "INT-{d}"
 fn idFromRequestId(request_id: []const u8) !u32 {

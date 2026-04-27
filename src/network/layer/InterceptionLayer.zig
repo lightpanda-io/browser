@@ -25,6 +25,7 @@ const IS_DEBUG = builtin.mode == .Debug;
 const http = @import("../http.zig");
 const URL = @import("../../browser/URL.zig");
 const Client = @import("../../browser/HttpClient.zig").Client;
+const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Request = @import("../../browser/HttpClient.zig").Request;
 const Response = @import("../../browser/HttpClient.zig").Response;
 const FulfilledResponse = @import("../../browser/HttpClient.zig").FulfilledResponse;
@@ -59,6 +60,7 @@ fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
     const intercept_ctx = try pre_wrap_req.params.arena.allocator().create(InterceptContext);
     intercept_ctx.* = .{
         .forward = Forward.fromRequest(pre_wrap_req),
+        .layer = self,
         .request = pre_wrap_req,
     };
 
@@ -96,17 +98,58 @@ fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
 
 pub const InterceptContext = struct {
     forward: Forward,
+    layer: *InterceptionLayer,
     request: Request,
     content_length: usize = 0,
 
+    auth_challenge: ?http.AuthChallenge = null,
+    tries: usize = 0,
+
     fn startCallback(response: Response) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
+        log.debug(.http, "intercept start", .{ .url = self.request.params.url });
         return self.forward.forwardStart(response);
     }
 
     fn headerCallback(response: Response) anyerror!bool {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
+        log.debug(.http, "intercept header", .{
+            .url = self.request.params.url,
+            .status = response.status(),
+            .content_length = response.contentLength(),
+        });
+
         self.content_length = response.contentLength() orelse 0;
+
+        switch (response.inner) {
+            .transfer => |t| {
+                const status = t.response_header.?.status;
+                if (status == 401 or status == 407) {
+                    self.auth_challenge = Transfer.detectAuthChallenge(t._conn.?);
+
+                    if (self.auth_challenge != null and self.tries < 10) {
+                        var wait_for_interception = false;
+
+                        self.request.params.notification.dispatch(.http_request_auth_required, &.{
+                            .request = &self.request,
+                            .intercept_ctx = self,
+                            .wait_for_interception = &wait_for_interception,
+                        });
+
+                        if (wait_for_interception) {
+                            log.debug(.http, "intercept auth required", .{
+                                .url = self.request.params.url,
+                                .status = status,
+                                .intercepted = self.layer.intercepted,
+                            });
+                            self.layer.intercepted += 1;
+                            return false;
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
 
         self.request.params.notification.dispatch(.http_response_header_done, &.{
             .request = &self.request,
@@ -117,6 +160,10 @@ pub const InterceptContext = struct {
 
     fn dataCallback(response: Response, chunk: []const u8) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
+        log.debug(.http, "intercept data", .{
+            .url = self.request.params.url,
+            .len = chunk.len,
+        });
 
         self.request.params.notification.dispatch(.http_response_data, &.{
             .data = chunk,
@@ -128,6 +175,10 @@ pub const InterceptContext = struct {
 
     fn doneCallback(ctx: *anyopaque) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
+        log.debug(.http, "intercept done", .{
+            .url = self.request.params.url,
+            .content_length = self.content_length,
+        });
         self.request.params.notification.dispatch(.http_request_done, &.{
             .request = &self.request,
             .content_length = self.content_length,
@@ -137,6 +188,10 @@ pub const InterceptContext = struct {
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
+        log.debug(.http, "intercept error", .{
+            .url = self.request.params.url,
+            .err = err,
+        });
         self.request.params.notification.dispatch(.http_request_fail, &.{
             .request = &self.request,
             .err = err,
@@ -146,6 +201,7 @@ pub const InterceptContext = struct {
 
     fn shutdownCallback(ctx: *anyopaque) void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
+        log.debug(.http, "intercept shutdown", .{ .url = self.request.params.url });
         self.forward.forwardShutdown();
     }
 };

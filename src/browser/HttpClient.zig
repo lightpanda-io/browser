@@ -65,15 +65,6 @@ ws_active: usize = 0,
 // Count of active http requests
 http_active: usize = 0,
 
-// Count of intercepted requests. This is to help deal with intercepted requests.
-// The client doesn't track intercepted transfers. If a request is intercepted,
-// the client forgets about it and requires the interceptor to continue or abort
-// it. That works well, except if we only rely on active, we might think there's
-// no more network activity when, with interecepted requests, there might be more
-// in the future. (We really only need this to properly emit a 'networkIdle' and
-// 'networkAlmostIdle' Page.lifecycleEvent in CDP).
-intercepted: usize = 0,
-
 // Our curl multi handle.
 handles: http.Handles,
 
@@ -471,7 +462,15 @@ pub fn syncRequest(self: *Client, allocator: Allocator, params: RequestParams) !
     });
 
     while (sync_ctx.completion == .in_progress) {
-        _ = try self.tick(200);
+        const status = try self.tick(200);
+        log.debug(.http, "sync request tick", .{ .status = status });
+        switch (status) {
+            .cdp_socket => {
+                const cdp = self.cdp_client.?;
+                _ = cdp.blocking_read(cdp.ctx);
+            },
+            .normal => continue,
+        }
     }
 
     switch (sync_ctx.completion) {
@@ -831,6 +830,7 @@ pub const RequestParams = struct {
     arena: ArenaAllocator = undefined,
     /// This is unsafe to access until you pass it to `Client.request()` where it gets assigned.
     request_id: u32 = undefined,
+
     frame_id: u32,
     loader_id: u32,
     method: Method,
@@ -1312,25 +1312,24 @@ pub const Transfer = struct {
         }
     }
 
-    fn detectAuthChallenge(transfer: *Transfer, conn: *const http.Connection) void {
-        const status = conn.getResponseCode() catch return;
-        const connect_status = conn.getConnectCode() catch return;
+    pub fn detectAuthChallenge(conn: *const http.Connection) ?http.AuthChallenge {
+        const status = conn.getResponseCode() catch return null;
+        const connect_status = conn.getConnectCode() catch return null;
 
         if (status != 401 and status != 407 and connect_status != 401 and connect_status != 407) {
-            transfer._auth_challenge = null;
-            return;
+            return null;
         }
 
         if (conn.getResponseHeader("WWW-Authenticate", 0)) |hdr| {
-            transfer._auth_challenge = http.AuthChallenge.parse(status, .server, hdr.value) catch null;
+            return http.AuthChallenge.parse(status, .server, hdr.value) catch null;
         } else if (conn.getConnectHeader("WWW-Authenticate", 0)) |hdr| {
-            transfer._auth_challenge = http.AuthChallenge.parse(status, .server, hdr.value) catch null;
+            return http.AuthChallenge.parse(status, .server, hdr.value) catch null;
         } else if (conn.getResponseHeader("Proxy-Authenticate", 0)) |hdr| {
-            transfer._auth_challenge = http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
+            return http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
         } else if (conn.getConnectHeader("Proxy-Authenticate", 0)) |hdr| {
-            transfer._auth_challenge = http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
+            return http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
         } else {
-            transfer._auth_challenge = .{ .status = status, .source = null, .scheme = null, .realm = null };
+            return .{ .status = status, .source = null, .scheme = null, .realm = null };
         }
     }
 

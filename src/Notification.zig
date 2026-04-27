@@ -23,6 +23,7 @@ const Frame = @import("browser/Frame.zig");
 const Transfer = @import("browser/HttpClient.zig").Transfer;
 const Request = @import("browser/HttpClient.zig").Request;
 const Response = @import("browser/HttpClient.zig").Response;
+const InterceptContext = @import("network/layer/InterceptionLayer.zig").InterceptContext;
 
 const log = lp.log;
 const List = std.DoublyLinkedList;
@@ -174,6 +175,7 @@ pub const RequestIntercept = struct {
 
 pub const RequestAuthRequired = struct {
     request: *Request,
+    intercept_ctx: *InterceptContext,
     wait_for_interception: *bool,
 };
 
