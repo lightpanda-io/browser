@@ -610,6 +610,32 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/redirect-no-fragment")) {
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "/redirect-target" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/redirect-target")) {
+        return req.respond("<!DOCTYPE html><title>landed</title>", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/redirect-with-fragment")) {
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "/redirect-target#target_fragment" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/xhr/404")) {
         return req.respond("Not Found", .{
             .status = .not_found,

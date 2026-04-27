@@ -1003,6 +1003,60 @@ test "cdp.frame: reload" {
     }
 }
 
+test "cdp.frame: navigate inherits original fragment across redirect" {
+    // RFC 7231 §7.1.2: when a 3xx Location header has no fragment, the redirect
+    // inherits the fragment of the request URL.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    {
+        // Location: /redirect-target  (no fragment) — must inherit #myfrag.
+        try ctx.processMessage(.{
+            .id = 40,
+            .method = "Page.navigate",
+            .params = .{ .url = "http://127.0.0.1:9582/redirect-no-fragment#myfrag" },
+        });
+
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+
+        const frame = bc.session.currentFrame() orelse unreachable;
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/redirect-target#myfrag", frame.url);
+    }
+
+    {
+        // Location: /redirect-target#target_fragment — target's fragment wins.
+        try ctx.processMessage(.{
+            .id = 41,
+            .method = "Page.navigate",
+            .params = .{ .url = "http://127.0.0.1:9582/redirect-with-fragment#requested" },
+        });
+
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+
+        const frame = bc.session.currentFrame() orelse unreachable;
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/redirect-target#target_fragment", frame.url);
+    }
+
+    {
+        // No fragment on either side — final URL has no fragment.
+        try ctx.processMessage(.{
+            .id = 42,
+            .method = "Page.navigate",
+            .params = .{ .url = "http://127.0.0.1:9582/redirect-no-fragment" },
+        });
+
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+
+        const frame = bc.session.currentFrame() orelse unreachable;
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/redirect-target", frame.url);
+    }
+}
+
 test "cdp.frame: addScriptToEvaluateOnNewDocument" {
     var ctx = try testing.context();
     defer ctx.deinit();
