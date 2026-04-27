@@ -121,6 +121,7 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
 // Called from Frame.deinit when the frame is destroyed, so we don't need to
 // remove from the frame's worker list.
 pub fn deinit(self: *Worker) void {
+    self._frame._session.browser.http_client.abortFrame(self._frame_id);
     if (self._http_response) |res| {
         res.abort(error.Abort);
         self._http_response = null;

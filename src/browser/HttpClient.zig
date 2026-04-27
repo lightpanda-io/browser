@@ -324,9 +324,10 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
         while (n) |node| {
             n = node.next;
             const transfer: *Transfer = @fieldParentPtr("_node", node);
+            const params = transfer.req.params;
             if (comptime abort_all) {
                 transfer.kill();
-            } else if (transfer.req.params.frame_id == frame_id) {
+            } else if (params.frame_id == frame_id and !params.protect_from_abort) {
                 q.remove(node);
                 transfer.kill();
             }
@@ -339,15 +340,12 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
     }
 
     if (comptime IS_DEBUG and abort_all) {
-        // Even after an abort_all, we could still have transfers, but, at the
-        // very least, they should all be flagged as aborted (or be a transfer
-        // we explicitly protected with protect_from_abort).
         var it = self.in_use.first;
         var leftover: usize = 0;
         while (it) |node| : (it = node.next) {
             const conn: *http.Connection = @fieldParentPtr("node", node);
             switch (conn.transport) {
-                .http => |transfer| std.debug.assert(transfer.aborted or transfer.req.params.protect_from_abort),
+                .http => |transfer| std.debug.assert(transfer.aborted),
                 .websocket => {},
                 .none => {},
             }
@@ -364,8 +362,9 @@ fn abortConnections(list: std.DoublyLinkedList, comptime abort_all: bool, frame_
         const conn: *http.Connection = @fieldParentPtr("node", node);
         switch (conn.transport) {
             .http => |transfer| {
-                const matches = (comptime abort_all) or transfer.req.params.frame_id == frame_id;
-                if (matches and !transfer.req.params.protect_from_abort) {
+                const params = transfer.req.params;
+                const matches = (comptime abort_all) or (params.frame_id == frame_id and !params.protect_from_abort);
+                if (matches) {
                     transfer.kill();
                 }
             },

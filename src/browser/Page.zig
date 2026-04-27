@@ -130,15 +130,15 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
 
 // Tear down the Page and its root Frame. Equivalent to the old
 // Session.removePage + Session.resetFrameResources.
-pub fn deinit(self: *Page, abort_http: bool) void {
+pub fn deinit(self: *Page) void {
     self.cleanupClosedPopups();
 
     for (self.popups.items) |popup| {
-        popup.deinit(abort_http);
+        popup.deinit();
     }
     self.popups = .empty;
 
-    self.frame.deinit(abort_http);
+    self.frame.deinit();
 
     const session = self.session;
     defer session.browser.env.memoryPressureNotification(.moderate);
@@ -188,7 +188,7 @@ pub fn deinit(self: *Page, abort_http: bool) void {
 
 pub fn cleanupClosedPopups(self: *Page) void {
     for (self.queued_close.items) |popup| {
-        popup.deinit(true);
+        popup.deinit();
     }
     self.queued_close = .empty;
 }

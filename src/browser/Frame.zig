@@ -351,9 +351,9 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
     }
 }
 
-pub fn deinit(self: *Frame, abort_http: bool) void {
+pub fn deinit(self: *Frame) void {
     for (self.child_frames.items) |frame| {
-        frame.deinit(abort_http);
+        frame.deinit();
     }
 
     for (self.workers.items) |worker| {
@@ -413,14 +413,7 @@ pub fn deinit(self: *Frame, abort_http: bool) void {
 
     self._script_manager.base.shutdown = true;
 
-    if (self.parent == null) {
-        browser.http_client.abort();
-    } else if (abort_http) {
-        // a small optimization, it's faster to abort _everything_ on the root
-        // frame, so we prefer that. But if it's just the frame that's going
-        // away (a frame navigation) then we'll abort the frame-related requests
-        browser.http_client.abortFrame(self._frame_id);
-    }
+    browser.http_client.abortFrame(self._frame_id);
 
     self._script_manager.deinit();
     self._style_manager.deinit();
@@ -765,17 +758,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         .type = target._type,
     });
 
-    // This is a micro-optimization. Terminate any inflight request as early
-    // as we can. This will be more properly shutdown when we process the
-    // scheduled navigation.
-    if (target.parent == null) {
-        session.browser.http_client.abort();
-    } else {
-        // This doesn't terminate any inflight requests for nested frames, but
-        // again, this is just an optimization. We'll correctly shut down all
-        // nested inflight requests when we process the navigation.
-        session.browser.http_client.abortFrame(target._frame_id);
-    }
+    session.browser.http_client.abortFrame(target._frame_id);
 
     // Capture the originating frame's URL as the Referer for this
     // navigation. The originator's frame may be torn down before navigate()
@@ -1314,7 +1297,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     const frame_id = session.nextFrameId();
 
     try Frame.init(new_frame, frame_id, self._page, self);
-    errdefer new_frame.deinit(true);
+    errdefer new_frame.deinit();
 
     self._pending_loads += 1;
     new_frame.iframe = iframe;
@@ -1423,7 +1406,7 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
 
     const frame_id = session.nextFrameId();
     try Frame.init(popup, frame_id, page, null);
-    errdefer popup.deinit(true);
+    errdefer popup.deinit();
 
     popup.window._opener = opts.opener;
     if (opts.name.len > 0 and
