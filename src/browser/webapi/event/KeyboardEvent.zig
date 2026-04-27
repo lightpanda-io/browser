@@ -270,6 +270,49 @@ pub fn getShiftKey(self: *const KeyboardEvent) bool {
     return self._shift_key;
 }
 
+// Deprecated: tracked as 0 since we don't synthesise legacy character codes.
+pub fn getCharCode(self: *const KeyboardEvent) u32 {
+    _ = self;
+    return 0;
+}
+
+pub fn getKeyCode(self: *const KeyboardEvent) u32 {
+    _ = self;
+    return 0;
+}
+
+pub fn initKeyboardEvent(
+    self: *KeyboardEvent,
+    typ: []const u8,
+    bubbles: ?bool,
+    cancelable: ?bool,
+    view: ?*@import("../Window.zig"),
+    key: ?[]const u8,
+    location: ?u32,
+    ctrl_key: ?bool,
+    alt_key: ?bool,
+    shift_key: ?bool,
+    meta_key: ?bool,
+) !void {
+    const ui = self._proto;
+    const event = ui._proto;
+    if (event._event_phase != .none) {
+        return;
+    }
+
+    const arena = event._arena;
+    event._type_string = try String.init(arena, typ, .{});
+    event._bubbles = bubbles orelse false;
+    event._cancelable = cancelable orelse false;
+    ui._view = view;
+    self._key = try Key.fromString(arena, key orelse "");
+    self._location = std.meta.intToEnum(Location, location orelse 0) catch return error.TypeError;
+    self._ctrl_key = ctrl_key orelse false;
+    self._alt_key = alt_key orelse false;
+    self._shift_key = shift_key orelse false;
+    self._meta_key = meta_key orelse false;
+}
+
 pub fn getModifierState(self: *const KeyboardEvent, str: []const u8) !bool {
     const key = try Key.fromString(self._proto._proto._arena, str);
 
@@ -309,7 +352,15 @@ pub const JsApi = struct {
     pub const metaKey = bridge.accessor(KeyboardEvent.getMetaKey, null, .{});
     pub const repeat = bridge.accessor(KeyboardEvent.getRepeat, null, .{});
     pub const shiftKey = bridge.accessor(KeyboardEvent.getShiftKey, null, .{});
+    pub const charCode = bridge.accessor(KeyboardEvent.getCharCode, null, .{});
+    pub const keyCode = bridge.accessor(KeyboardEvent.getKeyCode, null, .{});
     pub const getModifierState = bridge.function(KeyboardEvent.getModifierState, .{});
+    pub const initKeyboardEvent = bridge.function(KeyboardEvent.initKeyboardEvent, .{});
+
+    pub const DOM_KEY_LOCATION_STANDARD = bridge.property(@intFromEnum(Location.DOM_KEY_LOCATION_STANDARD), .{ .template = true });
+    pub const DOM_KEY_LOCATION_LEFT = bridge.property(@intFromEnum(Location.DOM_KEY_LOCATION_LEFT), .{ .template = true });
+    pub const DOM_KEY_LOCATION_RIGHT = bridge.property(@intFromEnum(Location.DOM_KEY_LOCATION_RIGHT), .{ .template = true });
+    pub const DOM_KEY_LOCATION_NUMPAD = bridge.property(@intFromEnum(Location.DOM_KEY_LOCATION_NUMPAD), .{ .template = true });
 };
 
 const testing = @import("../../../testing.zig");

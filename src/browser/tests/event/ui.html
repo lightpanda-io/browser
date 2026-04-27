@@ -52,3 +52,33 @@
     const evt7 = new UIEvent('custom', { bubbles: true });
     testing.expectEqual(0, evt7.detail);
 </script>
+
+<script id=which>
+  {
+    const evt = new UIEvent('focus');
+    testing.expectEqual(0, evt.which);
+  }
+</script>
+
+<script id=initUIEvent>
+  {
+    const evt = document.createEvent('UIEvent');
+    evt.initUIEvent('foo', true, true, window, 7);
+    testing.expectEqual('foo', evt.type);
+    testing.expectEqual(true, evt.bubbles);
+    testing.expectEqual(true, evt.cancelable);
+    testing.expectEqual(window, evt.view);
+    testing.expectEqual(7, evt.detail);
+  }
+</script>
+
+<script id=initUIEventOptional>
+  {
+    const evt = document.createEvent('UIEvent');
+    evt.initUIEvent('bar');
+    testing.expectEqual('bar', evt.type);
+    testing.expectEqual(false, evt.bubbles);
+    testing.expectEqual(false, evt.cancelable);
+    testing.expectEqual(0, evt.detail);
+  }
+</script>

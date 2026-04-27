@@ -286,23 +286,42 @@ fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is
     lib.root_module.sanitize_thread = is_tsan;
 
     const macros = [_]struct { []const u8, []const u8 }{
-        .{ "SQLITE_DQS", "0" },
+        .{ "SQLITE_DEFAULT_FILE_PERMISSIONS", "0600" },
+        .{ "SQLITE_DEFAULT_MEMSTATUS", "0" },
         .{ "SQLITE_DEFAULT_WAL_SYNCHRONOUS", "1" },
-        .{ "SQLITE_USE_ALLOCA", "1" },
-        .{ "SQLITE_THREADSAFE", "1" },
-        .{ "SQLITE_TEMP_STORE", "3" },
+        .{ "SQLITE_DQS", "0" },
         .{ "SQLITE_ENABLE_API_ARMOR", "1" },
         .{ "SQLITE_ENABLE_UNLOCK_NOTIFY", "1" },
-        .{ "SQLITE_DEFAULT_FILE_PERMISSIONS", "0600" },
+        .{ "SQLITE_TEMP_STORE", "3" },
+        .{ "SQLITE_THREADSAFE", "1" },
+        .{ "SQLITE_UNTESTABLE", "1" },
+        .{ "SQLITE_USE_ALLOCA", "1" },
+        .{ "SQLITE_OMIT_AUTHORIZATION", "1" },
+        .{ "SQLITE_OMIT_AUTOMATIC_INDEX", "1" },
+        .{ "SQLITE_OMIT_AUTORESET", "1" },
+        .{ "SQLITE_OMIT_AUTOVACUUM", "1" },
+        .{ "SQLITE_OMIT_BETWEEN_OPTIMIZATION", "1" },
+        .{ "SQLITE_OMIT_CASE_SENSITIVE_LIKE_PRAGMA", "1" },
+        .{ "SQLITE_OMIT_COMPLETE", "1" },
         .{ "SQLITE_OMIT_DECLTYPE", "1" },
         .{ "SQLITE_OMIT_DEPRECATED", "1" },
+        .{ "SQLITE_OMIT_DESERIALIZE", "1" },
+        .{ "SQLITE_OMIT_GET_TABLE", "1" },
+        .{ "SQLITE_OMIT_INCRBLOB", "1" },
+        .{ "SQLITE_OMIT_JSON", "1" },
+        .{ "SQLITE_OMIT_LIKE_OPTIMIZATION", "1" },
         .{ "SQLITE_OMIT_LOAD_EXTENSION", "1" },
         .{ "SQLITE_OMIT_PROGRESS_CALLBACK", "1" },
         .{ "SQLITE_OMIT_SHARED_CACHE", "1" },
+        .{ "SQLITE_OMIT_TCL_VARIABLE", "1" },
+        .{ "SQLITE_OMIT_TEMPDB", "1" },
         .{ "SQLITE_OMIT_TRACE", "1" },
         .{ "SQLITE_OMIT_UTF16", "1" },
+        .{ "SQLITE_OMIT_XFER_OPT", "1" },
     };
-    for (macros) |m| lib.root_module.addCMacro(m[0], m[1]);
+    for (macros) |m| {
+        lib.root_module.addCMacro(m[0], m[1]);
+    }
 
     mod.linkLibrary(lib);
 }

@@ -29,8 +29,9 @@ const Sqlite = @This();
 
 pool: Pool,
 
-pub fn init(allocator: Allocator, path: ?[:0]const u8) !Sqlite {
-    var pool = try Pool.init(allocator, path orelse ":memory:");
+pub fn init(allocator: Allocator, path_: ?[:0]const u8) !Sqlite {
+    const path = path_ orelse ":memory:";
+    var pool = try Pool.init(allocator, path);
     errdefer pool.deinit(allocator);
 
     {
@@ -39,7 +40,9 @@ pub fn init(allocator: Allocator, path: ?[:0]const u8) !Sqlite {
         // pool to the return value (copy A) and then release the original
         const conn = try pool.acquire();
         defer pool.release(conn);
-        try @import("migrations.zig").run(conn);
+
+        const version = try @import("migrations.zig").run(conn);
+        log.info(.storage, "storage initialized", .{ .engine = "sqlite", .version = version, .path = path });
     }
 
     return .{

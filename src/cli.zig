@@ -405,7 +405,7 @@ pub fn Builder(comptime commands: anytype) type {
                                             error.Overflow => log.fatal(.app, "range overflow", .{ .arg = kebab_cased, .value = str }),
                                             error.InvalidCharacter => log.fatal(.app, "invalid character", .{ .arg = kebab_cased, .value = str }),
                                         }
-                                        continue :iter_args;
+                                        return error.InvalidArgument;
                                     };
 
                                     if (is_multiple) {
@@ -481,6 +481,7 @@ pub fn Builder(comptime commands: anytype) type {
 
                                             // Invalid option choice.
                                             log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = trimmed });
+                                            return error.InvalidArgument;
                                         }
                                     }
                                 },
@@ -493,7 +494,7 @@ pub fn Builder(comptime commands: anytype) type {
                                     const str = args.next() orelse return error.MissingArgument;
                                     const v = std.meta.stringToEnum(E, str) orelse {
                                         log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = str });
-                                        continue :iter_args;
+                                        return error.InvalidArgument;
                                     };
 
                                     if (is_multiple) {

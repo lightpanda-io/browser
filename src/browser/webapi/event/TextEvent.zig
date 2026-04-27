@@ -72,24 +72,23 @@ pub fn getData(self: *const TextEvent) []const u8 {
 pub fn initTextEvent(
     self: *TextEvent,
     typ: []const u8,
-    bubbles: bool,
-    cancelable: bool,
+    bubbles: ?bool,
+    cancelable: ?bool,
     view: ?*@import("../Window.zig"),
-    data: []const u8,
+    data: ?[]const u8,
 ) !void {
-    _ = view; // view parameter is ignored in modern implementations
-
-    const event = self._proto._proto;
+    const ui = self._proto;
+    const event = ui._proto;
     if (event._event_phase != .none) {
-        // Only allow initialization if event hasn't been dispatched
         return;
     }
 
     const arena = event._arena;
     event._type_string = try String.init(arena, typ, .{});
-    event._bubbles = bubbles;
-    event._cancelable = cancelable;
-    self._data = try arena.dupe(u8, data);
+    event._bubbles = bubbles orelse false;
+    event._cancelable = cancelable orelse false;
+    ui._view = view;
+    self._data = if (data) |d| try arena.dupe(u8, d) else "";
 }
 
 pub const JsApi = struct {
