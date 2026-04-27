@@ -120,9 +120,6 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
 }
 
 pub fn deinit(self: *Session) void {
-    // Tear down a pending navigation first so its in-flight transfer is
-    // aborted before we shutter the active Page (which calls
-    // http_client.abort() unconditionally from frame.deinit).
     if (self._pending_idx != null) {
         self.discardPendingPage();
     }
@@ -180,7 +177,7 @@ pub fn createPage(self: *Session) !*Frame {
     const slot = try self.findFreeSlot();
     const page = try self.pageInit(slot, self.nextFrameId());
     errdefer {
-        page.deinit(false);
+        page.deinit();
         self.freeSlot(slot);
     }
     self._active_idx = slot;
@@ -224,7 +221,7 @@ pub fn removePage(self: *Session) void {
     // Inform CDP the frame is going to be removed, allowing other worlds to remove themselves before the main one
     self.notification.dispatch(.frame_remove, .{});
 
-    self._pages[idx].?.deinit(false);
+    self._pages[idx].?.deinit();
     self.freeSlot(idx);
     self._active_idx = null;
 
@@ -268,7 +265,7 @@ pub fn replacePage(self: *Session) !*Frame {
     lp.assert(old_page.frame.parent == null, "Session.replacePage with parent", .{});
 
     const frame_id = old_page.frame._frame_id;
-    old_page.deinit(true);
+    old_page.deinit();
     self.freeSlot(old_idx);
     self._active_idx = null;
 
@@ -280,7 +277,7 @@ pub fn replacePage(self: *Session) !*Frame {
     const new_slot = try self.findFreeSlot();
     const page = try self.pageInit(new_slot, frame_id);
     errdefer {
-        page.deinit(false);
+        page.deinit();
         self.freeSlot(new_slot);
     }
     self._active_idx = new_slot;
@@ -408,7 +405,7 @@ fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
 
     const frame_id = frame._frame_id;
     const page = self.currentPage().?;
-    frame.deinit(true);
+    frame.deinit();
     frame.* = undefined;
 
     errdefer {
@@ -428,7 +425,7 @@ fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
         if (parent_notified) {
             parent._pending_loads -= 1;
         }
-        frame.deinit(true);
+        frame.deinit();
     }
 
     frame.iframe = iframe;
@@ -454,7 +451,7 @@ fn processPopupNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
     const frame_id = frame._frame_id;
     const page = self.currentPage().?;
 
-    frame.deinit(true);
+    frame.deinit();
     frame.* = undefined;
 
     errdefer {
@@ -468,7 +465,7 @@ fn processPopupNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
     }
 
     try Frame.init(frame, frame_id, page, null);
-    errdefer frame.deinit(true);
+    errdefer frame.deinit();
 
     frame.window._name = saved_name;
     frame.window._opener = saved_opener;
@@ -520,7 +517,7 @@ fn replaceRootImmediate(self: *Session, frame_id: u32, qn: *QueuedNavigation) !v
     // Dispatch frame_remove (same as removePage) then tear down the OLD
     // page's slot.
     self.notification.dispatch(.frame_remove, .{});
-    self._pages[old_idx].?.deinit(true);
+    self._pages[old_idx].?.deinit();
     self.freeSlot(old_idx);
     self._active_idx = null;
 
@@ -532,7 +529,7 @@ fn replaceRootImmediate(self: *Session, frame_id: u32, qn: *QueuedNavigation) !v
     const new_slot = try self.findFreeSlot();
     const page = try self.pageInit(new_slot, frame_id);
     errdefer {
-        page.deinit(false);
+        page.deinit();
         self.freeSlot(new_slot);
     }
     self._active_idx = new_slot;
@@ -570,7 +567,7 @@ fn initiateRootNavigation(self: *Session, frame_id: u32, qn: *QueuedNavigation) 
     const slot = try self.findFreeSlot();
     const page = try self.pageInit(slot, frame_id);
     errdefer {
-        page.deinit(false);
+        page.deinit();
         self.freeSlot(slot);
     }
 
@@ -659,7 +656,7 @@ pub fn commitPendingPage(self: *Session) !void {
     // context group, isolated worlds) has already done so. The OLD page's
     // frame.deinit calls http_client.abort() unconditionally; the in-flight
     // transfer survives via protect_from_abort.
-    self._pages[old_idx].?.deinit(false);
+    self._pages[old_idx].?.deinit();
     self.freeSlot(old_idx);
 }
 
@@ -674,7 +671,7 @@ pub fn discardPendingPage(self: *Session) void {
     }
 
     self._pending_idx = null;
-    self._pages[idx].?.deinit(false);
+    self._pages[idx].?.deinit();
     self.freeSlot(idx);
 }
 
