@@ -190,7 +190,7 @@ const RobotsContext = struct {
                     try self.buffer.ensureTotalCapacity(self.arena, cl);
                 }
             },
-            .cached => {},
+            else => {},
         }
         return true;
     }

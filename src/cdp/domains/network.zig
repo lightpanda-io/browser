@@ -28,6 +28,7 @@ const Notification = @import("../../Notification.zig");
 const timestamp = @import("../../datetime.zig").timestamp;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Request = @import("../../browser/HttpClient.zig").Request;
+const Response = @import("../../browser/HttpClient.zig").Response;
 
 const CdpStorage = @import("storage.zig");
 
@@ -261,7 +262,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
-        .requestId = &id.toRequestId(msg.transfer),
+        .requestId = &id.toRequestId2(msg.request),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
         .errorText = msg.err,
@@ -304,15 +305,14 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
-    const transfer = msg.transfer;
-    const req = &transfer.req;
+    const req = msg.request;
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
         .frameId = &id.toFrameId(req.params.frame_id),
-        .requestId = &id.toRequestId(transfer),
+        .requestId = &id.toRequestId2(req),
         .loaderId = &id.toLoaderId(req.params.loader_id),
-        .response = TransferAsResponseWriter.init(arena, transfer),
+        .response = ResponseWriter.init(arena, msg.response),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
 }
@@ -321,10 +321,10 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
-    const transfer = msg.transfer;
+    const req = msg.request;
     try bc.cdp.sendEvent("Network.loadingFinished", .{
-        .requestId = &id.toRequestId(transfer),
-        .encodedDataLength = transfer.bytes_received,
+        .requestId = &id.toRequestId2(req),
+        .encodedDataLength = msg.content_length,
     }, .{ .session_id = session_id });
 }
 
@@ -438,6 +438,96 @@ pub const TransferAsRequestWriter = struct {
                 try jws.write(cookies[0 .. cookies.len - 1]);
             }
             try jws.endObject();
+        }
+        try jws.endObject();
+    }
+};
+
+const ResponseWriter = struct {
+    arena: Allocator,
+    response: *const Response,
+
+    fn init(arena: Allocator, response: *const Response) ResponseWriter {
+        return .{
+            .arena = arena,
+            .response = response,
+        };
+    }
+
+    pub fn jsonStringify(self: *const ResponseWriter, jws: anytype) !void {
+        self._jsonStringify(jws) catch return error.WriteFailed;
+    }
+
+    fn _jsonStringify(self: *const ResponseWriter, jws: anytype) !void {
+        const response = self.response;
+
+        try jws.beginObject();
+        {
+            try jws.objectField("url");
+            try jws.write(response.url());
+        }
+
+        if (response.status()) |status| {
+            try jws.objectField("status");
+            try jws.write(status);
+
+            try jws.objectField("statusText");
+            try jws.write(@as(std.http.Status, @enumFromInt(status)).phrase() orelse "Unknown");
+        }
+
+        {
+            const mime: Mime = blk: {
+                if (response.contentType()) |ct| {
+                    break :blk try Mime.parse(ct);
+                }
+                break :blk .unknown;
+            };
+
+            try jws.objectField("mimeType");
+            try jws.write(mime.contentTypeString());
+            try jws.objectField("charset");
+            try jws.write(mime.charsetString());
+        }
+
+        {
+            try jws.objectField("timing");
+            try jws.write(.{
+                // TODO: fix
+                .requestTime = -1,
+                .connectEnd = -1,
+                .connectStart = -1,
+                .dnsEnd = -1,
+                .dnsStart = -1,
+                .proxyEnd = -1,
+                .proxyStart = -1,
+                .receiveHeadersEnd = -1,
+                .receiveHeadersStart = -1,
+                .sendEnd = -1,
+                .sendStart = -1,
+                .sslEnd = -1,
+                .sslStart = -1,
+            });
+        }
+
+        {
+            // chromedp doesn't like having duplicate header names. It's pretty
+            // common to get these from a server (e.g. for Cache-Control), but
+            // Chrome joins these. So we have to too.
+            const arena = self.arena;
+            var it = response.headerIterator();
+            var map: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+            while (it.next()) |hdr| {
+                const gop = try map.getOrPut(arena, hdr.name);
+                if (gop.found_existing) {
+                    // yes, chrome joins multi-value headers with a \n
+                    gop.value_ptr.* = try std.mem.join(arena, "\n", &.{ gop.value_ptr.*, hdr.value });
+                } else {
+                    gop.value_ptr.* = hdr.value;
+                }
+            }
+
+            try jws.objectField("headers");
+            try jws.write(std.json.ArrayHashMap([]const u8){ .map = map });
         }
         try jws.endObject();
     }

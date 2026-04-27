@@ -22,10 +22,14 @@ const log = @import("../../log.zig");
 
 const IS_DEBUG = builtin.mode == .Debug;
 
+const http = @import("../http.zig");
 const URL = @import("../../browser/URL.zig");
 const Client = @import("../../browser/HttpClient.zig").Client;
 const Request = @import("../../browser/HttpClient.zig").Request;
+const Response = @import("../../browser/HttpClient.zig").Response;
+const FulfilledResponse = @import("../../browser/HttpClient.zig").FulfilledResponse;
 const Layer = @import("../../browser/HttpClient.zig").Layer;
+const Forward = @import("Forward.zig");
 
 const InterceptionLayer = @This();
 
@@ -49,20 +53,174 @@ pub fn layer(self: *InterceptionLayer) Layer {
 
 fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
     const self: *InterceptionLayer = @ptrCast(@alignCast(ptr));
-    var req = in_req;
+    var pre_wrap_req = in_req;
+
+    // Wrap callbacks to intercept notifications
+    const intercept_ctx = try pre_wrap_req.params.arena.allocator().create(InterceptContext);
+    intercept_ctx.* = .{
+        .forward = Forward.fromRequest(pre_wrap_req),
+        .request = pre_wrap_req,
+    };
+
+    var req = intercept_ctx.forward.wrapRequest(
+        pre_wrap_req,
+        intercept_ctx,
+        client.incrReqId(),
+        .{
+            .start = InterceptContext.startCallback,
+            .header = InterceptContext.headerCallback,
+            .data = InterceptContext.dataCallback,
+            .done = InterceptContext.doneCallback,
+            .err = InterceptContext.errorCallback,
+            .shutdown = InterceptContext.shutdownCallback,
+        },
+    );
 
     req.params.notification.dispatch(.http_request_start, &.{ .request = &req });
 
-    const wait_for_interception = false;
-    // req.params.notification.dispatch(.http_request_intercept, &.{
-    //     .transfer = transfer,
-    //     .wait_for_interception = &wait_for_interception,
-    // });
+    var wait_for_interception = false;
+    req.params.notification.dispatch(.http_request_intercept, &.{
+        .request = &req,
+        .wait_for_interception = &wait_for_interception,
+    });
 
-    if (wait_for_interception == false) {
-        // request not intercepted, process it normally
+    if (!wait_for_interception) {
         return self.next.request(client, req);
     }
 
-    @panic("not implemented yet");
+    self.intercepted += 1;
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "wait for interception", .{ .intercepted = self.intercepted });
+    }
+}
+
+pub const InterceptContext = struct {
+    forward: Forward,
+    request: Request,
+    content_length: usize = 0,
+
+    fn startCallback(response: Response) anyerror!void {
+        const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
+        return self.forward.forwardStart(response);
+    }
+
+    fn headerCallback(response: Response) anyerror!bool {
+        const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
+        self.content_length = response.contentLength() orelse 0;
+
+        self.request.params.notification.dispatch(.http_response_header_done, &.{
+            .request = &self.request,
+            .response = &response,
+        });
+        return self.forward.forwardHeader(response);
+    }
+
+    fn dataCallback(response: Response, chunk: []const u8) anyerror!void {
+        const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
+
+        self.request.params.notification.dispatch(.http_response_data, &.{
+            .data = chunk,
+            .request = &self.request,
+        });
+
+        return self.forward.forwardData(response, chunk);
+    }
+
+    fn doneCallback(ctx: *anyopaque) anyerror!void {
+        const self: *InterceptContext = @ptrCast(@alignCast(ctx));
+        self.request.params.notification.dispatch(.http_request_done, &.{
+            .request = &self.request,
+            .content_length = self.content_length,
+        });
+        return self.forward.forwardDone();
+    }
+
+    fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+        const self: *InterceptContext = @ptrCast(@alignCast(ctx));
+        self.request.params.notification.dispatch(.http_request_fail, &.{
+            .request = &self.request,
+            .err = err,
+        });
+        self.forward.forwardErr(err);
+    }
+
+    fn shutdownCallback(ctx: *anyopaque) void {
+        const self: *InterceptContext = @ptrCast(@alignCast(ctx));
+        self.forward.forwardShutdown();
+    }
+};
+
+// CDP Callbacks
+
+pub fn continueRequest(self: *InterceptionLayer, client: *Client, req: Request) anyerror!void {
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "continue transfer", .{ .intercepted = self.intercepted });
+    }
+
+    self.intercepted -= 1;
+    return self.next.request(client, req);
+}
+
+pub fn abortRequest(self: *InterceptionLayer, client: *Client, req: Request) void {
+    _ = client;
+
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "abort transfer", .{ .intercepted = self.intercepted });
+    }
+    self.intercepted -= 1;
+
+    defer req.deinit();
+    req.error_callback(req.ctx, error.Abort);
+}
+
+fn fulfillInner(
+    req: Request,
+    status: u16,
+    headers: []const http.Header,
+    body: ?[]const u8,
+) !void {
+    const fulfilled = FulfilledResponse{
+        .status = status,
+        .url = req.params.url,
+        .headers = headers,
+        .body = body,
+    };
+
+    const response = Response.fromFulfilled(req.ctx, &fulfilled);
+
+    if (req.start_callback) |cb| {
+        try cb(response);
+    }
+
+    const proceed = try req.header_callback(response);
+    if (!proceed) {
+        return error.Abort;
+    }
+
+    if (body) |b| {
+        try req.data_callback(response, b);
+    }
+
+    try req.done_callback(req.ctx);
+}
+
+pub fn fulfillRequest(
+    self: *InterceptionLayer,
+    _: *Client,
+    req: Request,
+    status: u16,
+    headers: []const http.Header,
+    body: ?[]const u8,
+) !void {
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "filfull transfer", .{ .intercepted = self.intercepted });
+    }
+
+    self.intercepted -= 1;
+    defer req.deinit();
+
+    fulfillInner(req, status, headers, body) catch |err| {
+        req.error_callback(req.ctx, err);
+        return err;
+    };
 }

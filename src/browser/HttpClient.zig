@@ -402,33 +402,7 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
 pub fn _request(ptr: *anyopaque, _: *Client, req: Request) !void {
     const self: *Client = @ptrCast(@alignCast(ptr));
     const transfer = try self.makeTransfer(req);
-
-    var wait_for_interception = false;
-    transfer.req.params.notification.dispatch(.http_request_intercept, &.{
-        .transfer = transfer,
-        .wait_for_interception = &wait_for_interception,
-    });
-    if (wait_for_interception == false) {
-        // request not intercepted, process it normally
-        return self.process(transfer);
-    }
-
-    self.intercepted += 1;
-    if (comptime IS_DEBUG) {
-        log.debug(.http, "wait for interception", .{ .intercepted = self.intercepted });
-    }
-    transfer._intercept_state = .pending;
-
-    if (req.params.blocking == false) {
-        // The request was interecepted, but it isn't a blocking request, so we
-        // dont' need to block this call. The request will be unblocked
-        // asynchronously via either continueTransfer or abortTransfer
-        return;
-    }
-
-    if (try self.waitForInterceptedResponse(transfer)) {
-        return self.process(transfer);
-    }
+    return self.process(transfer);
 }
 
 pub fn request(self: *Client, req: Request) !void {
@@ -510,48 +484,6 @@ pub fn syncRequest(self: *Client, allocator: Allocator, params: RequestParams) !
     }
 }
 
-fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
-    // The request was intercepted and is blocking. This is messy, but our
-    // callers, the ScriptManager -> Page, don't have a great way to stop the
-    // parser and return control to the CDP server to wait for the interception
-    // response. We have some information on the CDPClient, so we'll do the
-    // blocking here. (This is a bit of a legacy thing. Initially the Client
-    // had a 'extra_socket' that it could monitor. It was named 'extra_socket'
-    // to appear generic, but really, that 'extra_socket' was always the CDP
-    // socket. Because we already had the "extra_socket" here, it was easier to
-    // make it even more CDP- aware and turn `extra_socket: socket_t` into the
-    // current CDPClient and do the blocking here).
-    const cdp_client = self.cdp_client.?;
-    const ctx = cdp_client.ctx;
-
-    if (cdp_client.blocking_read_start(ctx) == false) {
-        return error.BlockingInterceptFailure;
-    }
-
-    defer _ = cdp_client.blocking_read_end(ctx);
-
-    while (true) {
-        if (cdp_client.blocking_read(ctx) == false) {
-            return error.BlockingInterceptFailure;
-        }
-
-        switch (transfer._intercept_state) {
-            .pending => continue, // keep waiting
-            .@"continue" => return true,
-            .abort => |err| {
-                transfer.abort(err);
-                return false;
-            },
-            .fulfilled => {
-                // callbacks already called, just need to cleanups
-                transfer.deinit();
-                return false;
-            },
-            .not_intercepted => unreachable,
-        }
-    }
-}
-
 // Above, request will not process if there's an interception request. In such
 // cases, the interceptor is expected to call resume to continue the transfer
 // or transfer.abort() to abort it.
@@ -565,50 +497,6 @@ fn process(self: *Client, transfer: *Transfer) !void {
     }
 
     self.queue.append(&transfer._node);
-}
-
-// For an intercepted request
-pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
-    if (comptime IS_DEBUG) {
-        std.debug.assert(transfer._intercept_state != .not_intercepted);
-        log.debug(.http, "continue transfer", .{ .intercepted = self.intercepted });
-    }
-    self.intercepted -= 1;
-
-    if (!transfer.req.params.blocking) {
-        return self.process(transfer);
-    }
-    transfer._intercept_state = .@"continue";
-}
-
-// For an intercepted request
-pub fn abortTransfer(self: *Client, transfer: *Transfer) void {
-    if (comptime IS_DEBUG) {
-        std.debug.assert(transfer._intercept_state != .not_intercepted);
-        log.debug(.http, "abort transfer", .{ .intercepted = self.intercepted });
-    }
-    self.intercepted -= 1;
-
-    if (!transfer.req.params.blocking) {
-        transfer.abort(error.Abort);
-    }
-    transfer._intercept_state = .{ .abort = error.Abort };
-}
-
-// For an intercepted request
-pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers: []const http.Header, body: ?[]const u8) !void {
-    if (comptime IS_DEBUG) {
-        std.debug.assert(transfer._intercept_state != .not_intercepted);
-        log.debug(.http, "filfull transfer", .{ .intercepted = self.intercepted });
-    }
-    self.intercepted -= 1;
-
-    try transfer.fulfill(status, headers, body);
-    if (!transfer.req.params.blocking) {
-        transfer.deinit();
-        return;
-    }
-    transfer._intercept_state = .fulfilled;
 }
 
 pub fn nextReqId(self: *Client) u32 {
@@ -644,11 +532,6 @@ fn requestFailed(transfer: *Transfer, err: anyerror, comptime execute_callback: 
     }
 
     transfer._notified_fail = true;
-
-    transfer.req.params.notification.dispatch(.http_request_fail, &.{
-        .transfer = transfer,
-        .err = err,
-    });
 
     if (execute_callback) {
         transfer.req.error_callback(transfer.req.ctx, err);
@@ -757,58 +640,6 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
 }
 
 fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) !bool {
-    // Detect auth challenge from response headers.
-    // Also check on RecvError: proxy may send 407 with headers before
-    // closing the connection (CONNECT tunnel not yet established).
-    if (msg.err == null or msg.err.? == error.RecvError) {
-        transfer.detectAuthChallenge(msg.conn);
-    }
-
-    // In case of auth challenge
-    // TODO give a way to configure the number of auth retries.
-    if (transfer._auth_challenge != null and transfer._tries < 10) {
-        var wait_for_interception = false;
-        transfer.req.params.notification.dispatch(
-            .http_request_auth_required,
-            &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception },
-        );
-        if (wait_for_interception) {
-            self.intercepted += 1;
-            if (comptime IS_DEBUG) {
-                log.debug(.http, "wait for auth interception", .{ .intercepted = self.intercepted });
-            }
-            transfer._intercept_state = .pending;
-
-            // Whether or not this is a blocking request, we're not going
-            // to process it now. We can end the transfer, which will
-            // release the easy handle back into the pool. The transfer
-            // is still valid/alive (just has no handle).
-            transfer.releaseConn();
-            if (!transfer.req.params.blocking) {
-                // In the case of an async request, we can just "forget"
-                // about this transfer until it gets updated asynchronously
-                // from some CDP command.
-                return false;
-            }
-
-            // In the case of a sync request, we need to block until we
-            // get the CDP command for handling this case.
-            if (try self.waitForInterceptedResponse(transfer)) {
-                // we've been asked to continue with the request
-                // we can't process it here, since we're already inside
-                // a process, so we need to queue it and wait for the
-                // next tick (this is why it was safe to releaseConn
-                // above, because even in the "blocking" path, we still
-                // only process it on the next tick).
-                self.queue.append(&transfer._node);
-            } else {
-                // aborted, already cleaned up
-            }
-
-            return false;
-        }
-    }
-
     // Handle redirects: reuse the same connection to preserve TCP state.
     if (msg.err == null) {
         const status = try msg.conn.getResponseCode();
@@ -874,11 +705,6 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     if (transfer._stream_buffer.items.len > 0) {
         try transfer.req.data_callback(Response.fromTransfer(transfer), body);
 
-        transfer.req.params.notification.dispatch(.http_response_data, &.{
-            .data = body,
-            .transfer = transfer,
-        });
-
         if (transfer.aborted) {
             transfer.requestFailed(error.Abort, true);
             return true;
@@ -890,10 +716,6 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     transfer.releaseConn();
 
     try transfer.req.done_callback(transfer.req.ctx);
-
-    transfer.req.params.notification.dispatch(.http_request_done, &.{
-        .transfer = transfer,
-    });
 
     return true;
 }
@@ -1093,11 +915,26 @@ pub const Request = struct {
     }
 };
 
+pub const FulfilledResponse = struct {
+    status: u16,
+    url: [:0]const u8,
+    headers: []const http.Header,
+    body: ?[]const u8,
+
+    pub fn contentType(self: *const FulfilledResponse) ?[]const u8 {
+        for (self.headers) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) return hdr.value;
+        }
+        return null;
+    }
+};
+
 pub const Response = struct {
     ctx: *anyopaque,
     inner: union(enum) {
         transfer: *Transfer,
         cached: *const CachedResponse,
+        fulfilled: *const FulfilledResponse,
     },
 
     pub fn fromTransfer(transfer: *Transfer) Response {
@@ -1108,10 +945,15 @@ pub const Response = struct {
         return .{ .ctx = ctx, .inner = .{ .cached = resp } };
     }
 
+    pub fn fromFulfilled(ctx: *anyopaque, fulfilled: *const FulfilledResponse) Response {
+        return .{ .ctx = ctx, .inner = .{ .fulfilled = fulfilled } };
+    }
+
     pub fn status(self: Response) ?u16 {
         return switch (self.inner) {
             .transfer => |t| if (t.response_header) |rh| rh.status else null,
             .cached => |c| c.metadata.status,
+            .fulfilled => |f| f.status,
         };
     }
 
@@ -1119,6 +961,7 @@ pub const Response = struct {
         return switch (self.inner) {
             .transfer => |t| if (t.response_header) |*rh| rh.contentType() else null,
             .cached => |c| c.metadata.content_type,
+            .fulfilled => |f| f.contentType(),
         };
     }
 
@@ -1129,13 +972,14 @@ pub const Response = struct {
                 .buffer => |buf| @intCast(buf.len),
                 .file => |f| @intCast(f.len),
             },
+            .fulfilled => |f| if (f.body) |b| @intCast(b.len) else null,
         };
     }
 
     pub fn redirectCount(self: Response) ?u32 {
         return switch (self.inner) {
             .transfer => |t| if (t.response_header) |rh| rh.redirect_count else null,
-            .cached => 0,
+            .cached, .fulfilled => 0,
         };
     }
 
@@ -1143,6 +987,7 @@ pub const Response = struct {
         return switch (self.inner) {
             .transfer => |t| t.url,
             .cached => |c| c.metadata.url,
+            .fulfilled => |f| f.url,
         };
     }
 
@@ -1150,13 +995,14 @@ pub const Response = struct {
         return switch (self.inner) {
             .transfer => |t| t.responseHeaderIterator(),
             .cached => |c| HeaderIterator{ .list = .{ .list = c.metadata.headers } },
+            .fulfilled => |f| HeaderIterator{ .list = .{ .list = f.headers } },
         };
     }
 
     pub fn abort(self: Response, err: anyerror) void {
         switch (self.inner) {
             .transfer => |t| t.abort(err),
-            .cached => {},
+            .cached, .fulfilled => {},
         }
     }
 
@@ -1164,6 +1010,7 @@ pub const Response = struct {
         return switch (self.inner) {
             .transfer => |t| try t.format(writer),
             .cached => |c| try c.format(writer),
+            .fulfilled => |f| try writer.print("fulfilled {s}", .{f.url}),
         };
     }
 };
@@ -1300,11 +1147,6 @@ pub const Transfer = struct {
     fn requestFailed(self: *Transfer, err: anyerror, comptime execute_callback: bool) void {
         if (self._notified_fail) return;
         self._notified_fail = true;
-
-        self.req.params.notification.dispatch(.http_request_fail, &.{
-            .transfer = self,
-            .err = err,
-        });
 
         if (execute_callback) {
             self.req.error_callback(self.req.ctx, err);
@@ -1520,6 +1362,7 @@ pub const Transfer = struct {
             std.debug.assert(self._intercept_state != .not_intercepted);
             log.debug(.http, "abort auth transfer", .{ .intercepted = self.client.intercepted });
         }
+
         self.client.intercepted -= 1;
         if (!self.req.params.blocking) {
             self.abort(error.AbortAuthChallenge);
@@ -1556,10 +1399,6 @@ pub const Transfer = struct {
                 return error.ResponseTooLarge;
             }
         }
-
-        transfer.req.params.notification.dispatch(.http_response_header_done, &.{
-            .transfer = transfer,
-        });
 
         const proceed = transfer.req.header_callback(Response.fromTransfer(transfer)) catch |err| {
             log.err(.http, "header_callback", .{ .err = err, .req = transfer });
