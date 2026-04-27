@@ -52,6 +52,17 @@ pub fn toRequestId(transfer: *const Transfer) [14]u8 {
     return buf;
 }
 
+const Request = @import("../browser/HttpClient.zig").Request;
+pub fn toRequestId2(req: *const Request) [14]u8 {
+    if (req.params.resource_type == .document) {
+        return toLoaderId(req.params.loader_id);
+    }
+
+    var buf: [14]u8 = undefined;
+    _ = std.fmt.bufPrint(&buf, "REQ-{d:0>10}", .{req.params.request_id}) catch unreachable;
+    return buf;
+}
+
 pub fn toInterceptId(id: u32) [14]u8 {
     var buf: [14]u8 = undefined;
     _ = std.fmt.bufPrint(&buf, "INT-{d:0>10}", .{id}) catch unreachable;

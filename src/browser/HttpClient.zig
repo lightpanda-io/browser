@@ -44,6 +44,7 @@ const CachedResponse = @import("../network/cache/Cache.zig").CachedResponse;
 pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
 pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
 pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
+pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
 
 // This is loosely tied to a browser Page. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -135,6 +136,7 @@ max_response_size: usize,
 cache_layer: CacheLayer,
 robots_layer: RobotsLayer,
 web_bot_auth_layer: WebBotAuthLayer,
+interception_layer: InterceptionLayer,
 entry_layer: Layer,
 
 pub const Layer = struct {
@@ -200,14 +202,11 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
         .cache_layer = .{},
         .robots_layer = .{ .allocator = allocator },
         .web_bot_auth_layer = .{},
+        .interception_layer = .{},
         .entry_layer = undefined,
     };
 
     var next = client.layer();
-
-    if (network.config.webBotAuth() != null) {
-        next = layerWith(&client.web_bot_auth_layer, next);
-    }
 
     if (network.config.obeyRobots()) {
         next = layerWith(&client.robots_layer, next);
@@ -215,6 +214,12 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
 
     if (network.config.httpCacheDir() != null) {
         next = layerWith(&client.cache_layer, next);
+    }
+
+    next = layerWith(&client.interception_layer, next);
+
+    if (network.config.webBotAuth() != null) {
+        next = layerWith(&client.web_bot_auth_layer, next);
     }
 
     client.entry_layer = next;
@@ -398,8 +403,6 @@ pub fn _request(ptr: *anyopaque, _: *Client, req: Request) !void {
     const self: *Client = @ptrCast(@alignCast(ptr));
 
     const transfer = try self.makeTransfer(req);
-
-    transfer.req.params.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
 
     var wait_for_interception = false;
     transfer.req.params.notification.dispatch(.http_request_intercept, &.{
@@ -1070,6 +1073,20 @@ pub const Request = struct {
     error_callback: ErrorCallback,
     shutdown_callback: ?ShutdownCallback = null,
 
+    pub fn getCookieString(self: *Request, allocator: std.mem.Allocator) !?[:0]const u8 {
+        const jar = self.params.cookie_jar orelse return null;
+        var aw: std.Io.Writer.Allocating = .init(allocator);
+        try jar.forRequest(self.params.url, &aw.writer, .{
+            .is_http = true,
+            .origin_url = self.params.cookie_origin,
+            .is_navigation = self.params.resource_type == .document,
+        });
+        const written = aw.written();
+        if (written.len == 0) return null;
+        try aw.writer.writeByte(0);
+        return written.ptr[0..written.len :0];
+    }
+
     pub fn deinit(self: *const Request) void {
         self.params.deinit();
     }
@@ -1382,17 +1399,7 @@ pub const Transfer = struct {
     }
 
     pub fn getCookieString(self: *Transfer) !?[:0]const u8 {
-        const jar = self.req.params.cookie_jar orelse return null;
-        var aw: std.Io.Writer.Allocating = .init(self.arena.allocator());
-        try jar.forRequest(self.req.params.url, &aw.writer, .{
-            .is_http = true,
-            .origin_url = self.req.params.cookie_origin,
-            .is_navigation = self.req.params.resource_type == .document,
-        });
-        const written = aw.written();
-        if (written.len == 0) return null;
-        try aw.writer.writeByte(0);
-        return written.ptr[0..written.len :0];
+        return self.req.getCookieString(self.arena.allocator());
     }
 
     pub fn format(self: *Transfer, writer: *std.Io.Writer) !void {

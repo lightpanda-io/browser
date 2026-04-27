@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const Frame = @import("browser/Frame.zig");
 const Transfer = @import("browser/HttpClient.zig").Transfer;
+const Request = @import("browser/HttpClient.zig").Request;
 
 const log = lp.log;
 const List = std.DoublyLinkedList;
@@ -162,7 +163,7 @@ pub const FrameLoaded = struct {
 };
 
 pub const RequestStart = struct {
-    transfer: *Transfer,
+    request: *Request,
 };
 
 pub const RequestIntercept = struct {

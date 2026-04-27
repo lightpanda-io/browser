@@ -27,6 +27,7 @@ const Mime = @import("../../browser/Mime.zig");
 const Notification = @import("../../Notification.zig");
 const timestamp = @import("../../datetime.zig").timestamp;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
+const Request = @import("../../browser/HttpClient.zig").Request;
 
 const CdpStorage = @import("storage.zig");
 
@@ -273,8 +274,7 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
-    const transfer = msg.transfer;
-    const req = &transfer.req;
+    const req = msg.request;
     const frame_id = req.params.frame_id;
     const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
 
@@ -286,11 +286,11 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
     // We're missing a bunch of fields, but, for now, this eems like enough
     try bc.cdp.sendEvent("Network.requestWillBeSent", .{
         .frameId = &id.toFrameId(frame_id),
-        .requestId = &id.toRequestId(transfer),
+        .requestId = &id.toRequestId2(req),
         .loaderId = &id.toLoaderId(req.params.loader_id),
         .type = req.params.resource_type.string(),
         .documentURL = frame.url,
-        .request = TransferAsRequestWriter.init(transfer),
+        .request = RequestWriter.init(req),
         .initiator = .{ .type = "other" },
         .redirectHasExtraInfo = false, // TODO change after adding Network.requestWillBeSentExtraInfo
         .hasUserGesture = false,
@@ -327,6 +327,65 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
         .encodedDataLength = transfer.bytes_received,
     }, .{ .session_id = session_id });
 }
+
+pub const RequestWriter = struct {
+    request: *const Request,
+
+    pub fn init(request: *const Request) RequestWriter {
+        return .{
+            .request = request,
+        };
+    }
+
+    pub fn jsonStringify(self: *const RequestWriter, jws: anytype) !void {
+        self._jsonStringify(jws) catch return error.WriteFailed;
+    }
+
+    fn _jsonStringify(self: *const RequestWriter, jws: anytype) !void {
+        const request = self.request;
+
+        try jws.beginObject();
+        {
+            try jws.objectField("url");
+            try jws.write(request.params.url);
+        }
+
+        {
+            const frag = URL.getHash(request.params.url);
+            if (frag.len > 0) {
+                try jws.objectField("urlFragment");
+                try jws.write(frag);
+            }
+        }
+
+        {
+            try jws.objectField("method");
+            try jws.write(@tagName(request.params.method));
+        }
+
+        {
+            try jws.objectField("hasPostData");
+            try jws.write(request.params.body != null);
+        }
+
+        {
+            try jws.objectField("headers");
+            try jws.beginObject();
+            var it = request.params.headers.iterator();
+            while (it.next()) |hdr| {
+                try jws.objectField(hdr.name);
+                try jws.write(hdr.value);
+            }
+            // TODO: Fix.
+            // if (try request.getCookieString()) |cookies| {
+            //     try jws.objectField("Cookie");
+            //     try jws.write(cookies[0 .. cookies.len - 1]);
+            // }
+            try jws.endObject();
+        }
+        try jws.endObject();
+    }
+};
 
 pub const TransferAsRequestWriter = struct {
     transfer: *Transfer,
