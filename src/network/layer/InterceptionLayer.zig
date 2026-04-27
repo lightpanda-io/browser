@@ -23,9 +23,7 @@ const log = @import("../../log.zig");
 const IS_DEBUG = builtin.mode == .Debug;
 
 const http = @import("../http.zig");
-const URL = @import("../../browser/URL.zig");
 const Client = @import("../../browser/HttpClient.zig").Client;
-const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Request = @import("../../browser/HttpClient.zig").Request;
 const Response = @import("../../browser/HttpClient.zig").Response;
 const FulfilledResponse = @import("../../browser/HttpClient.zig").FulfilledResponse;
@@ -54,18 +52,21 @@ pub fn layer(self: *InterceptionLayer) Layer {
 
 fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
     const self: *InterceptionLayer = @ptrCast(@alignCast(ptr));
-    var pre_wrap_req = in_req;
 
-    // Wrap callbacks to intercept notifications
-    const intercept_ctx = try pre_wrap_req.params.arena.allocator().create(InterceptContext);
+    const arena = try client.network.app.arena_pool.acquire(.small, "InterceptionLayer");
+    errdefer client.network.app.arena_pool.release(arena);
+
+    const intercept_ctx = try arena.create(InterceptContext);
     intercept_ctx.* = .{
-        .forward = Forward.fromRequest(pre_wrap_req),
+        .arena = arena,
+        .client = client,
+        .forward = Forward.fromRequest(in_req),
         .layer = self,
-        .request = pre_wrap_req,
+        .request = in_req,
     };
 
     var req = intercept_ctx.forward.wrapRequest(
-        pre_wrap_req,
+        in_req,
         intercept_ctx,
         .{
             .start = InterceptContext.startCallback,
@@ -102,6 +103,8 @@ fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
 }
 
 pub const InterceptContext = struct {
+    arena: std.mem.Allocator,
+    client: *Client,
     forward: Forward,
     layer: *InterceptionLayer,
     request: Request,
@@ -148,6 +151,8 @@ pub const InterceptContext = struct {
 
     fn doneCallback(ctx: *anyopaque) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
+        defer self.client.network.app.arena_pool.release(self.arena);
+
         log.debug(.http, "intercept done", .{
             .url = self.request.params.url,
             .content_length = self.content_length,
@@ -162,6 +167,8 @@ pub const InterceptContext = struct {
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
+        defer self.client.network.app.arena_pool.release(self.arena);
+
         log.debug(.http, "intercept error", .{
             .url = self.request.params.url,
             .err = err,
@@ -175,6 +182,8 @@ pub const InterceptContext = struct {
 
     fn shutdownCallback(ctx: *anyopaque) void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
+        defer self.client.network.app.arena_pool.release(self.arena);
+
         log.debug(.http, "intercept shutdown", .{ .url = self.request.params.url });
         self.request.params.notification.dispatch(.http_request_fail, &.{
             .request = &self.request,
@@ -192,7 +201,11 @@ pub fn continueRequest(self: *InterceptionLayer, client: *Client, req: Request) 
     }
 
     self.intercepted -= 1;
-    return self.next.request(client, req);
+    self.next.request(client, req) catch |err| {
+        const ctx: *InterceptContext = @ptrCast(@alignCast(req.ctx));
+        client.network.app.arena_pool.release(ctx.arena);
+        return err;
+    };
 }
 
 pub fn abortRequest(self: *InterceptionLayer, client: *Client, req: Request) void {
