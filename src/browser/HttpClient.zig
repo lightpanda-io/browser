@@ -871,13 +871,6 @@ pub const RequestParams = struct {
     notification: *Notification,
     timeout_ms: u32 = 0,
 
-    // This is only relevant for intercepted requests. If a request is flagged
-    // as blocking AND is intercepted, then it'll be up to us to wait until
-    // we receive a response to the interception. This probably isn't ideal,
-    // but it's harder for our caller (ScriptManager) to deal with this. One
-    // reason for that is the Http Client is already a bit CDP-aware.
-    blocking: bool = false,
-
     const ResourceType = enum {
         document,
         xhr,

@@ -114,7 +114,6 @@ fn fetchRobotsThenRequest(
                 .url = robots_url,
                 .method = .GET,
                 .headers = headers,
-                .blocking = false,
                 .frame_id = req.params.frame_id,
                 .loader_id = req.params.loader_id,
                 .cookie_jar = req.params.cookie_jar,
