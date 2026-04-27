@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const log = lp.log;
 const builtin = @import("builtin");
+const zenai = @import("zenai");
 
 const cli = @import("cli.zig");
 const dump = @import("browser/dump.zig");
@@ -106,12 +107,7 @@ fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
     return .html;
 }
 
-pub const AiProvider = enum {
-    anthropic,
-    openai,
-    gemini,
-    ollama,
-};
+pub const AiProvider = std.meta.Tag(zenai.provider.Client);
 
 /// Definition for all the commands and its arguments. See @cli.zig for further.
 const Commands = cli.Builder(.{
