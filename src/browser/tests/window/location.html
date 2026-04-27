@@ -23,3 +23,11 @@
   testing.expectEqual("", location.hash);
   testing.expectEqual(testing.BASE_URL + 'window/location.html', location.href);
 </script>
+
+<script id=location_pathname_setter>
+  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(Location.prototype, 'pathname').set);
+</script>
+
+<script id=location_search_setter>
+  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(Location.prototype, 'search').set);
+</script>
