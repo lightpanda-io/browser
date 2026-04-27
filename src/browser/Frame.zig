@@ -614,6 +614,8 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .cdp_id = opts.cdp_id,
         .reason = opts.reason,
         .method = opts.method,
+        .body = if (opts.body) |b| try self.arena.dupe(u8, b) else null,
+        .header = if (opts.header) |h| try self.arena.dupeZ(u8, h) else null,
     };
 
     var headers = try http_client.newHeaders();
@@ -3443,6 +3445,10 @@ pub const NavigatedOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
     method: HttpClient.Method = .GET,
+    // Retained on the frame's arena so Page.reload can replay the prior
+    // navigation's HTTP method — matches Chrome's F5 behavior on POST pages.
+    body: ?[]const u8 = null,
+    header: ?[:0]const u8 = null,
 };
 
 const NavigationType = enum {
