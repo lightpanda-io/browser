@@ -921,8 +921,7 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
     const matcher_type = try self.attributeMatcher();
     _ = self.skipSpaces();
 
-    const value_raw = try self.attributeValue(arena);
-    const value = try arena.dupe(u8, value_raw);
+    const value = try self.attributeValue(arena);
     _ = self.skipSpaces();
 
     // Parse optional case-sensitivity flag
@@ -1014,7 +1013,7 @@ fn attributeValue(self: *Parser, arena: Allocator) ![]const u8 {
         // Decode \\ \" \' and \<hex digits>, treat \<newline> as a line continuation,
         // and stop at the matching unescaped closing quote.
         // https://drafts.csswg.org/css-syntax/#consume-string-token
-        var result: std.ArrayList(u8) = .empty;
+        var result = try std.ArrayList(u8).initCapacity(arena, input.len);
         var i: usize = 1;
         while (i < input.len and input[i] != quote) {
             const b = input[i];
@@ -1063,7 +1062,7 @@ fn attributeValue(self: *Parser, arena: Allocator) ![]const u8 {
 
     const value = input[0..i];
     self.input = input[i..];
-    return value;
+    return arena.dupe(u8, value);
 }
 
 fn asUint(comptime string: anytype) std.meta.Int(
