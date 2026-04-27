@@ -45,6 +45,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         setCookie,
         setCookies,
         getCookies,
+        getAllCookies,
         getResponseBody,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
@@ -59,6 +60,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .setCookie => return setCookie(cmd),
         .setCookies => return setCookies(cmd),
         .getCookies => return getCookies(cmd),
+        .getAllCookies => return getAllCookies(cmd),
         .getResponseBody => return getResponseBody(cmd),
     }
 }
@@ -149,7 +151,10 @@ fn deleteCookies(cmd: *CDP.Command) !void {
 }
 
 fn clearBrowserCookies(cmd: *CDP.Command) !void {
-    if (try cmd.params(struct {}) != null) return error.InvalidParams;
+    // Network.clearBrowserCookies takes no parameters per the CDP spec, but most
+    // CDP clients (chrome-remote-interface, chromedp, custom websocket clients)
+    // include an empty `"params":{}` object on every command for ergonomics.
+    // Chrome accepts that and clears the jar; reject only on truly malformed JSON.
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     bc.session.cookie_jar.clearRetainingCapacity();
     return cmd.sendResult(null, .{});
@@ -202,6 +207,18 @@ fn getCookies(cmd: *CDP.Command) !void {
     var jar = &bc.session.cookie_jar;
     jar.removeExpired(null);
     const writer = CdpStorage.CookieWriter{ .cookies = jar.cookies.items, .urls = urls.items };
+    try cmd.sendResult(.{ .cookies = writer }, .{});
+}
+
+fn getAllCookies(cmd: *CDP.Command) !void {
+    // Returns every cookie in the jar regardless of the current frame's origin.
+    // Mirrors Chrome's Network.getAllCookies and Storage.getCookies (without
+    // the latter's browserContextId filter, since Network commands are scoped
+    // to the current browser context already).
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    var jar = &bc.session.cookie_jar;
+    jar.removeExpired(null);
+    const writer = CdpStorage.CookieWriter{ .cookies = jar.cookies.items };
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
@@ -564,4 +581,84 @@ test "cdp.Network: cookies" {
         .params = .{ .browserContextId = "BID-S" },
     });
     try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{} }, .{ .id = 10 });
+}
+
+test "cdp.Network: clearBrowserCookies accepts empty params object" {
+    const CdpCookie = CdpStorage.CdpCookie;
+    const ResCookie = CdpStorage.ResCookie;
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-N1" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.setCookie",
+        .params = CdpCookie{ .name = "foo", .value = "bar", .url = "https://example.com/" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    // Most CDP clients (chrome-remote-interface, chromedp, etc.) always include
+    // a `params` field on every command, even for methods that take none.
+    // Chrome ignores the empty object; we should too. Sent as raw JSON because
+    // an empty Zig anonymous struct serializes as `[]`, not `{}`.
+    try ctx.processMessage(
+        \\{"id":2,"method":"Network.clearBrowserCookies","params":{}}
+    );
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Storage.getCookies",
+        .params = .{ .browserContextId = "BID-N1" },
+    });
+    try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{} }, .{ .id = 3 });
+}
+
+test "cdp.Network: getAllCookies returns whole jar regardless of current origin" {
+    const CdpCookie = CdpStorage.CdpCookie;
+    const ResCookie = CdpStorage.ResCookie;
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-N2" });
+
+    // Two cookies on different origins. With no current frame URL,
+    // Network.getCookies (no `urls`) would return -32602 InvalidParams;
+    // Network.getAllCookies must still return both.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.setCookies",
+        .params = .{
+            .cookies = &[_]CdpCookie{
+                .{ .name = "a", .value = "1", .url = "https://example.com/" },
+                .{ .name = "b", .value = "2", .url = "https://other.test/" },
+            },
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    // Empty params object — sent as raw JSON because an empty Zig anonymous
+    // struct serializes as `[]`, not `{}`.
+    try ctx.processMessage(
+        \\{"id":2,"method":"Network.getAllCookies","params":{}}
+    );
+    try ctx.expectSentResult(.{
+        .cookies = &[_]ResCookie{
+            .{ .name = "a", .value = "1", .domain = "example.com", .path = "/", .size = 2, .secure = true },
+            .{ .name = "b", .value = "2", .domain = "other.test", .path = "/", .size = 2, .secure = true },
+        },
+    }, .{ .id = 2 });
+
+    // Also works without any params field at all (CDP-spec literal "no params").
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.getAllCookies",
+    });
+    try ctx.expectSentResult(.{
+        .cookies = &[_]ResCookie{
+            .{ .name = "a", .value = "1", .domain = "example.com", .path = "/", .size = 2, .secure = true },
+            .{ .name = "b", .value = "2", .domain = "other.test", .path = "/", .size = 2, .secure = true },
+        },
+    }, .{ .id = 3 });
 }

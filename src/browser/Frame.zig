@@ -722,7 +722,10 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     };
 
     const session = target._session;
-    if (!opts.force and URL.eqlDocument(target.url, resolved_url)) {
+    // Short-circuit only true fragment-only navigations (same path/query, different
+    // fragment). Identical URLs fall through and trigger a real reload.
+    const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
+    if (!opts.force and is_fragment_navigation) {
         target.url = try target.arena.dupeZ(u8, resolved_url);
         target.window._location = try Location.init(target.url, target);
         if (target.parent == null) {
@@ -3707,7 +3710,15 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     };
 
     if (submit_opts.fire_event) {
-        const submitter_html: ?*HtmlElement = if (submitter_) |s| s.is(HtmlElement) else null;
+        // Per HTML spec "submit a form element" algorithm: SubmitEvent.submitter
+        // must be null when the submitter is the form itself, which is what
+        // Form.requestSubmit() passes when called with no submitter argument.
+        // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
+        const submitter_html: ?*HtmlElement = blk: {
+            const s = submitter_ orelse break :blk null;
+            if (s == form_element) break :blk null;
+            break :blk s.is(HtmlElement);
+        };
         const submit_event = (try SubmitEvent.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true, .submitter = submitter_html }, self)).asEvent();
 
         // so submit_event is still valid when we check _prevent_default

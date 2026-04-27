@@ -20,6 +20,7 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 
 const URL = @import("URL.zig");
+const U = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 
 const Location = @This();
@@ -63,6 +64,22 @@ pub fn getSearch(self: *const Location, exec: *const js.Execution) ![]const u8 {
 
 pub fn getHash(self: *const Location) []const u8 {
     return self._url.getHash();
+}
+
+pub fn setPathname(_: *const Location, pathname: []const u8, frame: *Frame) !void {
+    const new_url = try U.setPathname(frame.url, pathname, frame.call_arena);
+    return frame.scheduleNavigation(new_url, .{
+        .reason = .script,
+        .kind = .{ .push = null },
+    }, .{ .script = frame });
+}
+
+pub fn setSearch(_: *const Location, search: []const u8, frame: *Frame) !void {
+    const new_url = try U.setSearch(frame.url, search, frame.call_arena);
+    return frame.scheduleNavigation(new_url, .{
+        .reason = .script,
+        .kind = .{ .push = null },
+    }, .{ .script = frame });
 }
 
 pub fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
@@ -117,9 +134,9 @@ pub const JsApi = struct {
         return self.assign(url, frame);
     }
 
-    pub const search = bridge.accessor(Location.getSearch, null, .{});
+    pub const search = bridge.accessor(Location.getSearch, Location.setSearch, .{});
     pub const hash = bridge.accessor(Location.getHash, Location.setHash, .{});
-    pub const pathname = bridge.accessor(Location.getPathname, null, .{});
+    pub const pathname = bridge.accessor(Location.getPathname, Location.setPathname, .{});
     pub const hostname = bridge.accessor(Location.getHostname, null, .{});
     pub const host = bridge.accessor(Location.getHost, null, .{});
     pub const port = bridge.accessor(Location.getPort, null, .{});

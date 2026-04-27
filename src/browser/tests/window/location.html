@@ -7,13 +7,13 @@
 </script>
 
 <script id=location_hash>
-  location.hash = "";
-  testing.expectEqual("", location.hash);
-  testing.expectEqual(testing.BASE_URL + 'window/location.html', location.href);
-
   location.hash = "#abcdef";
   testing.expectEqual("#abcdef", location.hash);
   testing.expectEqual(testing.BASE_URL + 'window/location.html#abcdef', location.href);
+
+  location.hash = "";
+  testing.expectEqual("", location.hash);
+  testing.expectEqual(testing.BASE_URL + 'window/location.html', location.href);
 
   location.hash = "xyzxyz";
   testing.expectEqual("#xyzxyz", location.hash);
@@ -22,4 +22,12 @@
   location.hash = "";
   testing.expectEqual("", location.hash);
   testing.expectEqual(testing.BASE_URL + 'window/location.html', location.href);
+</script>
+
+<script id=location_pathname_setter>
+  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(Location.prototype, 'pathname').set);
+</script>
+
+<script id=location_search_setter>
+  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(Location.prototype, 'search').set);
 </script>

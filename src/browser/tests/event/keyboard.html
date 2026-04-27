@@ -116,3 +116,54 @@
     testing.expectEqual(true, called);
   }
 </script>
+
+<script id=domKeyLocationConstants>
+  {
+    testing.expectEqual(0, KeyboardEvent.DOM_KEY_LOCATION_STANDARD);
+    testing.expectEqual(1, KeyboardEvent.DOM_KEY_LOCATION_LEFT);
+    testing.expectEqual(2, KeyboardEvent.DOM_KEY_LOCATION_RIGHT);
+    testing.expectEqual(3, KeyboardEvent.DOM_KEY_LOCATION_NUMPAD);
+
+    let evt = new KeyboardEvent('keydown', {key: 'a'});
+    testing.expectEqual(0, evt.DOM_KEY_LOCATION_STANDARD);
+    testing.expectEqual(1, evt.DOM_KEY_LOCATION_LEFT);
+    testing.expectEqual(2, evt.DOM_KEY_LOCATION_RIGHT);
+    testing.expectEqual(3, evt.DOM_KEY_LOCATION_NUMPAD);
+  }
+</script>
+
+<script id=charCodeKeyCode>
+  {
+    let evt = new KeyboardEvent('keypress', {key: 'a'});
+    testing.expectEqual(0, evt.charCode);
+    testing.expectEqual(0, evt.keyCode);
+  }
+</script>
+
+<script id=initKeyboardEvent>
+  {
+    let evt = new KeyboardEvent('keydown', {key: 'a'});
+    evt.initKeyboardEvent('keyup', true, true, window, 'q', 1, true, false, true, false);
+    testing.expectEqual('keyup', evt.type);
+    testing.expectEqual(true, evt.bubbles);
+    testing.expectEqual(true, evt.cancelable);
+    testing.expectEqual('q', evt.key);
+    testing.expectEqual(1, evt.location);
+    testing.expectEqual(true, evt.ctrlKey);
+    testing.expectEqual(false, evt.altKey);
+    testing.expectEqual(true, evt.shiftKey);
+    testing.expectEqual(false, evt.metaKey);
+  }
+</script>
+
+<script id=initKeyboardEventOptional>
+  {
+    let evt = new KeyboardEvent('keydown', {key: 'x'});
+    evt.initKeyboardEvent('foo');
+    testing.expectEqual('foo', evt.type);
+    testing.expectEqual(false, evt.bubbles);
+    testing.expectEqual(false, evt.cancelable);
+    testing.expectEqual('', evt.key);
+    testing.expectEqual(0, evt.location);
+  }
+</script>

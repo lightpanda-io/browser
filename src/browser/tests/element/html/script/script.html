@@ -25,5 +25,15 @@
       testing.expectEqual(true, dom_load);
       testing.expectEqual(true, attribute_load);
    });
+
+   // Web IDL requires attribute getters/setters to be named "get X" / "set X"
+   // and methods to use their identifier. Sentinel for the binding-level naming
+   // fix in Snapshot.zig — Script.src exercises both accessor paths.
+   const desc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
+   testing.expectEqual('get src', desc.get.name);
+   testing.expectEqual('set src', desc.set.name);
+
+   const append = Object.getOwnPropertyDescriptor(Element.prototype, 'append');
+   testing.expectEqual('append', append.value.name);
 }
 </script>
