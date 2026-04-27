@@ -126,40 +126,21 @@ pub const InterceptContext = struct {
 
         self.content_length = response.contentLength() orelse 0;
 
-        // switch (response.inner) {
-        //     .transfer => |t| {
-        //         const status = t.response_header.?.status;
-        //         if (status == 401 or status == 407) {
-        //             self.auth_challenge = Transfer.detectAuthChallenge(t._conn.?);
-
-        //             if (self.auth_challenge != null and self.tries < 10) {
-        //                 var wait_for_interception = false;
-
-        //                 self.request.params.notification.dispatch(.http_request_auth_required, &.{
-        //                     .request = &self.request,
-        //                     .intercept_ctx = self,
-        //                     .wait_for_interception = &wait_for_interception,
-        //                 });
-
-        //                 if (wait_for_interception) {
-        //                     log.debug(.http, "intercept auth required", .{
-        //                         .url = self.request.params.url,
-        //                         .status = status,
-        //                         .intercepted = self.layer.intercepted,
-        //                     });
-        //                     self.layer.intercepted += 1;
-        //                     return false;
-        //                 }
-        //             }
-        //         }
-        //     },
-        //     else => {},
-        // }
+        switch (response.inner) {
+            .transfer => |t| {
+                const status = t.response_header.?.status;
+                if (status == 401 or status == 407) {
+                    self.auth_challenge = Transfer.detectAuthChallenge(t._conn.?);
+                }
+            },
+            else => {},
+        }
 
         self.request.params.notification.dispatch(.http_response_header_done, &.{
             .request = &self.request,
             .response = &response,
         });
+
         return self.forward.forwardHeader(response);
     }
 
@@ -184,6 +165,27 @@ pub const InterceptContext = struct {
             .url = self.request.params.url,
             .content_length = self.content_length,
         });
+
+        // if (self.auth_challenge != null and self.tries < 10) {
+        //     var wait_for_interception = false;
+        //     self.request.params.notification.dispatch(.http_request_auth_required, &.{
+        //         .request = &self.request,
+        //         .intercept_ctx = self,
+        //         .wait_for_interception = &wait_for_interception,
+        //     });
+
+        //     if (wait_for_interception) {
+        //         log.debug(.http, "intercept auth required", .{
+        //             .url = self.request.params.url,
+        //             .intercepted = self.layer.intercepted,
+        //         });
+        //         self.layer.intercepted += 1;
+        //         self.tries += 1;
+        //         // Don't forward done — CDP owns this now, will retry via continueWithAuth
+        //         return;
+        //     }
+        // }
+
         self.request.params.notification.dispatch(.http_request_done, &.{
             .request = &self.request,
             .content_length = self.content_length,
@@ -288,4 +290,15 @@ pub fn fulfillRequest(
         req.error_callback(req.ctx, err);
         return err;
     };
+}
+
+pub fn abortAuthChallenge(self: *InterceptionLayer, req: Request) void {
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "abort auth transfer", .{ .intercepted = self.intercepted });
+    }
+
+    self.intercepted -= 1;
+    defer req.deinit();
+    req.error_callback(req.ctx, error.AbortAuthChallenge);
+    return;
 }

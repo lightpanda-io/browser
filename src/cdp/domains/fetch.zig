@@ -300,7 +300,7 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
 
     var intercept_state = &bc.intercept_state;
     const request_id = try idFromRequestId(params.requestId);
-    const request = intercept_state.remove(request_id) orelse return error.RequestNotFound;
+    var request = intercept_state.remove(request_id) orelse return error.RequestNotFound;
 
     log.debug(.cdp, "request intercept", .{
         .state = "continue with auth",
@@ -308,27 +308,27 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
         .response = params.authChallengeResponse.response,
     });
 
+    const client = bc.cdp.browser.http_client;
+
     if (params.authChallengeResponse.response != .ProvideCredentials) {
-        // TODO:
-        // request.abortAuthChallenge();
+        client.interception_layer.abortAuthChallenge(request);
         return cmd.sendResult(null, .{});
     }
 
-    // TODO:
     // cancel the request, deinit the transfer on error.
-    // errdefer request.abortAuthChallenge();
+    errdefer client.interception_layer.abortAuthChallenge(request);
 
-    // todo:
-    // restart the request with the provided credentials.
-    // const arena = request.params.arena.allocator();
-    // request.updateCredentials(
-    //     try std.fmt.allocPrintSentinel(arena, "{s}:{s}", .{
-    //         params.authChallengeResponse.username,
-    //         params.authChallengeResponse.password,
-    //     }, 0),
-    // );
+    const arena = request.params.arena.allocator();
+    request.params.credentials = try std.fmt.allocPrintSentinel(
+        arena,
+        "{s}:{s}",
+        .{
+            params.authChallengeResponse.username,
+            params.authChallengeResponse.password,
+        },
+        0,
+    );
 
-    const client = bc.cdp.browser.http_client;
     try client.interception_layer.continueRequest(client, request);
     return cmd.sendResult(null, .{});
 }
