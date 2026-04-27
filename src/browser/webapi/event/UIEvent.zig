@@ -40,6 +40,7 @@ pub const Type = union(enum) {
     focus_event: *@import("FocusEvent.zig"),
     text_event: *@import("TextEvent.zig"),
     input_event: *@import("InputEvent.zig"),
+    composition_event: *@import("CompositionEvent.zig"),
 };
 
 pub const UIEventOptions = struct {
@@ -88,6 +89,7 @@ pub fn is(self: *UIEvent, comptime T: type) ?*T {
         .focus_event => |e| return if (T == @import("FocusEvent.zig")) e else null,
         .text_event => |e| return if (T == @import("TextEvent.zig")) e else null,
         .input_event => |e| return if (T == @import("InputEvent.zig")) e else null,
+        .composition_event => |e| return if (T == @import("CompositionEvent.zig")) e else null,
     }
     return null;
 }
@@ -111,7 +113,34 @@ pub fn getView(self: *UIEvent, frame: *Frame) *Window {
     return self._view orelse frame.window;
 }
 
-// deprecated `initUIEvent()` not implemented
+// Legacy: see https://w3c.github.io/uievents/#dom-uievent-which
+pub fn getWhich(self: *const UIEvent) u32 {
+    return switch (self._type) {
+        .mouse_event => |me| @as(u32, @intCast(me.getButton())) + 1,
+        .keyboard_event => 0,
+        else => 0,
+    };
+}
+
+pub fn initUIEvent(
+    self: *UIEvent,
+    typ: []const u8,
+    bubbles: ?bool,
+    cancelable: ?bool,
+    view: ?*Window,
+    detail: ?i32,
+) !void {
+    const event = self._proto;
+    if (event._event_phase != .none) {
+        return;
+    }
+
+    event._type_string = try String.init(event._arena, typ, .{});
+    event._bubbles = bubbles orelse false;
+    event._cancelable = cancelable orelse false;
+    self._view = view;
+    self._detail = if (detail) |d| @intCast(@max(d, 0)) else 0;
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(UIEvent);
@@ -125,6 +154,8 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(UIEvent.init, .{});
     pub const detail = bridge.accessor(UIEvent.getDetail, null, .{});
     pub const view = bridge.accessor(UIEvent.getView, null, .{});
+    pub const which = bridge.accessor(UIEvent.getWhich, null, .{});
+    pub const initUIEvent = bridge.function(UIEvent.initUIEvent, .{});
 };
 
 const testing = @import("../../../testing.zig");

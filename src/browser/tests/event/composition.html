@@ -5,10 +5,13 @@
   {
     let event = new CompositionEvent("test", {});
     testing.expectEqual(true, event instanceof CompositionEvent);
+    testing.expectEqual(true, event instanceof UIEvent);
     testing.expectEqual(true, event instanceof Event);
 
     testing.expectEqual("test", event.type);
     testing.expectEqual("", event.data);
+    testing.expectEqual(0, event.detail);
+    testing.expectEqual(window, event.view);
   }
 </script>
 
@@ -31,6 +34,39 @@
 
     document.dispatchEvent(new CompositionEvent('CE', {data: 'test-data'}));
     testing.expectEqual(1, called);
+  }
+</script>
+
+<script id=createEvent>
+  {
+    let evt = document.createEvent('CompositionEvent');
+    testing.expectEqual(true, evt instanceof CompositionEvent);
+    testing.expectEqual(true, evt instanceof UIEvent);
+    testing.expectEqual(true, evt instanceof Event);
+    testing.expectEqual('', evt.data);
+  }
+</script>
+
+<script id=initCompositionEvent>
+  {
+    let evt = document.createEvent('CompositionEvent');
+    evt.initCompositionEvent('compositionstart', true, false, window, 'hello');
+    testing.expectEqual('compositionstart', evt.type);
+    testing.expectEqual(true, evt.bubbles);
+    testing.expectEqual(false, evt.cancelable);
+    testing.expectEqual(window, evt.view);
+    testing.expectEqual('hello', evt.data);
+  }
+</script>
+
+<script id=initCompositionEventOptional>
+  {
+    let evt = document.createEvent('CompositionEvent');
+    evt.initCompositionEvent('compositionend');
+    testing.expectEqual('compositionend', evt.type);
+    testing.expectEqual(false, evt.bubbles);
+    testing.expectEqual(false, evt.cancelable);
+    testing.expectEqual('', evt.data);
   }
 </script>
 
