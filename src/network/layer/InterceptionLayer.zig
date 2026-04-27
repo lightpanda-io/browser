@@ -187,6 +187,8 @@ pub const InterceptContext = struct {
 };
 
 // CDP Callbacks
+// These handle their own clean up on errors with `self.next.request`.
+// This is because they don't pass their error up the chain as they are async callbacks.
 
 pub fn continueRequest(self: *InterceptionLayer, client: *Client, req: Request) anyerror!void {
     if (comptime IS_DEBUG) {
