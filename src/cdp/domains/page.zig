@@ -333,8 +333,19 @@ fn doReload(cmd: *CDP.Command) !void {
     const session = bc.session;
     var frame = session.currentFrame() orelse return error.FrameNotLoaded;
 
-    // Dupe URL before replacePage() frees the old frame's arena.
+    // Capture URL plus the prior navigation's method/body/header before
+    // replacePage() frees the old frame's arena. Replaying the same HTTP
+    // method on reload matches Chrome's F5 behavior — POST navigations
+    // re-submit, GET navigations re-fetch.
     const reload_url = try cmd.arena.dupeZ(u8, frame.url);
+    const prev_nav = frame._navigated_options;
+    const prev_body: ?[]const u8, const prev_header: ?[:0]const u8 = blk: {
+        const p = prev_nav orelse break :blk .{ null, null };
+        break :blk .{
+            if (p.body) |b| try cmd.arena.dupe(u8, b) else null,
+            if (p.header) |h| try cmd.arena.dupeZ(u8, h) else null,
+        };
+    };
 
     if (frame._load_state != .waiting) {
         // Reset isolated world identities to disable V8 weak callbacks before
@@ -351,6 +362,9 @@ fn doReload(cmd: *CDP.Command) !void {
         .cdp_id = cmd.input.id,
         .kind = .reload,
         .force = if (params) |p| p.ignoreCache orelse false else false,
+        .method = if (prev_nav) |p| p.method else .GET,
+        .body = prev_body,
+        .header = prev_header,
     });
 }
 
@@ -1000,6 +1014,117 @@ test "cdp.frame: reload" {
     {
         // reload with ignoreCache param
         try ctx.processMessage(.{ .id = 32, .method = "Page.reload", .params = .{ .ignoreCache = true } });
+    }
+}
+
+test "cdp.frame: reload replays POST navigation" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // Manually wire up the browser context: loadBrowserContext only does GET
+    // navigations, but we need the first navigation to be POST.
+    const cdp_inst = ctx.cdp();
+    _ = try cdp_inst.createBrowserContext();
+    var bc = &cdp_inst.browser_context.?;
+    bc.id = "BID-A6";
+    bc.session_id = "SID-X";
+    bc.target_id = "TID-A6-0000000".*;
+
+    // First navigation: POST a form-style payload to /echo_method.
+    {
+        const f = try bc.session.createPage();
+        try f.navigate("http://127.0.0.1:9582/echo_method", .{
+            .method = .POST,
+            .body = "key=value",
+            .header = "Content-Type: application/x-www-form-urlencoded",
+        });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    // Sanity: the body confirms a POST round-tripped.
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("document.body.innerText.includes('method=POST')", null);
+        try testing.expect(v.toBool());
+    }
+
+    // Trigger a CDP reload. With the fix in place, doReload captures the
+    // prior POST method/body/header and replays them. Without it (regression
+    // guard), the second request would silently fall back to GET.
+    try ctx.processMessage(.{ .id = 50, .method = "Page.reload" });
+
+    {
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("document.body.innerText.includes('method=POST')", null);
+        try testing.expect(v.toBool());
+    }
+}
+
+test "cdp.frame: reload after POST→redirect drops the POST" {
+    // RFC 7231 §6.4.3 / §6.4.4: 302 and 303 responses to a POST cause the
+    // user agent to convert the followup request to GET. The page that
+    // actually loaded did so via GET, so a later Page.reload must NOT replay
+    // the original POST body to the redirect target.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const cdp_inst = ctx.cdp();
+    _ = try cdp_inst.createBrowserContext();
+    var bc = &cdp_inst.browser_context.?;
+    bc.id = "BID-A6R";
+    bc.session_id = "SID-XR";
+    bc.target_id = "TID-A6R-000000".*;
+
+    // First navigation: POST /redirect_to_echo → 302 → GET /echo_method.
+    {
+        const f = try bc.session.createPage();
+        try f.navigate("http://127.0.0.1:9582/redirect_to_echo", .{
+            .method = .POST,
+            .body = "key=value",
+            .header = "Content-Type: application/x-www-form-urlencoded",
+        });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    // Sanity: after the redirect, the loaded page is /echo_method via GET.
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("document.body.innerText.includes('method=GET')", null);
+        try testing.expect(v.toBool());
+    }
+
+    // Reload. The request that produced the current page was GET, so the
+    // reload must also be GET — not a re-POST of the original form data.
+    try ctx.processMessage(.{ .id = 60, .method = "Page.reload" });
+
+    {
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("document.body.innerText.includes('method=GET')", null);
+        try testing.expect(v.toBool());
     }
 }
 
