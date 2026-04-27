@@ -1572,7 +1572,19 @@ pub const Transfer = struct {
             }
 
             const base_url = try conn.getEffectiveUrl();
-            break :blk try URL.resolve(arena, std.mem.span(base_url), location.value, .{});
+            const resolved = try URL.resolve(arena, std.mem.span(base_url), location.value, .{});
+
+            // RFC 7231 §7.1.2: if the Location value has no fragment, the redirect
+            // inherits the fragment from the URI used to generate the request.
+            // URL.resolve follows RFC 3986 §5.3, which drops the base fragment when
+            // the relative ref has none, so we re-attach it here.
+            if (URL.getHash(resolved).len == 0) {
+                const original_hash = URL.getHash(transfer.url);
+                if (original_hash.len != 0) {
+                    break :blk try std.mem.joinZ(arena, "", &.{ resolved, original_hash });
+                }
+            }
+            break :blk resolved;
         };
 
         try transfer.updateURL(url);
