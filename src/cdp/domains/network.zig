@@ -329,9 +329,9 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
 }
 
 pub const RequestWriter = struct {
-    request: *const Request,
+    request: *Request,
 
-    pub fn init(request: *const Request) RequestWriter {
+    pub fn init(request: *Request) RequestWriter {
         return .{
             .request = request,
         };
@@ -376,11 +376,10 @@ pub const RequestWriter = struct {
                 try jws.objectField(hdr.name);
                 try jws.write(hdr.value);
             }
-            // TODO: Fix.
-            // if (try request.getCookieString()) |cookies| {
-            //     try jws.objectField("Cookie");
-            //     try jws.write(cookies[0 .. cookies.len - 1]);
-            // }
+            if (try request.getCookieString()) |cookies| {
+                try jws.objectField("Cookie");
+                try jws.write(cookies[0 .. cookies.len - 1]);
+            }
             try jws.endObject();
         }
         try jws.endObject();
@@ -434,7 +433,7 @@ pub const TransferAsRequestWriter = struct {
                 try jws.objectField(hdr.name);
                 try jws.write(hdr.value);
             }
-            if (try transfer.getCookieString()) |cookies| {
+            if (try transfer.req.getCookieString()) |cookies| {
                 try jws.objectField("Cookie");
                 try jws.write(cookies[0 .. cookies.len - 1]);
             }

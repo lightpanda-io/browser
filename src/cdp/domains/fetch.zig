@@ -245,7 +245,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
         .new_url = params.url,
     });
 
-    const arena = transfer.arena.allocator();
+    const arena = transfer.req.params.arena.allocator();
     // Update the request with the new parameters
     if (params.url) |url| {
         try transfer.updateURL(try arena.dupeZ(u8, url));
@@ -309,7 +309,7 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
     errdefer transfer.abortAuthChallenge();
 
     // restart the request with the provided credentials.
-    const arena = transfer.arena.allocator();
+    const arena = transfer.req.params.arena.allocator();
     transfer.updateCredentials(
         try std.fmt.allocPrintSentinel(arena, "{s}:{s}", .{
             params.authChallengeResponse.username,
@@ -354,7 +354,7 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
     var body: ?[]const u8 = null;
     if (params.body) |b| {
         const decoder = std.base64.standard.Decoder;
-        const buf = try transfer.arena.allocator().alloc(u8, try decoder.calcSizeForSlice(b));
+        const buf = try transfer.req.params.arena.allocator().alloc(u8, try decoder.calcSizeForSlice(b));
         try decoder.decode(buf, b);
         body = buf;
     }

@@ -401,7 +401,6 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
 
 pub fn _request(ptr: *anyopaque, _: *Client, req: Request) !void {
     const self: *Client = @ptrCast(@alignCast(ptr));
-
     const transfer = try self.makeTransfer(req);
 
     var wait_for_interception = false;
@@ -436,6 +435,8 @@ pub fn request(self: *Client, req: Request) !void {
     // Assign Request Id.
     var our_req = req;
     our_req.params.request_id = self.incrReqId();
+    our_req.params.arena = ArenaAllocator.init(self.allocator);
+
     return self.entry_layer.request(self, our_req);
 }
 
@@ -621,14 +622,11 @@ pub fn incrReqId(self: *Client) u32 {
 }
 
 fn makeTransfer(self: *Client, req: Request) !*Transfer {
-    errdefer req.params.headers.deinit();
-
     const transfer = try self.transfer_pool.create();
     errdefer self.transfer_pool.destroy(transfer);
 
     transfer.* = .{
         .start_time = timestamp(.monotonic),
-        .arena = ArenaAllocator.init(self.allocator),
         .id = req.params.request_id,
         .url = req.params.url,
         .req = req,
@@ -1008,6 +1006,8 @@ fn ensureNoActiveConnection(self: *const Client) !void {
 
 pub const RequestParams = struct {
     /// This is unsafe to access until you pass it to `Client.request()` where it gets assigned.
+    arena: ArenaAllocator = undefined,
+    /// This is unsafe to access until you pass it to `Client.request()` where it gets assigned.
     request_id: u32 = undefined,
     frame_id: u32,
     loader_id: u32,
@@ -1051,6 +1051,7 @@ pub const RequestParams = struct {
 
     pub fn deinit(self: *const RequestParams) void {
         self.headers.deinit();
+        self.arena.deinit();
     }
 };
 
@@ -1073,9 +1074,9 @@ pub const Request = struct {
     error_callback: ErrorCallback,
     shutdown_callback: ?ShutdownCallback = null,
 
-    pub fn getCookieString(self: *Request, allocator: std.mem.Allocator) !?[:0]const u8 {
+    pub fn getCookieString(self: *Request) !?[:0]const u8 {
         const jar = self.params.cookie_jar orelse return null;
-        var aw: std.Io.Writer.Allocating = .init(allocator);
+        var aw: std.Io.Writer.Allocating = .init(self.params.arena.allocator());
         try jar.forRequest(self.params.url, &aw.writer, .{
             .is_http = true,
             .origin_url = self.params.cookie_origin,
@@ -1177,7 +1178,6 @@ pub const SyncResponse = struct {
 };
 
 pub const Transfer = struct {
-    arena: ArenaAllocator,
     id: u32 = 0,
     req: Request,
     url: [:0]const u8,
@@ -1245,7 +1245,6 @@ pub const Transfer = struct {
         }
 
         self.req.deinit();
-        self.arena.deinit();
         self.client.transfer_pool.destroy(self);
     }
 
@@ -1337,7 +1336,7 @@ pub const Transfer = struct {
         try conn.setHeaders(&header_list);
 
         // Add cookies from cookie jar.
-        if (try self.getCookieString()) |cookies| {
+        if (try self.req.getCookieString()) |cookies| {
             try conn.setCookies(@ptrCast(cookies.ptr));
         }
 
@@ -1398,10 +1397,6 @@ pub const Transfer = struct {
         }
     }
 
-    pub fn getCookieString(self: *Transfer) !?[:0]const u8 {
-        return self.req.getCookieString(self.arena.allocator());
-    }
-
     pub fn format(self: *Transfer, writer: *std.Io.Writer) !void {
         const req = self.req;
         return writer.print("{s} {s}", .{ @tagName(req.params.method), req.params.url });
@@ -1418,7 +1413,7 @@ pub const Transfer = struct {
     fn handleRedirect(transfer: *Transfer) !void {
         const req = &transfer.req;
         const conn = transfer._conn.?;
-        const arena = transfer.arena.allocator();
+        const arena = transfer.req.params.arena.allocator();
 
         transfer._redirect_count += 1;
         if (transfer._redirect_count > transfer.client.network.config.httpMaxRedirects()) {
@@ -1602,7 +1597,7 @@ pub const Transfer = struct {
                     transfer._callback_error = error.ResponseTooLarge;
                     return http.writefunc_error;
                 }
-                transfer._stream_buffer.ensureTotalCapacity(transfer.arena.allocator(), cl) catch {};
+                transfer._stream_buffer.ensureTotalCapacity(transfer.req.params.arena.allocator(), cl) catch {};
             }
         }
 
@@ -1615,7 +1610,7 @@ pub const Transfer = struct {
         }
 
         const chunk = buffer[0..chunk_len];
-        transfer._stream_buffer.appendSlice(transfer.arena.allocator(), chunk) catch |err| {
+        transfer._stream_buffer.appendSlice(transfer.req.params.arena.allocator(), chunk) catch |err| {
             transfer._callback_error = err;
             return http.writefunc_error;
         };

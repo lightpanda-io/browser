@@ -66,6 +66,8 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
                 const path = URL.getPathname(req.params.url);
 
                 if (!robots.isAllowed(path)) {
+                    defer req.deinit();
+
                     log.warn(.http, "blocked by robots", .{ .url = req.params.url });
                     req.error_callback(req.ctx, error.RobotsBlocked);
                     return;
