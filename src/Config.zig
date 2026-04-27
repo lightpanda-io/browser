@@ -51,7 +51,7 @@ fn logFilterScopesValidator(allocator: Allocator, args: *std.process.ArgIterator
     var it = std.mem.splitScalar(u8, str, ',');
     while (it.next()) |part| {
         const v = std.meta.stringToEnum(log.Scope, part) orelse {
-            log.fatal(.app, "invalid option choice", .{ .arg = "log-filter-scopes", .value = part });
+            log.fatal(.app, "invalid option choice", .{ .arg = "--log-filter-scopes", .value = part });
             return error.InvalidOption;
         };
 
