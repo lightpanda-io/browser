@@ -17,7 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const log = @import("../../log.zig");
+const lp = @import("lightpanda");
+const log = lp.log;
 
 const URL = @import("../../browser/URL.zig");
 const Robots = @import("../Robots.zig");

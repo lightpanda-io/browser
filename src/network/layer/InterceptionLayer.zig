@@ -18,7 +18,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const log = @import("../../log.zig");
+const lp = @import("lightpanda");
+const log = lp.log;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
