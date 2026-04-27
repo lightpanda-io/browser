@@ -107,9 +107,6 @@ pub const InterceptContext = struct {
     request: Request,
     content_length: usize = 0,
 
-    auth_challenge: ?http.AuthChallenge = null,
-    tries: usize = 0,
-
     fn startCallback(response: Response) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
         log.debug(.http, "intercept start", .{ .url = self.request.params.url });
@@ -125,16 +122,6 @@ pub const InterceptContext = struct {
         });
 
         self.content_length = response.contentLength() orelse 0;
-
-        switch (response.inner) {
-            .transfer => |t| {
-                const status = t.response_header.?.status;
-                if (status == 401 or status == 407) {
-                    self.auth_challenge = Transfer.detectAuthChallenge(t._conn.?);
-                }
-            },
-            else => {},
-        }
 
         self.request.params.notification.dispatch(.http_response_header_done, &.{
             .request = &self.request,
@@ -165,26 +152,6 @@ pub const InterceptContext = struct {
             .url = self.request.params.url,
             .content_length = self.content_length,
         });
-
-        // if (self.auth_challenge != null and self.tries < 10) {
-        //     var wait_for_interception = false;
-        //     self.request.params.notification.dispatch(.http_request_auth_required, &.{
-        //         .request = &self.request,
-        //         .intercept_ctx = self,
-        //         .wait_for_interception = &wait_for_interception,
-        //     });
-
-        //     if (wait_for_interception) {
-        //         log.debug(.http, "intercept auth required", .{
-        //             .url = self.request.params.url,
-        //             .intercepted = self.layer.intercepted,
-        //         });
-        //         self.layer.intercepted += 1;
-        //         self.tries += 1;
-        //         // Don't forward done — CDP owns this now, will retry via continueWithAuth
-        //         return;
-        //     }
-        // }
 
         self.request.params.notification.dispatch(.http_request_done, &.{
             .request = &self.request,

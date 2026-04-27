@@ -639,6 +639,33 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
 }
 
 fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) !bool {
+    if (msg.err == null or msg.err.? == error.RecvError) {
+        transfer.detectAuthChallenge(msg.conn);
+    }
+
+    // In case of auth challenge
+    // TODO give a way to configure the number of auth retries.
+    if (transfer._auth_challenge != null and transfer._tries < 10) {
+        var wait_for_interception = false;
+        transfer.req.params.notification.dispatch(
+            .http_request_auth_required,
+            &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception },
+        );
+        if (wait_for_interception) {
+            self.interception_layer.intercepted += 1;
+            if (comptime IS_DEBUG) {
+                log.debug(.http, "wait for auth interception", .{ .intercepted = self.interception_layer.intercepted });
+            }
+
+            // Whether or not this is a blocking request, we're not going
+            // to process it now. We can end the transfer, which will
+            // release the easy handle back into the pool. The transfer
+            // is still valid/alive (just has no handle).
+            transfer.releaseConn();
+            return false;
+        }
+    }
+
     // Handle redirects: reuse the same connection to preserve TCP state.
     if (msg.err == null) {
         const status = try msg.conn.getResponseCode();
@@ -1068,7 +1095,6 @@ pub const Transfer = struct {
 
     // for when a Transfer is queued in the client.queue
     _node: std.DoublyLinkedList.Node = .{},
-    _intercept_state: InterceptState = .not_intercepted,
 
     const InterceptState = union(enum) {
         not_intercepted,
@@ -1312,24 +1338,25 @@ pub const Transfer = struct {
         }
     }
 
-    pub fn detectAuthChallenge(conn: *const http.Connection) ?http.AuthChallenge {
-        const status = conn.getResponseCode() catch return null;
-        const connect_status = conn.getConnectCode() catch return null;
+    fn detectAuthChallenge(transfer: *Transfer, conn: *const http.Connection) void {
+        const status = conn.getResponseCode() catch return;
+        const connect_status = conn.getConnectCode() catch return;
 
         if (status != 401 and status != 407 and connect_status != 401 and connect_status != 407) {
-            return null;
+            transfer._auth_challenge = null;
+            return;
         }
 
         if (conn.getResponseHeader("WWW-Authenticate", 0)) |hdr| {
-            return http.AuthChallenge.parse(status, .server, hdr.value) catch null;
+            transfer._auth_challenge = http.AuthChallenge.parse(status, .server, hdr.value) catch null;
         } else if (conn.getConnectHeader("WWW-Authenticate", 0)) |hdr| {
-            return http.AuthChallenge.parse(status, .server, hdr.value) catch null;
+            transfer._auth_challenge = http.AuthChallenge.parse(status, .server, hdr.value) catch null;
         } else if (conn.getResponseHeader("Proxy-Authenticate", 0)) |hdr| {
-            return http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
+            transfer._auth_challenge = http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
         } else if (conn.getConnectHeader("Proxy-Authenticate", 0)) |hdr| {
-            return http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
+            transfer._auth_challenge = http.AuthChallenge.parse(status, .proxy, hdr.value) catch null;
         } else {
-            return .{ .status = status, .source = null, .scheme = null, .realm = null };
+            transfer._auth_challenge = .{ .status = status, .source = null, .scheme = null, .realm = null };
         }
     }
 
@@ -1358,16 +1385,12 @@ pub const Transfer = struct {
     // before interception process.
     pub fn abortAuthChallenge(self: *Transfer) void {
         if (comptime IS_DEBUG) {
-            std.debug.assert(self._intercept_state != .not_intercepted);
-            log.debug(.http, "abort auth transfer", .{ .intercepted = self.client.intercepted });
+            log.debug(.http, "abort auth transfer", .{ .intercepted = self.client.interception_layer.intercepted });
         }
 
-        self.client.intercepted -= 1;
-        if (!self.req.params.blocking) {
-            self.abort(error.AbortAuthChallenge);
-            return;
-        }
-        self._intercept_state = .{ .abort = error.AbortAuthChallenge };
+        self.client.interception_layer.intercepted -= 1;
+        self.abort(error.AbortAuthChallenge);
+        return;
     }
 
     // headerDoneCallback is called once the headers have been read.
@@ -1550,6 +1573,15 @@ pub const Transfer = struct {
         return null;
     }
 };
+
+pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "continue transfer", .{ .intercepted = self.interception_layer.intercepted });
+    }
+
+    self.interception_layer.intercepted -= 1;
+    return self.process(transfer);
+}
 
 const Noop = struct {
     fn headerCallback(_: Response) !bool {

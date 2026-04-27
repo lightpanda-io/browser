@@ -680,7 +680,6 @@ pub const Script = struct {
     debug_transfer_aborted: bool = false,
     debug_transfer_bytes_received: usize = 0,
     debug_transfer_notified_fail: bool = false,
-    debug_transfer_intercept_state: u8 = 0,
     debug_transfer_auth_challenge: bool = false,
     debug_transfer_easy_id: usize = 0,
 
@@ -756,7 +755,6 @@ pub const Script = struct {
                     .a3 = self.debug_transfer_aborted,
                     .a4 = self.debug_transfer_bytes_received,
                     .a5 = self.debug_transfer_notified_fail,
-                    .a7 = self.debug_transfer_intercept_state,
                     .a8 = self.debug_transfer_auth_challenge,
                     .a9 = self.debug_transfer_easy_id,
                     .b1 = transfer.id,
@@ -764,7 +762,6 @@ pub const Script = struct {
                     .b3 = transfer.aborted,
                     .b4 = transfer.bytes_received,
                     .b5 = transfer._notified_fail,
-                    .b7 = @intFromEnum(transfer._intercept_state),
                     .b8 = transfer._auth_challenge != null,
                     .b9 = if (transfer._conn) |c| @intFromPtr(c._easy) else 0,
                 });
@@ -774,7 +771,6 @@ pub const Script = struct {
                 self.debug_transfer_aborted = transfer.aborted;
                 self.debug_transfer_bytes_received = transfer.bytes_received;
                 self.debug_transfer_notified_fail = transfer._notified_fail;
-                self.debug_transfer_intercept_state = @intFromEnum(transfer._intercept_state);
                 self.debug_transfer_auth_challenge = transfer._auth_challenge != null;
                 self.debug_transfer_easy_id = if (transfer._conn) |c| @intFromPtr(c._easy) else 0;
             },

@@ -450,9 +450,16 @@ pub const BrowserContext = struct {
 
         // abort all intercepted requests before closing the session/page
         // since some of these might callback into the page/scriptmanager
-        for (self.intercept_state.pendingRequests()) |request| {
-            defer request.deinit();
-            request.error_callback(request.ctx, error.ClientDisconnect);
+        for (self.intercept_state.pendingIntercepts()) |intercept| {
+            switch (intercept) {
+                .transfer => |t| {
+                    t.abort(error.ClientDisconnect);
+                },
+                .request => |r| {
+                    defer r.deinit();
+                    r.error_callback(r.ctx, error.ClientDisconnect);
+                },
+            }
         }
 
         for (self.isolated_worlds.items) |world| {

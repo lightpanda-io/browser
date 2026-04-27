@@ -174,8 +174,7 @@ pub const RequestIntercept = struct {
 };
 
 pub const RequestAuthRequired = struct {
-    request: *Request,
-    intercept_ctx: *InterceptContext,
+    transfer: *Transfer,
     wait_for_interception: *bool,
 };
 

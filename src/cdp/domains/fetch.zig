@@ -54,7 +54,12 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 // Stored in CDP
 pub const InterceptState = struct {
     allocator: Allocator,
-    waiting: std.AutoArrayHashMapUnmanaged(u32, HttpClient.Request),
+    waiting: std.AutoArrayHashMapUnmanaged(u32, Pending),
+
+    const Pending = union(enum) {
+        transfer: *HttpClient.Transfer,
+        request: HttpClient.Request,
+    };
 
     pub fn init(allocator: Allocator) !InterceptState {
         return .{
@@ -67,11 +72,15 @@ pub const InterceptState = struct {
         return self.waiting.count() == 0;
     }
 
-    pub fn put(self: *InterceptState, request: HttpClient.Request) !void {
-        return self.waiting.put(self.allocator, request.params.request_id, request);
+    pub fn putRequest(self: *InterceptState, request: HttpClient.Request) !void {
+        return self.waiting.put(self.allocator, request.params.request_id, .{ .request = request });
     }
 
-    pub fn remove(self: *InterceptState, request_id: u32) ?HttpClient.Request {
+    pub fn putTransfer(self: *InterceptState, transfer: *HttpClient.Transfer) !void {
+        return self.waiting.put(self.allocator, transfer.id, .{ .transfer = transfer });
+    }
+
+    pub fn remove(self: *InterceptState, request_id: u32) ?Pending {
         const entry = self.waiting.fetchSwapRemove(request_id) orelse return null;
         return entry.value;
     }
@@ -80,7 +89,7 @@ pub const InterceptState = struct {
         self.waiting.deinit(self.allocator);
     }
 
-    pub fn pendingRequests(self: *const InterceptState) []HttpClient.Request {
+    pub fn pendingIntercepts(self: *const InterceptState) []Pending {
         return self.waiting.values();
     }
 };
@@ -193,7 +202,7 @@ pub fn requestIntercept(bc: *CDP.BrowserContext, intercept: *const Notification.
     // TODO: What to do when receiving replies for a previous frame's requests?
 
     const request = intercept.request;
-    try bc.intercept_state.put(request.*);
+    try bc.intercept_state.putRequest(request.*);
 
     try bc.cdp.sendEvent("Fetch.requestPaused", .{
         .requestId = &id.toInterceptId(request.params.request_id),
@@ -235,7 +244,9 @@ fn continueRequest(cmd: *CDP.Command) !void {
 
     var intercept_state = &bc.intercept_state;
     const request_id = try idFromRequestId(params.requestId);
-    var request = intercept_state.remove(request_id) orelse return error.RequestNotFound;
+
+    const pending = intercept_state.remove(request_id) orelse return error.RequestNotFound;
+    var request = pending.request;
 
     log.debug(.cdp, "request intercept", .{
         .state = "continue",
@@ -300,7 +311,9 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
 
     var intercept_state = &bc.intercept_state;
     const request_id = try idFromRequestId(params.requestId);
-    var request = intercept_state.remove(request_id) orelse return error.RequestNotFound;
+    const pending = intercept_state.remove(request_id) orelse return error.RequestNotFound;
+    const transfer = pending.transfer;
+    var request = transfer.req;
 
     log.debug(.cdp, "request intercept", .{
         .state = "continue with auth",
@@ -311,15 +324,15 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
     const client = bc.cdp.browser.http_client;
 
     if (params.authChallengeResponse.response != .ProvideCredentials) {
-        client.interception_layer.abortAuthChallenge(request);
+        transfer.abortAuthChallenge();
         return cmd.sendResult(null, .{});
     }
 
     // cancel the request, deinit the transfer on error.
-    errdefer client.interception_layer.abortAuthChallenge(request);
+    errdefer transfer.abortAuthChallenge();
 
     const arena = request.params.arena.allocator();
-    request.params.credentials = try std.fmt.allocPrintSentinel(
+    transfer.updateCredentials(try std.fmt.allocPrintSentinel(
         arena,
         "{s}:{s}",
         .{
@@ -327,9 +340,9 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
             params.authChallengeResponse.password,
         },
         0,
-    );
+    ));
 
-    try client.interception_layer.continueRequest(client, request);
+    try client.continueTransfer(transfer);
     return cmd.sendResult(null, .{});
 }
 
@@ -352,7 +365,9 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
 
     var intercept_state = &bc.intercept_state;
     const request_id = try idFromRequestId(params.requestId);
-    var request = intercept_state.remove(request_id) orelse return error.RequestNotFound;
+
+    const pending = intercept_state.remove(request_id) orelse return error.RequestNotFound;
+    var request = pending.request;
 
     log.debug(.cdp, "request intercept", .{
         .state = "fulfilled",
@@ -385,7 +400,8 @@ fn failRequest(cmd: *CDP.Command) !void {
     var intercept_state = &bc.intercept_state;
     const request_id = try idFromRequestId(params.requestId);
 
-    const request = intercept_state.remove(request_id) orelse return error.RequestNotFound;
+    const pending = intercept_state.remove(request_id) orelse return error.RequestNotFound;
+    const request = pending.request;
 
     const client = bc.cdp.browser.http_client;
     defer client.interception_layer.abortRequest(client, request);
@@ -408,16 +424,16 @@ pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notificati
     // NOTE: we assume whomever created the request created it with a lifetime of the Page.
     // TODO: What to do when receiving replies for a previous frame's requests?
 
-    const intercept_ctx = intercept.intercept_ctx;
-    const request = intercept.request;
-    try bc.intercept_state.put(request.*);
+    const transfer = intercept.transfer;
+    try bc.intercept_state.putTransfer(transfer);
+    var request = transfer.req;
 
-    const challenge = intercept_ctx.auth_challenge orelse return error.NullAuthChallenge;
+    const challenge = transfer._auth_challenge orelse return error.NullAuthChallenge;
 
     try bc.cdp.sendEvent("Fetch.authRequired", .{
         .requestId = &id.toInterceptId(request.params.request_id),
         .frameId = &id.toFrameId(request.params.frame_id),
-        .request = network.RequestWriter.init(request),
+        .request = network.RequestWriter.init(&request),
         .resourceType = switch (request.params.resource_type) {
             .script => "Script",
             .xhr => "XHR",
@@ -430,7 +446,7 @@ pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notificati
             .scheme = if (challenge.scheme) |s| (if (s == .digest) "digest" else "basic") else "",
             .realm = challenge.realm orelse "",
         },
-        .networkId = &id.toRequestId2(request),
+        .networkId = &id.toRequestId2(&request),
     }, .{ .session_id = session_id });
 
     log.debug(.cdp, "request auth required", .{
