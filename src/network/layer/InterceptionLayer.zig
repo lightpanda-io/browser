@@ -53,12 +53,8 @@ pub fn layer(self: *InterceptionLayer) Layer {
 fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
     const self: *InterceptionLayer = @ptrCast(@alignCast(ptr));
 
-    const arena = try client.network.app.arena_pool.acquire(.small, "InterceptionLayer");
-    errdefer client.network.app.arena_pool.release(arena);
-
-    const intercept_ctx = try arena.create(InterceptContext);
+    const intercept_ctx = try in_req.params.arena.create(InterceptContext);
     intercept_ctx.* = .{
-        .arena = arena,
         .client = client,
         .forward = Forward.fromRequest(in_req),
         .layer = self,
@@ -103,7 +99,6 @@ fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
 }
 
 pub const InterceptContext = struct {
-    arena: std.mem.Allocator,
     client: *Client,
     forward: Forward,
     layer: *InterceptionLayer,
@@ -151,7 +146,6 @@ pub const InterceptContext = struct {
 
     fn doneCallback(ctx: *anyopaque) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
-        defer self.client.network.app.arena_pool.release(self.arena);
 
         log.debug(.http, "intercept done", .{
             .url = self.request.params.url,
@@ -167,7 +161,6 @@ pub const InterceptContext = struct {
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
-        defer self.client.network.app.arena_pool.release(self.arena);
 
         log.debug(.http, "intercept error", .{
             .url = self.request.params.url,
@@ -182,7 +175,6 @@ pub const InterceptContext = struct {
 
     fn shutdownCallback(ctx: *anyopaque) void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
-        defer self.client.network.app.arena_pool.release(self.arena);
 
         log.debug(.http, "intercept shutdown", .{ .url = self.request.params.url });
         self.request.params.notification.dispatch(.http_request_fail, &.{
@@ -203,7 +195,7 @@ pub fn continueRequest(self: *InterceptionLayer, client: *Client, req: Request) 
     self.intercepted -= 1;
     self.next.request(client, req) catch |err| {
         const ctx: *InterceptContext = @ptrCast(@alignCast(req.ctx));
-        client.network.app.arena_pool.release(ctx.arena);
+        ctx.client.deinitRequest(req);
         return err;
     };
 }
