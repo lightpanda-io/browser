@@ -67,7 +67,6 @@ fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
     var req = intercept_ctx.forward.wrapRequest(
         pre_wrap_req,
         intercept_ctx,
-        client.incrReqId(),
         .{
             .start = InterceptContext.startCallback,
             .header = InterceptContext.headerCallback,
@@ -84,6 +83,12 @@ fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
     req.params.notification.dispatch(.http_request_intercept, &.{
         .request = &req,
         .wait_for_interception = &wait_for_interception,
+    });
+
+    log.debug(.http, "interception check", .{
+        .wait_for_interception = wait_for_interception,
+        .intercepted = self.intercepted,
+        .url = req.params.url,
     });
 
     if (!wait_for_interception) {
@@ -121,35 +126,35 @@ pub const InterceptContext = struct {
 
         self.content_length = response.contentLength() orelse 0;
 
-        switch (response.inner) {
-            .transfer => |t| {
-                const status = t.response_header.?.status;
-                if (status == 401 or status == 407) {
-                    self.auth_challenge = Transfer.detectAuthChallenge(t._conn.?);
+        // switch (response.inner) {
+        //     .transfer => |t| {
+        //         const status = t.response_header.?.status;
+        //         if (status == 401 or status == 407) {
+        //             self.auth_challenge = Transfer.detectAuthChallenge(t._conn.?);
 
-                    if (self.auth_challenge != null and self.tries < 10) {
-                        var wait_for_interception = false;
+        //             if (self.auth_challenge != null and self.tries < 10) {
+        //                 var wait_for_interception = false;
 
-                        self.request.params.notification.dispatch(.http_request_auth_required, &.{
-                            .request = &self.request,
-                            .intercept_ctx = self,
-                            .wait_for_interception = &wait_for_interception,
-                        });
+        //                 self.request.params.notification.dispatch(.http_request_auth_required, &.{
+        //                     .request = &self.request,
+        //                     .intercept_ctx = self,
+        //                     .wait_for_interception = &wait_for_interception,
+        //                 });
 
-                        if (wait_for_interception) {
-                            log.debug(.http, "intercept auth required", .{
-                                .url = self.request.params.url,
-                                .status = status,
-                                .intercepted = self.layer.intercepted,
-                            });
-                            self.layer.intercepted += 1;
-                            return false;
-                        }
-                    }
-                }
-            },
-            else => {},
-        }
+        //                 if (wait_for_interception) {
+        //                     log.debug(.http, "intercept auth required", .{
+        //                         .url = self.request.params.url,
+        //                         .status = status,
+        //                         .intercepted = self.layer.intercepted,
+        //                     });
+        //                     self.layer.intercepted += 1;
+        //                     return false;
+        //                 }
+        //             }
+        //         }
+        //     },
+        //     else => {},
+        // }
 
         self.request.params.notification.dispatch(.http_response_header_done, &.{
             .request = &self.request,
@@ -202,6 +207,10 @@ pub const InterceptContext = struct {
     fn shutdownCallback(ctx: *anyopaque) void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
         log.debug(.http, "intercept shutdown", .{ .url = self.request.params.url });
+        self.request.params.notification.dispatch(.http_request_fail, &.{
+            .request = &self.request,
+            .err = error.Shutdown,
+        });
         self.forward.forwardShutdown();
     }
 };
@@ -269,7 +278,7 @@ pub fn fulfillRequest(
     body: ?[]const u8,
 ) !void {
     if (comptime IS_DEBUG) {
-        log.debug(.http, "filfull transfer", .{ .intercepted = self.intercepted });
+        log.debug(.http, "fulfill transfer", .{ .intercepted = self.intercepted });
     }
 
     self.intercepted -= 1;
