@@ -107,6 +107,7 @@ pub fn Builder(comptime T: type) type {
 }
 
 pub const Constructor = struct {
+    arity: c_int,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     const Opts = struct {
@@ -118,21 +119,24 @@ pub const Constructor = struct {
     };
 
     fn init(comptime T: type, comptime func: anytype, comptime opts: Opts) Constructor {
-        return .{ .func = struct {
-            fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
-                var caller: Caller = undefined;
-                if (!caller.init(v8_isolate)) {
-                    return;
-                }
-                defer caller.deinit();
+        return .{
+            .arity = comptime Function.getArity(@TypeOf(func), if (opts.new_target) 1 else 0),
+            .func = struct {
+                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                    const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
+                    var caller: Caller = undefined;
+                    if (!caller.init(v8_isolate)) {
+                        return;
+                    }
+                    defer caller.deinit();
 
-                caller.constructor(T, func, handle.?, .{
-                    .dom_exception = opts.dom_exception,
-                    .new_target = opts.new_target,
-                });
-            }
-        }.wrap };
+                    caller.constructor(T, func, handle.?, .{
+                        .dom_exception = opts.dom_exception,
+                        .new_target = opts.new_target,
+                    });
+                }
+            }.wrap,
+        };
     }
 };
 
@@ -149,7 +153,7 @@ pub const Function = struct {
             .cache = opts.cache,
             .static = opts.static,
             .wpt_only = opts.wpt_only,
-            .arity = getArity(@TypeOf(func)),
+            .arity = getArity(@TypeOf(func), 1),
             .func = if (opts.noop) noopFunction else struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
                     Caller.Function.call(T, handle.?, func, opts);
@@ -160,14 +164,32 @@ pub const Function = struct {
 
     pub fn noopFunction(_: ?*const v8.FunctionCallbackInfo) callconv(.c) void {}
 
-    fn getArity(comptime T: type) usize {
+    fn getArity(comptime T: type, comptime start: usize) usize {
+        const Execution = js.Execution;
+
+        const Page = @import("../Page.zig");
+        const Session = @import("../Session.zig");
+
         var count: usize = 0;
         var params = @typeInfo(T).@"fn".params;
-        for (params[1..]) |p| { // start at 1, skip self
+        for (params[start..]) |p| { // start at 1, skip self
             const PT = p.type.?;
             if (PT == *Frame or PT == *const Frame) {
                 break;
             }
+
+            if (PT == *Page or PT == *const Page) {
+                break;
+            }
+
+            if (PT == *Execution or PT == *const Execution) {
+                break;
+            }
+
+            if (PT == *Session or PT == *const Session) {
+                break;
+            }
+
             if (@typeInfo(PT) == .optional) {
                 break;
             }
