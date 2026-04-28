@@ -931,6 +931,9 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/CryptoKey.zig"),
     @import("../webapi/Selection.zig"),
     @import("../webapi/ImageData.zig"),
+    @import("../webapi/XPathResult.zig"),
+    @import("../webapi/XPathExpression.zig"),
+    @import("../webapi/XPathEvaluator.zig"),
 });
 
 // APIs available on Worker context globals (constructors like URL, Headers, etc.)

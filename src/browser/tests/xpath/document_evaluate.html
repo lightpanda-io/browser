@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<body>
+  <script src="../testing.js"></script>
+  <h1 id=title>Hello</h1>
+  <div class=group>
+    <p id=p1>First</p>
+    <p id=p2>Second</p>
+    <p id=p3>Third</p>
+  </div>
+  <span id=span1 data-x="42">x</span>
+</body>
+
+<script id=snapshot_basic>
+{
+  const r = document.evaluate("//p", document, null,
+    XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+  testing.expectEqual(true, r instanceof XPathResult);
+  testing.expectEqual(XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, r.resultType);
+  testing.expectEqual(3, r.snapshotLength);
+  testing.expectEqual('p1', r.snapshotItem(0).id);
+  testing.expectEqual('p3', r.snapshotItem(2).id);
+  testing.expectEqual(null, r.snapshotItem(3));
+}
+</script>
+
+<script id=default_context>
+{
+  const r1 = document.evaluate("//p", null, null,
+    XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+  testing.expectEqual(3, r1.snapshotLength);
+  const r2 = document.evaluate("//p", undefined, null,
+    XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+  testing.expectEqual(3, r2.snapshotLength);
+}
+</script>
+
+<script id=first_ordered_node>
+{
+  const r = document.evaluate("//p", document, null,
+    XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+  testing.expectEqual(XPathResult.FIRST_ORDERED_NODE_TYPE, r.resultType);
+  testing.expectEqual('p1', r.singleNodeValue.id);
+
+  const empty = document.evaluate("//nope", document, null,
+    XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+  testing.expectEqual(null, empty.singleNodeValue);
+}
+</script>
+
+<script id=number_type>
+{
+  const r = document.evaluate("count(//p)", document, null,
+    XPathResult.NUMBER_TYPE, null);
+  testing.expectEqual(XPathResult.NUMBER_TYPE, r.resultType);
+  testing.expectEqual(3, r.numberValue);
+}
+</script>
+
+<script id=string_type>
+{
+  const r = document.evaluate("string(//h1)", document, null,
+    XPathResult.STRING_TYPE, null);
+  testing.expectEqual(XPathResult.STRING_TYPE, r.resultType);
+  testing.expectEqual('Hello', r.stringValue);
+}
+</script>
+
+<script id=boolean_type>
+{
+  const r = document.evaluate("count(//p) > 0", document, null,
+    XPathResult.BOOLEAN_TYPE, null);
+  testing.expectEqual(XPathResult.BOOLEAN_TYPE, r.resultType);
+  testing.expectEqual(true, r.booleanValue);
+}
+</script>
+
+<script id=any_type>
+{
+  const ns = document.evaluate("//p", document, null,
+    XPathResult.ANY_TYPE, null);
+  testing.expectEqual(XPathResult.UNORDERED_NODE_ITERATOR_TYPE, ns.resultType);
+  testing.expectEqual('p1', ns.iterateNext().id);
+
+  const num = document.evaluate("count(//p)", document, null,
+    XPathResult.ANY_TYPE, null);
+  testing.expectEqual(XPathResult.NUMBER_TYPE, num.resultType);
+  testing.expectEqual(3, num.numberValue);
+}
+</script>
+
+<script id=context_node_scoping>
+{
+  const div = document.querySelector('div.group');
+  const r = document.evaluate("./p", div, null,
+    XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+  testing.expectEqual(3, r.snapshotLength);
+  testing.expectEqual('p1', r.snapshotItem(0).id);
+}
+</script>
+
+<script id=create_expression>
+{
+  const expr = document.createExpression("//p", null);
+  testing.expectEqual(true, expr instanceof XPathExpression);
+  const r = expr.evaluate(document, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+  testing.expectEqual(3, r.snapshotLength);
+}
+</script>
+
+<script id=create_ns_resolver>
+{
+  const resolver = document.createNSResolver(document);
+  testing.expectEqual(document, resolver);
+}
+</script>
+
+<script id=attribute_axis>
+{
+  const r = document.evaluate("//span/@data-x", document, null,
+    XPathResult.STRING_TYPE, null);
+  testing.expectEqual('42', r.stringValue);
+}
+</script>
