@@ -413,7 +413,8 @@ pub fn deinit(self: *Frame) void {
 
     self._script_manager.base.shutdown = true;
 
-    browser.http_client.abortFrame(self._frame_id);
+    // don't abort pending frames.
+    browser.http_client.abortFrame(self._frame_id, .{});
 
     self._script_manager.deinit();
     self._style_manager.deinit();
@@ -753,7 +754,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         .type = target._type,
     });
 
-    session.browser.http_client.abortFrame(target._frame_id);
+    session.browser.http_client.abortFrame(target._frame_id, .{});
 
     // Capture the originating frame's URL as the Referer for this
     // navigation. The originator's frame may be torn down before navigate()
