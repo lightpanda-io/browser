@@ -159,24 +159,23 @@ pub fn forEach(self: *FormData, cb_: js.Function, js_this_: ?js.Object) !void {
     }
 }
 
+pub const EncType = union(enum) {
+    urlencode,
+    // Boundary delimiter; caller owns the bytes (must outlive the write).
+    formdata: []const u8,
+};
+
 pub const WriteOpts = struct {
-    enctype: ?[]const u8 = null,
+    encoding: EncType = .urlencode,
     charset: []const u8 = "UTF-8",
     allocator: ?std.mem.Allocator = null,
 };
 
 pub fn write(self: *const FormData, opts: WriteOpts, writer: *std.Io.Writer) !void {
-    const enctype = opts.enctype orelse {
-        return self.urlEncode(opts, writer);
-    };
-
-    if (std.ascii.eqlIgnoreCase(enctype, "application/x-www-form-urlencoded")) {
-        return self.urlEncode(opts, writer);
+    switch (opts.encoding) {
+        .urlencode => return self.urlEncode(opts, writer),
+        .formdata => |boundary| return self.multipartEncode(boundary, writer),
     }
-
-    log.warn(.not_implemented, "FormData.encoding", .{
-        .encoding = enctype,
-    });
 }
 
 fn urlEncode(self: *const FormData, opts: WriteOpts, writer: *std.Io.Writer) !void {
@@ -194,6 +193,42 @@ fn urlEncodeEntry(entry: *const Entry, opts: WriteOpts, writer: *std.Io.Writer) 
     try KeyValueList.urlEncodeFormValue(entry.name.str(), opts.allocator, opts.charset, writer);
     try writer.writeByte('=');
     try KeyValueList.urlEncodeFormValue(entry.value.asString(), opts.allocator, opts.charset, writer);
+}
+
+fn multipartEncode(self: *const FormData, boundary: []const u8, writer: *std.Io.Writer) !void {
+    for (self._entries.items) |*entry| {
+        try multipartEncodeEntry(entry, boundary, writer);
+    }
+    try writer.print("--{s}--\r\n", .{boundary});
+}
+
+fn multipartEncodeEntry(entry: *const Entry, boundary: []const u8, writer: *std.Io.Writer) !void {
+    try writer.print("--{s}\r\n", .{boundary});
+    const value_ptr = &entry.value;
+    switch (value_ptr.*) {
+        .string => |*s| {
+            try writer.writeAll("Content-Disposition: form-data; name=\"");
+            try writeMultipartName(writer, entry.name.str());
+            try writer.writeAll("\"\r\n\r\n");
+            try writer.writeAll(s.str());
+            try writer.writeAll("\r\n");
+        },
+        // File entries need a real payload (filename + bytes + Content-Type) — not yet wired.
+        .file => log.warn(.not_implemented, "FormData.multipart.file", .{}),
+    }
+}
+
+// Per RFC 7578 §4.2, Content-Disposition names are quoted-string form;
+// CR/LF/" must be escaped.
+fn writeMultipartName(writer: *std.Io.Writer, name: []const u8) !void {
+    for (name) |c| {
+        switch (c) {
+            '"' => try writer.writeAll("%22"),
+            '\r' => try writer.writeAll("%0D"),
+            '\n' => try writer.writeAll("%0A"),
+            else => try writer.writeByte(c),
+        }
+    }
 }
 
 // Used by URLSearchParams to ingest a FormData; file entries collapse via Value.asString.
@@ -356,4 +391,73 @@ pub const JsApi = struct {
 const testing = @import("../../../testing.zig");
 test "WebApi: FormData" {
     try testing.htmlRunner("net/form_data.html", .{});
+}
+
+test "FormData: multipart write" {
+    const allocator = testing.arena_allocator;
+
+    var fd = FormData{
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd.append("name", "John");
+    try fd.append("note", "two\r\nlines");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try fd.write(.{
+        .encoding = .{ .formdata = "BOUNDARY" },
+        .allocator = allocator,
+    }, &buf.writer);
+
+    try testing.expectString(
+        "--BOUNDARY\r\n" ++
+            "Content-Disposition: form-data; name=\"name\"\r\n\r\n" ++
+            "John\r\n" ++
+            "--BOUNDARY\r\n" ++
+            "Content-Disposition: form-data; name=\"note\"\r\n\r\n" ++
+            "two\r\nlines\r\n" ++
+            "--BOUNDARY--\r\n",
+        buf.written(),
+    );
+}
+
+test "FormData: multipart escapes name CR/LF/quote" {
+    const allocator = testing.arena_allocator;
+
+    var fd = FormData{
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd.append("a\"b\r\nc", "v");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try fd.write(.{
+        .encoding = .{ .formdata = "B" },
+        .allocator = allocator,
+    }, &buf.writer);
+
+    try testing.expectString(
+        "--B\r\n" ++
+            "Content-Disposition: form-data; name=\"a%22b%0D%0Ac\"\r\n\r\n" ++
+            "v\r\n" ++
+            "--B--\r\n",
+        buf.written(),
+    );
+}
+
+test "FormData: multipart empty body" {
+    const allocator = testing.arena_allocator;
+
+    var fd = FormData{
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try fd.write(.{
+        .encoding = .{ .formdata = "B" },
+        .allocator = allocator,
+    }, &buf.writer);
+
+    try testing.expectString("--B--\r\n", buf.written());
 }
