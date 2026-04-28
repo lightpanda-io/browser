@@ -692,7 +692,9 @@ pub const BrowserContext = struct {
         const arena = self.frame_arena;
 
         // Prepare the captured response value.
-        const id = msg.request.params.request_id;
+        const params = msg.request.params;
+        // for documents, CDP uses the loarder id as request id.
+        const id = if (params.resource_type == .document) params.loader_id else params.request_id;
         const gop = try self.captured_responses.getOrPut(arena, id);
         if (!gop.found_existing) {
             gop.value_ptr.* = .{
@@ -729,7 +731,9 @@ pub const BrowserContext = struct {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         const arena = self.frame_arena;
 
-        const id = msg.request.params.request_id;
+        const params = msg.request.params;
+        // for documents, CDP uses the loarder id as request id.
+        const id = if (params.resource_type == .document) params.loader_id else params.request_id;
         const resp = self.captured_responses.getPtr(id) orelse lp.assert(false, "onHttpResponseData missinf captured response", .{});
 
         return resp.data.appendSlice(arena, msg.data);
