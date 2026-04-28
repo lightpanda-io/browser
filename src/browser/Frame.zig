@@ -2355,6 +2355,17 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         attribute_iterator,
                         .{ ._proto = undefined },
                     ),
+                    asUint("frameset") => {
+                        if (comptime from_parser) {
+                            log.warn(.not_implemented, "framset", .{ .note = "<framset>...</frameset> in html is not handled properly" });
+                        }
+                        return self.createHtmlElementT(
+                            Element.Html.FrameSet,
+                            namespace,
+                            attribute_iterator,
+                            .{ ._proto = undefined },
+                        );
+                    },
                     asUint("optgroup") => return self.createHtmlElementT(
                         Element.Html.OptGroup,
                         namespace,
