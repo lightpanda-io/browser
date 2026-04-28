@@ -95,7 +95,12 @@ pub fn fromExpression(
     const arena = try frame.getArena(.medium, "XPathResult");
     errdefer frame.releaseArena(arena);
 
-    const expr = try xpath.Parser.parse(arena, expression);
+    // The AST borrows string slices from its input (literals, names,
+    // var refs, function names). `expression` is materialized in the JS
+    // call_arena and is reclaimed when the top-level call returns, so
+    // dupe into our long-lived arena before parsing.
+    const owned = try arena.dupe(u8, expression);
+    const expr = try xpath.Parser.parse(arena, owned);
     const result = try xpath.Evaluator.evaluate(arena, frame, expr, context_node);
     return fromResult(arena, requested_type, result);
 }

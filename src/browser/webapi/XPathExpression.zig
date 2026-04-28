@@ -50,7 +50,12 @@ pub fn init(expression: []const u8, frame: *Frame) !*XPathExpression {
     const arena = try frame.getArena(.tiny, "XPathExpression");
     errdefer frame.releaseArena(arena);
 
-    const expr = try xpath.Parser.parse(arena, expression);
+    // The AST borrows string slices from its input (literals, names,
+    // var refs, function names). `expression` is materialized in the JS
+    // call_arena and is reclaimed when the top-level call returns, so
+    // dupe into our long-lived arena before parsing.
+    const owned = try arena.dupe(u8, expression);
+    const expr = try xpath.Parser.parse(arena, owned);
     const xe = try arena.create(XPathExpression);
     xe.* = .{ ._arena = arena, ._expr = expr };
     return xe;
