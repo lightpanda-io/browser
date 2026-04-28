@@ -65,8 +65,7 @@ pub const HeaderIterator = http.HeaderIterator;
 // impacting those other http requests.
 pub const Client = @This();
 
-// Our curl multi handle. Owns in_use/ready_queue/http_active/ws_active/
-// performing — see Network.Handle.
+// Our curl multi handle. Owns in_use/http_active/ws_active — see Network.Handle.
 handle: Network.Handle,
 
 // WebSockets with queued events to be drained from the worker thread.
@@ -214,6 +213,30 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
 
 pub fn deinit(self: *Client) void {
     self.abort();
+
+    // Cancellations submitted by abort flow through the network thread
+    // and come back as canceled completions. If the network thread has
+    // already stopped, drive its queues ourselves; otherwise spin until
+    // they all arrive and we drained them.
+    var spins: usize = 0;
+    while (self.handle.in_use.first != null and spins < 1000) : (spins += 1) {
+        if (self.network.shutdown.load(.acquire)) {
+            self.network.drainPendingForShutdown();
+        }
+        _ = self.processMessages() catch {};
+        self.drainReadyWs();
+        if (self.handle.in_use.first == null) break;
+        std.Thread.sleep(std.time.ns_per_ms);
+    }
+    if (self.handle.in_use.first != null) {
+        log.warn(.http, "deinit with active conns", .{
+            .count = self.handle.http_active + self.handle.ws_active,
+        });
+    } else if (comptime IS_DEBUG) {
+        std.debug.assert(self.transfers.size == 0);
+        std.debug.assert(self.queue.first == null);
+    }
+
     self.handle.deinit();
 
     self.ws_ready.deinit(self.allocator);
@@ -269,14 +292,8 @@ pub fn setTlsVerify(self: *Client, verify: bool) !void {
 
     var it = self.handle.in_use.first;
     while (it) |node| : (it = node.next) {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        try self.handle.submitTlsVerify(conn, verify, self.use_proxy);
-    }
-
-    it = self.handle.ready_queue.first;
-    while (it) |node| : (it = node.next) {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        try self.handle.submitTlsVerify(conn, verify, self.use_proxy);
+        const conn: *http.Connection = @fieldParentPtr("_worker_node", node);
+        self.handle.submitTlsVerify(conn, verify, self.use_proxy);
     }
 
     self.tls_verify = verify;
@@ -318,22 +335,6 @@ pub fn abort(self: *Client) void {
 
     for (snapshot.items) |t| {
         t.kill();
-    }
-
-    // After the kill loop, every internal list should drain itself via
-    // each transfer's deinit:
-    //   - self.transfers : transfers.remove(self.id)
-    //   - self.queue     : unlinked if _queued is set
-    //   - handle.in_use / handle.ready_queue : via submitRemove
-    //   - handle.dirty  : drained at end of each perform
-    // Any non-empty list means a transfer escaped cleanup — assert so we
-    // catch the regression rather than silently leaking on next use.
-    if (comptime IS_DEBUG) {
-        std.debug.assert(self.transfers.size == 0);
-        std.debug.assert(self.queue.first == null);
-        std.debug.assert(self.handle.in_use.first == null);
-        std.debug.assert(self.handle.ready_queue.first == null);
-        std.debug.assert(self.handle.dirty.first == null);
     }
 }
 
@@ -560,14 +561,9 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
 // cases, the interceptor is expected to call resume to continue the transfer
 // or transfer.abort() to abort it.
 fn process(self: *Client, transfer: *Transfer) !void {
-    // libcurl doesn't allow recursive calls, if we're in a `perform()` operation
-    // then we _have_ to queue this.
-    if (self.handle.performing == false) {
-        if (self.handle.getConnection()) |conn| {
-            return self.makeRequest(conn, transfer);
-        }
+    if (self.handle.getConnection()) |conn| {
+        return self.makeRequest(conn, transfer);
     }
-
     self.queue.append(&transfer._node);
     transfer.state = .queued;
 }
@@ -640,38 +636,23 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
 }
 
 fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
-    // Handle.perform manages performing flag, drains the dirty queue
-    // before, and the ready_queue after curl_multi_perform.
-    const running = try self.handle.perform();
-
-    // Drain queued WebSocket events. ws callbacks (called from libcurl during
-    // perform above) only buffer/queue — actual JS dispatch happens here, on
-    // the worker thread.
+    // The network thread drives the multi; this just drains whatever
+    // it's already pushed (WS events queued by callbacks, completions
+    // delivered through Handle's wake pipe).
     self.drainReadyWs();
 
-    // We just processed completions; their done_callbacks may have
-    // scheduled microtasks (JS continuations) or queued new transfers.
-    // Return without polling so the caller (_tick) can run macrotasks
-    // and re-evaluate. Otherwise we'd sleep on cdp_link_active for up
-    // to timeout_ms while pending JS work sits idle.
+    // Process completions we already have before deciding to block.
     if (try self.processMessages()) {
         return;
     }
 
-    // Poll for HTTP I/O. The Network thread will call curl_multi_wakeup
-    // on our multi handle whenever it pushes to our inbox, so we drop
-    // out of poll promptly even when we have no curl handles in flight
-    // — but ONLY if a producer is actually wired up. `cdp_link_active`
-    // is set by Server.handleConnection once network.registerCdp has
-    // returned; in tests (which never register) and during the
-    // pre-handshake window the flag stays false and we don't waste a
-    // poll timeout waiting for a wakeup that won't arrive.
-    if (running > 0 or self.cdp_link_active) {
-        // when cdp_link_active == true, the network thread will unblock this
-        // by calling wakup on our multi.
+    // Poll for HTTP I/O or CDP inbox wakeups. cdp_link_active is set only
+    // after Network.registerCdp wires a producer that can wake this Handle.
+    if (self.handle.in_use.first != null or self.cdp_link_active) {
         try self.handle.poll(&.{}, timeout_ms);
     }
 
+    self.drainReadyWs();
     _ = try self.processMessages();
 }
 
@@ -762,7 +743,7 @@ fn processOneMessage(self: *Client, msg: Network.Handle.Completion, transfer: *T
             // release the easy handle back into the pool. The transfer
             // is still valid/alive (just has no handle); park it for
             // continueWithAuth.
-            self.handle.submitRemove(transfer._conn.?);
+            self.handle.finishConn(transfer._conn.?);
             transfer._conn = null;
             transfer.state = .{ .parked = .intercept_auth };
             return false;
@@ -837,7 +818,7 @@ fn processOneMessage(self: *Client, msg: Network.Handle.Completion, transfer: *T
     // release conn ASAP so that it's available; some done_callbacks
     // will load more resources. State stays .completing — the
     // processMessages caller still owns deinit.
-    self.handle.submitRemove(msg.conn);
+    self.handle.finishConn(msg.conn);
     transfer._conn = null;
 
     try transfer.req.done_callback(transfer.req.ctx);
@@ -1191,7 +1172,7 @@ pub const Transfer = struct {
 
     pub fn deinit(self: *Transfer) void {
         if (self._conn) |c| {
-            self.client.handle.submitRemove(c);
+            self.client.handle.finishConn(c);
             self._conn = null;
         }
 
@@ -1242,30 +1223,32 @@ pub const Transfer = struct {
     }
 
     // Decide whether to tear down now or defer until processOneMessage
-    // eventually drains the in-flight curl handle.
+    // eventually receives the canceled/completed connection.
     //
     // Two states force deferral:
     //   * `.completing` — processOneMessage is currently processing
     //     this transfer. It will call `transfer.deinit` itself after the
     //     chain returns; deiniting here would double-free. This covers
     //     both the with-conn and post-release-ASAP windows.
-    //   * `.inflight` while `client.handle.performing` — libcurl could still
-    //     fire callbacks for us. Releasing the arena now would UAF
-    //     from inside curl.
+    //   * `.inflight` with `_conn != null` — the network thread owns the
+    //     easy. Submit a cancellation and let the completion path call deinit.
     //
     // Otherwise (created / queued / parked / fully drained), there is
     // nothing left referencing this transfer and we can safely deinit
     // inline.
     fn detachOrDeinit(self: *Transfer) void {
-        const must_defer = switch (self.state) {
-            .completing => true,
-            .inflight => self.client.handle.performing,
-            else => false,
-        };
-        if (must_defer) {
-            self.detachInPerform();
-        } else {
-            self.deinit();
+        switch (self.state) {
+            .aborted => return,
+            .completing => self.detachInPerform(),
+            .inflight => {
+                if (self._conn) |conn| {
+                    self.detachInPerform();
+                    self.client.handle.submitRemove(conn);
+                } else {
+                    self.detachInPerform();
+                }
+            },
+            else => self.deinit(),
         }
     }
 
