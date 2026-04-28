@@ -201,6 +201,27 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: 
 
 pub fn deinit(self: *Client) void {
     self.abort(null);
+
+    // Cancellations submitted by abort flow through the network thread
+    // and come back as canceled completions. If the network thread has
+    // already stopped, drive its queues ourselves; otherwise spin until
+    // they all arrive and we drained them.
+    var spins: usize = 0;
+    while (self.handle.in_use.first != null and spins < 1000) : (spins += 1) {
+        if (self.network.shutdown.load(.acquire)) {
+            self.network.drainPendingForShutdown();
+        }
+        _ = self.processMessages() catch {};
+        self.drainReadyWs();
+        if (self.handle.in_use.first == null) break;
+        std.Thread.sleep(std.time.ns_per_ms);
+    }
+    if (self.handle.in_use.first != null) {
+        log.warn(.http, "deinit with active conns", .{
+            .count = self.handle.http_active + self.handle.ws_active,
+        });
+    }
+
     self.handle.deinit();
 
     self.ws_ready.deinit(self.allocator);
@@ -247,14 +268,8 @@ pub fn setTlsVerify(self: *Client, verify: bool) !void {
 
     var it = self.handle.in_use.first;
     while (it) |node| : (it = node.next) {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        try self.handle.submitTlsVerify(conn, verify, self.use_proxy);
-    }
-
-    it = self.handle.ready_queue.first;
-    while (it) |node| : (it = node.next) {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        try self.handle.submitTlsVerify(conn, verify, self.use_proxy);
+        const conn: *http.Connection = @fieldParentPtr("_worker_node", node);
+        self.handle.submitTlsVerify(conn, verify, self.use_proxy);
     }
 
     self.tls_verify = verify;
@@ -424,14 +439,9 @@ pub fn syncRequest(self: *Client, allocator: Allocator, params: RequestParams) !
 // cases, the interceptor is expected to call resume to continue the transfer
 // or transfer.abort() to abort it.
 fn process(self: *Client, transfer: *Transfer) !void {
-    // libcurl doesn't allow recursive calls, if we're in a `perform()` operation
-    // then we _have_ to queue this.
-    if (self.handle.performing == false) {
-        if (self.handle.getConnection()) |conn| {
-            return self.makeRequest(conn, transfer);
-        }
+    if (self.handle.getConnection()) |conn| {
+        return self.makeRequest(conn, transfer);
     }
-
     self.queue.append(&transfer._node);
 }
 
@@ -531,17 +541,12 @@ pub const PerformStatus = enum {
 };
 
 fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
-    // Handle.perform manages its own performing flag and drains
-    // ready_queue after curl_multi_perform returns.
-    const running = try self.handle.perform();
-
-    // Drain queued WebSocket events. ws callbacks (called from libcurl during
-    // perform above) only buffer/queue — actual JS dispatch happens here, on
-    // the worker thread.
+    // The network thread drives the multi; this just drains whatever
+    // it's already pushed (WS events queued by callbacks, completions
+    // delivered through Handle's wake pipe).
     self.drainReadyWs();
 
-    // We're potentially going to block for a while until we get data. Process
-    // whatever messages we have waiting ahead of time.
+    // Process completions we already have before deciding to block.
     if (try self.processMessages()) {
         return .normal;
     }
@@ -557,7 +562,9 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
         if (pollfds[0].revents != 0) {
             status = .cdp_socket;
         }
-    } else if (running > 0) {
+    } else if (self.handle.in_use.first != null) {
+        // Block until the network thread pushes a completion (or
+        // timeout). With nothing in flight there's no reason to wait.
         try self.handle.poll(&.{}, timeout_ms);
     }
 
@@ -961,14 +968,14 @@ pub const Transfer = struct {
 
     fn releaseConn(self: *Transfer) void {
         if (self._conn) |conn| {
-            self.client.handle.submitRemove(conn);
+            self.client.handle.finishConn(conn);
             self._conn = null;
         }
     }
 
     fn deinit(self: *Transfer) void {
         if (self._conn) |conn| {
-            self.client.handle.submitRemove(conn);
+            self.client.handle.finishConn(conn);
             self._conn = null;
         }
 
@@ -978,15 +985,22 @@ pub const Transfer = struct {
 
     pub fn abort(self: *Transfer, err: anyerror) void {
         self.requestFailed(err, true);
+        self.aborted = true;
 
-        if (self._performing or self.client.handle.performing) {
-            // We're currently in a curl_multi_perform. We cannot call
-            // curl_multi_remove_handle from a curl callback. Instead, we flag
-            // this transfer and our callbacks will check for this flag.
-            self.aborted = true;
+        // Inside a libcurl callback (network thread): just flag aborted
+        // and return. The callback will see the flag and unwind, and
+        // the transfer will eventually be delivered as a completion.
+        if (self._performing) return;
+
+        if (self._conn) |conn| {
+            // Submit cancel; the canceled completion arrives via
+            // drainCompletions and runs through deinit/finishConn.
+            self.client.handle.submitRemove(conn);
             return;
         }
 
+        // No conn yet: still in the wait queue.
+        self.client.queue.remove(&self._node);
         self.deinit();
     }
 
@@ -1002,23 +1016,22 @@ pub const Transfer = struct {
             cb(self.req.ctx);
         }
 
-        if (self._performing or self.client.handle.performing) {
-            // We're currently inside of a callback. This client, and libcurl
-            // generally don't expect a transfer to become deinitialized during
-            // a callback. We can flag the transfer as aborted (which is what
-            // we do when transfer.abort() is called in this condition) AND,
-            // since this "kill()"should prevent any future callbacks, the best
-            // we can do is null/noop them.
-            self.aborted = true;
-            self.req.start_callback = null;
-            self.req.shutdown_callback = null;
-            self.req.header_callback = Noop.headerCallback;
-            self.req.data_callback = Noop.dataCallback;
-            self.req.done_callback = Noop.doneCallback;
-            self.req.error_callback = Noop.errorCallback;
+        self.aborted = true;
+        self.req.start_callback = null;
+        self.req.shutdown_callback = null;
+        self.req.header_callback = Noop.headerCallback;
+        self.req.data_callback = Noop.dataCallback;
+        self.req.done_callback = Noop.doneCallback;
+        self.req.error_callback = Noop.errorCallback;
+
+        if (self._performing) return;
+
+        if (self._conn) |conn| {
+            self.client.handle.submitRemove(conn);
             return;
         }
 
+        self.client.queue.remove(&self._node);
         self.deinit();
     }
 
