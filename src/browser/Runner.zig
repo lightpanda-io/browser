@@ -206,18 +206,10 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
                 },
             }
 
-            if (http_active == 0 and http_client.handle.ws_active == 0 and http_client.queue.first == null and http_client.handle.ready_queue.first == null and (comptime is_cdp) == false) {
+            if (http_active == 0 and http_client.handle.ws_active == 0 and http_client.queue.first == null and (comptime is_cdp) == false) {
                 // we don't need to consider http_client.interception_layer.intercepted
                 // here because is_cdp is false, and that can only be
                 // the case when interception isn't possible.
-                //
-                // ready_queue is also part of the check: makeRequest now
-                // wraps its handles.perform() in a performing=true window,
-                // and any synchronous libcurl callback that ends up
-                // calling trackConn during that window (e.g. JS creating
-                // a WebSocket) will append to ready_queue. Without this
-                // check we could observe it non-empty after
-                // http_client.tick returns.
                 //
                 // intercepted is only non-zero in serve mode, and
                 // serve mode implies is_cdp — so if we got here,
