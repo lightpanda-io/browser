@@ -441,6 +441,9 @@ const ResponseWriter = struct {
             try jws.write(mime.charsetString());
         }
 
+        try jws.objectField("fromDiskCache");
+        try jws.write(response.inner == .cached);
+
         {
             try jws.objectField("timing");
             try jws.write(.{
