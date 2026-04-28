@@ -148,7 +148,7 @@ pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
 /// Returns true if the element is a submit button per the HTML spec:
 /// - <input type="submit"> or <input type="image">
 /// - <button type="submit"> (including default, since button's default type is "submit")
-fn isSubmitButton(element: *Element) bool {
+pub fn isSubmitButton(element: *Element) bool {
     if (element.is(Input)) |input| {
         return input._input_type == .submit or input._input_type == .image;
     }
