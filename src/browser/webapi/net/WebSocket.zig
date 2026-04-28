@@ -86,6 +86,11 @@ _pending_close: ?PendingClose = null,
 // WebSocket stays alive between queueing and drain.
 _in_ready_list: bool = false,
 
+// Set while a cancel is in flight. We hold an extra ref so the WS
+// can't be freed before the canceled completion arrives via
+// drainCompletions → disconnected.
+_cancel_pending: bool = false,
+
 // close info for event dispatch
 _close_code: u16 = 1000,
 _close_reason: []const u8 = "",
@@ -196,7 +201,10 @@ pub fn init(url: []const u8, protocols: [][]const u8, frame: *Frame) !*WebSocket
 }
 
 pub fn deinit(self: *WebSocket, page: *Page) void {
-    self.cleanup();
+    // By the time we reach deinit (RC=0) the canceled completion has
+    // already routed through cleanup(true). If conn is still set
+    // here it's an upstream invariant break — defensively finish.
+    self.cleanup(true);
 
     if (self._on_open) |func| {
         func.release();
@@ -232,15 +240,18 @@ fn asEventTarget(self: *WebSocket) *EventTarget {
 
 // we're being aborted internally (e.g. frame shutting down)
 pub fn kill(self: *WebSocket) void {
-    self.cleanup();
+    self._ready_state = .closed;
+    self.cleanup(false);
 }
 
 pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
-    if (self._ready_state == .closed) {
-        // already disconnected (e.g. close-handshake disconnected us, then
-        // libcurl reports the same connection completion).
-        return;
-    }
+    // Always run terminal cleanup — even on the already-closed early
+    // out, since the canceled completion delivery still needs to run
+    // finishConn and drop the cancel-pending ref.
+    defer self.cleanup(true);
+
+    if (self._ready_state == .closed) return;
+
     const was_clean = self._ready_state == .closing and err_ == null;
     self._ready_state = .closed;
 
@@ -250,9 +261,6 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
         log.info(.websocket, "disconnected", .{ .url = self._url, .reason = "closed" });
     }
 
-    // Queue events first (markReady acquires a "pending" ref), then cleanup
-    // (which releases the create-time ref). The pending ref keeps us alive
-    // until drainPending dispatches and releases it.
     self._pending_close = .{
         .code = if (was_clean) self._close_code else 1006,
         .reason = if (was_clean) self._close_reason else "",
@@ -260,18 +268,33 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
         .with_error = !was_clean,
     };
     self.markReady();
-
-    self.cleanup();
 }
 
-fn cleanup(self: *WebSocket) void {
-    if (self._conn) |conn| {
+// completed=true: terminal — conn already detached (delivered via
+// drainCompletions). Decrements counters via finishConn, releases
+// create-time ref (and cancel-pending ref if held).
+//
+// completed=false: initiate cancel — submitRemove queues the network
+// remove; we hold an extra ref until the canceled completion routes
+// back through disconnected → cleanup(true).
+fn cleanup(self: *WebSocket, completed: bool) void {
+    const conn = self._conn orelse return;
+    if (!completed) {
+        if (self._cancel_pending) return;
+        self._cancel_pending = true;
+        self.acquireRef();
         self._http_client.handle.submitRemove(conn);
-        self._req_headers.deinit();
-        self._conn = null;
-        self.releaseRef(self._frame._page);
-        self._send_queue.clearRetainingCapacity();
+        return;
     }
+    self._http_client.handle.finishConn(conn);
+    self._req_headers.deinit();
+    self._conn = null;
+    self.releaseRef(self._frame._page); // create-time
+    if (self._cancel_pending) {
+        self._cancel_pending = false;
+        self.releaseRef(self._frame._page); // pending-cancel
+    }
+    self._send_queue.clearRetainingCapacity();
 }
 
 fn queueMessage(self: *WebSocket, msg: Message) !void {
@@ -281,7 +304,7 @@ fn queueMessage(self: *WebSocket, msg: Message) !void {
     if (was_empty) {
         // Unpause the send callback so libcurl will request data
         if (self._conn) |conn| {
-            try self._http_client.handle.submitUnpause(conn);
+            self._http_client.handle.submitUnpause(conn);
         }
     }
 }
@@ -392,7 +415,7 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
             .with_error = false,
         };
         self.markReady();
-        self.cleanup();
+        self.cleanup(false);
         return;
     }
 
@@ -738,9 +761,11 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
                 1005; // No status code received
 
             if (self._ready_state == .closing) {
-                // Client-initiated close: this is the server's response.
-                // Close handshake complete - disconnect.
-                self.disconnected(null);
+                // Client-initiated close — server's response. Don't
+                // disconnect inline: we're inside a libcurl callback
+                // and tearing the conn down here would UAF the easy
+                // handle. Curl will deliver normal completion when the
+                // server closes the socket per RFC 6455 §5.5.1.
             } else {
                 // Server-initiated close: send reciprocal close frame per RFC 6455 §5.5.1
                 self._close_code = received_code;

@@ -271,7 +271,54 @@ pub const Connection = struct {
     _easy: *libcurl.Curl,
     in_use: bool,
     transport: Transport,
+
+    // Network-side node. Selects ownership: available pool /
+    // pending_add / pending_remove / Handle._completion_queue /
+    // Handle._drained. Mutated by the network thread under
+    // `Network.submission_mutex`, then handed off to worker via Slot.
     node: std.DoublyLinkedList.Node = .{},
+
+    // Worker-side node. Lives in Handle.in_use for the duration of a
+    // tracked submission, independent of `node`.
+    _worker_node: std.DoublyLinkedList.Node = .{},
+
+    // Network-side submission state. Transitions of `_submission` and
+    // membership in pending_add/pending_remove/Slot lists must happen
+    // together under `Network.submission_mutex`.
+    _submission: SubmissionState = .idle,
+
+    // Op channel guarded by Network.submission_mutex. The conn lives in
+    // Network.pending_ops while `_op_in_list` is true; flags below
+    // accumulate work for drainQueue to apply on the network thread.
+    _op_node: std.DoublyLinkedList.Node = .{},
+    _op_in_list: bool = false,
+    _op_unpause: bool = false,
+    _op_tls_verify: ?TlsVerifyOp = null,
+
+    // Set by trackers (HttpClient, telemetry) before submitRequest. The
+    // network thread invokes it after curl_multi_remove_handle, passing
+    // the cause; the callback then takes ownership of the conn (must
+    // eventually release it back to the pool).
+    on_complete: ?*const fn (conn: *Connection, err: ?anyerror) void = null,
+
+    // Stash for the callback to forward to the worker via Slot.
+    _completion_err: ?anyerror = null,
+
+    pub const SubmissionState = enum(u8) {
+        // Not in any submission list, not in the curl multi.
+        idle,
+        // Queued for the network thread to add to the multi.
+        pending_add,
+        // Active in the curl multi.
+        in_multi,
+        // Queued for the network thread to remove from the multi.
+        pending_remove,
+    };
+
+    pub const TlsVerifyOp = struct {
+        verify: bool,
+        use_proxy: bool,
+    };
 
     pub const Transport = union(enum) {
         none, // used for cases that manage their own connection, e.g. telemetry
@@ -418,6 +465,10 @@ pub const Connection = struct {
     ) !void {
         libcurl.curl_easy_reset(self._easy);
         self.transport = .none;
+        self.on_complete = null;
+        self._completion_err = null;
+        // _submission and _op_* fields are guarded by submission_mutex
+        // and cleared by Network on every transition to .idle.
 
         // timeouts
         try libcurl.curl_easy_setopt(self._easy, .timeout_ms, config.httpTimeout());
