@@ -576,7 +576,7 @@ pub const Script = struct {
                     .a9 = self.debug_transfer_easy_id,
                     .b1 = transfer.id,
                     .b2 = transfer._tries,
-                    .b3 = transfer.aborted,
+                    .b3 = transfer.isAborted(),
                     .b4 = transfer.bytes_received,
                     .b5 = transfer._notified_fail,
                     .b8 = transfer._auth_challenge != null,
@@ -585,7 +585,7 @@ pub const Script = struct {
                 self.header_callback_called = true;
                 self.debug_transfer_id = transfer.id;
                 self.debug_transfer_tries = transfer._tries;
-                self.debug_transfer_aborted = transfer.aborted;
+                self.debug_transfer_aborted = transfer.isAborted();
                 self.debug_transfer_bytes_received = transfer.bytes_received;
                 self.debug_transfer_notified_fail = transfer._notified_fail;
                 self.debug_transfer_auth_challenge = transfer._auth_challenge != null;

@@ -306,12 +306,15 @@ pub const AbortOpts = Network.Handle.AbortOpts;
 pub fn abort(self: *Client) void {
     self.handle.abort();
 
+    // transfer.kill() removes the transfer from self.queue and deinits
+    // it for queued (no conn) transfers; capture next before so we
+    // don't deref freed memory.
     var n = self.queue.first;
-    while (n) |node| : (n = node.next) {
+    while (n) |node| {
+        n = node.next;
         const transfer: *Transfer = @fieldParentPtr("_node", node);
         transfer.kill();
     }
-    self.queue = .{};
 }
 
 // abortFrame with .normal doesn't abort protect_from_abort requests.
@@ -319,14 +322,12 @@ pub fn abort(self: *Client) void {
 pub fn abortFrame(self: *Client, frame_id: u32, opts: AbortOpts) void {
     self.handle.abortFrame(frame_id, opts);
 
-    var q = &self.queue;
-    var n = q.first;
+    var n = self.queue.first;
     while (n) |node| {
         n = node.next;
         const transfer: *Transfer = @fieldParentPtr("_node", node);
         const params = transfer.req.params;
         if (params.frame_id == frame_id and (opts.scope == .full or !params.protect_from_abort)) {
-            q.remove(node);
             transfer.kill();
         }
     }
@@ -669,7 +670,7 @@ fn processOneMessage(self: *Client, msg: Network.Handle.Completion, transfer: *T
     if (transfer._stream_buffer.items.len > 0) {
         try transfer.req.data_callback(Response.fromTransfer(transfer), body);
 
-        if (transfer.aborted) {
+        if (transfer.isAborted()) {
             transfer.requestFailed(error.Abort, true);
             return true;
         }
@@ -954,7 +955,7 @@ pub const Transfer = struct {
     bytes_received: usize = 0,
 
     start_time: u64,
-    aborted: bool = false,
+    aborted: std.atomic.Value(bool) = .init(false),
 
     // We'll store the response header here
     response_header: ?ResponseHead = null,
@@ -1002,9 +1003,17 @@ pub const Transfer = struct {
         self.client.transfer_pool.destroy(self);
     }
 
+    pub fn isAborted(self: *const Transfer) bool {
+        return self.aborted.load(.acquire);
+    }
+
+    fn setAborted(self: *Transfer) void {
+        self.aborted.store(true, .release);
+    }
+
     pub fn abort(self: *Transfer, err: anyerror) void {
         self.requestFailed(err, true);
-        self.aborted = true;
+        self.setAborted();
 
         // Inside a libcurl callback (network thread): just flag aborted
         // and return. The callback will see the flag and unwind, and
@@ -1035,7 +1044,7 @@ pub const Transfer = struct {
             cb(self.req.ctx);
         }
 
-        self.aborted = true;
+        self.setAborted();
         self.req.start_callback = null;
         self.req.shutdown_callback = null;
         self.req.header_callback = Noop.headerCallback;
@@ -1314,7 +1323,7 @@ pub const Transfer = struct {
             return err;
         };
 
-        return proceed and transfer.aborted == false;
+        return proceed and !transfer.isAborted();
     }
 
     fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) usize {
@@ -1363,7 +1372,7 @@ pub const Transfer = struct {
             return http.writefunc_error;
         };
 
-        if (transfer.aborted) {
+        if (transfer.isAborted()) {
             return http.writefunc_error;
         }
 
