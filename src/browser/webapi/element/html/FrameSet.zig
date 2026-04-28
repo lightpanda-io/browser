@@ -23,3 +23,8 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 };
+
+const testing = @import("../../../../testing.zig");
+test "WebApi: HTML.Frameset" {
+    try testing.htmlRunner("element/html/frameset.html", .{});
+}
