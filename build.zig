@@ -344,6 +344,10 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) !void {
 
     const libidn2 = buildLibidn2(b, target, mod.optimize.?, is_tsan);
     curl.root_module.linkLibrary(libidn2);
+    // Also expose libidn2 to the consuming module so src/sys/idna.zig's
+    // @cImport of <idn2.h> resolves. Without this, lightpanda_module only
+    // sees idn2.h transitively if a system libidn2 happens to be installed.
+    mod.linkLibrary(libidn2);
 
     switch (target.result.os.tag) {
         .macos => {
