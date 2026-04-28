@@ -813,6 +813,72 @@
 }
 </script>
 
+<script id=selectWithoutOptions>
+{
+  // Per HTML spec (constructing form data set, step 5.5), a <select> only
+  // appends entries for options whose selectedness is true. With zero options,
+  // nothing is selected and no entry is appended.
+  const form = document.createElement('form');
+
+  const sel = document.createElement('select');
+  sel.name = 'choice';
+  form.appendChild(sel);
+
+  const sibling = document.createElement('input');
+  sibling.name = 'sibling';
+  sibling.value = 'kept';
+  form.appendChild(sibling);
+
+  const fd = new FormData(form);
+  testing.expectEqual(false, fd.has('choice'));
+  testing.expectEqual(null, fd.get('choice'));
+  testing.expectEqual([], fd.getAll('choice'));
+  testing.expectEqual('kept', fd.get('sibling'));
+  testing.expectEqual([['sibling', 'kept']], Array.from(fd.entries()));
+}
+</script>
+
+<script id=selectMultipleWithoutOptions>
+{
+  // Same rule for <select multiple> — with zero options, no entry.
+  const form = document.createElement('form');
+
+  const sel = document.createElement('select');
+  sel.name = 'tags';
+  sel.multiple = true;
+  form.appendChild(sel);
+
+  const fd = new FormData(form);
+  testing.expectEqual(false, fd.has('tags'));
+  testing.expectEqual([], fd.getAll('tags'));
+  testing.expectEqual([], Array.from(fd.entries()));
+}
+</script>
+
+<script id=selectAllOptionsDisabled>
+{
+  // A single-select with only disabled options has no auto-selected option,
+  // so no entry is appended.
+  const form = document.createElement('form');
+
+  const sel = document.createElement('select');
+  sel.name = 'mode';
+
+  const opt = document.createElement('option');
+  opt.value = 'off';
+  opt.disabled = true;
+  opt.textContent = 'off';
+  sel.appendChild(opt);
+
+  form.appendChild(sel);
+
+  const fd = new FormData(form);
+  testing.expectEqual(false, fd.has('mode'));
+  testing.expectEqual(null, fd.get('mode'));
+  testing.expectEqual([], fd.getAll('mode'));
+}
+</script>
+
 <script id=formDataEventModifyFormData>
 {
   // Listeners can modify formData during the event

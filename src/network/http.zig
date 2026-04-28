@@ -64,6 +64,8 @@ pub const Headers = struct {
         if (header_list == null) {
             return error.OutOfMemory;
         }
+        // libcurl leaves the list intact when curl_slist_append fails, so we own it.
+        errdefer libcurl.curl_slist_free_all(header_list);
 
         // Always add sec-CH-UA header
         const with_sec_ch_ua = libcurl.curl_slist_append(header_list, Config.HttpHeaders.sec_ch_ua);

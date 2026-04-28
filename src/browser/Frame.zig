@@ -615,6 +615,8 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .cdp_id = opts.cdp_id,
         .reason = opts.reason,
         .method = opts.method,
+        .body = if (opts.body) |b| try self.arena.dupe(u8, b) else null,
+        .header = if (opts.header) |h| try self.arena.dupeZ(u8, h) else null,
     };
 
     var headers = try http_client.newHeaders();
@@ -954,6 +956,18 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
         self.origin = try URL.getOrigin(self.arena, self.url);
     }
     try self.js.setOrigin(self.origin);
+
+    // After any redirect, drop the original method/body/header so a later
+    // Page.reload doesn't re-POST form data to the redirect target. Conservative
+    // default — 307/308 technically preserve the method per RFC 7231, but
+    // resubmitting form data is the more dangerous failure mode.
+    if ((response.redirectCount() orelse 0) > 0) {
+        if (self._navigated_options) |*no| {
+            no.method = .GET;
+            no.body = null;
+            no.header = null;
+        }
+    }
 
     self.window._location = try Location.init(self.url, self);
     self.document._location = self.window._location;
@@ -3474,6 +3488,10 @@ pub const NavigatedOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
     method: HttpClient.Method = .GET,
+    // Retained on the frame's arena so Page.reload can replay the prior
+    // navigation's HTTP method — matches Chrome's F5 behavior on POST pages.
+    body: ?[]const u8 = null,
+    header: ?[:0]const u8 = null,
 };
 
 const NavigationType = enum {
@@ -3763,7 +3781,16 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     const arena = try self._session.getArena(.medium, "submitForm");
     errdefer self._session.releaseArena(arena);
 
-    const enctype = form_element.getAttributeSafe(comptime .wrap("enctype"));
+    // Per HTML spec form-submission algorithm, when the submitter is a submit
+    // button, its formaction/formmethod/formenctype attributes override the
+    // form's corresponding attributes (matching how formtarget is honored above).
+    // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
+    const enctype = blk: {
+        if (submitter_) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formenctype"))) |fe| break :blk fe;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("enctype"));
+    };
 
     // Get charset from accept-charset attribute or fall back to document charset
     const charset: []const u8 = blk: {
@@ -3780,8 +3807,18 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     var buf = std.Io.Writer.Allocating.init(arena);
     try form_data.write(.{ .enctype = enctype, .charset = charset, .allocator = arena }, &buf.writer);
 
-    const method = form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
-    var action = form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
+    const method = blk: {
+        if (submitter_) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formmethod"))) |fm| break :blk fm;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
+    };
+    var action = blk: {
+        if (submitter_) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formaction"))) |fa| break :blk fa;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
+    };
 
     var opts = NavigateOpts{
         .reason = .form,

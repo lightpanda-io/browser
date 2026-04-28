@@ -196,7 +196,12 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, frame: *F
 
             if (element.is(Form.Select)) |select| {
                 if (select.getMultiple() == false) {
-                    break :blk select.getValue(frame);
+                    // Per the HTML spec, a single-select with no selectedness
+                    // candidate (zero options or every option disabled)
+                    // contributes no entry. Otherwise emit the candidate's
+                    // value.
+                    const opt = select.effectiveOption() orelse continue;
+                    break :blk opt.getValue(frame);
                 }
 
                 var options = try select.getSelectedOptions(frame);

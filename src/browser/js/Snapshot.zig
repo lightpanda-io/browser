@@ -569,7 +569,12 @@ pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8
         break :blk illegalConstructorCallback;
     };
 
-    const template = v8.v8__FunctionTemplate__New__DEFAULT2(isolate, callback).?;
+    const arity: c_int = if (@hasDecl(JsApi, "constructor")) JsApi.constructor.arity else 0;
+    const template = v8.v8__FunctionTemplate__New__Config(isolate, &.{
+        .length = arity,
+        .callback = callback,
+        .behavior = v8.kConstructorBehavior_Allow,
+    }).?;
     {
         const internal_field_count = comptime countInternalFields(JsApi);
         if (internal_field_count > 0) {

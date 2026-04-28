@@ -662,6 +662,30 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/echo_method")) {
+        // Echo the request method back as HTML so tests can assert on what
+        // method the navigation used. Used by the Page.reload-replays-POST test.
+        const method_name = @tagName(req.head.method);
+        var html_buf: [128]u8 = undefined;
+        const html = try std.fmt.bufPrint(&html_buf, "<html><body>method={s}</body></html>", .{method_name});
+        return req.respond(html, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/redirect_to_echo")) {
+        // 302 to /echo_method. Used by the Page.reload-after-redirect test to
+        // confirm a POST→302→GET chain doesn't replay POST on reload.
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "/echo_method" },
+            },
+        });
+    }
+
     if (std.mem.startsWith(u8, path, "/src/browser/tests/")) {
         // strip off leading / so that it's relative to CWD
         return TestHTTPServer.sendFile(req, path[1..]);
