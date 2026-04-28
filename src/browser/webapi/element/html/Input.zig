@@ -564,7 +564,10 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
         .time => return if (isValidTime(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
         .@"datetime-local" => return try sanitizeDatetimeLocal(dupe, value, frame.arena),
         .number => return if (isValidFloatingPoint(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
-        .range => return try sanitizeRange(dupe, value, self.getMin(), self.getMax(), self.getStep(), frame),
+        .range => {
+            const value_attr = self.asConstElement().getAttributeSafe(comptime .wrap("value")) orelse "";
+            return try sanitizeRange(dupe, value, self.getMin(), self.getMax(), self.getStep(), value_attr, frame);
+        },
         .color => {
             if (value.len == 7 and value[0] == '#') {
                 var needs_lower = false;
@@ -798,13 +801,16 @@ fn sanitizeDatetimeLocal(comptime dupe: bool, value: []const u8, arena: std.mem.
 ///      neighbor instead.
 /// `min`/`max` default to 0 and 100 respectively when the attribute is missing
 /// or fails to parse as a valid floating-point number. `step` defaults to 1;
-/// `step="any"` (case-insensitive) disables step matching.
+/// `step="any"` (case-insensitive) disables step matching. The step base
+/// (https://html.spec.whatwg.org/multipage/input.html#concept-input-min) falls
+/// back through `min` content attr → `value` content attr → 0.
 fn sanitizeRange(
     comptime dupe: bool,
     value: []const u8,
     min_attr: []const u8,
     max_attr: []const u8,
     step_attr: []const u8,
+    value_attr: []const u8,
     frame: *Frame,
 ) ![]const u8 {
     const min: f64 = if (isValidFloatingPoint(min_attr))
@@ -815,16 +821,22 @@ fn sanitizeRange(
         std.fmt.parseFloat(f64, max_attr) catch 100
     else
         100;
+    const step_base: f64 = if (isValidFloatingPoint(min_attr))
+        std.fmt.parseFloat(f64, min_attr) catch 0
+    else if (isValidFloatingPoint(value_attr))
+        std.fmt.parseFloat(f64, value_attr) catch 0
+    else
+        0;
 
     if (!isValidFloatingPoint(value)) {
-        return try formatFloat(frame.arena, snapToStep(min + (max - min) / 2, min, max, min, step_attr));
+        return try formatFloat(frame.arena, snapToStep(min + (max - min) / 2, min, max, step_base, step_attr));
     }
 
     const v0 = std.fmt.parseFloat(f64, value) catch unreachable; // grammar already validated
     var v = v0;
     if (v < min) v = min;
     if (v > max) v = max;
-    const snapped = snapToStep(v, min, max, min, step_attr);
+    const snapped = snapToStep(v, min, max, step_base, step_attr);
     if (v == v0 and snapped == v) {
         // Already valid and on the ladder — preserve the original string so
         // assignments like `el.value = "1.0"` round-trip without canonicalizing.
@@ -839,7 +851,7 @@ fn sanitizeRange(
 /// unchanged for `step="any"` (case-insensitive) or when no ladder rung lands
 /// in `[min, max]`.
 fn snapToStep(value: f64, min: f64, max: f64, step_base: f64, step_attr: []const u8) f64 {
-    if (step_attr.len == 3 and std.ascii.eqlIgnoreCase(step_attr, "any")) return value;
+    if (std.ascii.eqlIgnoreCase(step_attr, "any")) return value;
 
     const step: f64 = blk: {
         if (isValidFloatingPoint(step_attr)) {

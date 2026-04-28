@@ -255,5 +255,35 @@
     s9.step = '7';  // ladder: 0, 7, 14, ..., 98; midpoint=50; nearest is 49
     s9.value = 'garbage';
     testing.expectEqual('49', s9.value);
+
+    // Step base falls back through `min` content attr -> `value` content attr -> 0
+    // (https://html.spec.whatwg.org/multipage/input.html#concept-input-min).
+    // When `min` is absent but a parseable `value` content attribute exists,
+    // it becomes the step base — so the ladder shifts.
+    const s10 = document.createElement('input');
+    s10.type = 'range';
+    s10.max = '10';
+    s10.setAttribute('value', '3.5');  // content attr only; step_base = 3.5
+    s10.value = '5.3';                 // ladder [3.5, 4.5, 5.5, ...]; nearest is 5.5
+    testing.expectEqual('5.5', s10.value);
+
+    // Unparseable `value` content attr fails the fallback chain and step base
+    // defaults to 0 (ladder [0, 1, 2, ...]; nearest to 5.3 is 5).
+    const s11 = document.createElement('input');
+    s11.type = 'range';
+    s11.max = '10';
+    s11.setAttribute('value', 'garbage');
+    s11.value = '5.3';
+    testing.expectEqual('5', s11.value);
+
+    // `min` content attr wins over `value` content attr in the fallback chain
+    // (step_base = 0 from min, not 3.5 from value attr).
+    const s12 = document.createElement('input');
+    s12.type = 'range';
+    s12.min = '0';
+    s12.max = '10';
+    s12.setAttribute('value', '3.5');
+    s12.value = '5.3';
+    testing.expectEqual('5', s12.value);
   }
 </script>
