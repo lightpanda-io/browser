@@ -809,7 +809,7 @@ fn processOneMessage(self: *Client, msg: Network.Handle.Completion, transfer: *T
     if (body.len > 0) {
         try transfer.req.data_callback(Response.fromTransfer(transfer), body);
 
-        if (transfer.state == .aborted) {
+        if (transfer.isAborted()) {
             transfer.requestFailed(error.Abort, true);
             return true;
         }
@@ -1095,6 +1095,7 @@ pub const Transfer = struct {
     client: *Client,
 
     start_time: u64,
+    aborted: std.atomic.Value(bool) = .init(false),
 
     _notified_fail: bool = false,
 
@@ -1199,6 +1200,15 @@ pub const Transfer = struct {
         arena_pool.release(arena);
     }
 
+    pub fn isAborted(self: *const Transfer) bool {
+        return self.aborted.load(.acquire);
+    }
+
+    fn setAborted(self: *Transfer) void {
+        self.aborted.store(true, .release);
+        self.state = .aborted;
+    }
+
     // Cancel this transfer with `err`. Fires error_callback once (latched
     // via _notified_fail), then either deinits synchronously or, if we're
     // mid-perform with a libcurl handle still in the multi, detaches and
@@ -1237,8 +1247,8 @@ pub const Transfer = struct {
     // nothing left referencing this transfer and we can safely deinit
     // inline.
     fn detachOrDeinit(self: *Transfer) void {
+        if (self.isAborted()) return;
         switch (self.state) {
-            .aborted => return,
             .completing => self.detachInPerform(),
             .inflight => {
                 if (self._conn) |conn| {
@@ -1266,9 +1276,7 @@ pub const Transfer = struct {
     //     `owner == null` and skips the list-remove that would otherwise
     //     UAF against a freed list.
     fn detachInPerform(self: *Transfer) void {
-        // `_conn` (if any) rides through .aborted untouched; deinit
-        // releases it once libcurl is done.
-        self.state = .aborted;
+        self.setAborted();
         self.req.start_callback = null;
         self.req.shutdown_callback = null;
         self.req.header_callback = Noop.headerCallback;
@@ -1546,7 +1554,7 @@ pub const Transfer = struct {
             return err;
         };
 
-        return proceed and transfer.state != .aborted;
+        return proceed and !transfer.isAborted();
     }
 
     fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) usize {
@@ -1596,7 +1604,7 @@ pub const Transfer = struct {
             return http.writefunc_error;
         };
 
-        if (transfer.state == .aborted) {
+        if (transfer.isAborted()) {
             return http.writefunc_error;
         }
 
