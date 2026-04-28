@@ -298,14 +298,11 @@ fn navigate(cmd: *CDP.Command) !void {
     }
 
     const session = bc.session;
-    var frame = session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = session.currentFrame() orelse return error.FrameNotLoaded;
 
-    if (frame._load_state != .waiting) {
-        frame = try session.replacePage();
-    }
 
     const encoded_url = try URL.ensureEncoded(frame.call_arena, params.url, "UTF-8");
-    try frame.navigate(encoded_url, .{
+    try session.initiateRootNavigation(frame._frame_id, encoded_url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
         .kind = .{ .push = null },
@@ -325,10 +322,10 @@ fn doReload(cmd: *CDP.Command) !void {
     }
 
     const session = bc.session;
-    var frame = session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = session.currentFrame() orelse return error.FrameNotLoaded;
 
     // Capture URL plus the prior navigation's method/body/header before
-    // replacePage() frees the old frame's arena. Replaying the same HTTP
+    // we free the old frame's arena. Replaying the same HTTP
     // method on reload matches Chrome's F5 behavior — POST navigations
     // re-submit, GET navigations re-fetch.
     const reload_url = try cmd.arena.dupeZ(u8, frame.url);
@@ -341,11 +338,7 @@ fn doReload(cmd: *CDP.Command) !void {
         };
     };
 
-    if (frame._load_state != .waiting) {
-        frame = try session.replacePage();
-    }
-
-    try frame.navigate(reload_url, .{
+    try session.initiateRootNavigation(frame._frame_id, reload_url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
         .kind = .reload,
