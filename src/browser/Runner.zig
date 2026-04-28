@@ -158,7 +158,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
             // There's no JS to run, and no reason to run the scheduler
             // — unless we're the CDP worker, in which case we want
             // http_client.tick to drain the inbox.
-            if (http_client.http_active == 0 and (comptime is_cdp) == false) {
+            if (http_client.handle.http_active == 0 and (comptime is_cdp) == false) {
                 // haven't started navigating, I guess.
                 return .done;
             }
@@ -180,11 +180,11 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
             // download, or scheduled tasks to execute, or both.
 
             // scheduler.run could trigger new http transfers, so do not
-            // store http_client.http_active BEFORE this call and then use
+            // store http_client.handle.http_active BEFORE this call and then use
             // it AFTER.
             try browser.runMacrotasks();
 
-            const http_active = http_client.http_active;
+            const http_active = http_client.handle.http_active;
             const total_network_activity = http_active + http_client.interception_layer.intercepted;
             if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
                 frame.notifyNetworkAlmostIdle();
@@ -206,7 +206,11 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
                 },
             }
 
-            if (http_active == 0 and http_client.ws_active == 0 and http_client.queue.first == null and http_client.ready_queue.first == null and (comptime is_cdp) == false) {
+            if (http_active == 0 and http_client.handle.ws_active == 0 and http_client.queue.first == null and http_client.handle.ready_queue.first == null and (comptime is_cdp) == false) {
+                // we don't need to consider http_client.interception_layer.intercepted
+                // here because is_cdp is false, and that can only be
+                // the case when interception isn't possible.
+                //
                 // ready_queue is also part of the check: makeRequest now
                 // wraps its handles.perform() in a performing=true window,
                 // and any synchronous libcurl callback that ends up
@@ -216,8 +220,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
                 // http_client.tick returns.
                 //
                 // intercepted is only non-zero in serve mode, and
-                // serve mode implies cdp_client != null — so if we got
-                // here, intercepted == 0.
+                // serve mode implies is_cdp — so if we got here,
+                // intercepted == 0.
                 if (comptime IS_DEBUG) {
                     std.debug.assert(http_client.interception_layer.intercepted == 0);
                 }
