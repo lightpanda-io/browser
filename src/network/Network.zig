@@ -658,8 +658,15 @@ fn drainQueue(self: *Network) void {
     // *under* the lock — that's what keeps the conn alive (every path
     // that releases the conn first transitions out of .in_multi here).
     // pause/setopt only flip libcurl flags, no callbacks fire.
-    var to_add: std.DoublyLinkedList = .{};
-    var to_remove: std.DoublyLinkedList = .{};
+    //
+    // We collect into ArrayList(*Connection) rather than reusing
+    // conn.node in another DoublyLinkedList: a worker submitRequest /
+    // submitRemove racing with the outside-lock loop would observe
+    // unsynchronized writes to conn.node otherwise.
+    var to_add: std.ArrayList(*http.Connection) = .empty;
+    defer to_add.deinit(self.allocator);
+    var to_remove: std.ArrayList(*http.Connection) = .empty;
+    defer to_remove.deinit(self.allocator);
     {
         self.submission_mutex.lock();
         defer self.submission_mutex.unlock();
@@ -669,14 +676,14 @@ fn drainQueue(self: *Network) void {
             lp.assert(conn._submission == .pending_remove, "drainQueue: conn not in pending_remove", .{});
             conn._submission = .idle;
             self.removeFromOpsLocked(conn);
-            to_remove.append(node);
+            to_remove.append(self.allocator, conn) catch @panic("OOM");
         }
         while (self.pending_add.popFirst()) |node| {
             const conn: *http.Connection = @fieldParentPtr("node", node);
             lp.assert(conn._submission == .pending_add, "drainQueue: conn not in pending_add", .{});
             // .in_multi is the target; handleAdd may roll back to .idle on failure.
             conn._submission = .in_multi;
-            to_add.append(node);
+            to_add.append(self.allocator, conn) catch @panic("OOM");
         }
         while (self.pending_ops.popFirst()) |node| {
             const conn: *http.Connection = @fieldParentPtr("_op_node", node);
@@ -704,14 +711,8 @@ fn drainQueue(self: *Network) void {
 
     // Process removes before adds: cancellations should take effect
     // before we admit new transfers.
-    while (to_remove.popFirst()) |node| {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        self.handleRemove(conn);
-    }
-    while (to_add.popFirst()) |node| {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        self.handleAdd(conn);
-    }
+    for (to_remove.items) |conn| self.handleRemove(conn);
+    for (to_add.items) |conn| self.handleAdd(conn);
 }
 
 // Caller has already set conn._submission = .in_multi. On failure we
@@ -1195,7 +1196,7 @@ pub const Handle = struct {
             while (it) |node| : (it = node.next) {
                 const conn: *http.Connection = @fieldParentPtr("_worker_node", node);
                 switch (conn.transport) {
-                    .http => |transfer| std.debug.assert(transfer.aborted),
+                    .http => |transfer| std.debug.assert(transfer.isAborted()),
                     .websocket => {},
                     .none => {},
                 }
