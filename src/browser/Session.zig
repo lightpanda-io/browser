@@ -252,58 +252,6 @@ pub fn releaseOrigin(self: *Session, origin: *js.Origin) void {
     self.currentPage().?.releaseOrigin(origin);
 }
 
-pub fn replacePage(self: *Session) !*Frame {
-    if (comptime IS_DEBUG) {
-        log.debug(.browser, "replace page", .{});
-    }
-
-    const old_idx = self._active_idx orelse {
-        lp.assert(false, "Session.replacePage null page", .{});
-        return error.NoActivePage;
-    };
-    const old_page = &self._pages[old_idx].?;
-    lp.assert(old_page.frame.parent == null, "Session.replacePage with parent", .{});
-
-    const frame_id = old_page.frame._frame_id;
-
-    // Dispatch frame_remove so CDP can tear down the OLD page's isolated
-    // world V8 contexts and inspector state. Without this, old V8 contexts
-    // leak (and a later frameNavigated would localScope() into a freed
-    // handle — UAF).
-    self.notification.dispatch(.frame_remove, .{});
-
-    old_page.deinit();
-    self.freeSlot(old_idx);
-    self._active_idx = null;
-    self.navigation.onRemoveFrame();
-
-    // Preserve prior behavior: frame_id_gen reset on root replacement so a
-    // subsequent createPage starts from id 1. The captured frame_id is
-    // passed into Page.init explicitly, so it isn't affected.
-    self.frame_id_gen = 0;
-
-    const new_slot = try self.findFreeSlot();
-    const page = try self.pageInit(new_slot, frame_id);
-    errdefer {
-        page.deinit();
-        self.freeSlot(new_slot);
-    }
-    self._active_idx = new_slot;
-    const new_frame = &page.frame;
-
-    // Creates a new NavigationEventTarget for this frame.
-    self.navigation.onNewFrame(new_frame) catch |err| {
-        log.err(.browser, "replacePage onNewFrame", .{ .err = err });
-    };
-
-    // Dispatch frame_created so CDP creates fresh isolated world V8 contexts
-    // for the new frame. The subsequent frame.navigate call will dispatch
-    // frame_navigated which registers them with the inspector.
-    self.notification.dispatch(.frame_created, new_frame);
-
-    return new_frame;
-}
-
 pub fn currentPage(self: *Session) ?*Page {
     const idx = self._active_idx orelse return null;
     return &self._pages[idx].?;
@@ -519,7 +467,12 @@ fn processRootQueuedNavigation(self: *Session) !void {
         return self.replaceRootImmediate(current_frame._frame_id, qn);
     }
 
-    return self.initiateRootNavigation(current_frame._frame_id, qn);
+    // The qn arena is consumed here regardless of success — frame.navigate
+    // dupes the URL into the page's own arena, so we can release the qn
+    // arena as soon as navigate returns.
+    defer self.arena_pool.release(qn.arena);
+
+    return self.initiateRootNavigation(current_frame._frame_id, qn.url, qn.opts);
 }
 
 // Legacy immediate-swap path: tear down the active page and create a new one
@@ -575,13 +528,8 @@ fn replaceRootImmediate(self: *Session, frame_id: u32, qn: *QueuedNavigation) !v
 // The active Page (and its V8 context) stays addressable across the round-
 // trip — Runtime.evaluate, DOM.*, etc. continue to operate on the OLD page
 // until commitPendingPage swaps the pointer when response headers arrive.
-fn initiateRootNavigation(self: *Session, frame_id: u32, qn: *QueuedNavigation) !void {
+pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, opts: Frame.NavigateOpts) !void {
     lp.assert(self._pending_idx == null, "Session.initiateRootNavigation - pending already set", .{});
-
-    // The qn arena is consumed here regardless of success — frame.navigate
-    // dupes the URL into the page's own arena, so we can release the qn
-    // arena as soon as navigate returns.
-    defer self.arena_pool.release(qn.arena);
 
     // Pick the slot NOT occupied by the active page.
     const slot = try self.findFreeSlot();
@@ -596,7 +544,7 @@ fn initiateRootNavigation(self: *Session, frame_id: u32, qn: *QueuedNavigation) 
     errdefer self._pending_idx = null;
 
     if (comptime IS_DEBUG) {
-        log.debug(.browser, "initiate root navigation", .{ .url = qn.url });
+        log.debug(.browser, "initiate root navigation", .{ .url = url });
     }
 
     // No frame_created notification yet — CDP must not see the pending page
@@ -604,8 +552,8 @@ fn initiateRootNavigation(self: *Session, frame_id: u32, qn: *QueuedNavigation) 
     // world and the isolated worlds get registered with the V8 inspector at
     // commit, after frame_remove tears down the OLD page's context group.
 
-    page.frame.navigate(qn.url, qn.opts) catch |err| {
-        log.err(.browser, "pending navigation start", .{ .err = err, .url = qn.url });
+    page.frame.navigate(url, opts) catch |err| {
+        log.err(.browser, "pending navigation start", .{ .err = err, .url = url });
         return err;
     };
 }
