@@ -576,6 +576,7 @@ pub const BrowserContext = struct {
         try self.notification.register(.http_request_fail, self, onHttpRequestFail);
         try self.notification.register(.http_request_start, self, onHttpRequestStart);
         try self.notification.register(.http_request_done, self, onHttpRequestDone);
+        try self.notification.register(.http_request_served_from_cache, self, onHttpRequestServedFromCache);
         try self.notification.register(.http_response_data, self, onHttpResponseData);
         try self.notification.register(.http_response_header_done, self, onHttpResponseHeadersDone);
     }
@@ -584,6 +585,7 @@ pub const BrowserContext = struct {
         self.notification.unregister(.http_request_fail, self);
         self.notification.unregister(.http_request_start, self);
         self.notification.unregister(.http_request_done, self);
+        self.notification.unregister(.http_request_served_from_cache, self);
         self.notification.unregister(.http_response_data, self);
         self.notification.unregister(.http_response_header_done, self);
     }
@@ -732,6 +734,11 @@ pub const BrowserContext = struct {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
         try @import("domains/fetch.zig").requestAuthRequired(self, data);
+    }
+
+    pub fn onHttpRequestServedFromCache(ctx: *anyopaque, msg: *const Notification.RequestServedFromCache) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/network.zig").httpServedFromCache(self, msg);
     }
 
     fn resetNotificationArena(self: *BrowserContext) void {
