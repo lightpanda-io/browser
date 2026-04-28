@@ -265,9 +265,17 @@ pub fn replacePage(self: *Session) !*Frame {
     lp.assert(old_page.frame.parent == null, "Session.replacePage with parent", .{});
 
     const frame_id = old_page.frame._frame_id;
+
+    // Dispatch frame_remove so CDP can tear down the OLD page's isolated
+    // world V8 contexts and inspector state. Without this, old V8 contexts
+    // leak (and a later frameNavigated would localScope() into a freed
+    // handle — UAF).
+    self.notification.dispatch(.frame_remove, .{});
+
     old_page.deinit();
     self.freeSlot(old_idx);
     self._active_idx = null;
+    self.navigation.onRemoveFrame();
 
     // Preserve prior behavior: frame_id_gen reset on root replacement so a
     // subsequent createPage starts from id 1. The captured frame_id is
@@ -281,7 +289,19 @@ pub fn replacePage(self: *Session) !*Frame {
         self.freeSlot(new_slot);
     }
     self._active_idx = new_slot;
-    return &page.frame;
+    const new_frame = &page.frame;
+
+    // Creates a new NavigationEventTarget for this frame.
+    self.navigation.onNewFrame(new_frame) catch |err| {
+        log.err(.browser, "replacePage onNewFrame", .{ .err = err });
+    };
+
+    // Dispatch frame_created so CDP creates fresh isolated world V8 contexts
+    // for the new frame. The subsequent frame.navigate call will dispatch
+    // frame_navigated which registers them with the inspector.
+    self.notification.dispatch(.frame_created, new_frame);
+
+    return new_frame;
 }
 
 pub fn currentPage(self: *Session) ?*Page {
