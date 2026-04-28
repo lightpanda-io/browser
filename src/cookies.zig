@@ -43,7 +43,7 @@ fn _loadFromFile(session: *Session, path: []const u8) !void {
         return;
     };
 
-    const json_cookies = std.json.parseFromSliceLeaky([]const JsonCookie, arena, content, .{
+    const json_cookies = std.json.parseFromSliceLeaky([]const LoadJsonCookie, arena, content, .{
         .ignore_unknown_fields = true,
     }) catch |err| {
         log.err(.app, "Cookie.parseFile", .{ .path = path, .err = err });
@@ -73,7 +73,7 @@ fn _loadFromFile(session: *Session, path: []const u8) !void {
             .expires = jc.expires,
             .secure = jc.secure orelse false,
             .http_only = jc.httpOnly orelse false,
-            .same_site = jc.sameSite,
+            .same_site = parseJsonSameSite(jc.sameSite),
         };
 
         jar.add(cookie, now) catch |err| {
@@ -111,7 +111,7 @@ fn _saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
         }
 
         try w.writeAll("\n  ");
-        try std.json.Stringify.value(JsonCookie{
+        try std.json.Stringify.value(SaveJsonCookie{
             .name = c.name,
             .value = c.value,
             .domain = c.domain,
@@ -132,7 +132,7 @@ fn _saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
     log.info(.app, "Cookie.saveToFile", .{ .path = path, .count = jar.cookies.items.len });
 }
 
-const JsonCookie = struct {
+const LoadJsonCookie = struct {
     name: []const u8,
     value: []const u8,
     domain: []const u8,
@@ -140,5 +140,38 @@ const JsonCookie = struct {
     expires: ?f64 = null,
     secure: ?bool = null,
     httpOnly: ?bool = null,
+    sameSite: ?[]const u8 = null,
+};
+
+const SaveJsonCookie = struct {
+    name: []const u8,
+    value: []const u8,
+    domain: []const u8,
+    path: []const u8,
+    expires: ?f64 = null,
+    secure: bool,
+    httpOnly: bool,
     sameSite: Cookie.SameSite = .none,
 };
+
+fn parseJsonSameSite(value: ?[]const u8) Cookie.SameSite {
+    const same_site = value orelse return .none;
+    if (std.ascii.eqlIgnoreCase(same_site, "strict")) return .strict;
+    if (std.ascii.eqlIgnoreCase(same_site, "lax")) return .lax;
+    if (std.ascii.eqlIgnoreCase(same_site, "none")) return .none;
+    return .none;
+}
+
+test "cookies: load JSON accepts CDP SameSite casing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const parsed = try std.json.parseFromSliceLeaky(
+        []const LoadJsonCookie,
+        arena.allocator(),
+        "[{\"name\":\"sid\",\"value\":\"1\",\"domain\":\"example.com\",\"sameSite\":\"Lax\"}]",
+        .{ .ignore_unknown_fields = true },
+    );
+
+    try std.testing.expectEqual(Cookie.SameSite.lax, parseJsonSameSite(parsed[0].sameSite));
+}
