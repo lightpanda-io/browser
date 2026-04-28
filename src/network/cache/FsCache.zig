@@ -264,6 +264,19 @@ pub fn put(self: *FsCache, meta: CachedMetadata, body: []const u8) !void {
     log.debug(.cache, "put", .{ .url = meta.url, .hash = &hashed_key, .body_len = body.len });
 }
 
+pub fn clear(self: *FsCache) !void {
+    var iter = self.dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".cache") and
+            !std.mem.endsWith(u8, entry.name, ".cache.tmp")) continue;
+
+        self.dir.deleteFile(entry.name) catch |e| {
+            log.err(.cache, "clear delete fail", .{ .file = entry.name, .err = e });
+        };
+    }
+}
+
 const testing = std.testing;
 
 fn setupCache() !struct { tmp: testing.TmpDir, cache: Cache } {
@@ -616,4 +629,101 @@ test "FsCache: vary multiple headers" {
             .{ .name = "Accept-Language", .value = "fr" },
         },
     }));
+}
+
+test "FsCache: clear removes all entries" {
+    var setup = try setupCache();
+    defer {
+        setup.cache.deinit();
+        setup.tmp.cleanup();
+    }
+
+    const cache = &setup.cache;
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const now = std.time.timestamp();
+    const base_meta_a = CachedMetadata{
+        .url = "https://example.com/a",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+        .content_type = "text/html",
+    };
+
+    const base_meta_b = CachedMetadata{
+        .url = "https://example.com/b",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+        .content_type = "text/html",
+    };
+
+    try cache.put(base_meta_a, "body a");
+    try cache.put(base_meta_b, "body b");
+
+    // Sanity check: both are cached
+    const r1 = cache.get(arena.allocator(), .{ .url = "https://example.com/a", .timestamp = now, .request_headers = &.{} });
+    try testing.expect(r1 != null);
+    r1.?.data.file.file.close();
+
+    const r2 = cache.get(arena.allocator(), .{ .url = "https://example.com/b", .timestamp = now, .request_headers = &.{} });
+    try testing.expect(r2 != null);
+    r2.?.data.file.file.close();
+
+    try cache.clear();
+
+    try testing.expectEqual(null, cache.get(arena.allocator(), .{ .url = "https://example.com/a", .timestamp = now, .request_headers = &.{} }));
+    try testing.expectEqual(null, cache.get(arena.allocator(), .{ .url = "https://example.com/b", .timestamp = now, .request_headers = &.{} }));
+}
+
+test "FsCache: put after clear works" {
+    var setup = try setupCache();
+    defer {
+        setup.cache.deinit();
+        setup.tmp.cleanup();
+    }
+
+    const cache = &setup.cache;
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const now = std.time.timestamp();
+    const meta = CachedMetadata{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+
+    try cache.put(meta, "before clear");
+    try cache.clear();
+
+    // Should be a miss after clear
+    try testing.expectEqual(null, cache.get(arena.allocator(), .{ .url = "https://example.com", .timestamp = now, .request_headers = &.{} }));
+
+    // Put again after clear — should work normally
+    try cache.put(meta, "after clear");
+    const result = cache.get(arena.allocator(), .{ .url = "https://example.com", .timestamp = now, .request_headers = &.{} }) orelse return error.CacheMiss;
+    const f = result.data.file;
+    defer f.file.close();
+
+    var buf: [64]u8 = undefined;
+    var file_reader = f.file.reader(&buf);
+    try file_reader.seekTo(f.offset);
+    const read_buf = try file_reader.interface.readAlloc(testing.allocator, f.len);
+    defer testing.allocator.free(read_buf);
+    try testing.expectEqualStrings("after clear", read_buf);
 }
