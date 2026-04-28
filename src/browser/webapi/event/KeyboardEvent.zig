@@ -248,6 +248,18 @@ pub const Key = union(enum) {
             else => 0,
         };
     }
+
+    /// Legacy `KeyboardEvent.charCode` value per UI Events spec § Annex C
+    /// (https://www.w3.org/TR/uievents/#legacy-key-attributes). Returns the
+    /// Unicode code point of the character produced by the key. Only
+    /// meaningful inside a `keypress` event — callers must gate accordingly.
+    pub fn charCode(self: Key) u32 {
+        return switch (self) {
+            .Enter => 13,
+            .standard => |s| if (s.len > 0) s[0] else 0,
+            else => 0,
+        };
+    }
 };
 
 pub const Location = enum(i32) {
@@ -362,17 +374,22 @@ pub fn getShiftKey(self: *const KeyboardEvent) bool {
 // charCode is the Unicode code point of the character produced by the key,
 // and is only meaningful on `keypress` events. For `keydown` and `keyup` it
 // is 0. (Deprecated, but read by legacy event handlers.)
+//
+// Chrome returns 0 for synthetic events (those created via
+// `new KeyboardEvent(...)` rather than dispatched by the user agent), so we
+// gate on `_is_trusted` to match.
 pub fn getCharCode(self: *const KeyboardEvent) u32 {
     const event = self._proto._proto;
-    if (!std.mem.eql(u8, event._type_string.str(), "keypress")) return 0;
-    return switch (self._key) {
-        .standard => |s| if (s.len > 0) s[0] else 0,
-        else => 0,
-    };
+    if (event._is_trusted == false) return 0;
+    if (event._type_string.eql(comptime .wrap("keypress")) == false) return 0;
+    return self._key.charCode();
 }
 
 // https://www.w3.org/TR/uievents/#dom-keyboardevent-keycode
+//
+// As with `charCode`, Chrome returns 0 for synthetic events.
 pub fn getKeyCode(self: *const KeyboardEvent) u32 {
+    if (self._proto._proto._is_trusted == false) return 0;
     return self._key.keyCode();
 }
 
@@ -461,4 +478,78 @@ pub const JsApi = struct {
 const testing = @import("../../../testing.zig");
 test "WebApi: KeyboardEvent" {
     try testing.htmlRunner("event/keyboard.html", .{});
+}
+
+test "KeyboardEvent: Key.keyCode mapping" {
+    // Letters: uppercase ASCII regardless of case.
+    try testing.expectEqual(@as(u32, 65), Key.keyCode(.{ .standard = "a" }));
+    try testing.expectEqual(@as(u32, 65), Key.keyCode(.{ .standard = "A" }));
+    try testing.expectEqual(@as(u32, 84), Key.keyCode(.{ .standard = "T" }));
+    try testing.expectEqual(@as(u32, 90), Key.keyCode(.{ .standard = "z" }));
+
+    // Digits.
+    try testing.expectEqual(@as(u32, 48), Key.keyCode(.{ .standard = "0" }));
+    try testing.expectEqual(@as(u32, 53), Key.keyCode(.{ .standard = "5" }));
+    try testing.expectEqual(@as(u32, 57), Key.keyCode(.{ .standard = "9" }));
+
+    // Space.
+    try testing.expectEqual(@as(u32, 32), Key.keyCode(.{ .standard = " " }));
+
+    // Modifier keys.
+    try testing.expectEqual(@as(u32, 16), Key.keyCode(.Shift));
+    try testing.expectEqual(@as(u32, 17), Key.keyCode(.Control));
+    try testing.expectEqual(@as(u32, 18), Key.keyCode(.Alt));
+    try testing.expectEqual(@as(u32, 91), Key.keyCode(.Meta));
+    try testing.expectEqual(@as(u32, 20), Key.keyCode(.CapsLock));
+
+    // Whitespace keys.
+    try testing.expectEqual(@as(u32, 13), Key.keyCode(.Enter));
+    try testing.expectEqual(@as(u32, 9), Key.keyCode(.Tab));
+
+    // Navigation keys.
+    try testing.expectEqual(@as(u32, 37), Key.keyCode(.ArrowLeft));
+    try testing.expectEqual(@as(u32, 38), Key.keyCode(.ArrowUp));
+    try testing.expectEqual(@as(u32, 39), Key.keyCode(.ArrowRight));
+    try testing.expectEqual(@as(u32, 40), Key.keyCode(.ArrowDown));
+    try testing.expectEqual(@as(u32, 33), Key.keyCode(.PageUp));
+    try testing.expectEqual(@as(u32, 34), Key.keyCode(.PageDown));
+    try testing.expectEqual(@as(u32, 35), Key.keyCode(.End));
+    try testing.expectEqual(@as(u32, 36), Key.keyCode(.Home));
+
+    // Editing keys.
+    try testing.expectEqual(@as(u32, 8), Key.keyCode(.Backspace));
+    try testing.expectEqual(@as(u32, 46), Key.keyCode(.Delete));
+    try testing.expectEqual(@as(u32, 45), Key.keyCode(.Insert));
+
+    // UI keys.
+    try testing.expectEqual(@as(u32, 27), Key.keyCode(.Escape));
+    try testing.expectEqual(@as(u32, 19), Key.keyCode(.Pause));
+    try testing.expectEqual(@as(u32, 93), Key.keyCode(.ContextMenu));
+
+    // Function keys.
+    try testing.expectEqual(@as(u32, 112), Key.keyCode(.F1));
+    try testing.expectEqual(@as(u32, 123), Key.keyCode(.F12));
+
+    // Keys without a defined fixed virtual key code.
+    try testing.expectEqual(@as(u32, 0), Key.keyCode(.Dead));
+    try testing.expectEqual(@as(u32, 0), Key.keyCode(.Unidentified));
+    try testing.expectEqual(@as(u32, 0), Key.keyCode(.{ .standard = "" }));
+}
+
+test "KeyboardEvent: Key.charCode mapping" {
+    // Printable characters: Unicode code point of the first byte.
+    try testing.expectEqual(@as(u32, 97), Key.charCode(.{ .standard = "a" }));
+    try testing.expectEqual(@as(u32, 65), Key.charCode(.{ .standard = "A" }));
+    try testing.expectEqual(@as(u32, 48), Key.charCode(.{ .standard = "0" }));
+    try testing.expectEqual(@as(u32, 32), Key.charCode(.{ .standard = " " }));
+
+    // Enter is the one named key that produces a charCode (\r = 13).
+    try testing.expectEqual(@as(u32, 13), Key.charCode(.Enter));
+
+    // Other named keys and the empty standard key produce no character.
+    try testing.expectEqual(@as(u32, 0), Key.charCode(.Tab));
+    try testing.expectEqual(@as(u32, 0), Key.charCode(.Escape));
+    try testing.expectEqual(@as(u32, 0), Key.charCode(.ArrowLeft));
+    try testing.expectEqual(@as(u32, 0), Key.charCode(.Shift));
+    try testing.expectEqual(@as(u32, 0), Key.charCode(.{ .standard = "" }));
 }
