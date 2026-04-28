@@ -301,12 +301,6 @@ fn navigate(cmd: *CDP.Command) !void {
     var frame = session.currentFrame() orelse return error.FrameNotLoaded;
 
     if (frame._load_state != .waiting) {
-        // Reset isolated world identities to disable V8 weak callbacks before
-        // resetPageResources releases refs. Prevents double-release crashes.
-        for (bc.isolated_worlds.items) |isolated_world| {
-            isolated_world.identity.deinit();
-            isolated_world.identity = .{};
-        }
         frame = try session.replacePage();
     }
 
@@ -348,12 +342,6 @@ fn doReload(cmd: *CDP.Command) !void {
     };
 
     if (frame._load_state != .waiting) {
-        // Reset isolated world identities to disable V8 weak callbacks before
-        // resetPageResources releases refs. Prevents double-release crashes.
-        for (bc.isolated_worlds.items) |isolated_world| {
-            isolated_world.identity.deinit();
-            isolated_world.identity = .{};
-        }
         frame = try session.replacePage();
     }
 
