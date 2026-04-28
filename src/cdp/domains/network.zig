@@ -262,7 +262,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
-        .requestId = &id.toRequestId2(msg.request),
+        .requestId = &id.toRequestId(msg.request),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
         .errorText = msg.err,
@@ -287,7 +287,7 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
     // We're missing a bunch of fields, but, for now, this eems like enough
     try bc.cdp.sendEvent("Network.requestWillBeSent", .{
         .frameId = &id.toFrameId(frame_id),
-        .requestId = &id.toRequestId2(req),
+        .requestId = &id.toRequestId(req),
         .loaderId = &id.toLoaderId(req.params.loader_id),
         .type = req.params.resource_type.string(),
         .documentURL = frame.url,
@@ -310,7 +310,7 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
         .frameId = &id.toFrameId(req.params.frame_id),
-        .requestId = &id.toRequestId2(req),
+        .requestId = &id.toRequestId(req),
         .loaderId = &id.toLoaderId(req.params.loader_id),
         .response = ResponseWriter.init(arena, msg.response),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
@@ -323,7 +323,7 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     const session_id = bc.session_id orelse return;
     const req = msg.request;
     try bc.cdp.sendEvent("Network.loadingFinished", .{
-        .requestId = &id.toRequestId2(req),
+        .requestId = &id.toRequestId(req),
         .encodedDataLength = msg.content_length,
     }, .{ .session_id = session_id });
 }
