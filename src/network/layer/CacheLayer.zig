@@ -34,6 +34,7 @@ const Forward = @import("Forward.zig");
 
 const CacheLayer = @This();
 
+enabled: bool = true,
 next: Layer = undefined,
 
 pub fn layer(self: *CacheLayer) Layer {
@@ -49,7 +50,7 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
     const self: *CacheLayer = @ptrCast(@alignCast(ptr));
     const network = client.network;
 
-    if (req.params.method != .GET) {
+    if (req.params.method != .GET or !self.enabled) {
         return self.next.request(client, req);
     }
 
@@ -90,6 +91,10 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
     );
 
     return self.next.request(client, wrapped);
+}
+
+pub fn setEnabled(self: *CacheLayer, enabled: bool) void {
+    self.enabled = enabled;
 }
 
 fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
