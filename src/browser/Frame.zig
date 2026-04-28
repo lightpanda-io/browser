@@ -622,6 +622,10 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     if (opts.header) |hdr| {
         try headers.add(hdr);
     }
+    if (opts.referer) |ref| {
+        const ref_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", ref }, 0);
+        try headers.add(ref_header);
+    }
     // We dispatch frame_navigate event before sending the request.
     // It ensures the event frame_navigated is not dispatched before this one.
     session.notification.dispatch(.frame_navigate, &.{
@@ -754,9 +758,18 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         session.browser.http_client.abortFrame(target._frame_id);
     }
 
+    // Capture the originating frame's URL as the Referer for this
+    // navigation. The originator's frame may be torn down before navigate()
+    // runs (processRootQueuedNavigation rebuilds the Page in-place), so dup
+    // into the QueuedNavigation arena which outlives that tear-down.
+    var nav_opts = opts;
+    if (nav_opts.referer == null and std.mem.startsWith(u8, originator.url, "http")) {
+        nav_opts.referer = try arena.dupe(u8, originator.url);
+    }
+
     const qn = try arena.create(QueuedNavigation);
     qn.* = .{
-        .opts = opts,
+        .opts = nav_opts,
         .arena = arena,
         .url = resolved_url,
         .is_about_blank = is_about_blank,
@@ -1279,7 +1292,12 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         );
     };
 
-    new_frame.navigate(url, .{ .reason = .initialFrameNavigation }) catch |err| {
+    new_frame.navigate(url, .{
+        .reason = .initialFrameNavigation,
+        // Iframe's initial src request carries the parent's URL as Referer.
+        // Parent frame outlives this navigate() call, so the slice is safe.
+        .referer = if (std.mem.startsWith(u8, self.url, "http")) self.url else null,
+    }) catch |err| {
         log.warn(.frame, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
         iframe._window = null;
@@ -3452,6 +3470,10 @@ pub const NavigateOpts = struct {
     method: HttpClient.Method = .GET,
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
+    // Set by scheduleNavigationWithArena from the originating frame's URL so
+    // anchor click / form submit / location.href navigations carry a Referer.
+    // null on CDP Page.navigate (address-bar) and Page.reload — matches Chrome.
+    referer: ?[]const u8 = null,
     force: bool = false,
     kind: NavigationKind = .{ .push = null },
 };
