@@ -43,6 +43,9 @@ runs:
 
     # Rust Toolchain for html5ever
     - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: src/html5ever
 
     - name: Cache v8
       id: cache-v8
