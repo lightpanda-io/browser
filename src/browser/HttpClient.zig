@@ -45,6 +45,7 @@ pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
 pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
 pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
 pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
+pub const DeferringLayer = @import("../network/layer/DeferringLayer.zig");
 
 // This is loosely tied to a browser Page. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -124,10 +125,13 @@ cdp_client: ?CDPClient = null,
 
 max_response_size: usize,
 
+blocking_request_id: ?u32 = null,
+
 cache_layer: CacheLayer,
 robots_layer: RobotsLayer,
 web_bot_auth_layer: WebBotAuthLayer,
 interception_layer: InterceptionLayer,
+deferring_layer: DeferringLayer,
 entry_layer: Layer,
 
 pub const Layer = struct {
@@ -194,6 +198,7 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
         .robots_layer = .{ .allocator = allocator },
         .web_bot_auth_layer = .{},
         .interception_layer = .{},
+        .deferring_layer = .{},
         .entry_layer = undefined,
     };
 
@@ -212,6 +217,8 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
     if (network.config.webBotAuth() != null) {
         next = layerWith(&client.web_bot_auth_layer, next);
     }
+
+    next = layerWith(&client.deferring_layer, next);
 
     client.entry_layer = next;
 
@@ -378,6 +385,10 @@ fn abortConnections(list: std.DoublyLinkedList, comptime abort_all: bool, frame_
 }
 
 pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
+    if (self.blocking_request_id == null) {
+        self.deferring_layer.flush();
+    }
+
     while (self.queue.popFirst()) |queue_node| {
         const conn = self.network.getConnection() orelse {
             self.queue.prepend(queue_node);
@@ -457,6 +468,10 @@ const SyncContext = struct {
 pub fn syncRequest(self: *Client, allocator: Allocator, params: RequestParams) !SyncResponse {
     var sync_ctx = SyncContext{ .allocator = allocator, .body = .empty };
     errdefer sync_ctx.body.deinit(allocator);
+
+    const expected_id = self.nextReqId();
+    self.blocking_request_id = expected_id;
+    defer self.blocking_request_id = null;
 
     try self.request(.{
         .params = params,
