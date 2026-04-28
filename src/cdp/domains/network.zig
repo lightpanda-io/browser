@@ -44,6 +44,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         setUserAgentOverride,
         deleteCookies,
         clearBrowserCookies,
+        clearBrowserCache,
         setCookie,
         setCookies,
         getCookies,
@@ -59,6 +60,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .setExtraHTTPHeaders => return setExtraHTTPHeaders(cmd),
         .deleteCookies => return deleteCookies(cmd),
         .clearBrowserCookies => return clearBrowserCookies(cmd),
+        .clearBrowserCache => return clearBrowserCache(cmd),
         .setCookie => return setCookie(cmd),
         .setCookies => return setCookies(cmd),
         .getCookies => return getCookies(cmd),
@@ -159,6 +161,17 @@ fn clearBrowserCookies(cmd: *CDP.Command) !void {
     // Chrome accepts that and clears the jar; reject only on truly malformed JSON.
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     bc.session.cookie_jar.clearRetainingCapacity();
+    return cmd.sendResult(null, .{});
+}
+
+fn clearBrowserCache(cmd: *CDP.Command) !void {
+    // Network.clearBrowserCache takes no parameters per the CDP spec, but most
+    // CDP clients (chrome-remote-interface, chromedp, custom websocket clients)
+    // include an empty `"params":{}` object on every command for ergonomics.
+    // Chrome accepts that and clears the jar; reject only on truly malformed JSON.
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const network = bc.cdp.browser.http_client.network;
+    if (network.cache) |*c| try c.clear();
     return cmd.sendResult(null, .{});
 }
 
@@ -672,4 +685,29 @@ test "cdp.Network: getAllCookies returns whole jar regardless of current origin"
             .{ .name = "b", .value = "2", .domain = "other.test", .path = "/", .size = 2, .secure = true },
         },
     }, .{ .id = 3 });
+}
+
+test "cdp.Network: clearBrowserCache succeeds" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-CC1" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.clearBrowserCache",
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+}
+
+test "cdp.Network: clearBrowserCache accepts empty params object" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-CC2" });
+
+    // Most CDP clients always include a `params` field on every command,
+    // even for methods that take none. Chrome ignores the empty object; we should too.
+    try ctx.processMessage(
+        \\{"id":1,"method":"Network.clearBrowserCache","params":{}}
+    );
+    try ctx.expectSentResult(null, .{ .id = 1 });
 }
