@@ -11,6 +11,7 @@ const Command = @import("Command.zig");
 const CommandExecutor = @import("CommandExecutor.zig");
 const Recorder = @import("Recorder.zig");
 const Verifier = @import("Verifier.zig");
+const SlashCommand = @import("SlashCommand.zig");
 
 const Self = @This();
 
@@ -118,6 +119,7 @@ self_heal: bool,
 interactive: bool,
 one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
+slash_schemas: []const SlashCommand.SchemaInfo,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
     const is_one_shot = opts.task != null;
@@ -175,6 +177,16 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     // pure replay and must not be mutated.
     const recorder_path: ?[]const u8 = if (opts.interactive) opts.script_file else null;
 
+    // Reuse the executor's schema arena: the parsed schemas in `tools` already
+    // live there, and the cache must outlive only as long as those do.
+    const slash_schemas: []const SlashCommand.SchemaInfo = if (will_repl)
+        SlashCommand.buildSchemas(tool_executor.schemaAllocator(), tools) catch {
+            log.fatal(.app, "failed to build slash schemas", .{});
+            return error.SlashSchemaInitFailed;
+        }
+    else
+        &.{};
+
     self.* = .{
         .allocator = allocator,
         .ai_client = ai_client,
@@ -193,6 +205,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .interactive = opts.interactive,
         .one_shot_task = opts.task,
         .one_shot_attachments = if (opts.task_attachments.items.len == 0) null else opts.task_attachments.items,
+        .slash_schemas = slash_schemas,
     };
 
     self.cmd_executor = CommandExecutor.init(allocator, tool_executor, &self.terminal);
@@ -260,6 +273,11 @@ fn runRepl(self: *Self) void {
 
         if (line.len == 0) continue;
 
+        if (line[0] == '/') {
+            if (self.handleSlash(line[1..])) break :repl;
+            continue :repl;
+        }
+
         const cmd = Command.parse(line);
 
         if (cmd.needsLlm() and self.ai_client == null) {
@@ -287,6 +305,114 @@ fn runRepl(self: *Self) void {
     }
 
     self.terminal.printInfo("Goodbye!");
+}
+
+/// Handle a REPL line that started with `/`. Returns `true` if the user asked
+/// to exit (`/quit` or `/exit`), `false` otherwise. All errors are printed and
+/// swallowed — the REPL must not die from a malformed slash command.
+fn handleSlash(self: *Self, body: []const u8) bool {
+    const split = SlashCommand.splitNameRest(body) orelse {
+        self.terminal.printError("Empty slash command. Try /help.");
+        return false;
+    };
+    const name = split.name;
+    const rest = split.rest;
+
+    if (std.mem.eql(u8, name, "quit") or std.mem.eql(u8, name, "exit")) {
+        return true;
+    }
+    if (std.mem.eql(u8, name, "help")) {
+        self.printSlashHelp(rest);
+        return false;
+    }
+
+    const schema = SlashCommand.findSchema(self.slash_schemas, name) orelse {
+        self.printSlashParseError(error.UnknownTool, name);
+        return false;
+    };
+
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const args_json = SlashCommand.parseArgs(aa, schema, rest) catch |err| {
+        self.printSlashParseError(err, name);
+        return false;
+    };
+
+    if (std.mem.eql(u8, schema.tool_name, "eval")) {
+        // callEval surfaces the is_error flag separately from the text;
+        // tool_executor.call discards it.
+        const script = extractEvalScript(aa, args_json) catch {
+            self.terminal.printError("eval requires a `script` argument.");
+            return false;
+        };
+        const result = self.tool_executor.callEval(aa, script);
+        if (result.is_error) {
+            self.terminal.printErrorFmt("eval: {s}", .{result.text});
+        } else {
+            self.terminal.printToolResult(schema.tool_name, result.text);
+        }
+        return false;
+    }
+
+    const result = self.tool_executor.call(aa, schema.tool_name, args_json) catch |err| {
+        self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, @errorName(err) });
+        return false;
+    };
+    self.terminal.printToolResult(schema.tool_name, result);
+    return false;
+}
+
+fn printSlashHelp(self: *Self, target: []const u8) void {
+    if (target.len == 0) {
+        self.terminal.printInfo("Slash commands (no LLM, REPL only):");
+        for (self.slash_schemas) |s| {
+            const summary = firstSentence(s.description);
+            self.terminal.printInfoFmt("  /{s} — {s}", .{ s.tool_name, summary });
+        }
+        self.terminal.printInfo("Meta: /help <name>, /quit, /exit");
+        return;
+    }
+    const lookup = if (target[0] == '/') target[1..] else target;
+    const schema = SlashCommand.findSchema(self.slash_schemas, lookup) orelse {
+        self.terminal.printErrorFmt("unknown tool: {s}", .{lookup});
+        return;
+    };
+    self.terminal.printInfoFmt("/{s} — {s}", .{ schema.tool_name, schema.description });
+    self.terminal.printInfoFmt("schema: {s}", .{schema.input_schema_raw});
+}
+
+fn printSlashParseError(self: *Self, err: SlashCommand.ParseError, name: []const u8) void {
+    switch (err) {
+        error.UnknownTool => self.terminal.printErrorFmt("unknown tool '{s}'. Try /help.", .{name}),
+        error.MissingName => self.terminal.printError("missing tool name. Try /help."),
+        error.MissingRequired => self.terminal.printErrorFmt("{s}: missing required argument. Try /help {s}.", .{ name, name }),
+        error.MalformedKv => self.terminal.printErrorFmt("{s}: malformed key=value. Use key=value or {{json}}.", .{name}),
+        error.PositionalNotAllowed => self.terminal.printErrorFmt("{s}: positional only works for tools with one required field. Use key=value.", .{name}),
+        error.UnterminatedQuote => self.terminal.printErrorFmt("{s}: unterminated quote.", .{name}),
+        error.OutOfMemory => self.terminal.printError("out of memory"),
+    }
+}
+
+fn firstSentence(text: []const u8) []const u8 {
+    // Sentence boundary = period followed by whitespace (or end of string).
+    // Plain "." is too aggressive — descriptions reference "console.log",
+    // "JSON-LD, OpenGraph, etc.", and similar abbreviations.
+    var i: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, text, i, '.')) |idx| : (i = idx + 1) {
+        if (idx + 1 == text.len or std.ascii.isWhitespace(text[idx + 1])) return text[0..idx];
+    }
+    return text;
+}
+
+fn extractEvalScript(arena: std.mem.Allocator, args_json: []const u8) ![]const u8 {
+    if (args_json.len == 0) return error.MissingScript;
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, args_json, .{});
+    if (parsed != .object) return error.MissingScript;
+    const v = parsed.object.get("script") orelse return error.MissingScript;
+    if (v != .string) return error.MissingScript;
+    return v.string;
 }
 
 const Replacement = struct {

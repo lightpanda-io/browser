@@ -57,6 +57,13 @@ pub fn deinit(self: *Self) void {
 
 pub const CallError = browser_tools.ToolError || error{InvalidJsonArguments};
 
+/// Allocator backing the parsed tool schemas. Lives for the executor's
+/// lifetime, so callers can hand back slices that need the same lifetime
+/// (e.g. derived caches over `getTools` output).
+pub fn schemaAllocator(self: *Self) std.mem.Allocator {
+    return self.tool_schema_arena.allocator();
+}
+
 pub fn getTools(self: *Self) ![]const zenai.provider.Tool {
     const arena = self.tool_schema_arena.allocator();
     const tools = try arena.alloc(zenai.provider.Tool, browser_tools.tool_defs.len);
