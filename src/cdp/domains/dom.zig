@@ -104,7 +104,16 @@ fn isXPathQuery(q: []const u8) bool {
         if (q[1] == '/') return true;
         if (q[1] == '.' and q.len > 2 and q[2] == '/') return true;
     }
-    return std.mem.indexOf(u8, q, "::") != null;
+    // Require axis-name shape immediately before `::` so CSS pseudo-elements
+    // (`a::before`) and attribute values containing `::` (`[data-x="x::y"]`)
+    // aren't misrouted to the XPath evaluator.
+    var idx: usize = 0;
+    while (std.mem.indexOfPos(u8, q, idx, "::")) |hit| : (idx = hit + 1) {
+        if (hit == 0) continue;
+        const c = q[hit - 1];
+        if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '-') return true;
+    }
+    return false;
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-performSearch
