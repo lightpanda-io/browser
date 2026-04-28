@@ -45,6 +45,7 @@ pub const PointerEventsCache = std.AutoHashMapUnmanaged(*Element, bool);
 const StyleManager = @This();
 
 const Tag = Element.Tag;
+const Input = Element.Html.Input;
 const RuleList = std.MultiArrayList(VisibilityRule);
 
 frame: *Frame,
@@ -241,23 +242,22 @@ pub fn hasDisplayNone(self: *StyleManager, el: *Element) bool {
     return self.isElementHidden(el, .{});
 }
 
-/// True if `el` matches a UA-stylesheet display:none rule per HTML Rendering
-/// §15.3.1 "Hidden elements" — covers the `[hidden]` attribute, the unrendered
-/// tag-name list, `<input type="hidden" i>`, and the closed-`<details>` non-
-/// `<summary>` direct-child rule. Centralized so `getComputedStyle().display`
-/// (via `hasDisplayNone`) and `el.checkVisibility()` (via `isHidden`) share
-/// the same UA-stylesheet truth.
+/// Centralizes UA-stylesheet display:none truth so `getComputedStyle().display`
+/// (via `hasDisplayNone`) and `el.checkVisibility()` (via `isHidden`) agree.
+/// Spec: HTML Rendering §15.3.1 "Hidden elements".
 fn matchesUaDisplayNoneRule(el: *Element) bool {
-    // [hidden] { display: none } — applies to all elements.
-    if (el.hasAttributeSafe(comptime .wrap("hidden"))) return true;
-
+    // Tag check first: O(1) switch, exits for the ~95% of elements with
+    // ordinary tags before we touch the attribute list.
     const tag = el.getTag();
     if (tag.isHiddenByUaStylesheet()) return true;
 
+    if (el.hasAttributeSafe(comptime .wrap("hidden"))) return true;
+
     // input[type="hidden" i] { display: none !important }
+    // _input_type is parsed case-insensitively at attribute-set time.
     if (tag == .input) {
-        if (el.getAttributeSafe(comptime .wrap("type"))) |type_val| {
-            if (std.ascii.eqlIgnoreCase(type_val, "hidden")) return true;
+        if (el.is(Input)) |input| {
+            if (input._input_type == .hidden) return true;
         }
     }
 
@@ -345,14 +345,11 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     }
 
     // UA stylesheet display:none rules (HTML Rendering §15.3.1 "Hidden elements").
-    // Inline `display` already wins above (sets display_priority == INLINE_PRIORITY);
-    // skip the UA check in that case so author inline overrides keep working.
-    // Otherwise short-circuit return true: the spec lists `input[type=hidden]`
-    // and `noscript` as `!important` and the rest are normal-origin UA rules
-    // that author CSS could in principle override, but author overrides of
-    // `<script>`/`<head>`/closed-`<details>` children are exceptionally rare
-    // and matching the existing `[hidden]` short-circuit keeps the behavior
-    // consistent across all UA rules.
+    // Skipped when an inline `display` is set so author overrides win per cascade.
+    // All UA rules are short-circuited here; the spec marks some as `!important`
+    // (`input[type=hidden]`, `noscript`) and others as normal-origin, but author
+    // CSS overriding `<script>`/`<head>`/closed-`<details>` children is rare
+    // enough that uniform treatment is acceptable.
     if (options.check_display and display_priority != INLINE_PRIORITY) {
         if (matchesUaDisplayNoneRule(el)) return true;
     }
