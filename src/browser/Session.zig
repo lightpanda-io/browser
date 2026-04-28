@@ -265,6 +265,11 @@ pub fn pendingPage(self: *Session) ?*Page {
     return &self._pages[idx].?;
 }
 
+pub fn currentOrPendingFrame(self: *Session) ?*Frame {
+    const page = self.pendingPage() orelse self.currentPage() orelse return null;
+    return &page.frame;
+}
+
 pub fn currentFrame(self: *Session) ?*Frame {
     const page = self.currentPage() orelse return null;
     return &page.frame;
