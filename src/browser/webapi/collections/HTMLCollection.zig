@@ -72,6 +72,10 @@ pub fn getAtIndex(self: *HTMLCollection, index: usize, frame: *const Frame) ?*El
 }
 
 pub fn getByName(self: *HTMLCollection, name: []const u8, frame: *Frame) ?*Element {
+    if (name.len == 0) {
+        return null;
+    }
+
     return switch (self._data) {
         .empty => null,
         inline else => |*impl| impl.getByName(name, frame),
@@ -146,7 +150,15 @@ pub const JsApi = struct {
 
     pub const length = bridge.accessor(HTMLCollection.length, null, .{});
     pub const @"[int]" = bridge.indexed(HTMLCollection.getAtIndex, null, .{ .null_as_undefined = true });
-    pub const @"[str]" = bridge.namedIndexed(HTMLCollection.getByName, null, null, .{ .null_as_undefined = true });
+    pub const @"[str]" = bridge.namedIndexed(struct {
+        pub fn wrap(self: *HTMLCollection, name: []const u8, frame: *Frame) !?*Element {
+            if (name.len == 0) {
+                return error.NotHandled;
+            }
+
+            return self.getByName(name, frame);
+        }
+    }.wrap, null, null, .{ .null_as_undefined = true });
 
     pub const item = bridge.function(_item, .{});
     fn _item(self: *HTMLCollection, index: i32, frame: *Frame) ?*Element {

@@ -151,8 +151,20 @@
   }
 </script>
 
+<iframe id=f7></iframe>
+<script id=onloadorder type=module>
+  {
+    const state = await testing.async();
+    $('#f7').onload = state.resolve;
+    $('#f7').src = "about:blank";
+    await state.done(() => {
+      testing.expectEqual(true, true);
+    });
+  }
+</script>
+
 <script id=count>
   testing.onload(() => {
-    testing.expectEqual(9, window.length);
+    testing.expectEqual(10, window.length);
   });
 </script>

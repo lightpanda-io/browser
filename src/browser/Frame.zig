@@ -614,11 +614,17 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .cdp_id = opts.cdp_id,
         .reason = opts.reason,
         .method = opts.method,
+        .body = if (opts.body) |b| try self.arena.dupe(u8, b) else null,
+        .header = if (opts.header) |h| try self.arena.dupeZ(u8, h) else null,
     };
 
     var headers = try http_client.newHeaders();
     if (opts.header) |hdr| {
         try headers.add(hdr);
+    }
+    if (opts.referer) |ref| {
+        const ref_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", ref }, 0);
+        try headers.add(ref_header);
     }
     // We dispatch frame_navigate event before sending the request.
     // It ensures the event frame_navigated is not dispatched before this one.
@@ -641,16 +647,18 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     http_client.request(.{
         .ctx = self,
-        .url = self.url,
-        .frame_id = self._frame_id,
-        .loader_id = self._loader_id,
-        .method = opts.method,
-        .headers = headers,
-        .body = opts.body,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = self.url,
-        .resource_type = .document,
-        .notification = self._session.notification,
+        .params = .{
+            .url = self.url,
+            .frame_id = self._frame_id,
+            .loader_id = self._loader_id,
+            .method = opts.method,
+            .headers = headers,
+            .body = opts.body,
+            .cookie_jar = &session.cookie_jar,
+            .cookie_origin = self.url,
+            .resource_type = .document,
+            .notification = self._session.notification,
+        },
         .header_callback = frameHeaderDoneCallback,
         .data_callback = frameDataCallback,
         .done_callback = frameDoneCallback,
@@ -720,7 +728,10 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     };
 
     const session = target._session;
-    if (!opts.force and URL.eqlDocument(target.url, resolved_url)) {
+    // Short-circuit only true fragment-only navigations (same path/query, different
+    // fragment). Identical URLs fall through and trigger a real reload.
+    const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
+    if (!opts.force and is_fragment_navigation) {
         target.url = try target.arena.dupeZ(u8, resolved_url);
         target.window._location = try Location.init(target.url, target);
         if (target.parent == null) {
@@ -749,9 +760,18 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         session.browser.http_client.abortFrame(target._frame_id);
     }
 
+    // Capture the originating frame's URL as the Referer for this
+    // navigation. The originator's frame may be torn down before navigate()
+    // runs (processRootQueuedNavigation rebuilds the Page in-place), so dup
+    // into the QueuedNavigation arena which outlives that tear-down.
+    var nav_opts = opts;
+    if (nav_opts.referer == null and std.mem.startsWith(u8, originator.url, "http")) {
+        nav_opts.referer = try arena.dupe(u8, originator.url);
+    }
+
     const qn = try arena.create(QueuedNavigation);
     qn.* = .{
-        .opts = opts,
+        .opts = nav_opts,
         .arena = arena,
         .url = resolved_url,
         .is_about_blank = is_about_blank,
@@ -950,6 +970,18 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
         self.origin = try URL.getOrigin(self.arena, self.url);
     }
     try self.js.setOrigin(self.origin);
+
+    // After any redirect, drop the original method/body/header so a later
+    // Page.reload doesn't re-POST form data to the redirect target. Conservative
+    // default — 307/308 technically preserve the method per RFC 7231, but
+    // resubmitting form data is the more dangerous failure mode.
+    if ((response.redirectCount() orelse 0) > 0) {
+        if (self._navigated_options) |*no| {
+            no.method = .GET;
+            no.body = null;
+            no.header = null;
+        }
+    }
 
     self.window._location = try Location.init(self.url, self);
     self.document._location = self.window._location;
@@ -1262,7 +1294,12 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         );
     };
 
-    new_frame.navigate(url, .{ .reason = .initialFrameNavigation }) catch |err| {
+    new_frame.navigate(url, .{
+        .reason = .initialFrameNavigation,
+        // Iframe's initial src request carries the parent's URL as Referer.
+        // Parent frame outlives this navigate() call, so the slice is safe.
+        .referer = if (std.mem.startsWith(u8, self.url, "http")) self.url else null,
+    }) catch |err| {
         log.warn(.frame, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
         iframe._window = null;
@@ -3435,6 +3472,10 @@ pub const NavigateOpts = struct {
     method: HttpClient.Method = .GET,
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
+    // Set by scheduleNavigationWithArena from the originating frame's URL so
+    // anchor click / form submit / location.href navigations carry a Referer.
+    // null on CDP Page.navigate (address-bar) and Page.reload — matches Chrome.
+    referer: ?[]const u8 = null,
     force: bool = false,
     kind: NavigationKind = .{ .push = null },
 };
@@ -3443,6 +3484,10 @@ pub const NavigatedOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
     method: HttpClient.Method = .GET,
+    // Retained on the frame's arena so Page.reload can replay the prior
+    // navigation's HTTP method — matches Chrome's F5 behavior on POST pages.
+    body: ?[]const u8 = null,
+    header: ?[:0]const u8 = null,
 };
 
 const NavigationType = enum {
@@ -3732,7 +3777,16 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     const arena = try self._session.getArena(.medium, "submitForm");
     errdefer self._session.releaseArena(arena);
 
-    const enctype = form_element.getAttributeSafe(comptime .wrap("enctype"));
+    // Per HTML spec form-submission algorithm, when the submitter is a submit
+    // button, its formaction/formmethod/formenctype attributes override the
+    // form's corresponding attributes (matching how formtarget is honored above).
+    // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
+    const enctype = blk: {
+        if (submitter_) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formenctype"))) |fe| break :blk fe;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("enctype"));
+    };
 
     // Get charset from accept-charset attribute or fall back to document charset
     const charset: []const u8 = blk: {
@@ -3749,8 +3803,18 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     var buf = std.Io.Writer.Allocating.init(arena);
     try form_data.write(.{ .enctype = enctype, .charset = charset, .allocator = arena }, &buf.writer);
 
-    const method = form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
-    var action = form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
+    const method = blk: {
+        if (submitter_) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formmethod"))) |fm| break :blk fm;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
+    };
+    var action = blk: {
+        if (submitter_) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formaction"))) |fa| break :blk fa;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
+    };
 
     var opts = NavigateOpts{
         .reason = .form,

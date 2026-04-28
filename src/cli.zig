@@ -339,6 +339,198 @@ pub fn Builder(comptime commands: anytype) type {
             return error.UnknownCommand;
         }
 
+        /// Returns the type for validator function.
+        pub fn ValidatorFn(comptime T: type, comptime is_multiple: bool) type {
+            if (is_multiple) {
+                return *const fn (Allocator, *std.process.ArgIterator, *std.ArrayList(T)) anyerror!void;
+            }
+
+            return *const fn (Allocator, *std.process.ArgIterator) anyerror!T;
+        }
+
+        /// Turns a snake_case string to kebab-case in comptime.
+        fn toKebabCase(comptime str: []const u8) [str.len]u8 {
+            var output: [str.len]u8 = str[0..str.len].*;
+            for (&output) |*c| if (c.* == '_') {
+                c.* = '-';
+            };
+            return output;
+        }
+
+        fn parseValue(
+            allocator: Allocator,
+            args: *std.process.ArgIterator,
+            /// Pointer to field; *T.
+            target: anytype,
+            /// `Option` doesn't have a concrete type; this field expects:
+            /// ```zig
+            /// Option{
+            ///     .name = "option_name",
+            ///     .type = T,
+            ///     .multiple = ?bool,
+            ///     .validator = ?ValidatorFn(T, is_multiple),
+            /// };
+            /// ```
+            option: anytype,
+        ) !void {
+            const kebab_cased = "--" ++ comptime toKebabCase(option.name);
+
+            const OptionType = @TypeOf(option);
+            const is_multiple = @hasField(OptionType, "multiple") and option.multiple;
+            const has_validator = @hasField(OptionType, "validator");
+
+            // Prefer validator for parsing if provided.
+            if (has_validator) {
+                const validator = option.validator;
+                if (is_multiple) {
+                    // Pass the list.
+                    try @call(.auto, validator, .{ allocator, args, target });
+                } else {
+                    // Receive the value from return.
+                    const v = try @call(.auto, validator, .{ allocator, args });
+                    target.* = v;
+                }
+
+                return;
+            }
+
+            // Extract type info.
+            const T = option.type;
+            const option_info = blk: {
+                const info = @typeInfo(T);
+                // If wrapped in optional, prefer the child type.
+                if (info == .optional) break :blk @typeInfo(info.optional.child);
+                break :blk info;
+            };
+
+            // Parse by type.
+            return switch (option_info) {
+                .int => |int| {
+                    const Int = std.meta.Int(int.signedness, int.bits);
+
+                    const str = args.next() orelse return error.MissingArgument;
+                    const v = std.fmt.parseInt(Int, str, 10) catch |err| {
+                        switch (err) {
+                            error.Overflow => log.fatal(.app, "range overflow", .{ .arg = kebab_cased, .value = str }),
+                            error.InvalidCharacter => log.fatal(.app, "invalid character", .{ .arg = kebab_cased, .value = str }),
+                        }
+                        return error.InvalidArgument;
+                    };
+
+                    if (is_multiple) {
+                        // Push to ArrayList.
+                        try target.append(allocator, v);
+                    } else {
+                        target.* = v;
+                    }
+                },
+                .pointer => |pointer| {
+                    const not_u8_slice = pointer.child != u8 or pointer.size != .slice;
+                    if (not_u8_slice) {
+                        @compileError("Only []u8, []const u8, [:sentinel]u8 and [:sentinel]const u8 pointers are supported");
+                    }
+
+                    const v = blk: {
+                        const str = args.next() orelse return error.MissingArgument;
+
+                        // DupeZ branch.
+                        if (comptime pointer.sentinel()) |sentinel| {
+                            const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.alignment), str.len + 1);
+                            @memcpy(buf[0..str.len], str);
+                            buf[str.len] = sentinel;
+                            break :blk buf[0..str.len :sentinel];
+                        }
+
+                        // Dupe branch.
+                        const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.alignment), str.len);
+                        @memcpy(buf, str);
+                        break :blk buf;
+                    };
+
+                    if (is_multiple) {
+                        try target.append(allocator, v);
+                    } else {
+                        target.* = v;
+                    }
+                },
+                .@"struct" => |_struct| {
+                    // Don't support multiple for structs for now.
+                    if (is_multiple) {
+                        @compileError("multiple option is not supported for structs");
+                    }
+
+                    const not_packed = _struct.layout != .@"packed";
+                    if (not_packed) {
+                        @compileError("only packed structs are allowed");
+                    }
+
+                    const str = args.next() orelse return error.MissingArgument;
+
+                    if (std.mem.eql(u8, str, "full")) {
+                        // "full" sets all the fields of packed struct.
+                        const Int = _struct.backing_integer orelse @compileError("packed struct must provide a backing integer");
+                        target.* = @bitCast(@as(Int, std.math.maxInt(Int)));
+                    } else {
+                        // Parse given args.
+                        var it = std.mem.tokenizeScalar(u8, str, ',');
+                        outer: while (it.next()) |part| {
+                            const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
+
+                            inline for (_struct.fields) |f| {
+                                lp.assert(f.type == bool, "all fields of packed struct must be boolean", .{
+                                    .option = option.name,
+                                    .field = f.name,
+                                });
+
+                                if (std.mem.eql(u8, trimmed, @as([]const u8, f.name))) {
+                                    @field(target, f.name) = true;
+                                    continue :outer;
+                                }
+                            }
+
+                            // Invalid option choice.
+                            log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = trimmed });
+                            return error.InvalidArgument;
+                        }
+                    }
+                },
+                .@"enum" => {
+                    const E = switch (@typeInfo(T)) {
+                        .optional => |optional| optional.child,
+                        inline else => T,
+                    };
+
+                    const str = args.next() orelse return error.MissingArgument;
+                    const v = std.meta.stringToEnum(E, str) orelse {
+                        log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = str });
+                        return error.InvalidArgument;
+                    };
+
+                    if (is_multiple) {
+                        try target.append(allocator, v);
+                    } else {
+                        target.* = v;
+                    }
+                },
+                .bool => {
+                    if (is_multiple) {
+                        @compileError("multiple option is not supported for booleans");
+                    }
+
+                    const default = blk: {
+                        if (@hasField(@TypeOf(option), "default")) {
+                            break :blk option.default;
+                        }
+                        break :blk false;
+                    };
+
+                    // Set opposite of the default.
+                    target.* = !default;
+                },
+                else => unreachable,
+            };
+        }
+
         /// Parses the command with its options.
         fn parseCommand(
             allocator: Allocator,
@@ -359,170 +551,39 @@ pub fn Builder(comptime commands: anytype) type {
                 inline for (options) |option| {
                     // We allow both `--my-option` and `--my_option` variants;
                     // assuming given `option` struct prefer snake_case for `name`.
-                    const kebab_cased = comptime casing: {
-                        var output: [option.name.len]u8 = undefined;
-                        @memcpy(&output, option.name);
-                        std.mem.replaceScalar(u8, &output, '_', '-');
-                        break :casing "--" ++ output;
-                    };
-
                     // Match an option.
-                    const match =
-                        std.mem.eql(u8, option_name, "--" ++ option.name) or
-                        std.mem.eql(u8, option_name, kebab_cased);
+                    if (std.mem.eql(u8, option_name, "--" ++ option.name) or
+                        std.mem.eql(u8, option_name, "--" ++ comptime toKebabCase(option.name)))
+                    {
+                        try parseValue(allocator, args, &@field(c, option.name), option);
+                        continue :iter_args;
+                    }
 
-                    if (match) {
-                        const T = option.type;
-                        const option_info = blk: {
-                            const info = @typeInfo(T);
-                            // If wrapped in optional, prefer the child type.
-                            if (info == .optional) break :blk @typeInfo(info.optional.child);
-                            break :blk info;
-                        };
-
-                        const is_multiple = @hasField(@TypeOf(option), "multiple") and option.multiple;
-                        const has_validator = @hasField(@TypeOf(option), "validator");
-
-                        // Prefer custom validator logic instead.
-                        if (has_validator) {
-                            const validator = option.validator;
-                            if (is_multiple) {
-                                // Pass the list.
-                                try @call(.auto, validator, .{ allocator, args, &@field(c, option.name) });
-                            } else {
-                                // Receive the value from return.
-                                const v = try @call(.auto, validator, .{ allocator, args });
-                                @field(c, option.name) = v;
-                            }
-                        } else {
-                            switch (option_info) {
-                                .int => |int| {
-                                    const Int = std.meta.Int(int.signedness, int.bits);
-
-                                    const str = args.next() orelse return error.MissingArgument;
-                                    const v = std.fmt.parseInt(Int, str, 10) catch |err| {
-                                        switch (err) {
-                                            error.Overflow => log.fatal(.app, "range overflow", .{ .arg = kebab_cased, .value = str }),
-                                            error.InvalidCharacter => log.fatal(.app, "invalid character", .{ .arg = kebab_cased, .value = str }),
-                                        }
-                                        continue :iter_args;
-                                    };
-
-                                    if (is_multiple) {
-                                        // Push to ArrayList.
-                                        try @field(c, option.name).append(allocator, v);
-                                    } else {
-                                        @field(c, option.name) = v;
-                                    }
-                                },
-                                .pointer => |pointer| {
-                                    const not_u8_slice = pointer.child != u8 or pointer.size != .slice;
-                                    if (not_u8_slice) {
-                                        @compileError("Only []u8, []const u8, [:sentinel]u8 and [:sentinel]const u8 pointers are supported");
+                    const is_multiple = @hasField(@TypeOf(option), "multiple") and option.multiple;
+                    // Parse for variants if there are.
+                    const has_variants = @hasField(@TypeOf(option), "variants");
+                    if (has_variants) {
+                        inline for (option.variants) |variant| {
+                            if (std.mem.eql(u8, option_name, "--" ++ variant.name) or
+                                std.mem.eql(u8, option_name, "--" ++ comptime toKebabCase(variant.name)))
+                            {
+                                const opts = blk: {
+                                    if (@hasField(@TypeOf(variant), "validator")) {
+                                        break :blk .{
+                                            .name = variant.name,
+                                            .type = option.type,
+                                            .multiple = is_multiple,
+                                            .validator = variant.validator,
+                                        };
                                     }
 
-                                    const v = blk: {
-                                        const str = args.next() orelse return error.MissingArgument;
+                                    break :blk .{ .name = variant.name, .type = option.type, .multiple = is_multiple };
+                                };
 
-                                        // DupeZ branch.
-                                        if (comptime pointer.sentinel()) |sentinel| {
-                                            const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.alignment), str.len + 1);
-                                            @memcpy(buf[0..str.len], str);
-                                            buf[str.len] = sentinel;
-                                            break :blk buf[0..str.len :sentinel];
-                                        }
-
-                                        // Dupe branch.
-                                        const buf = try allocator.alignedAlloc(u8, .fromByteUnits(pointer.alignment), str.len);
-                                        @memcpy(buf, str);
-                                        break :blk buf;
-                                    };
-
-                                    if (is_multiple) {
-                                        try @field(c, option.name).append(allocator, v);
-                                    } else {
-                                        @field(c, option.name) = v;
-                                    }
-                                },
-                                .@"struct" => |_struct| {
-                                    // Don't support multiple for structs for now.
-                                    if (is_multiple) {
-                                        @compileError("multiple option is not supported for structs");
-                                    }
-
-                                    const not_packed = _struct.layout != .@"packed";
-                                    if (not_packed) {
-                                        @compileError("only packed structs are allowed");
-                                    }
-
-                                    const str = args.next() orelse return error.MissingArgument;
-
-                                    if (std.mem.eql(u8, str, "full")) {
-                                        // "full" sets all the fields of packed struct.
-                                        const Int = _struct.backing_integer.?;
-                                        @field(c, option.name) = @bitCast(@as(Int, std.math.maxInt(Int)));
-                                    } else {
-                                        // Parse given args.
-                                        var it = std.mem.tokenizeScalar(u8, str, ',');
-                                        outer: while (it.next()) |part| {
-                                            const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
-
-                                            inline for (_struct.fields) |f| {
-                                                lp.assert(f.type == bool, "all fields of packed struct must be boolean", .{
-                                                    .option = option.name,
-                                                    .field = f.name,
-                                                });
-
-                                                if (std.mem.eql(u8, trimmed, @as([]const u8, f.name))) {
-                                                    @field(@field(c, option.name), f.name) = true;
-                                                    continue :outer;
-                                                }
-                                            }
-
-                                            // Invalid option choice.
-                                            log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = trimmed });
-                                        }
-                                    }
-                                },
-                                .@"enum" => {
-                                    const E = switch (@typeInfo(T)) {
-                                        .optional => |optional| optional.child,
-                                        inline else => T,
-                                    };
-
-                                    const str = args.next() orelse return error.MissingArgument;
-                                    const v = std.meta.stringToEnum(E, str) orelse {
-                                        log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = str });
-                                        continue :iter_args;
-                                    };
-
-                                    if (is_multiple) {
-                                        try @field(c, option.name).append(allocator, v);
-                                    } else {
-                                        @field(c, option.name) = v;
-                                    }
-                                },
-                                .bool => {
-                                    if (is_multiple) {
-                                        @compileError("multiple option is not supported for booleans");
-                                    }
-
-                                    const default = blk: {
-                                        if (@hasField(@TypeOf(option), "default")) {
-                                            break :blk option.default;
-                                        }
-                                        break :blk false;
-                                    };
-
-                                    // Set opposite of the default.
-                                    @field(c, option.name) = !default;
-                                },
-
-                                else => {},
+                                try parseValue(allocator, args, &@field(c, option.name), opts);
+                                continue :iter_args;
                             }
                         }
-
-                        continue :iter_args;
                     }
                 }
 

@@ -276,9 +276,11 @@ fn createSnapshotContext(
                 const name = JsApi.Meta.name;
                 const v8_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                 var maybe_result: v8.MaybeBool = undefined;
-                var properties: v8.PropertyAttribute = v8.None;
-                if (@hasDecl(JsApi.Meta, "enumerable") and JsApi.Meta.enumerable == false) {
-                    properties |= v8.DontEnum;
+                // Web IDL: interface objects on the global are non-enumerable
+                // by default. Opt back in via JsApi.Meta.enumerable = true.
+                var properties: v8.PropertyAttribute = v8.DontEnum;
+                if (@hasDecl(JsApi.Meta, "enumerable") and JsApi.Meta.enumerable == true) {
+                    properties = v8.None;
                 }
                 v8.v8__Object__DefineOwnProperty(global_obj, context, v8_class_name, func, properties, &maybe_result);
             }
@@ -567,7 +569,12 @@ pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8
         break :blk illegalConstructorCallback;
     };
 
-    const template = v8.v8__FunctionTemplate__New__DEFAULT2(isolate, callback).?;
+    const arity: c_int = if (@hasDecl(JsApi, "constructor")) JsApi.constructor.arity else 0;
+    const template = v8.v8__FunctionTemplate__New__Config(isolate, &.{
+        .length = arity,
+        .callback = callback,
+        .behavior = v8.kConstructorBehavior_Allow,
+    }).?;
     {
         const internal_field_count = comptime countInternalFields(JsApi);
         if (internal_field_count > 0) {
@@ -578,6 +585,8 @@ pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8
     const name_str = if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi);
     const class_name = v8.v8__String__NewFromUtf8(isolate, name_str.ptr, v8.kNormal, @intCast(name_str.len));
     v8.v8__FunctionTemplate__SetClassName(template, class_name);
+    // Web IDL: interface object's `prototype` property is non-writable/non-configurable.
+    v8.v8__FunctionTemplate__ReadOnlyPrototype(template);
     return template;
 }
 
@@ -615,13 +624,21 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
                     .callback = value.getter,
                     .signature = getter_signature,
                 }).?;
-                const setter_callback = if (value.setter) |setter|
-                    v8.v8__FunctionTemplate__New__Config(isolate, &.{
+                // WebIDL: getter function's .name should be "get X"
+                const getter_name_str = "get " ++ name;
+                const getter_name_v8 = v8.v8__String__NewFromUtf8(isolate, getter_name_str.ptr, v8.kNormal, @intCast(getter_name_str.len));
+                v8.v8__FunctionTemplate__SetClassName(getter_callback, getter_name_v8);
+
+                const setter_callback = if (value.setter) |setter| blk: {
+                    const cb = v8.v8__FunctionTemplate__New__Config(isolate, &.{
                         .callback = setter,
                         .signature = getter_signature,
-                    }).?
-                else
-                    null;
+                    }).?;
+                    const setter_name_str = "set " ++ name;
+                    const setter_name_v8 = v8.v8__String__NewFromUtf8(isolate, setter_name_str.ptr, v8.kNormal, @intCast(setter_name_str.len));
+                    v8.v8__FunctionTemplate__SetClassName(cb, setter_name_v8);
+                    break :blk cb;
+                } else null;
 
                 var attribute: v8.PropertyAttribute = 0;
                 if (value.setter == null) {
@@ -655,6 +672,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
                     .signature = func_signature,
                 }).?;
                 const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
+                v8.v8__FunctionTemplate__SetClassName(function_template, js_name);
                 if (value.static) {
                     v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
                 } else {

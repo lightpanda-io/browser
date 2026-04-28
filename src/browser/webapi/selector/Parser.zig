@@ -921,8 +921,7 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
     const matcher_type = try self.attributeMatcher();
     _ = self.skipSpaces();
 
-    const value_raw = try self.attributeValue();
-    const value = try arena.dupe(u8, value_raw);
+    const value = try self.attributeValue(arena);
     _ = self.skipSpaces();
 
     // Parse optional case-sensitivity flag
@@ -1002,7 +1001,7 @@ fn attributeMatcher(self: *Parser) !std.meta.FieldEnum(Selector.AttributeMatcher
     };
 }
 
-fn attributeValue(self: *Parser) ![]const u8 {
+fn attributeValue(self: *Parser, arena: Allocator) ![]const u8 {
     const input = self.input;
     if (input.len == 0) {
         return error.InvalidAttributeSelector;
@@ -1010,10 +1009,41 @@ fn attributeValue(self: *Parser) ![]const u8 {
 
     const quote = input[0];
     if (quote == '"' or quote == '\'') {
-        const end = std.mem.indexOfScalarPos(u8, input, 1, quote) orelse return error.InvalidAttributeSelector;
-        const value = input[1..end];
-        self.input = input[end + 1 ..];
-        return value;
+        // Walk the string respecting backslash escapes per CSS Syntax Level 3 §4.3.5.
+        // Decode \\ \" \' and \<hex digits>, treat \<newline> as a line continuation,
+        // and stop at the matching unescaped closing quote.
+        // https://drafts.csswg.org/css-syntax/#consume-string-token
+        var result = try std.ArrayList(u8).initCapacity(arena, input.len);
+        var i: usize = 1;
+        while (i < input.len and input[i] != quote) {
+            const b = input[i];
+            if (b == '\\') {
+                if (i + 1 >= input.len) {
+                    // Backslash at EOF inside a string is a parse error per spec;
+                    // surface it as a missing closing quote.
+                    return error.InvalidAttributeSelector;
+                }
+                const after = input[i + 1];
+                if (after == '\n') {
+                    // Escaped newline inside a string is a line continuation: drop both.
+                    i += 2;
+                    continue;
+                }
+                const escape = try parseEscape(input[i + 1 ..], arena);
+                try result.appendSlice(arena, escape.bytes);
+                i += 1 + escape.consumed;
+                continue;
+            }
+            if (b == '\n') {
+                // Bare newline terminates a string token (parse error).
+                return error.InvalidAttributeSelector;
+            }
+            try result.append(arena, b);
+            i += 1;
+        }
+        if (i >= input.len) return error.InvalidAttributeSelector;
+        self.input = input[i + 1 ..];
+        return result.items;
     }
 
     var i: usize = 0;
@@ -1032,7 +1062,7 @@ fn attributeValue(self: *Parser) ![]const u8 {
 
     const value = input[0..i];
     self.input = input[i..];
-    return value;
+    return arena.dupe(u8, value);
 }
 
 fn asUint(comptime string: anytype) std.meta.Int(
@@ -1544,5 +1574,98 @@ test "Selector: Parser.parseNthPattern" {
         try testing.expectEqual(2, pattern.a);
         try testing.expectEqual(1, pattern.b);
         try testing.expectEqual("  )", parser.input);
+    }
+}
+
+test "Selector: Parser.attributeValue" {
+    defer testing.reset();
+    const arena = testing.arena_allocator;
+
+    // Unquoted identifier value (unchanged path).
+    {
+        var parser = Parser{ .input = "abc]" };
+        try testing.expectEqual("abc", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Plain double-quoted value with no escapes.
+    {
+        var parser = Parser{ .input = "\"abc\"]" };
+        try testing.expectEqual("abc", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Plain single-quoted value with no escapes.
+    {
+        var parser = Parser{ .input = "'abc']" };
+        try testing.expectEqual("abc", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Escaped backslash inside a double-quoted value: "abc\\def" -> abc\def.
+    {
+        var parser = Parser{ .input = "\"abc\\\\def\"]" };
+        try testing.expectEqual("abc\\def", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Escaped quote inside a double-quoted value: "foo\"bar" -> foo"bar.
+    {
+        var parser = Parser{ .input = "\"foo\\\"bar\"]" };
+        try testing.expectEqual("foo\"bar", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Escaped single quote inside a single-quoted value: 'foo\'bar' -> foo'bar.
+    {
+        var parser = Parser{ .input = "'foo\\'bar']" };
+        try testing.expectEqual("foo'bar", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Hex escape with explicit space terminator: "\41 B" -> "AB" (space is consumed).
+    {
+        var parser = Parser{ .input = "\"\\41 B\"]" };
+        try testing.expectEqual("AB", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Hex escape consumes up to 6 hex digits with no delimiter: "\41B" -> "ƛ" (U+041B).
+    {
+        var parser = Parser{ .input = "\"\\41B\"]" };
+        try testing.expectEqual("\u{041B}", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Hex escape decoding to a multi-byte UTF-8 sequence: "\1F3A8" -> "🎨".
+    {
+        var parser = Parser{ .input = "\"\\1F3A8\"]" };
+        try testing.expectEqual("🎨", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Escaped newline inside a string is a line continuation (drops the newline).
+    {
+        var parser = Parser{ .input = "\"foo\\\nbar\"]" };
+        try testing.expectEqual("foobar", try parser.attributeValue(arena));
+        try testing.expectEqual("]", parser.input);
+    }
+
+    // Missing closing quote.
+    {
+        var parser = Parser{ .input = "\"abc" };
+        try testing.expectError(error.InvalidAttributeSelector, parser.attributeValue(arena));
+    }
+
+    // Unescaped newline inside a string terminates with a parse error.
+    {
+        var parser = Parser{ .input = "\"abc\ndef\"]" };
+        try testing.expectError(error.InvalidAttributeSelector, parser.attributeValue(arena));
+    }
+
+    // Trailing backslash before EOF is a parse error.
+    {
+        var parser = Parser{ .input = "\"abc\\" };
+        try testing.expectError(error.InvalidAttributeSelector, parser.attributeValue(arena));
     }
 }

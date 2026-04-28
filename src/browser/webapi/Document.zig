@@ -396,6 +396,11 @@ pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*
         return (try TextEvent.init("", null, frame)).asEvent();
     }
 
+    if (std.mem.eql(u8, normalized, "compositionevent")) {
+        const CompositionEvent = @import("event/CompositionEvent.zig");
+        return (try CompositionEvent.init("", null, frame)).asEvent();
+    }
+
     return error.NotSupported;
 }
 

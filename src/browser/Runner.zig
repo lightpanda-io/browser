@@ -185,7 +185,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
             try frame.dispatchLoad();
 
             const http_active = http_client.http_active;
-            const total_network_activity = http_active + http_client.intercepted;
+            const total_network_activity = http_active + http_client.interception_layer.intercepted;
             if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
                 frame.notifyNetworkAlmostIdle();
             }
@@ -211,7 +211,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
                 // because is_cdp is false, and that can only be
                 // the case when interception isn't possible.
                 if (comptime IS_DEBUG) {
-                    std.debug.assert(http_client.intercepted == 0);
+                    std.debug.assert(http_client.interception_layer.intercepted == 0);
                 }
 
                 if (browser.hasBackgroundTasks()) {

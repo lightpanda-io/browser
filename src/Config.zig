@@ -51,12 +51,24 @@ fn logFilterScopesValidator(allocator: Allocator, args: *std.process.ArgIterator
     var it = std.mem.splitScalar(u8, str, ',');
     while (it.next()) |part| {
         const v = std.meta.stringToEnum(log.Scope, part) orelse {
-            log.fatal(.app, "invalid option choice", .{ .arg = "log-filter-scopes", .value = part });
+            log.fatal(.app, "invalid option choice", .{ .arg = "--log-filter-scopes", .value = part });
             return error.InvalidOption;
         };
 
         try list.append(allocator, v);
     }
+}
+
+fn logLevelValidator(_: Allocator, args: *std.process.ArgIterator) !?log.Level {
+    const str = args.next() orelse return error.MissingArgument;
+    if (std.mem.eql(u8, str, "error")) {
+        return .err;
+    }
+
+    return std.meta.stringToEnum(log.Level, str) orelse {
+        log.fatal(.app, "invalid option choice", .{ .arg = "--log-level", .value = str });
+        return error.InvalidArgument;
+    };
 }
 
 /// Common CLI args.
@@ -71,7 +83,7 @@ const CommonOptions = .{
     .{ .name = "http_max_response_size", .type = ?usize },
     .{ .name = "ws_max_concurrent", .type = ?u8 },
     .{ .name = "insecure_disable_tls_host_verification", .type = bool },
-    .{ .name = "log_level", .type = ?log.Level },
+    .{ .name = "log_level", .type = ?log.Level, .validator = logLevelValidator },
     .{ .name = "log_format", .type = ?log.Format },
     .{ .name = "log_filter_scopes", .type = log.Scope, .multiple = true, .validator = logFilterScopesValidator },
     .{ .name = "user_agent_suffix", .type = ?[]const u8 },
@@ -106,6 +118,18 @@ fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
     return .html;
 }
 
+fn waitScriptFileValidator(allocator: Allocator, args: *std.process.ArgIterator) !?[:0]const u8 {
+    const path = args.next() orelse {
+        log.fatal(.app, "missing argument value", .{ .arg = "--wait-script-file" });
+        return error.InvalidArgument;
+    };
+
+    return std.fs.cwd().readFileAllocOptions(allocator, path, 1024 * 1024, null, .of(u8), 0) catch |err| {
+        log.fatal(.app, "failed to read file", .{ .arg = "--wait-script-file", .path = path, .err = err });
+        return error.InvalidArgument;
+    };
+}
+
 /// Definition for all the commands and its arguments. See @cli.zig for further.
 const Commands = cli.Builder(.{
     .{
@@ -131,7 +155,13 @@ const Commands = cli.Builder(.{
             .{ .name = "strip_mode", .type = dump.Opts.Strip, .default = dump.Opts.Strip{} },
             .{ .name = "wait_ms", .type = u32, .default = 5_000 },
             .{ .name = "wait_until", .type = ?WaitUntil },
-            .{ .name = "wait_script", .type = ?[:0]const u8 },
+            .{
+                .name = "wait_script",
+                .type = ?[:0]const u8,
+                .variants = .{
+                    .{ .name = "wait_script_file", .validator = waitScriptFileValidator },
+                },
+            },
             .{ .name = "wait_selector", .type = ?[:0]const u8 },
             .{ .name = "terminate_ms", .type = ?u32 },
         },
@@ -558,8 +588,8 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Defaults to no caching.
         \\
         \\--storage-engine
-        \\                The storage engine to use. Choices are: sqlite.
-        \\                Default to sqlite.
+        \\                The storage engine to use. Choices are: none, sqlite.
+        \\                Default to none.
         \\
         \\--storage-sqlite-path
         \\                Path to SQLite database file for persistent storage.

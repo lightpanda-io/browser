@@ -27,6 +27,8 @@ const Mime = @import("../../browser/Mime.zig");
 const Notification = @import("../../Notification.zig");
 const timestamp = @import("../../datetime.zig").timestamp;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
+const Request = @import("../../browser/HttpClient.zig").Request;
+const Response = @import("../../browser/HttpClient.zig").Response;
 
 const CdpStorage = @import("storage.zig");
 
@@ -260,7 +262,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
-        .requestId = &id.toRequestId(msg.transfer),
+        .requestId = &id.toRequestId(msg.request),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
         .errorText = msg.err,
@@ -273,24 +275,23 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
-    const transfer = msg.transfer;
-    const req = &transfer.req;
-    const frame_id = req.frame_id;
+    const req = msg.request;
+    const frame_id = req.params.frame_id;
     const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
 
     // Modify request with extra CDP headers
     for (bc.extra_headers.items) |extra| {
-        try req.headers.add(extra);
+        try req.params.headers.add(extra);
     }
 
     // We're missing a bunch of fields, but, for now, this eems like enough
     try bc.cdp.sendEvent("Network.requestWillBeSent", .{
         .frameId = &id.toFrameId(frame_id),
-        .requestId = &id.toRequestId(transfer),
-        .loaderId = &id.toLoaderId(req.loader_id),
-        .type = req.resource_type.string(),
+        .requestId = &id.toRequestId(req),
+        .loaderId = &id.toLoaderId(req.params.loader_id),
+        .type = req.params.resource_type.string(),
         .documentURL = frame.url,
-        .request = TransferAsRequestWriter.init(transfer),
+        .request = RequestWriter.init(req),
         .initiator = .{ .type = "other" },
         .redirectHasExtraInfo = false, // TODO change after adding Network.requestWillBeSentExtraInfo
         .hasUserGesture = false,
@@ -304,15 +305,14 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
-    const transfer = msg.transfer;
-    const req = &transfer.req;
+    const req = msg.request;
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
-        .frameId = &id.toFrameId(req.frame_id),
-        .requestId = &id.toRequestId(transfer),
-        .loaderId = &id.toLoaderId(req.loader_id),
-        .response = TransferAsResponseWriter.init(arena, transfer),
+        .frameId = &id.toFrameId(req.params.frame_id),
+        .requestId = &id.toRequestId(req),
+        .loaderId = &id.toLoaderId(req.params.loader_id),
+        .response = ResponseWriter.init(arena, msg.response),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
 }
@@ -321,36 +321,37 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
-    const transfer = msg.transfer;
+    const req = msg.request;
     try bc.cdp.sendEvent("Network.loadingFinished", .{
-        .requestId = &id.toRequestId(transfer),
-        .encodedDataLength = transfer.bytes_received,
+        .requestId = &id.toRequestId(req),
+        .encodedDataLength = msg.content_length,
     }, .{ .session_id = session_id });
 }
 
-pub const TransferAsRequestWriter = struct {
-    transfer: *Transfer,
+pub const RequestWriter = struct {
+    request: *Request,
 
-    pub fn init(transfer: *Transfer) TransferAsRequestWriter {
+    pub fn init(request: *Request) RequestWriter {
         return .{
-            .transfer = transfer,
+            .request = request,
         };
     }
 
-    pub fn jsonStringify(self: *const TransferAsRequestWriter, jws: anytype) !void {
+    pub fn jsonStringify(self: *const RequestWriter, jws: anytype) !void {
         self._jsonStringify(jws) catch return error.WriteFailed;
     }
-    fn _jsonStringify(self: *const TransferAsRequestWriter, jws: anytype) !void {
-        const transfer = self.transfer;
+
+    fn _jsonStringify(self: *const RequestWriter, jws: anytype) !void {
+        const request = self.request;
 
         try jws.beginObject();
         {
             try jws.objectField("url");
-            try jws.write(transfer.url);
+            try jws.write(request.params.url);
         }
 
         {
-            const frag = URL.getHash(transfer.url);
+            const frag = URL.getHash(request.params.url);
             if (frag.len > 0) {
                 try jws.objectField("urlFragment");
                 try jws.write(frag);
@@ -359,23 +360,23 @@ pub const TransferAsRequestWriter = struct {
 
         {
             try jws.objectField("method");
-            try jws.write(@tagName(transfer.req.method));
+            try jws.write(@tagName(request.params.method));
         }
 
         {
             try jws.objectField("hasPostData");
-            try jws.write(transfer.req.body != null);
+            try jws.write(request.params.body != null);
         }
 
         {
             try jws.objectField("headers");
             try jws.beginObject();
-            var it = transfer.req.headers.iterator();
+            var it = request.params.headers.iterator();
             while (it.next()) |hdr| {
                 try jws.objectField(hdr.name);
                 try jws.write(hdr.value);
             }
-            if (try transfer.getCookieString()) |cookies| {
+            if (try request.getCookieString()) |cookies| {
                 try jws.objectField("Cookie");
                 try jws.write(cookies[0 .. cookies.len - 1]);
             }
@@ -385,34 +386,31 @@ pub const TransferAsRequestWriter = struct {
     }
 };
 
-const TransferAsResponseWriter = struct {
+const ResponseWriter = struct {
     arena: Allocator,
-    transfer: *Transfer,
+    response: *const Response,
 
-    fn init(arena: Allocator, transfer: *Transfer) TransferAsResponseWriter {
+    fn init(arena: Allocator, response: *const Response) ResponseWriter {
         return .{
             .arena = arena,
-            .transfer = transfer,
+            .response = response,
         };
     }
 
-    pub fn jsonStringify(self: *const TransferAsResponseWriter, jws: anytype) !void {
+    pub fn jsonStringify(self: *const ResponseWriter, jws: anytype) !void {
         self._jsonStringify(jws) catch return error.WriteFailed;
     }
 
-    fn _jsonStringify(self: *const TransferAsResponseWriter, jws: anytype) !void {
-        const transfer = self.transfer;
+    fn _jsonStringify(self: *const ResponseWriter, jws: anytype) !void {
+        const response = self.response;
 
         try jws.beginObject();
         {
             try jws.objectField("url");
-            try jws.write(transfer.url);
+            try jws.write(response.url());
         }
 
-        if (transfer.response_header) |*rh| {
-            // it should not be possible for this to be false, but I'm not
-            // feeling brave today.
-            const status = rh.status;
+        if (response.status()) |status| {
             try jws.objectField("status");
             try jws.write(status);
 
@@ -422,7 +420,7 @@ const TransferAsResponseWriter = struct {
 
         {
             const mime: Mime = blk: {
-                if (transfer.response_header.?.contentType()) |ct| {
+                if (response.contentType()) |ct| {
                     break :blk try Mime.parse(ct);
                 }
                 break :blk .unknown;
@@ -437,7 +435,8 @@ const TransferAsResponseWriter = struct {
         {
             try jws.objectField("timing");
             try jws.write(.{
-                .requestTime = transfer.start_time,
+                // TODO: fix
+                .requestTime = -1,
                 .connectEnd = -1,
                 .connectStart = -1,
                 .dnsEnd = -1,
@@ -458,7 +457,7 @@ const TransferAsResponseWriter = struct {
             // common to get these from a server (e.g. for Cache-Control), but
             // Chrome joins these. So we have to too.
             const arena = self.arena;
-            var it = transfer.responseHeaderIterator();
+            var it = response.headerIterator();
             var map: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
             while (it.next()) |hdr| {
                 const gop = try map.getOrPut(arena, hdr.name);

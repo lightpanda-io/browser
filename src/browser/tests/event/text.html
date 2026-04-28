@@ -1,17 +1,32 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 <script id=createEvent>
-  let evt = document.createEvent('TextEvent');
-  testing.expectEqual(true, evt instanceof TextEvent);
-  testing.expectEqual(true, evt instanceof UIEvent);
-  testing.expectEqual('', evt.data);
+  {
+    let evt = document.createEvent('TextEvent');
+    testing.expectEqual(true, evt instanceof TextEvent);
+    testing.expectEqual(true, evt instanceof UIEvent);
+    testing.expectEqual('', evt.data);
+  }
 </script>
 
 <script id=initTextEvent>
-  let textEvent = document.createEvent('TextEvent');
-  textEvent.initTextEvent('textInput', true, false, window, 'test data');
-  testing.expectEqual('textInput', textEvent.type);
-  testing.expectEqual('test data', textEvent.data);
-  testing.expectEqual(true, textEvent.bubbles);
-  testing.expectEqual(false, textEvent.cancelable);
+  {
+    let textEvent = document.createEvent('TextEvent');
+    textEvent.initTextEvent('textInput', true, false, window, 'test data');
+    testing.expectEqual('textInput', textEvent.type);
+    testing.expectEqual('test data', textEvent.data);
+    testing.expectEqual(true, textEvent.bubbles);
+    testing.expectEqual(false, textEvent.cancelable);
+  }
+</script>
+
+<script id=initTextEventOptional>
+  {
+    let evt = document.createEvent('TextEvent');
+    evt.initTextEvent('foo');
+    testing.expectEqual('foo', evt.type);
+    testing.expectEqual('', evt.data);
+    testing.expectEqual(false, evt.bubbles);
+    testing.expectEqual(false, evt.cancelable);
+  }
 </script>
