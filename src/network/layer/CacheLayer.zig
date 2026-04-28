@@ -63,7 +63,9 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
         .timestamp = std.time.timestamp(),
         .request_headers = req_header_list.items,
     })) |cached| {
-        return serveFromCache(req, &cached);
+        try serveFromCache(req, &cached);
+        client.deinitRequest(req);
+        return;
     }
 
     const cache_ctx = try arena.create(CacheContext);
