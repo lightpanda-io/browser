@@ -26,6 +26,7 @@ const timestamp = @import("../datetime.zig").timestamp;
 
 const URL = @import("URL.zig");
 const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
+const WebSocket = @import("webapi/net/WebSocket.zig");
 
 const http = @import("../network/http.zig");
 const Robots = @import("../network/Robots.zig");
@@ -81,6 +82,11 @@ dirty: std.DoublyLinkedList = .{},
 
 // Whether we're currently inside a curl_multi_perform call.
 performing: bool = false,
+
+// WebSockets with queued events to be drained from the worker thread.
+// Populated by libcurl callbacks (currently same thread, future cross-thread).
+ws_ready: std.ArrayList(*WebSocket) = .{},
+ws_ready_mutex: std.Thread.Mutex = .{},
 
 // Use to generate the next request ID
 next_request_id: u32 = 0,
@@ -231,6 +237,7 @@ pub fn deinit(self: *Client) void {
     self.abort();
     self.handles.deinit();
 
+    self.ws_ready.deinit(self.allocator);
     self.clearUserAgentOverride();
 
     self.robots_layer.deinit(self.allocator);
@@ -661,6 +668,11 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
         break :blk try self.handles.perform();
     };
 
+    // Drain queued WebSocket events. ws callbacks (called from libcurl during
+    // perform above) only buffer/queue — actual JS dispatch happens here, on
+    // the worker thread.
+    self.drainReadyWs();
+
     // Process dirty connections — return them to Network pool.
     while (self.dirty.popFirst()) |node| {
         const conn: *http.Connection = @fieldParentPtr("node", node);
@@ -977,6 +989,27 @@ pub fn removeConn(self: *Client, conn: *http.Connection) void {
 
 fn releaseConn(self: *Client, conn: *http.Connection) void {
     self.network.releaseConnection(conn);
+}
+
+// Called from WebSocket libcurl callbacks (currently same worker thread, but
+// the API is mutex-protected so it stays correct if libcurl moves off-thread).
+pub fn addReadyWs(self: *Client, ws: *WebSocket) void {
+    self.ws_ready_mutex.lock();
+    defer self.ws_ready_mutex.unlock();
+    self.ws_ready.append(self.allocator, ws) catch {};
+}
+
+fn drainReadyWs(self: *Client) void {
+    self.ws_ready_mutex.lock();
+    const items = self.ws_ready.toOwnedSlice(self.allocator) catch {
+        self.ws_ready_mutex.unlock();
+        return;
+    };
+    self.ws_ready_mutex.unlock();
+    defer self.allocator.free(items);
+    for (items) |ws| {
+        ws.drainPending();
+    }
 }
 
 fn ensureNoActiveConnection(self: *const Client) !void {
@@ -1795,8 +1828,6 @@ const Noop = struct {
 pub const Owner = struct {
     transfers: std.DoublyLinkedList = .{},
     websockets: std.DoublyLinkedList = .{},
-
-    const WebSocket = @import("webapi/net/WebSocket.zig");
 
     pub fn addTransfer(self: *Owner, t: *Transfer) void {
         self.transfers.append(&t.owner_node);
