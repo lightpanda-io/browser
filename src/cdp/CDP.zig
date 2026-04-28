@@ -19,8 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const App = @import("../App.zig");
 const Notification = @import("../Notification.zig");
-const Client = @import("../Server.zig").Client;
 const js = @import("../browser/js/js.zig");
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
@@ -28,12 +28,15 @@ const Frame = @import("../browser/Frame.zig");
 const Mime = @import("../browser/Mime.zig");
 const Element = @import("../browser/webapi/Element.zig");
 const Label = @import("../browser/webapi/element/html/Label.zig");
+const CDPClient = @import("../browser/HttpClient.zig").CDPClient;
+const WsConnection = @import("../network/WsConnection.zig");
 
 const Incrementing = @import("id.zig").Incrementing;
 const InterceptState = @import("domains/fetch.zig").InterceptState;
 
 const log = lp.log;
 const json = std.json;
+const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
 pub const URL_BASE = "chrome://newtab/";
@@ -47,10 +50,10 @@ const BrowserContextIdGen = Incrementing(u32, "BID");
 // Generic so that we can inject mocks into it.
 const CDP = @This();
 
-// Used for sending message to the client and closing on error
-client: *Client,
-
 allocator: Allocator,
+app: *App,
+
+ws: WsConnection,
 
 // The active browser
 browser: Browser,
@@ -78,18 +81,17 @@ frame_arena: std.heap.ArenaAllocator,
 // (or altogether eliminate) our use of this.
 browser_context_arena: std.heap.ArenaAllocator,
 
-pub fn init(client: *Client) !CDP {
-    const app = client.app;
+pub fn init(
+    self: *CDP,
+    app: *App,
+    socket: posix.socket_t,
+    json_version_response: []const u8,
+) !void {
     const allocator = app.allocator;
-    const browser = try Browser.init(app, .{
-        .env = .{ .with_inspector = true },
-        .http_client = client.http,
-    });
-    errdefer browser.deinit();
-
-    return .{
-        .client = client,
-        .browser = browser,
+    self.* = .{
+        .app = app,
+        .ws = undefined,
+        .browser = undefined,
         .allocator = allocator,
         .browser_context = null,
         .frame_arena = std.heap.ArenaAllocator.init(allocator),
@@ -97,6 +99,17 @@ pub fn init(client: *Client) !CDP {
         .notification_arena = std.heap.ArenaAllocator.init(allocator),
         .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
     };
+
+    try self.ws.init(socket, self.app.allocator, json_version_response);
+    errdefer self.ws.deinit();
+
+    self.browser = try Browser.init(app, .{ .env = .{ .with_inspector = true } }, .{
+        .ctx = self,
+        .socket = socket,
+        .blocking_read_start = CDP.blockingReadStart,
+        .blocking_read = CDP.blockingRead,
+        .blocking_read_end = CDP.blockingReadStop,
+    });
 }
 
 pub fn deinit(self: *CDP) void {
@@ -108,6 +121,48 @@ pub fn deinit(self: *CDP) void {
     self.message_arena.deinit();
     self.notification_arena.deinit();
     self.browser_context_arena.deinit();
+    self.ws.deinit();
+}
+
+pub fn blockingReadStart(ctx: *anyopaque) bool {
+    const self: *CDP = @ptrCast(@alignCast(ctx));
+    self.ws.setBlocking(true) catch |err| {
+        log.warn(.app, "CDP blockingReadStart", .{ .err = err });
+        return false;
+    };
+    return true;
+}
+
+pub fn blockingRead(ctx: *anyopaque) bool {
+    const self: *CDP = @ptrCast(@alignCast(ctx));
+    return self.readSocket();
+}
+
+pub fn blockingReadStop(ctx: *anyopaque) bool {
+    const self: *CDP = @ptrCast(@alignCast(ctx));
+    self.ws.setBlocking(false) catch |err| {
+        log.warn(.app, "CDP blockingReadStop", .{ .err = err });
+        return false;
+    };
+    return true;
+}
+
+pub fn readSocket(self: *CDP) bool {
+    const n = self.ws.read() catch |err| {
+        log.warn(.app, "CDP read", .{ .err = err });
+        return false;
+    };
+
+    if (n == 0) {
+        log.info(.app, "CDP disconnect", .{});
+        return false;
+    }
+
+    return self.ws.processMessages(self) catch false;
+}
+
+pub fn sendJSON(self: *CDP, message: anytype) !void {
+    try self.ws.sendJSON(message, .{ .emit_null_optional_fields = false });
 }
 
 pub fn handleMessage(self: *CDP, msg: []const u8) bool {
@@ -126,10 +181,27 @@ pub fn processMessage(self: *CDP, msg: []const u8) !void {
 // A bit hacky right now. The main server loop doesn't unblock for
 // scheduled task. So we run this directly in order to process any
 // timeouts (or http events) which are ready to be processed.
-pub fn pageWait(self: *CDP, ms: u32) !Session.Runner.CDPWaitResult {
-    const session = &(self.browser.session orelse return error.NoPage);
+pub fn tick(self: *CDP) !bool {
+    // Liveness is enforced by TCP keepalive configured in
+    // Network.acceptConnections; the wakeup lets V8 run or terminate.
+    const wait_ms: u32 = 1000; // 1s
+
+    var session = self.browser.session orelse {
+        const status = try self.browser.http_client.tick(wait_ms);
+        if (status != .cdp_socket) return true;
+        if (self.readSocket() == false) return false;
+        return true;
+    };
     var runner = try session.runner(.{});
-    return runner.waitCDP(.{ .ms = ms });
+
+    switch (try runner.waitCDP(.{ .ms = wait_ms })) {
+        .cdp_socket => {
+            if (self.readSocket() == false) return false;
+        },
+        .done => {},
+    }
+
+    return true;
 }
 
 // Called from above, in processMessage which handles client messages
@@ -302,12 +374,6 @@ pub fn sendEvent(self: *CDP, method: []const u8, p: anytype, opts: SendEventOpts
     });
 }
 
-pub fn sendJSON(self: *CDP, message: anytype) !void {
-    return self.client.sendJSON(message, .{
-        .emit_null_optional_fields = false,
-    });
-}
-
 pub const BrowserContext = struct {
     const Node = @import("Node.zig");
     const AXNode = @import("AXNode.zig");
@@ -394,7 +460,7 @@ pub const BrowserContext = struct {
         errdefer notification.deinit();
 
         const session = try cdp.browser.newSession(notification);
-        if (cdp.client.app.config.cookieFile()) |cookie_path| {
+        if (cdp.app.config.cookieFile()) |cookie_path| {
             lp.cookies.loadFromFile(session, cookie_path);
         }
 
@@ -760,7 +826,7 @@ pub const BrowserContext = struct {
         };
 
         const cdp = self.cdp;
-        const allocator = cdp.client.sendAllocator();
+        const allocator = cdp.ws.send_arena.allocator();
 
         const field = ",\"sessionId\":\"";
 
@@ -786,7 +852,7 @@ pub const BrowserContext = struct {
             std.debug.assert(buf.items.len == message_len);
         }
 
-        try cdp.client.sendJSONRaw(buf);
+        try cdp.ws.sendJSONRaw(buf);
     }
 };
 

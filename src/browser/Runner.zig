@@ -45,7 +45,7 @@ pub fn init(session: *Session, _: Opts) !Runner {
     return .{
         .frame = frame,
         .session = session,
-        .http_client = session.browser.http_client,
+        .http_client = &session.browser.http_client,
     };
 }
 

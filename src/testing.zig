@@ -333,7 +333,6 @@ fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
 }
 
 pub var test_app: *App = undefined;
-pub var test_http: *HttpClient = undefined;
 pub var test_browser: Browser = undefined;
 pub var test_notification: *Notification = undefined;
 pub var test_session: *Session = undefined;
@@ -499,10 +498,7 @@ test "tests:beforeAll" {
     test_app = try App.init(test_allocator, &test_config);
     errdefer test_app.deinit();
 
-    test_http = try HttpClient.init(test_allocator, &test_app.network);
-    errdefer test_http.deinit();
-
-    test_browser = try Browser.init(test_app, .{ .http_client = test_http });
+    test_browser = try Browser.init(test_app, .{}, null);
     errdefer test_browser.deinit();
 
     // Create notification for testing
@@ -557,7 +553,6 @@ test "tests:afterAll" {
 
     test_notification.deinit();
     test_browser.deinit();
-    test_http.deinit();
     test_app.deinit();
     test_config.deinit(@import("root").tracking_allocator);
 }

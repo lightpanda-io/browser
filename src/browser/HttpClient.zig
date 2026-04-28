@@ -149,23 +149,21 @@ pub const CDPClient = struct {
     blocking_read_end: *const fn (*anyopaque) bool,
 };
 
-pub fn init(allocator: Allocator, network: *Network) !*Client {
+pub fn init(allocator: Allocator, network: *Network, cdp_client: ?CDPClient) !Client {
     var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
     errdefer transfer_pool.deinit();
-
-    const client = try allocator.create(Client);
-    errdefer allocator.destroy(client);
 
     var slot = try Slot.init();
     errdefer slot.deinit();
 
     const http_proxy = network.config.httpProxy();
 
-    client.* = .{
+    return .{
         .slot = slot,
         .network = network,
         .allocator = allocator,
         .transfer_pool = transfer_pool,
+        .cdp_client = cdp_client,
 
         .use_proxy = http_proxy != null,
         .http_proxy = http_proxy,
@@ -173,8 +171,6 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
         .obey_robots = network.config.obeyRobots(),
         .max_response_size = network.config.httpMaxResponseSize() orelse std.math.maxInt(u32),
     };
-
-    return client;
 }
 
 pub fn deinit(self: *Client) void {
@@ -208,7 +204,6 @@ pub fn deinit(self: *Client) void {
     self.pending_robots_queue.deinit(self.allocator);
 
     self.clearUserAgentOverride();
-    self.allocator.destroy(self);
 }
 
 // Set a user agent override. Both the raw UA string and the pre-formatted

@@ -75,7 +75,7 @@ pub fn init(input: Input, options: ?InitOpts, frame: *Frame) !js.Promise {
         ._signal = request._signal,
     };
 
-    const http_client = frame._session.browser.http_client;
+    const http_client = &frame._session.browser.http_client;
     var headers = try http_client.newHeaders();
     if (request._headers) |h| {
         try h.populateHttpHeader(frame.call_arena, &headers);

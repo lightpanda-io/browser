@@ -210,13 +210,7 @@ const FetchTerminator = struct {
 fn fetchThread(app: *App, ft: *FetchTerminator, url: [:0]const u8, fetch_opts: lp.FetchOpts) void {
     defer app.network.stop();
 
-    const http_client = lp.HttpClient.init(app.allocator, &app.network) catch |err| {
-        log.fatal(.app, "http client init error", .{ .err = err });
-        return;
-    };
-    defer http_client.deinit();
-
-    var browser = lp.Browser.init(app, .{ .http_client = http_client }) catch |err| {
+    var browser = lp.Browser.init(app, .{}, null) catch |err| {
         log.fatal(.app, "browser init error", .{ .err = err });
         return;
     };

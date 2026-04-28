@@ -92,7 +92,7 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
         return self;
     }
 
-    const http_client = session.browser.http_client;
+    const http_client = &session.browser.http_client;
     http_client.request(.{
         .ctx = self,
         .url = resolved_url,
