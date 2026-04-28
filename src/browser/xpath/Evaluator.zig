@@ -277,11 +277,15 @@ fn appendAttributes(self: *Evaluator, node: *Node, out: *std.ArrayList(*Node)) E
     const el = node.is(Element) orelse return;
     var it = el.attributeIterator();
     while (it.next()) |entry| {
-        // Materialize as full Attribute so the result is *Node-uniform.
-        // Allocates from frame.arena (long-lived); attribute axis is
-        // typically leaf, so churn is bounded.
-        const attr = try entry.toAttribute(el, self.frame);
-        try out.append(self.arena, attr._proto);
+        // Memoize via frame._attribute_lookup so repeated XPath queries
+        // (Capybara/Selenium polling) reuse the same *Attribute instead
+        // of leaking fresh ones into page-lifetime storage on every call.
+        // Same pattern as Attribute.List.getAttribute / NamedNodeMap.getAtIndex.
+        const gop = try self.frame._attribute_lookup.getOrPut(self.frame.arena, @intFromPtr(entry));
+        if (!gop.found_existing) {
+            gop.value_ptr.* = try entry.toAttribute(el, self.frame);
+        }
+        try out.append(self.arena, gop.value_ptr.*._proto);
     }
 }
 
