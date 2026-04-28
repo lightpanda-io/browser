@@ -294,31 +294,20 @@ pub fn waitForSelector(self: *Runner, selector: [:0]const u8, timeout_ms: u32) !
     }
 }
 
-pub fn runScriptFile(runner: *Runner, allocator: std.mem.Allocator, file_path: [:0]const u8) !void {
+pub fn injectScripts(runner: *Runner, scripts: std.ArrayList([:0]const u8)) !void {
     const frame = runner.frame;
 
-    const bytes = std.fs.cwd().readFileAlloc(allocator, file_path, 64 * 1024 * 1024) catch |err| {
-        switch (err) {
-            error.FileNotFound => log.err(.app, "Runner.runScriptFile", .{ .path = file_path, .note = "file not found" }),
-            else => log.err(.app, "Runner.runScriptFile", .{ .path = file_path, .err = err }),
-        }
-        return;
-    };
-    defer allocator.free(bytes);
+    for (scripts.items) |source| {
+        // Create <script> element.
+        const script_node = try frame.createElementNS(.html, "script", null);
+        const script_element = script_node.as(@import("webapi/element/html/Script.zig"));
+        try script_element.setInnerText(source, frame);
 
-    var ls: js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
-    defer ls.deinit();
-
-    var try_catch: js.TryCatch = undefined;
-    try_catch.init(&ls.local);
-    defer try_catch.deinit();
-
-    return ls.local.eval(bytes, "script") catch |err| {
-        const caught = try_catch.caughtOrError(frame.call_arena, err);
-        log.err(.app, "run script file error", .{ .err = caught });
-        return error.ScriptError;
-    };
+        // Insert to <head>.
+        const doc = frame.document.as(@import("webapi/HTMLDocument.zig"));
+        const head = doc.getHead() orelse return error.NoHead;
+        _ = try head.asNode().appendChild(script_node, frame);
+    }
 }
 
 pub fn waitForScript(runner: *Runner, script: [:0]const u8, timeout_ms: u32) !void {
