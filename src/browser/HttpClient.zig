@@ -304,19 +304,25 @@ pub fn getUserAgent(self: *const Client) [:0]const u8 {
     return self.user_agent_override orelse self.network.config.http_headers.user_agent;
 }
 
+const AbortOpts = struct {
+    scope: enum { normal, full } = .normal,
+};
+
 pub fn abort(self: *Client) void {
-    self._abort(true, 0);
+    self._abort(true, 0, .{ .scope = .full });
 }
 
-pub fn abortFrame(self: *Client, frame_id: u32) void {
-    self._abort(false, frame_id);
+// abortFrame with .normal doesn't abort protect_from_abort requests.
+// .full abort all relqtive requests.
+pub fn abortFrame(self: *Client, frame_id: u32, opts: AbortOpts) void {
+    self._abort(false, frame_id, opts);
 }
 
 // Written this way so that both abort and abortFrame can share the same code
 // but abort can avoid the frame_id check at comptime.
-fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
-    abortConnections(self.in_use, abort_all, frame_id);
-    abortConnections(self.ready_queue, abort_all, frame_id);
+fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32, opts: AbortOpts) void {
+    abortConnections(self.in_use, abort_all, frame_id, opts);
+    abortConnections(self.ready_queue, abort_all, frame_id, opts);
 
     {
         var q = &self.queue;
@@ -327,9 +333,11 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
             const params = transfer.req.params;
             if (comptime abort_all) {
                 transfer.kill();
-            } else if (params.frame_id == frame_id and !params.protect_from_abort) {
-                q.remove(node);
-                transfer.kill();
+            } else if (params.frame_id == frame_id) {
+                if (opts.scope == .full or !params.protect_from_abort) {
+                    q.remove(node);
+                    transfer.kill();
+                }
             }
         }
     }
@@ -355,7 +363,7 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
     }
 }
 
-fn abortConnections(list: std.DoublyLinkedList, comptime abort_all: bool, frame_id: u32) void {
+fn abortConnections(list: std.DoublyLinkedList, comptime abort_all: bool, frame_id: u32, opts: AbortOpts) void {
     var n = list.first;
     while (n) |node| {
         n = node.next;
@@ -363,9 +371,12 @@ fn abortConnections(list: std.DoublyLinkedList, comptime abort_all: bool, frame_
         switch (conn.transport) {
             .http => |transfer| {
                 const params = transfer.req.params;
-                const matches = (comptime abort_all) or (params.frame_id == frame_id and !params.protect_from_abort);
-                if (matches) {
+                if (comptime abort_all) {
                     transfer.kill();
+                } else if (params.frame_id == frame_id) {
+                    if (opts.scope == .full or !params.protect_from_abort) {
+                        transfer.kill();
+                    }
                 }
             },
             .websocket => |ws| {

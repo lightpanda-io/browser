@@ -534,7 +534,9 @@ fn replaceRootImmediate(self: *Session, frame_id: u32, qn: *QueuedNavigation) !v
 // trip — Runtime.evaluate, DOM.*, etc. continue to operate on the OLD page
 // until commitPendingPage swaps the pointer when response headers arrive.
 pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, opts: Frame.NavigateOpts) !void {
-    lp.assert(self._pending_idx == null, "Session.initiateRootNavigation - pending already set", .{});
+    if (self._pending_idx != null) {
+        self.discardPendingPage();
+    }
 
     // Pick the slot NOT occupied by the active page.
     const slot = try self.findFreeSlot();
@@ -643,8 +645,13 @@ pub fn discardPendingPage(self: *Session) void {
         log.debug(.browser, "discard pending page", .{});
     }
 
+    const pending_page = &self._pages[idx].?;
+
+    // Force abort all inflight queries.
+    self.browser.http_client.abortFrame(pending_page.frame._frame_id, .{ .scope = .full });
+
     self._pending_idx = null;
-    self._pages[idx].?.deinit();
+    pending_page.deinit();
     self.freeSlot(idx);
 }
 
