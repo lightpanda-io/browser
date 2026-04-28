@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<body>
+  <script src="../testing.js"></script>
+  <h1 id=h>Hello</h1>
+  <p id=p1>One</p>
+  <p id=p2>Two</p>
+</body>
+
+<script id=type_constants>
+{
+  testing.expectEqual(0, XPathResult.ANY_TYPE);
+  testing.expectEqual(1, XPathResult.NUMBER_TYPE);
+  testing.expectEqual(2, XPathResult.STRING_TYPE);
+  testing.expectEqual(3, XPathResult.BOOLEAN_TYPE);
+  testing.expectEqual(4, XPathResult.UNORDERED_NODE_ITERATOR_TYPE);
+  testing.expectEqual(5, XPathResult.ORDERED_NODE_ITERATOR_TYPE);
+  testing.expectEqual(6, XPathResult.UNORDERED_NODE_SNAPSHOT_TYPE);
+  testing.expectEqual(7, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE);
+  testing.expectEqual(8, XPathResult.ANY_UNORDERED_NODE_TYPE);
+  testing.expectEqual(9, XPathResult.FIRST_ORDERED_NODE_TYPE);
+}
+</script>
+
+<script id=instance_constants>
+{
+  // Type constants are also exposed on instances.
+  const r = document.evaluate("//p", document, null,
+    XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+  testing.expectEqual(7, r.ORDERED_NODE_SNAPSHOT_TYPE);
+  testing.expectEqual(0, r.ANY_TYPE);
+}
+</script>
+
+<script id=number_value>
+{
+  const r = document.evaluate("count(//p)", document, null,
+    XPathResult.NUMBER_TYPE, null);
+  testing.expectEqual(XPathResult.NUMBER_TYPE, r.resultType);
+  testing.expectEqual(2, r.numberValue);
+}
+</script>
+
+<script id=string_value>
+{
+  const r = document.evaluate("string(//h1)", document, null,
+    XPathResult.STRING_TYPE, null);
+  testing.expectEqual(XPathResult.STRING_TYPE, r.resultType);
+  testing.expectEqual('Hello', r.stringValue);
+}
+</script>
+
+<script id=boolean_value>
+{
+  const r = document.evaluate("count(//p) > 0", document, null,
+    XPathResult.BOOLEAN_TYPE, null);
+  testing.expectEqual(XPathResult.BOOLEAN_TYPE, r.resultType);
+  testing.expectEqual(true, r.booleanValue);
+}
+</script>
+
+<script id=unordered_iterator>
+{
+  const r = document.evaluate("//p", document, null,
+    XPathResult.UNORDERED_NODE_ITERATOR_TYPE, null);
+  testing.expectEqual(XPathResult.UNORDERED_NODE_ITERATOR_TYPE, r.resultType);
+  testing.expectEqual('p1', r.iterateNext().id);
+  testing.expectEqual('p2', r.iterateNext().id);
+  testing.expectEqual(null, r.iterateNext());
+  testing.expectEqual(false, r.invalidIteratorState);
+}
+</script>
+
+<script id=ordered_iterator>
+{
+  const r = document.evaluate("//p", document, null,
+    XPathResult.ORDERED_NODE_ITERATOR_TYPE, null);
+  testing.expectEqual(XPathResult.ORDERED_NODE_ITERATOR_TYPE, r.resultType);
+  testing.expectEqual('p1', r.iterateNext().id);
+  testing.expectEqual('p2', r.iterateNext().id);
+  testing.expectEqual(null, r.iterateNext());
+}
+</script>
+
+<script id=unordered_snapshot>
+{
+  const r = document.evaluate("//p", document, null,
+    XPathResult.UNORDERED_NODE_SNAPSHOT_TYPE, null);
+  testing.expectEqual(XPathResult.UNORDERED_NODE_SNAPSHOT_TYPE, r.resultType);
+  testing.expectEqual(2, r.snapshotLength);
+  testing.expectEqual('p1', r.snapshotItem(0).id);
+  testing.expectEqual('p2', r.snapshotItem(1).id);
+  testing.expectEqual(null, r.snapshotItem(2));
+}
+</script>
+
+<script id=ordered_snapshot>
+{
+  const r = document.evaluate("//p", document, null,
+    XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+  testing.expectEqual(XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, r.resultType);
+  testing.expectEqual(2, r.snapshotLength);
+  testing.expectEqual('p1', r.snapshotItem(0).id);
+  testing.expectEqual('p2', r.snapshotItem(1).id);
+}
+</script>
+
+<script id=any_unordered_node>
+{
+  const r = document.evaluate("//p", document, null,
+    XPathResult.ANY_UNORDERED_NODE_TYPE, null);
+  testing.expectEqual(XPathResult.ANY_UNORDERED_NODE_TYPE, r.resultType);
+  testing.expectEqual('p1', r.singleNodeValue.id);
+
+  const empty = document.evaluate("//nope", document, null,
+    XPathResult.ANY_UNORDERED_NODE_TYPE, null);
+  testing.expectEqual(null, empty.singleNodeValue);
+}
+</script>
+
+<script id=first_ordered_node>
+{
+  const r = document.evaluate("//p", document, null,
+    XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+  testing.expectEqual(XPathResult.FIRST_ORDERED_NODE_TYPE, r.resultType);
+  testing.expectEqual('p1', r.singleNodeValue.id);
+}
+</script>
+
+<script id=any_type_resolution>
+{
+  // ANY_TYPE settles into the natural category of the result.
+  const ns = document.evaluate("//p", document, null,
+    XPathResult.ANY_TYPE, null);
+  testing.expectEqual(XPathResult.UNORDERED_NODE_ITERATOR_TYPE, ns.resultType);
+
+  const num = document.evaluate("count(//p)", document, null,
+    XPathResult.ANY_TYPE, null);
+  testing.expectEqual(XPathResult.NUMBER_TYPE, num.resultType);
+  testing.expectEqual(2, num.numberValue);
+
+  const str = document.evaluate("string(//h1)", document, null,
+    XPathResult.ANY_TYPE, null);
+  testing.expectEqual(XPathResult.STRING_TYPE, str.resultType);
+  testing.expectEqual('Hello', str.stringValue);
+
+  const bool = document.evaluate("true()", document, null,
+    XPathResult.ANY_TYPE, null);
+  testing.expectEqual(XPathResult.BOOLEAN_TYPE, bool.resultType);
+  testing.expectEqual(true, bool.booleanValue);
+}
+</script>
+
+<script id=type_mismatch_throws>
+{
+  const r = document.evaluate("//p", document, null,
+    XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+
+  // Wrong-typed accessors throw DOMException(InvalidStateError).
+  let n = 0;
+  try { r.numberValue; } catch (e) { n++; }
+  try { r.stringValue; } catch (e) { n++; }
+  try { r.booleanValue; } catch (e) { n++; }
+  try { r.singleNodeValue; } catch (e) { n++; }
+  try { r.iterateNext(); } catch (e) { n++; }
+  testing.expectEqual(5, n);
+}
+</script>
+
+<script id=node_set_for_scalar_throws>
+{
+  // Requesting a node-set type for a scalar expression rejects.
+  let threw = false;
+  try {
+    document.evaluate("count(//p)", document, null,
+      XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+  } catch (e) {
+    threw = true;
+  }
+  testing.expectEqual(true, threw);
+}
+</script>
+
+<script id=iterator_exhaustion>
+{
+  const r = document.evaluate("//p", document, null,
+    XPathResult.ORDERED_NODE_ITERATOR_TYPE, null);
+  testing.expectEqual('p1', r.iterateNext().id);
+  testing.expectEqual('p2', r.iterateNext().id);
+  testing.expectEqual(null, r.iterateNext());
+  // Re-calling on an exhausted iterator stays at null.
+  testing.expectEqual(null, r.iterateNext());
+}
+</script>

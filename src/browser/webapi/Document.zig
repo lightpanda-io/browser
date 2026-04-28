@@ -35,6 +35,8 @@ const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
 const FontFaceSet = @import("css/FontFaceSet.zig");
 const Selection = @import("Selection.zig");
+const XPathResult = @import("XPathResult.zig");
+const XPathExpression = @import("XPathExpression.zig");
 
 pub const XMLDocument = @import("XMLDocument.zig");
 pub const HTMLDocument = @import("HTMLDocument.zig");
@@ -410,6 +412,40 @@ pub fn createTreeWalker(_: *const Document, root: *Node, what_to_show: ?js.Value
 
 pub fn createNodeIterator(_: *const Document, root: *Node, what_to_show: ?js.Value, filter: ?DOMNodeIterator.FilterOpts, frame: *Frame) !*DOMNodeIterator {
     return DOMNodeIterator.init(root, try whatToShow(what_to_show), filter, frame);
+}
+
+pub fn evaluate(
+    self: *Document,
+    expression: []const u8,
+    context_node: ?*Node,
+    resolver: ?js.Function,
+    result_type: u16,
+    result: ?*XPathResult,
+    frame: *Frame,
+) !*XPathResult {
+    // resolver/result are no-ops in HTML mode (decision #2).
+    _ = resolver;
+    _ = result;
+    return XPathResult.fromExpression(
+        expression,
+        context_node orelse self.asNode(),
+        result_type,
+        frame,
+    );
+}
+
+pub fn createExpression(
+    _: *const Document,
+    expression: []const u8,
+    resolver: ?js.Function,
+    frame: *Frame,
+) !*XPathExpression {
+    _ = resolver;
+    return XPathExpression.init(expression, frame);
+}
+
+pub fn createNSResolver(_: *const Document, node: *Node) ?*Node {
+    return node;
 }
 
 fn whatToShow(value_: ?js.Value) !u32 {
@@ -1053,6 +1089,9 @@ pub const JsApi = struct {
     pub const createEvent = bridge.function(Document.createEvent, .{ .dom_exception = true });
     pub const createTreeWalker = bridge.function(Document.createTreeWalker, .{});
     pub const createNodeIterator = bridge.function(Document.createNodeIterator, .{});
+    pub const evaluate = bridge.function(Document.evaluate, .{ .dom_exception = true });
+    pub const createExpression = bridge.function(Document.createExpression, .{ .dom_exception = true });
+    pub const createNSResolver = bridge.function(Document.createNSResolver, .{});
     pub const getElementById = bridge.function(_getElementById, .{});
     fn _getElementById(self: *Document, value_: ?js.Value, frame: *Frame) !?*Element {
         const value = value_ orelse return null;
@@ -1112,4 +1151,8 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Document" {
     try testing.htmlRunner("document", .{});
+}
+
+test "WebApi: Document.evaluate" {
+    try testing.htmlRunner("xpath/document_evaluate.html", .{});
 }
