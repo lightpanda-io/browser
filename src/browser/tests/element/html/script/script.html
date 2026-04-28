@@ -35,5 +35,11 @@
 
    const append = Object.getOwnPropertyDescriptor(Element.prototype, 'append');
    testing.expectEqual('append', append.value.name);
+
+   // Constructor.length should equal the number of required arguments (1 for
+   // events: the type). Sentinel for the New__Config wiring in Snapshot.zig.
+   testing.expectEqual(1, MouseEvent.length);
+   testing.expectEqual(1, KeyboardEvent.length);
+   testing.expectEqual(1, Event.length);
 }
 </script>

@@ -3753,7 +3753,16 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     const arena = try self._session.getArena(.medium, "submitForm");
     errdefer self._session.releaseArena(arena);
 
-    const enctype = form_element.getAttributeSafe(comptime .wrap("enctype"));
+    // Per HTML spec form-submission algorithm, when the submitter is a submit
+    // button, its formaction/formmethod/formenctype attributes override the
+    // form's corresponding attributes (matching how formtarget is honored above).
+    // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
+    const enctype = blk: {
+        if (submitter_) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formenctype"))) |fe| break :blk fe;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("enctype"));
+    };
 
     // Get charset from accept-charset attribute or fall back to document charset
     const charset: []const u8 = blk: {
@@ -3770,8 +3779,18 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     var buf = std.Io.Writer.Allocating.init(arena);
     try form_data.write(.{ .enctype = enctype, .charset = charset, .allocator = arena }, &buf.writer);
 
-    const method = form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
-    var action = form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
+    const method = blk: {
+        if (submitter_) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formmethod"))) |fm| break :blk fm;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
+    };
+    var action = blk: {
+        if (submitter_) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formaction"))) |fa| break :blk fa;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
+    };
 
     var opts = NavigateOpts{
         .reason = .form,
