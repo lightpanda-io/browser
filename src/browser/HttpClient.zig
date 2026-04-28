@@ -198,7 +198,7 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
         .robots_layer = .{ .allocator = allocator },
         .web_bot_auth_layer = .{},
         .interception_layer = .{},
-        .deferring_layer = .{},
+        .deferring_layer = .{ .allocator = allocator },
         .entry_layer = undefined,
     };
 
@@ -232,7 +232,8 @@ pub fn deinit(self: *Client) void {
     self.transfer_pool.deinit();
     self.clearUserAgentOverride();
 
-    self.robots_layer.deinit(self.allocator);
+    self.robots_layer.deinit();
+    self.deferring_layer.deinit();
 
     self.allocator.destroy(self);
 }

@@ -43,12 +43,12 @@ pub fn layer(self: *RobotsLayer) Layer {
     };
 }
 
-pub fn deinit(self: *RobotsLayer, allocator: std.mem.Allocator) void {
+pub fn deinit(self: *RobotsLayer) void {
     var it = self.pending.iterator();
     while (it.next()) |entry| {
-        entry.value_ptr.deinit(allocator);
+        entry.value_ptr.deinit(self.allocator);
     }
-    self.pending.deinit(allocator);
+    self.pending.deinit(self.allocator);
 }
 
 fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {

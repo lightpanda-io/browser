@@ -28,6 +28,7 @@ const Forward = @import("Forward.zig");
 
 const DeferringLayer = @This();
 
+allocator: std.mem.Allocator,
 next: Layer = undefined,
 
 // Requests whose callbacks should be deferred until flush() is called.
@@ -41,10 +42,19 @@ pub fn layer(self: *DeferringLayer) Layer {
     };
 }
 
+pub fn deinit(self: *DeferringLayer) void {
+    while (self.deferred.popFirst()) |node| {
+        const deferred: *DeferredContext = @fieldParentPtr("node", node);
+        deferred.deinit();
+    }
+}
+
 fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
     const self: *DeferringLayer = @ptrCast(@alignCast(ptr));
 
-    const deferred_req = try in_req.params.arena.create(DeferredRequest);
+    const deferred_req = try self.allocator.create(DeferredContext);
+    errdefer self.allocator.destroy(deferred_req);
+
     deferred_req.* = .{
         .layer = self,
         .client = client,
@@ -57,12 +67,12 @@ fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
         in_req,
         deferred_req,
         .{
-            .start = DeferredRequest.startCallback,
-            .header = DeferredRequest.headerCallback,
-            .data = DeferredRequest.dataCallback,
-            .done = DeferredRequest.doneCallback,
-            .err = DeferredRequest.errorCallback,
-            .shutdown = DeferredRequest.shutdownCallback,
+            .start = DeferredContext.startCallback,
+            .header = DeferredContext.headerCallback,
+            .data = DeferredContext.dataCallback,
+            .done = DeferredContext.doneCallback,
+            .err = DeferredContext.errorCallback,
+            .shutdown = DeferredContext.shutdownCallback,
         },
     );
 
@@ -72,7 +82,7 @@ fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
 // Flush all deferred requests, firing their done/error callbacks.
 pub fn flush(self: *DeferringLayer) void {
     while (self.deferred.popFirst()) |node| {
-        const deferred: *DeferredRequest = @fieldParentPtr("node", node);
+        const deferred: *DeferredContext = @fieldParentPtr("node", node);
         deferred.fire();
     }
 }
@@ -81,7 +91,7 @@ pub fn hasPending(self: *const DeferringLayer) bool {
     return self.deferred.first != null;
 }
 
-const DeferredRequest = struct {
+const DeferredContext = struct {
     layer: *DeferringLayer,
     client: *Client,
     forward: Forward,
@@ -95,59 +105,71 @@ const DeferredRequest = struct {
         shutdown,
     } = .none,
 
-    fn shouldDefer(self: *DeferredRequest) bool {
+    fn deinit(self: *DeferredContext) void {
+        self.layer.allocator.destroy(self);
+    }
+
+    fn shouldDefer(self: *DeferredContext) bool {
         const blocking_id = self.client.blocking_request_id orelse return false;
         return self.request.params.request_id != blocking_id;
     }
 
     fn startCallback(response: Response) anyerror!void {
-        const self: *DeferredRequest = @ptrCast(@alignCast(response.ctx));
+        const self: *DeferredContext = @ptrCast(@alignCast(response.ctx));
         return self.forward.forwardStart(response);
     }
 
     fn headerCallback(response: Response) anyerror!bool {
-        const self: *DeferredRequest = @ptrCast(@alignCast(response.ctx));
+        const self: *DeferredContext = @ptrCast(@alignCast(response.ctx));
         return self.forward.forwardHeader(response);
     }
 
     fn dataCallback(response: Response, chunk: []const u8) anyerror!void {
-        const self: *DeferredRequest = @ptrCast(@alignCast(response.ctx));
+        const self: *DeferredContext = @ptrCast(@alignCast(response.ctx));
         return self.forward.forwardData(response, chunk);
     }
 
     fn doneCallback(ctx: *anyopaque) anyerror!void {
-        const self: *DeferredRequest = @ptrCast(@alignCast(ctx));
+        const self: *DeferredContext = @ptrCast(@alignCast(ctx));
         if (self.shouldDefer()) {
             log.debug(.http, "deferring done callback", .{ .url = self.request.params.url });
             self.outcome = .done;
             self.layer.deferred.append(&self.node);
             return;
         }
+
+        defer self.deinit();
         return self.forward.forwardDone();
     }
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
-        const self: *DeferredRequest = @ptrCast(@alignCast(ctx));
+        const self: *DeferredContext = @ptrCast(@alignCast(ctx));
         if (self.shouldDefer()) {
             log.debug(.http, "deferring error callback", .{ .url = self.request.params.url, .err = err });
             self.outcome = .{ .err = err };
             self.layer.deferred.append(&self.node);
             return;
         }
+
+        defer self.deinit();
         self.forward.forwardErr(err);
     }
 
     fn shutdownCallback(ctx: *anyopaque) void {
-        const self: *DeferredRequest = @ptrCast(@alignCast(ctx));
+        const self: *DeferredContext = @ptrCast(@alignCast(ctx));
         if (self.shouldDefer()) {
             self.outcome = .shutdown;
             self.layer.deferred.append(&self.node);
             return;
         }
+
+        defer self.deinit();
         self.forward.forwardShutdown();
     }
 
-    fn fire(self: *DeferredRequest) void {
+    fn fire(self: *DeferredContext) void {
+        defer self.deinit();
+
         switch (self.outcome) {
             .none => unreachable,
             .done => self.forward.forwardDone() catch |err| {
