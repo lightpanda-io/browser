@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<form>
+  <textarea id="empty-required" required></textarea>
+  <textarea id="filled-required" required>x</textarea>
+  <textarea id="too-long" maxlength="3"></textarea>
+  <textarea id="too-short" minlength="5"></textarea>
+  <textarea id="disabled-required" required disabled></textarea>
+</form>
+
+<script id="surface">
+{
+  const t = $('#empty-required');
+  testing.expectEqual(true, 'validity' in t);
+  testing.expectEqual('function', typeof t.checkValidity);
+  testing.expectEqual('function', typeof t.setCustomValidity);
+}
+</script>
+
+<script id="value_missing">
+{
+  testing.expectEqual(true, $('#empty-required').validity.valueMissing);
+  testing.expectEqual(false, $('#filled-required').validity.valueMissing);
+}
+</script>
+
+<script id="too_long">
+{
+  const t = $('#too-long');
+  testing.expectEqual(false, t.validity.tooLong);
+  t.value = 'abcdef';
+  testing.expectEqual(true, t.validity.tooLong);
+  t.value = 'ab';
+  testing.expectEqual(false, t.validity.tooLong);
+}
+</script>
+
+<script id="too_short">
+{
+  const t = $('#too-short');
+  // empty value never triggers tooShort
+  testing.expectEqual(false, t.validity.tooShort);
+  t.value = 'ab';
+  testing.expectEqual(true, t.validity.tooShort);
+  t.value = 'abcde';
+  testing.expectEqual(false, t.validity.tooShort);
+}
+</script>
+
+<script id="disabled">
+{
+  testing.expectEqual(false, $('#disabled-required').willValidate);
+  testing.expectEqual(true, $('#disabled-required').validity.valid);
+  testing.expectEqual(true, $('#disabled-required').checkValidity());
+}
+</script>
+
+<script id="custom_validity">
+{
+  const t = $('#filled-required');
+  t.setCustomValidity('nope');
+  testing.expectEqual(true, t.validity.customError);
+  testing.expectEqual(false, t.checkValidity());
+  t.setCustomValidity('');
+  testing.expectEqual(true, t.validity.valid);
+}
+</script>

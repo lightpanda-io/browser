@@ -27,6 +27,7 @@ const Form = @import("Form.zig");
 const Selection = @import("../../Selection.zig");
 const Event = @import("../../Event.zig");
 const InputEvent = @import("../../event/InputEvent.zig");
+const ValidityState = @import("ValidityState.zig");
 
 const TextArea = @This();
 
@@ -38,6 +39,7 @@ _selection_end: u32 = 0,
 _selection_direction: Selection.SelectionDirection = .none,
 
 _on_selectionchange: ?js.Function.Global = null,
+_custom_validity: ?[]const u8 = null,
 
 pub fn getOnSelectionChange(self: *TextArea) ?js.Function.Global {
     return self._on_selectionchange;
@@ -284,6 +286,77 @@ pub fn getLabels(self: *TextArea, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
+// Constraint validation
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#the-constraint-validation-api
+
+pub fn getWillValidate(self: *const TextArea) bool {
+    return !self.getDisabled();
+}
+
+pub fn getValidity(self: *TextArea, frame: *Frame) !*ValidityState {
+    return frame._factory.create(ValidityState{ ._owner = self.asElement() });
+}
+
+pub fn getValidationMessage(self: *const TextArea) []const u8 {
+    if (!self.getWillValidate()) return "";
+    if (self._custom_validity) |msg| return msg;
+    if (self.suffersValueMissing()) return "Please fill out this field.";
+    if (self.suffersTooLong()) return "Please shorten this text.";
+    if (self.suffersTooShort()) return "Please lengthen this text.";
+    return "";
+}
+
+pub fn checkValidity(self: *TextArea, frame: *Frame) !bool {
+    if (!self.getWillValidate()) return true;
+    const v = ValidityState{ ._owner = self.asElement() };
+    if (v.getValid()) return true;
+
+    const event = try Event.init("invalid", .{ .cancelable = true }, frame._page);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
+    return false;
+}
+
+pub fn reportValidity(self: *TextArea, frame: *Frame) !bool {
+    return self.checkValidity(frame);
+}
+
+pub fn setCustomValidity(self: *TextArea, message: []const u8, frame: *Frame) !void {
+    if (message.len == 0) {
+        self._custom_validity = null;
+    } else {
+        self._custom_validity = try frame.arena.dupe(u8, message);
+    }
+}
+
+pub fn hasCustomValidity(self: *const TextArea) bool {
+    return self._custom_validity != null;
+}
+
+pub fn suffersValueMissing(self: *const TextArea) bool {
+    if (!self.getWillValidate()) return false;
+    if (!self.getRequired()) return false;
+    return self.getValue().len == 0;
+}
+
+pub fn suffersTooLong(self: *const TextArea) bool {
+    const value = self._value orelse return false;
+    const max_attr = self.asConstElement().getAttributeSafe(comptime .wrap("maxlength")) orelse return false;
+    const max = std.fmt.parseInt(i32, max_attr, 10) catch return false;
+    if (max < 0) return false;
+    const count = std.unicode.utf8CountCodepoints(value) catch value.len;
+    return count > @as(usize, @intCast(max));
+}
+
+pub fn suffersTooShort(self: *const TextArea) bool {
+    const value = self._value orelse return false;
+    if (value.len == 0) return false;
+    const min_attr = self.asConstElement().getAttributeSafe(comptime .wrap("minlength")) orelse return false;
+    const min = std.fmt.parseInt(i32, min_attr, 10) catch return false;
+    if (min < 0) return false;
+    const count = std.unicode.utf8CountCodepoints(value) catch value.len;
+    return count < @as(usize, @intCast(min));
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(TextArea);
 
@@ -294,6 +367,12 @@ pub const JsApi = struct {
     };
 
     pub const labels = bridge.accessor(TextArea.getLabels, null, .{});
+    pub const willValidate = bridge.accessor(TextArea.getWillValidate, null, .{});
+    pub const validity = bridge.accessor(TextArea.getValidity, null, .{});
+    pub const validationMessage = bridge.accessor(TextArea.getValidationMessage, null, .{});
+    pub const checkValidity = bridge.function(TextArea.checkValidity, .{});
+    pub const reportValidity = bridge.function(TextArea.reportValidity, .{});
+    pub const setCustomValidity = bridge.function(TextArea.setCustomValidity, .{});
     pub const onselectionchange = bridge.accessor(TextArea.getOnSelectionChange, TextArea.setOnSelectionChange, .{});
     pub const value = bridge.accessor(TextArea.getValue, TextArea.setValue, .{});
     pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, TextArea.setDefaultValue, .{});
@@ -320,4 +399,5 @@ pub const Build = struct {
 const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.TextArea" {
     try testing.htmlRunner("element/html/textarea.html", .{});
+    try testing.htmlRunner("element/html/textarea-validity.html", .{});
 }

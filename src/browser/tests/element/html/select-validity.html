@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<form id="f">
+  <select id="placeholder" required>
+    <option value="">choose…</option>
+    <option value="a">A</option>
+  </select>
+  <select id="filled" required>
+    <option value="a">A</option>
+    <option value="b">B</option>
+  </select>
+  <select id="disabled" required disabled>
+    <option value="">empty</option>
+  </select>
+  <select id="not-required">
+    <option value="">empty</option>
+  </select>
+</form>
+
+<script id="surface">
+{
+  const s = $('#filled');
+  testing.expectEqual(true, 'validity' in s);
+  testing.expectEqual(true, 'validationMessage' in s);
+  testing.expectEqual('function', typeof s.checkValidity);
+  testing.expectEqual('function', typeof s.setCustomValidity);
+}
+</script>
+
+<script id="placeholder_value_missing">
+{
+  // First option's value is empty → required + selected = valueMissing
+  testing.expectEqual(true, $('#placeholder').validity.valueMissing);
+  testing.expectEqual(false, $('#placeholder').validity.valid);
+  testing.expectEqual(false, $('#placeholder').checkValidity());
+}
+</script>
+
+<script id="filled_select_valid">
+{
+  testing.expectEqual(false, $('#filled').validity.valueMissing);
+  testing.expectEqual(true, $('#filled').validity.valid);
+  testing.expectEqual(true, $('#filled').checkValidity());
+}
+</script>
+
+<script id="not_required_passes">
+{
+  testing.expectEqual(false, $('#not-required').validity.valueMissing);
+  testing.expectEqual(true, $('#not-required').validity.valid);
+}
+</script>
+
+<script id="disabled_passes">
+{
+  // Disabled is barred from constraint validation; willValidate=false.
+  testing.expectEqual(false, $('#disabled').willValidate);
+  testing.expectEqual(false, $('#disabled').validity.valueMissing);
+  testing.expectEqual(true, $('#disabled').validity.valid);
+}
+</script>
+
+<script id="custom_validity">
+{
+  const s = $('#filled');
+  s.setCustomValidity('pick again');
+  testing.expectEqual(true, s.validity.customError);
+  testing.expectEqual(false, s.validity.valid);
+  testing.expectEqual('pick again', s.validationMessage);
+  s.setCustomValidity('');
+  testing.expectEqual(true, s.validity.valid);
+}
+</script>

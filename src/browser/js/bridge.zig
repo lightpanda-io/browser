@@ -848,6 +848,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/element/html/Video.zig"),
     @import("../webapi/element/html/UL.zig"),
     @import("../webapi/element/html/Unknown.zig"),
+    @import("../webapi/element/html/ValidityState.zig"),
     @import("../webapi/element/Svg.zig"),
     @import("../webapi/element/svg/Generic.zig"),
     @import("../webapi/encoding/TextDecoder.zig"),
