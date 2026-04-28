@@ -1,4 +1,6 @@
 const std = @import("std");
+const lp = @import("lightpanda");
+const browser_tools = lp.tools;
 const c = @cImport({
     @cInclude("linenoise.h");
 });
@@ -50,6 +52,25 @@ fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callcon
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(buf)), 0);
     if (input.len == 0) return;
     if (std.mem.indexOfScalar(u8, input, ' ') != null) return;
+
+    if (input[0] == '/') {
+        const partial = input[1..];
+        // linenoise strdup's the string, so a stack buffer reused per match
+        // is fine. 64 covers every tool name comfortably.
+        var name_buf: [64:0]u8 = undefined;
+        for (browser_tools.tool_defs) |td| {
+            const total = 1 + td.name.len;
+            if (total >= name_buf.len) continue;
+            if (td.name.len < partial.len) continue;
+            if (!std.ascii.eqlIgnoreCase(td.name[0..partial.len], partial)) continue;
+            name_buf[0] = '/';
+            @memcpy(name_buf[1..total], td.name);
+            name_buf[total] = 0;
+            c.linenoiseAddCompletion(lc, &name_buf);
+        }
+        return;
+    }
+
     for (commands) |cmd| {
         if (cmd.name.len >= input.len and std.ascii.eqlIgnoreCase(cmd.name[0..input.len], input)) {
             c.linenoiseAddCompletion(lc, cmd.name.ptr);
