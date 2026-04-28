@@ -46,7 +46,7 @@ pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
         const opts = opts_ orelse break :blk .empty;
         switch (opts) {
             .query_string => |qs| break :blk try paramsFromString(arena, qs, exec.buf),
-            .form_data => |fd| break :blk try KeyValueList.copy(arena, fd._list),
+            .form_data => |fd| break :blk try fd.toKeyValueList(arena),
             .value => |js_val| {
                 // Order matters here; Array is also an Object.
                 if (js_val.isArray()) {
