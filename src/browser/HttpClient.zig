@@ -792,7 +792,7 @@ fn processOneMessage(self: *Client, msg: Network.Handle.Completion, transfer: *T
     if (body.len > 0) {
         try transfer.req.data_callback(Response.fromTransfer(transfer), body);
 
-        if (transfer.aborted) {
+        if (transfer.isAborted()) {
             transfer.requestFailed(error.Abort, true);
             return true;
         }
@@ -1074,7 +1074,7 @@ pub const Transfer = struct {
     client: *Client,
 
     start_time: u64,
-    aborted: bool = false,
+    aborted: std.atomic.Value(bool) = .init(false),
 
     _notified_fail: bool = false,
 
@@ -1128,6 +1128,14 @@ pub const Transfer = struct {
         arena_pool.release(arena);
     }
 
+    pub fn isAborted(self: *const Transfer) bool {
+        return self.aborted.load(.acquire);
+    }
+
+    fn setAborted(self: *Transfer) void {
+        self.aborted.store(true, .release);
+    }
+
     // Cancel this transfer with `err`. Fires error_callback once (latched
     // via _notified_fail), then either deinits synchronously or, if we're
     // mid-perform with a libcurl handle still in the multi, detaches and
@@ -1168,7 +1176,7 @@ pub const Transfer = struct {
     // there is nothing left referencing this transfer and we can safely
     // deinit inline even from inside a perform callback.
     fn detachOrDeinit(self: *Transfer) void {
-        if (self.aborted) return;
+        if (self.isAborted()) return;
         if (self._performing) {
             self.detachInPerform();
         } else if (self._conn) |conn| {
@@ -1192,7 +1200,7 @@ pub const Transfer = struct {
     //     `owner == null` and skips the list-remove that would otherwise
     //     UAF against a freed list.
     fn detachInPerform(self: *Transfer) void {
-        self.aborted = true;
+        self.setAborted();
         self.req.start_callback = null;
         self.req.shutdown_callback = null;
         self.req.header_callback = Noop.headerCallback;
@@ -1470,7 +1478,7 @@ pub const Transfer = struct {
             return err;
         };
 
-        return proceed and transfer.aborted == false;
+        return proceed and !transfer.isAborted();
     }
 
     fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) usize {
@@ -1520,7 +1528,7 @@ pub const Transfer = struct {
             return http.writefunc_error;
         };
 
-        if (transfer.aborted) {
+        if (transfer.isAborted()) {
             return http.writefunc_error;
         }
 
