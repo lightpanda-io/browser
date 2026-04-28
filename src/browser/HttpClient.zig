@@ -72,13 +72,10 @@ ws_active: usize = 0,
 http_active: usize = 0,
 
 // Our curl multi handle.
-handles: http.Handles,
+handle: Network.Handle,
 
 // Connections currently in this client's curl_multi.
 in_use: std.DoublyLinkedList = .{},
-
-// Connections that failed to be removed from curl_multi during perform.
-dirty: std.DoublyLinkedList = .{},
 
 // Whether we're currently inside a curl_multi_perform call.
 performing: bool = false,
@@ -186,13 +183,13 @@ fn layerWith(self: anytype, next: Layer) Layer {
 }
 
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) !void {
-    var handles = try http.Handles.init(network.config);
-    errdefer handles.deinit();
+    var handle = try network.getHandle();
+    errdefer handle.deinit();
 
     const http_proxy = network.config.httpProxy();
 
     self.* = Client{
-        .handles = handles,
+        .handle = handle,
         .network = network,
         .allocator = allocator,
         .cdp = cdp,
@@ -235,7 +232,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
 
 pub fn deinit(self: *Client) void {
     self.abort();
-    self.handles.deinit();
+    self.handle.deinit();
 
     self.ws_ready.deinit(self.allocator);
     self.clearUserAgentOverride();
@@ -291,13 +288,13 @@ pub fn setTlsVerify(self: *Client, verify: bool) !void {
     var it = self.in_use.first;
     while (it) |node| : (it = node.next) {
         const conn: *http.Connection = @fieldParentPtr("node", node);
-        try conn.setTlsVerify(verify, self.use_proxy);
+        try self.handle.submitTlsVerify(conn, verify, self.use_proxy);
     }
 
     it = self.ready_queue.first;
     while (it) |node| : (it = node.next) {
         const conn: *http.Connection = @fieldParentPtr("node", node);
-        try conn.setTlsVerify(verify, self.use_proxy);
+        try self.handle.submitTlsVerify(conn, verify, self.use_proxy);
     }
 
     self.tls_verify = verify;
@@ -354,7 +351,7 @@ pub fn abort(self: *Client) void {
         std.debug.assert(self.queue.first == null);
         std.debug.assert(self.in_use.first == null);
         std.debug.assert(self.ready_queue.first == null);
-        std.debug.assert(self.dirty.first == null);
+        std.debug.assert(self.handle.dirty.first == null);
     }
 }
 
@@ -422,7 +419,7 @@ pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
 fn drainQueue(self: *Client) !void {
     while (self.queue.popFirst()) |queue_node| {
         const transfer: *Transfer = @fieldParentPtr("_node", queue_node);
-        const conn = self.network.getConnection() orelse {
+        const conn = self.handle.getConnection() orelse {
             self.queue.prepend(queue_node);
             return;
         };
@@ -584,7 +581,7 @@ fn process(self: *Client, transfer: *Transfer) !void {
     // libcurl doesn't allow recursive calls, if we're in a `perform()` operation
     // then we _have_ to queue this.
     if (self.performing == false) {
-        if (self.network.getConnection()) |conn| {
+        if (self.handle.getConnection()) |conn| {
             return self.makeRequest(conn, transfer);
         }
     }
@@ -657,7 +654,7 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
     // execution).
     self.performing = true;
     defer self.performing = false;
-    _ = try self.handles.perform();
+    _ = try self.handle.perform();
 }
 
 fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
@@ -665,7 +662,7 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
         self.performing = true;
         defer self.performing = false;
 
-        break :blk try self.handles.perform();
+        break :blk try self.handle.perform();
     };
 
     // Drain queued WebSocket events. ws callbacks (called from libcurl during
@@ -674,14 +671,7 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
     self.drainReadyWs();
 
     // Process dirty connections — return them to Network pool.
-    while (self.dirty.popFirst()) |node| {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        self.handles.remove(conn) catch |err| {
-            log.fatal(.http, "multi remove handle", .{ .err = err, .src = "perform" });
-            @panic("multi_remove_handle");
-        };
-        self.releaseConn(conn);
-    }
+    self.handle.drainDirty();
 
     while (self.ready_queue.popFirst()) |node| {
         const conn: *http.Connection = @fieldParentPtr("node", node);
@@ -708,7 +698,7 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
     if (running > 0 or self.cdp_link_active) {
         // when cdp_link_active == true, the network thread will unblock this
         // by calling wakup on our multi.
-        try self.handles.poll(&.{}, timeout_ms);
+        try self.handle.poll(&.{}, timeout_ms);
     }
 
     _ = try self.processMessages();
@@ -776,7 +766,7 @@ fn isFetchInterceptionMethod(method: []const u8) bool {
         std.mem.eql(u8, method, "Fetch.continueWithAuth");
 }
 
-fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) !bool {
+fn processOneMessage(self: *Client, msg: Network.Handle.MultiMessage, transfer: *Transfer) !bool {
     // State at entry: .inflight = conn (multi just delivered a completion).
     if (msg.err == null or msg.err.? == error.RecvError) {
         transfer.detectAuthChallenge(msg.conn);
@@ -816,7 +806,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 
             const conn = transfer._conn.?;
 
-            try self.handles.remove(conn);
+            try self.handle.remove(conn);
             // Conn temporarily out of multi during reconfigure.
             // _detached_conn lets processMessages release it if any of
             // the steps below throw. State stays .inflight; _conn stays set
@@ -824,7 +814,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 
             transfer.reset();
             try transfer.configureConn(conn);
-            try self.handles.add(conn);
+            try self.handle.add(conn);
             transfer._detached_conn = null;
 
             _ = try self.perform(0);
@@ -893,7 +883,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 
 fn processMessages(self: *Client) !bool {
     var processed = false;
-    while (try self.handles.readMessage()) |msg| {
+    while (try self.handle.readMessage()) |msg| {
         switch (msg.conn.transport) {
             .http => |transfer| {
                 const done = self.processOneMessage(msg, transfer) catch |err| blk: {
@@ -950,7 +940,7 @@ pub fn trackConn(self: *Client, conn: *http.Connection) !void {
         self.releaseConn(conn);
         return err;
     };
-    self.handles.add(conn) catch |err| {
+    self.handle.add(conn) catch |err| {
         self.in_use.remove(&conn.node);
         conn.in_use = false;
         self.releaseConn(conn);
@@ -978,17 +968,11 @@ pub fn removeConn(self: *Client, conn: *http.Connection) void {
         .websocket => self.ws_active -= 1,
         else => unreachable,
     }
-    if (self.handles.remove(conn)) {
-        self.releaseConn(conn);
-    } else |_| {
-        // Can happen if we're in a perform() call, so we'll queue this
-        // for cleanup later.
-        self.dirty.append(&conn.node);
-    }
+    self.handle.cancelConn(conn);
 }
 
 fn releaseConn(self: *Client, conn: *http.Connection) void {
-    self.network.releaseConnection(conn);
+    self.handle.releaseConnection(conn);
 }
 
 // Called from WebSocket libcurl callbacks (currently same worker thread, but
