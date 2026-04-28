@@ -65,20 +65,9 @@ pub const HeaderIterator = http.HeaderIterator;
 // impacting those other http requests.
 pub const Client = @This();
 
-// Count of active ws requests
-ws_active: usize = 0,
-
-// Count of active http requests
-http_active: usize = 0,
-
-// Our curl multi handle.
+// Our curl multi handle. Owns in_use/ready_queue/http_active/ws_active/
+// performing — see Network.Handle.
 handle: Network.Handle,
-
-// Connections currently in this client's curl_multi.
-in_use: std.DoublyLinkedList = .{},
-
-// Whether we're currently inside a curl_multi_perform call.
-performing: bool = false,
 
 // WebSockets with queued events to be drained from the worker thread.
 // Populated by libcurl callbacks (currently same thread, future cross-thread).
@@ -95,15 +84,8 @@ next_request_id: u32 = 0,
 // only valid for the lifetime of the entry.
 transfers: std.AutoHashMapUnmanaged(u32, *Transfer) = .empty,
 
-// When handles has no more available easys, requests get queued.
+// Transfers waiting for a free Connection from the pool.
 queue: std.DoublyLinkedList = .{},
-
-// Queue is for Transfers that have no connection. ready_queue is for connections
-// that were initiated when performing == true and thus need to wait until
-// performing == false before being added. I'm hoping this is temporary and that
-// we can unify the two queues. But HTTP is being changed a lot right now, and
-// I'm trying to minimize the surface area.
-ready_queue: std.DoublyLinkedList = .{},
 
 // The main app allocator
 allocator: Allocator,
@@ -285,13 +267,13 @@ pub fn setTlsVerify(self: *Client, verify: bool) !void {
     // Remove inflight connections check on enable TLS b/c chromiumoxide calls
     // the command during navigate and Curl seems to accept it...
 
-    var it = self.in_use.first;
+    var it = self.handle.in_use.first;
     while (it) |node| : (it = node.next) {
         const conn: *http.Connection = @fieldParentPtr("node", node);
         try self.handle.submitTlsVerify(conn, verify, self.use_proxy);
     }
 
-    it = self.ready_queue.first;
+    it = self.handle.ready_queue.first;
     while (it) |node| : (it = node.next) {
         const conn: *http.Connection = @fieldParentPtr("node", node);
         try self.handle.submitTlsVerify(conn, verify, self.use_proxy);
@@ -342,15 +324,15 @@ pub fn abort(self: *Client) void {
     // each transfer's deinit:
     //   - self.transfers : transfers.remove(self.id)
     //   - self.queue     : unlinked if _queued is set
-    //   - self.in_use / self.ready_queue : via removeConn
-    //   - self.dirty     : drained at end of each perform; nothing left here
+    //   - handle.in_use / handle.ready_queue : via submitRemove
+    //   - handle.dirty  : drained at end of each perform
     // Any non-empty list means a transfer escaped cleanup — assert so we
     // catch the regression rather than silently leaking on next use.
     if (comptime IS_DEBUG) {
         std.debug.assert(self.transfers.size == 0);
         std.debug.assert(self.queue.first == null);
-        std.debug.assert(self.in_use.first == null);
-        std.debug.assert(self.ready_queue.first == null);
+        std.debug.assert(self.handle.in_use.first == null);
+        std.debug.assert(self.handle.ready_queue.first == null);
         std.debug.assert(self.handle.dirty.first == null);
     }
 }
@@ -572,7 +554,7 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
 fn process(self: *Client, transfer: *Transfer) !void {
     // libcurl doesn't allow recursive calls, if we're in a `perform()` operation
     // then we _have_ to queue this.
-    if (self.performing == false) {
+    if (self.handle.performing == false) {
         if (self.handle.getConnection()) |conn| {
             return self.makeRequest(conn, transfer);
         }
@@ -612,7 +594,7 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
         transfer._conn = conn;
         errdefer {
             transfer._conn = null;
-            self.releaseConn(conn);
+            self.handle.releaseConnection(conn);
         }
 
         try transfer.configureConn(conn);
@@ -622,7 +604,10 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
     // lifecycle. perform/processMessages will eventually invoke completion
     // callbacks and call transfer.deinit. We flag loop_owned so Client.request
     // (or anyone else holding the transfer pointer) knows not to deinit it.
-    self.trackConn(conn) catch |err| {
+    self.handle.submitRequest(conn) catch |err| {
+        // submitRequest rolled back its own bookkeeping; we still own
+        // the conn — release it.
+        self.handle.releaseConnection(conn);
         transfer._conn = null;
         return err;
     };
@@ -643,31 +628,18 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
     // wouldn't be so bad. But curl can synchronously fire callbacks for the
     // request we JUST added, which we do not want (it results in incorrect
     // execution).
-    self.performing = true;
-    defer self.performing = false;
     _ = try self.handle.perform();
 }
 
 fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
-    const running = blk: {
-        self.performing = true;
-        defer self.performing = false;
-
-        break :blk try self.handle.perform();
-    };
+    // Handle.perform manages performing flag, drains the dirty queue
+    // before, and the ready_queue after curl_multi_perform.
+    const running = try self.handle.perform();
 
     // Drain queued WebSocket events. ws callbacks (called from libcurl during
     // perform above) only buffer/queue — actual JS dispatch happens here, on
     // the worker thread.
     self.drainReadyWs();
-
-    // Process dirty connections — return them to Network pool.
-    self.handle.drainDirty();
-
-    while (self.ready_queue.popFirst()) |node| {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        try self.trackConn(conn);
-    }
 
     // We just processed completions; their done_callbacks may have
     // scheduled microtasks (JS continuations) or queued new transfers.
@@ -752,7 +724,7 @@ fn isFetchInterceptionMethod(method: []const u8) bool {
         std.mem.eql(u8, method, "Fetch.continueWithAuth");
 }
 
-fn processOneMessage(self: *Client, msg: Network.Handle.MultiMessage, transfer: *Transfer) !bool {
+fn processOneMessage(self: *Client, msg: Network.Handle.Completion, transfer: *Transfer) !bool {
     if (msg.err == null or msg.err.? == error.RecvError) {
         transfer.detectAuthChallenge(msg.conn);
     }
@@ -788,15 +760,9 @@ fn processOneMessage(self: *Client, msg: Network.Handle.MultiMessage, transfer: 
 
             const conn = transfer._conn.?;
 
-            try self.handle.remove(conn);
-            transfer._conn = null;
-            transfer._detached_conn = conn; // signal orphan for processMessages cleanup
-
             transfer.reset();
             try transfer.configureConn(conn);
-            try self.handle.add(conn);
-            transfer._detached_conn = null;
-            transfer._conn = conn; // reattach after successful re-add
+            try self.handle.submitRequest(conn);
 
             _ = try self.perform(0);
 
@@ -862,20 +828,12 @@ fn processOneMessage(self: *Client, msg: Network.Handle.MultiMessage, transfer: 
 
 fn processMessages(self: *Client) !bool {
     var processed = false;
-    while (try self.handle.readMessage()) |msg| {
+    while (try self.handle.nextCompletion()) |msg| {
         switch (msg.conn.transport) {
             .http => |transfer| {
                 const done = self.processOneMessage(msg, transfer) catch |err| blk: {
                     log.err(.http, "process_messages", .{ .err = err, .req = transfer });
                     transfer.requestFailed(err, true);
-                    if (transfer._detached_conn) |c| {
-                        // Conn was removed from handles during redirect reconfiguration
-                        // but not re-added. Release it directly to avoid double-remove.
-                        self.in_use.remove(&c.node);
-                        self.http_active -= 1;
-                        self.releaseConn(c);
-                        transfer._detached_conn = null;
-                    }
                     break :blk true;
                 };
                 if (done) {
@@ -901,59 +859,6 @@ fn processMessages(self: *Client) !bool {
     return processed;
 }
 
-pub fn trackConn(self: *Client, conn: *http.Connection) !void {
-    if (self.performing) {
-        conn.in_use = false;
-        self.ready_queue.append(&conn.node);
-        return;
-    }
-
-    self.in_use.append(&conn.node);
-    conn.in_use = true;
-    // Set private pointer so readMessage can find the Connection.
-    // Must be done each time since curl_easy_reset clears it when
-    // connections are returned to pool.
-    conn.setPrivate(conn) catch |err| {
-        self.in_use.remove(&conn.node);
-        conn.in_use = false;
-        self.releaseConn(conn);
-        return err;
-    };
-    self.handle.add(conn) catch |err| {
-        self.in_use.remove(&conn.node);
-        conn.in_use = false;
-        self.releaseConn(conn);
-        return err;
-    };
-
-    switch (conn.transport) {
-        .http => self.http_active += 1,
-        .websocket => self.ws_active += 1,
-        else => unreachable,
-    }
-}
-
-pub fn removeConn(self: *Client, conn: *http.Connection) void {
-    if (conn.in_use == false) {
-        self.ready_queue.remove(&conn.node);
-        self.releaseConn(conn);
-        return;
-    }
-
-    self.in_use.remove(&conn.node);
-    conn.in_use = false;
-    switch (conn.transport) {
-        .http => self.http_active -= 1,
-        .websocket => self.ws_active -= 1,
-        else => unreachable,
-    }
-    self.handle.cancelConn(conn);
-}
-
-fn releaseConn(self: *Client, conn: *http.Connection) void {
-    self.handle.releaseConnection(conn);
-}
-
 // Called from WebSocket libcurl callbacks (currently same worker thread, but
 // the API is mutex-protected so it stays correct if libcurl moves off-thread).
 pub fn addReadyWs(self: *Client, ws: *WebSocket) void {
@@ -976,7 +881,7 @@ fn drainReadyWs(self: *Client) void {
 }
 
 fn ensureNoActiveConnection(self: *const Client) !void {
-    if (self.http_active > 0 or self.ws_active > 0) {
+    if (self.handle.http_active > 0 or self.handle.ws_active > 0) {
         return error.InflightConnection;
     }
 }
@@ -1193,10 +1098,6 @@ pub const Transfer = struct {
     _notified_fail: bool = false,
 
     _conn: ?*http.Connection = null,
-    // Set when conn is temporarily detached from transfer during redirect
-    // reconfiguration. Used by processMessages to release the orphaned conn
-    // if reconfiguration fails.
-    _detached_conn: ?*http.Connection = null,
 
     _auth_challenge: ?http.AuthChallenge = null,
 
@@ -1211,14 +1112,14 @@ pub const Transfer = struct {
 
     fn releaseConn(self: *Transfer) void {
         if (self._conn) |conn| {
-            self.client.removeConn(conn);
+            self.client.handle.submitRemove(conn);
             self._conn = null;
         }
     }
 
     pub fn deinit(self: *Transfer) void {
         if (self._conn) |conn| {
-            self.client.removeConn(conn);
+            self.client.handle.submitRemove(conn);
             self._conn = null;
         }
 
@@ -1288,7 +1189,7 @@ pub const Transfer = struct {
     // deinit inline even from inside a perform callback.
     fn detachOrDeinit(self: *Transfer) void {
         const must_defer = self._performing or
-            (self.client.performing and self._conn != null);
+            (self.client.handle.performing and self._conn != null);
         if (must_defer) {
             self.detachInPerform();
         } else {
