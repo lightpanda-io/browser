@@ -132,11 +132,33 @@
   }
 </script>
 
-<script id=charCodeKeyCode>
+<script id=keyCodeAndCharCodeAreZeroForSyntheticEvents>
   {
-    let evt = new KeyboardEvent('keypress', {key: 'a'});
-    testing.expectEqual(0, evt.charCode);
-    testing.expectEqual(0, evt.keyCode);
+    // Per Chrome behavior, both legacy `keyCode` and `charCode` return 0 for
+    // events constructed via `new KeyboardEvent(...)` because such events
+    // have `isTrusted === false`. The legacy mapping (a -> 65, Enter -> 13,
+    // etc.) is only exposed for events dispatched by the user agent itself.
+    // The full mapping table is exercised via Zig unit tests in
+    // `webapi/event/KeyboardEvent.zig`.
+
+    // Letters
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: 'a'}).keyCode);
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: 'Z'}).keyCode);
+    // Digits
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: '5'}).keyCode);
+    // Space
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: ' '}).keyCode);
+    // Named keys
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: 'Enter'}).keyCode);
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: 'F1'}).keyCode);
+    // Unknown key
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: 'Dead'}).keyCode);
+
+    // charCode follows the same rule across event types.
+    testing.expectEqual(0, new KeyboardEvent('keypress', {key: 'a'}).charCode);
+    testing.expectEqual(0, new KeyboardEvent('keypress', {key: 'Enter'}).charCode);
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: 'a'}).charCode);
+    testing.expectEqual(0, new KeyboardEvent('keyup', {key: 'a'}).charCode);
   }
 </script>
 

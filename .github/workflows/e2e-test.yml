@@ -63,8 +63,16 @@ jobs:
             zig-out/bin/lightpanda
           retention-days: 1
 
-  demo-scripts:
-    name: demo-scripts
+  demo-runner:
+    strategy:
+      fail-fast: false
+      matrix:
+        proxy: [true, false]
+        wba: [true, false]
+        cache: [true, false]
+        robotstxt: [true, false]
+
+    name: demo-runner
     needs: zig-build-release
 
     runs-on: ubuntu-latest
@@ -85,36 +93,54 @@ jobs:
 
       - run: chmod a+x ./lightpanda
 
-      - name: run end to end tests
-        run: |
-          ./lightpanda serve & echo $! > LPD.pid
-          go run runner/main.go
-          kill `cat LPD.pid`
-
-      - name: build proxy
+      - if: matrix.proxy == true
+        name: build and start proxy
         run: |
           cd proxy
           go build
+          ./proxy & echo $! > PROXY.id
 
-      - name: run end to end tests through proxy
+      - if: matrix.cache == true
+        run: mkdir /tmp/lp-cache
+
+      - if: matrix.wba == true
+        run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
+
+      - id: args
+        name: build LP args
         run: |
-          ./proxy/proxy & echo $! > PROXY.id
-          ./lightpanda serve --http-proxy 'http://127.0.0.1:3000' & echo $! > LPD.pid
+          args=""
+          [ "${{ matrix.proxy }}" = "true" ] && args="$args --http-proxy http://127.0.0.1:3000"
+          [ "${{ matrix.cache }}" = "true" ] && args="$args --http-cache-dir /tmp/lp-cache"
+          [ "${{ matrix.robotstxt }}" = "true" ] && args="$args --obey-robots"
+          [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-key-file private_key.pem"
+          [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-domain ${{ vars.WBA_DOMAIN }}"
+          [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-keyid ${{ vars.WBA_KEY_ID }}"
+          echo $args
+          echo "value=$args" >> "$GITHUB_OUTPUT"
+
+      - run: |
+          ./lightpanda serve ${{ steps.args.outputs.value }} & echo $! > LPD.pid
+
+      - run: |
           go run runner/main.go
-          URL=https://demo-browser.lightpanda.io/campfire-commerce/ node puppeteer/proxy_auth.js
-          kill `cat LPD.pid` `cat PROXY.id`
 
-      - name: run request interception through proxy and playwright
+      - run: |
+          kill `cat LPD.pid`
+
+      - if: matrix.proxy == true
         run: |
-          export PROXY_USERNAME=username PROXY_PASSWORD=password
-          ./proxy/proxy & echo $! > PROXY.id
-          ./lightpanda serve & echo $! > LPD.pid
-          BASE_URL=https://demo-browser.lightpanda.io/ node playwright/proxy_auth.js
-          kill `cat LPD.pid` `cat PROXY.id`
+          pkill proxy
 
-  # e2e tests w/ web-bot-auth configuration on.
-  wba-demo-scripts:
-    name: wba-demo-scripts
+  proxy-auth:
+    strategy:
+      fail-fast: false
+      matrix:
+        wba: [true, false]
+        cache: [true, false]
+        robotstxt: [true, false]
+
+    name: demo-runner
     needs: zig-build-release
 
     runs-on: ubuntu-latest
@@ -135,47 +161,46 @@ jobs:
 
       - run: chmod a+x ./lightpanda
 
-      - run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
-
-      - name: run end to end tests
-        run: |
-          ./lightpanda serve \
-            --web-bot-auth-key-file private_key.pem \
-            --web-bot-auth-keyid ${{ vars.WBA_KEY_ID }} \
-            --web-bot-auth-domain ${{ vars.WBA_DOMAIN }} \
-            & echo $! > LPD.pid
-          go run runner/main.go
-          kill `cat LPD.pid`
-
-      - name: build proxy
+      - name: build and start proxy
         run: |
           cd proxy
           go build
+          ./proxy & echo $! > PROXY.id
+
+      - if: matrix.cache == true
+        run: mkdir /tmp/lp-cache
+
+      - if: matrix.wba == true
+        run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
+
+      - id: args
+        name: build LP args
+        run: |
+          args=""
+          [ "${{ matrix.cache }}" = "true" ] && args="$args --http-cache-dir /tmp/lp-cache"
+          [ "${{ matrix.robotstxt }}" = "true" ] && args="$args --obey-robots"
+          [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-key-file private_key.pem"
+          [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-domain ${{ vars.WBA_DOMAIN }}"
+          [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-keyid ${{ vars.WBA_KEY_ID }}"
+          echo $args
+          echo "value=$args" >> "$GITHUB_OUTPUT"
 
       - name: run end to end tests through proxy
         run: |
-          ./proxy/proxy & echo $! > PROXY.id
-          ./lightpanda serve \
-            --web-bot-auth-key-file private_key.pem \
-            --web-bot-auth-keyid ${{ vars.WBA_KEY_ID }} \
-            --web-bot-auth-domain ${{ vars.WBA_DOMAIN }} \
-            --http-proxy 'http://127.0.0.1:3000' \
-            & echo $! > LPD.pid
+          export PROXY_USERNAME=username PROXY_PASSWORD=password
+          ./lightpanda serve --http-proxy http://127.0.0.1:3000 ${{ steps.args.outputs.value }} & echo $! > LPD.pid
           go run runner/main.go
           URL=https://demo-browser.lightpanda.io/campfire-commerce/ node puppeteer/proxy_auth.js
-          kill `cat LPD.pid` `cat PROXY.id`
+          kill `cat LPD.pid`
 
       - name: run request interception through proxy and playwright
         run: |
           export PROXY_USERNAME=username PROXY_PASSWORD=password
-          ./proxy/proxy & echo $! > PROXY.id
-          ./lightpanda serve \
-            --web-bot-auth-key-file private_key.pem \
-            --web-bot-auth-keyid ${{ vars.WBA_KEY_ID }} \
-            --web-bot-auth-domain ${{ vars.WBA_DOMAIN }} \
-            & echo $! > LPD.pid
+          ./lightpanda serve ${{ steps.args.outputs.value }} & echo $! > LPD.pid
           BASE_URL=https://demo-browser.lightpanda.io/ node playwright/proxy_auth.js
-          kill `cat LPD.pid` `cat PROXY.id`
+          kill `cat LPD.pid`
+
+      - run: pkill proxy
 
   wba-test:
     name: wba-test
