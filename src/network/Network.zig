@@ -45,6 +45,8 @@ const Listener = struct {
     onAccept: *const fn (ctx: *anyopaque, socket: posix.socket_t) void,
 };
 
+const Error = libcurl.Error;
+
 // Number of fixed pollfds entries (wakeup pipe + listener).
 const PSEUDO_POLLFDS = 2;
 
@@ -348,6 +350,10 @@ pub fn deinit(self: *Network) void {
     }
 
     globalDeinit();
+}
+
+pub fn getHandle(self: *Network) !Handle {
+    return try Handle.init(self);
 }
 
 pub fn bind(
@@ -714,6 +720,121 @@ pub fn newConnection(self: *Network) ?*http.Connection {
 
     return conn;
 }
+
+pub const Handle = struct {
+    multi: *libcurl.CurlM,
+    network: *Network,
+
+    // Conns whose remove was deferred because we were inside
+    // curl_multi_perform. Drained by drainDirty before the next perform.
+    dirty: std.DoublyLinkedList = .{},
+
+    pub fn init(network: *Network) !Handle {
+        const multi = libcurl.curl_multi_init() orelse return error.FailedToInitializeMulti;
+        errdefer libcurl.curl_multi_cleanup(multi) catch {};
+
+        try libcurl.curl_multi_setopt(multi, .max_host_connections, network.config.httpMaxHostOpen());
+
+        return .{ .network = network, .multi = multi };
+    }
+
+    pub fn deinit(self: *Handle) void {
+        libcurl.curl_multi_cleanup(self.multi) catch {};
+    }
+
+    pub fn add(self: *Handle, conn: *const http.Connection) !void {
+        try libcurl.curl_multi_add_handle(self.multi, conn._easy);
+    }
+
+    pub fn remove(self: *Handle, conn: *const http.Connection) !void {
+        try libcurl.curl_multi_remove_handle(self.multi, conn._easy);
+    }
+
+    pub fn perform(self: *Handle) !c_int {
+        var running: c_int = undefined;
+        try libcurl.curl_multi_perform(self.multi, &running);
+        return running;
+    }
+
+    pub fn poll(self: *Handle, extra_fds: []libcurl.CurlWaitFd, timeout_ms: c_int) !void {
+        try libcurl.curl_multi_poll(self.multi, extra_fds, timeout_ms, null);
+    }
+
+    pub const MultiMessage = struct {
+        conn: *http.Connection,
+        err: ?Error,
+    };
+
+    pub fn readMessage(self: *Handle) !?MultiMessage {
+        var messages_count: c_int = 0;
+        const msg = libcurl.curl_multi_info_read(self.multi, &messages_count) orelse return null;
+        return switch (msg.data) {
+            .done => |err| {
+                var private: *anyopaque = undefined;
+                try libcurl.curl_easy_getinfo(msg.easy_handle, .private, &private);
+                return .{
+                    .conn = @ptrCast(@alignCast(private)),
+                    .err = err,
+                };
+            },
+            else => unreachable,
+        };
+    }
+
+    // connection pool delegates ----------------------------------------
+
+    pub fn getConnection(self: *Handle) ?*http.Connection {
+        return self.network.getConnection();
+    }
+
+    pub fn newConnection(self: *Handle) ?*http.Connection {
+        return self.network.newConnection();
+    }
+
+    pub fn releaseConnection(self: *Handle, conn: *http.Connection) void {
+        self.network.releaseConnection(conn);
+    }
+
+    // Cancel an active conn: remove from multi and return to pool. If
+    // we're inside curl_multi_perform (libcurl forbids remove from a
+    // callback), defer the remove via the dirty queue and let
+    // drainDirty pick it up before the next perform.
+    pub fn cancelConn(self: *Handle, conn: *http.Connection) void {
+        if (self.remove(conn)) {
+            self.releaseConnection(conn);
+        } else |_| {
+            self.dirty.append(&conn.node);
+        }
+    }
+
+    pub fn drainDirty(self: *Handle) void {
+        while (self.dirty.popFirst()) |node| {
+            const conn: *http.Connection = @fieldParentPtr("node", node);
+            self.remove(conn) catch |err| {
+                log.fatal(.http, "multi remove handle", .{ .err = err, .src = "drainDirty" });
+                @panic("multi_remove_handle");
+            };
+            self.releaseConnection(conn);
+        }
+    }
+
+    // per-conn ops on active conns -------------------------------------
+    //
+    // These wrap libcurl mutators that today run synchronously on the
+    // worker thread. The seam exists so the same call sites stay valid
+    // once the network thread owns the multi and these become
+    // cross-thread submits.
+
+    pub fn submitTlsVerify(self: *Handle, conn: *http.Connection, verify: bool, use_proxy: bool) !void {
+        _ = self;
+        try conn.setTlsVerify(verify, use_proxy);
+    }
+
+    pub fn submitUnpause(self: *Handle, conn: *http.Connection) !void {
+        _ = self;
+        try conn.pause(.{ .cont = true });
+    }
+};
 
 // Wraps lines @ 64 columns. A PEM is basically a base64 encoded DER (which is
 // what Zig has), with lines wrapped at 64 characters and with a basic header
