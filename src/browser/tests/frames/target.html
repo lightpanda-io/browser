@@ -56,3 +56,73 @@
     });
   }
 </script>
+
+<!-- Per HTML spec, formaction on the submit button overrides the form's action.
+     https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit -->
+<iframe name=frame4 id=f4></iframe>
+<form target="frame4" action="support/should-not-load.html">
+  <input type=submit id=submit_formaction formaction="support/page.html">
+</form>
+
+<script id=formaction type=module>
+  {
+    const state = await testing.async();
+    $('#submit_formaction').click();
+    $('#f4').onload = () => {
+      state.resolve();
+    };
+
+    await state.done(() => {
+      testing.expectEqual('a-page\n', $('#f4').contentDocument.body.textContent);
+    });
+  }
+</script>
+
+<!-- Per HTML spec, formmethod on the submit button overrides the form's method.
+     A form with method=GET would append the FormData as ?x=probe to the action;
+     formmethod=POST should suppress that and send the values in the request body.
+     We verify the override by asserting the loaded iframe URL has no query string. -->
+<iframe name=frame5 id=f5></iframe>
+<form target="frame5" method="GET" action="support/page.html">
+  <input name="x" value="probe">
+  <input type=submit id=submit_formmethod formmethod="POST">
+</form>
+
+<script id=formmethod type=module>
+  {
+    const state = await testing.async();
+    $('#submit_formmethod').click();
+    $('#f5').onload = () => {
+      state.resolve();
+    };
+
+    await state.done(() => {
+      // formmethod=POST overrode form's GET, so the FormData entry was NOT
+      // appended to the action URL as a query string.
+      testing.expectEqual(false, $('#f5').contentDocument.URL.includes('?'));
+      testing.expectEqual('a-page\n', $('#f5').contentDocument.body.textContent);
+    });
+  }
+</script>
+
+<!-- Combined: formaction + formmethod on the same submit button. -->
+<iframe name=frame6 id=f6></iframe>
+<form target="frame6" method="GET" action="support/should-not-load.html">
+  <input name="x" value="probe">
+  <input type=submit id=submit_form_both formaction="support/page.html" formmethod="POST">
+</form>
+
+<script id=formaction_and_formmethod type=module>
+  {
+    const state = await testing.async();
+    $('#submit_form_both').click();
+    $('#f6').onload = () => {
+      state.resolve();
+    };
+
+    await state.done(() => {
+      testing.expectEqual(false, $('#f6').contentDocument.URL.includes('?'));
+      testing.expectEqual('a-page\n', $('#f6').contentDocument.body.textContent);
+    });
+  }
+</script>
