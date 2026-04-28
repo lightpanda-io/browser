@@ -60,6 +60,18 @@ fn logFilterScopesValidator(allocator: Allocator, args: *std.process.ArgIterator
     }
 }
 
+fn logLevelValidator(_: Allocator, args: *std.process.ArgIterator) !?log.Level {
+    const str = args.next() orelse return error.MissingArgument;
+    if (std.mem.eql(u8, str, "error")) {
+        return .err;
+    }
+
+    return std.meta.stringToEnum(log.Level, str) orelse {
+        log.fatal(.app, "invalid option choice", .{ .arg = "--log-level", .value = str });
+        return error.InvalidArgument;
+    };
+}
+
 /// Common CLI args.
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
@@ -72,7 +84,7 @@ const CommonOptions = .{
     .{ .name = "http_max_response_size", .type = ?usize },
     .{ .name = "ws_max_concurrent", .type = ?u8 },
     .{ .name = "insecure_disable_tls_host_verification", .type = bool },
-    .{ .name = "log_level", .type = ?log.Level },
+    .{ .name = "log_level", .type = ?log.Level, .validator = logLevelValidator },
     .{ .name = "log_format", .type = ?log.Format },
     .{ .name = "log_filter_scopes", .type = log.Scope, .multiple = true, .validator = logFilterScopesValidator },
     .{ .name = "user_agent_suffix", .type = ?[]const u8 },

@@ -450,8 +450,25 @@ pub const BrowserContext = struct {
 
         // abort all intercepted requests before closing the session/page
         // since some of these might callback into the page/scriptmanager
-        for (self.intercept_state.pendingTransfers()) |transfer| {
-            transfer.abort(error.ClientDisconnect);
+        const http_client = browser.http_client;
+        for (self.intercept_state.pendingIntercepts()) |intercept| {
+            defer {
+                lp.assert(
+                    http_client.interception_layer.intercepted > 0,
+                    "BrowserContext.deinit.intercepted",
+                    .{ .value = http_client.interception_layer.intercepted },
+                );
+                http_client.interception_layer.intercepted -= 1;
+            }
+            switch (intercept) {
+                .transfer => |t| {
+                    t.abort(error.ClientDisconnect);
+                },
+                .request => |r| {
+                    defer http_client.deinitRequest(r);
+                    r.error_callback(r.ctx, error.ClientDisconnect);
+                },
+            }
         }
 
         for (self.isolated_worlds.items) |world| {
@@ -668,7 +685,7 @@ pub const BrowserContext = struct {
         const arena = self.frame_arena;
 
         // Prepare the captured response value.
-        const id = msg.transfer.id;
+        const id = msg.request.params.request_id;
         const gop = try self.captured_responses.getOrPut(arena, id);
         if (!gop.found_existing) {
             gop.value_ptr.* = .{
@@ -676,8 +693,8 @@ pub const BrowserContext = struct {
                 // Encode the data in base64 by default, but don't encode
                 // for well known content-type.
                 .must_encode = blk: {
-                    const transfer = msg.transfer;
-                    if (transfer.response_header.?.contentType()) |ct| {
+                    const response = msg.response;
+                    if (response.contentType()) |ct| {
                         const mime = try Mime.parse(ct);
 
                         if (!mime.isText()) {
@@ -705,7 +722,7 @@ pub const BrowserContext = struct {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         const arena = self.frame_arena;
 
-        const id = msg.transfer.id;
+        const id = msg.request.params.request_id;
         const resp = self.captured_responses.getPtr(id) orelse lp.assert(false, "onHttpResponseData missinf captured response", .{});
 
         return resp.data.appendSlice(arena, msg.data);
