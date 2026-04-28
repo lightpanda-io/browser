@@ -414,12 +414,12 @@ pub fn deinit(self: *Frame, abort_http: bool) void {
     self._script_manager.shutdown = true;
 
     if (self.parent == null) {
-        browser.http_client.abort();
+        browser.http_client.abort(null);
     } else if (abort_http) {
         // a small optimization, it's faster to abort _everything_ on the root
         // frame, so we prefer that. But if it's just the frame that's going
         // away (a frame navigation) then we'll abort the frame-related requests
-        browser.http_client.abortFrame(self._frame_id);
+        browser.http_client.abort(self._frame_id);
     }
 
     self._script_manager.deinit();
@@ -754,12 +754,12 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     // as we can. This will be more properly shutdown when we process the
     // scheduled navigation.
     if (target.parent == null) {
-        session.browser.http_client.abort();
+        session.browser.http_client.abort(null);
     } else {
         // This doesn't terminate any inflight requests for nested frames, but
         // again, this is just an optimization. We'll correctly shut down all
         // nested inflight requests when we process the navigation.
-        session.browser.http_client.abortFrame(target._frame_id);
+        session.browser.http_client.abort(target._frame_id);
     }
 
     // Capture the originating frame's URL as the Referer for this

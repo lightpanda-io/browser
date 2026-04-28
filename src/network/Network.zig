@@ -57,6 +57,7 @@ allocator: Allocator,
 app: *App,
 config: *const Config,
 ca_blob: ?http.Blob,
+
 robot_store: RobotStore,
 web_bot_auth: ?WebBotAuth,
 cache: ?Cache,
@@ -73,11 +74,10 @@ ws_mutex: std.Thread.Mutex = .{},
 pollfds: []posix.pollfd,
 listener: ?Listener = null,
 accept: std.atomic.Value(bool) = .init(true),
+shutdown: std.atomic.Value(bool) = .init(false),
 
 // Wakeup pipe: workers write to [1], main thread polls [0]
 wakeup_pipe: [2]posix.fd_t = .{ -1, -1 },
-
-shutdown: std.atomic.Value(bool) = .init(false),
 
 // Multi is a heavy structure that can consume up to 2MB of RAM.
 // Currently, Network is used sparingly, and we only create it on demand.
@@ -725,9 +725,26 @@ pub const Handle = struct {
     multi: *libcurl.CurlM,
     network: *Network,
 
+    // Active conns (added to multi). Iterated externally by abort,
+    // setTlsVerify, etc. — pub for direct access.
+    in_use: std.DoublyLinkedList = .{},
+
+    // Conns whose submit was deferred because we were inside
+    // curl_multi_perform. Drained automatically after perform completes.
+    ready_queue: std.DoublyLinkedList = .{},
+
     // Conns whose remove was deferred because we were inside
     // curl_multi_perform. Drained by drainDirty before the next perform.
     dirty: std.DoublyLinkedList = .{},
+
+    // Counters for in-flight conns by transport. Read externally
+    // (ensureNoActiveConnection, abort assertion).
+    http_active: usize = 0,
+    ws_active: usize = 0,
+
+    // True while inside curl_multi_perform. Reads-only externally; checked
+    // by HttpClient.process to defer new submits.
+    performing: bool = false,
 
     pub fn init(network: *Network) !Handle {
         const multi = libcurl.curl_multi_init() orelse return error.FailedToInitializeMulti;
@@ -742,36 +759,48 @@ pub const Handle = struct {
         libcurl.curl_multi_cleanup(self.multi) catch {};
     }
 
-    pub fn add(self: *Handle, conn: *const http.Connection) !void {
-        try libcurl.curl_multi_add_handle(self.multi, conn._easy);
-    }
-
-    pub fn remove(self: *Handle, conn: *const http.Connection) !void {
-        try libcurl.curl_multi_remove_handle(self.multi, conn._easy);
-    }
-
     pub fn perform(self: *Handle) !c_int {
+        // Drain removes deferred by submitRemove during the previous
+        // curl_multi_perform call.
+        self.drainDirty();
+
         var running: c_int = undefined;
-        try libcurl.curl_multi_perform(self.multi, &running);
+        {
+            self.performing = true;
+            defer self.performing = false;
+            try libcurl.curl_multi_perform(self.multi, &running);
+        }
+
+        // Drain submits deferred during the perform we just exited.
+        self.drainReadyQueue();
         return running;
     }
 
-    pub fn poll(self: *Handle, extra_fds: []libcurl.CurlWaitFd, timeout_ms: c_int) !void {
-        try libcurl.curl_multi_poll(self.multi, extra_fds, timeout_ms, null);
+    pub fn poll(self: *Handle, extra_fds: []posix.pollfd, timeout_ms: c_int) !void {
+        // posix.pollfd and CurlWaitFd are layout-compatible (verified at
+        // comptime in Network.zig).
+        const wait_fds: []libcurl.CurlWaitFd = @ptrCast(extra_fds);
+        try libcurl.curl_multi_poll(self.multi, wait_fds, timeout_ms, null);
     }
 
-    pub const MultiMessage = struct {
+    pub const Completion = struct {
         conn: *http.Connection,
         err: ?Error,
     };
 
-    pub fn readMessage(self: *Handle) !?MultiMessage {
+    pub fn nextCompletion(self: *Handle) !?Completion {
         var messages_count: c_int = 0;
         const msg = libcurl.curl_multi_info_read(self.multi, &messages_count) orelse return null;
         return switch (msg.data) {
             .done => |err| {
                 var private: *anyopaque = undefined;
                 try libcurl.curl_easy_getinfo(msg.easy_handle, .private, &private);
+                // Detach from the multi before returning. The conn is
+                // delivered already-removed, matching the future async
+                // semantics. Subsequent submitRemove calls on the same
+                // conn (e.g. from transfer.deinit) tolerate the missing
+                // handle.
+                libcurl.curl_multi_remove_handle(self.multi, msg.easy_handle) catch {};
                 return .{
                     .conn = @ptrCast(@alignCast(private)),
                     .err = err,
@@ -795,19 +824,92 @@ pub const Handle = struct {
         self.network.releaseConnection(conn);
     }
 
-    // Cancel an active conn: remove from multi and return to pool. If
-    // we're inside curl_multi_perform (libcurl forbids remove from a
-    // callback), defer the remove via the dirty queue and let
-    // drainDirty pick it up before the next perform.
-    pub fn cancelConn(self: *Handle, conn: *http.Connection) void {
-        if (self.remove(conn)) {
-            self.releaseConnection(conn);
-        } else |_| {
-            self.dirty.append(&conn.node);
+    // Hand off a configured conn to the multi.
+    //
+    // First-time submit: bookkeeps in_use + counter, sets the private
+    // pointer, adds to multi. If we're inside curl_multi_perform, the
+    // submit is deferred to ready_queue and replayed by drainReadyQueue.
+    //
+    // Re-submit (conn already tracked, e.g. redirect): just sets the
+    // private pointer and re-adds to multi. Bookkeeping is untouched.
+    //
+    // On failure, bookkeeping is rolled back. The conn is NOT released
+    // — caller is responsible.
+    pub fn submitRequest(self: *Handle, conn: *http.Connection) !void {
+        const first_time = !conn.in_use;
+
+        if (first_time) {
+            if (self.performing) {
+                self.ready_queue.append(&conn.node);
+                return;
+            }
+            self.in_use.append(&conn.node);
+            conn.in_use = true;
+            switch (conn.transport) {
+                .http => self.http_active += 1,
+                .websocket => self.ws_active += 1,
+                else => unreachable,
+            }
         }
+        errdefer if (first_time) {
+            self.in_use.remove(&conn.node);
+            conn.in_use = false;
+            switch (conn.transport) {
+                .http => self.http_active -= 1,
+                .websocket => self.ws_active -= 1,
+                else => unreachable,
+            }
+        };
+
+        try conn.setPrivate(conn);
+        try self.add(conn);
     }
 
-    pub fn drainDirty(self: *Handle) void {
+    // Cancel a tracked conn: untrack, remove from multi, return to pool.
+    //
+    // If conn is in ready_queue (deferred submit), just untrack and
+    // release. If it's in in_use, decrement counters and try to remove
+    // from multi: on RecursiveApiCall (we're inside perform) defer via
+    // dirty; on BadEasyHandle the conn was already detached (e.g. by
+    // nextCompletion) and we fall through to release.
+    pub fn submitRemove(self: *Handle, conn: *http.Connection) void {
+        if (!conn.in_use) {
+            // Was deferred to ready_queue; never reached in_use/multi.
+            self.ready_queue.remove(&conn.node);
+            self.releaseConnection(conn);
+            return;
+        }
+
+        self.in_use.remove(&conn.node);
+        conn.in_use = false;
+        switch (conn.transport) {
+            .http => self.http_active -= 1,
+            .websocket => self.ws_active -= 1,
+            else => unreachable,
+        }
+
+        self.remove(conn) catch |err| switch (err) {
+            error.RecursiveApiCall => {
+                self.dirty.append(&conn.node);
+                return;
+            },
+            error.BadEasyHandle => {}, // already detached, fall through
+            else => log.warn(.http, "curl multi remove", .{ .err = err }),
+        };
+        self.releaseConnection(conn);
+    }
+
+    // --- internals --------------------------------------------------
+
+    fn add(self: *Handle, conn: *const http.Connection) !void {
+        try libcurl.curl_multi_add_handle(self.multi, conn._easy);
+    }
+
+    fn remove(self: *Handle, conn: *const http.Connection) !void {
+        try libcurl.curl_multi_remove_handle(self.multi, conn._easy);
+    }
+
+    fn drainDirty(self: *Handle) void {
         while (self.dirty.popFirst()) |node| {
             const conn: *http.Connection = @fieldParentPtr("node", node);
             self.remove(conn) catch |err| {
@@ -815,6 +917,70 @@ pub const Handle = struct {
                 @panic("multi_remove_handle");
             };
             self.releaseConnection(conn);
+        }
+    }
+
+    fn drainReadyQueue(self: *Handle) void {
+        // submitRequest will see conn.in_use=false and run the first-time
+        // path. self.performing is false here (set by perform's defer).
+        while (self.ready_queue.popFirst()) |node| {
+            const conn: *http.Connection = @fieldParentPtr("node", node);
+            self.submitRequest(conn) catch |err| {
+                log.warn(.http, "ready_queue submit", .{ .err = err });
+                self.releaseConnection(conn);
+            };
+        }
+    }
+
+    // Abort tracked conns. frame_id == null kills everything; otherwise
+    // only conns whose transport-specific frame_id matches. Each kill()
+    // initiates teardown via submitRemove, which mutates in_use — the
+    // iteration captures `next` before kill() to stay safe.
+    pub fn abort(self: *Handle, frame_id: ?u32) void {
+        abortList(self.in_use, frame_id);
+        abortList(self.ready_queue, frame_id);
+
+        if (frame_id == null and comptime builtin.mode == .Debug) {
+            // After abort_all, any leftover http transfers should be
+            // flagged aborted (in-callback transfers can't be deinit'd
+            // synchronously). leftover count must match counters.
+            var it = self.in_use.first;
+            var leftover: usize = 0;
+            while (it) |node| : (it = node.next) {
+                const conn: *http.Connection = @fieldParentPtr("node", node);
+                switch (conn.transport) {
+                    .http => |transfer| std.debug.assert(transfer.aborted),
+                    .websocket => {},
+                    .none => {},
+                }
+                leftover += 1;
+            }
+            std.debug.assert(self.http_active + self.ws_active == leftover);
+        }
+    }
+
+    fn abortList(list: std.DoublyLinkedList, frame_id: ?u32) void {
+        var n = list.first;
+        while (n) |node| {
+            n = node.next;
+            const conn: *http.Connection = @fieldParentPtr("node", node);
+            switch (conn.transport) {
+                .http => |transfer| {
+                    if (frame_id) |fid| {
+                        if (transfer.req.params.frame_id == fid) transfer.kill();
+                    } else {
+                        transfer.kill();
+                    }
+                },
+                .websocket => |ws| {
+                    if (frame_id) |fid| {
+                        if (ws._frame._frame_id == fid) ws.kill();
+                    } else {
+                        ws.kill();
+                    }
+                },
+                .none => unreachable,
+            }
         }
     }
 
