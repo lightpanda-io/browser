@@ -141,10 +141,10 @@ pub fn tickCDP(self: *Runner, opts: TickOpts) !CDPTickResult {
 }
 
 fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
-    // Refresh self.frame from session — the previous _tick's http_client.tick()
-    // may have fired frameHeaderDoneCallback → Session.commitPendingPage,
-    // freeing the OLD page and replacing it with the pending one.
-    self.frame = self.session.currentFrame() orelse return .done;
+    // Refresh self.frame from session. In case of pending page, we want to
+    // take its state while loading. If we use only the current frame, we will
+    // return a .done result immediately.
+    self.frame = self.session.currentOrPendingFrame() orelse return .done;
     const frame = self.frame;
     const http_client = self.http_client;
 

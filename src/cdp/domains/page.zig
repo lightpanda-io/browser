@@ -300,7 +300,6 @@ fn navigate(cmd: *CDP.Command) !void {
     const session = bc.session;
     const frame = session.currentFrame() orelse return error.FrameNotLoaded;
 
-
     const encoded_url = try URL.ensureEncoded(frame.call_arena, params.url, "UTF-8");
     try session.initiateRootNavigation(frame._frame_id, encoded_url, .{
         .reason = .address_bar,
@@ -1025,17 +1024,21 @@ test "cdp.frame: reload" {
         try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 30 });
     }
 
-    _ = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
 
     {
         // reload with no params — should not error (navigation is async,
         // so no result is sent synchronously; we just verify no error)
         try ctx.processMessage(.{ .id = 31, .method = "Page.reload" });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
     }
 
     {
         // reload with ignoreCache param
         try ctx.processMessage(.{ .id = 32, .method = "Page.reload", .params = .{ .ignoreCache = true } });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
     }
 }
 
