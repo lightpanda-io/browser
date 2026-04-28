@@ -150,11 +150,11 @@ pub fn init(url: []const u8, protocols: [][]const u8, frame: *Frame) !*WebSocket
     const resolved_url = try URL.resolve(arena, frame.base(), url, .{ .always_dupe = true, .encoding = frame.charset });
 
     const http_client = &frame._session.browser.http_client;
-    const conn = http_client.network.newConnection() orelse {
+    const conn = http_client.handle.newConnection() orelse {
         return error.NoFreeConnection;
     };
 
-    errdefer http_client.network.releaseConnection(conn);
+    errdefer http_client.handle.releaseConnection(conn);
 
     try conn.setURL(resolved_url);
     try conn.setConnectOnly(false);
@@ -281,7 +281,7 @@ fn queueMessage(self: *WebSocket, msg: Message) !void {
     if (was_empty) {
         // Unpause the send callback so libcurl will request data
         if (self._conn) |conn| {
-            try conn.pause(.{ .cont = true });
+            try self._http_client.handle.submitUnpause(conn);
         }
     }
 }

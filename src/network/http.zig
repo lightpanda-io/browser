@@ -34,8 +34,6 @@ pub const readfunc_pause = libcurl.curl_readfunc_pause;
 pub const writefunc_error = libcurl.curl_writefunc_error;
 pub const WsFrameType = libcurl.WsFrameType;
 
-const Error = libcurl.Error;
-
 pub fn curl_version() [*c]const u8 {
     return libcurl.curl_version();
 }
@@ -572,78 +570,12 @@ pub const Connection = struct {
         }
     }
 
-    pub fn request(self: *const Connection, http_headers: *const Config.HttpHeaders) !u16 {
-        var header_list = try Headers.init(http_headers.user_agent_header);
-        defer header_list.deinit();
-        try self.secretHeaders(&header_list, http_headers);
-        try self.setHeaders(&header_list);
-
-        try libcurl.curl_easy_perform(self._easy);
-        return self.getResponseCode();
-    }
-
     pub fn wsStartFrame(self: *const Connection, frame_type: libcurl.WsFrameType, size: usize) !void {
         try libcurl.curl_ws_start_frame(self._easy, frame_type, @intCast(size));
     }
 
     pub fn wsMeta(self: *const Connection) ?libcurl.WsFrameMeta {
         return libcurl.curl_ws_meta(self._easy);
-    }
-};
-
-pub const Handles = struct {
-    multi: *libcurl.CurlM,
-
-    pub fn init(config: *const Config) !Handles {
-        const multi = libcurl.curl_multi_init() orelse return error.FailedToInitializeMulti;
-        errdefer libcurl.curl_multi_cleanup(multi) catch {};
-
-        try libcurl.curl_multi_setopt(multi, .max_host_connections, config.httpMaxHostOpen());
-
-        return .{ .multi = multi };
-    }
-
-    pub fn deinit(self: *Handles) void {
-        libcurl.curl_multi_cleanup(self.multi) catch {};
-    }
-
-    pub fn add(self: *Handles, conn: *const Connection) !void {
-        try libcurl.curl_multi_add_handle(self.multi, conn._easy);
-    }
-
-    pub fn remove(self: *Handles, conn: *const Connection) !void {
-        try libcurl.curl_multi_remove_handle(self.multi, conn._easy);
-    }
-
-    pub fn perform(self: *Handles) !c_int {
-        var running: c_int = undefined;
-        try libcurl.curl_multi_perform(self.multi, &running);
-        return running;
-    }
-
-    pub fn poll(self: *Handles, extra_fds: []libcurl.CurlWaitFd, timeout_ms: c_int) !void {
-        try libcurl.curl_multi_poll(self.multi, extra_fds, timeout_ms, null);
-    }
-
-    pub const MultiMessage = struct {
-        conn: *Connection,
-        err: ?Error,
-    };
-
-    pub fn readMessage(self: *Handles) !?MultiMessage {
-        var messages_count: c_int = 0;
-        const msg = libcurl.curl_multi_info_read(self.multi, &messages_count) orelse return null;
-        return switch (msg.data) {
-            .done => |err| {
-                var private: *anyopaque = undefined;
-                try libcurl.curl_easy_getinfo(msg.easy_handle, .private, &private);
-                return .{
-                    .conn = @ptrCast(@alignCast(private)),
-                    .err = err,
-                };
-            },
-            else => unreachable,
-        };
     }
 };
 
