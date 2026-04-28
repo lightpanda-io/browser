@@ -118,7 +118,7 @@ pub fn init(
         .cdp = self,
         .state = .live,
         .socket = socket,
-        .handles = http_client.handles,
+        .handle = http_client.handle,
     };
 }
 
