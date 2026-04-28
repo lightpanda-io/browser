@@ -295,7 +295,10 @@ fn matchTest(node: *Node, test_: Ast.NodeTest, axis: Ast.Axis, lowered_name: ?[]
     return switch (test_) {
         .type_test => |kind| switch (kind) {
             .node => true,
-            .text => node.getNodeType() == 3,
+            // XPath 1.0 §5.7: the data model has no CDATASection node —
+            // CDATA content is part of the text node value. Match both
+            // Text (3) and CDATASection (4) DOM node types.
+            .text => node.getNodeType() == 3 or node.getNodeType() == 4,
             .comment => node.getNodeType() == 8,
             .processing_instruction => node.getNodeType() == 7,
         },
