@@ -55,7 +55,7 @@ pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     wait_until: ?Config.WaitUntil = null,
     wait_script: ?[:0]const u8 = null,
-    script: ?[:0]const u8 = null,
+    inject_script: std.ArrayList([:0]const u8) = .{},
     wait_selector: ?[:0]const u8 = null,
     dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
@@ -150,8 +150,9 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
         try runner.waitForScript(script, remaining);
     }
 
-    if (opts.script) |script| {
-        try runner.runScriptFile(app.allocator, script);
+    // Inject scripts to DOM if any.
+    if (opts.inject_script.items.len > 0) {
+        try runner.injectScripts(opts.inject_script);
     }
 
     const writer = opts.writer orelse return;

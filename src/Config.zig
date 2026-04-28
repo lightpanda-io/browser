@@ -130,6 +130,24 @@ fn waitScriptFileValidator(allocator: Allocator, args: *std.process.ArgIterator)
     };
 }
 
+fn injectScriptFileValidator(
+    allocator: Allocator,
+    args: *std.process.ArgIterator,
+    list: *std.ArrayList([:0]const u8),
+) !void {
+    const path = args.next() orelse {
+        log.fatal(.app, "missing argument value", .{ .arg = "--inject-script-file" });
+        return error.InvalidArgument;
+    };
+
+    const bytes = std.fs.cwd().readFileAllocOptions(allocator, path, 1024 * 1024, null, .of(u8), 0) catch |err| {
+        log.fatal(.app, "failed to read file", .{ .arg = "--inject-script-file", .path = path, .err = err });
+        return error.InvalidArgument;
+    };
+
+    return list.append(allocator, bytes);
+}
+
 /// Definition for all the commands and its arguments. See @cli.zig for further.
 const Commands = cli.Builder(.{
     .{
@@ -163,7 +181,14 @@ const Commands = cli.Builder(.{
                 },
             },
             .{ .name = "wait_selector", .type = ?[:0]const u8 },
-            .{ .name = "script", .type = ?[:0]const u8 },
+            .{
+                .name = "inject_script",
+                .type = [:0]const u8,
+                .multiple = true,
+                .variants = .{
+                    .{ .name = "inject_script_file", .validator = injectScriptFileValidator },
+                },
+            },
             .{ .name = "terminate_ms", .type = ?u32 },
         },
         .shared_options = CommonOptions,
@@ -642,8 +667,15 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--wait-script-file
         \\                Like --wait-script, but reads the script from a file.
         \\
-        \\--script        Path to a JavaScript file to execute in the page context
-        \\                once the --wait- conditions have been met, before the dump.
+        \\--inject-script JavaScript to inject as an inline <script> element in
+        \\                <head> once the --wait-* conditions have been met,
+        \\                before the dump.
+        \\                Can be passed multiple times; scripts run in order.
+        \\
+        \\--inject-script-file
+        \\                Like --inject-script, but reads the script from a file.
+        \\                Can be passed multiple times; can be mixed with
+        \\                --inject-script and runs in CLI order.
         \\
         \\--terminate-ms  Hard deadline in milliseconds. After this time elapses,
         \\                JavaScript execution is forcibly terminated (e.g. for

@@ -124,7 +124,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                 .wait_ms = opts.wait_ms,
                 .wait_until = opts.wait_until,
                 .wait_script = opts.wait_script,
-                .script = opts.script,
+                .inject_script = opts.inject_script,
                 .wait_selector = opts.wait_selector,
                 .dump_mode = opts.dump,
                 .dump = .{
