@@ -28,10 +28,19 @@ pub const Init = union(enum) {
     rsa_hashed_key_gen: RsaHashedKeyGen,
     /// For HMAC: pass an HmacKeyGenParams object.
     hmac_key_gen: HmacKeyGen,
+    /// For AES variants: pass an AesKeyGenParams object.
+    aes_key_gen: AesKeyGen,
+    /// For ECDSA / ECDH: pass an EcKeyGenParams object.
+    ec_key_gen: EcKeyGen,
+
+    /// don't use []const u8 here, we don't want non-strings coerced. Let those
+    /// fall to the invalid case
     /// Can be Ed25519 or X25519.
-    name: []const u8,
+    object: struct { name: js.String },
     /// Can be Ed25519 or X25519.
-    object: struct { name: []const u8 },
+    name: js.String,
+
+    invalid: js.Value,
 
     /// https://developer.mozilla.org/en-US/docs/Web/API/RsaHashedKeyGenParams
     pub const RsaHashedKeyGen = struct {
@@ -44,6 +53,18 @@ pub const Init = union(enum) {
             string: []const u8,
             object: struct { name: []const u8 },
         },
+    };
+
+    /// https://developer.mozilla.org/en-US/docs/Web/API/AesKeyGenParams
+    pub const AesKeyGen = struct {
+        name: []const u8,
+        length: u32,
+    };
+
+    /// https://developer.mozilla.org/en-US/docs/Web/API/EcKeyGenParams
+    pub const EcKeyGen = struct {
+        name: []const u8,
+        namedCurve: []const u8,
     };
 
     /// https://developer.mozilla.org/en-US/docs/Web/API/HmacKeyGenParams
