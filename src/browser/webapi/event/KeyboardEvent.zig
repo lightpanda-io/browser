@@ -160,6 +160,94 @@ pub const Key = union(enum) {
             else => |k| @tagName(k),
         };
     }
+
+    /// Legacy `KeyboardEvent.keyCode` value per UI Events spec § Annex C
+    /// (https://www.w3.org/TR/uievents/#legacy-key-attributes). Returns 0 for
+    /// keys without a defined fixed virtual key code.
+    ///
+    /// Spec note: for printable characters, `keyCode` is calculated from the
+    /// **unmodified** key value's uppercase ASCII. We don't track the
+    /// unmodified key, so we uppercase `_key` instead. This is exact for
+    /// letters (uppercase('t') == uppercase('T')) and digits, but for
+    /// shift-modified symbols (e.g., shift+1='!') it returns the modified
+    /// char's ASCII rather than the digit's keyCode. Callers needing
+    /// spec-strict behavior should pass `unmodifiedText` through CDP
+    /// `Input.dispatchKeyEvent` and use that instead.
+    pub fn keyCode(self: Key) u32 {
+        return switch (self) {
+            // Modifier keys
+            .Alt, .AltGraph => 18,
+            .CapsLock => 20,
+            .Control => 17,
+            .Meta, .Hyper, .Super => 91,
+            .NumLock => 144,
+            .ScrollLock => 145,
+            .Shift => 16,
+
+            // Whitespace keys (Space hits the .standard path below)
+            .Enter => 13,
+            .Tab => 9,
+
+            // Navigation keys
+            .ArrowDown => 40,
+            .ArrowLeft => 37,
+            .ArrowRight => 39,
+            .ArrowUp => 38,
+            .End => 35,
+            .Home => 36,
+            .PageDown => 34,
+            .PageUp => 33,
+
+            // Editing keys
+            .Backspace => 8,
+            .Clear => 12,
+            .Delete => 46,
+            .Insert => 45,
+
+            // UI keys
+            .Cancel => 3,
+            .ContextMenu => 93,
+            .Escape => 27,
+            .Execute => 43,
+            .Help => 47,
+            .Pause => 19,
+            .Select => 41,
+
+            // Function keys
+            .F1 => 112,
+            .F2 => 113,
+            .F3 => 114,
+            .F4 => 115,
+            .F5 => 116,
+            .F6 => 117,
+            .F7 => 118,
+            .F8 => 119,
+            .F9 => 120,
+            .F10 => 121,
+            .F11 => 122,
+            .F12 => 123,
+
+            .standard => |s| {
+                if (s.len == 0) return 0;
+                const c = s[0];
+                // Letters: uppercase ASCII
+                if (c >= 'a' and c <= 'z') return c - 'a' + 'A';
+                if (c >= 'A' and c <= 'Z') return c;
+                // Digits: ASCII
+                if (c >= '0' and c <= '9') return c;
+                // Space: 32 — also returned via the ASCII fall-through below,
+                // but called out for clarity since it's the most common case.
+                if (c == ' ') return 32;
+                // Other ASCII chars (best-effort: legacy keyCode for symbols
+                // is platform-specific and depends on the unmodified key,
+                // which we don't track).
+                return c;
+            },
+
+            // Keys without a defined legacy keyCode
+            else => 0,
+        };
+    }
 };
 
 pub const Location = enum(i32) {
@@ -270,15 +358,22 @@ pub fn getShiftKey(self: *const KeyboardEvent) bool {
     return self._shift_key;
 }
 
-// Deprecated: tracked as 0 since we don't synthesise legacy character codes.
+// https://www.w3.org/TR/uievents/#dom-keyboardevent-charcode
+// charCode is the Unicode code point of the character produced by the key,
+// and is only meaningful on `keypress` events. For `keydown` and `keyup` it
+// is 0. (Deprecated, but read by legacy event handlers.)
 pub fn getCharCode(self: *const KeyboardEvent) u32 {
-    _ = self;
-    return 0;
+    const event = self._proto._proto;
+    if (!std.mem.eql(u8, event._type_string.str(), "keypress")) return 0;
+    return switch (self._key) {
+        .standard => |s| if (s.len > 0) s[0] else 0,
+        else => 0,
+    };
 }
 
+// https://www.w3.org/TR/uievents/#dom-keyboardevent-keycode
 pub fn getKeyCode(self: *const KeyboardEvent) u32 {
-    _ = self;
-    return 0;
+    return self._key.keyCode();
 }
 
 pub fn initKeyboardEvent(
