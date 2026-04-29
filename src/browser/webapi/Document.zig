@@ -713,13 +713,20 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
     // Determine insertion point:
     // - If _write_insertion_point is set and still parented correctly, continue from there
     // - Otherwise, start after the script (first write, or previous insertion point was removed)
+    // parseFragment above can synchronously execute a parser-blocking script
+    // (e.g. <script src=...> with from_parser=true). That script's side
+    // effects can detach `script` from `parent` — for instance, by writing
+    // to parent.innerHTML — leaving us nowhere sensible to splice in.
     var insert_after: ?*Node = blk: {
         if (self._write_insertion_point) |wip| {
             if (wip._parent == parent) {
                 break :blk wip;
             }
         }
-        break :blk script.asNode();
+        if (script.asNode()._parent == parent) {
+            break :blk script.asNode();
+        }
+        return;
     };
 
     for (children_to_insert.items) |child| {

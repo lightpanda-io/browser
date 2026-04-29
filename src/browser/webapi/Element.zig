@@ -474,7 +474,11 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
         try frame.insertAllChildrenBefore(fragment, parent, node);
     }
 
-    frame.removeNode(parent, node, .{ .will_be_reconnected = false });
+    // A custom element callback fired during insertAllChildrenBefore may
+    // have already detached `node`; only remove it if it's still here.
+    if (node._parent == parent) {
+        frame.removeNode(parent, node, .{ .will_be_reconnected = false });
+    }
 }
 
 pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void {
@@ -485,10 +489,12 @@ pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void
 pub fn setInnerHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     const parent = self.asNode();
 
-    // Remove all existing children
+    // Remove all existing children. Drain via firstChild(): removeNode
+    // fires disconnectedCallback for custom elements, which can mutate
+    // the child list and dangle any cached next-pointer the iterator
+    // would otherwise hold.
     frame.domChanged();
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
+    while (parent.firstChild()) |child| {
         frame.removeNode(parent, child, .{ .will_be_reconnected = false });
     }
 
