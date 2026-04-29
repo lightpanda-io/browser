@@ -1694,6 +1694,32 @@ pub const Tag = enum {
             else => false,
         };
     }
+
+    // UA stylesheet display:none defaults per HTML Rendering §15.3.1
+    // "Hidden elements" (https://html.spec.whatwg.org/multipage/rendering.html#hidden-elements).
+    // The spec also lists basefont, noembed, noframes, rp; those tags are
+    // obsolete and not represented in this enum, so they fall through to
+    // `.unknown`/`.custom` and aren't matched here.
+    pub fn isHiddenByUaStylesheet(self: Tag) bool {
+        return switch (self) {
+            .area,
+            .base,
+            .datalist,
+            .head,
+            .link,
+            .meta,
+            .noscript,
+            .param,
+            .script,
+            .source,
+            .style,
+            .template,
+            .title,
+            .track,
+            => true,
+            else => false,
+        };
+    }
 };
 
 pub const JsApi = struct {

@@ -191,6 +191,115 @@
   }
 </script>
 
+<script id="ua_unrendered_tags_are_display_none">
+  {
+    // Per HTML Rendering §15.3.1 "Hidden elements", these tags get
+    // display:none from the UA stylesheet:
+    //   area, base, datalist, head, link, meta, noscript, param, script,
+    //   source, style, template, title, track
+    // (basefont/noembed/noframes/rp are obsolete and not represented in
+    // Lightpanda's Element.Tag enum.)
+    const tags = [
+      'area', 'base', 'datalist', 'link', 'meta', 'noscript', 'param',
+      'script', 'source', 'style', 'template', 'title', 'track',
+    ];
+    for (const t of tags) {
+      const el = document.createElement(t);
+      document.body.appendChild(el);
+      testing.expectEqual('none', window.getComputedStyle(el).display);
+      testing.expectEqual(false, el.checkVisibility());
+      el.remove();
+    }
+    // <head> itself
+    testing.expectEqual('none', window.getComputedStyle(document.head).display);
+    testing.expectEqual(false, document.head.checkVisibility());
+  }
+</script>
+
+<script id="ua_input_type_hidden_is_display_none">
+  {
+    // input[type="hidden" i] { display: none !important }
+    const inp = document.createElement('input');
+    inp.type = 'hidden';
+    document.body.appendChild(inp);
+    testing.expectEqual('none', window.getComputedStyle(inp).display);
+    testing.expectEqual(false, inp.checkVisibility());
+
+    // Other input types are visible
+    inp.type = 'text';
+    testing.expectEqual(true, inp.checkVisibility());
+
+    // Spec uses [type=hidden i] (case-insensitive)
+    inp.type = 'HIDDEN';
+    testing.expectEqual(false, inp.checkVisibility());
+
+    inp.remove();
+  }
+</script>
+
+<script id="ua_closed_details_hides_non_summary_children">
+  {
+    // details:not([open]) > *:not(summary) { display: none }
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = 'header';
+    const child = document.createElement('p');
+    child.textContent = 'body';
+    details.appendChild(summary);
+    details.appendChild(child);
+    document.body.appendChild(details);
+
+    // Closed: <summary> visible, body child hidden
+    testing.expectEqual(true, summary.checkVisibility());
+    testing.expectEqual(false, child.checkVisibility());
+    testing.expectEqual('none', window.getComputedStyle(child).display);
+
+    // Open: child visible
+    details.setAttribute('open', '');
+    testing.expectEqual(true, child.checkVisibility());
+
+    // Closed again
+    details.removeAttribute('open');
+    testing.expectEqual(false, child.checkVisibility());
+
+    // Descendants of a closed-details child are hidden via the ancestor walk.
+    const grandchild = document.createElement('span');
+    child.appendChild(grandchild);
+    testing.expectEqual(false, grandchild.checkVisibility());
+
+    details.remove();
+  }
+</script>
+
+<script id="hidden_attribute_propagates_through_check_visibility">
+  {
+    // [hidden] { display: none } applies to the element itself...
+    const parent = document.createElement('div');
+    parent.setAttribute('hidden', '');
+    const child = document.createElement('span');
+    parent.appendChild(child);
+    document.body.appendChild(parent);
+
+    testing.expectEqual(false, parent.checkVisibility());
+    // ...and through ancestor walking, hides descendants too.
+    testing.expectEqual(false, child.checkVisibility());
+
+    parent.remove();
+  }
+</script>
+
+<script id="inline_display_overrides_ua_default">
+  {
+    // Author inline `display: block` on a UA-hidden tag wins per CSS cascade
+    // (inline > UA stylesheet).
+    const s = document.createElement('script');
+    s.style.display = 'block';
+    document.body.appendChild(s);
+    testing.expectEqual(true, s.checkVisibility());
+    s.remove();
+  }
+</script>
+
 <script id="deep_nesting">
   {
     const levels = 5;
