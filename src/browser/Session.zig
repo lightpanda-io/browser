@@ -133,9 +133,15 @@ pub fn createPage(self: *Session) !*Frame {
 }
 
 pub fn removePage(self: *Session) void {
+    lp.assert(self.page != null, "Session.removePage - page is null", .{});
+    if (self.page.?.frame._script_manager.is_evaluating) {
+        // Reentrant teardown from a CDP message drained inside syncRequest;
+        // Session.deinit reclaims the page when the connection closes.
+        return;
+    }
+
     // Inform CDP the frame is going to be removed, allowing other worlds to remove themselves before the main one
     self.notification.dispatch(.frame_remove, .{});
-    lp.assert(self.page != null, "Session.removePage - page is null", .{});
 
     self.page.?.deinit(false);
     self.page = null;
