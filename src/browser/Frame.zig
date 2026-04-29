@@ -3648,7 +3648,11 @@ pub fn handleClick(self: *Frame, target: *Node) !void {
         },
         .input => |input| {
             try element.focus(self);
-            if (input._input_type == .submit) {
+            // Per HTML §4.10.18.6.4 "Image Button state (type=image)", clicking an
+            // image button submits its form. The form-data set already gets the
+            // submitter's coordinate fields appended via FormData.collectForm
+            // (see src/browser/webapi/net/FormData.zig).
+            if (input._input_type == .submit or input._input_type == .image) {
                 return self.submitForm(element, input.getForm(self), .{});
             }
         },

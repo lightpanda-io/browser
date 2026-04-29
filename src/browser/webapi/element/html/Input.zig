@@ -1114,6 +1114,7 @@ const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Input" {
     try testing.htmlRunner("element/html/input.html", .{});
     try testing.htmlRunner("element/html/input_click.html", .{});
+    try testing.htmlRunner("element/html/input_image_submit.html", .{});
     try testing.htmlRunner("element/html/input_radio.html", .{});
     try testing.htmlRunner("element/html/input-attrs.html", .{});
 }
