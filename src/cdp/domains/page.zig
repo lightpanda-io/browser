@@ -391,9 +391,10 @@ fn getNavigationHistory(cmd: *CDP.Command) !void {
 
     const entries_out = try cmd.arena.alloc(NavigationEntry, entries_in.len);
     for (entries_in, 0..) |entry, i| {
-        // Internal _id is a decimal-formatted monotonically-increasing counter
-        // (see Navigation.pushEntry); fall back to index if parse ever fails.
-        const eid = std.fmt.parseInt(i64, entry._id, 10) catch @as(i64, @intCast(i));
+        // Navigation.pushEntry always formats _id as a decimal usize counter,
+        // so parse failure here is an internal invariant violation, not a
+        // recoverable runtime error.
+        const eid = std.fmt.parseInt(i64, entry._id, 10) catch @panic("Navigation entry _id is not a base-10 integer");
         entries_out[i] = .{
             .id = eid,
             .url = entry._url orelse "",
@@ -425,7 +426,7 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
     var target_index: ?usize = null;
     var target_url: ?[:0]const u8 = null;
     for (nav._entries.items, 0..) |entry, i| {
-        const eid = std.fmt.parseInt(i64, entry._id, 10) catch continue;
+        const eid = std.fmt.parseInt(i64, entry._id, 10) catch @panic("Navigation entry _id is not a base-10 integer");
         if (eid == params.entryId) {
             target_index = i;
             target_url = entry._url;
