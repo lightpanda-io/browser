@@ -45,7 +45,7 @@ pub fn init(session: *Session, _: Opts) !Runner {
     return .{
         .frame = frame,
         .session = session,
-        .http_client = session.browser.http_client,
+        .http_client = &session.browser.http_client,
     };
 }
 
@@ -148,7 +148,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
         .pre, .raw, .text, .image => {
             // The main frame hasn't started/finished navigating.
             // There's no JS to run, and no reason to run the scheduler.
-            if (http_client.http_active == 0 and (comptime is_cdp) == false) {
+            if (http_client.handle.http_active == 0 and (comptime is_cdp) == false) {
                 // haven't started navigating, I guess.
                 return .done;
             }
@@ -177,14 +177,14 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
             // download, or scheduled tasks to execute, or both.
 
             // scheduler.run could trigger new http transfers, so do not
-            // store http_client.http_active BEFORE this call and then use
+            // store http_client.handle.http_active BEFORE this call and then use
             // it AFTER.
             try browser.runMacrotasks();
 
             // Each call to this runs scheduled load events.
             try frame.dispatchLoad();
 
-            const http_active = http_client.http_active;
+            const http_active = http_client.handle.http_active;
             const total_network_activity = http_active + http_client.interception_layer.intercepted;
             if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
                 frame.notifyNetworkAlmostIdle();
@@ -206,7 +206,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
                 },
             }
 
-            if (http_active == 0 and http_client.ws_active == 0 and (comptime is_cdp == false)) {
+            if (http_active == 0 and http_client.handle.ws_active == 0 and (comptime is_cdp == false)) {
                 // we don't need to consider http_client.intercepted here
                 // because is_cdp is false, and that can only be
                 // the case when interception isn't possible.

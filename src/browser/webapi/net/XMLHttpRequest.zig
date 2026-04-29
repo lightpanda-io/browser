@@ -241,7 +241,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         return self.handleBlobUrl(frame);
     }
 
-    const http_client = frame._session.browser.http_client;
+    const http_client = &frame._session.browser.http_client;
     var headers = try http_client.newHeaders();
 
     // Only add cookies for same-origin or when withCredentials is true
