@@ -203,11 +203,11 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
         next = layerWith(&client.robots_layer, next);
     }
 
+    next = layerWith(&client.interception_layer, next);
+
     if (network.config.httpCacheDir() != null) {
         next = layerWith(&client.cache_layer, next);
     }
-
-    next = layerWith(&client.interception_layer, next);
 
     if (network.config.webBotAuth() != null) {
         next = layerWith(&client.web_bot_auth_layer, next);

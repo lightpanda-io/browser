@@ -109,13 +109,6 @@ pub const InterceptContext = struct {
     fn startCallback(response: Response) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
         log.debug(.http, "intercept start", .{ .url = self.request.params.url });
-
-        if (response.inner == .cached) {
-            self.request.params.notification.dispatch(.http_request_served_from_cache, &.{
-                .request = &self.request,
-            });
-        }
-
         return self.forward.forwardStart(response);
     }
 
