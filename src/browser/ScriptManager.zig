@@ -553,6 +553,18 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
 pub fn staticScriptsDone(self: *ScriptManager) void {
     lp.assert(self.static_scripts_done == false, "ScriptManager.staticScriptsDone", .{});
     self.static_scripts_done = true;
+
+    // Since all blocking requests and everything is done here,
+    // this is another safe place to flush out all of the deferred requests.
+    //
+    // We assert that we are not in a blocking request because we shouldn't be.
+    lp.assert(
+        self.client.blocking_request_id == null,
+        "blocking_request_id should be null",
+        .{ .value = self.client.blocking_request_id },
+    );
+    self.client.deferring_layer.flush();
+
     self.evaluate();
 }
 

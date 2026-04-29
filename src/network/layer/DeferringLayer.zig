@@ -174,6 +174,7 @@ const DeferredContext = struct {
             .none => unreachable,
             .done => self.forward.forwardDone() catch |err| {
                 log.err(.http, "deferred done callback", .{ .err = err, .url = self.request.params.url });
+                self.forward.forwardErr(err);
             },
             .err => |err| self.forward.forwardErr(err),
             .shutdown => self.forward.forwardShutdown(),
