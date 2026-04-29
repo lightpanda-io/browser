@@ -79,10 +79,7 @@ shutdown: std.atomic.Value(bool) = .init(false),
 // Wakeup pipe: workers write to [1], main thread polls [0]
 wakeup_pipe: [2]posix.fd_t = .{ -1, -1 },
 
-// Multi is a heavy structure that can consume up to 2MB of RAM.
-// Currently, Network is used sparingly, and we only create it on demand.
-// When Network becomes truly shared, it should become a regular field.
-multi: ?*libcurl.CurlM = null,
+multi: *libcurl.CurlM,
 
 // Cross-thread submission to the network thread.
 //
@@ -102,6 +99,11 @@ callbacks_mutex: std.Thread.Mutex = .{},
 
 /// Optional IP filter for blocking requests to private/internal networks (--block-private-networks).
 ip_filter: ?*IpFilter = null,
+
+pub const Op = union(enum) {
+    unpause,
+    tls_verify: http.Connection.TlsVerifyOp,
+};
 
 const TickCallback = struct {
     ctx: *anyopaque,
@@ -235,6 +237,10 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     errdefer globalDeinit();
 
     const pipe = try posix.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
+    errdefer {
+        posix.close(pipe[0]);
+        posix.close(pipe[1]);
+    }
 
     // 0 is wakeup, 1 is listener, rest for curl fds
     const pollfds = try allocator.alloc(posix.pollfd, PSEUDO_POLLFDS + config.httpMaxConcurrent());
@@ -243,10 +249,14 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     @memset(pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
     pollfds[0] = .{ .fd = pipe[0], .events = posix.POLL.IN, .revents = 0 };
 
-    var ca_blob: ?http.Blob = null;
-    if (config.tlsVerifyHost()) {
-        ca_blob = try loadCerts(allocator);
-    }
+    const ca_blob: ?http.Blob = if (config.tlsVerifyHost())
+        try loadCerts(allocator)
+    else
+        null;
+    errdefer if (ca_blob) |cb| {
+        const data: [*]u8 = @ptrCast(cb.data);
+        allocator.free(data[0..cb.len]);
+    };
 
     // IP filter for blocking requests to private/internal networks.
     const block_private = config.blockPrivateNetworks();
@@ -275,13 +285,15 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
         connections[i] = try http.Connection.init(ca_blob, config, ip_filter);
         available.append(&connections[i].node);
     }
+    errdefer for (0..count) |i| connections[i].deinit();
 
     const web_bot_auth = if (config.webBotAuth()) |wba_cfg|
         try WebBotAuth.fromConfig(allocator, &wba_cfg)
     else
         null;
+    errdefer if (web_bot_auth) |wba| wba.deinit(allocator);
 
-    const cache = if (config.httpCacheDir()) |cache_dir_path|
+    var cache = if (config.httpCacheDir()) |cache_dir_path|
         Cache{
             .kind = .{
                 .fs = FsCache.init(cache_dir_path) catch |e| {
@@ -296,35 +308,41 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
         }
     else
         null;
+    errdefer if (cache) |*c| c.deinit();
+
+    var robot_store = RobotStore.init(allocator);
+    errdefer robot_store.deinit();
+
+    var ws_pool = std.heap.MemoryPool(http.Connection).init(allocator);
+    errdefer ws_pool.deinit();
+
+    const multi = libcurl.curl_multi_init() orelse return Error.FailedInit;
+    errdefer libcurl.curl_multi_cleanup(multi) catch {};
 
     return .{
-        .allocator = allocator,
+        .app = app,
         .config = config,
         .ca_blob = ca_blob,
+        .allocator = allocator,
 
+        .multi = multi,
         .pollfds = pollfds,
         .wakeup_pipe = pipe,
+        .ws_pool = ws_pool,
+        .ws_max = config.wsMaxConcurrent(),
 
         .available = available,
         .connections = connections,
 
-        .app = app,
-
-        .robot_store = RobotStore.init(allocator),
-        .web_bot_auth = web_bot_auth,
         .cache = cache,
-
-        .ws_pool = .init(allocator),
-        .ws_max = config.wsMaxConcurrent(),
-
         .ip_filter = ip_filter,
+        .robot_store = robot_store,
+        .web_bot_auth = web_bot_auth,
     };
 }
 
 pub fn deinit(self: *Network) void {
-    if (self.multi) |multi| {
-        libcurl.curl_multi_cleanup(multi) catch {};
-    }
+    libcurl.curl_multi_cleanup(self.multi) catch {};
 
     for (&self.wakeup_pipe) |*fd| {
         if (fd.* >= 0) {
@@ -360,10 +378,6 @@ pub fn deinit(self: *Network) void {
     }
 
     globalDeinit();
-}
-
-pub fn getHandle(self: *Network) !Handle {
-    return try Handle.init(self);
 }
 
 pub fn bind(
@@ -420,7 +434,7 @@ pub fn onTick(self: *Network, ctx: *anyopaque, callback: *const fn (*anyopaque) 
     self.wakeupPoll();
 }
 
-pub fn fireTicks(self: *Network) void {
+fn fireTicks(self: *Network) void {
     self.callbacks_mutex.lock();
     defer self.callbacks_mutex.unlock();
 
@@ -449,34 +463,27 @@ pub fn run(self: *Network) void {
 
         self.drainQueue();
 
-        if (self.multi) |multi| {
-            // Kickstart newly added handles (DNS/connect) so that
-            // curl registers its sockets before we poll.
-            libcurl.curl_multi_perform(multi, &running_handles) catch |err| {
-                lp.log.err(.app, "curl perform", .{ .err = err });
-            };
-            self.processCompletions(multi);
-        }
+        // Kickstart newly added handles (DNS/connect) so that
+        // curl registers its sockets before we poll.
+        libcurl.curl_multi_perform(self.multi, &running_handles) catch |err| {
+            lp.log.err(.app, "curl perform", .{ .err = err });
+        };
+        self.processCompletions(self.multi);
 
         // for ontick to work, you need to wake up periodically
         const timeout = blk: {
-            const min_timeout = 250; // 250ms
-            if (self.multi == null) {
-                break :blk min_timeout;
-            }
-
             const curl_timeout = self.getCurlTimeout();
             if (curl_timeout == 0) {
                 break :blk 0;
             }
 
+            const min_timeout = 250; // 250ms
             break :blk @min(min_timeout, curl_timeout);
         };
 
-        if (self.multi != null and running_handles > 0) {
+        if (running_handles > 0) {
             // Use curl_multi_poll: lets libcurl monitor its own
             // sockets while we add the wakeup + listener as extra fds.
-            const multi = self.multi.?;
             var extra_fds: [PSEUDO_POLLFDS]libcurl.CurlWaitFd = undefined;
             var extra_len: usize = 0;
             extra_fds[extra_len] = .{
@@ -497,7 +504,7 @@ pub fn run(self: *Network) void {
                 break :blk idx;
             } else null;
 
-            libcurl.curl_multi_poll(multi, extra_fds[0..extra_len], timeout, null) catch |err| {
+            libcurl.curl_multi_poll(self.multi, extra_fds[0..extra_len], timeout, null) catch |err| {
                 lp.log.err(.app, "curl poll", .{ .err = err });
                 continue;
             };
@@ -525,13 +532,11 @@ pub fn run(self: *Network) void {
             self.acceptConnections();
         }
 
-        if (self.multi) |multi| {
-            // Drive transfers and process completions.
-            libcurl.curl_multi_perform(multi, &running_handles) catch |err| {
-                lp.log.err(.app, "curl perform", .{ .err = err });
-            };
-            self.processCompletions(multi);
-        }
+        // Drive transfers and process completions.
+        libcurl.curl_multi_perform(self.multi, &running_handles) catch |err| {
+            lp.log.err(.app, "curl perform", .{ .err = err });
+        };
+        self.processCompletions(self.multi);
 
         self.fireTicks();
 
@@ -561,31 +566,37 @@ pub fn run(self: *Network) void {
     }
 }
 
-pub const Op = union(enum) {
-    unpause,
-    tls_verify: http.Connection.TlsVerifyOp,
-};
+pub fn getHandle(self: *Network) !Handle {
+    return try Handle.init(self);
+}
+
+pub fn request(self: *Network, conn: *http.Connection) void {
+    self.submitRequest(conn);
+}
 
 // Hand off conn to the network thread for adding to the multi.
-pub fn submitRequest(self: *Network, conn: *http.Connection) void {
+fn submitRequest(self: *Network, conn: *http.Connection) void {
     {
         self.submission_mutex.lock();
         defer self.submission_mutex.unlock();
+
         lp.assert(conn._submission == .idle, "submitRequest: conn not idle", .{});
         conn._submission = .pending_add;
         self.pending_add.append(&conn.node);
     }
+
     self.wakeupPoll();
 }
 
 // Cancel a conn. If it never reached the multi (still in pending_add),
 // short-circuit: deliver the canceled completion synchronously via
 // on_complete. Otherwise queue a remove for the network thread.
-pub fn submitRemove(self: *Network, conn: *http.Connection) void {
+fn submitRemove(self: *Network, conn: *http.Connection) void {
     var local_cancel: bool = false;
     {
         self.submission_mutex.lock();
         defer self.submission_mutex.unlock();
+
         switch (conn._submission) {
             .pending_add => {
                 self.pending_add.remove(&conn.node);
@@ -609,26 +620,29 @@ pub fn submitRemove(self: *Network, conn: *http.Connection) void {
         } else {
             self.releaseConnection(conn);
         }
-        return;
+    } else {
+        self.wakeupPoll();
     }
-    self.wakeupPoll();
 }
 
 // Fire-and-forget op queued for the network thread to apply on a conn
 // that's currently in (or about to enter) the multi. Dropped if the
 // conn isn't in flight.
-pub fn submitOp(self: *Network, conn: *http.Connection, op: Op) void {
+fn submitOp(self: *Network, conn: *http.Connection, op: Op) void {
     {
         self.submission_mutex.lock();
         defer self.submission_mutex.unlock();
+
         switch (conn._submission) {
             .pending_add, .in_multi => {},
             .idle, .pending_remove => return,
         }
+
         switch (op) {
             .unpause => conn._op_unpause = true,
             .tls_verify => |t| conn._op_tls_verify = t,
         }
+
         if (!conn._op_in_list) {
             conn._op_in_list = true;
             self.pending_ops.append(&conn._op_node);
@@ -663,8 +677,6 @@ fn drainQueue(self: *Network) void {
     // conn.node in another DoublyLinkedList: a worker submitRequest /
     // submitRemove racing with the outside-lock loop would observe
     // unsynchronized writes to conn.node otherwise.
-    var to_add: std.ArrayList(*http.Connection) = .empty;
-    defer to_add.deinit(self.allocator);
     var to_remove: std.ArrayList(*http.Connection) = .empty;
     defer to_remove.deinit(self.allocator);
     {
@@ -674,17 +686,35 @@ fn drainQueue(self: *Network) void {
         while (self.pending_remove.popFirst()) |node| {
             const conn: *http.Connection = @fieldParentPtr("node", node);
             lp.assert(conn._submission == .pending_remove, "drainQueue: conn not in pending_remove", .{});
+
             conn._submission = .idle;
             self.removeFromOpsLocked(conn);
             to_remove.append(self.allocator, conn) catch @panic("OOM");
         }
+    }
+    for (to_remove.items) |conn| self.handleRemove(conn);
+
+    var to_add: std.ArrayList(*http.Connection) = .empty;
+    defer to_add.deinit(self.allocator);
+    {
+        self.submission_mutex.lock();
+        defer self.submission_mutex.unlock();
+
         while (self.pending_add.popFirst()) |node| {
             const conn: *http.Connection = @fieldParentPtr("node", node);
             lp.assert(conn._submission == .pending_add, "drainQueue: conn not in pending_add", .{});
+
             // .in_multi is the target; handleAdd may roll back to .idle on failure.
             conn._submission = .in_multi;
             to_add.append(self.allocator, conn) catch @panic("OOM");
         }
+    }
+    for (to_add.items) |conn| self.handleAdd(conn);
+
+    {
+        self.submission_mutex.lock();
+        defer self.submission_mutex.unlock();
+
         while (self.pending_ops.popFirst()) |node| {
             const conn: *http.Connection = @fieldParentPtr("_op_node", node);
             conn._op_in_list = false;
@@ -708,31 +738,17 @@ fn drainQueue(self: *Network) void {
             }
         }
     }
-
-    // Process removes before adds: cancellations should take effect
-    // before we admit new transfers.
-    for (to_remove.items) |conn| self.handleRemove(conn);
-    for (to_add.items) |conn| self.handleAdd(conn);
 }
 
 // Caller has already set conn._submission = .in_multi. On failure we
 // roll back to .idle and either fire on_complete or release.
 fn handleAdd(self: *Network, conn: *http.Connection) void {
-    const multi = self.multi orelse blk: {
-        const m = libcurl.curl_multi_init() orelse {
-            lp.assert(false, "curl multi init failed", .{});
-            unreachable;
-        };
-        self.multi = m;
-        break :blk m;
-    };
-
     conn.setPrivate(conn) catch |err| {
         lp.log.err(.app, "curl set private", .{ .err = err });
         self.handleAddFailure(conn, err);
         return;
     };
-    libcurl.curl_multi_add_handle(multi, conn._easy) catch |err| {
+    libcurl.curl_multi_add_handle(self.multi, conn._easy) catch |err| {
         lp.log.err(.app, "curl multi add", .{ .err = err });
         self.handleAddFailure(conn, err);
     };
@@ -742,6 +758,7 @@ fn handleAddFailure(self: *Network, conn: *http.Connection, err: anyerror) void 
     {
         self.submission_mutex.lock();
         defer self.submission_mutex.unlock();
+
         conn._submission = .idle;
         self.removeFromOpsLocked(conn);
     }
@@ -756,9 +773,8 @@ fn handleAddFailure(self: *Network, conn: *http.Connection, err: anyerror) void 
 // longer in any submission list. The conn may still be in the multi
 // (normal cancel path).
 fn handleRemove(self: *Network, conn: *http.Connection) void {
-    if (self.multi) |multi| {
-        _ = libcurl.curl_multi_remove_handle(multi, conn._easy) catch {};
-    }
+    _ = libcurl.curl_multi_remove_handle(self.multi, conn._easy) catch {};
+
     if (conn.on_complete) |cb| {
         cb(conn, error.Canceled);
     } else {
@@ -770,9 +786,7 @@ fn handleRemove(self: *Network, conn: *http.Connection) void {
 // late-cancel completions through after Network.stop()+join().
 pub fn drainPendingForShutdown(self: *Network) void {
     self.drainQueue();
-    if (self.multi) |multi| {
-        self.processCompletions(multi);
-    }
+    self.processCompletions(self.multi);
 }
 
 pub fn stop(self: *Network) void {
@@ -844,9 +858,8 @@ fn preparePollFds(self: *Network, multi: *libcurl.CurlM) void {
 }
 
 fn getCurlTimeout(self: *Network) i32 {
-    const multi = self.multi orelse return -1;
     var timeout_ms: c_long = -1;
-    libcurl.curl_multi_timeout(multi, &timeout_ms) catch return -1;
+    libcurl.curl_multi_timeout(self.multi, &timeout_ms) catch return -1;
     return @intCast(@min(timeout_ms, std.math.maxInt(i32)));
 }
 
