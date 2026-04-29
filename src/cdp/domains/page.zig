@@ -1329,4 +1329,3 @@ test "cdp.frame: addScriptToEvaluateOnNewDocument" {
         try testing.expectEqual(2, try test_val.toI32());
     }
 }
-
