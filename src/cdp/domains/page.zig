@@ -693,6 +693,10 @@ fn handleJavaScriptDialog(cmd: *CDP.Command) !void {
     // Dialogs auto-dismiss in headless mode. By the time the CDP client
     // sends this command, the dialog has already returned and there is
     // no pending dialog to accept or dismiss.
+    //
+    // Lightpanda-aware clients that want to control confirm/prompt return
+    // values can pre-arm a response via LP.handleJavaScriptDialog instead
+    // (see src/cdp/domains/lp.zig).
     _ = try cmd.params(struct {
         accept: bool,
         promptText: ?[]const u8 = null,
@@ -702,6 +706,15 @@ fn handleJavaScriptDialog(cmd: *CDP.Command) !void {
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Page/#event-javascriptDialogOpening
 pub fn javascriptDialogOpening(bc: anytype, event: *const Notification.JavascriptDialogOpening) !void {
+    // Pop any response pre-armed via LP.handleJavaScriptDialog onto the
+    // dispatch's output param so the calling alert/confirm/prompt returns
+    // the CDP client's choice. Cleared unconditionally — a stash applies
+    // to exactly one dialog.
+    if (bc.pending_dialog_response) |pending| {
+        event.response.* = pending;
+        bc.pending_dialog_response = null;
+    }
+
     const session_id = bc.session_id orelse return;
     var cdp = bc.cdp;
 
