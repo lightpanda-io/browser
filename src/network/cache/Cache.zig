@@ -49,6 +49,12 @@ pub fn put(self: *Cache, metadata: CachedMetadata, body: []const u8) !void {
     };
 }
 
+pub fn clear(self: *Cache) !void {
+    return switch (self.kind) {
+        inline else => |*c| c.clear(),
+    };
+}
+
 pub const CacheControl = struct {
     max_age: u64,
 

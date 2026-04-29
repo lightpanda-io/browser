@@ -553,18 +553,41 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
 pub fn staticScriptsDone(self: *ScriptManager) void {
     lp.assert(self.static_scripts_done == false, "ScriptManager.staticScriptsDone", .{});
     self.static_scripts_done = true;
+
+    // Since all blocking requests and everything is done here,
+    // this is another safe place to flush out all of the deferred requests.
+    //
+    // We assert that we are not in a blocking request because we shouldn't be.
+    lp.assert(
+        self.client.blocking_request_id == null,
+        "blocking_request_id should be null",
+        .{ .value = self.client.blocking_request_id },
+    );
+    self.client.deferring_layer.flush();
+
     self.evaluate();
 }
 
 fn evaluate(self: *ScriptManager) void {
-    if (self.is_evaluating) {
-        // It's possible for a script.eval to cause evaluate to be called again.
-        return;
-    }
-
-    const frame = self.frame;
+    if (self.is_evaluating) return;
     self.is_evaluating = true;
     defer self.is_evaluating = false;
+    self.evaluateInner();
+}
+
+fn evaluateInner(self: *ScriptManager) void {
+    lp.assert(
+        self.is_evaluating,
+        "ScriptManager.evaluateInner",
+        .{ .value = self.is_evaluating },
+    );
+
+    // Re-run if eval produced new ready scripts
+    defer if (self.ready_scripts.first != null) {
+        self.evaluateInner();
+    };
+
+    const frame = self.frame;
 
     while (self.ready_scripts.popFirst()) |n| {
         var script: *Script = @fieldParentPtr("node", n);
@@ -585,26 +608,15 @@ fn evaluate(self: *ScriptManager) void {
                     });
                 }
             },
-            else => unreachable, // no other script is put in this list
+            else => unreachable,
         }
     }
 
-    if (self.static_scripts_done == false) {
-        // We can only execute deferred scripts if
-        // 1 - all the normal scripts are done
-        // 2 - we've finished parsing the HTML and at least queued all the scripts
-        // The last one isn't obvious, but it's possible for self.scripts to
-        // be empty not because we're done executing all the normal scripts
-        // but because we're done executing some (or maybe none), but we're still
-        // parsing the HTML.
-        return;
-    }
+    if (self.static_scripts_done == false) return;
 
     while (self.defer_scripts.first) |n| {
         var script: *Script = @fieldParentPtr("node", n);
-        if (script.complete == false) {
-            return;
-        }
+        if (script.complete == false) return;
         defer {
             _ = self.defer_scripts.popFirst();
             script.deinit();
@@ -612,15 +624,7 @@ fn evaluate(self: *ScriptManager) void {
         script.eval(frame);
     }
 
-    // At this point all normal scripts and deferred scripts are done, PLUS
-    // the frame has signaled that it's done parsing HTML (static_scripts_done == true).
-    //
-
-    // When all scripts (normal and deferred) are done loading, the document
-    // state changes (this ultimately triggers the DOMContentLoaded event).
-    // Page makes this safe to call multiple times.
     frame.documentIsLoaded();
-
     if (self.async_scripts.first == null and self.frame_notified_of_completion == false) {
         self.frame_notified_of_completion = true;
         frame.scriptsCompletedLoading();

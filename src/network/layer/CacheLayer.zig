@@ -22,7 +22,6 @@ const log = lp.log;
 
 const http = @import("../http.zig");
 const Client = @import("../../browser/HttpClient.zig").Client;
-const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Request = @import("../../browser/HttpClient.zig").Request;
 const Response = @import("../../browser/HttpClient.zig").Response;
 const Layer = @import("../../browser/HttpClient.zig").Layer;
@@ -34,6 +33,7 @@ const Forward = @import("Forward.zig");
 
 const CacheLayer = @This();
 
+enabled: bool = true,
 next: Layer = undefined,
 
 pub fn layer(self: *CacheLayer) Layer {
@@ -45,11 +45,12 @@ pub fn layer(self: *CacheLayer) Layer {
     };
 }
 
-fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
+fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
     const self: *CacheLayer = @ptrCast(@alignCast(ptr));
     const network = client.network;
+    var req = in_req;
 
-    if (req.params.method != .GET) {
+    if (req.params.method != .GET or !self.enabled) {
         return self.next.request(client, req);
     }
 
@@ -63,8 +64,16 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
         .timestamp = std.time.timestamp(),
         .request_headers = req_header_list.items,
     })) |cached| {
+        req.params.notification.dispatch(
+            .http_request_served_from_cache,
+            &.{
+                .request = &req,
+            },
+        );
+
         try serveFromCache(req, &cached);
         client.deinitRequest(req);
+
         return;
     }
 
@@ -81,8 +90,8 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
         req,
         cache_ctx,
         .{
-            .start = CacheContext.startCallback,
             .header = CacheContext.headerCallback,
+            .data = CacheContext.dataCallback,
             .done = CacheContext.doneCallback,
             .shutdown = CacheContext.shutdownCallback,
             .err = CacheContext.errorCallback,
@@ -92,7 +101,13 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
     return self.next.request(client, wrapped);
 }
 
-fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
+pub fn setEnabled(self: *CacheLayer, enabled: bool) void {
+    self.enabled = enabled;
+}
+
+fn serveFromCache(in_req: Request, cached: *const CachedResponse) !void {
+    var req = in_req;
+
     const response = Response.fromCached(req.ctx, cached);
     defer switch (cached.data) {
         .buffer => |_| {},
@@ -107,6 +122,12 @@ fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
     if (!proceed) {
         return error.Abort;
     }
+
+    // This dispatches the Network.responseReceived that we should send.
+    req.params.notification.dispatch(.http_response_header_done, &.{
+        .request = &req,
+        .response = &response,
+    });
 
     switch (cached.data) {
         .buffer => |data| {
@@ -138,45 +159,47 @@ fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
 const CacheContext = struct {
     arena: std.mem.Allocator,
     client: *Client,
-    transfer: ?*Transfer = null,
     forward: Forward,
     req_url: [:0]const u8,
     req_headers: http.Headers,
     pending_metadata: ?*CachedMetadata = null,
-
-    fn startCallback(response: Response) anyerror!void {
-        const self: *CacheContext = @ptrCast(@alignCast(response.ctx));
-        self.transfer = response.inner.transfer;
-        return self.forward.forwardStart(response);
-    }
+    body_buffer: std.ArrayList(u8) = .empty,
 
     fn headerCallback(response: Response) anyerror!bool {
         const self: *CacheContext = @ptrCast(@alignCast(response.ctx));
         const allocator = self.arena;
 
-        const transfer = response.inner.transfer;
-        var rh = &transfer.response_header.?;
+        var vary: ?[]const u8 = null;
+        var cache_control: ?[]const u8 = null;
+        var age: ?[]const u8 = null;
+        var has_set_cookie = false;
+        var has_authorization = false;
 
-        const conn = transfer._conn.?;
-
-        const vary = if (conn.getResponseHeader("vary", 0)) |h| h.value else null;
+        var iter = response.headerIterator();
+        while (iter.next()) |h| {
+            if (std.ascii.eqlIgnoreCase(h.name, "vary")) vary = h.value;
+            if (std.ascii.eqlIgnoreCase(h.name, "cache-control")) cache_control = h.value;
+            if (std.ascii.eqlIgnoreCase(h.name, "age")) age = h.value;
+            if (std.ascii.eqlIgnoreCase(h.name, "set-cookie")) has_set_cookie = true;
+            if (std.ascii.eqlIgnoreCase(h.name, "authorization")) has_authorization = true;
+        }
 
         const maybe_cm = try Cache.tryCache(
             allocator,
             std.time.timestamp(),
-            transfer.url,
-            rh.status,
-            rh.contentType(),
-            if (conn.getResponseHeader("cache-control", 0)) |h| h.value else null,
+            response.url(),
+            response.status() orelse @panic("Response must have status"),
+            response.contentType(),
+            cache_control,
             vary,
-            if (conn.getResponseHeader("age", 0)) |h| h.value else null,
-            conn.getResponseHeader("set-cookie", 0) != null,
-            conn.getResponseHeader("authorization", 0) != null,
+            age,
+            has_set_cookie,
+            has_authorization,
         );
 
         if (maybe_cm) |cm| {
-            var iter = transfer.responseHeaderIterator();
-            var header_list = try iter.collect(allocator);
+            var cache_iter = response.headerIterator();
+            var header_list = try cache_iter.collect(allocator);
             const end_of_response = header_list.items.len;
 
             if (vary) |vary_str| {
@@ -200,20 +223,31 @@ const CacheContext = struct {
             metadata.headers = header_list.items[0..end_of_response];
             metadata.vary_headers = header_list.items[end_of_response..];
             self.pending_metadata = metadata;
+
+            if (response.contentLength()) |len| {
+                try self.body_buffer.ensureTotalCapacity(self.arena, len);
+            }
         }
 
         return self.forward.forwardHeader(response);
     }
 
+    fn dataCallback(response: Response, data: []const u8) anyerror!void {
+        const self: *CacheContext = @ptrCast(@alignCast(response.ctx));
+        if (self.pending_metadata != null) {
+            try self.body_buffer.appendSlice(self.arena, data);
+        }
+        return self.forward.forwardData(response, data);
+    }
+
     fn doneCallback(ctx: *anyopaque) anyerror!void {
         const self: *CacheContext = @ptrCast(@alignCast(ctx));
-        const transfer = self.transfer orelse @panic("Start Callback didn't set CacheLayer.transfer");
 
         if (self.pending_metadata) |metadata| {
             const cache = &self.client.network.cache.?;
 
             log.debug(.browser, "http cache", .{ .key = self.req_url, .metadata = metadata });
-            cache.put(metadata.*, transfer._stream_buffer.items) catch |err| {
+            cache.put(metadata.*, self.body_buffer.items) catch |err| {
                 log.warn(.http, "cache put failed", .{ .err = err });
             };
             log.debug(.browser, "http.cache.put", .{ .url = self.req_url });
