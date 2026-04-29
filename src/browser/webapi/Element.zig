@@ -1667,8 +1667,20 @@ pub const Tag = enum {
     // `.unknown`/`.custom` and aren't matched here.
     pub fn isHiddenByUaStylesheet(self: Tag) bool {
         return switch (self) {
-            .area, .base, .datalist, .head, .link, .meta, .noscript, .param,
-            .script, .source, .style, .template, .title, .track,
+            .area,
+            .base,
+            .datalist,
+            .head,
+            .link,
+            .meta,
+            .noscript,
+            .param,
+            .script,
+            .source,
+            .style,
+            .template,
+            .title,
+            .track,
             => true,
             else => false,
         };
