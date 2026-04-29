@@ -396,17 +396,22 @@ pub fn _request(ptr: *anyopaque, _: *Client, req: Request) !void {
     return self.process(transfer);
 }
 
-pub fn request(self: *Client, req: Request) !void {
+pub fn request(self: *Client, in_req: Request) !void {
     // Assign Request Id.
-    var our_req = req;
-    our_req.params.request_id = self.incrReqId();
+    var req = in_req;
+    req.params.request_id = self.incrReqId();
 
     const arena = try self.network.app.arena_pool.acquire(.small, "Request.arena");
-    our_req.params.arena = arena;
+    req.params.arena = arena;
 
-    return self.entry_layer.request(self, our_req) catch |err| {
-        our_req.error_callback(our_req.ctx, err);
-        self.deinitRequest(our_req);
+    req.params.notification.dispatch(
+        .http_request_start,
+        &.{ .request = &req },
+    );
+
+    return self.entry_layer.request(self, req) catch |err| {
+        req.error_callback(req.ctx, err);
+        self.deinitRequest(req);
         return err;
     };
 }

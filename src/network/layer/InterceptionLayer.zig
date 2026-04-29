@@ -75,8 +75,6 @@ fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
         },
     );
 
-    req.params.notification.dispatch(.http_request_start, &.{ .request = &req });
-
     var wait_for_interception = false;
     req.params.notification.dispatch(.http_request_intercept, &.{
         .request = &req,
