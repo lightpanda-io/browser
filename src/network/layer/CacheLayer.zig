@@ -169,6 +169,10 @@ const CacheContext = struct {
         const self: *CacheContext = @ptrCast(@alignCast(response.ctx));
         const allocator = self.arena;
 
+        if (response.inner != .transfer) {
+            return self.forward.forwardHeader(response);
+        }
+
         var vary: ?[]const u8 = null;
         var cache_control: ?[]const u8 = null;
         var age: ?[]const u8 = null;
