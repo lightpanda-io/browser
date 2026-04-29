@@ -417,12 +417,13 @@ pub fn frameRemove(bc: *CDP.BrowserContext) void {
         isolated_world.removeContext();
     }
 
-    // node_registry / node_search_list reference Nodes that live in the page
-    // about to be torn down. Clear them now — for legacy navigations this is
-    // a no-op-equivalent of the bc.reset() that frameNavigate used to do up
-    // front; for pending root commits this is the moment that registry was
-    // deferred to (frameNavigate skipped it because the OLD page was still
-    // live during the in-flight HTTP).
+    // node_registry / node_search_list reference Nodes from the page being
+    // torn down — clear them before the page's memory is freed. For pending
+    // root commits this is the only reset, because frameNavigate set
+    // is_pending_root=true and deliberately skipped its own reset so the
+    // OLD page's nodes stayed addressable during the in-flight HTTP. For
+    // synthetic / non-pending navs frameNavigate also calls bc.reset()
+    // (via the !is_pending_root branch); the two are redundant but harmless.
     bc.reset();
 }
 
