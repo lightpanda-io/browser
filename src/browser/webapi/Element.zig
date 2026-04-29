@@ -600,7 +600,21 @@ pub fn hasAttributeSafe(self: *const Element, name: String) bool {
     return attributes.hasSafe(name);
 }
 
+// Per HTML "concept-fe-disabled", only listed elements participate in the
+// disabled concept. Anything else (e.g. <div disabled>) has no disabled
+// state and never matches :disabled / :enabled.
+pub fn hasDisabledConcept(self: *const Element) bool {
+    return switch (self.getTag()) {
+        .button, .input, .select, .textarea, .optgroup, .option, .fieldset => true,
+        else => false,
+    };
+}
+
 pub fn isDisabled(self: *Element) bool {
+    if (!self.hasDisabledConcept()) {
+        return false;
+    }
+
     if (self.getAttributeSafe(comptime .wrap("disabled")) != null) {
         return true;
     }

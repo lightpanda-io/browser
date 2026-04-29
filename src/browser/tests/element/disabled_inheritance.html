@@ -33,6 +33,10 @@
   <input id="own_enabled" type="text">
 </form>
 
+<div id="div_plain">x</div>
+<div id="div_with_disabled_attr" disabled>y</div>
+<span id="span_plain">z</span>
+
 <script id="fieldset_inheritance">
 {
   // Form controls inside <fieldset disabled> match :disabled.
@@ -90,6 +94,20 @@
   testing.expectTrue($('#opt_loose').matches(':enabled'));
   // Legend descendants are enabled despite the disabled fieldset.
   testing.expectTrue($('#legend_input').matches(':enabled'));
+}
+</script>
+
+<script id="concept_gate">
+{
+  // Per HTML "concept-fe-disabled", only listed elements (button, input,
+  // select, textarea, optgroup, option, fieldset) participate in the
+  // disabled concept. Anything else never matches :disabled / :enabled,
+  // even with an own [disabled] attribute.
+  testing.expectFalse($('#div_plain').matches(':disabled'));
+  testing.expectFalse($('#div_plain').matches(':enabled'));
+  testing.expectFalse($('#span_plain').matches(':enabled'));
+  testing.expectFalse($('#div_with_disabled_attr').matches(':disabled'));
+  testing.expectFalse($('#div_with_disabled_attr').matches(':enabled'));
 }
 </script>
 

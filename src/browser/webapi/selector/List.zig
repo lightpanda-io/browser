@@ -538,7 +538,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             return el.isDisabled();
         },
         .enabled => {
-            return !el.isDisabled();
+            return el.hasDisabledConcept() and !el.isDisabled();
         },
         .indeterminate => {
             const input = el.is(Node.Element.Html.Input) orelse return false;
