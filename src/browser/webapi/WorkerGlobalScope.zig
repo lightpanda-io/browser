@@ -24,9 +24,11 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const JS = @import("../js/js.zig");
+const URL = @import("../URL.zig");
 const Page = @import("../Page.zig");
 const Factory = @import("../Factory.zig");
 const Session = @import("../Session.zig");
+const HttpClient = @import("../HttpClient.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 
 const Blob = @import("Blob.zig");
@@ -36,6 +38,7 @@ const Console = @import("Console.zig");
 const EventTarget = @import("EventTarget.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
+const Fetch = @import("net/Fetch.zig");
 
 const builtin = @import("builtin");
 const IS_DEBUG = builtin.mode == .Debug;
@@ -48,8 +51,8 @@ const WorkerGlobalScope = @This();
 // Meant to follow the same field naming as Page so that an anytype of generic
 // can access these the same for a Page of a WGS.
 // These fields represent the "Page"-like component of the WGS
-_session: *Session,
 _page: *Page,
+_session: *Session,
 _factory: *Factory,
 _identity: JS.Identity = .{},
 arena: Allocator,
@@ -67,6 +70,12 @@ _blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
 
 // Reference back to the Worker object (for postMessage to frame)
 _worker: *Worker,
+
+// HTTP attribution. Mirrors Frame's fields so that generic code over
+// (Frame|WorkerGlobalScope) can read them uniformly. Populated from the
+// owning Worker at init.
+_frame_id: u32,
+_loader_id: u32,
 
 // Event management for non-DOM targets in worker context
 _event_manager: EventManagerBase,
@@ -103,6 +112,8 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
         ._proto = undefined,
         ._factory = factory,
         ._worker = worker,
+        ._frame_id = worker._frame_id,
+        ._loader_id = worker._loader_id,
         ._event_manager = .init(arena),
     });
     errdefer factory.destroy(self);
@@ -154,6 +165,29 @@ pub fn dispatch(
         self._page,
         opts,
     );
+}
+
+pub fn hasDirectListeners(self: *WorkerGlobalScope, target: *EventTarget, typ: []const u8, handler: anytype) bool {
+    return self._event_manager.hasDirectListeners(target, typ, handler);
+}
+
+// Workers don't have their own Referer; per spec, dedicated worker requests
+// use the parent document's URL. Delegate to the owning frame.
+pub fn headersForRequest(self: *WorkerGlobalScope, headers: *HttpClient.Headers) !void {
+    return self._worker._frame.headersForRequest(headers);
+}
+
+pub fn isSameOrigin(self: *const WorkerGlobalScope, url: [:0]const u8) bool {
+    const current_origin = self.origin orelse return false;
+
+    if (!std.mem.startsWith(u8, url, current_origin)) {
+        return false;
+    }
+    return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
+}
+
+pub fn lookupBlobUrl(self: *WorkerGlobalScope, url: []const u8) ?*Blob {
+    return self._blob_urls.get(url);
 }
 
 pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {
@@ -346,6 +380,10 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     }
 }
 
+pub fn fetch(_: *const WorkerGlobalScope, input: Fetch.Input, options: ?Fetch.InitOpts, exec: *const JS.Execution) !JS.Promise {
+    return Fetch.init(input, options, exec);
+}
+
 // TODO: importScripts - needs script loading infrastructure
 // TODO: location - needs WorkerLocation
 // TODO: navigator - needs WorkerNavigator
@@ -441,6 +479,7 @@ pub const JsApi = struct {
     pub const postMessage = bridge.function(WorkerGlobalScope.postMessage, .{});
     pub const reportError = bridge.function(WorkerGlobalScope.reportError, .{});
     pub const close = bridge.function(WorkerGlobalScope.close, .{});
+    pub const fetch = bridge.function(WorkerGlobalScope.fetch, .{});
 
     pub const onmessage = bridge.accessor(WorkerGlobalScope.getOnMessage, WorkerGlobalScope.setOnMessage, .{});
     pub const onmessageerror = bridge.accessor(WorkerGlobalScope.getOnMessageError, WorkerGlobalScope.setOnMessageError, .{});

@@ -2740,6 +2740,10 @@ pub fn dispatch(
     return self._event_manager.dispatchDirect(target, event, handler, opts);
 }
 
+pub fn hasDirectListeners(self: *Frame, target: *EventTarget, typ: []const u8, handler: anytype) bool {
+    return self._event_manager.hasDirectListeners(target, typ, handler);
+}
+
 pub fn dupeSSO(self: *Frame, value: []const u8) !String {
     return String.init(self.arena, value, .{ .dupe = true });
 }

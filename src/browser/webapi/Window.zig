@@ -251,8 +251,8 @@ pub fn setOnUnhandledRejection(self: *Window, setter: ?FunctionSetter) void {
     self._on_unhandled_rejection = getFunctionFromSetter(setter);
 }
 
-pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, frame: *Frame) !js.Promise {
-    return Fetch.init(input, options, frame);
+pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, exec: *const js.Execution) !js.Promise {
+    return Fetch.init(input, options, exec);
 }
 
 const LegacyHandler = union(enum) {
