@@ -555,6 +555,19 @@ pub fn close(self: *Window) void {
     }
 
     _ = page.popups.swapRemove(popup_index);
+
+    // Drop any pending queued navigation for this frame. Frame.deinit will
+    // release the QueuedNavigation arena, but the entry in page.queued_navigation
+    // would otherwise have processQueuedNavigation re-deinit the popup.
+    if (frame._queued_navigation != null) {
+        for (page.queued_navigation.items, 0..) |f, i| {
+            if (f == frame) {
+                _ = page.queued_navigation.swapRemove(i);
+                break;
+            }
+        }
+    }
+
     frame.deinit(true);
 }
 
