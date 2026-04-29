@@ -63,6 +63,25 @@ jobs:
             zig-out/bin/lightpanda
           retention-days: 1
 
+  cdpproxy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: 'lightpanda-io/cdpproxy'
+          fetch-depth: 0
+
+      - name: build proxy
+        run: go build
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: cdpproxy
+          path: cdpproxy
+          retention-days: 1
+
   demo-runner:
     strategy:
       fail-fast: false
@@ -73,7 +92,9 @@ jobs:
         robotstxt: [true, false]
 
     name: demo-runner
-    needs: zig-build-release
+    needs:
+      - zig-build-release
+      - cdpproxy
 
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -86,19 +107,28 @@ jobs:
 
       - run: npm install
 
-      - name: download artifact
+      - name: download lightpanda release
         uses: actions/download-artifact@v8
         with:
           name: lightpanda-build-release
 
       - run: chmod a+x ./lightpanda
 
+      - name: download cdpproxy
+        uses: actions/download-artifact@v8
+        with:
+          name: cdpproxy
+
+      - run: chmod a+x ./cdpproxy
+
+      - run: ./cdpproxy > cdp.log &
+
       - if: matrix.proxy == true
         name: build and start proxy
         run: |
           cd proxy
           go build
-          ./proxy & echo $! > PROXY.id
+          ./proxy &
 
       - if: matrix.cache == true
         run: mkdir /tmp/lp-cache
@@ -120,17 +150,18 @@ jobs:
           echo "value=$args" >> "$GITHUB_OUTPUT"
 
       - run: |
-          ./lightpanda serve ${{ steps.args.outputs.value }} & echo $! > LPD.pid
+          ./lightpanda serve --port 9223 ${{ steps.args.outputs.value }} &
 
       - run: |
           go run runner/main.go
 
-      - run: |
-          kill `cat LPD.pid`
-
-      - if: matrix.proxy == true
-        run: |
-          pkill proxy
+      - name: upload cdp log
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: cdp-log-demo-runner-${{ matrix.proxy }}-${{ matrix.wba }}-${{ matrix.cache }}-${{ matrix.robotstxt }}
+          path: cdp.log
+          retention-days: 1
 
   proxy-auth:
     strategy:
@@ -140,8 +171,10 @@ jobs:
         cache: [true, false]
         robotstxt: [true, false]
 
-    name: demo-runner
-    needs: zig-build-release
+    name: proxy-auth
+    needs:
+      - zig-build-release
+      - cdpproxy
 
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -154,18 +187,27 @@ jobs:
 
       - run: npm install
 
-      - name: download artifact
+      - name: download lightpanda release
         uses: actions/download-artifact@v8
         with:
           name: lightpanda-build-release
 
       - run: chmod a+x ./lightpanda
 
+      - name: download cdpproxy
+        uses: actions/download-artifact@v8
+        with:
+          name: cdpproxy
+
+      - run: chmod a+x ./cdpproxy
+
+      - run: ./cdpproxy > cdp.log &
+
       - name: build and start proxy
         run: |
           cd proxy
           go build
-          ./proxy & echo $! > PROXY.id
+          ./proxy &
 
       - if: matrix.cache == true
         run: mkdir /tmp/lp-cache
@@ -188,19 +230,23 @@ jobs:
       - name: run end to end tests through proxy
         run: |
           export PROXY_USERNAME=username PROXY_PASSWORD=password
-          ./lightpanda serve --http-proxy http://127.0.0.1:3000 ${{ steps.args.outputs.value }} & echo $! > LPD.pid
+          ./lightpanda serve --port 9223 --http-proxy http://127.0.0.1:3000 ${{ steps.args.outputs.value }} &
           go run runner/main.go
           URL=https://demo-browser.lightpanda.io/campfire-commerce/ node puppeteer/proxy_auth.js
-          kill `cat LPD.pid`
 
       - name: run request interception through proxy and playwright
         run: |
           export PROXY_USERNAME=username PROXY_PASSWORD=password
-          ./lightpanda serve ${{ steps.args.outputs.value }} & echo $! > LPD.pid
+          ./lightpanda serve --port 9223 ${{ steps.args.outputs.value }} &
           BASE_URL=https://demo-browser.lightpanda.io/ node playwright/proxy_auth.js
-          kill `cat LPD.pid`
 
-      - run: pkill proxy
+      - name: upload cdp log
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: cdp-log-proxy-auth-${{ matrix.wba }}-${{ matrix.cache }}-${{ matrix.robotstxt }}
+          path: cdp.log
+          retention-days: 1
 
   wba-test:
     name: wba-test
