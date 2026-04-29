@@ -73,6 +73,10 @@ pub fn initStringHandle(self: Isolate, str: []const u8) *const v8.String {
     return v8.v8__String__NewFromUtf8(self.handle, str.ptr, v8.kNormal, @as(c_int, @intCast(str.len))).?;
 }
 
+pub fn initOneByteStringHandle(self: Isolate, bytes: []const u8) *const v8.String {
+    return v8.v8__String__NewFromOneByte(self.handle, bytes.ptr, v8.kNormal, @as(c_int, @intCast(bytes.len))).?;
+}
+
 pub fn createError(self: Isolate, msg: []const u8) *const v8.Value {
     const message = self.initStringHandle(msg);
     return v8.v8__Exception__Error(message).?;

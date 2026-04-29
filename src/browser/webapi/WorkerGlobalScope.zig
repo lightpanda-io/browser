@@ -250,14 +250,13 @@ pub fn receiveMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
     });
 }
 
-pub fn btoa(_: *const WorkerGlobalScope, input: []const u8, exec: *JS.Execution) ![]const u8 {
-    const base64 = @import("encoding/base64.zig");
-    return base64.encode(exec.call_arena, input);
+pub fn btoa(_: *const WorkerGlobalScope, input: JS.String.OneByte, exec: *JS.Execution) ![]const u8 {
+    return @import("encoding/base64.zig").encode(exec.call_arena, input.bytes);
 }
 
-pub fn atob(_: *const WorkerGlobalScope, input: []const u8, exec: *JS.Execution) ![]const u8 {
-    const base64 = @import("encoding/base64.zig");
-    return base64.decode(exec.call_arena, input);
+pub fn atob(_: *const WorkerGlobalScope, input: JS.String.OneByte, exec: *JS.Execution) !JS.String.OneByte {
+    const bytes = try @import("encoding/base64.zig").decode(exec.call_arena, input.bytes);
+    return .{ .bytes = bytes };
 }
 
 pub fn structuredClone(_: *const WorkerGlobalScope, value: JS.Value) !JS.Value {
@@ -435,7 +434,7 @@ pub const JsApi = struct {
     pub const onrejectionhandled = bridge.accessor(WorkerGlobalScope.getOnRejectionHandled, WorkerGlobalScope.setOnRejectionHandled, .{});
     pub const onunhandledrejection = bridge.accessor(WorkerGlobalScope.getOnUnhandledRejection, WorkerGlobalScope.setOnUnhandledRejection, .{});
 
-    pub const btoa = bridge.function(WorkerGlobalScope.btoa, .{});
+    pub const btoa = bridge.function(WorkerGlobalScope.btoa, .{ .dom_exception = true });
     pub const atob = bridge.function(WorkerGlobalScope.atob, .{ .dom_exception = true });
     pub const structuredClone = bridge.function(WorkerGlobalScope.structuredClone, .{});
     pub const postMessage = bridge.function(WorkerGlobalScope.postMessage, .{});

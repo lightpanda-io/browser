@@ -31,6 +31,22 @@ const String = @This();
 local: *const js.Local,
 handle: *const v8.String,
 
+// A byte slice that should be handed to JS as a "binary string" — each byte
+// 0..255 becomes a JS code unit 0..255 (Latin-1), with no UTF-8 decoding.
+// Return this from a Web API method whenever the contract is "one byte per
+// JS character" (atob, FileReader.readAsBinaryString, etc.). The framework
+// turns it into a V8 string via `String::NewFromOneByte`.
+pub const OneByte = struct {
+    bytes: []const u8,
+};
+
+pub fn toValue(self: String) js.Value {
+    return .{
+        .local = self.local,
+        .handle = @ptrCast(self.handle),
+    };
+}
+
 pub fn toSlice(self: String) ![]u8 {
     return self._toSlice(false, self.local.call_arena);
 }
@@ -113,4 +129,33 @@ pub fn format(self: String, writer: *std.Io.Writer) !void {
 
 pub fn len(self: String) usize {
     return @intCast(v8.v8__String__Utf8Length(self.handle, self.local.isolate.handle));
+}
+
+// JS-level character (code unit) count, independent of encoding. Equivalent
+// to `s.length` in JavaScript. Use this — not `len()` — when allocating a
+// buffer for one-byte / Latin-1 reads.
+pub fn lenChars(self: String) usize {
+    return @intCast(v8.v8__String__Length(self.handle));
+}
+
+// True iff every code unit in the string fits in a single byte (codepoint
+// <= 0xFF, i.e. Latin-1). Used by btoa to reject strings with codepoints
+// outside the binary-string range.
+pub fn containsOnlyOneByte(self: String) bool {
+    return v8.v8__String__ContainsOnlyOneByte(self.handle);
+}
+
+// Read the string as Latin-1 bytes — each output byte equals the
+// corresponding code unit. Caller must have already established (via
+// `containsOnlyOneByte`) that no code unit exceeds 0xFF; otherwise V8
+// silently truncates to the low byte.
+pub fn toOneByteSlice(self: String, allocator: Allocator) ![]u8 {
+    const handle = self.handle;
+    const isolate = self.local.isolate.handle;
+    const length: u32 = @intCast(v8.v8__String__Length(handle));
+    const buf = try allocator.alloc(u8, length);
+    if (length > 0) {
+        v8.v8__String__WriteOneByte(handle, isolate, 0, length, buf.ptr);
+    }
+    return buf;
 }

@@ -454,12 +454,13 @@ pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]cons
     });
 }
 
-pub fn btoa(_: *const Window, input: []const u8, frame: *Frame) ![]const u8 {
-    return @import("encoding/base64.zig").encode(frame.call_arena, input);
+pub fn btoa(_: *const Window, input: js.String.OneByte, frame: *Frame) ![]const u8 {
+    return @import("encoding/base64.zig").encode(frame.call_arena, input.bytes);
 }
 
-pub fn atob(_: *const Window, input: []const u8, frame: *Frame) ![]const u8 {
-    return @import("encoding/base64.zig").decode(frame.call_arena, input);
+pub fn atob(_: *const Window, input: js.String.OneByte, frame: *Frame) !js.String.OneByte {
+    const bytes = try @import("encoding/base64.zig").decode(frame.call_arena, input.bytes);
+    return .{ .bytes = bytes };
 }
 
 pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {
@@ -885,7 +886,7 @@ pub const JsApi = struct {
     pub const cancelIdleCallback = bridge.function(Window.cancelIdleCallback, .{});
     pub const matchMedia = bridge.function(Window.matchMedia, .{});
     pub const postMessage = bridge.function(Window.postMessage, .{});
-    pub const btoa = bridge.function(Window.btoa, .{});
+    pub const btoa = bridge.function(Window.btoa, .{ .dom_exception = true });
     pub const atob = bridge.function(Window.atob, .{ .dom_exception = true });
     pub const reportError = bridge.function(Window.reportError, .{});
     pub const structuredClone = bridge.function(Window.structuredClone, .{});
