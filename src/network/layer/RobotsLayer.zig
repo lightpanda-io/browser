@@ -57,6 +57,10 @@ fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
     const arena = req.params.arena;
     const robots_url = try URL.getRobotsUrl(arena, req.params.url);
 
+    if (req.params.internal) {
+        return self.next.request(client, req);
+    }
+
     if (client.network.robot_store.get(robots_url)) |robot_entry| {
         switch (robot_entry) {
             .present => |robots| {
@@ -104,28 +108,33 @@ fn fetchRobotsThenRequest(
         const headers = try client.newHeaders();
         log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
 
-        try self.next.request(client, .{
-            .ctx = robots_ctx,
-            .params = .{
-                // We have to do this ourselves because we are not going through the top level `request`.
-                .arena = new_arena,
-                .request_id = client.incrReqId(),
-                .url = robots_url,
-                .method = .GET,
-                .headers = headers,
-                .frame_id = req.params.frame_id,
-                .loader_id = req.params.loader_id,
-                .cookie_jar = req.params.cookie_jar,
-                .cookie_origin = req.params.cookie_origin,
-                .notification = req.params.notification,
-                .resource_type = .fetch,
+        try self.next.request(
+            client,
+            .{
+                .ctx = robots_ctx,
+                .params = .{
+                    // We have to do these ourselves since we don't go through request.
+                    .arena = new_arena,
+                    .request_id = client.nextReqId(),
+
+                    .url = robots_url,
+                    .method = .GET,
+                    .headers = headers,
+                    .frame_id = req.params.frame_id,
+                    .loader_id = req.params.loader_id,
+                    .cookie_jar = req.params.cookie_jar,
+                    .cookie_origin = req.params.cookie_origin,
+                    .notification = req.params.notification,
+                    .resource_type = .fetch,
+                    .internal = true,
+                },
+                .header_callback = RobotsContext.headerCallback,
+                .data_callback = RobotsContext.dataCallback,
+                .done_callback = RobotsContext.doneCallback,
+                .error_callback = RobotsContext.errorCallback,
+                .shutdown_callback = RobotsContext.shutdownCallback,
             },
-            .header_callback = RobotsContext.headerCallback,
-            .data_callback = RobotsContext.dataCallback,
-            .done_callback = RobotsContext.doneCallback,
-            .error_callback = RobotsContext.errorCallback,
-            .shutdown_callback = RobotsContext.shutdownCallback,
-        });
+        );
     }
 
     try entry.value_ptr.append(self.allocator, req);
@@ -169,11 +178,6 @@ const RobotsContext = struct {
     buffer: std.ArrayListUnmanaged(u8),
     status: u16 = 0,
 
-    fn deinit(self: *RobotsContext) void {
-        self.buffer.deinit(self.layer.allocator);
-        self.layer.allocator.destroy(self);
-    }
-
     fn headerCallback(response: Response) anyerror!bool {
         const self: *RobotsContext = @ptrCast(@alignCast(response.ctx));
         switch (response.inner) {
@@ -198,6 +202,7 @@ const RobotsContext = struct {
 
     fn doneCallback(ctx_ptr: *anyopaque) anyerror!void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
+
         const l = self.layer;
         const client = self.client;
         const robots_url = self.robots_url;
@@ -241,6 +246,7 @@ const RobotsContext = struct {
 
     fn errorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
+
         const l = self.layer;
         const client = self.client;
         const robots_url = self.robots_url;
@@ -251,6 +257,7 @@ const RobotsContext = struct {
 
     fn shutdownCallback(ctx_ptr: *anyopaque) void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
+
         const l = self.layer;
         const client = self.client;
         const robots_url = self.robots_url;

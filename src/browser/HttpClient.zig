@@ -199,11 +199,11 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
 
     var next = client.layer();
 
+    next = layerWith(&client.interception_layer, next);
+
     if (network.config.obeyRobots()) {
         next = layerWith(&client.robots_layer, next);
     }
-
-    next = layerWith(&client.interception_layer, next);
 
     if (network.config.httpCacheDir() != null) {
         next = layerWith(&client.cache_layer, next);
@@ -404,10 +404,12 @@ pub fn request(self: *Client, in_req: Request) !void {
     const arena = try self.network.app.arena_pool.acquire(.small, "Request.arena");
     req.params.arena = arena;
 
-    req.params.notification.dispatch(
-        .http_request_start,
-        &.{ .request = &req },
-    );
+    if (!req.params.internal) {
+        req.params.notification.dispatch(
+            .http_request_start,
+            &.{ .request = &req },
+        );
+    }
 
     return self.entry_layer.request(self, req) catch |err| {
         req.error_callback(req.ctx, err);
@@ -882,6 +884,7 @@ pub const RequestParams = struct {
     credentials: ?[:0]const u8 = null,
     notification: *Notification,
     timeout_ms: u32 = 0,
+    internal: bool = false,
 
     const ResourceType = enum {
         document,

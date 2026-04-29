@@ -54,6 +54,10 @@ pub fn layer(self: *InterceptionLayer) Layer {
 fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
     const self: *InterceptionLayer = @ptrCast(@alignCast(ptr));
 
+    if (in_req.params.internal) {
+        return try self.next.request(client, in_req);
+    }
+
     const intercept_ctx = try in_req.params.arena.create(InterceptContext);
     intercept_ctx.* = .{
         .client = client,
