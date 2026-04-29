@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id="frameset_constructor">
+  // Regression for #2249: Angular 9's zone.js polyfill reaches for
+  // HTMLFrameSetElement during __load_patch. The constructor must exist as a
+  // global and instances must report the standard tag, type, and prototype
+  // chain.
+  //
+  // Note: an inline <frameset> cannot be used here. The HTML5 parser switches
+  // to the "in frameset" insertion mode on a top-level <frameset>, after which
+  // all <script> tokens are ignored — so we exercise the element via
+  // createElement instead.
+  testing.expectEqual("function", typeof HTMLFrameSetElement)
+
+  const fs = document.createElement('frameset')
+  testing.expectEqual("[object HTMLFrameSetElement]", fs.toString())
+  testing.expectEqual("FRAMESET", fs.tagName)
+  testing.expectEqual(true, fs instanceof HTMLFrameSetElement)
+  testing.expectEqual(true, fs instanceof HTMLElement)
+</script>

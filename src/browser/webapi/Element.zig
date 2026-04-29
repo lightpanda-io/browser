@@ -218,6 +218,7 @@ pub fn getTagNameLower(self: *const Element) []const u8 {
                 .embed => "embed",
                 .fieldset => "fieldset",
                 .font => "font",
+                .frameset => "frameset",
                 .form => "form",
                 .generic => |e| e._tag_name.str(),
                 .heading => |e| e._tag_name.str(),
@@ -297,6 +298,7 @@ pub fn getTagNameSpec(self: *const Element, buf: []u8) []const u8 {
             .embed => "EMBED",
             .fieldset => "FIELDSET",
             .font => "FONT",
+            .frameset => "FRAMESET",
             .form => "FORM",
             .generic => |e| upperTagName(&e._tag_name, buf),
             .heading => |e| upperTagName(&e._tag_name, buf),
@@ -598,9 +600,40 @@ pub fn hasAttributeSafe(self: *const Element, name: String) bool {
     return attributes.hasSafe(name);
 }
 
+// Per HTML "concept-fe-disabled", only listed elements participate in the
+// disabled concept. Anything else (e.g. <div disabled>) has no disabled
+// state and never matches :disabled / :enabled.
+pub fn hasDisabledConcept(self: *const Element) bool {
+    return switch (self.getTag()) {
+        .button, .input, .select, .textarea, .optgroup, .option, .fieldset => true,
+        else => false,
+    };
+}
+
 pub fn isDisabled(self: *Element) bool {
+    if (!self.hasDisabledConcept()) {
+        return false;
+    }
+
     if (self.getAttributeSafe(comptime .wrap("disabled")) != null) {
         return true;
+    }
+
+    // <option> takes a different inheritance path: per HTML
+    // "concept-option-disabled" an option is disabled when its parent is an
+    // <optgroup disabled>. It does NOT inherit from <select disabled> or
+    // an ancestor <fieldset disabled>.
+    if (self.getTag() == .option) {
+        if (self.asNode()._parent) |parent_node| {
+            if (parent_node.is(Element)) |parent_el| {
+                if (parent_el.getTag() == .optgroup and
+                    parent_el.getAttributeSafe(comptime .wrap("disabled")) != null)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     const element_node = self.asNode();
@@ -1447,6 +1480,7 @@ pub fn getTag(self: *const Element) Tag {
             .canvas => .canvas,
             .fieldset => .fieldset,
             .font => .font,
+            .frameset => .frameset,
             .heading => |h| h._tag,
             .label => .label,
             .legend => .legend,
@@ -1540,6 +1574,7 @@ pub const Tag = enum {
     em,
     fieldset,
     figure,
+    frameset,
     form,
     font,
     footer,
@@ -1656,6 +1691,32 @@ pub const Tag = enum {
     pub fn isMetadata(self: Tag) bool {
         return switch (self) {
             .base, .head, .link, .meta, .noscript, .script, .style, .template, .title => true,
+            else => false,
+        };
+    }
+
+    // UA stylesheet display:none defaults per HTML Rendering §15.3.1
+    // "Hidden elements" (https://html.spec.whatwg.org/multipage/rendering.html#hidden-elements).
+    // The spec also lists basefont, noembed, noframes, rp; those tags are
+    // obsolete and not represented in this enum, so they fall through to
+    // `.unknown`/`.custom` and aren't matched here.
+    pub fn isHiddenByUaStylesheet(self: Tag) bool {
+        return switch (self) {
+            .area,
+            .base,
+            .datalist,
+            .head,
+            .link,
+            .meta,
+            .noscript,
+            .param,
+            .script,
+            .source,
+            .style,
+            .template,
+            .title,
+            .track,
+            => true,
             else => false,
         };
     }
