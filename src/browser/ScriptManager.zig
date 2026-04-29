@@ -265,13 +265,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     }
 
     if (remote_url) |url| {
-        errdefer {
-            if (is_blocking == false) {
-                self.scriptList(script).remove(&script.node);
-            }
-            // Let the outer errdefer handle releasing the arena if client.request fails
-        }
-
         if (comptime IS_DEBUG) {
             var ls: js.Local.Scope = undefined;
             frame.js.localScope(&ls);
@@ -285,23 +278,48 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             });
         }
 
-        {
-            const was_evaluating = self.is_evaluating;
-            self.is_evaluating = true;
-            defer self.is_evaluating = was_evaluating;
+        const was_evaluating = self.is_evaluating;
+        self.is_evaluating = true;
+        defer self.is_evaluating = was_evaluating;
 
-            try self.client.request(.{
+        const headers = try self.getHeaders();
+        errdefer headers.deinit();
+
+        if (is_blocking) {
+            const response = try self.client.syncRequest(arena, .{
                 .url = url,
-                .ctx = script,
                 .method = .GET,
                 .frame_id = frame._frame_id,
                 .loader_id = frame._loader_id,
-                .headers = try self.getHeaders(),
-                .blocking = is_blocking,
+                .headers = headers,
                 .cookie_jar = &frame._session.cookie_jar,
                 .cookie_origin = frame.url,
                 .resource_type = .script,
                 .notification = frame._session.notification,
+            });
+
+            script.source = .{ .remote = response.body };
+            script.status = response.status;
+            script.complete = true;
+        } else {
+            errdefer {
+                self.scriptList(script).remove(&script.node);
+                // Let the outer errdefer handle releasing the arena if client.request fails
+            }
+
+            try self.client.request(.{
+                .ctx = script,
+                .params = .{
+                    .url = url,
+                    .method = .GET,
+                    .frame_id = frame._frame_id,
+                    .loader_id = frame._loader_id,
+                    .headers = headers,
+                    .cookie_jar = &frame._session.cookie_jar,
+                    .cookie_origin = frame.url,
+                    .resource_type = .script,
+                    .notification = frame._session.notification,
+                },
                 .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
                 .header_callback = Script.headerCallback,
                 .data_callback = Script.dataCallback,
@@ -317,29 +335,21 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         return;
     }
 
-    // this is <script src="..."></script>, it needs to block the caller
-    // until it's evaluated
-    var client = self.client;
-    while (true) {
-        if (!script.complete) {
-            _ = try client.tick(200);
-            continue;
-        }
-        if (script.status == 0) {
-            // an error (that we already logged)
-            script.deinit();
-            return;
-        }
-
-        // could have already been evaluating if this is dynamically added
-        const was_evaluating = self.is_evaluating;
-        self.is_evaluating = true;
-        defer {
-            self.is_evaluating = was_evaluating;
-            script.deinit();
-        }
-        return script.eval(frame);
+    if (script.status == 0) {
+        // an error (that we already logged)
+        script.deinit();
+        return;
     }
+
+    // could have already been evaluating if this is dynamically added
+    const was_evaluating = self.is_evaluating;
+    self.is_evaluating = true;
+    defer {
+        self.is_evaluating = was_evaluating;
+        script.deinit();
+    }
+
+    script.eval(frame);
 }
 
 fn scriptList(self: *ScriptManager, script: *const Script) *std.DoublyLinkedList {
@@ -407,16 +417,18 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
     self.async_scripts.append(&script.node);
 
     self.client.request(.{
-        .url = url,
         .ctx = script,
-        .method = .GET,
-        .frame_id = frame._frame_id,
-        .loader_id = frame._loader_id,
-        .headers = try self.getHeaders(),
-        .cookie_jar = &frame._session.cookie_jar,
-        .cookie_origin = frame.url,
-        .resource_type = .script,
-        .notification = frame._session.notification,
+        .params = .{
+            .url = url,
+            .method = .GET,
+            .frame_id = frame._frame_id,
+            .loader_id = frame._loader_id,
+            .headers = try self.getHeaders(),
+            .cookie_jar = &frame._session.cookie_jar,
+            .cookie_origin = frame.url,
+            .resource_type = .script,
+            .notification = frame._session.notification,
+        },
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,
@@ -513,16 +525,18 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
 
     self.async_scripts.append(&script.node);
     self.client.request(.{
-        .url = url,
-        .method = .GET,
-        .frame_id = frame._frame_id,
-        .loader_id = frame._loader_id,
-        .headers = try self.getHeaders(),
         .ctx = script,
-        .resource_type = .script,
-        .cookie_jar = &frame._session.cookie_jar,
-        .cookie_origin = frame.url,
-        .notification = frame._session.notification,
+        .params = .{
+            .url = url,
+            .method = .GET,
+            .frame_id = frame._frame_id,
+            .loader_id = frame._loader_id,
+            .headers = try self.getHeaders(),
+            .resource_type = .script,
+            .cookie_jar = &frame._session.cookie_jar,
+            .cookie_origin = frame.url,
+            .notification = frame._session.notification,
+        },
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,
@@ -664,7 +678,6 @@ pub const Script = struct {
     debug_transfer_aborted: bool = false,
     debug_transfer_bytes_received: usize = 0,
     debug_transfer_notified_fail: bool = false,
-    debug_transfer_intercept_state: u8 = 0,
     debug_transfer_auth_challenge: bool = false,
     debug_transfer_easy_id: usize = 0,
 
@@ -740,7 +753,6 @@ pub const Script = struct {
                     .a3 = self.debug_transfer_aborted,
                     .a4 = self.debug_transfer_bytes_received,
                     .a5 = self.debug_transfer_notified_fail,
-                    .a7 = self.debug_transfer_intercept_state,
                     .a8 = self.debug_transfer_auth_challenge,
                     .a9 = self.debug_transfer_easy_id,
                     .b1 = transfer.id,
@@ -748,7 +760,6 @@ pub const Script = struct {
                     .b3 = transfer.aborted,
                     .b4 = transfer.bytes_received,
                     .b5 = transfer._notified_fail,
-                    .b7 = @intFromEnum(transfer._intercept_state),
                     .b8 = transfer._auth_challenge != null,
                     .b9 = if (transfer._conn) |c| @intFromPtr(c._easy) else 0,
                 });
@@ -758,7 +769,6 @@ pub const Script = struct {
                 self.debug_transfer_aborted = transfer.aborted;
                 self.debug_transfer_bytes_received = transfer.bytes_received;
                 self.debug_transfer_notified_fail = transfer._notified_fail;
-                self.debug_transfer_intercept_state = @intFromEnum(transfer._intercept_state);
                 self.debug_transfer_auth_challenge = transfer._auth_challenge != null;
                 self.debug_transfer_easy_id = if (transfer._conn) |c| @intFromPtr(c._easy) else 0;
             },

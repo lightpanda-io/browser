@@ -1,0 +1,78 @@
+name: package debian
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+
+env:
+  RELEASE: ${{ github.ref_type == 'tag' && github.ref_name || 'nightly' }}
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            deb_arch: amd64
+          - arch: aarch64
+            deb_arch: arm64
+
+    env:
+      ARCH: ${{ matrix.arch }}
+      DEB_ARCH: ${{ matrix.deb_arch }}
+      OS: linux
+
+    runs-on: ubuntu-22.04
+    container: debian:stable-slim
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install packaging deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends dpkg-dev
+
+      - name: Download linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          path: .
+
+      - name: Build Debian package
+        run: |
+          RAW_VERSION="${{ env.RELEASE }}"
+          PKGVER="${RAW_VERSION#v}"
+          echo "PKGVER=${PKGVER}" >> "$GITHUB_ENV"
+
+          ROOT="lightpanda_${PKGVER}_${DEB_ARCH}"
+          mkdir -p "$ROOT/DEBIAN" "$ROOT/usr/bin" "$ROOT/usr/share/doc/lightpanda"
+
+          install -m755 "lightpanda-${ARCH}-${OS}" "$ROOT/usr/bin/lightpanda"
+          install -m644 LICENSE "$ROOT/usr/share/doc/lightpanda/copyright"
+
+          cat > "$ROOT/DEBIAN/control" <<EOF
+          Package: lightpanda
+          Version: ${PKGVER}
+          Section: web
+          Priority: optional
+          Architecture: ${DEB_ARCH}
+          Depends: libc6 (>= 2.35)
+          Maintainer: Lightpanda <hello@lightpanda.io>
+          Homepage: https://lightpanda.io
+          Description: Lightpanda, headless browser built for AI and automation
+          EOF
+
+          dpkg-deb --build --root-owner-group "$ROOT"
+
+      - name: Upload Debian package to release
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          artifacts: lightpanda_${{ env.PKGVER }}_${{ env.DEB_ARCH }}.deb
+          tag: ${{ env.RELEASE }}
+          makeLatest: true

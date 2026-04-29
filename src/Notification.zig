@@ -21,6 +21,9 @@ const lp = @import("lightpanda");
 
 const Frame = @import("browser/Frame.zig");
 const Transfer = @import("browser/HttpClient.zig").Transfer;
+const Request = @import("browser/HttpClient.zig").Request;
+const Response = @import("browser/HttpClient.zig").Response;
+const InterceptContext = @import("network/layer/InterceptionLayer.zig").InterceptContext;
 
 const log = lp.log;
 const List = std.DoublyLinkedList;
@@ -162,11 +165,11 @@ pub const FrameLoaded = struct {
 };
 
 pub const RequestStart = struct {
-    transfer: *Transfer,
+    request: *Request,
 };
 
 pub const RequestIntercept = struct {
-    transfer: *Transfer,
+    request: *Request,
     wait_for_interception: *bool,
 };
 
@@ -177,19 +180,21 @@ pub const RequestAuthRequired = struct {
 
 pub const ResponseData = struct {
     data: []const u8,
-    transfer: *Transfer,
+    request: *Request,
 };
 
 pub const ResponseHeaderDone = struct {
-    transfer: *Transfer,
+    request: *Request,
+    response: *const Response,
 };
 
 pub const RequestDone = struct {
-    transfer: *Transfer,
+    request: *Request,
+    content_length: usize,
 };
 
 pub const RequestFail = struct {
-    transfer: *Transfer,
+    request: *Request,
     err: anyerror,
 };
 
@@ -197,6 +202,20 @@ pub const JavascriptDialogOpening = struct {
     url: [:0]const u8,
     message: []const u8,
     dialog_type: []const u8,
+    // Output param. The CDP listener may set this from a pre-armed response
+    // queued by Page.handleJavaScriptDialog. The dispatcher (alert/confirm/
+    // prompt in Window.zig) reads it back to decide what to return to JS.
+    // Headless mode auto-dismisses if no listener fills it in: confirm→false,
+    // prompt→null, alert→void (default-zero DialogResponse).
+    response: *DialogResponse,
+};
+
+pub const DialogResponse = struct {
+    accept: bool = false,
+    // Set when the CDP client sent a `promptText` with `accept: true`. Memory
+    // is owned by whoever filled in the response (typically the BrowserContext
+    // arena) and must outlive a single dispatch call.
+    prompt_text: ?[]const u8 = null,
 };
 
 pub fn init(allocator: Allocator) !*Notification {

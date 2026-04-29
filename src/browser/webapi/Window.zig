@@ -44,6 +44,7 @@ const Element = @import("Element.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
 const Selection = @import("Selection.zig");
+const Notification = @import("../../Notification.zig");
 
 const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
@@ -95,6 +96,18 @@ _scroll_pos: struct {
 // A cross origin wrapper for this window
 _cross_origin_wrapper: CrossOriginWindow,
 
+// The Window that called window.open to create this one. Null for the root
+// window, for noopener popups, and cleared if the opener is torn down while
+// we're still alive. Only valid if `!_opener.?._closed`.
+_opener: ?*Window = null,
+
+// True after our Frame has been deinit'd by window.close. Many things on the
+// window become invalid once this is true.
+_closed: bool = false,
+
+// Popup name (owned by page.arena)
+_name: []const u8 = "",
+
 pub fn asEventTarget(self: *Window) *EventTarget {
     return self._proto;
 }
@@ -109,6 +122,25 @@ pub fn getSelf(self: *Window) *Window {
 
 pub fn getWindow(self: *Window) *Window {
     return self;
+}
+
+pub fn getOpener(self: *Window, frame: *Frame) ?Access {
+    const opener = self._opener orelse return null;
+    if (opener._closed) return null;
+    return Access.init(frame.window, opener);
+}
+
+pub fn getClosed(self: *const Window) bool {
+    return self._closed;
+}
+
+pub fn getName(self: *const Window) []const u8 {
+    return self._name;
+}
+
+pub fn setName(self: *Window, name: []const u8, frame: *Frame) !void {
+    // Store in the Page's frame arena so the slice outlives any call_arena.
+    self._name = try frame.arena.dupe(u8, name);
 }
 
 pub fn getTop(self: *Window, frame: *Frame) Access {
@@ -422,6 +454,121 @@ pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]
         }
     }
     return CSSStyleProperties.init(element, true, frame);
+}
+
+// window.open(url?, target?, features?) — v1 scope:
+//   * Always creates a new popup Frame on the Page (sibling to the root).
+//   * Honors `noopener` / `noreferrer` tokens in `features` (opener=null,
+//     return value=null). Geometry (width, height, ...) ignored.
+//   * `target` values `_self` / `_parent` / `_top` navigate the current frame.
+//     Any other value is treated as a popup name; reusing a live name
+//     navigates the existing popup instead of spawning a new one.
+//   * `url` empty or missing opens about:blank.
+pub fn open(self: *Window, url_: ?[]const u8, target_: ?[]const u8, features_: ?[]const u8, frame: *Frame) !?Access {
+    const raw_url = url_ orelse "";
+    const target = target_ orelse "";
+    const features = features_ orelse "";
+
+    const no_opener = hasFeatureToken(features, "noopener") or hasFeatureToken(features, "noreferrer");
+
+    // _self / _parent / _top navigate the current browsing context.
+    if (std.ascii.eqlIgnoreCase(target, "_self") or
+        std.ascii.eqlIgnoreCase(target, "_parent") or
+        std.ascii.eqlIgnoreCase(target, "_top"))
+    {
+        const nav_target = frame.resolveTargetFrame(target) orelse frame;
+        const nav_url = if (raw_url.len == 0) "about:blank" else raw_url;
+        try frame.scheduleNavigation(nav_url, .{
+            .reason = .script,
+            .kind = .{ .push = null },
+        }, .{ .script = nav_target });
+
+        if (no_opener) {
+            return null;
+        }
+
+        return Access.init(frame.window, nav_target.window);
+    }
+
+    const page = frame._page;
+
+    // Name-based reuse: if a popup with this name already exists, reuse it.
+    // `_blank` is reserved and never reuses.
+    const is_named = target.len > 0 and !std.ascii.eqlIgnoreCase(target, "_blank");
+    if (is_named) {
+        if (page.findPopupByName(target)) |existing| {
+            if (raw_url.len > 0) {
+                try existing.scheduleNavigation(raw_url, .{
+                    .reason = .script,
+                    .kind = .{ .push = null },
+                }, .{ .script = existing });
+            }
+            if (no_opener) {
+                return null;
+            }
+            return Access.init(frame.window, existing.window);
+        }
+    }
+
+    // Spawn a new popup Frame as a sibling of the root.
+    const popup = try frame.openPopup(.{
+        .url = raw_url,
+        .name = target,
+        .opener = if (no_opener) null else self,
+    });
+
+    if (no_opener) {
+        return null;
+    }
+    return Access.init(frame.window, popup.window);
+}
+
+pub fn close(self: *Window) void {
+    if (self._closed) {
+        return;
+    }
+
+    // Per spec, close() is only honored on script-opened windows. That
+    // maps exactly to membership in page.popups.
+    const frame = self._frame;
+    const page = frame._page;
+
+    var popup_index: usize = 0;
+    while (popup_index < page.popups.items.len) : (popup_index += 1) {
+        if (page.popups.items[popup_index] == frame) {
+            break;
+        }
+    } else return;
+
+    self._closed = true;
+
+    // Any live Window holding us as its opener must drop the reference —
+    // our Frame is about to go away, and a stale _frame deref on their
+    // side would crash.
+    for (page.popups.items) |popup| {
+        if (popup.window._opener == self) {
+            popup.window._opener = null;
+        }
+    }
+    if (page.frame.window._opener == self) {
+        page.frame.window._opener = null;
+    }
+
+    _ = page.popups.swapRemove(popup_index);
+
+    // Drop any pending queued navigation for this frame. Frame.deinit will
+    // release the QueuedNavigation arena, but the entry in page.queued_navigation
+    // would otherwise have processQueuedNavigation re-deinit the popup.
+    if (frame._queued_navigation != null) {
+        for (page.queued_navigation.items, 0..) |f, i| {
+            if (f == frame) {
+                _ = page.queued_navigation.swapRemove(i);
+                break;
+            }
+        }
+    }
+
+    frame.deinit(true);
 }
 
 pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]const u8, frame: *Frame) !void {
@@ -833,6 +980,20 @@ fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
     };
 }
 
+// Checks whether a window.open features string contains a token, matched
+// case-insensitively on whole-token boundaries (comma or whitespace separated).
+// The features syntax is legacy and loose; the only tokens we interpret are
+// noopener and noreferrer.
+fn hasFeatureToken(features: []const u8, token: []const u8) bool {
+    var it = std.mem.tokenizeAny(u8, features, " \t\r\n,");
+    while (it.next()) |raw| {
+        // Trim a trailing =value if present — we only need the key.
+        const key = if (std.mem.indexOfScalarPos(u8, raw, 0, '=')) |eq| raw[0..eq] else raw;
+        if (std.ascii.eqlIgnoreCase(key, token)) return true;
+    }
+    return false;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Window);
 
@@ -912,37 +1073,50 @@ pub const JsApi = struct {
     pub const innerHeight = bridge.property(1080, .{ .template = false });
     pub const devicePixelRatio = bridge.property(1, .{ .template = false });
 
-    // This should return a window-like object in specific conditions. Would be
-    // pretty complicated to properly support I think.
-    pub const opener = bridge.property(null, .{ .template = false });
+    pub const opener = bridge.accessor(Window.getOpener, null, .{});
+    pub const closed = bridge.accessor(Window.getClosed, null, .{});
+    pub const name = bridge.accessor(Window.getName, Window.setName, .{});
+    pub const open = bridge.function(Window.open, .{});
+    pub const close = bridge.function(Window.close, .{});
 
     pub const alert = bridge.function(struct {
         fn alert(_: *const Window, message: ?[]const u8, frame: *Frame) void {
+            var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "alert",
+                .response = &response,
             });
+            // Return value is void; we still pop a pre-armed response so the
+            // CDP client's pre-arm doesn't leak across to the next dialog.
         }
     }.alert, .{});
     pub const confirm = bridge.function(struct {
         fn confirm(_: *const Window, message: ?[]const u8, frame: *Frame) bool {
+            var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "confirm",
+                .response = &response,
             });
-            return false;
+            return response.accept;
         }
     }.confirm, .{});
     pub const prompt = bridge.function(struct {
         fn prompt(_: *const Window, message: ?[]const u8, _: ?[]const u8, frame: *Frame) ?[]const u8 {
+            var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "prompt",
+                .response = &response,
             });
-            return null;
+            if (!response.accept) return null;
+            // promptText omitted with accept=true is "" per CDP spec
+            // (https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-handleJavaScriptDialog).
+            return response.prompt_text orelse "";
         }
     }.prompt, .{});
 

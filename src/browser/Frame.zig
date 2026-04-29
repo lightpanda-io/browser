@@ -534,6 +534,8 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             self.origin = try URL.getOrigin(self.arena, request_url[5.. :0]);
         } else if (self.parent) |parent| {
             self.origin = parent.origin;
+        } else if (self.window._opener) |opener| {
+            self.origin = opener._frame.origin;
         } else {
             self.origin = null;
         }
@@ -622,6 +624,10 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     if (opts.header) |hdr| {
         try headers.add(hdr);
     }
+    if (opts.referer) |ref| {
+        const ref_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", ref }, 0);
+        try headers.add(ref_header);
+    }
     // We dispatch frame_navigate event before sending the request.
     // It ensures the event frame_navigated is not dispatched before this one.
     session.notification.dispatch(.frame_navigate, &.{
@@ -643,16 +649,18 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     http_client.request(.{
         .ctx = self,
-        .url = self.url,
-        .frame_id = self._frame_id,
-        .loader_id = self._loader_id,
-        .method = opts.method,
-        .headers = headers,
-        .body = opts.body,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = self.url,
-        .resource_type = .document,
-        .notification = self._session.notification,
+        .params = .{
+            .url = self.url,
+            .frame_id = self._frame_id,
+            .loader_id = self._loader_id,
+            .method = opts.method,
+            .headers = headers,
+            .body = opts.body,
+            .cookie_jar = &session.cookie_jar,
+            .cookie_origin = self.url,
+            .resource_type = .document,
+            .notification = self._session.notification,
+        },
         .header_callback = frameHeaderDoneCallback,
         .data_callback = frameDataCallback,
         .done_callback = frameDoneCallback,
@@ -754,9 +762,18 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         session.browser.http_client.abortFrame(target._frame_id);
     }
 
+    // Capture the originating frame's URL as the Referer for this
+    // navigation. The originator's frame may be torn down before navigate()
+    // runs (processRootQueuedNavigation rebuilds the Page in-place), so dup
+    // into the QueuedNavigation arena which outlives that tear-down.
+    var nav_opts = opts;
+    if (nav_opts.referer == null and std.mem.startsWith(u8, originator.url, "http")) {
+        nav_opts.referer = try arena.dupe(u8, originator.url);
+    }
+
     const qn = try arena.create(QueuedNavigation);
     qn.* = .{
-        .opts = opts,
+        .opts = nav_opts,
         .arena = arena,
         .url = resolved_url,
         .is_about_blank = is_about_blank,
@@ -1279,7 +1296,12 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         );
     };
 
-    new_frame.navigate(url, .{ .reason = .initialFrameNavigation }) catch |err| {
+    new_frame.navigate(url, .{
+        .reason = .initialFrameNavigation,
+        // Iframe's initial src request carries the parent's URL as Referer.
+        // Parent frame outlives this navigate() call, so the slice is safe.
+        .referer = if (std.mem.startsWith(u8, self.url, "http")) self.url else null,
+    }) catch |err| {
         log.warn(.frame, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
         iframe._window = null;
@@ -1316,6 +1338,69 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         // is no longer sorted.
         self.child_frames_sorted = false;
     }
+}
+
+const OpenPopupOpts = struct {
+    url: []const u8,
+    name: []const u8,
+    opener: ?*Window,
+};
+
+// Create a new top-level browsing context as a sibling of the root frame.
+// The popup shares the Page's arena, factory, and identity map, but has no
+// parent and is not attached to the frame tree — it lives in page.popups.
+pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
+    const page = self._page;
+    const session = self._session;
+
+    const resolved_url: [:0]const u8 = blk: {
+        if (opts.url.len == 0) {
+            break :blk "about:blank";
+        }
+        if (std.mem.eql(u8, opts.url, "about:blank")) {
+            break :blk "about:blank";
+        }
+        const frame_base = base_blk: {
+            var frame = self;
+            while (true) {
+                const maybe_base = frame.base();
+                if (!std.mem.eql(u8, maybe_base, "about:blank")) {
+                    break :base_blk maybe_base;
+                }
+                frame = frame.parent orelse break :base_blk "";
+            }
+        };
+        break :blk try URL.resolve(self.call_arena, frame_base, opts.url, .{ .always_dupe = true, .encoding = self.charset });
+    };
+
+    const popup = try page.frame_arena.create(Frame);
+    errdefer page.frame_arena.destroy(popup);
+
+    const frame_id = session.nextFrameId();
+    try Frame.init(popup, frame_id, page, null);
+    errdefer popup.deinit(true);
+
+    popup.window._opener = opts.opener;
+    if (opts.name.len > 0 and
+        !std.ascii.eqlIgnoreCase(opts.name, "_blank") and
+        !std.ascii.eqlIgnoreCase(opts.name, "_self") and
+        !std.ascii.eqlIgnoreCase(opts.name, "_parent") and
+        !std.ascii.eqlIgnoreCase(opts.name, "_top"))
+    {
+        popup.window._name = try page.frame_arena.dupe(u8, opts.name);
+    }
+
+    const popup_index = page.popups.items.len;
+    try page.popups.append(page.frame_arena, popup);
+    // not impossible that navigate adds popups, so remove by index
+    errdefer _ = page.popups.swapRemove(popup_index);
+
+    popup.navigate(resolved_url, .{ .reason = .script }) catch |err| {
+        log.warn(.frame, "popup navigate failure", .{ .url = resolved_url, .err = err });
+        return err;
+    };
+
+    return popup;
 }
 
 pub fn domChanged(self: *Frame) void {
@@ -2335,6 +2420,17 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         attribute_iterator,
                         .{ ._proto = undefined },
                     ),
+                    asUint("frameset") => {
+                        if (comptime from_parser) {
+                            log.warn(.not_implemented, "framset", .{ .note = "<framset>...</frameset> in html is not handled properly" });
+                        }
+                        return self.createHtmlElementT(
+                            Element.Html.FrameSet,
+                            namespace,
+                            attribute_iterator,
+                            .{ ._proto = undefined },
+                        );
+                    },
                     asUint("optgroup") => return self.createHtmlElementT(
                         Element.Html.OptGroup,
                         namespace,
@@ -3452,6 +3548,10 @@ pub const NavigateOpts = struct {
     method: HttpClient.Method = .GET,
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
+    // Set by scheduleNavigationWithArena from the originating frame's URL so
+    // anchor click / form submit / location.href navigations carry a Referer.
+    // null on CDP Page.navigate (address-bar) and Page.reload — matches Chrome.
+    referer: ?[]const u8 = null,
     force: bool = false,
     kind: NavigationKind = .{ .push = null },
 };
@@ -3492,7 +3592,7 @@ pub const QueuedNavigation = struct {
 /// to the appropriateFrame to navigate.
 /// Returns null if the target is "_blank" (which would open a new window/tab).
 /// Note: Callers should handle empty target separately (for owner document resolution).
-fn resolveTargetFrame(self: *Frame, target_name: []const u8) ?*Frame {
+pub fn resolveTargetFrame(self: *Frame, target_name: []const u8) ?*Frame {
     if (std.ascii.eqlIgnoreCase(target_name, "_self")) {
         return self;
     }
@@ -3613,7 +3713,11 @@ pub fn handleClick(self: *Frame, target: *Node) !void {
         },
         .input => |input| {
             try element.focus(self);
-            if (input._input_type == .submit) {
+            // Per HTML §4.10.18.6.4 "Image Button state (type=image)", clicking an
+            // image button submits its form. The form-data set already gets the
+            // submitter's coordinate fields appended via FormData.collectForm
+            // (see src/browser/webapi/net/FormData.zig).
+            if (input._input_type == .submit or input._input_type == .image) {
                 return self.submitForm(element, input.getForm(self), .{});
             }
         },
@@ -3753,7 +3857,16 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     const arena = try self._session.getArena(.medium, "submitForm");
     errdefer self._session.releaseArena(arena);
 
-    const enctype = form_element.getAttributeSafe(comptime .wrap("enctype"));
+    // Per HTML spec form-submission algorithm, when the submitter is a submit
+    // button, its formaction/formmethod/formenctype attributes override the
+    // form's corresponding attributes (matching how formtarget is honored above).
+    // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
+    const enctype = blk: {
+        if (submitter_) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formenctype"))) |fe| break :blk fe;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("enctype"));
+    };
 
     // Get charset from accept-charset attribute or fall back to document charset
     const charset: []const u8 = blk: {
@@ -3770,8 +3883,18 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     var buf = std.Io.Writer.Allocating.init(arena);
     try form_data.write(.{ .enctype = enctype, .charset = charset, .allocator = arena }, &buf.writer);
 
-    const method = form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
-    var action = form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
+    const method = blk: {
+        if (submitter_) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formmethod"))) |fm| break :blk fm;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
+    };
+    var action = blk: {
+        if (submitter_) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formaction"))) |fa| break :blk fa;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
+    };
 
     var opts = NavigateOpts{
         .reason = .form,

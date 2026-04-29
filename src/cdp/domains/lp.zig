@@ -41,6 +41,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         fillNode,
         scrollNode,
         waitForSelector,
+        handleJavaScriptDialog,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -54,6 +55,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .fillNode => return fillNode(cmd),
         .scrollNode => return scrollNode(cmd),
         .waitForSelector => return waitForSelector(cmd),
+        .handleJavaScriptDialog => return handleJavaScriptDialog(cmd),
     }
 }
 
@@ -293,6 +295,53 @@ fn waitForSelector(cmd: anytype) !void {
     }, .{});
 }
 
+// Lightpanda-namespaced pre-arm for window.alert/confirm/prompt return values.
+//
+// Standard CDP drivers send Page.handleJavaScriptDialog *reactively* in
+// response to a Page.javascriptDialogOpening event — the dialog suspends
+// JS, the client picks accept/dismiss, the runtime resumes. Lightpanda's
+// dialogs auto-dismiss in headless mode (window.alert/confirm/prompt
+// return immediately rather than blocking V8), so by the time the event
+// reaches the client, JS has already returned. A reactive call has
+// nothing left to influence — full Chrome-faithful behavior would
+// require V8 suspension, which #2082 / PR #2085 deferred.
+//
+// LP.handleJavaScriptDialog gives Lightpanda-aware clients a *proactive*
+// opt-in: the client sets {accept, promptText} *before* triggering the JS
+// that opens the dialog. The handler stashes the response on the
+// BrowserContext; when the next dialog dispatches the
+// `javascript_dialog_opening` notification, the listener in page.zig
+// pops the stash and fills it into the dispatch's response output param.
+// window.alert/confirm/prompt then return that value.
+//
+// Page.handleJavaScriptDialog continues to return -32000 "No dialog is
+// showing" so reactive Chrome-style drivers see no semantic change.
+//
+// Without a pre-armed response, behavior is unchanged from PR #2085:
+// confirm→false, prompt→null, alert→void.
+fn handleJavaScriptDialog(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        accept: bool,
+        promptText: ?[]const u8 = null,
+    })) orelse return error.InvalidParam;
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+
+    // Duplicate promptText into the BrowserContext arena so it outlives the
+    // CDP command's own message arena (the dialog may fire on a later command).
+    const prompt_text: ?[]const u8 = if (params.promptText) |t|
+        try bc.arena.dupe(u8, t)
+    else
+        null;
+
+    bc.pending_dialog_response = .{
+        .accept = params.accept,
+        .prompt_text = prompt_text,
+    };
+
+    return cmd.sendResult(null, .{});
+}
+
 const testing = @import("../testing.zig");
 test "cdp.lp: getMarkdown" {
     var ctx = try testing.context();
@@ -440,4 +489,118 @@ test "cdp.lp: waitForSelector" {
     });
     const err_obj = (try ctx.getSentMessage(2)).?.object.get("error").?.object;
     try testing.expect(err_obj.get("code") != null);
+}
+
+test "cdp.lp: handleJavaScriptDialog accepts/dismisses without an open dialog" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    {
+        // Without a BrowserContext: error (matches other LP handlers' shape).
+        try ctx.processMessage(.{ .id = 1, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = true } });
+        try ctx.expectSentError(-31998, "NoBrowserContext", .{ .id = 1 });
+    }
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-D1", .url = "cdp/dialog.html", .target_id = "FID-000000000X".* });
+
+    {
+        // Pre-arming with accept=true succeeds. Headless browsers auto-dismiss,
+        // so the CDP client sends LP.handleJavaScriptDialog *before* the JS
+        // that opens the dialog — handler stashes the response on the
+        // BrowserContext.
+        try ctx.processMessage(.{ .id = 2, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = true } });
+        try ctx.expectSentResult(null, .{ .id = 2 });
+    }
+
+    {
+        // Pre-arming with accept=false also succeeds.
+        try ctx.processMessage(.{ .id = 3, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = false } });
+        try ctx.expectSentResult(null, .{ .id = 3 });
+    }
+
+    {
+        // Pre-arming with a promptText also succeeds. The string is dup'd into
+        // the BrowserContext arena so it survives until the dialog dispatches.
+        try ctx.processMessage(.{ .id = 4, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = true, .promptText = "hello" } });
+        try ctx.expectSentResult(null, .{ .id = 4 });
+    }
+}
+
+test "cdp.lp: handleJavaScriptDialog controls confirm/prompt/alert return values" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-D2", .url = "cdp/dialog.html", .target_id = "FID-000000000X".* });
+
+    const frame = bc.session.currentFrame() orelse unreachable;
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // ---- confirm: accept=true makes confirm() return true ----
+    try ctx.processMessage(.{ .id = 1, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = true } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const c_accept = try ls.local.exec("confirm('proceed?')", null);
+    try testing.expectEqual(true, c_accept.toBool());
+    try ctx.expectSentEvent("Page.javascriptDialogOpening", .{
+        .message = "proceed?",
+        .type = "confirm",
+        .hasBrowserHandler = false,
+        .defaultPrompt = "",
+    }, .{ .session_id = "SID-X" });
+
+    // ---- confirm: accept=false makes confirm() return false ----
+    try ctx.processMessage(.{ .id = 2, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = false } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    const c_dismiss = try ls.local.exec("confirm('again?')", null);
+    try testing.expectEqual(false, c_dismiss.toBool());
+
+    // ---- confirm: no pre-arm preserves PR #2085 default (false) ----
+    const c_default = try ls.local.exec("confirm('default?')", null);
+    try testing.expectEqual(false, c_default.toBool());
+
+    // ---- prompt: accept=true with promptText returns the text ----
+    try ctx.processMessage(.{ .id = 3, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = true, .promptText = "hello" } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    const p_text = try ls.local.exec("prompt('name?')", null);
+    const p_text_str = try p_text.toStringSlice();
+    try testing.expectEqualSlices(u8, "hello", p_text_str);
+
+    // ---- prompt: accept=true without promptText returns "" per CDP spec ----
+    try ctx.processMessage(.{ .id = 4, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = true } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+
+    const p_empty = try ls.local.exec("prompt('name?')", null);
+    const p_empty_str = try p_empty.toStringSlice();
+    try testing.expectEqualSlices(u8, "", p_empty_str);
+
+    // ---- prompt: accept=false makes prompt() return null ----
+    try ctx.processMessage(.{ .id = 5, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = false } });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+
+    const p_dismiss = try ls.local.exec("prompt('cancel?')", null);
+    try testing.expect(p_dismiss.isNull());
+
+    // ---- prompt: no pre-arm preserves PR #2085 default (null) ----
+    const p_default = try ls.local.exec("prompt('default?')", null);
+    try testing.expect(p_default.isNull());
+
+    // ---- alert: dispatches the event but has no return value to override ----
+    try ctx.processMessage(.{ .id = 6, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = true } });
+    try ctx.expectSentResult(null, .{ .id = 6 });
+    _ = try ls.local.exec("alert('important')", null);
+    try ctx.expectSentEvent("Page.javascriptDialogOpening", .{
+        .message = "important",
+        .type = "alert",
+    }, .{ .session_id = "SID-X" });
+
+    // ---- pending response is consumed by exactly one dialog ----
+    // After the alert above pops the pre-arm, the next confirm sees no pending
+    // and falls back to the default (false) — the alert MUST clear pending so
+    // the response doesn't leak across dialogs.
+    const c_after_alert = try ls.local.exec("confirm('leak?')", null);
+    try testing.expectEqual(false, c_after_alert.toBool());
 }

@@ -800,6 +800,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/element/html/Embed.zig"),
     @import("../webapi/element/html/FieldSet.zig"),
     @import("../webapi/element/html/Font.zig"),
+    @import("../webapi/element/html/FrameSet.zig"),
     @import("../webapi/element/html/Form.zig"),
     @import("../webapi/element/html/Generic.zig"),
     @import("../webapi/element/html/Head.zig"),

@@ -145,7 +145,7 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
 
         const http_client = frame._session.browser.http_client;
         const http_active = http_client.http_active;
-        const total_network_activity = http_active + http_client.intercepted;
+        const total_network_activity = http_active + http_client.interception_layer.intercepted;
         if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
             try sendPageLifecycle(bc, "networkAlmostIdle", now, frame_id, loader_id);
         }
@@ -693,6 +693,10 @@ fn handleJavaScriptDialog(cmd: *CDP.Command) !void {
     // Dialogs auto-dismiss in headless mode. By the time the CDP client
     // sends this command, the dialog has already returned and there is
     // no pending dialog to accept or dismiss.
+    //
+    // Lightpanda-aware clients that want to control confirm/prompt return
+    // values can pre-arm a response via LP.handleJavaScriptDialog instead
+    // (see src/cdp/domains/lp.zig).
     _ = try cmd.params(struct {
         accept: bool,
         promptText: ?[]const u8 = null,
@@ -702,6 +706,15 @@ fn handleJavaScriptDialog(cmd: *CDP.Command) !void {
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Page/#event-javascriptDialogOpening
 pub fn javascriptDialogOpening(bc: anytype, event: *const Notification.JavascriptDialogOpening) !void {
+    // Pop any response pre-armed via LP.handleJavaScriptDialog onto the
+    // dispatch's output param so the calling alert/confirm/prompt returns
+    // the CDP client's choice. Cleared unconditionally — a stash applies
+    // to exactly one dialog.
+    if (bc.pending_dialog_response) |pending| {
+        event.response.* = pending;
+        bc.pending_dialog_response = null;
+    }
+
     const session_id = bc.session_id orelse return;
     var cdp = bc.cdp;
 
@@ -1179,6 +1192,89 @@ test "cdp.frame: navigate inherits original fragment across redirect" {
 
         const frame = bc.session.currentFrame() orelse unreachable;
         try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/redirect-target", frame.url);
+    }
+}
+
+test "cdp.frame: anchor click sends Referer matching the originating page" {
+    // HTML Living Standard "navigate" algorithm + Fetch §4.5 "request's referrer":
+    // when a navigation is initiated by a hyperlink click (or form submit, or
+    // location.href assignment), the resulting request carries a Referer
+    // header equal to the originating document's URL.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const cdp_inst = ctx.cdp();
+    _ = try cdp_inst.createBrowserContext();
+    var bc = &cdp_inst.browser_context.?;
+    bc.id = "BID-A18";
+    bc.session_id = "SID-A18";
+    bc.target_id = "TID-A18-000000".*;
+
+    // Initial navigation to the page hosting the anchor — driven directly via
+    // Frame.navigate(.address_bar), so this request itself has no Referer.
+    {
+        const f = try bc.session.createPage();
+        try f.navigate("http://127.0.0.1:9582/referer_link.html", .{});
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    // Click the anchor via JS. The click goes through Frame.scheduleNavigation
+    // (.reason = .script), which must capture the originating frame's URL as
+    // the Referer for the queued navigation.
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("document.getElementById('link').click()", null);
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    // After the click navigation completes, the loaded page is /echo_referer
+    // and its body echoes the Referer header the server actually saw.
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec(
+            "document.body.innerText.includes('referer=http://127.0.0.1:9582/referer_link.html')",
+            null,
+        );
+        try testing.expect(v.toBool());
+    }
+}
+
+test "cdp.frame: address-bar Page.navigate sends no Referer" {
+    // Regression guard: navigations initiated by the user agent itself (CDP
+    // Page.navigate, address-bar typed URLs, Page.reload) must not leak the
+    // previous page's URL as Referer. Matches Chrome.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const cdp_inst = ctx.cdp();
+    _ = try cdp_inst.createBrowserContext();
+    var bc = &cdp_inst.browser_context.?;
+    bc.id = "BID-A18B";
+    bc.session_id = "SID-A18B";
+    bc.target_id = "TID-A18B-00000".*;
+
+    {
+        const f = try bc.session.createPage();
+        try f.navigate("http://127.0.0.1:9582/echo_referer", .{});
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("document.body.innerText.includes('referer=NONE')", null);
+        try testing.expect(v.toBool());
     }
 }
 
