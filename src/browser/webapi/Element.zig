@@ -600,9 +600,40 @@ pub fn hasAttributeSafe(self: *const Element, name: String) bool {
     return attributes.hasSafe(name);
 }
 
+// Per HTML "concept-fe-disabled", only listed elements participate in the
+// disabled concept. Anything else (e.g. <div disabled>) has no disabled
+// state and never matches :disabled / :enabled.
+pub fn hasDisabledConcept(self: *const Element) bool {
+    return switch (self.getTag()) {
+        .button, .input, .select, .textarea, .optgroup, .option, .fieldset => true,
+        else => false,
+    };
+}
+
 pub fn isDisabled(self: *Element) bool {
+    if (!self.hasDisabledConcept()) {
+        return false;
+    }
+
     if (self.getAttributeSafe(comptime .wrap("disabled")) != null) {
         return true;
+    }
+
+    // <option> takes a different inheritance path: per HTML
+    // "concept-option-disabled" an option is disabled when its parent is an
+    // <optgroup disabled>. It does NOT inherit from <select disabled> or
+    // an ancestor <fieldset disabled>.
+    if (self.getTag() == .option) {
+        if (self.asNode()._parent) |parent_node| {
+            if (parent_node.is(Element)) |parent_el| {
+                if (parent_el.getTag() == .optgroup and
+                    parent_el.getAttributeSafe(comptime .wrap("disabled")) != null)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     const element_node = self.asNode();

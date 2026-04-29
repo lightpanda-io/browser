@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<form>
+  <fieldset id="fs" disabled>
+    <legend><input id="legend_input" type="text"></legend>
+    <input id="fs_input" type="text">
+    <button id="fs_button" type="button">btn</button>
+    <select id="fs_select"></select>
+    <textarea id="fs_textarea"></textarea>
+  </fieldset>
+
+  <fieldset id="fs_enabled">
+    <legend><input id="enabled_legend_input"></legend>
+    <input id="fs_enabled_input">
+  </fieldset>
+
+  <select id="sel_disabled" disabled>
+    <option id="opt_in_disabled_select">a</option>
+  </select>
+
+  <select id="sel_enabled">
+    <optgroup id="og_disabled" disabled label="g">
+      <option id="opt_in_disabled_optgroup">b</option>
+    </optgroup>
+    <optgroup id="og_enabled" label="h">
+      <option id="opt_in_enabled_optgroup">c</option>
+    </optgroup>
+    <option id="opt_loose">d</option>
+  </select>
+
+  <input id="own_disabled" type="text" disabled>
+  <input id="own_enabled" type="text">
+</form>
+
+<div id="div_plain">x</div>
+<div id="div_with_disabled_attr" disabled>y</div>
+<span id="span_plain">z</span>
+
+<script id="fieldset_inheritance">
+{
+  // Form controls inside <fieldset disabled> match :disabled.
+  testing.expectTrue($('#fs_input').matches(':disabled'));
+  testing.expectTrue($('#fs_button').matches(':disabled'));
+  testing.expectTrue($('#fs_select').matches(':disabled'));
+  testing.expectTrue($('#fs_textarea').matches(':disabled'));
+
+  // The fieldset's first <legend> exempts its descendants.
+  testing.expectFalse($('#legend_input').matches(':disabled'));
+
+  // Enabled fieldset doesn't propagate.
+  testing.expectFalse($('#fs_enabled_input').matches(':disabled'));
+  testing.expectFalse($('#enabled_legend_input').matches(':disabled'));
+}
+</script>
+
+<script id="optgroup_inheritance">
+{
+  // <option> inside <optgroup disabled> matches :disabled.
+  testing.expectTrue($('#opt_in_disabled_optgroup').matches(':disabled'));
+
+  // <option> outside any disabled ancestor does not.
+  testing.expectFalse($('#opt_in_enabled_optgroup').matches(':disabled'));
+  testing.expectFalse($('#opt_loose').matches(':disabled'));
+
+  // <option> inside <select disabled> (no optgroup) does NOT match :disabled
+  // per HTML "concept-option-disabled" — only own attr or <optgroup disabled>
+  // parent contributes. <select disabled> itself matches, but does not
+  // propagate to its <option> children for selector purposes.
+  testing.expectFalse($('#opt_in_disabled_select').matches(':disabled'));
+}
+</script>
+
+<script id="own_attribute">
+{
+  testing.expectTrue($('#own_disabled').matches(':disabled'));
+  testing.expectFalse($('#own_enabled').matches(':disabled'));
+
+  // The disabled <fieldset>/<select>/<optgroup> elements themselves match.
+  testing.expectTrue($('#fs').matches(':disabled'));
+  testing.expectTrue($('#sel_disabled').matches(':disabled'));
+  testing.expectTrue($('#og_disabled').matches(':disabled'));
+}
+</script>
+
+<script id="enabled_complement">
+{
+  // :enabled is the negation of :disabled for elements that have a
+  // disabled concept. An <input> inside <fieldset disabled> is :disabled,
+  // so it must NOT also be :enabled.
+  testing.expectFalse($('#fs_input').matches(':enabled'));
+  testing.expectFalse($('#opt_in_disabled_optgroup').matches(':enabled'));
+  testing.expectTrue($('#fs_enabled_input').matches(':enabled'));
+  testing.expectTrue($('#opt_loose').matches(':enabled'));
+  // Legend descendants are enabled despite the disabled fieldset.
+  testing.expectTrue($('#legend_input').matches(':enabled'));
+}
+</script>
+
+<script id="concept_gate">
+{
+  // Per HTML "concept-fe-disabled", only listed elements (button, input,
+  // select, textarea, optgroup, option, fieldset) participate in the
+  // disabled concept. Anything else never matches :disabled / :enabled,
+  // even with an own [disabled] attribute.
+  testing.expectFalse($('#div_plain').matches(':disabled'));
+  testing.expectFalse($('#div_plain').matches(':enabled'));
+  testing.expectFalse($('#span_plain').matches(':enabled'));
+  testing.expectFalse($('#div_with_disabled_attr').matches(':disabled'));
+  testing.expectFalse($('#div_with_disabled_attr').matches(':enabled'));
+}
+</script>
+
+<script id="querySelectorAll">
+{
+  // querySelectorAll(':disabled') should find every disabled element.
+  const ids = Array.from(document.querySelectorAll(':disabled')).map(e => e.id).sort();
+  // Expected (sorted):
+  //   fs, fs_button, fs_input, fs_select, fs_textarea,
+  //   og_disabled, opt_in_disabled_optgroup,
+  //   own_disabled, sel_disabled
+  const expected = [
+    'fs', 'fs_button', 'fs_input', 'fs_select', 'fs_textarea',
+    'og_disabled', 'opt_in_disabled_optgroup',
+    'own_disabled', 'sel_disabled',
+  ].sort();
+  testing.expectEqual(JSON.stringify(expected), JSON.stringify(ids));
+}
+</script>
