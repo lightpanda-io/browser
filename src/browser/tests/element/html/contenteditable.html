@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<div id="own-true" contenteditable="true">own true</div>
+<div id="own-empty" contenteditable="">own empty</div>
+<div id="own-false" contenteditable="false">own false</div>
+<div id="own-plaintext" contenteditable="plaintext-only">own plaintext-only</div>
+<div id="own-uppercase" contenteditable="TRUE">own UPPERCASE</div>
+<div id="own-falseupper" contenteditable="FALSE">own FALSEUPPER</div>
+
+<div id="ancestor-true" contenteditable="true">
+  <span id="child-of-true">child</span>
+  <div><span id="grandchild-of-true">grandchild</span></div>
+</div>
+
+<div id="ancestor-false" contenteditable="false">
+  <span id="child-of-false">child</span>
+  <div contenteditable="true">
+    <span id="grandchild-rehosted">re-hosted</span>
+  </div>
+</div>
+
+<div id="plain"><span id="child-of-plain">no editing context</span></div>
+
+<script id="own-states">
+  {
+    testing.expectEqual(true,  document.getElementById('own-true').isContentEditable);
+    testing.expectEqual(true,  document.getElementById('own-empty').isContentEditable);
+    testing.expectEqual(false, document.getElementById('own-false').isContentEditable);
+    testing.expectEqual(true,  document.getElementById('own-plaintext').isContentEditable);
+    testing.expectEqual(true,  document.getElementById('own-uppercase').isContentEditable);
+    testing.expectEqual(false, document.getElementById('own-falseupper').isContentEditable);
+  }
+</script>
+
+<script id="inheritance-true">
+  {
+    testing.expectEqual(true, document.getElementById('ancestor-true').isContentEditable);
+    testing.expectEqual(true, document.getElementById('child-of-true').isContentEditable);
+    testing.expectEqual(true, document.getElementById('grandchild-of-true').isContentEditable);
+  }
+</script>
+
+<script id="inheritance-false">
+  {
+    testing.expectEqual(false, document.getElementById('ancestor-false').isContentEditable);
+    testing.expectEqual(false, document.getElementById('child-of-false').isContentEditable);
+    // The nearer ancestor (contenteditable="true") wins over the outer "false".
+    testing.expectEqual(true,  document.getElementById('grandchild-rehosted').isContentEditable);
+  }
+</script>
+
+<script id="no-ancestor">
+  {
+    testing.expectEqual(false, document.getElementById('plain').isContentEditable);
+    testing.expectEqual(false, document.getElementById('child-of-plain').isContentEditable);
+    // The default for a document without designMode=on is non-editable.
+    testing.expectEqual(false, document.body.isContentEditable);
+    testing.expectEqual(false, document.documentElement.isContentEditable);
+  }
+</script>
+
+<script id="dynamic-attribute">
+  {
+    const el = document.createElement('div');
+    testing.expectEqual(false, el.isContentEditable);
+
+    el.setAttribute('contenteditable', 'true');
+    testing.expectEqual(true, el.isContentEditable);
+
+    el.setAttribute('contenteditable', 'false');
+    testing.expectEqual(false, el.isContentEditable);
+
+    el.setAttribute('contenteditable', '');
+    testing.expectEqual(true, el.isContentEditable);
+
+    el.removeAttribute('contenteditable');
+    testing.expectEqual(false, el.isContentEditable);
+  }
+</script>

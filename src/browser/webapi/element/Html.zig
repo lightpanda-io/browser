@@ -382,6 +382,24 @@ pub fn setTitle(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("title"), .wrap(value), frame);
 }
 
+// HTML §7.7.5.2: returns true iff the element's effective content editable
+// state is "true" or "plaintext-only". Walk up to the nearest ancestor (or
+// self) with a `contenteditable` attribute; the keyword "false" maps to the
+// false state, every other value (including the empty string, "true", and
+// "plaintext-only") maps to an editable state. With no ancestor carrying the
+// attribute the document's designMode default ("off") yields false.
+//
+// "contenteditable" is 15 bytes — past the comptime SSO limit — so the
+// String wrap runs at runtime, mirroring the pattern in interactive.zig.
+pub fn getIsContentEditable(self: *HtmlElement) bool {
+    var current: ?*Element = self.asElement();
+    while (current) |el| : (current = el.parentElement()) {
+        const raw = el.getAttributeSafe(.wrap("contenteditable")) orelse continue;
+        return !std.ascii.eqlIgnoreCase(raw, "false");
+    }
+    return false;
+}
+
 pub fn getAttributeFunction(
     self: *HtmlElement,
     listener_type: GlobalEventHandler,
@@ -1220,6 +1238,7 @@ pub const JsApi = struct {
 
     pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{});
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{});
+    pub const isContentEditable = bridge.accessor(HtmlElement.getIsContentEditable, null, .{});
     pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{});
     pub const tabIndex = bridge.accessor(HtmlElement.getTabIndex, HtmlElement.setTabIndex, .{});
     pub const title = bridge.accessor(HtmlElement.getTitle, HtmlElement.setTitle, .{});
@@ -1356,4 +1375,7 @@ test "WebApi: HTML.event_listeners" {
 }
 test "WebApi: HTMLElement.props" {
     try testing.htmlRunner("element/html/htmlelement-props.html", .{});
+}
+test "WebApi: HTMLElement.contenteditable" {
+    try testing.htmlRunner("element/html/contenteditable.html", .{});
 }
