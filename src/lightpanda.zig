@@ -55,7 +55,7 @@ pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     wait_until: ?Config.WaitUntil = null,
     wait_script: ?[:0]const u8 = null,
-    inject_script: std.ArrayList([:0]const u8) = .{},
+    inject_script: std.ArrayList([]const u8) = .{},
     wait_selector: ?[:0]const u8 = null,
     dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
@@ -76,6 +76,9 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
             cookies.saveToFile(&session.cookie_jar, cookie_jar_path);
         }
     }
+
+    // Stash scripts user want to inject.
+    session.inject_scripts = opts.inject_script.items;
 
     const frame = try session.createPage();
 
@@ -148,11 +151,6 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
         const remaining = opts.wait_ms -| elapsed;
         if (remaining == 0) return error.Timeout;
         try runner.waitForScript(script, remaining);
-    }
-
-    // Inject scripts to DOM if any.
-    if (opts.inject_script.items.len > 0) {
-        try runner.injectScripts(opts.inject_script);
     }
 
     const writer = opts.writer orelse return;
