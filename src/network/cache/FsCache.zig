@@ -265,6 +265,9 @@ pub fn put(self: *FsCache, meta: CachedMetadata, body: []const u8) !void {
 }
 
 pub fn clear(self: *FsCache) !void {
+    for (&self.locks) |*lock| lock.lock();
+    defer for (&self.locks) |*lock| lock.unlock();
+
     var iter = self.dir.iterate();
     while (try iter.next()) |entry| {
         if (entry.kind != .file) continue;
