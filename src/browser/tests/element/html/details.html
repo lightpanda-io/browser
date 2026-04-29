@@ -61,3 +61,103 @@
     testing.expectEqual('group1', details.getAttribute('name'))
   }
 </script>
+
+<!-- Summary click activation: per HTML §4.11.1.2, clicking a <summary>
+     that is a child of a <details> toggles the parent's `open` attribute. -->
+<details id="details_click_closed">
+  <summary id="summary_click_closed">click me</summary>
+  <p>content</p>
+</details>
+<details id="details_click_open" open>
+  <summary id="summary_click_open">click me</summary>
+  <p>content</p>
+</details>
+
+<script id="summary_click_opens_details">
+  {
+    const d = $('#details_click_closed');
+    const s = $('#summary_click_closed');
+    testing.expectEqual(false, d.open);
+    s.click();
+    testing.expectEqual(true, d.open);
+  }
+</script>
+
+<script id="summary_click_closes_open_details">
+  {
+    const d = $('#details_click_open');
+    const s = $('#summary_click_open');
+    testing.expectEqual(true, d.open);
+    s.click();
+    testing.expectEqual(false, d.open);
+  }
+</script>
+
+<script id="summary_click_toggles_repeatedly">
+  {
+    const d = document.createElement('details');
+    const s = document.createElement('summary');
+    d.appendChild(s);
+    document.body.appendChild(d);
+
+    testing.expectEqual(false, d.open);
+    s.click();
+    testing.expectEqual(true, d.open);
+    s.click();
+    testing.expectEqual(false, d.open);
+    s.click();
+    testing.expectEqual(true, d.open);
+
+    document.body.removeChild(d);
+  }
+</script>
+
+<script id="summary_click_preventDefault_blocks_toggle">
+  {
+    const d = document.createElement('details');
+    const s = document.createElement('summary');
+    d.appendChild(s);
+    document.body.appendChild(d);
+
+    s.addEventListener('click', (e) => e.preventDefault());
+
+    testing.expectEqual(false, d.open);
+    s.click();
+    testing.expectEqual(false, d.open);
+
+    document.body.removeChild(d);
+  }
+</script>
+
+<script id="summary_click_only_first_summary_toggles">
+  {
+    const d = document.createElement('details');
+    const s1 = document.createElement('summary');
+    const s2 = document.createElement('summary');
+    d.appendChild(s1);
+    d.appendChild(s2);
+    document.body.appendChild(d);
+
+    testing.expectEqual(false, d.open);
+    // Per spec, only the first <summary> child of <details> is the "summary
+    // for its parent details" — clicking a non-first summary doesn't toggle.
+    s2.click();
+    testing.expectEqual(false, d.open);
+    // The first summary still toggles.
+    s1.click();
+    testing.expectEqual(true, d.open);
+
+    document.body.removeChild(d);
+  }
+</script>
+
+<script id="summary_click_outside_details_does_nothing">
+  {
+    const s = document.createElement('summary');
+    document.body.appendChild(s);
+    // No throw, no side-effect — there is no parent <details> to toggle.
+    s.click();
+    testing.expectEqual(true, document.body.contains(s));
+    document.body.removeChild(s);
+  }
+</script>
