@@ -133,7 +133,7 @@ fn waitScriptFileValidator(allocator: Allocator, args: *std.process.ArgIterator)
 fn injectScriptFileValidator(
     allocator: Allocator,
     args: *std.process.ArgIterator,
-    list: *std.ArrayList([:0]const u8),
+    list: *std.ArrayList([]const u8),
 ) !void {
     const path = args.next() orelse {
         log.fatal(.app, "missing argument value", .{ .arg = "--inject-script-file" });
@@ -183,7 +183,7 @@ const Commands = cli.Builder(.{
             .{ .name = "wait_selector", .type = ?[:0]const u8 },
             .{
                 .name = "inject_script",
-                .type = [:0]const u8,
+                .type = []const u8,
                 .multiple = true,
                 .variants = .{
                     .{ .name = "inject_script_file", .validator = injectScriptFileValidator },

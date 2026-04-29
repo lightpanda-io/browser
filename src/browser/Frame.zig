@@ -1152,7 +1152,58 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
                     self._parse_state = .complete;
                 }
 
-                const raw_html = html.buffer.items;
+                const raw_html = blk: {
+                    const inject_scripts = self._session.inject_scripts;
+                    if (inject_scripts.len > 0) {
+                        // Find where <head> is.
+                        // Doing it as such since head can appear like <head>,
+                        // <HEAD>, <head lang="en">, <head class="..."> etc.
+                        // We must also skip false matches like <header>, so
+                        // require the byte after "<head" to be a tag terminator.
+                        const head_partial_end_index = scan: {
+                            var from: usize = 0;
+                            while (std.ascii.indexOfIgnoreCasePos(html.buffer.items, from, "<head")) |i| {
+                                const after = i + "<head".len;
+                                if (after >= html.buffer.items.len) break;
+                                switch (html.buffer.items[after]) {
+                                    '>', '/', ' ', '\t', '\n', '\r' => break :scan after,
+                                    else => from = i + 1,
+                                }
+                            }
+                            break :blk html.buffer.items;
+                        };
+                        // Look for closing caret.
+                        const head_end_index = (std.mem.indexOfScalarPos(u8, html.buffer.items, head_partial_end_index, '>') orelse {
+                            return error.InvalidHtml;
+                        }) + 1;
+
+                        // Allocate inject chunk in one go.
+                        const inject_chunk_size = calc: {
+                            var total: usize = "<script></script>".len * inject_scripts.len;
+                            for (inject_scripts) |script| total += script.len;
+                            break :calc total;
+                        };
+
+                        const inject_chunk = try html.arena.alloc(u8, inject_chunk_size);
+                        defer html.arena.free(inject_chunk);
+
+                        // Fill `inject_chunk`.
+                        var from: usize = 0;
+                        for (inject_scripts) |script| {
+                            @memcpy(inject_chunk[from..][0..8], "<script>");
+                            from += "<script>".len;
+                            @memcpy(inject_chunk[from..][0..script.len], script);
+                            from += script.len;
+                            @memcpy(inject_chunk[from..][0..9], "</script>");
+                            from += "</script>".len;
+                        }
+
+                        // Insert at the beginning of the <head>.
+                        try html.buffer.insertSlice(html.arena, head_end_index, inject_chunk);
+                    }
+
+                    break :blk html.buffer.items;
+                };
 
                 if (std.mem.eql(u8, self.charset, "UTF-8")) {
                     parser.parse(raw_html);
