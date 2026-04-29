@@ -169,13 +169,41 @@ fn freeSlot(self: *Session, slot: u1) void {
     self._pages[slot] = null;
 }
 
-// NOTE: the caller is not the owner of the returned value,
-// the pointer on Frame is just returned as a convenience
-pub fn createPage(self: *Session) !*Frame {
-    lp.assert(self._active_idx == null, "Session.createPage - page not null", .{});
+// Tear down the currently-active Page. Dispatches `frame_remove` first
+// so CDP can clear inspector state while the OLD page is still walkable,
+// then frees the slot and notifies Navigation. Resets `frame_id_gen` to
+// match pre-pending-page behavior. Used by removePage and by the
+// synthetic-nav path (replaceRootImmediate). Does NOT touch any pending
+// page — callers handle that themselves.
+//
+// NOT a substitute for the careful 5-step sequence in commitPendingPage,
+// which interleaves the OLD-page teardown with the pending-page promotion
+// in a specific order.
+fn tearDownActivePage(self: *Session) void {
+    self.notification.dispatch(.frame_remove, .{});
+    const idx = self._active_idx orelse {
+        lp.assert(false, "Session.tearDownActivePage - no active page", .{});
+        return;
+    };
+    self._pages[idx].?.deinit();
+    self.freeSlot(idx);
+    self._active_idx = null;
+    self.navigation.onRemoveFrame();
+    self.frame_id_gen = 0;
+}
 
+// Allocate a Page in a free slot, publish it as the active page, and
+// dispatch `frame_created` so CDP creates fresh isolated-world V8
+// contexts. Used by createPage and by the synthetic-nav path. Does NOT
+// dispatch `frame_navigate` — the caller does that (or doesn't, for a
+// blank initial page).
+//
+// On any failure after slot allocation, the errdefers roll back the slot
+// and `_active_idx`, leaving the session pageless (the caller is
+// responsible for any prior teardown of an old page).
+fn installNewActivePage(self: *Session, frame_id: u32) !*Frame {
     const slot = try self.findFreeSlot();
-    const page = try self.pageInit(slot, self.nextFrameId());
+    const page = try self.pageInit(slot, frame_id);
     errdefer {
         page.deinit();
         self.freeSlot(slot);
@@ -184,18 +212,21 @@ pub fn createPage(self: *Session) !*Frame {
     errdefer self._active_idx = null;
 
     const frame = &page.frame;
-
-    // Creates a new NavigationEventTarget for this frame.
     try self.navigation.onNewFrame(frame);
+    // Inform CDP the main frame has been created such that additional
+    // context for other Worlds can be created as well.
+    self.notification.dispatch(.frame_created, frame);
+    return frame;
+}
 
+// NOTE: the caller is not the owner of the returned value,
+// the pointer on Frame is just returned as a convenience
+pub fn createPage(self: *Session) !*Frame {
+    lp.assert(self._active_idx == null, "Session.createPage - page not null", .{});
     if (comptime IS_DEBUG) {
         log.debug(.browser, "create page", .{});
     }
-    // start JS env
-    // Inform CDP the main frame has been created such that additional context for other Worlds can be created as well
-    self.notification.dispatch(.frame_created, frame);
-
-    return frame;
+    return self.installNewActivePage(self.nextFrameId());
 }
 
 pub fn removePage(self: *Session) void {
@@ -217,20 +248,7 @@ pub fn removePage(self: *Session) void {
     if (self._pending_idx != null) {
         self.discardPendingPage();
     }
-
-    // Inform CDP the frame is going to be removed, allowing other worlds to remove themselves before the main one
-    self.notification.dispatch(.frame_remove, .{});
-
-    self._pages[idx].?.deinit();
-    self.freeSlot(idx);
-    self._active_idx = null;
-
-    self.navigation.onRemoveFrame();
-
-    // resetting frame_id_gen preserves previous behavior where removing the
-    // root page returned us to a clean-slate state.
-    self.frame_id_gen = 0;
-
+    self.tearDownActivePage();
     if (comptime IS_DEBUG) {
         log.debug(.browser, "remove page", .{});
     }
@@ -487,40 +505,8 @@ fn processRootQueuedNavigation(self: *Session) !void {
 fn replaceRootImmediate(self: *Session, frame_id: u32, qn: *QueuedNavigation) !void {
     defer self.arena_pool.release(qn.arena);
 
-    const old_idx = self._active_idx orelse {
-        lp.assert(false, "Session.replaceRootImmediate - no active page", .{});
-        return;
-    };
-
-    // Dispatch frame_remove (same as removePage) then tear down the OLD
-    // page's slot.
-    self.notification.dispatch(.frame_remove, .{});
-    self._pages[old_idx].?.deinit();
-    self.freeSlot(old_idx);
-    self._active_idx = null;
-
-    self.navigation.onRemoveFrame();
-
-    // Preserve prior behavior: the old resetFrameResources reset frame_id_gen.
-    self.frame_id_gen = 0;
-
-    const new_slot = try self.findFreeSlot();
-    const page = try self.pageInit(new_slot, frame_id);
-    errdefer {
-        page.deinit();
-        self.freeSlot(new_slot);
-    }
-    self._active_idx = new_slot;
-    const new_frame = &page.frame;
-
-    // Creates a new NavigationEventTarget for this frame.
-    self.navigation.onNewFrame(new_frame) catch |err| {
-        log.err(.browser, "createPage onNewNewFrame", .{ .err = err });
-    };
-
-    // start JS env
-    // Inform CDP the main frame has been created such that additional context for other Worlds can be created as well
-    self.notification.dispatch(.frame_created, new_frame);
+    self.tearDownActivePage();
+    const new_frame = try self.installNewActivePage(frame_id);
 
     new_frame.navigate(qn.url, qn.opts) catch |err| {
         log.err(.browser, "queued navigation error", .{ .err = err });
