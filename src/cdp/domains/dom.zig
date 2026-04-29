@@ -713,13 +713,16 @@ test "cdp.dom: getBoxModel" {
     });
     try ctx.expectSentResult(.{ .nodeId = 3 }, .{ .id = 4 });
 
+    // Box model on the <p> nodeId returned above.
+    // Note: nodeId 6 is <head>, which is `display: none` per HTML Rendering
+    // §15.3.1, so its box model is all-zeros — exercise a visible element.
     try ctx.processMessage(.{
         .id = 5,
         .method = "DOM.getBoxModel",
-        .params = .{ .nodeId = 6 },
+        .params = .{ .nodeId = 3 },
     });
     try ctx.expectSentResult(.{ .model = BoxModel{
-        .content = Quad{ 10.0, 10.0, 15.0, 10.0, 15.0, 15.0, 10.0, 15.0 },
+        .content = Quad{ 25.0, 25.0, 30.0, 25.0, 30.0, 30.0, 25.0, 30.0 },
         .padding = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
         .border = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
         .margin = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },

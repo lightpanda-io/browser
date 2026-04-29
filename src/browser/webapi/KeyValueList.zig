@@ -259,7 +259,12 @@ fn urlEncodeValueUtf8(value: []const u8, comptime mode: URLEncodeMode, writer: *
         return writer.writeAll(value);
     }
 
-    for (value) |b| {
+    var i: usize = 0;
+    while (i < value.len) : (i += 1) {
+        const b = value[i];
+        if (comptime mode == .form) {
+            if (try writeFormLineEnd(value, &i, b, writer)) continue;
+        }
         if (urlEncodeUnreserved(b, mode)) {
             try writer.writeByte(b);
         } else if (b == ' ') {
@@ -272,7 +277,12 @@ fn urlEncodeValueUtf8(value: []const u8, comptime mode: URLEncodeMode, writer: *
 
 /// Percent-encode a legacy-encoded value - must also encode & and ; to preserve NCRs.
 fn urlEncodeValueLegacy(value: []const u8, comptime mode: URLEncodeMode, writer: *std.Io.Writer) !void {
-    for (value) |b| {
+    var i: usize = 0;
+    while (i < value.len) : (i += 1) {
+        const b = value[i];
+        if (comptime mode == .form) {
+            if (try writeFormLineEnd(value, &i, b, writer)) continue;
+        }
         if (urlEncodeUnreserved(b, mode)) {
             try writer.writeByte(b);
         } else if (b == ' ') {
@@ -284,6 +294,25 @@ fn urlEncodeValueLegacy(value: []const u8, comptime mode: URLEncodeMode, writer:
             try writer.print("%{X:0>2}", .{b});
         }
     }
+}
+
+// HTML form-data set encoding algorithm: every U+000D (CR) not followed by
+// U+000A (LF), and every U+000A (LF) not preceded by U+000D (CR), is replaced
+// with the two-byte sequence CR+LF before percent-encoding. Returns true (and
+// emits "%0D%0A") when `b` is CR or LF; on CR, advances the caller's index
+// past a following LF so existing CRLF pairs aren't doubled.
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#url-encoded-form-data
+fn writeFormLineEnd(value: []const u8, i: *usize, b: u8, writer: *std.Io.Writer) !bool {
+    if (b == '\r') {
+        try writer.writeAll("%0D%0A");
+        if (i.* + 1 < value.len and value[i.* + 1] == '\n') i.* += 1;
+        return true;
+    }
+    if (b == '\n') {
+        try writer.writeAll("%0D%0A");
+        return true;
+    }
+    return false;
 }
 
 fn urlEncodeShouldEscape(value: []const u8, comptime mode: URLEncodeMode) bool {
@@ -408,4 +437,91 @@ test "KeyValueList: urlEncode Big5 unmappable character" {
 
     // &#28835; percent-encoded is %26%2328835%3B
     try testing.expectString("q=%26%2328835%3B", buf.written());
+}
+
+// HTML form-data set encoding algorithm: line endings in entry names and values
+// are normalized to CRLF — every stray LF (not preceded by CR) and every stray
+// CR (not followed by LF) is replaced with CR+LF before percent-encoding. The
+// normalization applies only to .form mode; URLSearchParams (.query) follows
+// the URL standard's serializer, which doesn't normalize.
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#url-encoded-form-data
+test "KeyValueList: urlEncode .form normalizes stray LF to CRLF" {
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    try list.append(allocator, "msg", "line1\nline2\nline3");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.form, null, "UTF-8", &buf.writer);
+
+    try testing.expectString("msg=line1%0D%0Aline2%0D%0Aline3", buf.written());
+}
+
+test "KeyValueList: urlEncode .form normalizes stray CR to CRLF" {
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    try list.append(allocator, "msg", "line1\rline2");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.form, null, "UTF-8", &buf.writer);
+
+    try testing.expectString("msg=line1%0D%0Aline2", buf.written());
+}
+
+test "KeyValueList: urlEncode .form preserves existing CRLF" {
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    try list.append(allocator, "msg", "line1\r\nline2");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.form, null, "UTF-8", &buf.writer);
+
+    try testing.expectString("msg=line1%0D%0Aline2", buf.written());
+}
+
+test "KeyValueList: urlEncode .form handles mixed line endings" {
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    // CR LF, then bare LF, then bare CR -> three CRLF sequences.
+    try list.append(allocator, "msg", "a\r\nb\nc\rd");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.form, null, "UTF-8", &buf.writer);
+
+    try testing.expectString("msg=a%0D%0Ab%0D%0Ac%0D%0Ad", buf.written());
+}
+
+test "KeyValueList: urlEncode .form normalizes line endings in entry names" {
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    try list.append(allocator, "n\nm", "v");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.form, null, "UTF-8", &buf.writer);
+
+    try testing.expectString("n%0D%0Am=v", buf.written());
+}
+
+test "KeyValueList: urlEncode .form normalizes legacy charsets too" {
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    try list.append(allocator, "msg", "a\nb");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.form, allocator, "GBK", &buf.writer);
+
+    try testing.expectString("msg=a%0D%0Ab", buf.written());
+}
+
+test "KeyValueList: urlEncode .query does NOT normalize line endings" {
+    // URL standard's application/x-www-form-urlencoded serializer (used by
+    // URLSearchParams) does not perform CRLF normalization — only the HTML
+    // form-data set encoding wrapper does. https://url.spec.whatwg.org/#concept-urlencoded-serializer
+    const allocator = testing.arena_allocator;
+    var list = KeyValueList.init();
+    try list.append(allocator, "msg", "a\nb\rc");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try list.urlEncode(.query, null, "UTF-8", &buf.writer);
+
+    try testing.expectString("msg=a%0Ab%0Dc", buf.written());
 }

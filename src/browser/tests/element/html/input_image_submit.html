@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<form id="img-form" action="/should-not-navigate-img" method="get">
+  <input type="hidden" name="hidden_field" value="hv">
+  <input id="img-named" type="image" name="img_btn" src="x.png">
+</form>
+
+<form id="img-form-unnamed" action="/should-not-navigate-img2" method="get">
+  <input type="hidden" name="hidden_field" value="hv2">
+  <input id="img-unnamed" type="image" src="x.png">
+</form>
+
+<form id="img-form-disabled" action="/should-not-navigate-img3" method="get">
+  <input id="img-disabled" type="image" name="d" src="x.png" disabled>
+</form>
+
+<form id="img-form-prevent" action="/should-not-navigate-img4" method="get">
+  <input id="img-prevent" type="image" name="p" src="x.png">
+</form>
+
+<form id="img-form-orphan" action="/should-not-navigate-img5" method="get">
+  <input type="hidden" name="orphan_field" value="ov">
+</form>
+<input id="img-orphan" type="image" form="img-form-orphan" name="o" src="x.png">
+
+<script id="image_click_fires_submit_event">
+  {
+    const form = document.getElementById('img-form');
+    let submitFired = false;
+    let submitter = null;
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      submitFired = true;
+      submitter = e.submitter;
+    });
+    document.getElementById('img-named').click();
+    testing.expectEqual(true, submitFired);
+    testing.expectEqual(document.getElementById('img-named'), submitter);
+  }
+</script>
+
+<script id="image_submitter_appends_named_coordinate_fields">
+  {
+    // The form-data set algorithm appends "name.x" / "name.y" coordinate
+    // entries when the submitter is an image button with a name attribute.
+    // Constructing FormData directly with the submitter exercises the same
+    // path the click handler reaches via Frame.submitForm.
+    const form = document.getElementById('img-form');
+    const fd = new FormData(form, document.getElementById('img-named'));
+    testing.expectEqual('hv', fd.get('hidden_field'));
+    testing.expectEqual('0',  fd.get('img_btn.x'));
+    testing.expectEqual('0',  fd.get('img_btn.y'));
+  }
+</script>
+
+<script id="unnamed_image_submitter_appends_bare_xy_fields">
+  {
+    const form = document.getElementById('img-form-unnamed');
+    const fd = new FormData(form, document.getElementById('img-unnamed'));
+    // An unnamed image submitter contributes bare "x" and "y" entries.
+    testing.expectEqual('0',   fd.get('x'));
+    testing.expectEqual('0',   fd.get('y'));
+    testing.expectEqual('hv2', fd.get('hidden_field'));
+  }
+</script>
+
+<script id="disabled_image_click_does_not_submit">
+  {
+    const form = document.getElementById('img-form-disabled');
+    let submitFired = false;
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      submitFired = true;
+    });
+    document.getElementById('img-disabled').click();
+    testing.expectEqual(false, submitFired);
+  }
+</script>
+
+<script id="image_click_preventDefault_blocks_navigation">
+  {
+    const form = document.getElementById('img-form-prevent');
+    let submitFired = false;
+    form.addEventListener('submit', (e) => {
+      submitFired = true;
+      e.preventDefault();
+    });
+    document.getElementById('img-prevent').click();
+    // submit event fired, but preventDefault stops the actual navigation.
+    testing.expectEqual(true, submitFired);
+  }
+</script>
+
+<script id="image_with_form_attribute_submits_referenced_form">
+  {
+    const form = document.getElementById('img-form-orphan');
+    let submitFired = false;
+    let submitter = null;
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      submitFired = true;
+      submitter = e.submitter;
+    });
+    document.getElementById('img-orphan').click();
+    testing.expectEqual(true, submitFired);
+    testing.expectEqual(document.getElementById('img-orphan'), submitter);
+  }
+</script>
