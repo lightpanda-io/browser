@@ -60,7 +60,11 @@ const default_system_prompt =
     \\  resolved automatically. Do NOT use getEnv to resolve them first.
     \\
     \\Search engines:
-    \\- When using Google, append &hl=en&gl=us to the URL to bypass localized
+    \\- For web searches, prefer the `search` tool over goto-ing google.com
+    \\  directly. It tries Google first and transparently falls back to
+    \\  DuckDuckGo when Google serves a captcha; the result is prefixed with
+    \\  "[fallback: duckduckgo]" on the fallback path.
+    \\- If you do goto Google manually, append &hl=en&gl=us to bypass localized
     \\  consent pages (e.g. https://www.google.com/search?q=...&hl=en&gl=us).
 ;
 

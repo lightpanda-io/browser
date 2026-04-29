@@ -70,6 +70,21 @@ pub const tool_defs = [_]ToolDef{
         ),
     },
     .{
+        .name = "search",
+        .description = "Run a web search and return results as markdown. Tries Google first; if Google serves a captcha (/sorry/ or 'unusual traffic' page), automatically falls back to DuckDuckGo's HTML endpoint and prefixes the result with '[fallback: duckduckgo]'. Prefer this over goto-ing google.com/search directly.",
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "query": { "type": "string", "description": "The search query." },
+            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+            \\  },
+            \\  "required": ["query"]
+            \\}
+        ),
+    },
+    .{
         .name = "markdown",
         .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
         .input_schema = url_params_schema,
@@ -331,6 +346,7 @@ const NodeAndPage = struct { node: *DOMNode, page: *lp.Frame };
 
 pub const Action = enum {
     goto,
+    search,
     markdown,
     links,
     nodeDetails,
@@ -388,14 +404,80 @@ fn execGoto(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.R
     return "Navigated successfully.";
 }
 
+pub const SearchParams = struct {
+    query: []const u8,
+    timeout: ?u32 = null,
+    waitUntil: ?lp.Config.WaitUntil = null,
+};
+
+const google_block_url_marker = "/sorry/";
+const google_block_text_marker = "detected unusual traffic";
+
+fn execSearch(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+    const args = try parseArgsOrErr(SearchParams, arena, arguments) orelse return ToolError.InvalidParams;
+    if (args.query.len == 0) return ToolError.InvalidParams;
+
+    const encoded = percentEncodeQuery(arena, args.query) catch return ToolError.OutOfMemory;
+    const google_url = std.fmt.allocPrintSentinel(
+        arena,
+        "https://www.google.com/search?q={s}&hl=en&gl=us",
+        .{encoded},
+        0,
+    ) catch return ToolError.OutOfMemory;
+
+    try performGoto(session, registry, google_url, args.timeout, args.waitUntil);
+    const google_frame = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+
+    if (std.mem.indexOf(u8, google_frame.url, google_block_url_marker) == null) {
+        const google_content = try renderFrameMarkdown(arena, google_frame);
+        if (std.mem.indexOf(u8, google_content, google_block_text_marker) == null) {
+            return google_content;
+        }
+    }
+
+    const ddg_url = std.fmt.allocPrintSentinel(
+        arena,
+        "https://html.duckduckgo.com/html/?q={s}",
+        .{encoded},
+        0,
+    ) catch return ToolError.OutOfMemory;
+    try performGoto(session, registry, ddg_url, args.timeout, args.waitUntil);
+    const ddg_frame = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    const ddg_content = try renderFrameMarkdown(arena, ddg_frame);
+
+    return std.fmt.allocPrint(
+        arena,
+        "[fallback: duckduckgo]\n{s}",
+        .{ddg_content},
+    ) catch return ToolError.OutOfMemory;
+}
+
+fn renderFrameMarkdown(arena: std.mem.Allocator, frame: *lp.Frame) ToolError![]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    lp.markdown.dump(frame.document.asNode(), .{}, &aw.writer, frame) catch
+        return ToolError.InternalError;
+    return aw.written();
+}
+
+fn percentEncodeQuery(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    for (input) |c| {
+        switch (c) {
+            'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => try out.append(arena, c),
+            else => {
+                var hex: [3]u8 = undefined;
+                _ = std.fmt.bufPrint(&hex, "%{X:0>2}", .{c}) catch unreachable;
+                try out.appendSlice(arena, &hex);
+            },
+        }
+    }
+    return out.toOwnedSlice(arena);
+}
+
 fn execMarkdown(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
-
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    lp.markdown.dump(page.document.asNode(), .{}, &aw.writer, page) catch
-        return ToolError.InternalError;
-    return aw.written();
+    return renderFrameMarkdown(arena, page);
 }
 
 fn execLinks(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -936,6 +1018,31 @@ test "substituteEnvVars missing var kept literal" {
 
     const r = substituteEnvVars(arena.allocator(), "$UNLIKELY_VAR_12345");
     try std.testing.expectEqualStrings("$UNLIKELY_VAR_12345", r);
+}
+
+test "percentEncodeQuery passes unreserved chars through" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const r = try percentEncodeQuery(arena.allocator(), "abcXYZ012-._~");
+    try std.testing.expectEqualStrings("abcXYZ012-._~", r);
+}
+
+test "percentEncodeQuery encodes spaces and reserved chars" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const r = try percentEncodeQuery(arena.allocator(), "hello world&q=1");
+    try std.testing.expectEqualStrings("hello%20world%26q%3D1", r);
+}
+
+test "percentEncodeQuery encodes UTF-8 bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // "café" → c, a, f, then 0xC3 0xA9 for é
+    const r = try percentEncodeQuery(arena.allocator(), "café");
+    try std.testing.expectEqualStrings("caf%C3%A9", r);
 }
 
 test "substituteEnvVars bare dollar" {
