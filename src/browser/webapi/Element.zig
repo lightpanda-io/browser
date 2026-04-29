@@ -605,6 +605,23 @@ pub fn isDisabled(self: *Element) bool {
         return true;
     }
 
+    // <option> takes a different inheritance path: per HTML
+    // "concept-option-disabled" an option is disabled when its parent is an
+    // <optgroup disabled>. It does NOT inherit from <select disabled> or
+    // an ancestor <fieldset disabled>.
+    if (self.getTag() == .option) {
+        if (self.asNode()._parent) |parent_node| {
+            if (parent_node.is(Element)) |parent_el| {
+                if (parent_el.getTag() == .optgroup and
+                    parent_el.getAttributeSafe(comptime .wrap("disabled")) != null)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     const element_node = self.asNode();
     var current: ?*Node = element_node._parent;
     while (current) |node| {

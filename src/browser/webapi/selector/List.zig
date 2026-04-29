@@ -535,10 +535,10 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             return input.getChecked();
         },
         .disabled => {
-            return el.getAttributeSafe(comptime .wrap("disabled")) != null;
+            return el.isDisabled();
         },
         .enabled => {
-            return el.getAttributeSafe(comptime .wrap("disabled")) == null;
+            return !el.isDisabled();
         },
         .indeterminate => {
             const input = el.is(Node.Element.Html.Input) orelse return false;
