@@ -585,9 +585,11 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
 //      onHttpResponseHeadersDone moments earlier and must survive).
 //   4. pending_page = null. Order matters: step 3 reads it.
 //   5. OLD Page.deinit + free LAST. Its frame.deinit calls
-//      http_client.abort() unconditionally — the in-flight navigation
-//      transfer (whose callback we are inside) is shielded by
-//      protect_from_abort, which the caller clears AFTER we return.
+//      http_client.abortFrame(frame_id) on the frame_id that the OLD
+//      page shares with the now-active pending page; the in-flight
+//      navigation transfer (whose callback we are inside) is shielded
+//      by protect_from_abort, which abortFrame's default .normal scope
+//      honors. The caller clears the flag AFTER we return.
 pub fn commitPendingPage(self: *Session) !void {
     const pending_idx = self._pending_idx orelse {
         lp.assert(false, "Session.commitPendingPage - no pending page", .{});
@@ -629,8 +631,9 @@ pub fn commitPendingPage(self: *Session) !void {
     // Step 5: tear down the OLD page LAST. Anything in steps 1-4 that
     // needed to walk the OLD page's state (CDP node_registry, inspector
     // context group, isolated worlds) has already done so. The OLD page's
-    // frame.deinit calls http_client.abort() unconditionally; the in-flight
-    // transfer survives via protect_from_abort.
+    // frame.deinit calls http_client.abortFrame(frame_id) on the frame_id
+    // shared with the pending page; the in-flight transfer survives via
+    // protect_from_abort.
     self._pages[old_idx].?.deinit();
     self.freeSlot(old_idx);
 }

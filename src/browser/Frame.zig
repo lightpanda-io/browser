@@ -627,7 +627,8 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     // Session.initiateRootNavigation) flags both the notification and the
     // HTTP request itself: CDP skips its node-registry reset until commit,
     // and the in-flight transfer survives the OLD page's frame.deinit which
-    // calls http_client.abort() during commitPendingPage.
+    // calls http_client.abortFrame(frame_id) on the shared frame_id during
+    // commitPendingPage.
     const is_pending_root = self._page._state == .pending;
 
     // We dispatch frame_navigate event before sending the request.
@@ -966,11 +967,13 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
     // tears down the OLD page, flips the pointer, and dispatches
     // frame_created against the new (now active) frame.
     //
-    // The OLD page's frame.deinit calls http_client.abort() — our transfer
+    // The OLD page's frame.deinit calls http_client.abortFrame(frame_id) on
+    // the frame_id it shares with the (now-active) pending page; our transfer
     // survives because Session.initiateRootNavigation flagged the request
-    // protect_from_abort. Once we are past commit, that protection is no
-    // longer needed and may interfere with subsequent aborts (e.g. another
-    // navigation while we are still streaming the body), so clear it.
+    // protect_from_abort, which abortFrame's default .normal scope honors.
+    // Once we are past commit, that protection is no longer needed and may
+    // interfere with subsequent aborts (e.g. another navigation while we are
+    // still streaming the body), so clear it.
     if (self._page._state == .pending) {
         try self._session.commitPendingPage();
         switch (response.inner) {

@@ -54,9 +54,9 @@ pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
 //
 // The app has other secondary http needs, like telemetry. While we want to
 // share some things (namely the ca blob, and maybe some configuration
-// (TODO: ??? should proxy settings be global ???)), we're able to do call
-// client.abort() to abort the transfers being made by a frame, without impacting
-// those other http requests.
+// (TODO: ??? should proxy settings be global ???)), we're able to call
+// client.abortFrame() to abort the transfers being made by a frame, without
+// impacting those other http requests.
 pub const Client = @This();
 
 // Count of active ws requests
@@ -892,9 +892,11 @@ pub const RequestParams = struct {
 
     // Set on an in-flight root-navigation transfer that was issued against a
     // pending Page. The old Page's frame.deinit (called from Session.commit
-    // PendingPage when response headers arrive) calls http_client.abort() —
-    // that abort_all path skips transfers with this flag so the callback
-    // chain we are sitting inside isn't killed mid-flight.
+    // PendingPage when response headers arrive) calls abortFrame() on the
+    // shared frame_id; abortFrame's default .normal scope skips transfers
+    // with this flag so the callback chain we are sitting inside isn't killed
+    // mid-flight. Session.discardPendingPage uses .full scope to override
+    // the flag in failure paths.
     protect_from_abort: bool = false,
 
     const ResourceType = enum {
