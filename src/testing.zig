@@ -662,6 +662,39 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/echo_referer")) {
+        // Echo the request's Referer header back as HTML so tests can assert
+        // what Referer the navigation sent. Used by the cross-page Referer test.
+        var it = req.iterateHeaders();
+        var referer: []const u8 = "NONE";
+        while (it.next()) |h| {
+            if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
+                referer = h.value;
+                break;
+            }
+        }
+        var html_buf: [512]u8 = undefined;
+        const html = try std.fmt.bufPrint(&html_buf, "<html><body>referer={s}</body></html>", .{referer});
+        return req.respond(html, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/referer_link.html")) {
+        // Page with an anchor link to /echo_referer. The test clicks the link
+        // via JS and asserts the resulting page reports Referer = this page.
+        return req.respond(
+            "<html><body><a id=\"link\" href=\"/echo_referer\">go</a></body></html>",
+            .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                },
+            },
+        );
+    }
+
     if (std.mem.eql(u8, path, "/echo_method")) {
         // Echo the request method back as HTML so tests can assert on what
         // method the navigation used. Used by the Page.reload-replays-POST test.
