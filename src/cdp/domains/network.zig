@@ -45,6 +45,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         deleteCookies,
         clearBrowserCookies,
         clearBrowserCache,
+        canClearBrowserCache,
         setCookie,
         setCookies,
         getCookies,
@@ -61,6 +62,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .deleteCookies => return deleteCookies(cmd),
         .clearBrowserCookies => return clearBrowserCookies(cmd),
         .clearBrowserCache => return clearBrowserCache(cmd),
+        .canClearBrowserCache => return canClearBrowserCache(cmd),
         .setCookie => return setCookie(cmd),
         .setCookies => return setCookies(cmd),
         .getCookies => return getCookies(cmd),
@@ -184,6 +186,12 @@ fn clearBrowserCache(cmd: *CDP.Command) !void {
     const network = bc.cdp.browser.http_client.network;
     if (network.cache) |*c| try c.clear();
     return cmd.sendResult(null, .{});
+}
+
+fn canClearBrowserCache(cmd: *CDP.Command) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const network = bc.cdp.browser.http_client.network;
+    return cmd.sendResult(.{ .result = network.cache != null }, .{});
 }
 
 fn setCookie(cmd: *CDP.Command) !void {
@@ -769,4 +777,18 @@ test "cdp.Network: cache enabled by default" {
 
     const client = ctx.cdp().browser.http_client;
     try testing.expectEqual(true, client.cache_layer.enabled);
+}
+
+test "cdp.Network: canClearBrowserCache" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-CC3" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.canClearBrowserCache",
+    });
+
+    // Cache is disabled in testing I'm pretty sure.
+    try ctx.expectSentResult(.{ .result = false }, .{ .id = 1 });
 }
