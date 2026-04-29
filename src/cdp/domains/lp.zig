@@ -569,7 +569,7 @@ test "cdp.lp: handleJavaScriptDialog controls confirm/prompt/alert return values
     const p_text_str = try p_text.toStringSlice();
     try testing.expectEqualSlices(u8, "hello", p_text_str);
 
-    // ---- prompt: accept=true without promptText returns "" per CDP spec ----
+    // ---- prompt: accept=true without promptText AND no dialog defaultText returns "" ----
     try ctx.processMessage(.{ .id = 4, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = true } });
     try ctx.expectSentResult(null, .{ .id = 4 });
 
@@ -577,9 +577,34 @@ test "cdp.lp: handleJavaScriptDialog controls confirm/prompt/alert return values
     const p_empty_str = try p_empty.toStringSlice();
     try testing.expectEqualSlices(u8, "", p_empty_str);
 
-    // ---- prompt: accept=false makes prompt() return null ----
-    try ctx.processMessage(.{ .id = 5, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = false } });
+    // ---- prompt: accept=true without promptText falls back to dialog defaultText ----
+    // Mirrors Chrome's accept-without-typing behavior: with no client-supplied
+    // promptText, the prompt's return value is the second arg to window.prompt.
+    try ctx.processMessage(.{ .id = 5, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = true } });
     try ctx.expectSentResult(null, .{ .id = 5 });
+
+    const p_default_text = try ls.local.exec("prompt('name?', 'John Smith')", null);
+    const p_default_text_str = try p_default_text.toStringSlice();
+    try testing.expectEqualSlices(u8, "John Smith", p_default_text_str);
+
+    // ---- prompt: pre-armed promptText overrides the dialog defaultText ----
+    try ctx.processMessage(.{ .id = 6, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = true, .promptText = "typed" } });
+    try ctx.expectSentResult(null, .{ .id = 6 });
+
+    const p_override = try ls.local.exec("prompt('name?', 'John Smith')", null);
+    const p_override_str = try p_override.toStringSlice();
+    try testing.expectEqualSlices(u8, "typed", p_override_str);
+
+    // ---- prompt: accept=false returns null regardless of dialog defaultText ----
+    try ctx.processMessage(.{ .id = 7, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = false } });
+    try ctx.expectSentResult(null, .{ .id = 7 });
+
+    const p_dismiss_with_default = try ls.local.exec("prompt('cancel?', 'John Smith')", null);
+    try testing.expect(p_dismiss_with_default.isNull());
+
+    // ---- prompt: accept=false makes prompt() return null ----
+    try ctx.processMessage(.{ .id = 8, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = false } });
+    try ctx.expectSentResult(null, .{ .id = 8 });
 
     const p_dismiss = try ls.local.exec("prompt('cancel?')", null);
     try testing.expect(p_dismiss.isNull());
@@ -589,8 +614,8 @@ test "cdp.lp: handleJavaScriptDialog controls confirm/prompt/alert return values
     try testing.expect(p_default.isNull());
 
     // ---- alert: dispatches the event but has no return value to override ----
-    try ctx.processMessage(.{ .id = 6, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = true } });
-    try ctx.expectSentResult(null, .{ .id = 6 });
+    try ctx.processMessage(.{ .id = 9, .method = "LP.handleJavaScriptDialog", .params = .{ .accept = true } });
+    try ctx.expectSentResult(null, .{ .id = 9 });
     _ = try ls.local.exec("alert('important')", null);
     try ctx.expectSentEvent("Page.javascriptDialogOpening", .{
         .message = "important",
