@@ -66,3 +66,35 @@
   testing.expectEqual(true, t.validity.valid);
 }
 </script>
+
+<script id="minmax_length">
+{
+  testing.expectEqual(3, $('#too-long').maxLength);
+  testing.expectEqual(-1, $('#filled-required').maxLength);
+  testing.expectEqual(5, $('#too-short').minLength);
+  testing.expectEqual(-1, $('#filled-required').minLength);
+
+  const t = $('#filled-required');
+  t.maxLength = 8;
+  testing.expectEqual('8', t.getAttribute('maxlength'));
+  t.minLength = 1;
+  testing.expectEqual('1', t.getAttribute('minlength'));
+}
+</script>
+
+<script id="validity_state_identity">
+{
+  const t = $('#empty-required');
+  testing.expectEqual(t.validity, t.validity);
+}
+</script>
+
+<script id="invalid_event_is_trusted">
+{
+  let captured = null;
+  const el = $('#empty-required');
+  el.addEventListener('invalid', (e) => { captured = e; });
+  el.checkValidity();
+  testing.expectEqual(true, captured.isTrusted);
+}
+</script>

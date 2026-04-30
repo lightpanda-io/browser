@@ -16,6 +16,7 @@
   <input id="hidden-required" type="hidden" required>
   <input id="disabled-required" type="text" required disabled>
   <input id="too-long" type="text" maxlength="3">
+  <input id="too-short" type="text" minlength="3" value="ab">
 </form>
 
 <script id="surface">
@@ -158,5 +159,33 @@
   const a = $('#empty-required').validity;
   testing.expectEqual(true, a instanceof ValidityState);
   testing.expectEqual(true, a.valueMissing);
+  // Repeated access returns the same instance (cached on the element).
+  testing.expectEqual(a, $('#empty-required').validity);
+}
+</script>
+
+<script id="minmax_length">
+{
+  testing.expectEqual(3, $('#too-long').maxLength);
+  testing.expectEqual(-1, $('#filled-required').maxLength);
+  testing.expectEqual(3, $('#too-short').minLength);
+  testing.expectEqual(-1, $('#filled-required').minLength);
+  testing.expectEqual(true, $('#too-short').validity.tooShort);
+
+  const el = $('#filled-required');
+  el.minLength = 2;
+  testing.expectEqual('2', el.getAttribute('minlength'));
+  el.maxLength = 7;
+  testing.expectEqual('7', el.getAttribute('maxlength'));
+}
+</script>
+
+<script id="invalid_event_is_trusted">
+{
+  let captured = null;
+  const el = $('#empty-required');
+  el.addEventListener('invalid', (e) => { captured = e; });
+  el.checkValidity();
+  testing.expectEqual(true, captured.isTrusted);
 }
 </script>

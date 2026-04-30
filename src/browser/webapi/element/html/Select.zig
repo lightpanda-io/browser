@@ -33,6 +33,7 @@ const Select = @This();
 _proto: *HtmlElement,
 _selected_index_set: bool = false,
 _custom_validity: ?[]const u8 = null,
+_validity: ?*ValidityState = null,
 
 pub fn asElement(self: *Select) *Element {
     return self._proto._proto;
@@ -53,21 +54,14 @@ pub fn asConstNode(self: *const Select) *const Node {
 // option in tree order. Returns null if there is no candidate (zero options
 // or every option disabled), in which case the select has no selectedness
 // and contributes no entry to a FormData set.
-pub fn effectiveOption(self: *Select) ?*Option {
+pub fn effectiveOption(self: *const Select) ?*Option {
     var first_option: ?*Option = null;
-    var iter = self.asNode().childrenIterator();
-    while (iter.next()) |child| {
+    var maybe_child = self.asConstNode().firstChild();
+    while (maybe_child) |child| : (maybe_child = child.nextSibling()) {
         const option = child.is(Option) orelse continue;
-        if (option.getDisabled()) {
-            continue;
-        }
-
-        if (option.getSelected()) {
-            return option;
-        }
-        if (first_option == null) {
-            first_option = option;
-        }
+        if (option.getDisabled()) continue;
+        if (option.getSelected()) return option;
+        if (first_option == null) first_option = option;
     }
     return first_option;
 }
@@ -261,10 +255,13 @@ pub fn getWillValidate(self: *const Select) bool {
 }
 
 pub fn getValidity(self: *Select, frame: *Frame) !*ValidityState {
-    return frame._factory.create(ValidityState{ ._owner = self.asElement() });
+    if (self._validity) |v| return v;
+    const v = try frame._factory.create(ValidityState{ ._owner = self.asElement() });
+    self._validity = v;
+    return v;
 }
 
-pub fn getValidationMessage(self: *Select) []const u8 {
+pub fn getValidationMessage(self: *const Select) []const u8 {
     if (!self.getWillValidate()) return "";
     if (self._custom_validity) |msg| return msg;
     if (self.suffersValueMissing()) return "Please select an item in the list.";
@@ -276,7 +273,7 @@ pub fn checkValidity(self: *Select, frame: *Frame) !bool {
     const v = ValidityState{ ._owner = self.asElement() };
     if (v.getValid()) return true;
 
-    const event = try Event.init("invalid", .{ .cancelable = true }, frame._page);
+    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
     return false;
 }
@@ -289,7 +286,7 @@ pub fn setCustomValidity(self: *Select, message: []const u8, frame: *Frame) !voi
     if (message.len == 0) {
         self._custom_validity = null;
     } else {
-        self._custom_validity = try frame.arena.dupe(u8, message);
+        self._custom_validity = try frame.dupeString(message);
     }
 }
 
@@ -297,7 +294,7 @@ pub fn hasCustomValidity(self: *const Select) bool {
     return self._custom_validity != null;
 }
 
-pub fn suffersValueMissing(self: *Select) bool {
+pub fn suffersValueMissing(self: *const Select) bool {
     if (!self.getWillValidate()) return false;
     if (!self.getRequired()) return false;
     // No selectable option ⇒ no value to submit.

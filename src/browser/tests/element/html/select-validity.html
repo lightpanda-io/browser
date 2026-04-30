@@ -72,3 +72,20 @@
   testing.expectEqual(true, s.validity.valid);
 }
 </script>
+
+<script id="validity_state_identity">
+{
+  const s = $('#filled');
+  testing.expectEqual(s.validity, s.validity);
+}
+</script>
+
+<script id="invalid_event_is_trusted">
+{
+  let captured = null;
+  const s = $('#placeholder');
+  s.addEventListener('invalid', (e) => { captured = e; });
+  s.checkValidity();
+  testing.expectEqual(true, captured.isTrusted);
+}
+</script>

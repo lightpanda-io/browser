@@ -40,6 +40,7 @@ _selection_direction: Selection.SelectionDirection = .none,
 
 _on_selectionchange: ?js.Function.Global = null,
 _custom_validity: ?[]const u8 = null,
+_validity: ?*ValidityState = null,
 
 pub fn getOnSelectionChange(self: *TextArea) ?js.Function.Global {
     return self._on_selectionchange;
@@ -139,6 +140,34 @@ pub fn setRequired(self: *TextArea, required: bool, frame: *Frame) !void {
     } else {
         try self.asElement().removeAttribute(comptime .wrap("required"), frame);
     }
+}
+
+pub fn getMaxLength(self: *const TextArea) i32 {
+    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("maxlength")) orelse return -1;
+    return std.fmt.parseInt(i32, attr, 10) catch -1;
+}
+
+pub fn setMaxLength(self: *TextArea, max_length: i32, frame: *Frame) !void {
+    if (max_length < 0) {
+        return error.IndexSizeError;
+    }
+    var buf: [32]u8 = undefined;
+    const value = std.fmt.bufPrint(&buf, "{d}", .{max_length}) catch unreachable;
+    try self.asElement().setAttributeSafe(comptime .wrap("maxlength"), .wrap(value), frame);
+}
+
+pub fn getMinLength(self: *const TextArea) i32 {
+    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("minlength")) orelse return -1;
+    return std.fmt.parseInt(i32, attr, 10) catch -1;
+}
+
+pub fn setMinLength(self: *TextArea, min_length: i32, frame: *Frame) !void {
+    if (min_length < 0) {
+        return error.IndexSizeError;
+    }
+    var buf: [32]u8 = undefined;
+    const value = std.fmt.bufPrint(&buf, "{d}", .{min_length}) catch unreachable;
+    try self.asElement().setAttributeSafe(comptime .wrap("minlength"), .wrap(value), frame);
 }
 
 pub fn select(self: *TextArea, frame: *Frame) !void {
@@ -294,7 +323,10 @@ pub fn getWillValidate(self: *const TextArea) bool {
 }
 
 pub fn getValidity(self: *TextArea, frame: *Frame) !*ValidityState {
-    return frame._factory.create(ValidityState{ ._owner = self.asElement() });
+    if (self._validity) |v| return v;
+    const v = try frame._factory.create(ValidityState{ ._owner = self.asElement() });
+    self._validity = v;
+    return v;
 }
 
 pub fn getValidationMessage(self: *const TextArea) []const u8 {
@@ -311,7 +343,7 @@ pub fn checkValidity(self: *TextArea, frame: *Frame) !bool {
     const v = ValidityState{ ._owner = self.asElement() };
     if (v.getValid()) return true;
 
-    const event = try Event.init("invalid", .{ .cancelable = true }, frame._page);
+    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
     return false;
 }
@@ -324,7 +356,7 @@ pub fn setCustomValidity(self: *TextArea, message: []const u8, frame: *Frame) !v
     if (message.len == 0) {
         self._custom_validity = null;
     } else {
-        self._custom_validity = try frame.arena.dupe(u8, message);
+        self._custom_validity = try frame.dupeString(message);
     }
 }
 
@@ -340,8 +372,7 @@ pub fn suffersValueMissing(self: *const TextArea) bool {
 
 pub fn suffersTooLong(self: *const TextArea) bool {
     const value = self._value orelse return false;
-    const max_attr = self.asConstElement().getAttributeSafe(comptime .wrap("maxlength")) orelse return false;
-    const max = std.fmt.parseInt(i32, max_attr, 10) catch return false;
+    const max = self.getMaxLength();
     if (max < 0) return false;
     const count = std.unicode.utf8CountCodepoints(value) catch value.len;
     return count > @as(usize, @intCast(max));
@@ -350,8 +381,7 @@ pub fn suffersTooLong(self: *const TextArea) bool {
 pub fn suffersTooShort(self: *const TextArea) bool {
     const value = self._value orelse return false;
     if (value.len == 0) return false;
-    const min_attr = self.asConstElement().getAttributeSafe(comptime .wrap("minlength")) orelse return false;
-    const min = std.fmt.parseInt(i32, min_attr, 10) catch return false;
+    const min = self.getMinLength();
     if (min < 0) return false;
     const count = std.unicode.utf8CountCodepoints(value) catch value.len;
     return count < @as(usize, @intCast(min));
@@ -379,6 +409,8 @@ pub const JsApi = struct {
     pub const disabled = bridge.accessor(TextArea.getDisabled, TextArea.setDisabled, .{});
     pub const name = bridge.accessor(TextArea.getName, TextArea.setName, .{});
     pub const required = bridge.accessor(TextArea.getRequired, TextArea.setRequired, .{});
+    pub const maxLength = bridge.accessor(TextArea.getMaxLength, TextArea.setMaxLength, .{ .dom_exception = true });
+    pub const minLength = bridge.accessor(TextArea.getMinLength, TextArea.setMinLength, .{ .dom_exception = true });
     pub const form = bridge.accessor(TextArea.getForm, null, .{});
     pub const select = bridge.function(TextArea.select, .{});
 

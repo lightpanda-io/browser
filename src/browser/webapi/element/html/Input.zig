@@ -84,6 +84,7 @@ _checked_dirty: bool = false,
 _input_type: Type = .text,
 _indeterminate: bool = false,
 _custom_validity: ?[]const u8 = null,
+_validity: ?*ValidityState = null,
 
 _selection_start: u32 = 0,
 _selection_end: u32 = 0,
@@ -163,10 +164,10 @@ pub fn getChecked(self: *const Input) bool {
     return self._checked;
 }
 
-pub fn setChecked(self: *Input, checked: bool, frame: *Frame) !void {
+pub fn setChecked(self: *Input, checked: bool, _: *Frame) !void {
     // If checking a radio button, uncheck others in the group first
     if (checked and self._input_type == .radio) {
-        try self.uncheckRadioGroup(frame);
+        self.uncheckRadioGroup();
     }
     // This should _not_ call setAttribute. It updates the current state only
     self._checked = checked;
@@ -217,10 +218,13 @@ fn hasDatalistAncestor(self: *const Input) bool {
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#the-constraint-validation-api
 
 pub fn getValidity(self: *Input, frame: *Frame) !*ValidityState {
-    return frame._factory.create(ValidityState{ ._owner = self.asElement() });
+    if (self._validity) |v| return v;
+    const v = try frame._factory.create(ValidityState{ ._owner = self.asElement() });
+    self._validity = v;
+    return v;
 }
 
-pub fn getValidationMessage(self: *Input) []const u8 {
+pub fn getValidationMessage(self: *const Input) []const u8 {
     if (!self.getWillValidate()) return "";
     if (self._custom_validity) |msg| return msg;
     if (self.suffersValueMissing()) return "Please fill out this field.";
@@ -242,7 +246,7 @@ pub fn checkValidity(self: *Input, frame: *Frame) !bool {
     const v = ValidityState{ ._owner = self.asElement() };
     if (v.getValid()) return true;
 
-    const event = try Event.init("invalid", .{ .cancelable = true }, frame._page);
+    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
     return false;
 }
@@ -256,7 +260,7 @@ pub fn setCustomValidity(self: *Input, message: []const u8, frame: *Frame) !void
     if (message.len == 0) {
         self._custom_validity = null;
     } else {
-        self._custom_validity = try frame.arena.dupe(u8, message);
+        self._custom_validity = try frame.dupeString(message);
     }
 }
 
@@ -264,13 +268,13 @@ pub fn hasCustomValidity(self: *const Input) bool {
     return self._custom_validity != null;
 }
 
-pub fn suffersValueMissing(self: *Input) bool {
+pub fn suffersValueMissing(self: *const Input) bool {
     if (!self.getWillValidate()) return false;
     if (!self.getRequired()) return false;
     return switch (self._input_type) {
         .checkbox => !self._checked,
         .radio => !self.radioGroupHasChecked(),
-        // file inputs aren't supported yet (#2175); treat as always-empty when required.
+        // TODO: file inputs aren't supported yet (#2175); treat as always-empty when required.
         .file => true,
         .text, .password, .email, .url, .tel, .search, .number, .date, .time, .@"datetime-local", .month, .week, .color => blk: {
             const v = self._value orelse self._default_value orelse "";
@@ -312,8 +316,7 @@ pub fn suffersTooLong(self: *const Input) bool {
 pub fn suffersTooShort(self: *const Input) bool {
     const value = self._value orelse return false;
     if (value.len == 0) return false;
-    const min_attr = self.asConstElement().getAttributeSafe(comptime .wrap("minlength")) orelse return false;
-    const min = std.fmt.parseInt(i32, min_attr, 10) catch return false;
+    const min = self.getMinLength();
     if (min < 0) return false;
     return codepointCount(value) < @as(usize, @intCast(min));
 }
@@ -327,9 +330,13 @@ pub fn suffersRangeOverflow(self: *const Input) bool {
 }
 
 fn numericRangeBreach(self: *const Input, comptime kind: enum { underflow, overflow }) bool {
-    // Only types whose value can be interpreted as a number have range constraints.
+    // Only number/range use floating-point comparison. date/time/month/week/
+    // datetime-local also have range constraints per spec, but their values
+    // require type-specific conversion (date → days since epoch, time → ms
+    // since midnight, etc.) before comparison — not yet implemented.
+    // TODO: implement range checks for date/time/month/week/datetime-local.
     switch (self._input_type) {
-        .number, .range, .date, .time, .@"datetime-local", .month, .week => {},
+        .number, .range => {},
         else => return false,
     }
 
@@ -352,23 +359,73 @@ fn numericRangeBreach(self: *const Input, comptime kind: enum { underflow, overf
     };
 }
 
-fn radioGroupHasChecked(self: *Input) bool {
-    const element = self.asElement();
-    const name = element.getAttributeSafe(comptime .wrap("name")) orelse return self._checked;
-    if (name.len == 0) return self._checked;
-
-    const root = element.asNode().getRootNode(null);
-    const TreeWalker = @import("../../TreeWalker.zig");
-    var walker = TreeWalker.Full.init(root, .{});
-    while (walker.next()) |node| {
-        const other = node.is(Element) orelse continue;
-        const other_input = other.is(Input) orelse continue;
-        if (other_input._input_type != .radio) continue;
-        if (!other_input._checked) continue;
-        const other_name = other.getAttributeSafe(comptime .wrap("name")) orelse continue;
-        if (std.mem.eql(u8, other_name, name)) return true;
+fn radioGroupHasChecked(self: *const Input) bool {
+    if (self._checked) return true;
+    var iter = self.radioGroupIterator() orelse return false;
+    while (iter.next()) |other| {
+        if (other == self) continue;
+        if (!other._checked) continue;
+        if (sameFormOwner(self, other)) return true;
     }
     return false;
+}
+
+const TreeWalker = @import("../../TreeWalker.zig");
+
+const RadioGroupIterator = struct {
+    walker: TreeWalker.Full,
+    name: []const u8,
+
+    fn next(self: *@This()) ?*Input {
+        while (self.walker.next()) |node| {
+            const other_element = node.is(Element) orelse continue;
+            const other_input = other_element.is(Input) orelse continue;
+            if (other_input._input_type != .radio) continue;
+            const other_name = other_element.getAttributeSafe(comptime .wrap("name")) orelse continue;
+            if (!std.mem.eql(u8, self.name, other_name)) continue;
+            return other_input;
+        }
+        return null;
+    }
+};
+
+/// Walk same-named radio inputs in `self`'s tree. Returns null if the input
+/// has no `name` (or empty `name`) — such radios don't participate in a
+/// group. The `TreeWalker` only inspects nodes; the `@constCast` is safe
+/// because nothing in the iteration mutates the tree.
+fn radioGroupIterator(self: *const Input) ?RadioGroupIterator {
+    const element = self.asConstElement();
+    const name = element.getAttributeSafe(comptime .wrap("name")) orelse return null;
+    if (name.len == 0) return null;
+    const root = @constCast(element.asConstNode()).getRootNode(null);
+    return .{
+        .walker = TreeWalker.Full.init(root, .{}),
+        .name = name,
+    };
+}
+
+/// Frame-less equivalent of `self.getForm() == other.getForm()` — used from
+/// the `*const` validation path. Compares by `form` attribute when either
+/// input sets it, otherwise by nearest ancestor `<form>`. Mirrors the
+/// pointer-equality semantics of `getForm` for the cases that don't require
+/// a document `getElementById` lookup.
+fn sameFormOwner(self: *const Input, other: *const Input) bool {
+    const self_attr = self.asConstElement().getAttributeSafe(comptime .wrap("form"));
+    const other_attr = other.asConstElement().getAttributeSafe(comptime .wrap("form"));
+    if (self_attr != null or other_attr != null) {
+        if (self_attr == null or other_attr == null) return false;
+        return std.mem.eql(u8, self_attr.?, other_attr.?);
+    }
+    return ancestorForm(self.asConstElement()) == ancestorForm(other.asConstElement());
+}
+
+fn ancestorForm(element: *const Element) ?*Form {
+    var node = element.asConstNode()._parent;
+    while (node) |n| {
+        if (n.is(Form)) |form| return form;
+        node = n._parent;
+    }
+    return null;
 }
 
 /// Liberal email validation: ASCII local part + "@" + dotted ASCII host. Mirrors
@@ -466,6 +523,20 @@ pub fn setMaxLength(self: *Input, max_length: i32, frame: *Frame) !void {
     var buf: [32]u8 = undefined;
     const value = std.fmt.bufPrint(&buf, "{d}", .{max_length}) catch unreachable;
     try self.asElement().setAttributeSafe(comptime .wrap("maxlength"), .wrap(value), frame);
+}
+
+pub fn getMinLength(self: *const Input) i32 {
+    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("minlength")) orelse return -1;
+    return std.fmt.parseInt(i32, attr, 10) catch -1;
+}
+
+pub fn setMinLength(self: *Input, min_length: i32, frame: *Frame) !void {
+    if (min_length < 0) {
+        return error.IndexSizeError;
+    }
+    var buf: [32]u8 = undefined;
+    const value = std.fmt.bufPrint(&buf, "{d}", .{min_length}) catch unreachable;
+    try self.asElement().setAttributeSafe(comptime .wrap("minlength"), .wrap(value), frame);
 }
 
 pub fn getSize(self: *const Input) i32 {
@@ -1123,55 +1194,12 @@ fn maxWeeksInYear(year: u32) u32 {
     return 52;
 }
 
-fn uncheckRadioGroup(self: *Input, frame: *Frame) !void {
-    const element = self.asElement();
-
-    const name = element.getAttributeSafe(comptime .wrap("name")) orelse return;
-    if (name.len == 0) {
-        return;
-    }
-
-    const my_form = self.getForm(frame);
-
-    // Walk from the root of the tree containing this element
-    // This handles both document-attached and orphaned elements
-    const root = element.asNode().getRootNode(null);
-
-    const TreeWalker = @import("../../TreeWalker.zig");
-    var walker = TreeWalker.Full.init(root, .{});
-
-    while (walker.next()) |node| {
-        const other_element = node.is(Element) orelse continue;
-        const other_input = other_element.is(Input) orelse continue;
-
-        // Skip self
-        if (other_input == self) {
-            continue;
-        }
-
-        if (other_input._input_type != .radio) {
-            continue;
-        }
-
-        const other_name = other_element.getAttributeSafe(comptime .wrap("name")) orelse continue;
-        if (!std.mem.eql(u8, name, other_name)) {
-            continue;
-        }
-
-        // Check if same form context
-        const other_form = other_input.getForm(frame);
-        if (my_form == null and other_form == null) {
-            other_input._checked = false;
-            continue;
-        }
-
-        if (my_form) |mf| {
-            if (other_form) |of| {
-                if (mf == of) {
-                    other_input._checked = false;
-                }
-            }
-        }
+fn uncheckRadioGroup(self: *Input) void {
+    var iter = self.radioGroupIterator() orelse return;
+    while (iter.next()) |other| {
+        if (other == self) continue;
+        if (!sameFormOwner(self, other)) continue;
+        other._checked = false;
     }
 }
 
@@ -1205,6 +1233,7 @@ pub const JsApi = struct {
     pub const readOnly = bridge.accessor(Input.getReadonly, Input.setReadonly, .{});
     pub const alt = bridge.accessor(Input.getAlt, Input.setAlt, .{});
     pub const maxLength = bridge.accessor(Input.getMaxLength, Input.setMaxLength, .{ .dom_exception = true });
+    pub const minLength = bridge.accessor(Input.getMinLength, Input.setMinLength, .{ .dom_exception = true });
     pub const size = bridge.accessor(Input.getSize, Input.setSize, .{});
     pub const src = bridge.accessor(Input.getSrc, Input.setSrc, .{});
     pub const form = bridge.accessor(Input.getForm, null, .{});
@@ -1255,7 +1284,7 @@ pub const Build = struct {
 
         // If this is a checked radio button, uncheck others in its group
         if (self._checked and self._input_type == .radio) {
-            try self.uncheckRadioGroup(frame);
+            self.uncheckRadioGroup();
         }
     }
 
@@ -1282,7 +1311,7 @@ pub const Build = struct {
                     self._checked = true;
                     // If setting a radio button to checked, uncheck others in the group
                     if (self._input_type == .radio) {
-                        try self.uncheckRadioGroup(frame);
+                        self.uncheckRadioGroup();
                     }
                 }
             },

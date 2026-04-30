@@ -32,6 +32,7 @@ const Button = @This();
 
 _proto: *HtmlElement,
 _custom_validity: ?[]const u8 = null,
+_validity: ?*ValidityState = null,
 
 pub fn asElement(self: *Button) *Element {
     return self._proto._proto;
@@ -132,7 +133,10 @@ pub fn getWillValidate(self: *const Button) bool {
 }
 
 pub fn getValidity(self: *Button, frame: *Frame) !*ValidityState {
-    return frame._factory.create(ValidityState{ ._owner = self.asElement() });
+    if (self._validity) |v| return v;
+    const v = try frame._factory.create(ValidityState{ ._owner = self.asElement() });
+    self._validity = v;
+    return v;
 }
 
 pub fn getValidationMessage(self: *const Button) []const u8 {
@@ -144,7 +148,7 @@ pub fn checkValidity(self: *Button, frame: *Frame) !bool {
     if (!self.getWillValidate()) return true;
     if (self._custom_validity == null) return true;
 
-    const event = try Event.init("invalid", .{ .cancelable = true }, frame._page);
+    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
     return false;
 }
@@ -157,7 +161,7 @@ pub fn setCustomValidity(self: *Button, message: []const u8, frame: *Frame) !voi
     if (message.len == 0) {
         self._custom_validity = null;
     } else {
-        self._custom_validity = try frame.arena.dupe(u8, message);
+        self._custom_validity = try frame.dupeString(message);
     }
 }
 
