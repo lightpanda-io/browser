@@ -127,8 +127,16 @@ slash_schemas: []const SlashCommand.SchemaInfo,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
     const is_one_shot = opts.task != null;
-    const will_repl = !is_one_shot and (opts.interactive or opts.script_file == null);
-    const needs_llm = will_repl or is_one_shot;
+    const is_mcp = opts.mcp;
+    const will_repl = !is_one_shot and !is_mcp and (opts.interactive or opts.script_file == null);
+    const needs_llm = will_repl or is_one_shot or is_mcp;
+
+    if (is_mcp and (is_one_shot or opts.interactive or opts.script_file != null)) {
+        log.fatal(.app, "incompatible flags", .{
+            .hint = "--mcp cannot be combined with --task, --interactive, or a script file",
+        });
+        return error.IncompatibleFlags;
+    }
 
     if (opts.self_heal and opts.provider == null) {
         log.fatal(.app, "missing --provider", .{
@@ -142,6 +150,13 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
             .hint = "--task requires --provider",
         });
         return error.TaskWithoutProvider;
+    }
+
+    if (is_mcp and opts.provider == null) {
+        log.fatal(.app, "missing --provider", .{
+            .hint = "--mcp requires --provider",
+        });
+        return error.McpWithoutProvider;
     }
 
     const api_key = try resolveApiKey(opts.provider, needs_llm);
@@ -249,7 +264,7 @@ pub fn run(self: *Self) bool {
 /// tool calls, errors, and info go to stderr, so callers can capture stdout
 /// as the clean answer.
 fn runOneShot(self: *Self, task: []const u8) bool {
-    self.processUserMessage(task, null) catch |err| switch (err) {
+    const text = self.processUserMessage(task, null) catch |err| switch (err) {
         error.UnsupportedAttachment, error.AttachmentReadFailed => {
             // Already logged in buildUserMessageParts with detail.
             return false;
@@ -259,6 +274,7 @@ fn runOneShot(self: *Self, task: []const u8) bool {
             return false;
         },
     };
+    if (text) |t| self.terminal.printAssistant(t) else self.terminal.printInfo("(no response from model)");
     return true;
 }
 
@@ -292,15 +308,9 @@ fn runRepl(self: *Self) void {
 
         switch (cmd) {
             .comment => continue :repl,
-            .login => self.processUserMessage(login_prompt, line) catch |err| {
-                self.terminal.printErrorFmt("LOGIN failed: {s}", .{@errorName(err)});
-            },
-            .accept_cookies => self.processUserMessage(accept_cookies_prompt, line) catch |err| {
-                self.terminal.printErrorFmt("ACCEPT_COOKIES failed: {s}", .{@errorName(err)});
-            },
-            .natural_language => self.processUserMessage(line, line) catch |err| {
-                self.terminal.printErrorFmt("Request failed: {s}", .{@errorName(err)});
-            },
+            .login => self.runLlmTurnPrint(login_prompt, line, "LOGIN"),
+            .accept_cookies => self.runLlmTurnPrint(accept_cookies_prompt, line, "ACCEPT_COOKIES"),
+            .natural_language => self.runLlmTurnPrint(line, line, "Request"),
             else => {
                 self.cmd_executor.execute(cmd);
                 self.recorder.record(cmd);
@@ -476,7 +486,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                     return false;
                 }
                 const prompt = if (entry.command == .login) login_prompt else accept_cookies_prompt;
-                self.processUserMessage(prompt, null) catch |err| {
+                const text = self.processUserMessage(prompt, null) catch |err| {
                     self.terminal.printErrorFmt("line {d}: {s} failed: {s}", .{
                         entry.line_num,
                         entry.raw_line,
@@ -485,6 +495,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                     self.flushReplacements(path, content, replacements.items);
                     return false;
                 };
+                if (text) |t| self.terminal.printAssistant(t);
             },
             else => {
                 self.terminal.printInfoFmt("[{d}] {s}", .{ entry.line_num, entry.raw_line });
@@ -824,7 +835,42 @@ fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []cons
     return null;
 }
 
-fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]const u8) !void {
+/// MCP entry point: run a single user task with a clean LLM context. Browser
+/// state (URL, cookies, etc.) is preserved by default; pass a fresh session
+/// upstream if isolation is needed. Returns the assistant text on success
+/// (memory tied to `message_arena`, valid until the next call), or `null`
+/// if the model emitted nothing.
+pub fn runOneTask(
+    self: *Self,
+    task: []const u8,
+    attachments: ?[]const []const u8,
+) !?[]const u8 {
+    self.messages.clearRetainingCapacity();
+    _ = self.message_arena.reset(.retain_capacity);
+    // Each task gets a fresh LLM context; drop registry entries that point
+    // into the old session so a stray backendNodeId can't survive a navigation.
+    self.tool_executor.node_registry.reset();
+    self.one_shot_attachments = attachments;
+    return self.processUserMessage(task, null);
+}
+
+/// REPL helper: run an LLM turn and route the answer to the terminal,
+/// reporting failures with `label` ("LOGIN", "Request", ...). Errors are
+/// swallowed — the REPL must not die from a single failed turn.
+fn runLlmTurnPrint(self: *Self, prompt: []const u8, record_comment: ?[]const u8, label: []const u8) void {
+    const text = self.processUserMessage(prompt, record_comment) catch |err| {
+        self.terminal.printErrorFmt("{s} failed: {s}", .{ label, @errorName(err) });
+        return;
+    };
+    if (text) |t| self.terminal.printAssistant(t) else self.terminal.printInfo("(no response from model)");
+}
+
+/// Run one user-input → final-answer turn. Returns the assistant text on
+/// success (memory lives in `message_arena`), or `null` if the model emitted
+/// nothing even after a synthesis turn. Callers decide how to surface the
+/// result (stdout for the CLI, JSON-RPC payload for MCP). Tool calls,
+/// recording, and pruning all happen here.
+fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]const u8) !?[]const u8 {
     const ma = self.message_arena.allocator();
 
     try self.ensureSystemPrompt();
@@ -894,11 +940,11 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
         }
     }
 
-    printed: {
-        if (result.text) |text| {
-            self.terminal.printAssistant(text);
-            break :printed;
-        }
+    // `result.text` and `synth.text` are owned by their RunToolsResult arenas,
+    // which are deinited at the end of this function. Dupe into the agent's
+    // `message_arena` so the returned slice outlives those arenas.
+    const final_text: ?[]const u8 = blk: {
+        if (result.text) |text| break :blk try ma.dupe(u8, text);
 
         // The tool-use loop exhausted max_turns or returned an empty turn
         // with no final text. Ask the model for a synthesis answer without
@@ -947,19 +993,15 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
             },
         ) catch |err| {
             log.err(.app, "AI synthesis error", .{ .err = err });
-            self.terminal.printInfo("(no response from model)");
-            break :printed;
+            break :blk null;
         };
         defer synth.deinit();
 
-        if (synth.text) |text| {
-            self.terminal.printAssistant(text);
-        } else {
-            self.terminal.printInfo("(no response from model)");
-        }
-    }
+        break :blk if (synth.text) |text| try ma.dupe(u8, text) else null;
+    };
 
     self.pruneMessages();
+    return final_text;
 }
 
 /// Build a `parts`-based user message when `--task-attachment` was given.

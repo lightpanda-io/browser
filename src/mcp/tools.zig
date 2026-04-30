@@ -23,12 +23,12 @@ const tool_list = blk: {
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     _ = arena;
     const id = req.id orelse return;
-    try server.sendResult(id, .{ .tools = &tool_list });
+    try server.transport.sendResult(id, .{ .tools = &tool_list });
 }
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     if (req.params == null or req.id == null) {
-        return server.sendError(req.id orelse .{ .integer = -1 }, .InvalidParams, "Missing params");
+        return server.transport.sendError(req.id orelse .{ .integer = -1 }, .InvalidParams, "Missing params");
     }
 
     const CallParams = struct {
@@ -37,20 +37,20 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
     };
 
     const call_params = std.json.parseFromValueLeaky(CallParams, arena, req.params.?, .{ .ignore_unknown_fields = true }) catch {
-        return server.sendError(req.id.?, .InvalidParams, "Invalid params");
+        return server.transport.sendError(req.id.?, .InvalidParams, "Invalid params");
     };
 
     const id = req.id.?;
 
     const action = std.meta.stringToEnum(browser_tools.Action, call_params.name) orelse {
-        return server.sendError(id, .MethodNotFound, "Tool not found");
+        return server.transport.sendError(id, .MethodNotFound, "Tool not found");
     };
 
     // JS errors are returned as isError tool results, not protocol errors
     if (action == .eval) {
         const result = browser_tools.callEval(server.session, arena, &server.node_registry, call_params.arguments);
         const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
-        return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });
+        return server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });
     }
 
     const result = browser_tools.call(server.session, arena, &server.node_registry, call_params.name, call_params.arguments) catch |err| {
@@ -59,11 +59,11 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
             error.NodeNotFound, error.InvalidParams => .InvalidParams,
             error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
         };
-        return server.sendError(id, code, @errorName(err));
+        return server.transport.sendError(id, code, @errorName(err));
     };
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = result }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 const router = @import("router.zig");

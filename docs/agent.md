@@ -6,9 +6,11 @@ It can act as:
 - an **LLM agent** that drives the browser with tool calls (`--provider`),
 - a **scripted runner** that replays a `.panda` script deterministically,
 - a **dumb REPL** for hand-driven Pandascript with no LLM at all,
-- a **one-shot task runner** that prints a single answer to stdout (`--task`).
+- a **one-shot task runner** that prints a single answer to stdout (`--task`),
+- an **MCP server** that exposes the agent itself as a single `task` tool
+  for other agents to delegate to (`--mcp`).
 
-All four modes share the same browser tools (`goto`, `click`, `fill`, `tree`,
+All five modes share the same browser tools (`goto`, `click`, `fill`, `tree`,
 `markdown`, `search`, ...). The same set is exposed over MCP via `lightpanda
 mcp`, so an agent script and an MCP client see the same surface.
 
@@ -29,6 +31,9 @@ mcp`, so an agent script and an MCP client see the same surface.
 
 # One-shot: ask a question, capture the answer on stdout
 ./lightpanda agent --provider gemini --task "what is on the front page of hn?"
+
+# MCP server: expose a single `task` tool for other agents to delegate to
+./lightpanda agent --mcp --provider anthropic
 ```
 
 ## Providers and API keys
@@ -145,6 +150,54 @@ from selector drift, not to redesign the script.
 `--task` runs a single user turn, prints the final answer on stdout, and
 exits. Combine with `--task-attachment <path>` (repeatable) to feed local
 files to providers that accept attachments.
+
+## MCP server mode (`--mcp`)
+
+`lightpanda agent --mcp --provider <p>` runs the agent as an MCP server
+over stdio. It exposes a single tool, `task`, so a calling agent can
+delegate a high-level browsing task and receive only the final answer
+without the intermediate browser tool calls (tree dumps, clicks, scrolls)
+filling its own context.
+
+```console
+./lightpanda agent --mcp --provider anthropic
+```
+
+MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "lightpanda-agent": {
+      "command": "/path/to/lightpanda",
+      "args": ["agent", "--mcp", "--provider", "anthropic"]
+    }
+  }
+}
+```
+
+The `task` tool accepts:
+
+| Field         | Type             | Notes                                                                  |
+|---------------|------------------|------------------------------------------------------------------------|
+| `task`        | string, required | Natural-language instruction for the agent.                            |
+| `attachments` | string[]         | Optional local file paths (image / PDF / text) for providers that accept attachments. |
+| `fresh`       | boolean          | If true, start the task from a fresh browser session (no cookies, no current page). |
+
+Each call resets the agent's LLM conversation, so tasks are independent
+from each other at the model level. The browser session, by contrast,
+persists across calls by default — set `fresh: true` to reset it.
+
+This mode is distinct from `lightpanda mcp`, which exposes the raw
+browser tools (`goto`, `click`, `fill`, ...) and does not depend on an
+LLM. Pick `lightpanda mcp` when the calling agent wants to drive the
+browser itself, and `lightpanda agent --mcp` when it wants to hand off
+the whole sub-task. `--mcp` cannot be combined with `--task`, `-i`, or a
+script file.
+
+Limitations: the JSON-RPC loop is single-threaded, so a long-running
+task call blocks subsequent calls until it finishes. There is no
+cancellation from the client side yet.
 
 ## Browser tools
 

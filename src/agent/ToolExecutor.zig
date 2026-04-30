@@ -55,6 +55,15 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self);
 }
 
+/// Tear down the current `Browser` and `Session` and replace them with
+/// fresh ones. Caller is responsible for clearing any registry/cache
+/// state that depended on the old session.
+pub fn resetSession(self: *Self) !void {
+    self.browser.deinit();
+    self.browser = try lp.Browser.init(self.app, .{ .http_client = self.http_client });
+    self.session = try self.browser.newSession(self.notification);
+}
+
 pub const CallError = browser_tools.ToolError || error{InvalidJsonArguments};
 
 /// Allocator backing the parsed tool schemas. Lives for the executor's
