@@ -82,6 +82,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: 'lightpanda-io/demo'
+          ref: 'http-cache-cdp'
           fetch-depth: 0
 
       - run: npm install
@@ -150,6 +151,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: 'lightpanda-io/demo'
+          ref: 'http-cache-cdp'
           fetch-depth: 0
 
       - run: npm install
@@ -216,6 +218,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: 'lightpanda-io/demo'
+          ref: 'http-cache-cdp'
           fetch-depth: 0
 
       - name: download artifact
@@ -270,6 +273,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: 'lightpanda-io/demo'
+          ref: 'http-cache-cdp'
           fetch-depth: 0
 
       - run: npm install

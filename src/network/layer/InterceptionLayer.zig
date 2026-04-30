@@ -75,8 +75,6 @@ fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
         },
     );
 
-    req.params.notification.dispatch(.http_request_start, &.{ .request = &req });
-
     var wait_for_interception = false;
     req.params.notification.dispatch(.http_request_intercept, &.{
         .request = &req,
@@ -105,22 +103,29 @@ pub const InterceptContext = struct {
     layer: *InterceptionLayer,
     request: Request,
     content_length: usize = 0,
+    is_from_network: bool = false,
 
     fn startCallback(response: Response) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
-        log.debug(.http, "intercept start", .{ .url = self.request.params.url });
+        self.is_from_network = response.inner == .transfer;
+
+        if (self.is_from_network) {
+            log.debug(.http, "intercept start", .{ .url = self.request.params.url });
+        }
         return self.forward.forwardStart(response);
     }
 
     fn headerCallback(response: Response) anyerror!bool {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
-        log.debug(.http, "intercept header", .{
-            .url = self.request.params.url,
-            .status = response.status(),
-            .content_length = response.contentLength(),
-        });
+        if (self.is_from_network) {
+            log.debug(.http, "intercept header", .{
+                .url = self.request.params.url,
+                .status = response.status(),
+                .content_length = response.contentLength(),
+            });
 
-        self.content_length = response.contentLength() orelse 0;
+            self.content_length = response.contentLength() orelse 0;
+        }
 
         self.request.params.notification.dispatch(.http_response_header_done, &.{
             .request = &self.request,
@@ -132,15 +137,18 @@ pub const InterceptContext = struct {
 
     fn dataCallback(response: Response, chunk: []const u8) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
-        log.debug(.http, "intercept data", .{
-            .url = self.request.params.url,
-            .len = chunk.len,
-        });
 
-        self.request.params.notification.dispatch(.http_response_data, &.{
-            .data = chunk,
-            .request = &self.request,
-        });
+        if (self.is_from_network) {
+            log.debug(.http, "intercept data", .{
+                .url = self.request.params.url,
+                .len = chunk.len,
+            });
+
+            self.request.params.notification.dispatch(.http_response_data, &.{
+                .data = chunk,
+                .request = &self.request,
+            });
+        }
 
         return self.forward.forwardData(response, chunk);
     }
@@ -148,40 +156,49 @@ pub const InterceptContext = struct {
     fn doneCallback(ctx: *anyopaque) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
 
-        log.debug(.http, "intercept done", .{
-            .url = self.request.params.url,
-            .content_length = self.content_length,
-        });
+        if (self.is_from_network) {
+            log.debug(.http, "intercept done", .{
+                .url = self.request.params.url,
+                .content_length = self.content_length,
+            });
 
-        self.request.params.notification.dispatch(.http_request_done, &.{
-            .request = &self.request,
-            .content_length = self.content_length,
-        });
+            self.request.params.notification.dispatch(.http_request_done, &.{
+                .request = &self.request,
+                .content_length = self.content_length,
+            });
+        }
+
         return self.forward.forwardDone();
     }
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
 
-        log.debug(.http, "intercept error", .{
-            .url = self.request.params.url,
-            .err = err,
-        });
-        self.request.params.notification.dispatch(.http_request_fail, &.{
-            .request = &self.request,
-            .err = err,
-        });
+        if (self.is_from_network) {
+            log.debug(.http, "intercept error", .{
+                .url = self.request.params.url,
+                .err = err,
+            });
+            self.request.params.notification.dispatch(.http_request_fail, &.{
+                .request = &self.request,
+                .err = err,
+            });
+        }
+
         self.forward.forwardErr(err);
     }
 
     fn shutdownCallback(ctx: *anyopaque) void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
 
-        log.debug(.http, "intercept shutdown", .{ .url = self.request.params.url });
-        self.request.params.notification.dispatch(.http_request_fail, &.{
-            .request = &self.request,
-            .err = error.Shutdown,
-        });
+        if (self.is_from_network) {
+            log.debug(.http, "intercept shutdown", .{ .url = self.request.params.url });
+            self.request.params.notification.dispatch(.http_request_fail, &.{
+                .request = &self.request,
+                .err = error.Shutdown,
+            });
+        }
+
         self.forward.forwardShutdown();
     }
 };

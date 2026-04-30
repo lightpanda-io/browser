@@ -44,6 +44,8 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         setUserAgentOverride,
         deleteCookies,
         clearBrowserCookies,
+        clearBrowserCache,
+        canClearBrowserCache,
         setCookie,
         setCookies,
         getCookies,
@@ -54,11 +56,13 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     switch (action) {
         .enable => return enable(cmd),
         .disable => return disable(cmd),
-        .setCacheDisabled => return cmd.sendResult(null, .{}),
+        .setCacheDisabled => return setCacheDisabled(cmd),
         .setUserAgentOverride => return @import("emulation.zig").setUserAgentOverride(cmd),
         .setExtraHTTPHeaders => return setExtraHTTPHeaders(cmd),
         .deleteCookies => return deleteCookies(cmd),
         .clearBrowserCookies => return clearBrowserCookies(cmd),
+        .clearBrowserCache => return clearBrowserCache(cmd),
+        .canClearBrowserCache => return canClearBrowserCache(cmd),
         .setCookie => return setCookie(cmd),
         .setCookies => return setCookies(cmd),
         .getCookies => return getCookies(cmd),
@@ -160,6 +164,34 @@ fn clearBrowserCookies(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     bc.session.cookie_jar.clearRetainingCapacity();
     return cmd.sendResult(null, .{});
+}
+
+fn setCacheDisabled(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        cacheDisabled: bool,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const client = bc.cdp.browser.http_client;
+    client.cache_layer.setEnabled(!params.cacheDisabled);
+    return cmd.sendResult(null, .{});
+}
+
+fn clearBrowserCache(cmd: *CDP.Command) !void {
+    // Network.clearBrowserCache takes no parameters per the CDP spec, but most
+    // CDP clients (chrome-remote-interface, chromedp, custom websocket clients)
+    // include an empty `"params":{}` object on every command for ergonomics.
+    // Chrome accepts that and clears the jar; reject only on truly malformed JSON.
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const network = bc.cdp.browser.http_client.network;
+    if (network.cache) |*c| try c.clear();
+    return cmd.sendResult(null, .{});
+}
+
+fn canClearBrowserCache(cmd: *CDP.Command) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const network = bc.cdp.browser.http_client.network;
+    return cmd.sendResult(.{ .result = network.cache != null }, .{});
 }
 
 fn setCookie(cmd: *CDP.Command) !void {
@@ -328,6 +360,15 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     }, .{ .session_id = session_id });
 }
 
+pub fn httpServedFromCache(bc: *CDP.BrowserContext, msg: *const Notification.RequestServedFromCache) !void {
+    const session_id = bc.session_id orelse return;
+    const req = msg.request;
+
+    try bc.cdp.sendEvent("Network.requestServedFromCache", .{
+        .requestId = &id.toRequestId(req),
+    }, .{ .session_id = session_id });
+}
+
 pub const RequestWriter = struct {
     request: *Request,
 
@@ -431,6 +472,9 @@ const ResponseWriter = struct {
             try jws.objectField("charset");
             try jws.write(mime.charsetString());
         }
+
+        try jws.objectField("fromDiskCache");
+        try jws.write(response.inner == .cached);
 
         {
             try jws.objectField("timing");
@@ -660,4 +704,91 @@ test "cdp.Network: getAllCookies returns whole jar regardless of current origin"
             .{ .name = "b", .value = "2", .domain = "other.test", .path = "/", .size = 2, .secure = true },
         },
     }, .{ .id = 3 });
+}
+
+test "cdp.Network: clearBrowserCache succeeds" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-CC1" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.clearBrowserCache",
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+}
+
+test "cdp.Network: clearBrowserCache accepts empty params object" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-CC2" });
+
+    // Most CDP clients always include a `params` field on every command,
+    // even for methods that take none. Chrome ignores the empty object; we should too.
+    try ctx.processMessage(
+        \\{"id":1,"method":"Network.clearBrowserCache","params":{}}
+    );
+    try ctx.expectSentResult(null, .{ .id = 1 });
+}
+
+test "cdp.Network: setCacheDisabled disables cache" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-CD1" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.setCacheDisabled",
+        .params = .{ .cacheDisabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const client = ctx.cdp().browser.http_client;
+    try testing.expectEqual(false, client.cache_layer.enabled);
+}
+
+test "cdp.Network: setCacheDisabled re-enables cache" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-CD2" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.setCacheDisabled",
+        .params = .{ .cacheDisabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Network.setCacheDisabled",
+        .params = .{ .cacheDisabled = false },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    const client = ctx.cdp().browser.http_client;
+    try testing.expectEqual(true, client.cache_layer.enabled);
+}
+
+test "cdp.Network: cache enabled by default" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-CD3" });
+
+    const client = ctx.cdp().browser.http_client;
+    try testing.expectEqual(true, client.cache_layer.enabled);
+}
+
+test "cdp.Network: canClearBrowserCache" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-CC3" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.canClearBrowserCache",
+    });
+
+    // Cache is disabled in testing I'm pretty sure.
+    try ctx.expectSentResult(.{ .result = false }, .{ .id = 1 });
 }
