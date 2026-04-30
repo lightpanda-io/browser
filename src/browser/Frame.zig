@@ -3728,6 +3728,28 @@ pub fn handleClick(self: *Frame, target: *Node) !void {
             }
         },
         .select, .textarea => try element.focus(self),
+        .generic => |generic| {
+            // Per HTML §4.11.1.2 "The summary element", a summary's activation
+            // behavior runs the toggle details state algorithm on its parent
+            // details, but only when this summary is the first summary
+            // element child of that details.
+            if (generic._tag != .summary) return;
+
+            const parent_element = element.asNode().parentElement() orelse return;
+            const parent_html = parent_element.is(Element.Html) orelse return;
+            const details = parent_html.is(Element.Html.Details) orelse return;
+
+            var maybe_child = parent_element.firstElementChild();
+            while (maybe_child) |child| : (maybe_child = child.nextElementSibling()) {
+                const child_html = child.is(Element.Html) orelse continue;
+                const child_generic = child_html.is(Element.Html.Generic) orelse continue;
+                if (child_generic._tag != .summary) continue;
+                if (child != element) return;
+                break;
+            }
+
+            try details.setOpen(!details.getOpen(), self);
+        },
         else => {},
     }
 }
