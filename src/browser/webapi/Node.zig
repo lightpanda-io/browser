@@ -990,7 +990,7 @@ pub fn getElementsByTagName(self: *Node, tag_name: []const u8, frame: *Frame) !G
     }
 
     const arena = frame.arena;
-    const filter = try String.init(arena, lower, .{});
+    const filter = try String.init(arena, tag_name, .{});
     return .{ .tag_name = collections.NodeLive(.tag_name).init(self, filter, frame) };
 }
 
