@@ -382,12 +382,16 @@ pub fn setTitle(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("title"), .wrap(value), frame);
 }
 
-// HTML §7.7.5.2: returns true iff the element's effective content editable
-// state is "true" or "plaintext-only". Walk up to the nearest ancestor (or
-// self) with a `contenteditable` attribute; the keyword "false" maps to the
-// false state, every other value (including the empty string, "true", and
-// "plaintext-only") maps to an editable state. With no ancestor carrying the
-// attribute the document's designMode default ("off") yields false.
+// HTML §7.7.5.2 specifies the IDL attribute as true iff the element's effective
+// content editable state is "true" or "plaintext-only". Lightpanda has no
+// caret/keyboard editing pipeline, so a true answer cannot be honored
+// end-to-end — downstream CDP tools (notably Puppeteer's dispatchKeyEvent
+// path) would route into an input pipeline that silently no-ops. Always
+// return false, and log .not_implemented when the spec would have said true
+// so usage surfaces in telemetry rather than silently depending on an
+// unsupported value. Spec walk per HTML §7.7.5.2 still applies — the nearest
+// ancestor with `contenteditable` wins; "false" disables. See PR #2310 for
+// the routing-vs-fail-loud discussion.
 //
 // "contenteditable" is 15 bytes — past the comptime SSO limit — so the
 // String wrap runs at runtime, mirroring the pattern in interactive.zig.
@@ -395,7 +399,10 @@ pub fn getIsContentEditable(self: *HtmlElement) bool {
     var current: ?*Element = self.asElement();
     while (current) |el| : (current = el.parentElement()) {
         const raw = el.getAttributeSafe(.wrap("contenteditable")) orelse continue;
-        return !std.ascii.eqlIgnoreCase(raw, "false");
+        if (!std.ascii.eqlIgnoreCase(raw, "false")) {
+            log.info(.not_implemented, "IsContentEditable", .{});
+        }
+        break;
     }
     return false;
 }
