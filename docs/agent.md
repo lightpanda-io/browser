@@ -115,18 +115,20 @@ from selector drift, not to redesign the script.
 
 ## REPL features
 
-- **Tab completion**: cycles through Pandascript keywords and `/<tool>` slash
-  commands. The dim grey suffix shown after the cursor is the first match;
-  pressing Tab accepts it.
+- **Tab completion** (case-insensitive): cycles through Pandascript keywords
+  and `/<tool>` slash commands. The dim grey suffix shown after the cursor is
+  the first match.
 - **Persistent history**: stored in `.lp-history` in the working directory.
 - **Slash commands**: `/<tool> [args]` calls a browser tool directly without
-  going through the LLM. `/help` lists tools, `/help <tool>` prints the JSON
-  schema. Args accept either a single positional value (for tools with one
-  required field), `key=value` pairs, or a raw `{json}` blob.
+  going through the LLM. Args accept either a single positional value (for
+  tools with one required field), `key=value` pairs, or a raw `{json}` blob.
+  Two meta commands round out the set: `/help` lists tools (`/help <tool>`
+  prints the JSON schema), and `/quit` exits the REPL.
   ```
   > /goto https://example.com
   > /findElement role=button name=Submit
   > /eval {"script": "document.title"}
+  > /quit
   ```
 - **Stdout vs stderr**: the final assistant answer and data-producing commands
   (`EXTRACT`, `EVAL`, `MARKDOWN`, `TREE`) write to stdout. Tool calls,
