@@ -3806,9 +3806,14 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 
     const form_element = form.asElement();
 
+    const submit_button: ?*Element = blk: {
+        const s = submitter_ orelse break :blk null;
+        break :blk if (Element.Html.Form.isSubmitButton(s)) s else null;
+    };
+
     const target_name_: ?[]const u8 = blk: {
-        if (submitter_) |submitter| {
-            if (submitter.getAttributeSafe(comptime .wrap("formtarget"))) |ft| {
+        if (submit_button) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formtarget"))) |ft| {
                 break :blk ft;
             }
         }
@@ -3862,13 +3867,13 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     // form's corresponding attributes (matching how formtarget is honored above).
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
     const enctype_attr = blk: {
-        if (submitter_) |s| {
+        if (submit_button) |s| {
             if (s.getAttributeSafe(comptime .wrap("formenctype"))) |fe| break :blk fe;
         }
         break :blk form_element.getAttributeSafe(comptime .wrap("enctype"));
     };
     const method = blk: {
-        if (submitter_) |s| {
+        if (submit_button) |s| {
             if (s.getAttributeSafe(comptime .wrap("formmethod"))) |fm| break :blk fm;
         }
         break :blk form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
@@ -3908,7 +3913,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     try form_data.write(.{ .encoding = encoding, .charset = charset, .allocator = arena }, &buf.writer);
 
     var action = blk: {
-        if (submitter_) |s| {
+        if (submit_button) |s| {
             if (s.getAttributeSafe(comptime .wrap("formaction"))) |fa| break :blk fa;
         }
         break :blk form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
