@@ -69,23 +69,29 @@ fn slashHint(name: []const u8, partial: []const u8) ?[]const u8 {
 
 fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callconv(.c) void {
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(buf)), 0);
-    if (input.len == 0) return;
-    if (std.mem.indexOfScalar(u8, input, ' ') != null) return;
 
-    if (input[0] == '/') {
-        const partial = input[1..];
-        // linenoise strdup's the string, so a stack buffer reused per match
-        // is fine. 64 covers every name comfortably.
-        var name_buf: [64:0]u8 = undefined;
-        for (browser_tools.tool_defs) |td| addSlashCompletion(lc, &name_buf, td.name, partial);
-        for (meta_slash_commands) |name| addSlashCompletion(lc, &name_buf, name, partial);
-        return;
+    if (input.len > 0 and std.mem.indexOfScalar(u8, input, ' ') == null) {
+        if (input[0] == '/') {
+            const partial = input[1..];
+            // linenoise strdup's the string, so a stack buffer reused per match
+            // is fine. 64 covers every name comfortably.
+            var name_buf: [64:0]u8 = undefined;
+            for (browser_tools.tool_defs) |td| addSlashCompletion(lc, &name_buf, td.name, partial);
+            for (meta_slash_commands) |name| addSlashCompletion(lc, &name_buf, name, partial);
+        } else {
+            for (commands) |cmd| {
+                if (cmd.name.len >= input.len and std.ascii.eqlIgnoreCase(cmd.name[0..input.len], input)) {
+                    c.linenoiseAddCompletion(lc, cmd.name.ptr);
+                }
+            }
+        }
     }
 
-    for (commands) |cmd| {
-        if (cmd.name.len >= input.len and std.ascii.eqlIgnoreCase(cmd.name[0..input.len], input)) {
-            c.linenoiseAddCompletion(lc, cmd.name.ptr);
-        }
+    // If we found nothing, register the input itself so linenoise enters
+    // completion mode anyway. Otherwise it returns the Tab keypress to its
+    // edit loop, which inserts '\t' into the buffer and corrupts the line.
+    if (lc.*.len == 0) {
+        c.linenoiseAddCompletion(lc, buf);
     }
 }
 
