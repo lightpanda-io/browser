@@ -20,7 +20,10 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
+const Notification = @import("../../Notification.zig");
+
 const logger = lp.log;
+const LogLevel = lp.log.Level;
 
 const Console = @This();
 
@@ -29,27 +32,54 @@ _counts: std.StringHashMapUnmanaged(u64) = .{},
 
 pub const init: Console = .{};
 
+fn dispatchConsoleMessage(values: []js.Value, level: LogLevel, exec: *js.Execution) void {
+    const notification = exec.context.page.session.notification;
+    const text = formatValues(values, exec.call_arena) catch return;
+    notification.dispatch(.console_message, &.{
+        .source = .javascript,
+        .level = level,
+        .text = text,
+    });
+}
+
+fn formatValues(values: []js.Value, allocator: std.mem.Allocator) ![]const u8 {
+    var aw: std.io.Writer.Allocating = .init(allocator);
+    const w = &aw.writer;
+    for (values, 0..) |v, i| {
+        if (i != 0) try w.writeByte(' ');
+
+        const js_str = try v.toString();
+        try js_str.format(w);
+    }
+    return aw.written();
+}
+
 pub fn trace(_: *const Console, values: []js.Value, exec: *js.Execution) !void {
     logger.debug(.js, "console.trace", .{
         .stack = exec.context.local.?.stackTrace() catch "???",
         .args = ValueWriter{ .values = values },
     });
+    dispatchConsoleMessage(values, .debug, exec);
 }
 
-pub fn debug(_: *const Console, values: []js.Value) void {
+pub fn debug(_: *const Console, values: []js.Value, exec: *js.Execution) void {
     logger.debug(.js, "console.debug", .{ValueWriter{ .values = values }});
+    dispatchConsoleMessage(values, .debug, exec);
 }
 
-pub fn info(_: *const Console, values: []js.Value) void {
+pub fn info(_: *const Console, values: []js.Value, exec: *js.Execution) void {
     logger.info(.js, "console.info", .{ValueWriter{ .values = values }});
+    dispatchConsoleMessage(values, .info, exec);
 }
 
-pub fn log(_: *const Console, values: []js.Value) void {
+pub fn log(_: *const Console, values: []js.Value, exec: *js.Execution) void {
     logger.info(.js, "console.log", .{ValueWriter{ .values = values }});
+    dispatchConsoleMessage(values, .info, exec);
 }
 
-pub fn warn(_: *const Console, values: []js.Value) void {
+pub fn warn(_: *const Console, values: []js.Value, exec: *js.Execution) void {
     logger.warn(.js, "console.warn", .{ValueWriter{ .values = values }});
+    dispatchConsoleMessage(values, .info, exec);
 }
 
 pub fn clear(_: *const Console) void {}
@@ -63,6 +93,7 @@ pub fn assert(_: *const Console, assertion: js.Value, values: []js.Value) void {
 
 pub fn @"error"(_: *const Console, values: []js.Value, exec: *js.Execution) void {
     logger.warn(.js, "console.error", .{ValueWriter{ .values = values, .stack = exec.context.local.?.stackTrace() catch |err| @errorName(err) orelse "???" }});
+    dispatchConsoleMessage(values, .err, exec);
 }
 
 pub fn table(_: *const Console, data: js.Value, columns: ?js.Value) void {
