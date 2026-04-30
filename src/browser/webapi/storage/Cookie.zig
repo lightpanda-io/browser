@@ -477,6 +477,8 @@ pub const Jar = struct {
         self: *Jar,
         cookie: Cookie,
         request_time: i64,
+        /// Checks if addition comes from HTTP request or JS context.
+        comptime is_http: bool,
     ) !void {
         const is_expired = isCookieExpired(&cookie, request_time);
         defer if (is_expired) {
@@ -491,15 +493,25 @@ pub const Jar = struct {
         }
 
         for (self.cookies.items, 0..) |*c, i| {
-            if (areCookiesEqual(&cookie, c)) {
-                c.deinit();
-                if (is_expired) {
-                    _ = self.cookies.swapRemove(i);
-                } else {
-                    self.cookies.items[i] = cookie;
-                }
+            // We're only looking for the equal one.
+            if (areCookiesEqual(&cookie, c) == false) {
+                continue;
+            }
+
+            // RFC 6265bis 5.7.2: a non-HTTP API (e.g. document.cookie) must
+            // not replace an HttpOnly cookie.
+            if (c.http_only and is_http == false) {
+                if (is_expired == false) cookie.deinit();
                 return;
             }
+
+            c.deinit();
+            if (is_expired) {
+                _ = self.cookies.swapRemove(i);
+            } else {
+                self.cookies.items[i] = cookie;
+            }
+            return;
         }
 
         if (!is_expired) {
@@ -563,7 +575,7 @@ pub const Jar = struct {
         };
 
         const now = std.time.timestamp();
-        try self.add(c, now);
+        try self.add(c, now, true);
     }
 
     fn writeCookie(cookie: *const Cookie, writer: anytype) !void {
@@ -685,29 +697,48 @@ test "Jar: add" {
     defer jar.deinit();
     try expectCookies(&.{}, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9000;Max-Age=0"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9000;Max-Age=0"), now, true);
     try expectCookies(&.{}, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9000"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9000"), now, true);
     try expectCookies(&.{.{ "over", "9000" }}, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9000!!"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9000!!"), now, true);
     try expectCookies(&.{.{ "over", "9000!!" }}, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "spice=flow"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "spice=flow"), now, true);
     try expectCookies(&.{ .{ "over", "9000!!" }, .{ "spice", "flow" } }, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "spice=flows;Path=/"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "spice=flows;Path=/"), now, true);
     try expectCookies(&.{ .{ "over", "9000!!" }, .{ "spice", "flows" } }, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9001;Path=/other"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9001;Path=/other"), now, true);
     try expectCookies(&.{ .{ "over", "9000!!" }, .{ "spice", "flows" }, .{ "over", "9001" } }, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9002;Path=/;Domain=lightpanda.io"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9002;Path=/;Domain=lightpanda.io"), now, true);
     try expectCookies(&.{ .{ "over", "9000!!" }, .{ "spice", "flows" }, .{ "over", "9001" }, .{ "over", "9002" } }, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=x;Path=/other;Max-Age=-200"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=x;Path=/other;Max-Age=-200"), now, true);
     try expectCookies(&.{ .{ "over", "9000!!" }, .{ "spice", "flows" }, .{ "over", "9002" } }, jar);
+}
+
+test "Jar: non-HTTP add must not replace or duplicate an HttpOnly cookie" {
+    const now = std.time.timestamp();
+
+    var jar = Jar.init(testing.allocator);
+    defer jar.deinit();
+
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "session=REAL;Path=/;HttpOnly"), now, true);
+    try testing.expectEqual(@as(usize, 1), jar.cookies.items.len);
+
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "session=ATTACKER;Path=/"), now, false);
+    try testing.expectEqual(@as(usize, 1), jar.cookies.items.len);
+    try testing.expectEqual("REAL", jar.cookies.items[0].value);
+    try testing.expectEqual(true, jar.cookies.items[0].http_only);
+
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "session=REFRESHED;Path=/;HttpOnly"), now, true);
+    try testing.expectEqual(@as(usize, 1), jar.cookies.items.len);
+    try testing.expectEqual("REFRESHED", jar.cookies.items[0].value);
 }
 
 test "Jar: add limit" {
@@ -724,7 +755,7 @@ test "Jar: add limit" {
         .path = "/",
         .expires = null,
         .value = "v" ** 4096 ++ "v",
-    }, now));
+    }, now, true));
 
     // generate unique names.
     const names = comptime blk: {
@@ -748,7 +779,7 @@ test "Jar: add limit" {
             .value = "v",
         };
 
-        try jar.add(c, now);
+        try jar.add(c, now, true);
     }
 
     try testing.expectError(error.CookieJarQuotaExceeded, jar.add(.{
@@ -758,7 +789,7 @@ test "Jar: add limit" {
         .path = "/",
         .expires = null,
         .value = "v",
-    }, now));
+    }, now, true));
 }
 
 test "Jar: forRequest" {
@@ -783,15 +814,15 @@ test "Jar: forRequest" {
         try expectCookies("", &jar, test_url, .{ .is_http = true });
     }
 
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "global1=1"), now);
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "global2=2;Max-Age=30;domain=lightpanda.io"), now);
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "path1=3;Path=/about"), now);
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "path2=4;Path=/docs/"), now);
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "secure=5;Secure"), now);
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "sitenone=6;SameSite=None;Path=/x/;Secure"), now);
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "sitelax=7;SameSite=Lax;Path=/x/"), now);
-    try jar.add(try Cookie.parse(testing.allocator, test_url, "sitestrict=8;SameSite=Strict;Path=/x/"), now);
-    try jar.add(try Cookie.parse(testing.allocator, url2, "domain1=9;domain=test.lightpanda.io"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "global1=1"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "global2=2;Max-Age=30;domain=lightpanda.io"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "path1=3;Path=/about"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "path2=4;Path=/docs/"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "secure=5;Secure"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "sitenone=6;SameSite=None;Path=/x/;Secure"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "sitelax=7;SameSite=Lax;Path=/x/"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "sitestrict=8;SameSite=Strict;Path=/x/"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, url2, "domain1=9;domain=test.lightpanda.io"), now, true);
 
     // nothing fancy here
     try expectCookies("global1=1; global2=2", &jar, test_url, .{ .is_http = true });

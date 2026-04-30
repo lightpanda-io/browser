@@ -255,7 +255,7 @@ pub fn setCookie(_: *HTMLDocument, cookie_str: []const u8, frame: *Frame) ![]con
         c.deinit();
         return ""; // HttpOnly cookies cannot be set from JS
     }
-    try frame._session.cookie_jar.add(c, std.time.timestamp());
+    try frame._session.cookie_jar.add(c, std.time.timestamp(), false);
     return cookie_str;
 }
 

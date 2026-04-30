@@ -167,7 +167,7 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
             .None => .none,
         },
     };
-    try cookie_jar.add(cookie, std.time.timestamp());
+    try cookie_jar.add(cookie, std.time.timestamp(), true);
 }
 
 pub const CookieWriter = struct {
