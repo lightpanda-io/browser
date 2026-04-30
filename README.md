@@ -37,6 +37,14 @@ See [benchmark details](https://github.com/lightpanda-io/demo/blob/main/BENCHMAR
 
 ## Quick start
 
+### Package naming note
+
+The browser binary in this repository is versioned independently from npm packages under the
+`@lightpanda/*` scope.
+
+- `lightpanda-io/browser` releases track the browser binary/runtime.
+- npm packages are SDK/integration packages and may use a different version sequence.
+
 ### Install
 **Install from the nightly builds**
 
