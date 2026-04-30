@@ -871,3 +871,52 @@
     testing.expectEqual('', url.search);
   }
 </script>
+
+<script id=idna>
+  // WHATWG "domain to ASCII": non-ASCII hosts are converted to punycode at
+  // parse time, so getters always return the ASCII form.
+  {
+    const url = new URL('https://räksmörgås.se/');
+    testing.expectEqual('xn--rksmrgs-5wao1o.se', url.hostname);
+    testing.expectEqual('xn--rksmrgs-5wao1o.se', url.host);
+    testing.expectEqual('https://xn--rksmrgs-5wao1o.se/', url.href);
+  }
+
+  // UTS#46 non-transitional processing preserves ß rather than mapping to ss.
+  {
+    const url = new URL('https://faß.de/');
+    testing.expectEqual('xn--fa-hia.de', url.hostname);
+  }
+
+  // Pure-ASCII hosts must not be touched.
+  {
+    const url = new URL('https://example.com/');
+    testing.expectEqual('example.com', url.hostname);
+    testing.expectEqual('https://example.com/', url.href);
+  }
+
+  // IDN preserved alongside port, userinfo, path, query, and fragment.
+  {
+    const url = new URL('https://räksmörgås.se:8443/p?q=1#h');
+    testing.expectEqual('xn--rksmrgs-5wao1o.se', url.hostname);
+    testing.expectEqual('xn--rksmrgs-5wao1o.se:8443', url.host);
+    testing.expectEqual('8443', url.port);
+    testing.expectEqual('/p', url.pathname);
+    testing.expectEqual('?q=1', url.search);
+    testing.expectEqual('#h', url.hash);
+  }
+
+  {
+    const url = new URL('https://user:pass@räksmörgås.se/');
+    testing.expectEqual('xn--rksmrgs-5wao1o.se', url.hostname);
+    testing.expectEqual('user', url.username);
+    testing.expectEqual('pass', url.password);
+  }
+
+  // Resolving a relative path against an IDN base preserves the punycode host.
+  {
+    const url = new URL('/about', 'https://räksmörgås.se/');
+    testing.expectEqual('xn--rksmrgs-5wao1o.se', url.hostname);
+    testing.expectEqual('https://xn--rksmrgs-5wao1o.se/about', url.href);
+  }
+</script>

@@ -34,6 +34,10 @@
             .url = "https://github.com/allyourcodebase/sqlite3/archive/8f840560eae88ab66668c6827c64ffbd0d74ef37.tar.gz",
             .hash = "sqlite3-3.51.0-DMxLWssOAABZ8cAvU_LfBIbp0kZjm824PU8sSLXpEDdr",
         },
+        .libidn2 = .{
+            .url = "https://ftp.gnu.org/gnu/libidn/libidn2-2.3.8.tar.gz",
+            .hash = "N-V-__8AABGOuAC_dhAN07kfoP4dycCFi8Bka4O-tuhriNH8",
+        },
     },
     .paths = .{""},
 }

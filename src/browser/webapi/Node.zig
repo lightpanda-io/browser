@@ -763,6 +763,7 @@ const CloneError = error{
     NotImplemented,
     InvalidCharacterError,
     CloneError,
+    Idna,
     IFrameLoadError,
     TooManyContexts,
     LinkLoadError,
