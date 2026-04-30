@@ -103,9 +103,6 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     errdefer arena_pool.release(arena);
 
     self.* = .{
-        ._pages = .{ null, null },
-        ._active_idx = null,
-        ._pending_idx = null,
         .arena = arena,
         .arena_pool = arena_pool,
         .history = .{},
