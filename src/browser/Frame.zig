@@ -3861,12 +3861,19 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     // button, its formaction/formmethod/formenctype attributes override the
     // form's corresponding attributes (matching how formtarget is honored above).
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
-    const enctype = blk: {
+    const enctype_attr = blk: {
         if (submitter_) |s| {
             if (s.getAttributeSafe(comptime .wrap("formenctype"))) |fe| break :blk fe;
         }
         break :blk form_element.getAttributeSafe(comptime .wrap("enctype"));
     };
+    const method = blk: {
+        if (submitter_) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formmethod"))) |fm| break :blk fm;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
+    };
+    const is_post = std.ascii.eqlIgnoreCase(method, "post");
 
     // Get charset from accept-charset attribute or fall back to document charset
     const charset: []const u8 = blk: {
@@ -3880,15 +3887,26 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         break :blk self.charset;
     };
 
-    var buf = std.Io.Writer.Allocating.init(arena);
-    try form_data.write(.{ .enctype = enctype, .charset = charset, .allocator = arena }, &buf.writer);
-
-    const method = blk: {
-        if (submitter_) |s| {
-            if (s.getAttributeSafe(comptime .wrap("formmethod"))) |fm| break :blk fm;
+    var boundary_buf: [36]u8 = undefined;
+    // GET ignores enctype per HTML spec; only resolve the union for POST.
+    const encoding: FormData.EncType = blk: {
+        if (is_post) {
+            if (enctype_attr) |attr| {
+                if (std.ascii.eqlIgnoreCase(attr, "multipart/form-data")) {
+                    @import("../id.zig").uuidv4(&boundary_buf);
+                    break :blk .{ .formdata = &boundary_buf };
+                }
+                if (!std.ascii.eqlIgnoreCase(attr, "application/x-www-form-urlencoded")) {
+                    log.warn(.not_implemented, "FormData.encoding", .{ .encoding = attr });
+                }
+            }
         }
-        break :blk form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
+        break :blk .urlencode;
     };
+
+    var buf = std.Io.Writer.Allocating.init(arena);
+    try form_data.write(.{ .encoding = encoding, .charset = charset, .allocator = arena }, &buf.writer);
+
     var action = blk: {
         if (submitter_) |s| {
             if (s.getAttributeSafe(comptime .wrap("formaction"))) |fa| break :blk fa;
@@ -3900,11 +3918,13 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         .reason = .form,
         .kind = .{ .push = null },
     };
-    if (std.ascii.eqlIgnoreCase(method, "post")) {
+    if (is_post) {
         opts.method = .POST;
         opts.body = buf.written();
-        // form_data.write currently only supports this encoding, so we know this has to be the content type
-        opts.header = "Content-Type: application/x-www-form-urlencoded";
+        opts.header = switch (encoding) {
+            .urlencode => "Content-Type: application/x-www-form-urlencoded",
+            .formdata => |b| try std.fmt.allocPrintSentinel(arena, "Content-Type: multipart/form-data; boundary={s}", .{b}, 0),
+        };
     } else {
         action = try URL.concatQueryString(arena, action, buf.written());
     }

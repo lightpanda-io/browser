@@ -206,6 +206,11 @@ fn urlEncodeEntry(entry: Entry, comptime mode: URLEncodeMode, allocator_: ?Alloc
     try urlEncodeValue(entry.value.str(), mode, allocator_, charset, writer);
 }
 
+// Exposed so FormData (which keeps its own entry list) can reuse the charset/NCR-aware encoder.
+pub fn urlEncodeFormValue(value: []const u8, allocator_: ?Allocator, charset: []const u8, writer: *std.Io.Writer) !void {
+    return urlEncodeValue(value, .form, allocator_, charset, writer);
+}
+
 fn urlEncodeValue(value: []const u8, comptime mode: URLEncodeMode, allocator_: ?Allocator, charset: []const u8, writer: *std.Io.Writer) !void {
     // For UTF-8, do standard percent encoding
     if (std.mem.eql(u8, charset, "UTF-8")) {
