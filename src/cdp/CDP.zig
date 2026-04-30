@@ -236,6 +236,7 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
             asUint(u56, "Runtime") => return @import("domains/runtime.zig").processMessage(command),
             asUint(u56, "Network") => return @import("domains/network.zig").processMessage(command),
             asUint(u56, "Storage") => return @import("domains/storage.zig").processMessage(command),
+            asUint(u56, "Console") => return @import("domains/console.zig").processMessage(command),
             else => {},
         },
         8 => switch (@as(u64, @bitCast(domain[0..8].*))) {
@@ -631,6 +632,9 @@ pub const BrowserContext = struct {
         self.notification.unregister(.frame_network_idle, self);
         self.notification.unregister(.frame_network_almost_idle, self);
     }
+
+    pub fn consoleEnable(_: *BrowserContext) !void {}
+    pub fn consoleDisable(_: *BrowserContext) void {}
 
     pub fn onFrameRemove(ctx: *anyopaque, _: Notification.FrameRemove) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
