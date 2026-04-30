@@ -3728,6 +3728,14 @@ pub fn handleClick(self: *Frame, target: *Node) !void {
             }
         },
         .select, .textarea => try element.focus(self),
+        .label => |label| {
+            // Per HTML §4.10.4 "The label element", a label's activation
+            // behavior is to run the synthetic click activation steps on the
+            // labeled control. Mirrors Chrome's HTMLLabelElement::DefaultEventHandler.
+            const control = label.getControl(self) orelse return;
+            const control_html = control.is(Element.Html) orelse return;
+            try control_html.click(self);
+        },
         else => {},
     }
 }
