@@ -478,10 +478,9 @@ fn processRootQueuedNavigation(self: *Session) !void {
     current_frame._queued_navigation = null;
 
     // Synthetic navigations (about:blank, blob:) commit instantly — no HTTP,
-    // so there is no in-flight window to worry about. Use the legacy
+    // so there is no in-flight window to worry about. Use the optimized
     // immediate-swap path for them.
-    const is_synthetic = std.mem.eql(u8, qn.url, "about:blank") or
-        std.mem.startsWith(u8, qn.url, "blob:");
+    const is_synthetic = qn.is_about_blank or std.mem.startsWith(u8, qn.url, "blob:");
 
     if (is_synthetic) {
         return self.replaceRootImmediate(current_frame._frame_id, qn);
