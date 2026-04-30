@@ -486,3 +486,34 @@ pub const JsApi = struct {
         .{},
     );
 };
+
+const testing = @import("../../../testing.zig");
+
+test "Navigation: about:blank commits entry" {
+    const frame = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+
+    // The test_session is shared; prior tests leak entries into it via
+    // session.navigation. Reset it so we exercise a fresh session-style state.
+    testing.test_session.navigation._entries.clearRetainingCapacity();
+    testing.test_session.navigation._index = 0;
+
+    try frame.navigate("about:blank", .{});
+
+    var runner = try testing.test_session.runner(.{});
+    try runner.wait(.{ .ms = 1000 });
+
+    // about:blank / blob: handling in Frame.navigate bypasses rameDoneCallback,
+    // so commitNavigation never runs and _entries stays empty. Reading
+    // `navigation.currentEntry` from JS then hits the `lp.assert(len > 0, ...)`
+    // in Navigation.getCurrentEntry
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const result = try ls.local.exec(
+        "navigation.currentEntry.url === 'about:blank'",
+        "Navigation.test",
+    );
+    try testing.expect(result.isTrue());
+}

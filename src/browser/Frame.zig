@@ -602,6 +602,11 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         // force next request id manually b/c we won't create a real req.
         _ = session.browser.http_client.incrReqId();
 
+        if (self.parent == null) {
+            session.navigation._current_navigation_kind = opts.kind;
+            try session.navigation.commitNavigation(self);
+        }
+
         self.documentIsComplete();
         return;
     }
