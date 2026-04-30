@@ -18,17 +18,21 @@
 
 const std = @import("std");
 
+const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
+const Notification = @import("../../Notification.zig");
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
         disable,
+        clearMessages,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .enable => return enable(cmd),
         .disable => return disable(cmd),
+        .clearMessages => return cmd.sendResult(null, .{}),
     }
 }
 
@@ -42,4 +46,23 @@ fn disable(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     bc.consoleDisable();
     return cmd.sendResult(null, .{});
+}
+
+const ConsoleMessage = struct {
+    source: []const u8,
+    level: []const u8,
+    text: []const u8,
+    url: ?[]const u8 = null,
+    line: ?u32 = null,
+    columns: ?u32 = null,
+};
+
+pub fn consoleMessage(bc: *CDP.BrowserContext, event: *const Notification.ConsoleMessage) !void {
+    const session_id = bc.session_id orelse return;
+
+    return bc.cdp.sendEvent("Console.messageAdded", ConsoleMessage{
+        .source = @tagName(event.source),
+        .level = @tagName(event.level),
+        .text = event.text,
+    }, .{ .session_id = session_id });
 }

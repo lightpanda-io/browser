@@ -86,6 +86,7 @@ const EventListeners = struct {
     http_response_data: List = .{},
     http_response_header_done: List = .{},
     javascript_dialog_opening: List = .{},
+    console_message: List = .{},
 };
 
 const Events = union(enum) {
@@ -106,6 +107,7 @@ const Events = union(enum) {
     http_response_data: *const ResponseData,
     http_response_header_done: *const ResponseHeaderDone,
     javascript_dialog_opening: *const JavascriptDialogOpening,
+    console_message: *const ConsoleMessage,
 };
 const EventType = std.meta.FieldEnum(Events);
 
@@ -216,6 +218,27 @@ pub const DialogResponse = struct {
     // is owned by whoever filled in the response (typically the BrowserContext
     // arena) and must outlive a single dispatch call.
     prompt_text: ?[]const u8 = null,
+};
+
+pub const ConsoleMessage = struct {
+    source: enum {
+        xml,
+        javascript,
+        network,
+        console_api,
+        storage,
+        appcache,
+        rendering,
+        security,
+        other,
+        deprecation,
+        worker,
+    },
+    level: log.Level,
+    text: []const u8,
+    url: ?[]const u8 = null,
+    line: ?u32 = null,
+    columns: ?u32 = null,
 };
 
 pub fn init(allocator: Allocator) !*Notification {

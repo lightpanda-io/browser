@@ -620,8 +620,13 @@ pub const BrowserContext = struct {
         self.notification.unregister(.frame_network_almost_idle, self);
     }
 
-    pub fn consoleEnable(_: *BrowserContext) !void {}
-    pub fn consoleDisable(_: *BrowserContext) void {}
+    pub fn consoleEnable(self: *BrowserContext) !void {
+        try self.notification.register(.console_message, self, onConsoleMessage);
+    }
+
+    pub fn consoleDisable(self: *BrowserContext) void {
+        self.notification.unregister(.console_message, self);
+    }
 
     pub fn onFrameRemove(ctx: *anyopaque, _: Notification.FrameRemove) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
@@ -775,6 +780,11 @@ pub const BrowserContext = struct {
         sendInspectorMessage(@ptrCast(@alignCast(ctx)), msg) catch |err| {
             log.err(.cdp, "send inspector event", .{ .err = err });
         };
+    }
+
+    pub fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/console.zig").consoleMessage(self, msg);
     }
 
     // This is hacky x 2. First, we create the JSON payload by gluing our
