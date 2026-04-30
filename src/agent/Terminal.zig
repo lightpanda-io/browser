@@ -34,8 +34,11 @@ const commands = [_]CommandInfo{
     .{ .name = "EVAL", .hint = " '<script>'" },
     .{ .name = "LOGIN", .hint = "" },
     .{ .name = "ACCEPT_COOKIES", .hint = "" },
-    .{ .name = "QUIT", .hint = "" },
 };
+
+// Meta slash commands handled directly by the agent (not by ToolExecutor).
+// Kept in sync with `handleSlash` in `Agent.zig`.
+const meta_slash_commands = [_][:0]const u8{ "help", "quit" };
 
 pub fn init(history_path: ?[:0]const u8) Self {
     c.linenoiseSetMultiLine(1);
@@ -47,6 +50,23 @@ pub fn init(history_path: ?[:0]const u8) Self {
     return .{ .history_path = history_path };
 }
 
+fn addSlashCompletion(lc: [*c]c.linenoiseCompletions, name_buf: *[64:0]u8, name: []const u8, partial: []const u8) void {
+    const total = 1 + name.len;
+    if (total >= name_buf.len) return;
+    if (name.len < partial.len) return;
+    if (!std.ascii.eqlIgnoreCase(name[0..partial.len], partial)) return;
+    name_buf[0] = '/';
+    @memcpy(name_buf[1..total], name);
+    name_buf[total] = 0;
+    c.linenoiseAddCompletion(lc, name_buf);
+}
+
+fn slashHint(name: []const u8, partial: []const u8) ?[]const u8 {
+    if (name.len <= partial.len) return null;
+    if (!std.ascii.eqlIgnoreCase(name[0..partial.len], partial)) return null;
+    return name[partial.len..];
+}
+
 fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callconv(.c) void {
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(buf)), 0);
     if (input.len == 0) return;
@@ -55,18 +75,10 @@ fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callcon
     if (input[0] == '/') {
         const partial = input[1..];
         // linenoise strdup's the string, so a stack buffer reused per match
-        // is fine. 64 covers every tool name comfortably.
+        // is fine. 64 covers every name comfortably.
         var name_buf: [64:0]u8 = undefined;
-        for (browser_tools.tool_defs) |td| {
-            const total = 1 + td.name.len;
-            if (total >= name_buf.len) continue;
-            if (td.name.len < partial.len) continue;
-            if (!std.ascii.eqlIgnoreCase(td.name[0..partial.len], partial)) continue;
-            name_buf[0] = '/';
-            @memcpy(name_buf[1..total], td.name);
-            name_buf[total] = 0;
-            c.linenoiseAddCompletion(lc, &name_buf);
-        }
+        for (browser_tools.tool_defs) |td| addSlashCompletion(lc, &name_buf, td.name, partial);
+        for (meta_slash_commands) |name| addSlashCompletion(lc, &name_buf, name, partial);
         return;
     }
 
@@ -92,16 +104,19 @@ fn hintsCallback(buf: [*c]const u8, color: [*c]c_int, bold: [*c]c_int) callconv(
 
     if (input[0] == '/') {
         const partial = input[1..];
-        for (browser_tools.tool_defs) |td| {
-            if (td.name.len <= partial.len) continue;
-            if (!std.ascii.eqlIgnoreCase(td.name[0..partial.len], partial)) continue;
-            const suffix = td.name[partial.len..];
-            if (suffix.len + 1 > hint_buf.len) return null;
-            @memcpy(hint_buf[0..suffix.len], suffix);
-            hint_buf[suffix.len] = 0;
-            return @ptrCast(&hint_buf);
-        }
-        return null;
+        const suffix = blk: {
+            for (browser_tools.tool_defs) |td| {
+                if (slashHint(td.name, partial)) |s| break :blk s;
+            }
+            for (meta_slash_commands) |name| {
+                if (slashHint(name, partial)) |s| break :blk s;
+            }
+            return null;
+        };
+        if (suffix.len + 1 > hint_buf.len) return null;
+        @memcpy(hint_buf[0..suffix.len], suffix);
+        hint_buf[suffix.len] = 0;
+        return @ptrCast(&hint_buf);
     }
 
     for (commands) |cmd| {

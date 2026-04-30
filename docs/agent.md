@@ -66,13 +66,12 @@ recorded scripts round-trip through the parser.
 | `EXTRACT`        | `EXTRACT '<selector>'`                | Returns text content.                                |
 | `EVAL`           | `EVAL '<js>'` or `EVAL '''…'''`       | Triple-quote for multi-line JS.                      |
 | `TREE`           | `TREE`                                | Print the semantic tree (not recorded).              |
-| `MARKDOWN` / `MD`| `MARKDOWN`                            | Print page as markdown (not recorded).               |
+| `MARKDOWN`       | `MARKDOWN`                            | Print page as markdown (not recorded).               |
 | `LOGIN`          | `LOGIN`                               | LLM-driven: fill `$LP_USERNAME` / `$LP_PASSWORD`.    |
 | `ACCEPT_COOKIES` | `ACCEPT_COOKIES`                      | LLM-driven: dismiss the consent banner.              |
-| `EXIT` / `QUIT`  | `EXIT`                                | REPL only.                                           |
 
 In the REPL, anything that does not parse as a Pandascript command is sent to
-the LLM as natural language.
+the LLM as natural language. To leave the REPL, use the `/quit` slash command.
 
 ### Example script
 

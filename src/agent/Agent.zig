@@ -263,7 +263,7 @@ fn runOneShot(self: *Self, task: []const u8) bool {
 }
 
 fn runRepl(self: *Self) void {
-    self.terminal.printInfo("Lightpanda Agent (type 'quit' to exit)");
+    self.terminal.printInfo("Lightpanda Agent (type '/quit' to exit)");
     self.terminal.printInfo("Tab completes/cycles throuch commands; the dim grey ghost shows the first match.");
     log.debug(.app, "tools loaded", .{ .count = self.tools.len });
     if (self.ai_client) |ai_client| {
@@ -291,7 +291,6 @@ fn runRepl(self: *Self) void {
         }
 
         switch (cmd) {
-            .quit => break :repl,
             .comment => continue :repl,
             .login => self.processUserMessage(login_prompt, line) catch |err| {
                 self.terminal.printErrorFmt("LOGIN failed: {s}", .{@errorName(err)});
@@ -452,10 +451,6 @@ fn runScript(self: *Self, path: []const u8) bool {
 
     while (iter.next()) |entry| {
         switch (entry.command) {
-            .quit => {
-                self.terminal.printInfo("QUIT — stopping script.");
-                break;
-            },
             .comment => {
                 // Track the most recent comment — recorded scripts
                 // prefix LLM-generated commands with the natural

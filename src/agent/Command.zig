@@ -36,13 +36,12 @@ pub const Command = union(enum) {
     eval_js: []const u8,
     login: void,
     accept_cookies: void,
-    quit: void,
     comment: void,
     natural_language: []const u8,
 
     pub fn isRecorded(self: Command) bool {
         return switch (self) {
-            .tree, .markdown, .comment, .quit => false,
+            .tree, .markdown, .comment => false,
             .goto, .click, .type_cmd, .wait, .scroll, .hover, .select, .check, .extract, .eval_js, .login, .accept_cookies => true,
             .natural_language => |text| text.len > 0,
         };
@@ -100,7 +99,6 @@ pub const Command = union(enum) {
                 try writer.print("EVAL {f}", .{quote(script)}),
             .login => try writer.writeAll("LOGIN"),
             .accept_cookies => try writer.writeAll("ACCEPT_COOKIES"),
-            .quit => try writer.writeAll("QUIT"),
             .comment => try writer.writeAll("#"),
             .natural_language => |text| try writer.writeAll(text),
         }
@@ -213,10 +211,6 @@ pub fn parse(line: []const u8) Command {
 
     if (std.ascii.eqlIgnoreCase(cmd_word, "ACCEPT_COOKIES")) {
         return .{ .accept_cookies = {} };
-    }
-
-    if (std.ascii.eqlIgnoreCase(cmd_word, "QUIT")) {
-        return .{ .quit = {} };
     }
 
     return .{ .natural_language = trimmed };
@@ -417,7 +411,7 @@ pub fn noSubstitute(_: std.mem.Allocator, input: []const u8) []const u8 {
 
 /// Map a Command to its (tool_name, JSON args) representation. Returns
 /// null for variants without a 1:1 tool mapping (login, accept_cookies,
-/// natural_language, comment, quit, extract — extract is rendered as a
+/// natural_language, comment, extract — extract is rendered as a
 /// custom `eval` script by the caller).
 ///
 /// `substitute` is applied to selector-like fields. The `value` field of
@@ -447,7 +441,7 @@ pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: Substitute
         .tree => .{ .name = @tagName(Action.tree), .args_json = "" },
         .markdown => .{ .name = @tagName(Action.markdown), .args_json = "" },
         .eval_js => |script| .{ .name = @tagName(Action.eval), .args_json = buildJson(arena, .{ .script = script }) },
-        .extract, .quit, .natural_language, .comment, .login, .accept_cookies => null,
+        .extract, .natural_language, .comment, .login, .accept_cookies => null,
     };
 }
 
@@ -707,11 +701,6 @@ test "parse LOGIN" {
 test "parse ACCEPT_COOKIES" {
     try std.testing.expect(parse("ACCEPT_COOKIES") == .accept_cookies);
     try std.testing.expect(parse("accept_cookies") == .accept_cookies);
-}
-
-test "parse QUIT" {
-    try std.testing.expect(parse("QUIT") == .quit);
-    try std.testing.expect(parse("quit") == .quit);
 }
 
 test "parse comment" {
@@ -1040,7 +1029,6 @@ test "toToolCall: variants without tool mapping return null" {
     try std.testing.expect(toToolCall(a, .{ .extract = ".x" }, noSubstitute) == null);
     try std.testing.expect(toToolCall(a, .login, noSubstitute) == null);
     try std.testing.expect(toToolCall(a, .accept_cookies, noSubstitute) == null);
-    try std.testing.expect(toToolCall(a, .quit, noSubstitute) == null);
     try std.testing.expect(toToolCall(a, .comment, noSubstitute) == null);
     try std.testing.expect(toToolCall(a, .{ .natural_language = "hi" }, noSubstitute) == null);
 }
