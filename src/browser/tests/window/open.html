@@ -107,3 +107,27 @@
   testing.expectEqual(null, window.opener);
 }
 </script>
+
+<script id=popup_self_close type=module>
+{
+  // Popup navigates to a real URL (not about:blank, which takes a synchronous
+  // shortcut) and calls window.close() from inside its own running script.
+  // Regression: synchronous frame teardown here used to destroy the popup's
+  // V8 context mid-eval, panicking on the deferred load-event dispatch.
+  // Receiving the postMessage proves the popup's script ran to completion
+  // (including the close call) without crashing.
+  const state = await testing.async();
+  window.addEventListener('message', (e) => {
+    if (e.data && e.data.from === 'popup_self_close') {
+      state.resolve(e.data);
+    }
+  }, { once: true });
+
+  const w = window.open(testing.BASE_URL + 'window/support/popup_self_close.html');
+  testing.expectTrue(w != null);
+
+  await state.done((data) => {
+    testing.expectEqual('popup_self_close', data.from);
+  });
+}
+</script>

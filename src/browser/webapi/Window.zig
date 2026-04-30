@@ -568,7 +568,14 @@ pub fn close(self: *Window) void {
         }
     }
 
-    frame.deinit(true);
+    // We can't tear the Frame down here — close() is invoked from JS still
+    // running on top of this Frame's V8 context, often deep inside a script
+    // eval whose parser is still holding the Frame. Destroying the context
+    // now leaves dangling pointers in the unwinding script eval (load event
+    // dispatch, runMacrotasks, etc.). Defer to Page.deinit instead.
+    page.queued_close.append(page.frame_arena, frame) catch |err| {
+        log.err(.frame, "queue popup close", .{ .err = err });
+    };
 }
 
 pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]const u8, frame: *Frame) !void {
