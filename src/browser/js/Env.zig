@@ -296,7 +296,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .templates = self.templates,
         .call_arena = params.call_arena,
         .microtask_queue = microtask_queue,
-        .script_manager = if (comptime is_frame) &global._script_manager else null,
+        .script_manager = if (comptime is_frame) &global._script_manager.base else &global._script_manager,
         .scheduler = .init(context_arena),
         .identity = params.identity,
         .identity_arena = params.identity_arena,

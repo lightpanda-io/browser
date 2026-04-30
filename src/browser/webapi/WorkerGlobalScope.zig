@@ -28,6 +28,7 @@ const Page = @import("../Page.zig");
 const Factory = @import("../Factory.zig");
 const Session = @import("../Session.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
+const ScriptManagerBase = @import("../ScriptManagerBase.zig");
 
 const Blob = @import("Blob.zig");
 const Worker = @import("Worker.zig");
@@ -71,6 +72,10 @@ _worker: *Worker,
 // Event management for non-DOM targets in worker context
 _event_manager: EventManagerBase,
 
+// Handles module imports (static + dynamic). No parser integration since
+// workers don't have <script> tags.
+_script_manager: ScriptManagerBase,
+
 // These fields represent the "Window"-like component of the WGS
 _closed: bool = false,
 _proto: *EventTarget,
@@ -104,8 +109,15 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
         ._factory = factory,
         ._worker = worker,
         ._event_manager = .init(arena),
+        ._script_manager = undefined,
     });
     errdefer factory.destroy(self);
+
+    self._script_manager = ScriptManagerBase.init(
+        arena,
+        session.browser.http_client,
+        .{ .worker = self },
+    );
 
     self.js = try session.browser.env.createWorkerContext(self, .{
         .call_arena = call_arena,
@@ -118,6 +130,8 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
 
 pub fn deinit(self: *WorkerGlobalScope) void {
     self._identity.deinit();
+    self._script_manager.deinit();
+
     const page = self._page;
     var it = self._blob_urls.valueIterator();
     while (it.next()) |blob| {
