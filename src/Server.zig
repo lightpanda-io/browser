@@ -57,8 +57,9 @@ pub fn init(app: *App, address: net.Address) !*Server {
         .clients_pool = std.heap.MemoryPool(Client).init(allocator),
     };
 
-    try self.app.network.bind(address, self, onAccept);
-    log.info(.app, "server running", .{ .address = address });
+    var bound_address = address;
+    try self.app.network.bind(&bound_address, self, onAccept);
+    log.info(.app, "server running", .{ .address = bound_address });
 
     return self;
 }

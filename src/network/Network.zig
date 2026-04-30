@@ -351,7 +351,7 @@ pub fn deinit(self: *Network) void {
 
 pub fn bind(
     self: *Network,
-    address: net.Address,
+    address: *net.Address,
     ctx: *anyopaque,
     on_accept: *const fn (ctx: *anyopaque, socket: posix.socket_t) void,
 ) !void {
@@ -366,6 +366,13 @@ pub fn bind(
 
     try posix.bind(listener, &address.any, address.getOsSockLen());
     try posix.listen(listener, self.config.maxPendingConnections());
+
+    // When the caller requests port 0, the OS assigns an ephemeral port; read
+    // the actual bound address back so callers (e.g. logging) see the real port.
+    var bound: posix.sockaddr.storage = undefined;
+    var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
+    try posix.getsockname(listener, @ptrCast(&bound), &bound_len);
+    address.* = net.Address.initPosix(@ptrCast(@alignCast(&bound)));
 
     if (self.listener != null) return error.TooManyListeners;
 
