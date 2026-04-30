@@ -182,7 +182,9 @@ fn freeSlot(self: *Session, slot: u1) void {
 fn tearDownActivePage(self: *Session) void {
     self.notification.dispatch(.frame_remove, .{});
     const idx = self._active_idx orelse {
-        lp.assert(false, "Session.tearDownActivePage - no active page", .{});
+        if (comptime IS_DEBUG) {
+            lp.assert(false, "Session.tearDownActivePage - no active page", .{});
+        }
         return;
     };
     self._pages[idx].?.deinit();
@@ -232,7 +234,6 @@ pub fn createPage(self: *Session) !*Frame {
 pub fn removePage(self: *Session) void {
     const idx = self._active_idx orelse {
         lp.assert(false, "Session.removePage - page is null", .{});
-        return;
     };
 
     if (self._pages[idx].?.frame._script_manager.base.is_evaluating) {
@@ -470,7 +471,6 @@ fn processPopupNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
 fn processRootQueuedNavigation(self: *Session) !void {
     const active_idx = self._active_idx orelse {
         lp.assert(false, "Session.processRootQueuedNavigation - no active page", .{});
-        return;
     };
     const current_frame = &self._pages[active_idx].?.frame;
 
@@ -579,11 +579,9 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
 pub fn commitPendingPage(self: *Session) !void {
     const pending_idx = self._pending_idx orelse {
         lp.assert(false, "Session.commitPendingPage - no pending page", .{});
-        return error.NoPendingPage;
     };
     const old_active_idx = self._active_idx orelse {
         lp.assert(false, "Session.commitPendingPage - no active page", .{});
-        return error.NoActivePage;
     };
 
     if (comptime IS_DEBUG) {
