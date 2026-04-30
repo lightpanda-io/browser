@@ -28,7 +28,7 @@ pub fn executeWithResult(self: *Self, a: std.mem.Allocator, cmd: Command.Command
     if (cmd == .extract) return self.execExtract(a, cmd.extract);
 
     const tc = Command.toToolCall(a, cmd, browser_tools.substituteEnvVars) orelse switch (cmd) {
-        .exit, .natural_language, .comment, .login, .accept_cookies => unreachable,
+        .quit, .natural_language, .comment, .login, .accept_cookies => unreachable,
         else => return .{ .output = "command has no tool mapping", .failed = true },
     };
     return self.callTool(a, tc.name, tc.args_json);

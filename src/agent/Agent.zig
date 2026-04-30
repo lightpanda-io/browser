@@ -291,7 +291,7 @@ fn runRepl(self: *Self) void {
         }
 
         switch (cmd) {
-            .exit => break :repl,
+            .quit => break :repl,
             .comment => continue :repl,
             .login => self.processUserMessage(login_prompt, line) catch |err| {
                 self.terminal.printErrorFmt("LOGIN failed: {s}", .{@errorName(err)});
@@ -313,7 +313,7 @@ fn runRepl(self: *Self) void {
 }
 
 /// Handle a REPL line that started with `/`. Returns `true` if the user asked
-/// to exit (`/quit` or `/exit`), `false` otherwise. All errors are printed and
+/// to quit (`/quit`), `false` otherwise. All errors are printed and
 /// swallowed — the REPL must not die from a malformed slash command.
 fn handleSlash(self: *Self, body: []const u8) bool {
     const split = SlashCommand.splitNameRest(body) orelse {
@@ -323,7 +323,7 @@ fn handleSlash(self: *Self, body: []const u8) bool {
     const name = split.name;
     const rest = split.rest;
 
-    if (std.mem.eql(u8, name, "quit") or std.mem.eql(u8, name, "exit")) {
+    if (std.mem.eql(u8, name, "quit")) {
         return true;
     }
     if (std.mem.eql(u8, name, "help")) {
@@ -376,7 +376,7 @@ fn printSlashHelp(self: *Self, target: []const u8) void {
             const summary = firstSentence(s.description);
             self.terminal.printInfoFmt("  /{s} — {s}", .{ s.tool_name, summary });
         }
-        self.terminal.printInfo("Meta: /help <name>, /quit, /exit");
+        self.terminal.printInfo("Meta: /help <name>, /quit");
         return;
     }
     const lookup = if (target[0] == '/') target[1..] else target;
@@ -452,8 +452,8 @@ fn runScript(self: *Self, path: []const u8) bool {
 
     while (iter.next()) |entry| {
         switch (entry.command) {
-            .exit => {
-                self.terminal.printInfo("EXIT — stopping script.");
+            .quit => {
+                self.terminal.printInfo("QUIT — stopping script.");
                 break;
             },
             .comment => {

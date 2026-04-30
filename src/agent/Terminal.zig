@@ -30,12 +30,11 @@ const commands = [_]CommandInfo{
     .{ .name = "CHECK", .hint = " '<selector>' [true|false]" },
     .{ .name = "TREE", .hint = "" },
     .{ .name = "MARKDOWN", .hint = "" },
-    .{ .name = "MD", .hint = "" },
     .{ .name = "EXTRACT", .hint = " '<selector>'" },
     .{ .name = "EVAL", .hint = " '<script>'" },
     .{ .name = "LOGIN", .hint = "" },
     .{ .name = "ACCEPT_COOKIES", .hint = "" },
-    .{ .name = "EXIT", .hint = "" },
+    .{ .name = "QUIT", .hint = "" },
 };
 
 pub fn init(history_path: ?[:0]const u8) Self {
