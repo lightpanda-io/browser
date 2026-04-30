@@ -60,7 +60,7 @@ pub const Command = union(enum) {
     /// True if running this command requires an LLM (i.e. an `ai_client` must
     /// be configured). LOGIN and ACCEPT_COOKIES are canned prompts; natural
     /// language is forwarded verbatim to the model. All three are unavailable
-    /// in dumb Pandascript-only mode (no `--provider`).
+    /// in dumb PandaScript-only mode (no `--provider`).
     pub fn needsLlm(self: Command) bool {
         return switch (self) {
             .login, .accept_cookies, .natural_language => true,
@@ -68,7 +68,7 @@ pub const Command = union(enum) {
         };
     }
 
-    /// Serializes back to Pandascript. Every string argument is wrapped in
+    /// Serializes back to PandaScript. Every string argument is wrapped in
     /// content-aware quotes so the output round-trips through `parse()`:
     ///   - single quotes by default,
     ///   - double quotes if the content contains `'` but not `"`,
@@ -105,7 +105,7 @@ pub const Command = union(enum) {
     }
 };
 
-/// Parse a line of REPL input into a Pandascript command.
+/// Parse a line of REPL input into a PandaScript command.
 /// Unrecognized input is returned as `.natural_language`.
 /// For multi-line EVAL blocks in scripts, use `ScriptParser`.
 pub fn parse(line: []const u8) Command {
@@ -446,7 +446,7 @@ pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: Substitute
 }
 
 /// Inverse of `toToolCall`: parse an LLM tool call into a Command, or
-/// return null if the tool name doesn't correspond to a Pandascript
+/// return null if the tool name doesn't correspond to a PandaScript
 /// command. Variants emitted by `toToolCall` round-trip through this.
 pub fn fromToolCall(arena: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) ?Command {
     const Action = lp.tools.Action;

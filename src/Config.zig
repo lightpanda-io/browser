@@ -725,15 +725,15 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\agent command
         \\Starts an interactive AI agent that can browse the web
-        \\Example: {0s} agent                         (dumb Pandascript-only REPL)
+        \\Example: {0s} agent                         (dumb PandaScript-only REPL)
         \\Example: {0s} agent --provider anthropic --model claude-haiku-4-5-20251001
         \\Example: {0s} agent --provider ollama --model gemma4
-        \\Example: {0s} agent script.panda            (replay a recorded script)
-        \\Example: {0s} agent -i script.panda         (replay then drop into REPL,
+        \\Example: {0s} agent script.lp            (replay a recorded script)
+        \\Example: {0s} agent -i script.lp         (replay then drop into REPL,
         \\                                             appending new commands to the file)
         \\
         \\Arguments:
-        \\[script_file]   Optional path to a .panda script.
+        \\[script_file]   Optional path to a .lp script.
         \\                Without -i: replays the script (no LLM calls).
         \\                With -i: replays if present, then enters the REPL and
         \\                appends any new commands to the file (creating it if
@@ -742,7 +742,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\Options:
         \\--provider      The AI provider: anthropic, openai, gemini, or ollama.
         \\                Optional. When omitted, the REPL runs in "dumb mode":
-        \\                Pandascript commands work, but natural-language input,
+        \\                PandaScript commands work, but natural-language input,
         \\                LOGIN / ACCEPT_COOKIES keywords, and --self-heal all
         \\                require a provider. Dumb mode needs no API key.
         \\

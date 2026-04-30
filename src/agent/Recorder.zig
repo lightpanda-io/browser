@@ -59,7 +59,7 @@ test "record writes state-mutating commands" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = tmp.dir.createFile("test.panda", .{ .read = true }) catch unreachable;
+    const file = tmp.dir.createFile("test.lp", .{ .read = true }) catch unreachable;
 
     var recorder: Self = .{ .allocator = std.testing.allocator, .file = file, .needs_separator = false };
     defer recorder.deinit();
@@ -101,7 +101,7 @@ test "record skips empty and comment lines" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = tmp.dir.createFile("test2.panda", .{ .read = true }) catch unreachable;
+    const file = tmp.dir.createFile("test2.lp", .{ .read = true }) catch unreachable;
 
     var recorder: Self = .{ .allocator = std.testing.allocator, .file = file, .needs_separator = false };
     defer recorder.deinit();
@@ -132,21 +132,21 @@ test "init appends to an existing file without truncating" {
 
     // Seed a file with a prior line.
     {
-        const seed = tmp.dir.createFile("script.panda", .{}) catch unreachable;
+        const seed = tmp.dir.createFile("script.lp", .{}) catch unreachable;
         defer seed.close();
         _ = seed.writeAll("GOTO https://example.com\n") catch unreachable;
     }
 
     // Resolve absolute path for Recorder.init (which uses std.fs.cwd()).
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const abs_path = tmp.dir.realpath("script.panda", &path_buf) catch unreachable;
+    const abs_path = tmp.dir.realpath("script.lp", &path_buf) catch unreachable;
 
     var recorder: Self = .init(std.testing.allocator, abs_path);
     defer recorder.deinit();
     recorder.record(Command.parse("CLICK 'Login'"));
 
     // Read back.
-    const file = tmp.dir.openFile("script.panda", .{}) catch unreachable;
+    const file = tmp.dir.openFile("script.lp", .{}) catch unreachable;
     defer file.close();
     var buf: [256]u8 = undefined;
     const n = file.readAll(&buf) catch unreachable;
@@ -167,13 +167,13 @@ test "init creates the file if missing" {
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const dir_path = tmp.dir.realpath(".", &path_buf) catch unreachable;
     var full_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const abs_path = std.fmt.bufPrint(&full_buf, "{s}/fresh.panda", .{dir_path}) catch unreachable;
+    const abs_path = std.fmt.bufPrint(&full_buf, "{s}/fresh.lp", .{dir_path}) catch unreachable;
 
     var recorder: Self = .init(std.testing.allocator, abs_path);
     defer recorder.deinit();
     recorder.record(Command.parse("GOTO https://example.com"));
 
-    const file = tmp.dir.openFile("fresh.panda", .{}) catch unreachable;
+    const file = tmp.dir.openFile("fresh.lp", .{}) catch unreachable;
     defer file.close();
     var buf: [128]u8 = undefined;
     const n = file.readAll(&buf) catch unreachable;

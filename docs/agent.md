@@ -4,8 +4,8 @@
 It can act as:
 
 - an **LLM agent** that drives the browser with tool calls (`--provider`),
-- a **scripted runner** that replays a `.panda` script deterministically,
-- a **dumb REPL** for hand-driven Pandascript with no LLM at all,
+- a **scripted runner** that replays a `.lp` script deterministically,
+- a **dumb REPL** for hand-driven PandaScript with no LLM at all,
 - a **one-shot task runner** that prints a single answer to stdout (`--task`),
 - an **MCP server** that exposes the agent itself as a single `task` tool
   for other agents to delegate to (`--mcp`).
@@ -20,14 +20,14 @@ mcp`, so an agent script and an MCP client see the same surface.
 # Interactive REPL with an LLM
 ./lightpanda agent --provider anthropic
 
-# Dumb REPL (no API key, Pandascript only)
+# Dumb REPL (no API key, PandaScript only)
 ./lightpanda agent
 
 # Replay a recorded script
-./lightpanda agent session.panda
+./lightpanda agent session.lp
 
 # Replay then continue interactively, appending new commands to the file
-./lightpanda agent -i session.panda
+./lightpanda agent -i session.lp
 
 # One-shot: ask a question, capture the answer on stdout
 ./lightpanda agent --provider gemini --task "what is on the front page of hn?"
@@ -48,12 +48,12 @@ mcp`, so an agent script and an MCP client see the same surface.
 Defaults: `--model` falls back to a sensible per-provider default; `--base-url`
 overrides the API endpoint (Ollama defaults to `http://localhost:11434/v1`).
 
-Without `--provider`, the REPL still works for Pandascript commands. Natural
+Without `--provider`, the REPL still works for PandaScript commands. Natural
 language, `LOGIN`, `ACCEPT_COOKIES`, and `--self-heal` all require a provider.
 
-## Pandascript
+## PandaScript
 
-Pandascript is a tiny, line-oriented DSL for browser actions. Each line is one
+PandaScript is a tiny, line-oriented DSL for browser actions. Each line is one
 command. Comments start with `#`. Strings are quoted with `'`, `"`, or `'''…'''`
 for values that mix both quote styles. Quoting rules are content-aware so that
 recorded scripts round-trip through the parser.
@@ -75,7 +75,7 @@ recorded scripts round-trip through the parser.
 | `LOGIN`          | `LOGIN`                               | LLM-driven: fill `$LP_USERNAME` / `$LP_PASSWORD`.    |
 | `ACCEPT_COOKIES` | `ACCEPT_COOKIES`                      | LLM-driven: dismiss the consent banner.              |
 
-In the REPL, anything that does not parse as a Pandascript command is sent to
+In the REPL, anything that does not parse as a PandaScript command is sent to
 the LLM as natural language. To leave the REPL, use the `/quit` slash command.
 
 ### Example script
@@ -93,10 +93,10 @@ EXTRACT '.dashboard h1'
 
 ### Recording
 
-Interactive sessions can write back to a `.panda` file:
+Interactive sessions can write back to a `.lp` file:
 
 ```console
-./lightpanda agent -i session.panda
+./lightpanda agent -i session.lp
 ```
 
 State-mutating commands (`GOTO`, `CLICK`, `TYPE`, ...) are appended; read-only
@@ -106,7 +106,7 @@ above the resulting tool calls so the script stays readable.
 
 ### Replay and self-healing
 
-`./lightpanda agent script.panda` replays without making any LLM call.
+`./lightpanda agent script.lp` replays without making any LLM call.
 
 With `--self-heal --provider <p>`, a failed command (typically a stale
 selector after the page changed) triggers a short LLM turn that inspects the
@@ -120,7 +120,7 @@ from selector drift, not to redesign the script.
 
 ## REPL features
 
-- **Tab completion** (case-insensitive): cycles through Pandascript keywords
+- **Tab completion** (case-insensitive): cycles through PandaScript keywords
   and `/<tool>` slash commands. The dim grey suffix shown after the cursor is
   the first match.
 - **Persistent history**: stored in `.lp-history` in the working directory.

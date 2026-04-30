@@ -69,7 +69,7 @@ const default_system_prompt =
 ;
 
 const self_heal_prompt_prefix =
-    \\A Pandascript command failed during replay. The command that failed was:
+    \\A PandaScript command failed during replay. The command that failed was:
     \\
 ;
 
@@ -285,7 +285,7 @@ fn runRepl(self: *Self) void {
     if (self.ai_client) |ai_client| {
         self.terminal.printInfoFmt("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
-        self.terminal.printInfo("Dumb REPL (no --provider) — Pandascript only. Pass --provider for natural-language, LOGIN, and ACCEPT_COOKIES.");
+        self.terminal.printInfo("Dumb REPL (no --provider) — PandaScript only. Pass --provider for natural-language, LOGIN, and ACCEPT_COOKIES.");
     }
 
     repl: while (true) {
@@ -302,7 +302,7 @@ fn runRepl(self: *Self) void {
         const cmd = Command.parse(line);
 
         if (cmd.needsLlm() and self.ai_client == null) {
-            self.terminal.printError("This command requires --provider. Pandascript commands (GOTO, CLICK, EXTRACT, ...) work without one.");
+            self.terminal.printError("This command requires --provider. PandaScript commands (GOTO, CLICK, EXTRACT, ...) work without one.");
             continue;
         }
 
