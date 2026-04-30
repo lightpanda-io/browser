@@ -105,7 +105,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         return;
     }
 
-    const kind: Script.Kind = blk: {
+    const kind: Script.Extra.FrameExtra.Kind = blk: {
         const script_type = element.getAttributeSafe(comptime .wrap("type")) orelse break :blk .javascript;
         if (script_type.len == 0) {
             break :blk .javascript;
@@ -166,45 +166,50 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     script_element._executed = true;
     const is_inline = source == .@"inline";
 
+    const mode: Script.Extra.FrameExtra.Mode = blk: {
+        if (source == .@"inline") {
+            break :blk if (kind == .module) .@"defer" else .normal;
+        }
+
+        if (element.getAttributeSafe(comptime .wrap("async")) != null) {
+            break :blk .async;
+        }
+
+        // Check for defer or module (before checking dynamic script default)
+        if (kind == .module or element.getAttributeSafe(comptime .wrap("defer")) != null) {
+            break :blk .@"defer";
+        }
+
+        // For dynamically-inserted scripts (not from parser), default to async
+        // unless async was explicitly set to false (which removes the attribute)
+        // and defer was set to true (checked above)
+        if (comptime !from_parser) {
+            // Script has src and no explicit async/defer attributes
+            // Per HTML spec, dynamically created scripts default to async
+            break :blk .async;
+        }
+
+        break :blk .normal;
+    };
+
     const script = try arena.create(Script);
     script.* = .{
-        .kind = kind,
         .node = .{},
         .arena = arena,
         .manager = &self.base,
         .source = source,
-        .script_element = script_element,
         .complete = is_inline,
         .status = if (is_inline) 200 else 0,
         .url = remote_url orelse base_url,
-        .mode = blk: {
-            if (source == .@"inline") {
-                break :blk if (kind == .module) .@"defer" else .normal;
-            }
-
-            if (element.getAttributeSafe(comptime .wrap("async")) != null) {
-                break :blk .async;
-            }
-
-            // Check for defer or module (before checking dynamic script default)
-            if (kind == .module or element.getAttributeSafe(comptime .wrap("defer")) != null) {
-                break :blk .@"defer";
-            }
-
-            // For dynamically-inserted scripts (not from parser), default to async
-            // unless async was explicitly set to false (which removes the attribute)
-            // and defer was set to true (checked above)
-            if (comptime !from_parser) {
-                // Script has src and no explicit async/defer attributes
-                // Per HTML spec, dynamically created scripts default to async
-                break :blk .async;
-            }
-
-            break :blk .normal;
-        },
+        .extra = .{ .frame = .{
+            .kind = kind,
+            .mode = mode,
+            .script_element = script_element,
+            .frame = frame,
+        } },
     };
 
-    const is_blocking = script.mode == .normal;
+    const is_blocking = mode == .normal;
     if (is_blocking == false) {
         self.base.scriptList(script).append(&script.node);
     }
@@ -294,7 +299,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         script.deinit();
     }
 
-    script.eval(frame);
+    script.eval();
 }
 
 pub fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
