@@ -581,7 +581,7 @@ pub fn commitPendingPage(self: *Session) !void {
         lp.assert(false, "Session.commitPendingPage - no pending page", .{});
         return error.NoPendingPage;
     };
-    const old_idx = self._active_idx orelse {
+    const old_active_idx = self._active_idx orelse {
         lp.assert(false, "Session.commitPendingPage - no active page", .{});
         return error.NoActivePage;
     };
@@ -620,8 +620,8 @@ pub fn commitPendingPage(self: *Session) !void {
     // frame.deinit calls http_client.abortFrame(frame_id) on the frame_id
     // shared with the pending page; the in-flight transfer survives via
     // protect_from_abort.
-    self._pages[old_idx].?.deinit();
-    self.freeSlot(old_idx);
+    self._pages[old_active_idx].?.deinit();
+    self.freeSlot(old_active_idx);
 }
 
 // Discard a pending Page without committing. Used for failure paths
