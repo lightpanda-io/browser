@@ -1105,7 +1105,7 @@ pub const JsApi = struct {
         }
     }.confirm, .{});
     pub const prompt = bridge.function(struct {
-        fn prompt(_: *const Window, message: ?[]const u8, _: ?[]const u8, frame: *Frame) ?[]const u8 {
+        fn prompt(_: *const Window, message: ?[]const u8, default_text: ?[]const u8, frame: *Frame) ?[]const u8 {
             var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
                 .url = frame.url,
@@ -1114,9 +1114,12 @@ pub const JsApi = struct {
                 .response = &response,
             });
             if (!response.accept) return null;
-            // promptText omitted with accept=true is "" per CDP spec
+            // Pre-armed promptText wins when present. Otherwise fall back to
+            // the dialog's defaultText (second arg to window.prompt) — Chrome's
+            // accept-without-typing behavior. If both are absent, return ""
+            // per CDP spec
             // (https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-handleJavaScriptDialog).
-            return response.prompt_text orelse "";
+            return response.prompt_text orelse default_text orelse "";
         }
     }.prompt, .{});
 
