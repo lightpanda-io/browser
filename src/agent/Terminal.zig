@@ -78,15 +78,40 @@ fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callcon
     }
 }
 
+// File-scope so the pointer survives the callback's stack frame; linenoise
+// reads the returned hint in refreshShowHints() *after* this function has
+// already returned, so a stack-local buffer would be UB.
+var hint_buf: [64:0]u8 = undefined;
+
 fn hintsCallback(buf: [*c]const u8, color: [*c]c_int, bold: [*c]c_int) callconv(.c) [*c]u8 {
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(buf)), 0);
     if (input.len == 0) return null;
     if (std.mem.indexOfScalar(u8, input, ' ') != null) return null;
+
+    color.* = 90;
+    bold.* = 0;
+
+    if (input[0] == '/') {
+        const partial = input[1..];
+        for (browser_tools.tool_defs) |td| {
+            if (td.name.len <= partial.len) continue;
+            if (!std.ascii.eqlIgnoreCase(td.name[0..partial.len], partial)) continue;
+            const suffix = td.name[partial.len..];
+            if (suffix.len + 1 > hint_buf.len) return null;
+            @memcpy(hint_buf[0..suffix.len], suffix);
+            hint_buf[suffix.len] = 0;
+            return @ptrCast(&hint_buf);
+        }
+        return null;
+    }
+
     for (commands) |cmd| {
-        if (std.ascii.eqlIgnoreCase(cmd.name, input) and cmd.hint.len > 0) {
-            color.* = 90;
-            bold.* = 0;
+        if (std.ascii.eqlIgnoreCase(cmd.name, input)) {
+            if (cmd.hint.len == 0) return null;
             return @ptrCast(@constCast(cmd.hint.ptr));
+        }
+        if (cmd.name.len > input.len and std.ascii.eqlIgnoreCase(cmd.name[0..input.len], input)) {
+            return @ptrCast(@constCast(cmd.name.ptr + input.len));
         }
     }
     return null;
