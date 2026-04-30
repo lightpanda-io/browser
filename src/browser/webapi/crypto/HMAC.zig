@@ -35,30 +35,30 @@ pub fn init(
     frame: *Frame,
 ) !js.Promise {
     const local = frame.js.local.?;
-    // Find digest.
+    // Per spec, an unrecognized hash is caught during algorithm normalization
+    // and surfaces as NotSupportedError.
     const digest = crypto.findDigest(switch (params.hash) {
         .string => |str| str,
         .object => |obj| obj.name,
     }) catch return local.rejectPromise(.{
-        .dom_exception = .{ .err = error.SyntaxError },
+        .dom_exception = .{ .err = error.NotSupported },
     });
 
-    // Calculate usages mask.
-    if (key_usages.len == 0) {
-        return local.rejectPromise(.{
-            .dom_exception = .{ .err = error.SyntaxError },
-        });
-    }
-    const decls = @typeInfo(CryptoKey.Usages).@"struct".decls;
+    // HMAC only accepts sign / verify; any other usage is a SyntaxError per
+    // the spec, even when the entry exists elsewhere in CryptoKey.Usages.
     var mask: u8 = 0;
-    iter_usages: for (key_usages) |usage| {
-        inline for (decls) |decl| {
-            if (std.mem.eql(u8, decl.name, usage)) {
-                mask |= @field(CryptoKey.Usages, decl.name);
-                continue :iter_usages;
-            }
+    for (key_usages) |usage| {
+        if (std.mem.eql(u8, usage, "sign")) {
+            mask |= CryptoKey.Usages.sign;
+        } else if (std.mem.eql(u8, usage, "verify")) {
+            mask |= CryptoKey.Usages.verify;
+        } else {
+            return local.rejectPromise(.{
+                .dom_exception = .{ .err = error.SyntaxError },
+            });
         }
-        // Unknown usage if got here.
+    }
+    if (key_usages.len == 0) {
         return local.rejectPromise(.{
             .dom_exception = .{ .err = error.SyntaxError },
         });

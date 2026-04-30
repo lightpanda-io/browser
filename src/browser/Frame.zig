@@ -412,7 +412,7 @@ pub fn deinit(self: *Frame, abort_http: bool) void {
     const browser = page.session.browser;
     browser.env.destroyContext(self.js);
 
-    self._script_manager.shutdown = true;
+    self._script_manager.base.shutdown = true;
 
     if (self.parent == null) {
         browser.http_client.abort();
@@ -535,6 +535,8 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             self.origin = try URL.getOrigin(self.arena, request_url[5.. :0]);
         } else if (self.parent) |parent| {
             self.origin = parent.origin;
+        } else if (self.window._opener) |opener| {
+            self.origin = opener._frame.origin;
         } else {
             self.origin = null;
         }
@@ -1337,6 +1339,69 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         // is no longer sorted.
         self.child_frames_sorted = false;
     }
+}
+
+const OpenPopupOpts = struct {
+    url: []const u8,
+    name: []const u8,
+    opener: ?*Window,
+};
+
+// Create a new top-level browsing context as a sibling of the root frame.
+// The popup shares the Page's arena, factory, and identity map, but has no
+// parent and is not attached to the frame tree — it lives in page.popups.
+pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
+    const page = self._page;
+    const session = self._session;
+
+    const resolved_url: [:0]const u8 = blk: {
+        if (opts.url.len == 0) {
+            break :blk "about:blank";
+        }
+        if (std.mem.eql(u8, opts.url, "about:blank")) {
+            break :blk "about:blank";
+        }
+        const frame_base = base_blk: {
+            var frame = self;
+            while (true) {
+                const maybe_base = frame.base();
+                if (!std.mem.eql(u8, maybe_base, "about:blank")) {
+                    break :base_blk maybe_base;
+                }
+                frame = frame.parent orelse break :base_blk "";
+            }
+        };
+        break :blk try URL.resolve(self.call_arena, frame_base, opts.url, .{ .always_dupe = true, .encoding = self.charset });
+    };
+
+    const popup = try page.frame_arena.create(Frame);
+    errdefer page.frame_arena.destroy(popup);
+
+    const frame_id = session.nextFrameId();
+    try Frame.init(popup, frame_id, page, null);
+    errdefer popup.deinit(true);
+
+    popup.window._opener = opts.opener;
+    if (opts.name.len > 0 and
+        !std.ascii.eqlIgnoreCase(opts.name, "_blank") and
+        !std.ascii.eqlIgnoreCase(opts.name, "_self") and
+        !std.ascii.eqlIgnoreCase(opts.name, "_parent") and
+        !std.ascii.eqlIgnoreCase(opts.name, "_top"))
+    {
+        popup.window._name = try page.frame_arena.dupe(u8, opts.name);
+    }
+
+    const popup_index = page.popups.items.len;
+    try page.popups.append(page.frame_arena, popup);
+    // not impossible that navigate adds popups, so remove by index
+    errdefer _ = page.popups.swapRemove(popup_index);
+
+    popup.navigate(resolved_url, .{ .reason = .script }) catch |err| {
+        log.warn(.frame, "popup navigate failure", .{ .url = resolved_url, .err = err });
+        return err;
+    };
+
+    return popup;
 }
 
 pub fn domChanged(self: *Frame) void {
@@ -3555,7 +3620,7 @@ pub const QueuedNavigation = struct {
 /// to the appropriateFrame to navigate.
 /// Returns null if the target is "_blank" (which would open a new window/tab).
 /// Note: Callers should handle empty target separately (for owner document resolution).
-fn resolveTargetFrame(self: *Frame, target_name: []const u8) ?*Frame {
+pub fn resolveTargetFrame(self: *Frame, target_name: []const u8) ?*Frame {
     if (std.ascii.eqlIgnoreCase(target_name, "_self")) {
         return self;
     }
@@ -3691,6 +3756,14 @@ pub fn handleClick(self: *Frame, target: *Node) !void {
             }
         },
         .select, .textarea => try element.focus(self),
+        .label => |label| {
+            // Per HTML §4.10.4 "The label element", a label's activation
+            // behavior is to run the synthetic click activation steps on the
+            // labeled control. Mirrors Chrome's HTMLLabelElement::DefaultEventHandler.
+            const control = label.getControl(self) orelse return;
+            const control_html = control.is(Element.Html) orelse return;
+            try control_html.click(self);
+        },
         else => {},
     }
 }
@@ -3769,9 +3842,14 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 
     const form_element = form.asElement();
 
+    const submit_button: ?*Element = blk: {
+        const s = submitter_ orelse break :blk null;
+        break :blk if (Element.Html.Form.isSubmitButton(s)) s else null;
+    };
+
     const target_name_: ?[]const u8 = blk: {
-        if (submitter_) |submitter| {
-            if (submitter.getAttributeSafe(comptime .wrap("formtarget"))) |ft| {
+        if (submit_button) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formtarget"))) |ft| {
                 break :blk ft;
             }
         }
@@ -3824,12 +3902,19 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     // button, its formaction/formmethod/formenctype attributes override the
     // form's corresponding attributes (matching how formtarget is honored above).
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
-    const enctype = blk: {
-        if (submitter_) |s| {
+    const enctype_attr = blk: {
+        if (submit_button) |s| {
             if (s.getAttributeSafe(comptime .wrap("formenctype"))) |fe| break :blk fe;
         }
         break :blk form_element.getAttributeSafe(comptime .wrap("enctype"));
     };
+    const method = blk: {
+        if (submit_button) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formmethod"))) |fm| break :blk fm;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
+    };
+    const is_post = std.ascii.eqlIgnoreCase(method, "post");
 
     // Get charset from accept-charset attribute or fall back to document charset
     const charset: []const u8 = blk: {
@@ -3843,17 +3928,28 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         break :blk self.charset;
     };
 
-    var buf = std.Io.Writer.Allocating.init(arena);
-    try form_data.write(.{ .enctype = enctype, .charset = charset, .allocator = arena }, &buf.writer);
-
-    const method = blk: {
-        if (submitter_) |s| {
-            if (s.getAttributeSafe(comptime .wrap("formmethod"))) |fm| break :blk fm;
+    var boundary_buf: [36]u8 = undefined;
+    // GET ignores enctype per HTML spec; only resolve the union for POST.
+    const encoding: FormData.EncType = blk: {
+        if (is_post) {
+            if (enctype_attr) |attr| {
+                if (std.ascii.eqlIgnoreCase(attr, "multipart/form-data")) {
+                    @import("../id.zig").uuidv4(&boundary_buf);
+                    break :blk .{ .formdata = &boundary_buf };
+                }
+                if (!std.ascii.eqlIgnoreCase(attr, "application/x-www-form-urlencoded")) {
+                    log.warn(.not_implemented, "FormData.encoding", .{ .encoding = attr });
+                }
+            }
         }
-        break :blk form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
+        break :blk .urlencode;
     };
+
+    var buf = std.Io.Writer.Allocating.init(arena);
+    try form_data.write(.{ .encoding = encoding, .charset = charset, .allocator = arena }, &buf.writer);
+
     var action = blk: {
-        if (submitter_) |s| {
+        if (submit_button) |s| {
             if (s.getAttributeSafe(comptime .wrap("formaction"))) |fa| break :blk fa;
         }
         break :blk form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
@@ -3863,11 +3959,13 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         .reason = .form,
         .kind = .{ .push = null },
     };
-    if (std.ascii.eqlIgnoreCase(method, "post")) {
+    if (is_post) {
         opts.method = .POST;
         opts.body = buf.written();
-        // form_data.write currently only supports this encoding, so we know this has to be the content type
-        opts.header = "Content-Type: application/x-www-form-urlencoded";
+        opts.header = switch (encoding) {
+            .urlencode => "Content-Type: application/x-www-form-urlencoded",
+            .formdata => |b| try std.fmt.allocPrintSentinel(arena, "Content-Type: multipart/form-data; boundary={s}", .{b}, 0),
+        };
     } else {
         action = try URL.concatQueryString(arena, action, buf.written());
     }

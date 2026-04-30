@@ -145,4 +145,5 @@ pub const JsApi = struct {
 const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Label" {
     try testing.htmlRunner("element/html/label.html", .{});
+    try testing.htmlRunner("element/html/label_click.html", .{});
 }

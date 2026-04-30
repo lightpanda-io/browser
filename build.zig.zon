@@ -42,6 +42,10 @@
             .url = "git+https://github.com/lightpanda-io/zenai.git#3f61d6a21574a8edfc8ccd599e865db10bf80207",
             .hash = "zenai-0.0.0-iOY_VIhAAwBZsH_XAUZWE_BcxMUE3-Yf0lM-9DYd4Pyd",
         },
+        .libidn2 = .{
+            .url = "https://ftp.gnu.org/gnu/libidn/libidn2-2.3.8.tar.gz",
+            .hash = "N-V-__8AABGOuAC_dhAN07kfoP4dycCFi8Bka4O-tuhriNH8",
+        },
     },
     .paths = .{""},
 }

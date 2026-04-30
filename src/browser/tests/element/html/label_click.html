@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<!-- HTMLLabelElement activation behavior (HTML §4.10.4 "The label element"):
+     calling .click() on a <label> must run the synthetic click activation
+     steps on the labeled control. -->
+
+<input id="cb_for" type="checkbox">
+<label id="lab_for" for="cb_for">Toggle by for=</label>
+
+<label id="lab_wrap"><input id="cb_wrap" type="checkbox"><span>Toggle wrapped</span></label>
+
+<input id="r_a" type="radio" name="g1" checked>
+<input id="r_b" type="radio" name="g1">
+<label id="lab_radio" for="r_b">Pick r_b</label>
+
+<input id="cb_disabled" type="checkbox" disabled>
+<label id="lab_disabled" for="cb_disabled">Disabled</label>
+
+<input id="cb_for_missing" type="checkbox">
+<label id="lab_missing" for="does-not-exist">No such control</label>
+
+<input id="cb_no_control" type="checkbox">
+<label id="lab_empty">No for, no descendant control</label>
+
+<input id="cb_outer_only" type="checkbox">
+<label id="lab_outer">No for, with non-labelable child <span>x</span></label>
+
+<form id="f_submit" action="javascript:void(0)">
+  <label id="lab_submit"><button id="btn_submit" type="submit">Submit</button></label>
+</form>
+
+<script id="for_attr_toggles_checkbox">
+  {
+    const cb = $('#cb_for');
+    const lab = $('#lab_for');
+    testing.expectEqual(false, cb.checked);
+
+    lab.click();
+    testing.expectEqual(true, cb.checked);
+
+    lab.click();
+    testing.expectEqual(false, cb.checked);
+  }
+</script>
+
+<script id="wrapping_label_toggles_checkbox">
+  {
+    const cb = $('#cb_wrap');
+    const lab = $('#lab_wrap');
+    testing.expectEqual(false, cb.checked);
+
+    lab.click();
+    testing.expectEqual(true, cb.checked);
+
+    lab.click();
+    testing.expectEqual(false, cb.checked);
+  }
+</script>
+
+<script id="for_attr_checks_radio">
+  {
+    const a = $('#r_a');
+    const b = $('#r_b');
+    testing.expectEqual(true, a.checked);
+    testing.expectEqual(false, b.checked);
+
+    $('#lab_radio').click();
+    testing.expectEqual(false, a.checked);
+    testing.expectEqual(true, b.checked);
+  }
+</script>
+
+<script id="disabled_control_does_not_toggle">
+  {
+    const cb = $('#cb_disabled');
+    testing.expectEqual(false, cb.checked);
+
+    $('#lab_disabled').click();
+    testing.expectEqual(false, cb.checked, 'disabled control must not activate');
+  }
+</script>
+
+<script id="missing_for_target_no_op">
+  {
+    // No exception, no side-effect.
+    $('#lab_missing').click();
+    testing.expectEqual(false, $('#cb_for_missing').checked);
+  }
+</script>
+
+<script id="no_for_no_descendant_no_op">
+  {
+    $('#lab_empty').click();
+    testing.expectEqual(false, $('#cb_no_control').checked);
+  }
+</script>
+
+<script id="no_labelable_descendant_no_op">
+  {
+    $('#lab_outer').click();
+    testing.expectEqual(false, $('#cb_outer_only').checked);
+  }
+</script>
+
+<script id="label_click_dispatches_click_on_control">
+  {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.id = 'cb_evt';
+    document.body.appendChild(cb);
+
+    const lab = document.createElement('label');
+    lab.htmlFor = 'cb_evt';
+    document.body.appendChild(lab);
+
+    const events = [];
+    lab.addEventListener('click', e => events.push(['label', e.target.tagName]));
+    cb.addEventListener('click', e => events.push(['cb', e.target.tagName]));
+    cb.addEventListener('input', () => events.push(['cb', 'input']));
+    cb.addEventListener('change', () => events.push(['cb', 'change']));
+
+    lab.click();
+
+    // The label's own click fires first, then the synthetic click on the
+    // control fires + bubbles, then input/change fire on the control.
+    testing.expectEqual(true, cb.checked);
+    testing.expectEqual('label', events[0][0]);
+    testing.expectEqual('LABEL', events[0][1]);
+    testing.expectEqual('cb', events[1][0]);
+    testing.expectEqual('INPUT', events[1][1]);
+    testing.expectEqual('input', events[2][1]);
+    testing.expectEqual('change', events[3][1]);
+
+    document.body.removeChild(lab);
+    document.body.removeChild(cb);
+  }
+</script>
+
+<script id="label_click_preventDefault_on_label_blocks_activation">
+  {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.id = 'cb_pd';
+    document.body.appendChild(cb);
+
+    const lab = document.createElement('label');
+    lab.htmlFor = 'cb_pd';
+    lab.addEventListener('click', (e) => e.preventDefault());
+    document.body.appendChild(lab);
+
+    lab.click();
+    testing.expectEqual(false, cb.checked, 'preventDefault on label must skip activation');
+
+    document.body.removeChild(lab);
+    document.body.removeChild(cb);
+  }
+</script>

@@ -26,10 +26,14 @@ const js = @import("../js/js.zig");
 const CryptoKey = @import("CryptoKey.zig");
 
 const algorithm = @import("crypto/algorithm.zig");
+const AES = @import("crypto/AES.zig");
+const EC = @import("crypto/EC.zig");
 const HMAC = @import("crypto/HMAC.zig");
+const RSA = @import("crypto/RSA.zig");
 const X25519 = @import("crypto/X25519.zig");
 
 const log = lp.log;
+const String = lp.String;
 
 /// The SubtleCrypto interface of the Web Crypto API provides a number of low-level
 /// cryptographic functions.
@@ -47,28 +51,92 @@ pub fn generateKey(
     key_usages: []const []const u8,
     frame: *Frame,
 ) !js.Promise {
+    const local = frame.js.local.?;
     switch (algo) {
         .hmac_key_gen => |params| return HMAC.init(params, extractable, key_usages, frame),
-        .name => |name| {
-            if (std.mem.eql(u8, "X25519", name)) {
-                return X25519.init(extractable, key_usages, frame);
-            }
-
-            log.warn(.not_implemented, "generateKey", .{ .name = name });
+        .aes_key_gen => |params| {
+            AES.validate(params, key_usages) catch |err| {
+                return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
+            };
+            log.warn(.not_implemented, "generateKey", .{ .name = params.name });
         },
-        .object => |object| {
-            // Ditto.
-            const name = object.name;
-            if (std.mem.eql(u8, "X25519", name)) {
-                return X25519.init(extractable, key_usages, frame);
-            }
-
-            log.warn(.not_implemented, "generateKey", .{ .name = name });
+        .ec_key_gen => |params| {
+            EC.validate(params, key_usages) catch |err| {
+                return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
+            };
+            log.warn(.not_implemented, "generateKey", .{ .name = params.name });
         },
-        else => log.warn(.not_implemented, "generateKey", .{}),
+        .rsa_hashed_key_gen => |params| {
+            RSA.validate(params, key_usages) catch |err| {
+                return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
+            };
+            log.warn(.not_implemented, "generateKey", .{ .name = params.name });
+        },
+        .name => |js_name| return generateKeyFromName(try js_name.toSSO(false), extractable, key_usages, frame),
+        .object => |object| return generateKeyFromName(try object.name.toSSO(false), extractable, key_usages, frame),
+        .invalid => return local.rejectPromise(.{ .type_error = "invalid algorithm" }),
     }
 
-    return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.SyntaxError } });
+    return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+}
+
+fn generateKeyFromName(
+    name: String,
+    extractable: bool,
+    key_usages: []const []const u8,
+    frame: *Frame,
+) !js.Promise {
+    return _generateKeyFromName(name, extractable, key_usages, frame) catch |err| {
+        return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = err } });
+    };
+}
+
+fn _generateKeyFromName(
+    name: String,
+    extractable: bool,
+    key_usages: []const []const u8,
+    frame: *Frame,
+) !js.Promise {
+    if (name.eql(comptime .wrap("X25519"))) {
+        return X25519.init(extractable, key_usages, frame);
+    }
+
+    {
+        // Algorithms whose `generateKey` parameters are just `{name}` — Ed25519,
+        // Ed448, X448. Validates usages so failure-path tests get the spec-mandated
+        // error name; leaves real key generation to a future change.
+
+        const allowed: []const []const u8 = blk: {
+            const str = name.str();
+            if (std.ascii.eqlIgnoreCase(str, "Ed25519") or std.ascii.eqlIgnoreCase(str, "Ed448")) {
+                break :blk &.{ "sign", "verify" };
+            }
+            if (std.ascii.eqlIgnoreCase(str, "X448")) {
+                break :blk &.{ "deriveKey", "deriveBits" };
+            }
+            return error.NotSupported;
+        };
+
+        for (key_usages) |usage| {
+            var ok = false;
+            for (allowed) |a| {
+                if (std.mem.eql(u8, a, usage)) {
+                    ok = true;
+                    break;
+                }
+            }
+            if (!ok) {
+                return error.SyntaxError;
+            }
+        }
+
+        if (key_usages.len == 0) {
+            return error.SyntaxError;
+        }
+    }
+
+    log.warn(.not_implemented, "generateKey", .{ .name = name });
+    return error.NotSupported;
 }
 
 /// Exports a key: that is, it takes as input a CryptoKey object and gives you

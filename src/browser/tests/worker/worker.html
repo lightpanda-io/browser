@@ -224,6 +224,23 @@
   }
 </script>
 
+<script id="worker_dynamic_import" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./import-worker.js');
+
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+
+    await state.done((response) => {
+      testing.expectTrue(response.ok, 'worker import error: ' + response.err);
+      testing.expectEqual('imported from module', response.message);
+      testing.expectEqual(42, response.product);
+    });
+  }
+</script>
+
 <script id="worker_structured_clone_nested" type=module>
   {
     const state = await testing.async();
