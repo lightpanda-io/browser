@@ -164,10 +164,10 @@ pub fn getChecked(self: *const Input) bool {
     return self._checked;
 }
 
-pub fn setChecked(self: *Input, checked: bool, _: *Frame) !void {
+pub fn setChecked(self: *Input, checked: bool, frame: *Frame) !void {
     // If checking a radio button, uncheck others in the group first
     if (checked and self._input_type == .radio) {
-        self.uncheckRadioGroup();
+        self.uncheckRadioGroup(frame);
     }
     // This should _not_ call setAttribute. It updates the current state only
     self._checked = checked;
@@ -224,10 +224,10 @@ pub fn getValidity(self: *Input, frame: *Frame) !*ValidityState {
     return v;
 }
 
-pub fn getValidationMessage(self: *const Input) []const u8 {
+pub fn getValidationMessage(self: *const Input, frame: *Frame) []const u8 {
     if (!self.getWillValidate()) return "";
     if (self._custom_validity) |msg| return msg;
-    if (self.suffersValueMissing()) return "Please fill out this field.";
+    if (self.suffersValueMissing(frame)) return "Please fill out this field.";
     if (self.suffersTypeMismatch()) return switch (self._input_type) {
         .email => "Please enter an email address.",
         .url => "Please enter a URL.",
@@ -244,7 +244,7 @@ pub fn getValidationMessage(self: *const Input) []const u8 {
 pub fn checkValidity(self: *Input, frame: *Frame) !bool {
     if (!self.getWillValidate()) return true;
     const v = ValidityState{ ._owner = self.asElement() };
-    if (v.getValid()) return true;
+    if (v.getValid(frame)) return true;
 
     const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
@@ -268,12 +268,12 @@ pub fn hasCustomValidity(self: *const Input) bool {
     return self._custom_validity != null;
 }
 
-pub fn suffersValueMissing(self: *const Input) bool {
+pub fn suffersValueMissing(self: *const Input, frame: *Frame) bool {
     if (!self.getWillValidate()) return false;
     if (!self.getRequired()) return false;
     return switch (self._input_type) {
         .checkbox => !self._checked,
-        .radio => !self.radioGroupHasChecked(),
+        .radio => !self.radioGroupHasChecked(frame),
         // TODO: file inputs aren't supported yet (#2175); treat as always-empty when required.
         .file => true,
         .text, .password, .email, .url, .tel, .search, .number, .date, .time, .@"datetime-local", .month, .week, .color => blk: {
@@ -359,13 +359,14 @@ fn numericRangeBreach(self: *const Input, comptime kind: enum { underflow, overf
     };
 }
 
-fn radioGroupHasChecked(self: *const Input) bool {
+fn radioGroupHasChecked(self: *const Input, frame: *Frame) bool {
     if (self._checked) return true;
     var iter = self.radioGroupIterator() orelse return false;
+    const my_form = self.getForm(frame);
     while (iter.next()) |other| {
         if (other == self) continue;
         if (!other._checked) continue;
-        if (sameFormOwner(self, other)) return true;
+        if (sameFormOwner(my_form, other, frame)) return true;
     }
     return false;
 }
@@ -404,28 +405,23 @@ fn radioGroupIterator(self: *const Input) ?RadioGroupIterator {
     };
 }
 
-/// Frame-less equivalent of `self.getForm() == other.getForm()` — used from
-/// the `*const` validation path. Compares by `form` attribute when either
-/// input sets it, otherwise by nearest ancestor `<form>`. Mirrors the
-/// pointer-equality semantics of `getForm` for the cases that don't require
-/// a document `getElementById` lookup.
-fn sameFormOwner(self: *const Input, other: *const Input) bool {
-    const self_attr = self.asConstElement().getAttributeSafe(comptime .wrap("form"));
-    const other_attr = other.asConstElement().getAttributeSafe(comptime .wrap("form"));
-    if (self_attr != null or other_attr != null) {
-        if (self_attr == null or other_attr == null) return false;
-        return std.mem.eql(u8, self_attr.?, other_attr.?);
-    }
-    return ancestorForm(self.asConstElement()) == ancestorForm(other.asConstElement());
-}
+fn sameFormOwner(self_form: ?*const Form, other: *const Input, frame: *Frame) bool {
+    const other_form = other.getForm(frame);
 
-fn ancestorForm(element: *const Element) ?*Form {
-    var node = element.asConstNode()._parent;
-    while (node) |n| {
-        if (n.is(Form)) |form| return form;
-        node = n._parent;
+    // Check if same form context
+    if (self_form == null and other_form == null) {
+        return true;
     }
-    return null;
+
+    if (self_form) |mf| {
+        if (other_form) |of| {
+            if (mf == of) {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 /// Liberal email validation: ASCII local part + "@" + dotted ASCII host. Mirrors
@@ -783,8 +779,8 @@ pub fn getLabels(self: *Input, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
-pub fn getForm(self: *Input, frame: *Frame) ?*Form {
-    const element = self.asElement();
+pub fn getForm(self: *const Input, frame: *Frame) ?*Form {
+    const element = self.asConstElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
     if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
@@ -796,7 +792,7 @@ pub fn getForm(self: *Input, frame: *Frame) ?*Form {
     }
 
     // No form attribute - traverse ancestors looking for a <form>
-    var node = element.asNode()._parent;
+    var node = element.asConstNode()._parent;
     while (node) |n| {
         if (n.is(Element.Html.Form)) |form| {
             return form;
@@ -1194,11 +1190,12 @@ fn maxWeeksInYear(year: u32) u32 {
     return 52;
 }
 
-fn uncheckRadioGroup(self: *Input) void {
+fn uncheckRadioGroup(self: *Input, frame: *Frame) void {
     var iter = self.radioGroupIterator() orelse return;
+    const my_form = self.getForm(frame);
     while (iter.next()) |other| {
         if (other == self) continue;
-        if (!sameFormOwner(self, other)) continue;
+        if (!sameFormOwner(my_form, other, frame)) continue;
         other._checked = false;
     }
 }
@@ -1284,7 +1281,7 @@ pub const Build = struct {
 
         // If this is a checked radio button, uncheck others in its group
         if (self._checked and self._input_type == .radio) {
-            self.uncheckRadioGroup();
+            self.uncheckRadioGroup(frame);
         }
     }
 
@@ -1311,7 +1308,7 @@ pub const Build = struct {
                     self._checked = true;
                     // If setting a radio button to checked, uncheck others in the group
                     if (self._input_type == .radio) {
-                        self.uncheckRadioGroup();
+                        self.uncheckRadioGroup(frame);
                     }
                 }
             },

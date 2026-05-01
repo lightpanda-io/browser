@@ -25,6 +25,7 @@ const Input = @import("Input.zig");
 const Select = @import("Select.zig");
 const TextArea = @import("TextArea.zig");
 const Button = @import("Button.zig");
+const Frame = @import("../../../Frame.zig");
 
 const ValidityState = @This();
 
@@ -33,8 +34,8 @@ const ValidityState = @This();
 // because the flag definitions are per-type in the HTML spec.
 _owner: *Element,
 
-pub fn getValueMissing(self: *const ValidityState) bool {
-    if (self._owner.is(Input)) |input| return input.suffersValueMissing();
+pub fn getValueMissing(self: *const ValidityState, frame: *Frame) bool {
+    if (self._owner.is(Input)) |input| return input.suffersValueMissing(frame);
     if (self._owner.is(Select)) |select| return select.suffersValueMissing();
     if (self._owner.is(TextArea)) |textarea| return textarea.suffersValueMissing();
     return false;
@@ -96,8 +97,8 @@ pub fn getCustomError(self: *const ValidityState) bool {
     return false;
 }
 
-pub fn getValid(self: *const ValidityState) bool {
-    return !self.getValueMissing() and
+pub fn getValid(self: *const ValidityState, frame: *Frame) bool {
+    return !self.getValueMissing(frame) and
         !self.getTypeMismatch() and
         !self.getPatternMismatch() and
         !self.getTooLong() and

@@ -271,7 +271,7 @@ pub fn getValidationMessage(self: *const Select) []const u8 {
 pub fn checkValidity(self: *Select, frame: *Frame) !bool {
     if (!self.getWillValidate()) return true;
     const v = ValidityState{ ._owner = self.asElement() };
-    if (v.getValid()) return true;
+    if (v.getValid(frame)) return true;
 
     const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
