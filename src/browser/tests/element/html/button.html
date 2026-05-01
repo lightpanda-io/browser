@@ -126,3 +126,19 @@
     testing.expectFalse(button.outerHTML.includes('required'))
   }
 </script>
+
+<script id="validity_state_identity">
+  testing.expectEqual($('#button1').validity, $('#button1').validity)
+</script>
+
+<script id="invalid_event_is_trusted">
+  {
+    const b = document.createElement('button')
+    document.body.appendChild(b)
+    b.setCustomValidity('nope')
+    let captured = null
+    b.addEventListener('invalid', (e) => { captured = e })
+    b.checkValidity()
+    testing.expectEqual(true, captured.isTrusted)
+  }
+</script>
