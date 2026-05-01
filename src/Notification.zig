@@ -118,6 +118,11 @@ pub const FrameNavigate = struct {
     timestamp: u64,
     url: [:0]const u8,
     opts: Frame.NavigateOpts,
+    // True when this navigation is being issued against a Page that is in
+    // .pending state (i.e. an in-flight root navigation whose old Page is
+    // still alive). CDP uses this to skip BrowserContext.reset() — the old
+    // page's nodes must remain live and addressable until commit.
+    is_pending_root: bool = false,
 };
 
 pub const FrameNavigated = struct {

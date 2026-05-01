@@ -28,6 +28,7 @@ const Frame = @import("../browser/Frame.zig");
 const Mime = @import("../browser/Mime.zig");
 const Element = @import("../browser/webapi/Element.zig");
 const Label = @import("../browser/webapi/element/html/Label.zig");
+const Request = @import("../browser/HttpClient.zig").Request;
 
 const Incrementing = @import("id.zig").Incrementing;
 const InterceptState = @import("domains/fetch.zig").InterceptState;
@@ -317,6 +318,18 @@ pub const BrowserContext = struct {
         data: std.ArrayList(u8),
     };
 
+    // Key for `captured_responses`. Documents are keyed by `loader_id`,
+    // everything else by `request_id` — the two id-spaces are independent
+    // counters and overlap numerically (loader 1 / request 1, loader 2 /
+    // request 2, ...), so the map key has to carry the namespace or
+    // entries collide. The wire-format prefix (`LID-` / `REQ-`) provides
+    // the same disambiguation on lookup; see `idFromRequestId` in
+    // domains/network.zig.
+    pub const CapturedResponseKey = struct {
+        kind: enum { request, loader },
+        id: u32,
+    };
+
     id: []const u8,
     cdp: *CDP,
 
@@ -382,7 +395,7 @@ pub const BrowserContext = struct {
     // ever streamed. So if CDP is the only thing that needs bodies in
     // memory for an arbitrary amount of time, then that's where we're going
     // to store the,
-    captured_responses: std.AutoHashMapUnmanaged(usize, CapturedResponse),
+    captured_responses: std.AutoHashMapUnmanaged(CapturedResponseKey, CapturedResponse),
 
     notification: *Notification,
 
@@ -685,6 +698,13 @@ pub const BrowserContext = struct {
         return @import("domains/page.zig").javascriptDialogOpening(self, msg);
     }
 
+    fn keyFromRequestReq(req: *const Request) CDP.BrowserContext.CapturedResponseKey {
+        return if (req.params.resource_type == .document)
+            .{ .kind = .loader, .id = req.params.loader_id }
+        else
+            .{ .kind = .request, .id = req.params.request_id };
+    }
+
     pub fn onHttpResponseHeadersDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
@@ -692,8 +712,8 @@ pub const BrowserContext = struct {
         const arena = self.frame_arena;
 
         // Prepare the captured response value.
-        const id = msg.request.params.request_id;
-        const gop = try self.captured_responses.getOrPut(arena, id);
+        const key = keyFromRequestReq(msg.request);
+        const gop = try self.captured_responses.getOrPut(arena, key);
         if (!gop.found_existing) {
             gop.value_ptr.* = .{
                 .data = .empty,
@@ -729,8 +749,8 @@ pub const BrowserContext = struct {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         const arena = self.frame_arena;
 
-        const id = msg.request.params.request_id;
-        const resp = self.captured_responses.getPtr(id) orelse lp.assert(false, "onHttpResponseData missinf captured response", .{});
+        const key = keyFromRequestReq(msg.request);
+        const resp = self.captured_responses.getPtr(key) orelse lp.assert(false, "onHttpResponseData missing captured response", .{});
 
         return resp.data.appendSlice(arena, msg.data);
     }
