@@ -144,7 +144,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         if (try parseDataURI(arena, src)) |data_uri| {
             source = .{ .@"inline" = data_uri };
         } else {
-            remote_url = try URL.resolve(arena, base_url, src, .{});
+            remote_url = try URL.resolve(arena, base_url, src, .{ .encoding = frame.charset });
             source = .{ .remote = .{} };
         }
     } else {
