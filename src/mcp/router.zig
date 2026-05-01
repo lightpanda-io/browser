@@ -2,13 +2,17 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const protocol = @import("protocol.zig");
-const resources = @import("resources.zig");
-const Server = @import("Server.zig");
-const tools = @import("tools.zig");
 
 const log = lp.log;
 
-pub fn processRequests(server: *Server, reader: *std.io.Reader) !void {
+/// Generic over the server type so both `mcp/Server.zig` (browser tools) and
+/// `agent/McpServer.zig` (the `task` tool) can reuse this loop. The server
+/// must expose: `allocator`, a `transport: Transport` field, and the
+/// per-method `handleInitialize`, `handleToolList`, `handleToolCall`
+/// methods. `handleResourceList` / `handleResourceRead` are optional —
+/// servers that don't expose resources can omit them and the router
+/// returns `MethodNotFound` automatically.
+pub fn processRequests(server: anytype, reader: *std.io.Reader) !void {
     var arena: std.heap.ArenaAllocator = .init(server.allocator);
     defer arena.deinit();
 
@@ -19,7 +23,7 @@ pub fn processRequests(server: *Server, reader: *std.io.Reader) !void {
         const buffered_line = reader.takeDelimiter('\n') catch |err| switch (err) {
             error.StreamTooLong => {
                 log.err(.mcp, "Message too long", .{});
-                try server.sendError(.null, .InvalidRequest, "Message too long");
+                try server.transport.sendError(.null, .InvalidRequest, "Message too long");
                 continue;
             },
             else => return err,
@@ -54,55 +58,47 @@ const method_map = std.StaticStringMap(Method).initComptime(.{
     .{ "resources/read", .@"resources/read" },
 });
 
-pub fn handleMessage(server: *Server, arena: std.mem.Allocator, msg: []const u8) !void {
+pub fn handleMessage(server: anytype, arena: std.mem.Allocator, msg: []const u8) !void {
     const req = std.json.parseFromSliceLeaky(protocol.Request, arena, msg, .{
         .ignore_unknown_fields = true,
     }) catch |err| {
         log.warn(.mcp, "JSON Parse Error", .{ .err = err, .msg = msg });
-        try server.sendError(.null, .ParseError, "Parse error");
+        try server.transport.sendError(.null, .ParseError, "Parse error");
         return;
     };
 
     const method = method_map.get(req.method) orelse {
         if (req.id != null) {
-            try server.sendError(req.id.?, .MethodNotFound, "Method not found");
+            try server.transport.sendError(req.id.?, .MethodNotFound, "Method not found");
         }
         return;
     };
 
     switch (method) {
-        .initialize => try handleInitialize(server, req),
+        .initialize => try server.handleInitialize(req),
         .ping => try handlePing(server, req),
         .@"notifications/initialized" => {},
-        .@"tools/list" => try tools.handleList(server, arena, req),
-        .@"tools/call" => try tools.handleCall(server, arena, req),
-        .@"resources/list" => try resources.handleList(server, req),
-        .@"resources/read" => try resources.handleRead(server, arena, req),
+        .@"tools/list" => try server.handleToolList(arena, req),
+        .@"tools/call" => try server.handleToolCall(arena, req),
+        .@"resources/list" => try handleOptional(server, req, "handleResourceList", .{req}),
+        .@"resources/read" => try handleOptional(server, req, "handleResourceRead", .{ arena, req }),
     }
 }
 
-fn handleInitialize(server: *Server, req: protocol.Request) !void {
-    const id = req.id orelse return;
-    const result: protocol.InitializeResult = .{
-        .protocolVersion = @tagName(protocol.Version.default),
-        .capabilities = .{
-            .resources = .{},
-            .tools = .{},
-        },
-        .serverInfo = .{
-            .name = "lightpanda",
-            .version = "0.1.0",
-        },
-    };
-
-    try server.sendResult(id, result);
+fn handleOptional(server: anytype, req: protocol.Request, comptime method: []const u8, args: anytype) !void {
+    if (@hasDecl(@TypeOf(server.*), method)) {
+        try @call(.auto, @field(@TypeOf(server.*), method), .{server} ++ args);
+    } else if (req.id) |id| {
+        try server.transport.sendError(id, .MethodNotFound, "Method not supported");
+    }
 }
 
-fn handlePing(server: *Server, req: protocol.Request) !void {
+fn handlePing(server: anytype, req: protocol.Request) !void {
     const id = req.id orelse return;
-    try server.sendResult(id, .{});
+    try server.transport.sendResult(id, .{});
 }
 
+const Server = @import("Server.zig");
 const testing = @import("../testing.zig");
 
 test "MCP.router - handleMessage - synchronous unit tests" {

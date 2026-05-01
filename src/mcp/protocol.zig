@@ -123,36 +123,7 @@ pub const Tool = struct {
     }
 };
 
-pub fn minify(comptime json: []const u8) []const u8 {
-    @setEvalBranchQuota(100000);
-    return comptime blk: {
-        var res: []const u8 = "";
-        var in_string = false;
-        var escaped = false;
-        for (json) |c| {
-            if (in_string) {
-                res = res ++ [1]u8{c};
-                if (escaped) {
-                    escaped = false;
-                } else if (c == '\\') {
-                    escaped = true;
-                } else if (c == '"') {
-                    in_string = false;
-                }
-            } else {
-                switch (c) {
-                    ' ', '\n', '\r', '\t' => continue,
-                    '"' => {
-                        in_string = true;
-                        res = res ++ [1]u8{c};
-                    },
-                    else => res = res ++ [1]u8{c},
-                }
-            }
-        }
-        break :blk res;
-    };
-}
+pub const minify = @import("../browser/tools.zig").minify;
 
 pub const Resource = struct {
     uri: []const u8,

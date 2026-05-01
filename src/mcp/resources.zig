@@ -23,7 +23,7 @@ pub const resource_list = [_]protocol.Resource{
 
 pub fn handleList(server: *Server, req: protocol.Request) !void {
     const id = req.id orelse return;
-    try server.sendResult(id, .{ .resources = &resource_list });
+    try server.transport.sendResult(id, .{ .resources = &resource_list });
 }
 
 const ReadParams = struct {
@@ -74,20 +74,20 @@ const resource_map = std.StaticStringMap(ResourceUri).initComptime(.{
 
 pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     if (req.params == null or req.id == null) {
-        return server.sendError(req.id orelse .{ .integer = -1 }, .InvalidParams, "Missing params");
+        return server.transport.sendError(req.id orelse .{ .integer = -1 }, .InvalidParams, "Missing params");
     }
     const req_id = req.id.?;
 
     const params = std.json.parseFromValueLeaky(ReadParams, arena, req.params.?, .{ .ignore_unknown_fields = true }) catch {
-        return server.sendError(req_id, .InvalidParams, "Invalid params");
+        return server.transport.sendError(req_id, .InvalidParams, "Invalid params");
     };
 
     const uri = resource_map.get(params.uri) orelse {
-        return server.sendError(req_id, .InvalidRequest, "Resource not found");
+        return server.transport.sendError(req_id, .InvalidRequest, "Resource not found");
     };
 
     const frame = server.session.currentFrame() orelse {
-        return server.sendError(req_id, .FrameNotLoaded, "Page not loaded");
+        return server.transport.sendError(req_id, .FrameNotLoaded, "Page not loaded");
     };
 
     const format: Format = switch (uri) {
@@ -106,7 +106,7 @@ pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
             .text = .{ .frame = frame, .format = format },
         }},
     };
-    server.sendResult(req_id, result) catch {
-        return server.sendError(req_id, .InternalError, "Failed to serialize resource content");
+    server.transport.sendResult(req_id, result) catch {
+        return server.transport.sendError(req_id, .InternalError, "Failed to serialize resource content");
     };
 }

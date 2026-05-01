@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
+const Frame = @import("../Frame.zig");
 const logger = lp.log;
 
 const Console = @This();
@@ -36,33 +37,39 @@ pub fn trace(_: *const Console, values: []js.Value, exec: *js.Execution) !void {
     });
 }
 
-pub fn debug(_: *const Console, values: []js.Value) void {
+pub fn debug(_: *const Console, values: []js.Value, exec: *js.Execution) void {
     logger.debug(.js, "console.debug", .{ValueWriter{ .values = values }});
+    appendMessage(exec, .debug, values);
 }
 
-pub fn info(_: *const Console, values: []js.Value) void {
+pub fn info(_: *const Console, values: []js.Value, exec: *js.Execution) void {
     logger.info(.js, "console.info", .{ValueWriter{ .values = values }});
+    appendMessage(exec, .info, values);
 }
 
-pub fn log(_: *const Console, values: []js.Value) void {
+pub fn log(_: *const Console, values: []js.Value, exec: *js.Execution) void {
     logger.info(.js, "console.log", .{ValueWriter{ .values = values }});
+    appendMessage(exec, .log, values);
 }
 
-pub fn warn(_: *const Console, values: []js.Value) void {
+pub fn warn(_: *const Console, values: []js.Value, exec: *js.Execution) void {
     logger.warn(.js, "console.warn", .{ValueWriter{ .values = values }});
+    appendMessage(exec, .warn, values);
 }
 
 pub fn clear(_: *const Console) void {}
 
-pub fn assert(_: *const Console, assertion: js.Value, values: []js.Value) void {
+pub fn assert(_: *const Console, assertion: js.Value, values: []js.Value, exec: *js.Execution) void {
     if (assertion.toBool()) {
         return;
     }
     logger.warn(.js, "console.assert", .{ValueWriter{ .values = values }});
+    appendMessage(exec, .warn, values);
 }
 
 pub fn @"error"(_: *const Console, values: []js.Value, exec: *js.Execution) void {
     logger.warn(.js, "console.error", .{ValueWriter{ .values = values, .stack = exec.context.local.?.stackTrace() catch |err| @errorName(err) orelse "???" }});
+    appendMessage(exec, .@"error", values);
 }
 
 pub fn table(_: *const Console, data: js.Value, columns: ?js.Value) void {
@@ -140,6 +147,16 @@ pub fn groupEnd(_: *const Console) void {}
 
 fn timestamp() u64 {
     return @import("../../datetime.zig").timestamp(.monotonic);
+}
+
+// Forwards frame-context console output to the Frame's message buffer (read by
+// the `consoleLogs` tool / CDP Runtime.consoleAPICalled). Worker contexts are
+// dropped — no buffer is attached there.
+fn appendMessage(exec: *js.Execution, level: Frame.ConsoleMessage.Level, values: []js.Value) void {
+    switch (exec.context.global) {
+        .frame => |f| f.appendConsoleMessage(level, values),
+        .worker => {},
+    }
 }
 
 const ValueWriter = struct {

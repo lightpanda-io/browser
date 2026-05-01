@@ -87,6 +87,8 @@ pub fn build(b: *Build) !void {
         try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
         try linkCurl(b, mod, enable_tsan);
         try linkHtml5Ever(b, mod);
+        linkZenai(b, mod);
+        linkLinenoise(b, mod);
 
         break :blk mod;
     };
@@ -986,6 +988,19 @@ fn buildCurl(
     });
 
     return lib;
+}
+
+fn linkZenai(b: *Build, mod: *Build.Module) void {
+    const dep = b.dependency("zenai", .{});
+    mod.addImport("zenai", dep.module("zenai"));
+}
+
+fn linkLinenoise(b: *Build, mod: *Build.Module) void {
+    const dep = b.dependency("linenoise", .{});
+    mod.addIncludePath(dep.path(""));
+    mod.addCSourceFile(.{
+        .file = dep.path("linenoise.c"),
+    });
 }
 
 /// Resolves the semantic version of the build.

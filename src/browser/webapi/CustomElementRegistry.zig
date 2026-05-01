@@ -235,7 +235,7 @@ fn validateName(name: []const u8) !void {
     }
 
     for (name) |c| {
-        if (c >= 'A' and c <= 'Z') {
+        if (std.ascii.isUpper(c)) {
             return error.SyntaxError;
         }
 

@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const log = lp.log;
 const builtin = @import("builtin");
+const zenai = @import("zenai");
 
 const cli = @import("cli.zig");
 const dump = @import("browser/dump.zig");
@@ -118,6 +119,8 @@ fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
     return .html;
 }
 
+pub const AiProvider = std.meta.Tag(zenai.provider.Client);
+
 fn waitScriptFileValidator(allocator: Allocator, args: *std.process.ArgIterator) !?[:0]const u8 {
     const path = args.next() orelse {
         log.fatal(.app, "missing argument value", .{ .arg = "--wait-script-file" });
@@ -174,12 +177,29 @@ const Commands = cli.Builder(.{
         },
         .shared_options = CommonOptions,
     },
+    .{
+        .name = "agent",
+        .positional = .{ .name = "script_file", .type = ?[:0]const u8 },
+        .options = .{
+            .{ .name = "provider", .type = ?AiProvider },
+            .{ .name = "model", .type = ?[:0]const u8 },
+            .{ .name = "base_url", .type = ?[:0]const u8 },
+            .{ .name = "system_prompt", .type = ?[:0]const u8 },
+            .{ .name = "self_heal", .type = bool },
+            .{ .name = "interactive", .type = bool },
+            .{ .name = "task", .type = ?[]const u8 },
+            .{ .name = "task_attachments", .type = []const u8, .multiple = true },
+            .{ .name = "mcp", .type = bool },
+        },
+        .shared_options = CommonOptions,
+    },
     .{ .name = "version", .options = .{} },
     .{ .name = "help", .options = .{} },
 });
 
 pub const RunMode = Commands.Enum;
 pub const Mode = Commands.Union;
+pub const Agent = @FieldType(Mode, "agent");
 
 mode: Mode,
 exec_name: []const u8,
@@ -191,66 +211,70 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
         .exec_name = exec_name,
         .http_headers = undefined,
     };
-    config.http_headers = try HttpHeaders.init(allocator, &config);
+    if (mode != .help and mode != .version) {
+        config.http_headers = try HttpHeaders.init(allocator, &config);
+    }
     return config;
 }
 
 pub fn deinit(self: *const Config, allocator: Allocator) void {
-    self.http_headers.deinit(allocator);
+    if (self.mode != .help and self.mode != .version) {
+        self.http_headers.deinit(allocator);
+    }
 }
 
 pub fn tlsVerifyHost(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| !opts.insecure_disable_tls_host_verification,
+        inline .serve, .fetch, .mcp, .agent => |opts| !opts.insecure_disable_tls_host_verification,
         else => unreachable,
     };
 }
 
 pub fn obeyRobots(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.obey_robots,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.obey_robots,
         else => unreachable,
     };
 }
 
 pub fn httpProxy(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_proxy,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_proxy,
         else => unreachable,
     };
 }
 
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.proxy_bearer_token,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.proxy_bearer_token,
         .help, .version => null,
     };
 }
 
 pub fn httpMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_max_concurrent orelse 10,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_concurrent orelse 10,
         else => unreachable,
     };
 }
 
 pub fn httpMaxHostOpen(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_max_host_open orelse 4,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_host_open orelse 4,
         else => unreachable,
     };
 }
 
 pub fn httpConnectTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_connect_timeout orelse 0,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_connect_timeout orelse 0,
         else => unreachable,
     };
 }
 
 pub fn httpTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_timeout orelse 5000,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_timeout orelse 5000,
         else => unreachable,
     };
 }
@@ -261,70 +285,70 @@ pub fn httpMaxRedirects(_: *const Config) u8 {
 
 pub fn httpMaxResponseSize(self: *const Config) ?usize {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_max_response_size,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_response_size,
         else => unreachable,
     };
 }
 
 pub fn wsMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.ws_max_concurrent orelse 8,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.ws_max_concurrent orelse 8,
         else => unreachable,
     };
 }
 
 pub fn logLevel(self: *const Config) ?log.Level {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.log_level,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.log_level,
         else => unreachable,
     };
 }
 
 pub fn logFormat(self: *const Config) ?log.Format {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.log_format,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.log_format,
         else => unreachable,
     };
 }
 
 pub fn logFilterScopes(self: *const Config) std.ArrayList(log.Scope) {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.log_filter_scopes,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.log_filter_scopes,
         else => unreachable,
     };
 }
 
 pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.user_agent_suffix,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.user_agent_suffix,
         .help, .version => null,
     };
 }
 
 pub fn userAgent(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.user_agent,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.user_agent,
         .help, .version => null,
     };
 }
 
 pub fn httpCacheDir(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.http_cache_dir,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_dir,
         else => null,
     };
 }
 
 pub fn cookieFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.cookie,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.cookie,
         else => null,
     };
 }
 
 pub fn cookieJarFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .fetch, .mcp => |opts| opts.cookie_jar,
+        inline .fetch, .mcp, .agent => |opts| opts.cookie_jar,
         else => null,
     };
 }
@@ -347,7 +371,7 @@ pub fn advertiseHost(self: *const Config) []const u8 {
 
 pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| WebBotAuthConfig{
+        inline .serve, .fetch, .mcp, .agent => |opts| WebBotAuthConfig{
             .key_file = opts.web_bot_auth_key_file orelse return null,
             .keyid = opts.web_bot_auth_keyid orelse return null,
             .domain = opts.web_bot_auth_domain orelse return null,
@@ -358,14 +382,14 @@ pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
 
 pub fn blockPrivateNetworks(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.block_private_networks,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.block_private_networks,
         else => unreachable,
     };
 }
 
 pub fn blockCidrs(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.block_cidrs,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.block_cidrs,
         else => unreachable,
     };
 }
@@ -388,17 +412,18 @@ pub fn maxPendingConnections(self: *const Config) u31 {
 
 pub fn storageEngine(self: *const Config) ?Storage.EngineType {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.storage_engine,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.storage_engine,
         else => unreachable,
     };
 }
 
 pub fn storageSqlitePath(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.storage_sqlite_path,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.storage_sqlite_path,
         else => unreachable,
     };
 }
+
 pub const DumpFormat = enum {
     html,
     markdown,
@@ -600,7 +625,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
     const usage =
         \\usage: {0s} command [options] [URL]
         \\
-        \\Command can be either 'fetch', 'serve', 'mcp' or 'help'
+        \\Command can be either 'fetch', 'serve', 'mcp', 'agent' or 'help'
         \\
         \\fetch command
         \\Fetches the specified URL
@@ -695,6 +720,59 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--cookie-jar    Path to a JSON file to save cookies to on exit (write-only).
         \\                Available for fetch and mcp commands.
         \\                Defaults to no cookie saving.
+        \\
+    ++ common_options ++
+        \\
+        \\agent command
+        \\Starts an interactive AI agent that can browse the web
+        \\Example: {0s} agent                         (dumb PandaScript-only REPL)
+        \\Example: {0s} agent --provider anthropic --model claude-haiku-4-5-20251001
+        \\Example: {0s} agent --provider ollama --model gemma4
+        \\Example: {0s} agent script.lp            (replay a recorded script)
+        \\Example: {0s} agent -i script.lp         (replay then drop into REPL,
+        \\                                             appending new commands to the file)
+        \\
+        \\Arguments:
+        \\[script_file]   Optional path to a .lp script.
+        \\                Without -i: replays the script (no LLM calls).
+        \\                With -i: replays if present, then enters the REPL and
+        \\                appends any new commands to the file (creating it if
+        \\                it does not yet exist).
+        \\
+        \\Options:
+        \\--provider      The AI provider: anthropic, openai, gemini, or ollama.
+        \\                Optional. When omitted, the REPL runs in "dumb mode":
+        \\                PandaScript commands work, but natural-language input,
+        \\                LOGIN / ACCEPT_COOKIES keywords, and --self-heal all
+        \\                require a provider. Dumb mode needs no API key.
+        \\
+        \\--model         The model name to use.
+        \\                Defaults to a sensible default per provider.
+        \\
+        \\--base-url      Override the API base URL for the provider.
+        \\                Defaults to the provider's standard endpoint.
+        \\                Ollama default: http://localhost:11434/v1
+        \\
+        \\--system-prompt Override the default system prompt.
+        \\
+        \\--self-heal     On tool errors, ask the model to recover by retrying
+        \\                with fresh page state instead of aborting.
+        \\
+        \\-i, --interactive
+        \\                After replaying the positional script (if any), drop
+        \\                into the REPL with the browser state preserved. When
+        \\                a positional script is present, any new commands
+        \\                entered in the REPL are appended to that file.
+        \\
+        \\--mcp           Run as an MCP server over stdio that exposes a single
+        \\                `task` tool. Each call delegates a high-level task to
+        \\                the agent and returns only the final answer to the
+        \\                MCP client. Requires --provider; cannot be combined
+        \\                with --task, -i, or a script file.
+        \\
+        \\The API key is read from the environment:
+        \\ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
+        \\Ollama does not require an API key.
         \\
     ++ common_options ++
         \\

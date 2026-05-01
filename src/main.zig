@@ -176,7 +176,53 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
             app.network.run();
         },
+        .agent => |opts| {
+            log.info(.app, "starting agent", .{});
+
+            var failed: bool = false;
+            {
+                var worker_thread = try std.Thread.spawn(.{}, agentThread, .{ allocator, app, opts, &failed });
+                defer worker_thread.join();
+
+                app.network.run();
+            }
+
+            if (failed) return error.AgentFailed;
+        },
         else => unreachable,
+    }
+}
+
+fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent, failed: *bool) void {
+    defer app.network.stop();
+
+    if (opts.mcp) {
+        var stdout = std.fs.File.stdout().writer(&.{});
+        var server = lp.agent.McpServer.init(allocator, app, opts, &stdout.interface) catch |err| {
+            log.fatal(.app, "agent mcp init error", .{ .err = err });
+            failed.* = true;
+            return;
+        };
+        defer server.deinit();
+
+        var stdin_buf: [64 * 1024]u8 = undefined;
+        var stdin = std.fs.File.stdin().reader(&stdin_buf);
+        lp.mcp.router.processRequests(server, &stdin.interface) catch |err| {
+            log.err(.app, "agent mcp error", .{ .err = err });
+            failed.* = true;
+        };
+        return;
+    }
+
+    var agent_instance = lp.agent.Agent.init(allocator, app, opts) catch |err| {
+        log.fatal(.app, "agent init error", .{ .err = err });
+        failed.* = true;
+        return;
+    };
+    defer agent_instance.deinit();
+
+    if (!agent_instance.run()) {
+        failed.* = true;
     }
 }
 

@@ -256,6 +256,7 @@ _parent_notified: bool = false,
 
 _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
+_console_messages: std.ArrayListUnmanaged(ConsoleMessage) = .{},
 _navigated_options: ?NavigatedOpts = null,
 
 pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
@@ -2785,6 +2786,26 @@ fn isXmlNameChar(c: u21) bool {
         (c >= 0x203F and c <= 0x2040);
 }
 
+const max_console_messages = 1000;
+
+pub fn appendConsoleMessage(self: *Frame, level: ConsoleMessage.Level, values: []JS.Value) void {
+    if (self._console_messages.items.len >= max_console_messages) return;
+    var aw: std.Io.Writer.Allocating = .init(self.arena);
+    for (values, 0..) |value, i| {
+        if (i > 0) aw.writer.writeAll(" ") catch return;
+        value.format(&aw.writer) catch return;
+    }
+    const text = aw.written();
+    self._console_messages.append(self.arena, .{ .level = level, .text = text }) catch return;
+}
+
+/// Returns buffered console messages and clears the buffer.
+pub fn drainConsoleMessages(self: *Frame) []const ConsoleMessage {
+    const items = self._console_messages.items;
+    self._console_messages.clearRetainingCapacity();
+    return items;
+}
+
 pub fn dupeString(self: *Frame, value: []const u8) ![]const u8 {
     if (String.intern(value)) |v| {
         return v;
@@ -3540,6 +3561,13 @@ pub const NavigateReason = enum {
     history,
     navigation,
     initialFrameNavigation,
+};
+
+pub const ConsoleMessage = struct {
+    level: Level,
+    text: []const u8,
+
+    pub const Level = enum { log, debug, info, warn, @"error" };
 };
 
 pub const NavigateOpts = struct {
