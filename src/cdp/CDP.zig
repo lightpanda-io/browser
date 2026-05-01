@@ -235,6 +235,7 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
             asUint(u56, "Runtime") => return @import("domains/runtime.zig").processMessage(command),
             asUint(u56, "Network") => return @import("domains/network.zig").processMessage(command),
             asUint(u56, "Storage") => return @import("domains/storage.zig").processMessage(command),
+            asUint(u56, "Console") => return @import("domains/console.zig").processMessage(command),
             else => {},
         },
         8 => switch (@as(u64, @bitCast(domain[0..8].*))) {
@@ -619,6 +620,14 @@ pub const BrowserContext = struct {
         self.notification.unregister(.frame_network_almost_idle, self);
     }
 
+    pub fn consoleEnable(self: *BrowserContext) !void {
+        try self.notification.register(.console_message, self, onConsoleMessage);
+    }
+
+    pub fn consoleDisable(self: *BrowserContext) void {
+        self.notification.unregister(.console_message, self);
+    }
+
     pub fn onFrameRemove(ctx: *anyopaque, _: Notification.FrameRemove) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         @import("domains/page.zig").frameRemove(self);
@@ -771,6 +780,11 @@ pub const BrowserContext = struct {
         sendInspectorMessage(@ptrCast(@alignCast(ctx)), msg) catch |err| {
             log.err(.cdp, "send inspector event", .{ .err = err });
         };
+    }
+
+    pub fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/console.zig").consoleMessage(self, msg);
     }
 
     // This is hacky x 2. First, we create the JSON payload by gluing our
