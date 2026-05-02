@@ -36,6 +36,7 @@ sigset: std.posix.sigset_t = undefined,
 handle_thread: ?std.Thread = null,
 
 attempt: u32 = 0,
+mutex: std.Thread.Mutex = .{},
 listeners: std.ArrayList(Listener) = .empty,
 
 pub const Listener = struct {
@@ -96,10 +97,22 @@ pub fn on(self: *SigHandler, func: anytype, args: std.meta.ArgsTuple(@TypeOf(fun
     const bytes: []const u8 = @ptrCast((&args)[0..1]);
     @memcpy(buffer, bytes);
 
+    self.mutex.lock();
+    defer self.mutex.unlock();
+
     try self.listeners.append(self.arena, .{
         .args = buffer,
         .start = TypeErased.start,
     });
+
+    // If a termination signal arrived before this listener was registered,
+    // the sighandler thread had nothing to call. Fire the new listener now
+    // so the shutdown isn't lost — otherwise main proceeds into the network
+    // run loop and the process becomes an orphan that ignores the signal.
+    if (self.attempt > 0) {
+        const item = &self.listeners.items[self.listeners.items.len - 1];
+        item.start(item.args.ptr);
+    }
 }
 
 fn sighandle(self: *SigHandler) noreturn {
@@ -114,7 +127,9 @@ fn sighandle(self: *SigHandler) noreturn {
 
         switch (sig) {
             std.posix.SIG.INT, std.posix.SIG.TERM => {
+                self.mutex.lock();
                 if (self.attempt > 1) {
+                    self.mutex.unlock();
                     std.process.exit(1);
                 }
                 self.attempt += 1;
@@ -123,12 +138,15 @@ fn sighandle(self: *SigHandler) noreturn {
                 for (self.listeners.items) |*item| {
                     item.start(item.args.ptr);
                 }
+                self.mutex.unlock();
                 continue;
             },
             std.posix.SIG.ALRM => {
                 // Deadline tripped (e.g. --terminate-ms). Run the same listeners,
                 // but don't bump `attempt` — a subsequent ctrl-c should still get
                 // the normal first-attempt graceful path before hard-exiting.
+                self.mutex.lock();
+                defer self.mutex.unlock();
                 log.info(.app, "Deadline reached ", .{});
                 for (self.listeners.items) |*item| {
                     item.start(item.args.ptr);
