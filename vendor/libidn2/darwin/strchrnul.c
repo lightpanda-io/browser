@@ -1,10 +1,12 @@
 /* Darwin-only strchrnul shim for libidn2.
 
-   strchrnul is a glibc extension. On macOS it is missing from libc before
-   15.4 and is never made visible to libidn2's lib/lookup.c (which calls it
-   without including <string.h>). The matching prototype is declared in
-   vendor/libidn2/config.h under #ifdef __APPLE__, so callers compile;
-   this file provides the symbol so they link.
+   strchrnul is a glibc extension. macOS libc lacks it before 15.4, and
+   libidn2's lib/lookup.c never includes <string.h> — so even on newer
+   macOS the declaration would not reach the call site. The matching
+   prototype is declared next to the strverscmp shim in
+   vendor/libidn2/config.h (within the _LIBIDN2_LP_DECLS block, gated on
+   __APPLE__), so callers compile; this file provides the symbol so
+   they link.
 
    gnulib's strchrnul.c falls through to rawmemchr() when the search byte
    is NUL — also a glibc extension. libidn2 only ever searches for '.', so

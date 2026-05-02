@@ -551,14 +551,11 @@ fn buildLibidn2(
         // libc itself; on musl it would also need a separate -liconv.
         mod.linkSystemLibrary("iconv", .{});
 
-        // libidn2's lib/lookup.c calls strchrnul(), a glibc extension that
-        // macOS libc lacked before 15.4 and that lookup.c never gets a
-        // declaration for (it doesn't include <string.h>). Upstream solves
-        // this through gnulib's substituted <string.h> + gl/strchrnul.c;
-        // we don't wire up that overlay. Provide our own implementation —
-        // the matching prototype is declared in vendor/libidn2/config.h
-        // under #ifdef __APPLE__, so every libidn2 TU sees it via the
-        // existing #include <config.h>.
+        // libidn2's lib/lookup.c calls strchrnul() without including
+        // <string.h>; the prototype is declared in vendor/libidn2/config.h
+        // alongside the existing strverscmp shim. macOS libc lacked the
+        // symbol entirely before 15.4 — provide it here so the link
+        // succeeds. Mirrors how gl/strverscmp.c is wired up below.
         lib.addCSourceFile(.{
             .file = b.path("vendor/libidn2/darwin/strchrnul.c"),
             .flags = &.{},

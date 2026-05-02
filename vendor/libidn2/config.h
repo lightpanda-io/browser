@@ -429,17 +429,6 @@
 /* Define to 1 if you have the `strchrnul' function. */
 #define HAVE_STRCHRNUL 1
 
-/* lib/lookup.c calls strchrnul() but never #include <string.h>, so it relies
-   on a declaration being visible by the time it processes config.h. Upstream
-   gets it from gnulib's substituted <string.h>; we don't wire up that overlay
-   (see build.zig::buildLibidn2). On macOS the symbol is also missing from
-   libc before 15.4 — build.zig adds vendor/libidn2/darwin/strchrnul.c on
-   Darwin to satisfy the link. Declare the prototype here so every libidn2
-   TU that includes config.h sees a real declaration before preprocessing. */
-#ifdef __APPLE__
-char *strchrnul(const char *s, int c_in);
-#endif
-
 /* Define if you have `strerror_r'. */
 #define HAVE_STRERROR_R 1
 
@@ -1915,4 +1904,12 @@ char *strchrnul(const char *s, int c_in);
 #ifndef _LIBIDN2_LP_DECLS
 #define _LIBIDN2_LP_DECLS
 extern int strverscmp(const char *, const char *);
+
+/* lightpanda: lib/lookup.c calls strchrnul() without including <string.h>,
+   so the prototype must reach it through this header. macOS libc also
+   lacked the symbol entirely before 15.4 — build.zig::buildLibidn2 adds
+   vendor/libidn2/darwin/strchrnul.c on Darwin to provide the definition. */
+#ifdef __APPLE__
+extern char *strchrnul(const char *, int);
+#endif
 #endif
