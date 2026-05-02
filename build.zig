@@ -550,11 +550,27 @@ fn buildLibidn2(
         // in libiconv (separate from libSystem). On glibc Linux iconv is in
         // libc itself; on musl it would also need a separate -liconv.
         mod.linkSystemLibrary("iconv", .{});
+
+        // libidn2's lib/lookup.c calls strchrnul() unconditionally — a glibc
+        // extension absent from macOS libc and not declared by <string.h>.
+        // Upstream relies on gnulib substituting <string.h> + linking
+        // gl/strchrnul.c; we don't wire up that overlay, so ship a small
+        // Darwin-only shim and inject its prototype via -include.
+        mod.addIncludePath(b.path("vendor/libidn2/darwin"));
+        lib.addCSourceFile(.{
+            .file = b.path("vendor/libidn2/darwin/strchrnul.c"),
+            .flags = &.{},
+        });
     }
+
+    const lib_flags: []const []const u8 = if (is_darwin)
+        &.{ "-DHAVE_CONFIG_H", "-DIDN2_STATIC", "-include", "strchrnul.h" }
+    else
+        &.{ "-DHAVE_CONFIG_H", "-DIDN2_STATIC" };
 
     lib.addCSourceFiles(.{
         .root = dep.path("lib"),
-        .flags = &.{ "-DHAVE_CONFIG_H", "-DIDN2_STATIC" },
+        .flags = lib_flags,
         .files = &.{
             "bidi.c",     "context.c",  "data.c",   "decode.c",
             "error.c",    "free.c",     "idna.c",   "lookup.c",
