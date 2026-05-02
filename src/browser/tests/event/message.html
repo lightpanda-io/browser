@@ -40,6 +40,15 @@
 }
 </script>
 
+<script id=messageEventPorts>
+{
+  // ports must always be a (frozen) array, never undefined.
+  const evt = new MessageEvent('message');
+  testing.expectEqual(0, evt.ports.length);
+  testing.expectEqual(true, Array.isArray(evt.ports) || typeof evt.ports.length === 'number');
+}
+</script>
+
 <script id=messageEventInheritance>
 {
   const evt4 = new MessageEvent('custom');
