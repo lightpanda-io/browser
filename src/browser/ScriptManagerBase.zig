@@ -195,10 +195,13 @@ fn releaseArena(self: *ScriptManagerBase, arena: Allocator) void {
 }
 
 pub fn scriptList(self: *ScriptManagerBase, script: *const Script) *std.DoublyLinkedList {
-    return switch (script.mode) {
-        .normal => unreachable, // not added to a list, executed immediately
-        .@"defer" => &self.defer_scripts,
-        .async, .import_async, .import => &self.async_scripts,
+    return switch (script.extra) {
+        .import, .import_async => &self.async_scripts,
+        .frame => |fe| switch (fe.mode) {
+            .normal => unreachable, // not added to a list, executed immediately
+            .@"defer" => &self.defer_scripts,
+            .async => &self.async_scripts,
+        },
     };
 }
 
@@ -226,15 +229,13 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
 
     const script = try arena.create(Script);
     script.* = .{
-        .kind = .module,
         .arena = arena,
         .url = url,
         .node = .{},
         .manager = self,
         .complete = false,
-        .script_element = null,
         .source = .{ .remote = .{} },
-        .mode = .import,
+        .extra = .import,
     };
 
     gop.value_ptr.* = ImportedModule{};
@@ -329,15 +330,13 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
 
     const script = try arena.create(Script);
     script.* = .{
-        .kind = .module,
         .arena = arena,
         .url = url,
         .node = .{},
         .manager = self,
         .complete = false,
-        .script_element = null,
         .source = .{ .remote = .{} },
-        .mode = .{ .import_async = .{
+        .extra = .{ .import_async = .{
             .callback = cb,
             .data = cb_data,
         } },
@@ -410,11 +409,12 @@ pub fn evaluate(self: *ScriptManagerBase) void {
 
     while (self.ready_scripts.popFirst()) |n| {
         var script: *Script = @fieldParentPtr("node", n);
-        switch (script.mode) {
-            .async => {
+        switch (script.extra) {
+            .frame => {
+                // Only .async mode reaches ready_scripts (defer stays in
+                // defer_scripts, normal is sync and never queued).
                 defer script.deinit();
-                // Workers never create .async mode scripts.
-                script.eval(self.owner.frame);
+                script.eval();
             },
             .import_async => |ia| {
                 if (script.status < 200 or script.status > 299) {
@@ -428,7 +428,7 @@ pub fn evaluate(self: *ScriptManagerBase) void {
                     });
                 }
             },
-            else => unreachable, // no other script is put in this list
+            .import => unreachable, // .import doesn't go through ready_scripts
         }
     }
 
@@ -450,8 +450,8 @@ pub fn evaluate(self: *ScriptManagerBase) void {
             _ = self.defer_scripts.popFirst();
             script.deinit();
         }
-        // Only Frames populate defer_scripts.
-        script.eval(self.owner.frame);
+        // Only frame scripts populate defer_scripts.
+        script.eval();
     }
 
     // Frame wrapper uses this to fire documentIsLoaded and
@@ -460,15 +460,13 @@ pub fn evaluate(self: *ScriptManagerBase) void {
 }
 
 pub const Script = struct {
-    kind: Kind,
     complete: bool,
     status: u16 = 0,
     source: Source,
     url: []const u8,
     arena: Allocator,
-    mode: ExecutionMode,
+    extra: Extra,
     node: std.DoublyLinkedList.Node,
-    script_element: ?*Element.Html.Script,
     manager: *ScriptManagerBase,
 
     // for debugging a rare production issue
@@ -483,12 +481,6 @@ pub const Script = struct {
     debug_transfer_auth_challenge: bool = false,
     debug_transfer_easy_id: usize = 0,
 
-    pub const Kind = enum {
-        module,
-        javascript,
-        importmap,
-    };
-
     pub const Source = union(enum) {
         @"inline": []const u8,
         remote: std.ArrayList(u8),
@@ -501,12 +493,42 @@ pub const Script = struct {
         }
     };
 
-    pub const ExecutionMode = union(enum) {
-        normal,
-        @"defer",
-        async,
+    // The mode-specific extension. Only `.frame` carries frame-only state
+    // (script_element, kind, *Frame); workers and dynamic JS imports use
+    // `.import` / `.import_async` and never reach the .frame arm.
+    pub const Extra = union(enum) {
+        // Static module import — V8 resolution via imported_modules.
         import,
+        // Dynamic JS import() — resolved via ready_scripts callback.
         import_async: ImportAsync,
+        // <script> tag in a frame.
+        frame: FrameExtra,
+
+        pub const FrameExtra = struct {
+            kind: Kind,
+            mode: Mode,
+            frame: *Frame,
+            script_element: *Element.Html.Script,
+
+            pub const Kind = enum {
+                module,
+                javascript,
+                importmap,
+            };
+
+            pub const Mode = enum {
+                // sync <script src="..."> — blocks parsing, evaluated
+                // immediately at the end of addFromElement via syncRequest.
+                normal,
+                // <script defer> / <script type=module> — queued in
+                // defer_scripts, drained in document order.
+                @"defer",
+                // <script async> / dynamically-inserted scripts — queued in
+                // async_scripts; once HTTP completes, doneCallback moves to
+                // ready_scripts and evaluate drains them.
+                async,
+            };
+        };
     };
 
     pub fn deinit(self: *Script) void {
@@ -544,7 +566,7 @@ pub const Script = struct {
                 // fails. Is the buffer just corrupt or is headerCallback really
                 // being called twice?
                 lp.assert(self.header_callback_called == false, "ScriptManagerBase.Header recall", .{
-                    .m = @tagName(std.meta.activeTag(self.mode)),
+                    .m = @tagName(std.meta.activeTag(self.extra)),
                     .a1 = self.debug_transfer_id,
                     .a2 = self.debug_transfer_tries,
                     .a3 = self.debug_transfer_aborted,
@@ -601,14 +623,25 @@ pub const Script = struct {
         }
 
         const manager = self.manager;
-        if (self.mode == .async or self.mode == .import_async) {
-            manager.async_scripts.remove(&self.node);
-            manager.ready_scripts.append(&self.node);
-        } else if (self.mode == .import) {
-            manager.async_scripts.remove(&self.node);
-            const entry = manager.imported_modules.getPtr(self.url).?;
-            entry.state = .{ .done = self };
-            entry.buffer = self.source.remote;
+        switch (self.extra) {
+            .frame => |fe| switch (fe.mode) {
+                .async => {
+                    manager.async_scripts.remove(&self.node);
+                    manager.ready_scripts.append(&self.node);
+                },
+                .@"defer" => {}, // stays in defer_scripts; drained in order
+                .normal => unreachable, // syncRequest path doesn't go through callbacks
+            },
+            .import_async => {
+                manager.async_scripts.remove(&self.node);
+                manager.ready_scripts.append(&self.node);
+            },
+            .import => {
+                manager.async_scripts.remove(&self.node);
+                const entry = manager.imported_modules.getPtr(self.url).?;
+                entry.state = .{ .done = self };
+                entry.buffer = self.source.remote;
+            },
         }
         manager.evaluate();
     }
@@ -618,12 +651,11 @@ pub const Script = struct {
         log.warn(.http, "script fetch error", .{
             .err = err,
             .req = self.url,
-            .mode = std.meta.activeTag(self.mode),
-            .kind = self.kind,
+            .extra = std.meta.activeTag(self.extra),
             .status = self.status,
         });
 
-        if (self.mode == .normal) {
+        if (self.extra == .frame and self.extra.frame.mode == .normal) {
             // This is blocked in a loop at the end of addFromElement, setting
             // it to complete with a status of 0 will signal the error.
             self.status = 0;
@@ -638,36 +670,31 @@ pub const Script = struct {
             return;
         }
 
-        switch (self.mode) {
+        switch (self.extra) {
             .import_async => |ia| ia.callback(ia.data, error.FailedToLoad),
             .import => {
                 const entry = manager.imported_modules.getPtr(self.url).?;
                 entry.state = .err;
             },
-            else => {},
+            .frame => {},
         }
         self.deinit();
         manager.evaluate();
     }
 
-    pub fn eval(self: *Script, frame: *Frame) void {
-        // never evaluated, source is passed back to v8, via callbacks.
-        if (comptime IS_DEBUG) {
-            std.debug.assert(self.mode != .import_async);
-
-            // never evaluated, source is passed back to v8 when asked for it.
-            std.debug.assert(self.mode != .import);
-        }
+    // Frame-only. Asserts extra == .frame; callers from the worker path never
+    // reach here (workers only produce .import / .import_async).
+    pub fn eval(self: *Script) void {
+        const fe = self.extra.frame;
+        const frame = fe.frame;
 
         if (frame.isGoingAway()) {
             // don't evaluate scripts for a dying frame.
             return;
         }
 
-        const script_element = self.script_element.?;
-
         const previous_script = frame.document._current_script;
-        frame.document._current_script = script_element;
+        frame.document._current_script = fe.script_element;
         defer frame.document._current_script = previous_script;
 
         // Clear the document.write insertion point for this script
@@ -682,7 +709,7 @@ pub const Script = struct {
 
         log.info(.browser, "executing script", .{
             .src = url,
-            .kind = self.kind,
+            .kind = fe.kind,
             .cacheable = cacheable,
         });
 
@@ -694,18 +721,18 @@ pub const Script = struct {
 
         // Handle importmap special case here: the content is a JSON containing
         // imports.
-        if (self.kind == .importmap) {
+        if (fe.kind == .importmap) {
             frame._script_manager.parseImportmap(self) catch |err| {
                 log.err(.browser, "parse importmap script", .{
                     .err = err,
                     .src = url,
-                    .kind = self.kind,
+                    .kind = fe.kind,
                     .cacheable = cacheable,
                 });
-                self.executeCallback(comptime .wrap("error"), frame);
+                self.executeCallback(comptime .wrap("error"));
                 return;
             };
-            self.executeCallback(comptime .wrap("load"), frame);
+            self.executeCallback(comptime .wrap("load"));
             return;
         }
 
@@ -717,7 +744,7 @@ pub const Script = struct {
 
         const success = blk: {
             const content = self.source.content();
-            switch (self.kind) {
+            switch (fe.kind) {
                 .javascript => _ = local.eval(content, url) catch break :blk false,
                 .module => {
                     // We don't care about waiting for the evaluation here.
@@ -740,7 +767,7 @@ pub const Script = struct {
         }
 
         if (success) {
-            self.executeCallback(comptime .wrap("load"), frame);
+            self.executeCallback(comptime .wrap("load"));
             return;
         }
 
@@ -751,10 +778,12 @@ pub const Script = struct {
             .cacheable = cacheable,
         });
 
-        self.executeCallback(comptime .wrap("error"), frame);
+        self.executeCallback(comptime .wrap("error"));
     }
 
-    fn executeCallback(self: *const Script, typ: String, frame: *Frame) void {
+    fn executeCallback(self: *const Script, typ: String) void {
+        const fe = self.extra.frame;
+        const frame = fe.frame;
         const Event = @import("webapi/Event.zig");
         const event = Event.initTrusted(typ, .{}, frame._page) catch |err| {
             log.warn(.js, "script internal callback", .{
@@ -764,7 +793,7 @@ pub const Script = struct {
             });
             return;
         };
-        frame._event_manager.dispatchOpts(self.script_element.?.asNode().asEventTarget(), event, .{ .apply_ignore = true }) catch |err| {
+        frame._event_manager.dispatchOpts(fe.script_element.asNode().asEventTarget(), event, .{ .apply_ignore = true }) catch |err| {
             log.warn(.js, "script callback", .{
                 .url = self.url,
                 .type = typ,
