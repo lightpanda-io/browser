@@ -2950,12 +2950,24 @@ pub fn insertAllChildrenBefore(self: *Frame, fragment: *Node, parent: *Node, ref
         // Check if child was connected BEFORE removing it from fragment
         const child_was_connected = child.isConnected();
         self.removeNode(fragment, child, .{ .will_be_reconnected = dest_connected });
-        try self.insertNodeRelative(
-            parent,
-            child,
-            .{ .before = ref_node },
-            .{ .child_already_connected = child_was_connected },
-        );
+        // A callback fired by a previous iteration's insert (e.g. a custom
+        // element's connectedCallback) may have detached ref_node from
+        // parent. In that case, fall back to append so the remaining
+        // children still land in `parent` in source order.
+        if (ref_node._parent == parent) {
+            try self.insertNodeRelative(
+                parent,
+                child,
+                .{ .before = ref_node },
+                .{ .child_already_connected = child_was_connected },
+            );
+        } else {
+            try self.appendNode(
+                parent,
+                child,
+                .{ .child_already_connected = child_was_connected },
+            );
+        }
     }
 }
 

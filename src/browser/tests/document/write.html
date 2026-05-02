@@ -120,6 +120,28 @@
   }
 </script>
 
+<!-- Regression: a script written by document.write can detach the
+     currently-executing script during fragment parsing (here by
+     replacing the parent's children via innerHTML). document.write
+     must not crash when its `_current_script` ends up parentless. -->
+<div id=dw_detach_container>
+  <script id=write_when_detached_during_write>
+    document.write('<script>document.getElementById("dw_detach_container").innerHTML = "";<\/script>');
+    // All we care is that the above didn't crash.
+    testing.expectEqual(true, true);
+  </script>
+</div>
+
+<script id=verify_dw_detach>
+  {
+    // The previous script *not crashing* is the real assertion. We also
+    // sanity-check that the inner script's innerHTML="" took effect by
+    // verifying the only element children are gone.
+    const container = document.getElementById('dw_detach_container');
+    testing.expectEqual(0, container.children.length);
+  }
+</script>
+
 <!-- Phase 3 Tests: document.open/close would go here -->
 <!-- Note: Testing document.open/close requires async/setTimeout which doesn't -->
 <!-- work well with the test isolation. The implementation is tested manually. -->
