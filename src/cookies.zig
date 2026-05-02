@@ -43,7 +43,7 @@ fn _loadFromFile(session: *Session, path: []const u8) !void {
         return;
     };
 
-    const json_cookies = std.json.parseFromSliceLeaky([]const LoadJsonCookie, arena, content, .{
+    const json_cookies = std.json.parseFromSliceLeaky([]const JsonCookie, arena, content, .{
         .ignore_unknown_fields = true,
     }) catch |err| {
         log.err(.app, "Cookie.parseFile", .{ .path = path, .err = err });
@@ -111,7 +111,7 @@ fn _saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
         }
 
         try w.writeAll("\n  ");
-        try std.json.Stringify.value(SaveJsonCookie{
+        try std.json.Stringify.value(JsonCookie{
             .name = c.name,
             .value = c.value,
             .domain = c.domain,
@@ -119,7 +119,7 @@ fn _saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
             .expires = c.expires,
             .secure = c.secure,
             .httpOnly = c.http_only,
-            .sameSite = c.same_site,
+            .sameSite = @tagName(c.same_site),
         }, .{}, w);
     }
 
@@ -132,7 +132,7 @@ fn _saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
     log.info(.app, "Cookie.saveToFile", .{ .path = path, .count = jar.cookies.items.len });
 }
 
-const LoadJsonCookie = struct {
+const JsonCookie = struct {
     name: []const u8,
     value: []const u8,
     domain: []const u8,
@@ -141,17 +141,6 @@ const LoadJsonCookie = struct {
     secure: ?bool = null,
     httpOnly: ?bool = null,
     sameSite: ?[]const u8 = null,
-};
-
-const SaveJsonCookie = struct {
-    name: []const u8,
-    value: []const u8,
-    domain: []const u8,
-    path: []const u8,
-    expires: ?f64 = null,
-    secure: bool,
-    httpOnly: bool,
-    sameSite: Cookie.SameSite = .none,
 };
 
 fn parseJsonSameSite(value: ?[]const u8) Cookie.SameSite {
@@ -167,7 +156,7 @@ test "cookies: load JSON accepts CDP SameSite casing" {
     defer arena.deinit();
 
     const parsed = try std.json.parseFromSliceLeaky(
-        []const LoadJsonCookie,
+        []const JsonCookie,
         arena.allocator(),
         "[{\"name\":\"sid\",\"value\":\"1\",\"domain\":\"example.com\",\"sameSite\":\"Lax\"}]",
         .{ .ignore_unknown_fields = true },
