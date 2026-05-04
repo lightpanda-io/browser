@@ -23,6 +23,7 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 
 const Event = @import("../Event.zig");
+const MessagePort = @import("../MessagePort.zig");
 const Window = @import("../Window.zig");
 
 const String = lp.String;
@@ -116,6 +117,10 @@ pub fn getSource(self: *const MessageEvent) ?*Window {
     return self._source;
 }
 
+pub fn getPorts(_: *const MessageEvent) []*MessagePort {
+    return &.{};
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(MessageEvent);
 
@@ -129,6 +134,7 @@ pub const JsApi = struct {
     pub const data = bridge.accessor(MessageEvent.getData, null, .{});
     pub const origin = bridge.accessor(MessageEvent.getOrigin, null, .{});
     pub const source = bridge.accessor(MessageEvent.getSource, null, .{});
+    pub const ports = bridge.accessor(MessageEvent.getPorts, null, .{});
 };
 
 const testing = @import("../../../testing.zig");

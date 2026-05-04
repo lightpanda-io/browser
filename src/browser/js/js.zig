@@ -234,6 +234,7 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
         .@"struct" => {
             switch (@TypeOf(value)) {
                 string.String => return isolate.initStringHandle(value.str()),
+                String.OneByte => return @ptrCast(isolate.initOneByteStringHandle(value.bytes)),
                 ArrayBuffer => {
                     const values = value.values;
                     const len = values.len;

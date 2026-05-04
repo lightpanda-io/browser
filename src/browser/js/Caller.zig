@@ -846,7 +846,23 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
             @field(args, tupleFieldName(field_index)) = null;
         } else {
             const js_val = info.getArg(@intCast(i), local);
-            @field(args, tupleFieldName(field_index)) = local.jsValueToZig(param.type.?, js_val) catch {
+            // Only fold errors we don't recognize into InvalidArgument; let
+            // domain-meaningful ones (e.g. InvalidCharacterError from a
+            // String.OneByte param) propagate so handleError can map them
+            // to the right DOMException. Compared by name because the per-
+            // type instantiation of jsValueToZig may not include such errors
+            // in its inferred error set.
+            @field(args, tupleFieldName(field_index)) = local.jsValueToZig(param.type.?, js_val) catch |err| {
+                const DOMException = @import("../webapi/DOMException.zig");
+                if (DOMException.fromError(err) != null) {
+                    // I don't love this. But we have [a few] cases when trying to
+                    // map a JS Value that we have a specific DOMException to throw.
+                    // Ideally we should only do this if dom_exception = true in the
+                    // bridge definition. But we don't have access to that here.
+                    // Instead, we just rely on the fact that local.jsValueToZig
+                    // only throws a DOMException-known error when it should.
+                    return err;
+                }
                 return error.InvalidArgument;
             };
         }
