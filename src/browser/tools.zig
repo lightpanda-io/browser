@@ -303,12 +303,12 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "getEnv",
-        .description = "Read the value of an environment variable. Useful for retrieving credentials or configuration without hardcoding them.",
+        .description = "Read an environment variable from the lightpanda LP_* namespace. Other names are reported as not set. Use $LP_* placeholders in fill values to inject secrets into the page without exposing them to the model.",
         .input_schema = minify(
             \\{
             \\  "type": "object",
             \\  "properties": {
-            \\    "name": { "type": "string", "description": "The environment variable name to read." }
+            \\    "name": { "type": "string", "description": "Environment variable name; must start with LP_." }
             \\  },
             \\  "required": ["name"]
             \\}
@@ -854,10 +854,22 @@ fn execFindElement(session: *lp.Session, arena: std.mem.Allocator, registry: *CD
 fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct { name: []const u8 };
     const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+
+    // Only the LP_ namespace is readable through this tool. Everything else
+    // (provider API keys, system env, third-party secrets) reports "not set"
+    // so the LLM can't probe for it. Same pattern as Kakoune's `kak_*`.
+    if (!isLpNamespace(args.name)) {
+        return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{args.name}) catch ToolError.InternalError;
+    }
+
     const name_z = arena.dupeZ(u8, args.name) catch return ToolError.InternalError;
     const value = std.posix.getenv(name_z) orelse
         return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{args.name}) catch ToolError.InternalError;
     return value;
+}
+
+fn isLpNamespace(name: []const u8) bool {
+    return name.len >= 3 and std.ascii.eqlIgnoreCase(name[0..3], "LP_");
 }
 
 fn execConsoleLogs(
@@ -1005,4 +1017,61 @@ test "substituteEnvVars bare dollar" {
 
     const r = substituteEnvVars(arena.allocator(), "price is $ 5");
     try std.testing.expectEqualStrings("price is $ 5", r);
+}
+
+test "isLpNamespace" {
+    try std.testing.expect(isLpNamespace("LP_FOO"));
+    try std.testing.expect(isLpNamespace("LP_USERNAME"));
+    try std.testing.expect(isLpNamespace("lp_anything"));
+
+    try std.testing.expect(!isLpNamespace("HOME"));
+    try std.testing.expect(!isLpNamespace("PATH"));
+    try std.testing.expect(!isLpNamespace("ANTHROPIC_API_KEY"));
+    try std.testing.expect(!isLpNamespace(""));
+    try std.testing.expect(!isLpNamespace("LP")); // too short, no underscore
+    // "LP_" mid-name must not pass.
+    try std.testing.expect(!isLpNamespace("HELP_TEXT"));
+}
+
+extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
+extern fn unsetenv(name: [*:0]u8) c_int;
+
+test "execGetEnv reads LP_* values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const var_name = "LP_GETENV_TEST_OK";
+    const var_value = "hello-world";
+    _ = setenv(@constCast(var_name), @constCast(var_value), 1);
+    defer _ = unsetenv(@constCast(var_name));
+
+    var obj: std.json.ObjectMap = .init(aa);
+    try obj.put("name", .{ .string = var_name });
+    const arguments: std.json.Value = .{ .object = obj };
+
+    const r = try execGetEnv(aa, arguments);
+    try std.testing.expectEqualStrings(var_value, r);
+}
+
+test "execGetEnv hides non-LP_ values even when set" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const var_name = "LIGHTPANDA_GETENV_TEST_OUTSIDE";
+    const var_value = "should-not-leak";
+    _ = setenv(@constCast(var_name), @constCast(var_value), 1);
+    defer _ = unsetenv(@constCast(var_name));
+
+    var obj: std.json.ObjectMap = .init(aa);
+    try obj.put("name", .{ .string = var_name });
+    const arguments: std.json.Value = .{ .object = obj };
+
+    const r = try execGetEnv(aa, arguments);
+    try std.testing.expect(std.mem.indexOf(u8, r, var_value) == null);
+    try std.testing.expectEqualStrings(
+        "Environment variable '" ++ var_name ++ "' is not set",
+        r,
+    );
 }

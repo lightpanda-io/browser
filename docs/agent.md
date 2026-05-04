@@ -221,6 +221,10 @@ for the LLM.
   surfaced by a page are not followed unless they match the user's task.
 - `$LP_*` environment variable references in `TYPE` / `fill` values are
   resolved at execution time, so credentials never enter the LLM context.
+- The `getEnv` tool only reads variables whose name starts with `LP_`.
+  Everything else (provider API keys, system env, third-party secrets)
+  reports "not set" so the model can't probe for it. The user controls
+  what lives under `LP_*`.
 - `--obey-robots`, `--http-proxy`, `--user-agent`, and the rest of the
   browser-level CLI flags apply to `agent` the same way they apply to
   `serve`, `fetch`, and `mcp`.
