@@ -233,7 +233,7 @@ pub fn getValidationMessage(self: *const Input, frame: *Frame) []const u8 {
         .url => "Please enter a URL.",
         else => "Please enter a valid value.",
     };
-    if (self.suffersPatternMismatch()) return "Please match the requested format.";
+    if (self.suffersPatternMismatch(frame)) return "Please match the requested format.";
     if (self.suffersTooLong()) return "Please shorten this text.";
     if (self.suffersTooShort()) return "Please lengthen this text.";
     if (self.suffersRangeUnderflow()) return "Value is too small.";
@@ -295,12 +295,35 @@ pub fn suffersTypeMismatch(self: *const Input) bool {
     };
 }
 
-pub fn suffersPatternMismatch(self: *const Input) bool {
-    _ = self;
-    // Pattern matching requires evaluating a JS RegExp anchored with ^(?: ... )$.
-    // Not yet implemented from Zig; returning false leaves well-formed inputs valid.
-    // TODO: route through the V8 RegExp constructor on the owner Frame.
-    return false;
+pub fn suffersPatternMismatch(self: *const Input, frame: *Frame) bool {
+    if (!self.getWillValidate()) return false;
+    // Per HTML §4.10.5.3.5, pattern only applies to text-like input types.
+    switch (self._input_type) {
+        .text, .search, .url, .tel, .email, .password => {},
+        else => return false,
+    }
+    const value = self._value orelse return false;
+    if (value.len == 0) return false;
+    const pattern = self.asConstElement().getAttributeSafe(comptime .wrap("pattern")) orelse return false;
+    if (pattern.len == 0) return false;
+
+    // Per HTML spec, anchor the pattern with ^(?:...)$ and compile under the
+    // "v" (Unicode sets) flag. An invalid pattern is ignored — V8 throws and
+    // we treat that as "no mismatch". TryCatch absorbs the exception so it
+    // doesn't linger in the isolate.
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const wrapped = std.fmt.allocPrint(frame.call_arena, "^(?:{s})$", .{pattern}) catch return false;
+    const re = js.RegExp.init(&ls.local, wrapped, js.RegExp.Flag.unicode_sets) catch return false;
+    const matched = re.match(value) catch return false;
+
+    return !matched;
 }
 
 pub fn suffersTooLong(self: *const Input) bool {
@@ -595,6 +618,14 @@ pub fn getPlaceholder(self: *const Input) []const u8 {
 
 pub fn setPlaceholder(self: *Input, placeholder: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("placeholder"), .wrap(placeholder), frame);
+}
+
+pub fn getPattern(self: *const Input) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("pattern")) orelse "";
+}
+
+pub fn setPattern(self: *Input, pattern: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("pattern"), .wrap(pattern), frame);
 }
 
 pub fn getMin(self: *const Input) []const u8 {
@@ -1237,6 +1268,7 @@ pub const JsApi = struct {
     pub const labels = bridge.accessor(Input.getLabels, null, .{});
     pub const indeterminate = bridge.accessor(Input.getIndeterminate, Input.setIndeterminate, .{});
     pub const placeholder = bridge.accessor(Input.getPlaceholder, Input.setPlaceholder, .{});
+    pub const pattern = bridge.accessor(Input.getPattern, Input.setPattern, .{});
     pub const min = bridge.accessor(Input.getMin, Input.setMin, .{});
     pub const max = bridge.accessor(Input.getMax, Input.setMax, .{});
     pub const step = bridge.accessor(Input.getStep, Input.setStep, .{});

@@ -46,8 +46,8 @@ pub fn getTypeMismatch(self: *const ValidityState) bool {
     return false;
 }
 
-pub fn getPatternMismatch(self: *const ValidityState) bool {
-    if (self._owner.is(Input)) |input| return input.suffersPatternMismatch();
+pub fn getPatternMismatch(self: *const ValidityState, frame: *Frame) bool {
+    if (self._owner.is(Input)) |input| return input.suffersPatternMismatch(frame);
     return false;
 }
 
@@ -100,7 +100,7 @@ pub fn getCustomError(self: *const ValidityState) bool {
 pub fn getValid(self: *const ValidityState, frame: *Frame) bool {
     return !self.getValueMissing(frame) and
         !self.getTypeMismatch() and
-        !self.getPatternMismatch() and
+        !self.getPatternMismatch(frame) and
         !self.getTooLong() and
         !self.getTooShort() and
         !self.getRangeUnderflow() and
