@@ -256,7 +256,7 @@ _parent_notified: bool = false,
 
 _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
-_console_messages: std.ArrayListUnmanaged(ConsoleMessage) = .{},
+_console_messages: std.ArrayList(ConsoleMessage) = .{},
 _navigated_options: ?NavigatedOpts = null,
 
 pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {

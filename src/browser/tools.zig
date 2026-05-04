@@ -460,7 +460,7 @@ fn renderFrameMarkdown(arena: std.mem.Allocator, frame: *lp.Frame) ToolError![]c
 }
 
 fn percentEncodeQuery(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     for (input) |c| {
         switch (c) {
             'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => try out.append(arena, c),
@@ -844,7 +844,7 @@ fn execFindElement(session: *lp.Session, arena: std.mem.Allocator, registry: *CD
     const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch
         return ToolError.InternalError;
 
-    var matches: std.ArrayListUnmanaged(lp.interactive.InteractiveElement) = .empty;
+    var matches: std.ArrayList(lp.interactive.InteractiveElement) = .empty;
     for (elements) |el| {
         if (args.role) |role| {
             const el_role = el.role orelse continue;
@@ -969,7 +969,7 @@ fn parseArgsOrErr(comptime T: type, arena: std.mem.Allocator, arguments: ?std.js
 pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8 {
     if (std.mem.indexOfScalar(u8, input, '$') == null) return input;
 
-    var result: std.ArrayListUnmanaged(u8) = .empty;
+    var result: std.ArrayList(u8) = .empty;
     var i: usize = 0;
     while (i < input.len) {
         if (input[i] == '$') {
