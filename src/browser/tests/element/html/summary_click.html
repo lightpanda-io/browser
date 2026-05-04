@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<!-- HTMLSummaryElement activation behavior (HTML §4.11.1.2 "The summary element"):
+     when summary is the first summary child of its parent <details>, clicking
+     it must toggle the parent details's `open` attribute. -->
+
+<details id="d_closed">
+  <summary id="s_closed">click me</summary>
+  <p>hidden by default</p>
+</details>
+
+<details id="d_open" open>
+  <summary id="s_open">starts open</summary>
+  <p>visible by default</p>
+</details>
+
+<details id="d_two">
+  <summary id="s_first">first</summary>
+  <summary id="s_second">second</summary>
+  <p>content</p>
+</details>
+
+<section id="orphan_parent">
+  <summary id="s_orphan">orphan summary</summary>
+</section>
+
+<script id="closed_details_opens_on_summary_click">
+  {
+    const d = $('#d_closed');
+    testing.expectEqual(false, d.open);
+    $('#s_closed').click();
+    testing.expectEqual(true, d.open);
+  }
+</script>
+
+<script id="open_details_closes_on_summary_click">
+  {
+    const d = $('#d_open');
+    testing.expectEqual(true, d.open);
+    $('#s_open').click();
+    testing.expectEqual(false, d.open);
+  }
+</script>
+
+<script id="only_first_summary_toggles">
+  {
+    const d = $('#d_two');
+    testing.expectEqual(false, d.open);
+
+    $('#s_second').click();
+    testing.expectEqual(false, d.open, 'non-first summary must not toggle');
+
+    $('#s_first').click();
+    testing.expectEqual(true, d.open);
+  }
+</script>
+
+<script id="summary_outside_details_no_op">
+  {
+    // No exception, no side-effect.
+    $('#s_orphan').click();
+    testing.expectEqual(true, true);
+  }
+</script>

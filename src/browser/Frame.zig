@@ -3736,6 +3736,24 @@ pub fn handleClick(self: *Frame, target: *Node) !void {
             const control_html = control.is(Element.Html) orelse return;
             try control_html.click(self);
         },
+        .generic => |generic| {
+            switch (generic._tag) {
+                .summary => {
+                    const parent_el = target.parentElement() orelse return;
+                    const details = parent_el.is(Element.Html.Details) orelse return;
+                    var maybe_prev = element.previousElementSibling();
+                    while (maybe_prev) |prev| {
+                        if (prev.getTag() == .summary) {
+                            // we found a summary element before the clicked one
+                            return;
+                        }
+                        maybe_prev = prev.previousElementSibling();
+                    }
+                    try details.setOpen(!details.getOpen(), self);
+                },
+                else => {},
+            }
+        },
         else => {},
     }
 }
