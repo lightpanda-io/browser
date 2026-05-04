@@ -356,10 +356,6 @@ pub fn deinit(self: *Frame) void {
         frame.deinit();
     }
 
-    for (self.workers.items) |worker| {
-        worker.deinit();
-    }
-
     if (comptime IS_DEBUG) {
         log.debug(.frame, "frame.deinit", .{ .url = self.url, .type = self._type });
 
@@ -410,6 +406,12 @@ pub fn deinit(self: *Frame) void {
 
     const browser = page.session.browser;
     browser.env.destroyContext(self.js);
+
+    // Must be after context is destroyed. A finalizer can reach into the *Worker
+    // (e.g. Worker.ReceiveMessageCallback) so the worker must still be valid.
+    for (self.workers.items) |worker| {
+        worker.deinit();
+    }
 
     self._script_manager.base.shutdown = true;
 
