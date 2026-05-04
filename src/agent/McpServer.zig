@@ -20,7 +20,7 @@ const task_tool_schema = browser_tools.minify(
     \\  "type": "object",
     \\  "properties": {
     \\    "task": { "type": "string", "description": "Natural-language instruction for the agent to execute against a headless browser." },
-    \\    "attachments": { "type": "array", "items": { "type": "string" }, "description": "Optional local file paths to attach to the request (image/PDF/text). Provider must accept attachments." },
+    \\    "attachments": { "type": "array", "items": { "type": "string" }, "description": "Optional local file paths to attach to the request (image/PDF/text). Paths must be relative to lightpanda's working directory and must not contain '..' segments. Provider must accept attachments." },
     \\    "fresh": { "type": "boolean", "description": "If true, start the task from a fresh browser session with no cookies and no current page." }
     \\  },
     \\  "required": ["task"]
@@ -95,6 +95,21 @@ pub fn handleToolCall(self: *Self, arena: std.mem.Allocator, req: protocol.Reque
     const args = std.json.parseFromValueLeaky(TaskArgs, arena, args_value, .{ .ignore_unknown_fields = true }) catch
         return self.transport.sendError(id, .InvalidParams, "Invalid task arguments");
 
+    // The MCP client is untrusted: refuse paths that could escape the
+    // working directory before they reach `std.fs.cwd().openFile`.
+    if (args.attachments) |paths| {
+        for (paths) |p| {
+            if (!isAttachmentPathSafe(p)) {
+                log.warn(.mcp, "rejected unsafe attachment path", .{ .path = p });
+                return self.transport.sendError(
+                    id,
+                    .InvalidParams,
+                    "attachment paths must be relative and must not contain '..'",
+                );
+            }
+        }
+    }
+
     if (args.fresh orelse false) {
         self.agent.tool_executor.resetSession() catch |err| {
             log.err(.mcp, "fresh session reset failed", .{ .err = err });
@@ -116,4 +131,37 @@ pub fn handleToolCall(self: *Self, arena: std.mem.Allocator, req: protocol.Reque
 fn sendErrorResult(self: *Self, id: std.json.Value, msg: []const u8) !void {
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
     try self.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = true });
+}
+
+/// Reject paths that an untrusted MCP client could use to escape the
+/// working directory: absolute paths and any path with a `..` segment.
+/// Operator-controlled symlinks already inside CWD are out of scope —
+/// the threat we close here is "client supplies an arbitrary string".
+fn isAttachmentPathSafe(path: []const u8) bool {
+    if (path.len == 0) return false;
+    if (std.fs.path.isAbsolute(path)) return false;
+    var it = std.mem.tokenizeAny(u8, path, "/\\");
+    while (it.next()) |seg| {
+        if (std.mem.eql(u8, seg, "..")) return false;
+    }
+    return true;
+}
+
+test "isAttachmentPathSafe accepts relative paths without traversal" {
+    try std.testing.expect(isAttachmentPathSafe("foo.txt"));
+    try std.testing.expect(isAttachmentPathSafe("./foo.txt"));
+    try std.testing.expect(isAttachmentPathSafe("sub/foo.txt"));
+    try std.testing.expect(isAttachmentPathSafe("a/b/c/d.png"));
+    try std.testing.expect(isAttachmentPathSafe("dir/file.with..dots"));
+}
+
+test "isAttachmentPathSafe rejects absolute paths and traversal" {
+    try std.testing.expect(!isAttachmentPathSafe(""));
+    try std.testing.expect(!isAttachmentPathSafe("/etc/passwd"));
+    try std.testing.expect(!isAttachmentPathSafe("/foo"));
+    try std.testing.expect(!isAttachmentPathSafe("../etc/passwd"));
+    try std.testing.expect(!isAttachmentPathSafe("..\\windows\\system32"));
+    try std.testing.expect(!isAttachmentPathSafe("sub/../etc/passwd"));
+    try std.testing.expect(!isAttachmentPathSafe("sub/.."));
+    try std.testing.expect(!isAttachmentPathSafe(".."));
 }

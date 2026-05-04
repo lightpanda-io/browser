@@ -181,7 +181,7 @@ The `task` tool accepts:
 | Field         | Type             | Notes                                                                  |
 |---------------|------------------|------------------------------------------------------------------------|
 | `task`        | string, required | Natural-language instruction for the agent.                            |
-| `attachments` | string[]         | Optional local file paths (image / PDF / text) for providers that accept attachments. |
+| `attachments` | string[]         | Optional local file paths (image / PDF / text) for providers that accept attachments. Paths must be relative to lightpanda's working directory and must not contain `..` segments; absolute paths and traversal are rejected. |
 | `fresh`       | boolean          | If true, start the task from a fresh browser session (no cookies, no current page). |
 
 Each call resets the agent's LLM conversation, so tasks are independent
