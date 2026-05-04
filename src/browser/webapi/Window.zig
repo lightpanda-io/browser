@@ -568,6 +568,8 @@ pub fn close(self: *Window) void {
         }
     }
 
+    frame.js.scheduler.reset();
+
     // We can't tear the Frame down here — close() is invoked from JS still
     // running on top of this Frame's V8 context, often deep inside a script
     // eval whose parser is still holding the Frame. Destroying the context
