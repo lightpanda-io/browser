@@ -63,7 +63,7 @@ recorded scripts round-trip through the parser.
 | `GOTO`           | `GOTO <url>`                          | Navigate. URL is unquoted.                           |
 | `CLICK`          | `CLICK '<selector>'`                  | CSS selector.                                        |
 | `TYPE`           | `TYPE '<selector>' '<value>'`         | Fills an input. `$LP_*` env refs auto-resolve.       |
-| `WAIT`           | `WAIT '<selector>'`                   | Wait for selector.                                   |
+| `WAIT`           | `WAIT '<selector>'`                   | Wait for selector to be present in the DOM.          |
 | `SCROLL`         | `SCROLL [x] [y]`                      | Default `(0, 0)`.                                    |
 | `HOVER`          | `HOVER '<selector>'`                  |                                                      |
 | `SELECT`         | `SELECT '<selector>' '<value>'`       | `<select>` option by value.                          |
