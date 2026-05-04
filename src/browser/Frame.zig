@@ -256,7 +256,7 @@ _parent_notified: bool = false,
 
 _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
-_console_messages: std.ArrayList(ConsoleMessage) = .{},
+_console_messages: std.Io.Writer.Allocating,
 _navigated_options: ?NavigatedOpts = null,
 
 pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
@@ -292,6 +292,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         ._style_manager = undefined,
         ._script_manager = undefined,
         ._event_manager = EventManager.init(arena, self),
+        ._console_messages = .init(arena),
     };
     self._to_load = &self._to_load_1;
 
@@ -2786,24 +2787,33 @@ fn isXmlNameChar(c: u21) bool {
         (c >= 0x203F and c <= 0x2040);
 }
 
-const max_console_messages = 1000;
+const max_console_bytes = 64 * 1024;
 
-pub fn appendConsoleMessage(self: *Frame, level: ConsoleMessage.Level, values: []JS.Value) void {
-    if (self._console_messages.items.len >= max_console_messages) return;
-    var aw: std.Io.Writer.Allocating = .init(self.arena);
-    for (values, 0..) |value, i| {
-        if (i > 0) aw.writer.writeAll(" ") catch return;
-        value.format(&aw.writer) catch return;
-    }
-    const text = aw.written();
-    self._console_messages.append(self.arena, .{ .level = level, .text = text }) catch return;
+pub fn appendConsoleMessage(self: *Frame, level: ConsoleLevel, values: []JS.Value) void {
+    const aw = &self._console_messages;
+    const start = aw.written().len;
+    if (start >= max_console_bytes) return;
+    appendConsoleMessageInner(&aw.writer, level, values) catch {
+        aw.shrinkRetainingCapacity(start);
+    };
 }
 
-/// Returns buffered console messages and clears the buffer.
-pub fn drainConsoleMessages(self: *Frame) []const ConsoleMessage {
-    const items = self._console_messages.items;
+fn appendConsoleMessageInner(w: *std.Io.Writer, level: ConsoleLevel, values: []JS.Value) !void {
+    try w.print("[{s}] ", .{@tagName(level)});
+    for (values, 0..) |value, i| {
+        if (i > 0) try w.writeAll(" ");
+        try value.format(w);
+    }
+    try w.writeByte('\n');
+}
+
+/// Returns the buffered console output and clears the buffer. The returned
+/// slice is valid until the next `appendConsoleMessage` reuses the backing
+/// storage, so callers must consume or copy it before that happens.
+pub fn drainConsoleMessages(self: *Frame) []const u8 {
+    const text = self._console_messages.written();
     self._console_messages.clearRetainingCapacity();
-    return items;
+    return text;
 }
 
 pub fn dupeString(self: *Frame, value: []const u8) ![]const u8 {
@@ -3563,12 +3573,7 @@ pub const NavigateReason = enum {
     initialFrameNavigation,
 };
 
-pub const ConsoleMessage = struct {
-    level: Level,
-    text: []const u8,
-
-    pub const Level = enum { log, debug, info, warn, @"error" };
-};
+pub const ConsoleLevel = enum { log, debug, info, warn, @"error" };
 
 pub const NavigateOpts = struct {
     cdp_id: ?i64 = null,

@@ -880,15 +880,9 @@ fn execConsoleLogs(
     arena: std.mem.Allocator,
 ) ToolError![]const u8 {
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
-    const messages = page.drainConsoleMessages();
-    if (messages.len == 0) return "No console messages.";
-
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    const writer = &aw.writer;
-    for (messages) |msg| {
-        writer.print("[{s}] {s}\n", .{ @tagName(msg.level), msg.text }) catch return ToolError.InternalError;
-    }
-    return aw.written();
+    const text = page.drainConsoleMessages();
+    if (text.len == 0) return "No console messages.";
+    return arena.dupe(u8, text) catch ToolError.InternalError;
 }
 
 fn execGetUrl(session: *lp.Session) ToolError![]const u8 {

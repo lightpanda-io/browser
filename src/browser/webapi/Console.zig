@@ -152,7 +152,7 @@ fn timestamp() u64 {
 // Forwards frame-context console output to the Frame's message buffer (read by
 // the `consoleLogs` tool / CDP Runtime.consoleAPICalled). Worker contexts are
 // dropped — no buffer is attached there.
-fn appendMessage(exec: *js.Execution, level: Frame.ConsoleMessage.Level, values: []js.Value) void {
+fn appendMessage(exec: *js.Execution, level: Frame.ConsoleLevel, values: []js.Value) void {
     switch (exec.context.global) {
         .frame => |f| f.appendConsoleMessage(level, values),
         .worker => {},
