@@ -3737,24 +3737,22 @@ pub fn handleClick(self: *Frame, target: *Node) !void {
             try control_html.click(self);
         },
         .generic => |generic| {
-            // Per HTML §4.11.1.2 "The summary element", clicking a summary
-            // toggles its parent details's open state, but only when the
-            // summary is the first summary child of that details.
-            if (generic._tag != .summary) return;
-            const parent_el = element.asNode().parentElement() orelse return;
-            const parent_html = parent_el.is(Element.Html) orelse return;
-            const details = switch (parent_html._type) {
-                .details => |d| d,
-                else => return,
-            };
-            var maybe_child = parent_el.firstElementChild();
-            while (maybe_child) |child| : (maybe_child = child.nextElementSibling()) {
-                if (child.getTag() == .summary) {
-                    if (child != element) return;
-                    break;
-                }
+            switch (generic._tag) {
+                .summary => {
+                    const parent_el = target.parentElement() orelse return;
+                    const details = parent_el.is(Element.Html.Details) orelse return;
+                    var maybe_prev = element.previousElementSibling();
+                    while (maybe_prev) |prev| {
+                        if (prev.getTag() == .summary) {
+                            // we found a summary element before the clicked one
+                            return;
+                        }
+                        maybe_prev = prev.previousElementSibling();
+                    }
+                    try details.setOpen(!details.getOpen(), self);
+                },
+                else => {},
             }
-            try details.setOpen(!details.getOpen(), self);
         },
         else => {},
     }
