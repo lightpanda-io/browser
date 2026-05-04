@@ -44,6 +44,7 @@ const Element = @import("Element.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
 const Selection = @import("Selection.zig");
+const Timers = @import("Timers.zig");
 const Notification = @import("../../Notification.zig");
 
 const log = lp.log;
@@ -77,8 +78,7 @@ _on_rejection_handled: ?js.Function.Global = null,
 _on_unhandled_rejection: ?js.Function.Global = null,
 _current_event: ?*Event = null,
 _location: *Location,
-_timer_id: u30 = 0,
-_timers: std.AutoHashMapUnmanaged(u32, *ScheduleCallback) = .{},
+_timers: Timers = .{},
 _custom_elements: CustomElementRegistry = .{},
 _scroll_pos: struct {
     x: u32,
@@ -286,63 +286,39 @@ pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, exe
     return Fetch.init(input, options, exec);
 }
 
-const LegacyHandler = union(enum) {
-    function: js.Function.Temp,
-    string: js.String,
-};
-
-pub fn setTimeout(self: *Window, handler: LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, frame: *Frame) !u32 {
-    const cb = try resolveTimerHandler(handler, frame);
-    return self.scheduleCallback(cb, delay_ms orelse 0, .{
+pub fn setTimeout(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, exec: *js.Execution) !u32 {
+    const cb = try handler.resolve(exec);
+    return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
         .repeat = false,
         .params = params,
-        .low_priority = false,
         .name = "window.setTimeout",
-    }, frame);
+    });
 }
 
-pub fn setInterval(self: *Window, handler: LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, frame: *Frame) !u32 {
-    const cb = try resolveTimerHandler(handler, frame);
-    return self.scheduleCallback(cb, delay_ms orelse 0, .{
+pub fn setInterval(self: *Window, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []js.Value.Temp, exec: *js.Execution) !u32 {
+    const cb = try handler.resolve(exec);
+    return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
         .repeat = true,
         .params = params,
-        .low_priority = false,
         .name = "window.setInterval",
-    }, frame);
+    });
 }
 
-// https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#dom-settimeout
-// https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#timerhandler
-// TimerHandler = Function or DOMString. When a string is passed, it is
-// compiled into an anonymous function body, matching how legacy browsers
-// (and all current UAs) interpret `setTimeout("foo()", 100)`.
-fn resolveTimerHandler(handler: LegacyHandler, frame: *Frame) !js.Function.Temp {
-    switch (handler) {
-        .function => |fun| return fun,
-        .string => |str| {
-            const fun = try frame.js.local.?.compileFunction(str, &.{}, &.{});
-            return fun.temp();
-        },
-    }
-}
-
-pub fn setImmediate(self: *Window, cb: js.Function.Temp, params: []js.Value.Temp, frame: *Frame) !u32 {
-    return self.scheduleCallback(cb, 0, .{
+pub fn setImmediate(self: *Window, cb: js.Function.Temp, params: []js.Value.Temp, exec: *js.Execution) !u32 {
+    return self._timers.schedule(exec, cb, 0, .{
         .repeat = false,
         .params = params,
-        .low_priority = false,
         .name = "window.setImmediate",
-    }, frame);
+    });
 }
 
-pub fn requestAnimationFrame(self: *Window, cb: js.Function.Temp, frame: *Frame) !u32 {
-    return self.scheduleCallback(cb, 5, .{
+pub fn requestAnimationFrame(self: *Window, cb: js.Function.Temp, exec: *js.Execution) !u32 {
+    return self._timers.schedule(exec, cb, 5, .{
         .repeat = false,
         .params = &.{},
-        .low_priority = false,
         .mode = .animation_frame,
         .name = "window.requestAnimationFrame",
-    }, frame);
+    });
 }
 
 pub fn queueMicrotask(_: *Window, cb: js.Function, frame: *Frame) void {
@@ -350,42 +326,37 @@ pub fn queueMicrotask(_: *Window, cb: js.Function, frame: *Frame) void {
 }
 
 pub fn clearTimeout(self: *Window, id: u32) void {
-    var sc = self._timers.fetchRemove(id) orelse return;
-    sc.value.removed = true;
+    self._timers.clear(id);
 }
 
 pub fn clearInterval(self: *Window, id: u32) void {
-    var sc = self._timers.fetchRemove(id) orelse return;
-    sc.value.removed = true;
+    self._timers.clear(id);
 }
 
 pub fn clearImmediate(self: *Window, id: u32) void {
-    var sc = self._timers.fetchRemove(id) orelse return;
-    sc.value.removed = true;
+    self._timers.clear(id);
 }
 
 pub fn cancelAnimationFrame(self: *Window, id: u32) void {
-    var sc = self._timers.fetchRemove(id) orelse return;
-    sc.value.removed = true;
+    self._timers.clear(id);
 }
 
 const RequestIdleCallbackOpts = struct {
     timeout: ?u32 = null,
 };
-pub fn requestIdleCallback(self: *Window, cb: js.Function.Temp, opts_: ?RequestIdleCallbackOpts, frame: *Frame) !u32 {
+pub fn requestIdleCallback(self: *Window, cb: js.Function.Temp, opts_: ?RequestIdleCallbackOpts, exec: *js.Execution) !u32 {
     const opts = opts_ orelse RequestIdleCallbackOpts{};
-    return self.scheduleCallback(cb, opts.timeout orelse 50, .{
+    return self._timers.schedule(exec, cb, opts.timeout orelse 50, .{
         .mode = .idle,
         .repeat = false,
         .params = &.{},
         .low_priority = true,
         .name = "window.requestIdleCallback",
-    }, frame);
+    });
 }
 
 pub fn cancelIdleCallback(self: *Window, id: u32) void {
-    var sc = self._timers.fetchRemove(id) orelse return;
-    sc.value.removed = true;
+    self._timers.clear(id);
 }
 
 pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
@@ -798,140 +769,6 @@ pub const Access = union(enum) {
         }
 
         return .{ .cross_origin = &accessing._cross_origin_wrapper };
-    }
-};
-
-const ScheduleOpts = struct {
-    repeat: bool,
-    params: []js.Value.Temp,
-    name: []const u8,
-    low_priority: bool = false,
-    animation_frame: bool = false,
-    mode: ScheduleCallback.Mode = .normal,
-};
-fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: ScheduleOpts, frame: *Frame) !u32 {
-    if (self._timers.count() > 512) {
-        // these are active
-        return error.TooManyTimeout;
-    }
-
-    const arena = try frame.getArena(.tiny, "Window.schedule");
-    errdefer frame.releaseArena(arena);
-
-    const timer_id = self._timer_id +% 1;
-    self._timer_id = timer_id;
-
-    const params = opts.params;
-    var persisted_params: []js.Value.Temp = &.{};
-    if (params.len > 0) {
-        persisted_params = try arena.dupe(js.Value.Temp, params);
-    }
-
-    const gop = try self._timers.getOrPut(frame.arena, timer_id);
-    if (gop.found_existing) {
-        // 2^31 would have to wrap for this to happen.
-        return error.TooManyTimeout;
-    }
-    errdefer _ = self._timers.remove(timer_id);
-
-    const callback = try arena.create(ScheduleCallback);
-    callback.* = .{
-        .cb = cb,
-        .frame = frame,
-        .arena = arena,
-        .mode = opts.mode,
-        .name = opts.name,
-        .timer_id = timer_id,
-        .params = persisted_params,
-        .repeat_ms = if (opts.repeat) if (delay_ms == 0) 1 else delay_ms else null,
-    };
-    gop.value_ptr.* = callback;
-
-    try frame.js.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
-        .name = opts.name,
-        .low_priority = opts.low_priority,
-        .finalizer = ScheduleCallback.cancelled,
-    });
-
-    return timer_id;
-}
-
-const ScheduleCallback = struct {
-    // for debugging
-    name: []const u8,
-
-    // window._timers key
-    timer_id: u31,
-
-    // delay, in ms, to repeat. When null, will be removed after the first time
-    repeat_ms: ?u32,
-
-    cb: js.Function.Temp,
-
-    mode: Mode,
-    frame: *Frame,
-    arena: Allocator,
-    removed: bool = false,
-    params: []const js.Value.Temp,
-
-    const Mode = enum {
-        idle,
-        normal,
-        animation_frame,
-    };
-
-    fn cancelled(ctx: *anyopaque) void {
-        var self: *ScheduleCallback = @ptrCast(@alignCast(ctx));
-        self.deinit();
-    }
-
-    fn deinit(self: *ScheduleCallback) void {
-        self.cb.release();
-        for (self.params) |param| {
-            param.release();
-        }
-        self.frame.releaseArena(self.arena);
-    }
-
-    fn run(ctx: *anyopaque) !?u32 {
-        const self: *ScheduleCallback = @ptrCast(@alignCast(ctx));
-        const frame = self.frame;
-        const window = frame.window;
-
-        if (self.removed) {
-            self.deinit();
-            return null;
-        }
-
-        var ls: js.Local.Scope = undefined;
-        frame.js.localScope(&ls);
-        defer ls.deinit();
-
-        switch (self.mode) {
-            .idle => {
-                const IdleDeadline = @import("IdleDeadline.zig");
-                ls.toLocal(self.cb).call(void, .{IdleDeadline{}}) catch |err| {
-                    log.warn(.js, "window.idleCallback", .{ .name = self.name, .err = err });
-                };
-            },
-            .animation_frame => {
-                ls.toLocal(self.cb).call(void, .{window._performance.now()}) catch |err| {
-                    log.warn(.js, "window.RAF", .{ .name = self.name, .err = err });
-                };
-            },
-            .normal => {
-                ls.toLocal(self.cb).call(void, self.params) catch |err| {
-                    log.warn(.js, "window.timer", .{ .name = self.name, .err = err });
-                };
-            },
-        }
-        ls.local.runMicrotasks();
-        if (self.repeat_ms) |ms| {
-            return ms;
-        }
-        defer self.deinit();
-        _ = window._timers.remove(self.timer_id);
-        return null;
     }
 };
 

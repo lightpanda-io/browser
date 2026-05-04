@@ -276,6 +276,40 @@
   }
 </script>
 
+<script id="worker_timers" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./timers-worker.js');
+
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker timers error: ' + data.err);
+      const r = data.results;
+
+      testing.expectEqual(true, r.setTimeout_id_is_number);
+      testing.expectEqual(5, r.setTimeout_args);
+      testing.expectEqual(true, r.setTimeout_this_is_self);
+      testing.expectEqual(1, r.setTimeout_length);
+
+      testing.expectEqual(true, r.setInterval_ids_distinct);
+      testing.expectEqual(true, r.setInterval_fired_multiple);
+      testing.expectEqual(true, r.setInterval_clear_stops);
+      testing.expectEqual(true, r.setInterval_pre_clear_silent);
+
+      testing.expectEqual(true, r.clear_invalid_silent);
+
+      testing.expectEqual(true, r.setTimeout_string_id_is_number);
+      testing.expectEqual(42, r.setTimeout_string_ran);
+      testing.expectEqual(true, r.setInterval_string_ran);
+
+      testing.expectEqual(true, r.setTimeout_invalid_throws);
+    });
+  }
+</script>
+
 <script id="importScripts" type=module>
   {
     const state = await testing.async();
