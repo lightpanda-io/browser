@@ -121,10 +121,7 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
 // Tear down the Page and its root Frame. Equivalent to the old
 // Session.removePage + Session.resetFrameResources.
 pub fn deinit(self: *Page, abort_http: bool) void {
-    for (self.queued_close.items) |popup| {
-        popup.deinit(abort_http);
-    }
-    self.queued_close = .empty;
+    self.cleanupClosedPopups();
 
     for (self.popups.items) |popup| {
         popup.deinit(abort_http);
@@ -177,6 +174,13 @@ pub fn deinit(self: *Page, abort_http: bool) void {
     }
 
     session.arena_pool.release(self.frame_arena);
+}
+
+pub fn cleanupClosedPopups(self: *Page) void {
+    for (self.queued_close.items) |popup| {
+        popup.deinit(true);
+    }
+    self.queued_close = .empty;
 }
 
 pub fn getArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !Allocator {

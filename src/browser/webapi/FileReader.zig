@@ -59,6 +59,7 @@ const ReadyState = enum(u8) {
 
 const Result = union(enum) {
     string: []const u8,
+    binary_string: js.String.OneByte,
     arraybuffer: js.ArrayBuffer,
 };
 
@@ -209,7 +210,7 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
     // Process the data based on read type
     self._result = switch (read_type) {
         .arraybuffer => .{ .arraybuffer = .{ .values = data } },
-        .binary_string => .{ .string = data },
+        .binary_string => .{ .binary_string = .{ .bytes = data } },
         .text => .{ .string = data },
         .data_url => blk: {
             // Create data URL with base64 encoding

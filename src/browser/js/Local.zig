@@ -62,6 +62,17 @@ pub fn newString(self: *const Local, str: []const u8) js.String {
     };
 }
 
+// Creates a JS string by mapping each input byte 0..255 directly to a JS
+// code unit, with no UTF-8 decoding. Use this when handing back binary data
+// (e.g. atob output) — passing those bytes through `newString` would treat
+// any byte 0x80..0xFF as malformed UTF-8 and replace it with U+FFFD.
+pub fn newOneByteString(self: *const Local, bytes: []const u8) js.String {
+    return .{
+        .local = self,
+        .handle = self.isolate.initOneByteStringHandle(bytes),
+    };
+}
+
 pub fn newObject(self: *const Local) js.Object {
     return .{
         .local = self,
@@ -745,6 +756,15 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             };
         },
         js.String => return js_val.isString(),
+        js.String.OneByte => {
+            // Receives a "binary string": each JS code unit must fit in a byte
+            // (0..255). Throws InvalidCharacterError if any code unit is out
+            // of range, matching the WHATWG btoa spec — which is the main
+            // intended caller, but applicable to any binary-string input.
+            const js_str = js_val.isString() orelse return null;
+            if (!js_str.containsOnlyOneByte()) return error.InvalidCharacterError;
+            return .{ .bytes = try js_str.toOneByteSlice(self.call_arena) };
+        },
         string.String => {
             const js_str = js_val.isString() orelse return null;
             return try js_str.toSSO(false);

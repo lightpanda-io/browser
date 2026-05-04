@@ -604,6 +604,11 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         // force next request id manually b/c we won't create a real req.
         _ = session.browser.http_client.incrReqId();
 
+        if (self.parent == null) {
+            session.navigation._current_navigation_kind = opts.kind;
+            try session.navigation.commitNavigation(self);
+        }
+
         self.documentIsComplete();
         return;
     }
@@ -1598,7 +1603,20 @@ pub fn checkIntersections(self: *Frame) !void {
     }
 }
 
-pub fn dispatchLoad(self: *Frame) !void {
+pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
+    try self._to_load.append(self.arena, html);
+    if (self._to_load.items.len == 1) {
+        try self.js.scheduler.add(self, struct {
+            fn cleanup(ctx: *anyopaque) !?u32 {
+                const f: *Frame = @ptrCast(@alignCast(ctx));
+                try f.dispatchLoad();
+                return null;
+            }
+        }.cleanup, 0, .{ .name = "frame.dispatchLoad" });
+    }
+}
+
+fn dispatchLoad(self: *Frame) !void {
     const has_dom_load_listener = self._event_manager.has_dom_load_listener;
 
     // Swap buffers - new additions during dispatch go to the other buffer
@@ -2981,12 +2999,24 @@ pub fn insertAllChildrenBefore(self: *Frame, fragment: *Node, parent: *Node, ref
         // Check if child was connected BEFORE removing it from fragment
         const child_was_connected = child.isConnected();
         self.removeNode(fragment, child, .{ .will_be_reconnected = dest_connected });
-        try self.insertNodeRelative(
-            parent,
-            child,
-            .{ .before = ref_node },
-            .{ .child_already_connected = child_was_connected },
-        );
+        // A callback fired by a previous iteration's insert (e.g. a custom
+        // element's connectedCallback) may have detached ref_node from
+        // parent. In that case, fall back to append so the remaining
+        // children still land in `parent` in source order.
+        if (ref_node._parent == parent) {
+            try self.insertNodeRelative(
+                parent,
+                child,
+                .{ .before = ref_node },
+                .{ .child_already_connected = child_was_connected },
+            );
+        } else {
+            try self.appendNode(
+                parent,
+                child,
+                .{ .child_already_connected = child_was_connected },
+            );
+        }
     }
 }
 
@@ -3768,6 +3798,24 @@ pub fn handleClick(self: *Frame, target: *Node) !void {
             const control = label.getControl(self) orelse return;
             const control_html = control.is(Element.Html) orelse return;
             try control_html.click(self);
+        },
+        .generic => |generic| {
+            switch (generic._tag) {
+                .summary => {
+                    const parent_el = target.parentElement() orelse return;
+                    const details = parent_el.is(Element.Html.Details) orelse return;
+                    var maybe_prev = element.previousElementSibling();
+                    while (maybe_prev) |prev| {
+                        if (prev.getTag() == .summary) {
+                            // we found a summary element before the clicked one
+                            return;
+                        }
+                        maybe_prev = prev.previousElementSibling();
+                    }
+                    try details.setOpen(!details.getOpen(), self);
+                },
+                else => {},
+            }
         },
         else => {},
     }

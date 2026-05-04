@@ -29,6 +29,7 @@ const Form = @import("Form.zig");
 const Selection = @import("../../Selection.zig");
 const Event = @import("../../Event.zig");
 const InputEvent = @import("../../event/InputEvent.zig");
+const ValidityState = @import("ValidityState.zig");
 
 const String = lp.String;
 
@@ -82,6 +83,8 @@ _checked: bool = false,
 _checked_dirty: bool = false,
 _input_type: Type = .text,
 _indeterminate: bool = false,
+_custom_validity: ?[]const u8 = null,
+_validity: ?*ValidityState = null,
 
 _selection_start: u32 = 0,
 _selection_end: u32 = 0,
@@ -164,7 +167,7 @@ pub fn getChecked(self: *const Input) bool {
 pub fn setChecked(self: *Input, checked: bool, frame: *Frame) !void {
     // If checking a radio button, uncheck others in the group first
     if (checked and self._input_type == .radio) {
-        try self.uncheckRadioGroup(frame);
+        self.uncheckRadioGroup(frame);
     }
     // This should _not_ call setAttribute. It updates the current state only
     self._checked = checked;
@@ -209,6 +212,261 @@ fn hasDatalistAncestor(self: *const Input) bool {
         node = parent.asConstNode().parentElement();
     }
     return false;
+}
+
+// Constraint validation API
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#the-constraint-validation-api
+
+pub fn getValidity(self: *Input, frame: *Frame) !*ValidityState {
+    if (self._validity) |v| return v;
+    const v = try frame._factory.create(ValidityState{ ._owner = self.asElement() });
+    self._validity = v;
+    return v;
+}
+
+pub fn getValidationMessage(self: *const Input, frame: *Frame) []const u8 {
+    if (!self.getWillValidate()) return "";
+    if (self._custom_validity) |msg| return msg;
+    if (self.suffersValueMissing(frame)) return "Please fill out this field.";
+    if (self.suffersTypeMismatch()) return switch (self._input_type) {
+        .email => "Please enter an email address.",
+        .url => "Please enter a URL.",
+        else => "Please enter a valid value.",
+    };
+    if (self.suffersPatternMismatch()) return "Please match the requested format.";
+    if (self.suffersTooLong()) return "Please shorten this text.";
+    if (self.suffersTooShort()) return "Please lengthen this text.";
+    if (self.suffersRangeUnderflow()) return "Value is too small.";
+    if (self.suffersRangeOverflow()) return "Value is too large.";
+    return "";
+}
+
+pub fn checkValidity(self: *Input, frame: *Frame) !bool {
+    if (!self.getWillValidate()) return true;
+    const v = ValidityState{ ._owner = self.asElement() };
+    if (v.getValid(frame)) return true;
+
+    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
+    return false;
+}
+
+pub fn reportValidity(self: *Input, frame: *Frame) !bool {
+    // Headless: no UI to draw, so reportValidity matches checkValidity exactly.
+    return self.checkValidity(frame);
+}
+
+pub fn setCustomValidity(self: *Input, message: []const u8, frame: *Frame) !void {
+    if (message.len == 0) {
+        self._custom_validity = null;
+    } else {
+        self._custom_validity = try frame.dupeString(message);
+    }
+}
+
+pub fn hasCustomValidity(self: *const Input) bool {
+    return self._custom_validity != null;
+}
+
+pub fn suffersValueMissing(self: *const Input, frame: *Frame) bool {
+    if (!self.getWillValidate()) return false;
+    if (!self.getRequired()) return false;
+    return switch (self._input_type) {
+        .checkbox => !self._checked,
+        .radio => !self.radioGroupHasChecked(frame),
+        // TODO: file inputs aren't supported yet (#2175); treat as always-empty when required.
+        .file => true,
+        .text, .password, .email, .url, .tel, .search, .number, .date, .time, .@"datetime-local", .month, .week, .color => blk: {
+            const v = self._value orelse self._default_value orelse "";
+            break :blk v.len == 0;
+        },
+        // submit/reset/button/hidden/image/range never participate in valueMissing.
+        .submit, .reset, .button, .hidden, .image, .range => false,
+    };
+}
+
+pub fn suffersTypeMismatch(self: *const Input) bool {
+    const value = self._value orelse return false;
+    if (value.len == 0) return false;
+    return switch (self._input_type) {
+        .email => !isValidEmail(value),
+        .url => !isValidAbsoluteURL(value),
+        else => false,
+    };
+}
+
+pub fn suffersPatternMismatch(self: *const Input) bool {
+    _ = self;
+    // Pattern matching requires evaluating a JS RegExp anchored with ^(?: ... )$.
+    // Not yet implemented from Zig; returning false leaves well-formed inputs valid.
+    // TODO: route through the V8 RegExp constructor on the owner Frame.
+    return false;
+}
+
+pub fn suffersTooLong(self: *const Input) bool {
+    // Per spec, only the dirty value flag triggers tooLong / tooShort. We treat
+    // the presence of an explicit _value (vs. attribute-derived _default_value)
+    // as an approximation of dirty.
+    const value = self._value orelse return false;
+    const max = self.getMaxLength();
+    if (max < 0) return false;
+    return codepointCount(value) > @as(usize, @intCast(max));
+}
+
+pub fn suffersTooShort(self: *const Input) bool {
+    const value = self._value orelse return false;
+    if (value.len == 0) return false;
+    const min = self.getMinLength();
+    if (min < 0) return false;
+    return codepointCount(value) < @as(usize, @intCast(min));
+}
+
+pub fn suffersRangeUnderflow(self: *const Input) bool {
+    return numericRangeBreach(self, .underflow);
+}
+
+pub fn suffersRangeOverflow(self: *const Input) bool {
+    return numericRangeBreach(self, .overflow);
+}
+
+fn numericRangeBreach(self: *const Input, comptime kind: enum { underflow, overflow }) bool {
+    // Only number/range use floating-point comparison. date/time/month/week/
+    // datetime-local also have range constraints per spec, but their values
+    // require type-specific conversion (date → days since epoch, time → ms
+    // since midnight, etc.) before comparison — not yet implemented.
+    // TODO: implement range checks for date/time/month/week/datetime-local.
+    switch (self._input_type) {
+        .number, .range => {},
+        else => return false,
+    }
+
+    const value = self._value orelse return false;
+    if (value.len == 0) return false;
+    if (!isValidFloatingPoint(value)) return false;
+    const v = std.fmt.parseFloat(f64, value) catch return false;
+
+    const attr = switch (kind) {
+        .underflow => self.getMin(),
+        .overflow => self.getMax(),
+    };
+    if (attr.len == 0) return false;
+    if (!isValidFloatingPoint(attr)) return false;
+    const bound = std.fmt.parseFloat(f64, attr) catch return false;
+
+    return switch (kind) {
+        .underflow => v < bound,
+        .overflow => v > bound,
+    };
+}
+
+fn radioGroupHasChecked(self: *const Input, frame: *Frame) bool {
+    if (self._checked) return true;
+    var iter = self.radioGroupIterator() orelse return false;
+    const my_form = self.getForm(frame);
+    while (iter.next()) |other| {
+        if (other == self) continue;
+        if (!other._checked) continue;
+        if (sameFormOwner(my_form, other, frame)) return true;
+    }
+    return false;
+}
+
+const TreeWalker = @import("../../TreeWalker.zig");
+
+const RadioGroupIterator = struct {
+    walker: TreeWalker.Full,
+    name: []const u8,
+
+    fn next(self: *@This()) ?*Input {
+        while (self.walker.next()) |node| {
+            const other_element = node.is(Element) orelse continue;
+            const other_input = other_element.is(Input) orelse continue;
+            if (other_input._input_type != .radio) continue;
+            const other_name = other_element.getAttributeSafe(comptime .wrap("name")) orelse continue;
+            if (!std.mem.eql(u8, self.name, other_name)) continue;
+            return other_input;
+        }
+        return null;
+    }
+};
+
+/// Walk same-named radio inputs in `self`'s tree. Returns null if the input
+/// has no `name` (or empty `name`) — such radios don't participate in a
+/// group. The `TreeWalker` only inspects nodes; the `@constCast` is safe
+/// because nothing in the iteration mutates the tree.
+fn radioGroupIterator(self: *const Input) ?RadioGroupIterator {
+    const element = self.asConstElement();
+    const name = element.getAttributeSafe(comptime .wrap("name")) orelse return null;
+    if (name.len == 0) return null;
+    const root = @constCast(element.asConstNode()).getRootNode(null);
+    return .{
+        .walker = TreeWalker.Full.init(root, .{}),
+        .name = name,
+    };
+}
+
+fn sameFormOwner(self_form: ?*const Form, other: *const Input, frame: *Frame) bool {
+    const other_form = other.getForm(frame);
+
+    // Check if same form context
+    if (self_form == null and other_form == null) {
+        return true;
+    }
+
+    if (self_form) |mf| {
+        if (other_form) |of| {
+            if (mf == of) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/// Liberal email validation: ASCII local part + "@" + dotted ASCII host. Mirrors
+/// the WHATWG "valid e-mail address" production loosely — sufficient for most
+/// constraint-validation tests; HTML browsers themselves are permissive here.
+fn isValidEmail(value: []const u8) bool {
+    const at = std.mem.indexOfScalar(u8, value, '@') orelse return false;
+    if (at == 0 or at == value.len - 1) return false;
+    const local = value[0..at];
+    const host = value[at + 1 ..];
+    for (local) |c| if (!isEmailLocalChar(c)) return false;
+    if (std.mem.indexOfScalar(u8, host, '.') == null) return false;
+    for (host) |c| if (!isEmailHostChar(c)) return false;
+    if (host[0] == '.' or host[host.len - 1] == '.') return false;
+    return true;
+}
+
+fn isEmailLocalChar(c: u8) bool {
+    if (std.ascii.isAlphanumeric(c)) return true;
+    return switch (c) {
+        '.', '!', '#', '$', '%', '&', '\'', '*', '+', '/', '=', '?', '^', '_', '`', '{', '|', '}', '~', '-' => true,
+        else => false,
+    };
+}
+
+fn isEmailHostChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '-' or c == '.';
+}
+
+/// Absolute URL check per the WHATWG URL parser: must include a scheme followed
+/// by "://" and a non-empty authority. Relative URLs are typeMismatches per spec.
+fn isValidAbsoluteURL(value: []const u8) bool {
+    const scheme_end = std.mem.indexOfScalar(u8, value, ':') orelse return false;
+    if (scheme_end == 0) return false;
+    if (!std.ascii.isAlphabetic(value[0])) return false;
+    for (value[1..scheme_end]) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '+' and c != '-' and c != '.') return false;
+    }
+    const rest = value[scheme_end + 1 ..];
+    if (!std.mem.startsWith(u8, rest, "//")) return false;
+    return rest.len > 2;
+}
+
+fn codepointCount(value: []const u8) usize {
+    return std.unicode.utf8CountCodepoints(value) catch value.len;
 }
 
 pub fn getDisabled(self: *const Input) bool {
@@ -261,6 +519,20 @@ pub fn setMaxLength(self: *Input, max_length: i32, frame: *Frame) !void {
     var buf: [32]u8 = undefined;
     const value = std.fmt.bufPrint(&buf, "{d}", .{max_length}) catch unreachable;
     try self.asElement().setAttributeSafe(comptime .wrap("maxlength"), .wrap(value), frame);
+}
+
+pub fn getMinLength(self: *const Input) i32 {
+    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("minlength")) orelse return -1;
+    return std.fmt.parseInt(i32, attr, 10) catch -1;
+}
+
+pub fn setMinLength(self: *Input, min_length: i32, frame: *Frame) !void {
+    if (min_length < 0) {
+        return error.IndexSizeError;
+    }
+    var buf: [32]u8 = undefined;
+    const value = std.fmt.bufPrint(&buf, "{d}", .{min_length}) catch unreachable;
+    try self.asElement().setAttributeSafe(comptime .wrap("minlength"), .wrap(value), frame);
 }
 
 pub fn getSize(self: *const Input) i32 {
@@ -507,8 +779,8 @@ pub fn getLabels(self: *Input, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
-pub fn getForm(self: *Input, frame: *Frame) ?*Form {
-    const element = self.asElement();
+pub fn getForm(self: *const Input, frame: *Frame) ?*Form {
+    const element = self.asConstElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
     if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
@@ -520,7 +792,7 @@ pub fn getForm(self: *Input, frame: *Frame) ?*Form {
     }
 
     // No form attribute - traverse ancestors looking for a <form>
-    var node = element.asNode()._parent;
+    var node = element.asConstNode()._parent;
     while (node) |n| {
         if (n.is(Element.Html.Form)) |form| {
             return form;
@@ -918,55 +1190,13 @@ fn maxWeeksInYear(year: u32) u32 {
     return 52;
 }
 
-fn uncheckRadioGroup(self: *Input, frame: *Frame) !void {
-    const element = self.asElement();
-
-    const name = element.getAttributeSafe(comptime .wrap("name")) orelse return;
-    if (name.len == 0) {
-        return;
-    }
-
+fn uncheckRadioGroup(self: *Input, frame: *Frame) void {
+    var iter = self.radioGroupIterator() orelse return;
     const my_form = self.getForm(frame);
-
-    // Walk from the root of the tree containing this element
-    // This handles both document-attached and orphaned elements
-    const root = element.asNode().getRootNode(null);
-
-    const TreeWalker = @import("../../TreeWalker.zig");
-    var walker = TreeWalker.Full.init(root, .{});
-
-    while (walker.next()) |node| {
-        const other_element = node.is(Element) orelse continue;
-        const other_input = other_element.is(Input) orelse continue;
-
-        // Skip self
-        if (other_input == self) {
-            continue;
-        }
-
-        if (other_input._input_type != .radio) {
-            continue;
-        }
-
-        const other_name = other_element.getAttributeSafe(comptime .wrap("name")) orelse continue;
-        if (!std.mem.eql(u8, name, other_name)) {
-            continue;
-        }
-
-        // Check if same form context
-        const other_form = other_input.getForm(frame);
-        if (my_form == null and other_form == null) {
-            other_input._checked = false;
-            continue;
-        }
-
-        if (my_form) |mf| {
-            if (other_form) |of| {
-                if (mf == of) {
-                    other_input._checked = false;
-                }
-            }
-        }
+    while (iter.next()) |other| {
+        if (other == self) continue;
+        if (!sameFormOwner(my_form, other, frame)) continue;
+        other._checked = false;
     }
 }
 
@@ -1000,6 +1230,7 @@ pub const JsApi = struct {
     pub const readOnly = bridge.accessor(Input.getReadonly, Input.setReadonly, .{});
     pub const alt = bridge.accessor(Input.getAlt, Input.setAlt, .{});
     pub const maxLength = bridge.accessor(Input.getMaxLength, Input.setMaxLength, .{ .dom_exception = true });
+    pub const minLength = bridge.accessor(Input.getMinLength, Input.setMinLength, .{ .dom_exception = true });
     pub const size = bridge.accessor(Input.getSize, Input.setSize, .{});
     pub const src = bridge.accessor(Input.getSrc, Input.setSrc, .{});
     pub const form = bridge.accessor(Input.getForm, null, .{});
@@ -1012,6 +1243,11 @@ pub const JsApi = struct {
     pub const multiple = bridge.accessor(Input.getMultiple, Input.setMultiple, .{});
     pub const autocomplete = bridge.accessor(Input.getAutocomplete, Input.setAutocomplete, .{});
     pub const willValidate = bridge.accessor(Input.getWillValidate, null, .{});
+    pub const validity = bridge.accessor(Input.getValidity, null, .{});
+    pub const validationMessage = bridge.accessor(Input.getValidationMessage, null, .{});
+    pub const checkValidity = bridge.function(Input.checkValidity, .{});
+    pub const reportValidity = bridge.function(Input.reportValidity, .{});
+    pub const setCustomValidity = bridge.function(Input.setCustomValidity, .{});
     pub const select = bridge.function(Input.select, .{});
 
     pub const selectionStart = bridge.accessor(Input.getSelectionStart, Input.setSelectionStart, .{});
@@ -1045,7 +1281,7 @@ pub const Build = struct {
 
         // If this is a checked radio button, uncheck others in its group
         if (self._checked and self._input_type == .radio) {
-            try self.uncheckRadioGroup(frame);
+            self.uncheckRadioGroup(frame);
         }
     }
 
@@ -1072,7 +1308,7 @@ pub const Build = struct {
                     self._checked = true;
                     // If setting a radio button to checked, uncheck others in the group
                     if (self._input_type == .radio) {
-                        try self.uncheckRadioGroup(frame);
+                        self.uncheckRadioGroup(frame);
                     }
                 }
             },
@@ -1117,6 +1353,7 @@ test "WebApi: HTML.Input" {
     try testing.htmlRunner("element/html/input_image_submit.html", .{});
     try testing.htmlRunner("element/html/input_radio.html", .{});
     try testing.htmlRunner("element/html/input-attrs.html", .{});
+    try testing.htmlRunner("element/html/input-validity.html", .{});
 }
 
 test "isValidFloatingPoint" {

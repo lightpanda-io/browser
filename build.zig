@@ -552,6 +552,16 @@ fn buildLibidn2(
         // in libiconv (separate from libSystem). On glibc Linux iconv is in
         // libc itself; on musl it would also need a separate -liconv.
         mod.linkSystemLibrary("iconv", .{});
+
+        // libidn2's lib/lookup.c calls strchrnul() without including
+        // <string.h>; the prototype is declared in vendor/libidn2/config.h
+        // alongside the existing strverscmp shim. macOS libc lacked the
+        // symbol entirely before 15.4 — provide it here so the link
+        // succeeds. Mirrors how gl/strverscmp.c is wired up below.
+        lib.addCSourceFile(.{
+            .file = b.path("vendor/libidn2/darwin/strchrnul.c"),
+            .flags = &.{},
+        });
     }
 
     lib.addCSourceFiles(.{

@@ -88,6 +88,73 @@
   });
 </script>
 
+<script id=atob_binary_string>
+  // atob must produce a "binary string": each output byte (0-255) becomes
+  // a JS string character whose codepoint equals that byte. High-bit bytes
+  // must NOT be folded through UTF-8 (which would replace them with U+FFFD).
+
+  // /w== decodes to a single 0xFF byte.
+  const ff = atob('/w==');
+  testing.expectEqual(1, ff.length);
+  testing.expectEqual(0xff, ff.charCodeAt(0));
+
+  // 0x00..0x07
+  const lo = atob('AAECAwQFBgc=');
+  testing.expectEqual(8, lo.length);
+  for (let i = 0; i < 8; i++) testing.expectEqual(i, lo.charCodeAt(i));
+
+  // 0xFC 0xFD 0xFE 0xFF — the bytes that previously turned into U+FFFD.
+  const hi = atob('/P3+/w==');
+  testing.expectEqual(4, hi.length);
+  testing.expectEqual(0xfc, hi.charCodeAt(0));
+  testing.expectEqual(0xfd, hi.charCodeAt(1));
+  testing.expectEqual(0xfe, hi.charCodeAt(2));
+  testing.expectEqual(0xff, hi.charCodeAt(3));
+
+  // Boundary at 0x7F/0x80.
+  const boundary = atob('f4A=');
+  testing.expectEqual(2, boundary.length);
+  testing.expectEqual(0x7f, boundary.charCodeAt(0));
+  testing.expectEqual(0x80, boundary.charCodeAt(1));
+
+  // Ensure the result is usable as input to a Uint8Array, the way recaptcha
+  // and many libraries decode binary blobs.
+  const bytes = new Uint8Array(hi.length);
+  for (let i = 0; i < hi.length; i++) bytes[i] = hi.charCodeAt(i);
+  testing.expectEqual(0xfc, bytes[0]);
+  testing.expectEqual(0xfd, bytes[1]);
+  testing.expectEqual(0xfe, bytes[2]);
+  testing.expectEqual(0xff, bytes[3]);
+</script>
+
+<script id=btoa_binary_string>
+  // btoa must accept a "binary string": each char's codepoint (0-255) is one
+  // input byte. Chars > 0xFF must throw InvalidCharacterError.
+
+  testing.expectEqual('/w==', btoa(String.fromCharCode(0xff)));
+  testing.expectEqual('/P3+/w==', btoa(String.fromCharCode(0xfc, 0xfd, 0xfe, 0xff)));
+  testing.expectEqual('AAECAwQFBgc=', btoa(String.fromCharCode(0, 1, 2, 3, 4, 5, 6, 7)));
+  testing.expectEqual('f4A=', btoa(String.fromCharCode(0x7f, 0x80)));
+
+  // Codepoints above 0xFF are not representable as a binary string.
+  testing.expectError('InvalidCharacterError', () => {
+    btoa(String.fromCharCode(0x100));
+  });
+  testing.expectError('InvalidCharacterError', () => {
+    btoa('a' + String.fromCharCode(0x1ff) + 'b');
+  });
+</script>
+
+<script id=btoa_atob_binary_roundtrip>
+  // Roundtrip every byte value 0..255.
+  let all = '';
+  for (let i = 0; i < 256; i++) all += String.fromCharCode(i);
+  const encoded = btoa(all);
+  const decoded = atob(encoded);
+  testing.expectEqual(256, decoded.length);
+  for (let i = 0; i < 256; i++) testing.expectEqual(i, decoded.charCodeAt(i));
+</script>
+
 <script id=btoa_atob_roundtrip>
   const testStrings = [
     'Hello World!',

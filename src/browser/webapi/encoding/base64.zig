@@ -16,29 +16,27 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Base64 encoding/decoding helpers for btoa/atob.
-//! Used by both Window and WorkerGlobalScope.
+//! Pure-byte base64 helpers for btoa/atob. The "binary string" semantics
+//! (each JS code unit 0..255 = one byte) are handled at the JS boundary in
+//! Window.atob / Window.btoa via the one-byte string APIs — this module
+//! just deals in bytes.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-/// Encodes input to base64 (btoa).
 pub fn encode(alloc: Allocator, input: []const u8) ![]const u8 {
     const encoded_len = std.base64.standard.Encoder.calcSize(input.len);
     const encoded = try alloc.alloc(u8, encoded_len);
     return std.base64.standard.Encoder.encode(encoded, input);
 }
 
-/// Decodes base64 input (atob).
-/// Implements forgiving base64 decode per WHATWG spec.
+/// Forgiving base64 decode per WHATWG spec:
+/// https://infra.spec.whatwg.org/#forgiving-base64-decode
 pub fn decode(alloc: Allocator, input: []const u8) ![]const u8 {
     const trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
-    // Forgiving base64 decode per WHATWG spec:
-    // https://infra.spec.whatwg.org/#forgiving-base64-decode
-    // Remove trailing padding to use standard_no_pad decoder
     const unpadded = std.mem.trimRight(u8, trimmed, "=");
 
-    // Length % 4 == 1 is invalid (can't represent valid base64)
+    // Length % 4 == 1 is invalid (can't represent valid base64).
     if (unpadded.len % 4 == 1) {
         return error.InvalidCharacterError;
     }
