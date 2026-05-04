@@ -32,7 +32,7 @@ const RobotsLayer = @This();
 
 next: Layer = undefined,
 allocator: std.mem.Allocator,
-pending: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(Request)) = .empty,
+pending: std.StringHashMapUnmanaged(std.ArrayList(Request)) = .empty,
 
 pub fn layer(self: *RobotsLayer) Layer {
     return .{
@@ -166,7 +166,7 @@ const RobotsContext = struct {
     arena: std.mem.Allocator,
     client: *Client,
     robots_url: [:0]const u8,
-    buffer: std.ArrayListUnmanaged(u8),
+    buffer: std.ArrayList(u8),
     status: u16 = 0,
 
     fn deinit(self: *RobotsContext) void {
