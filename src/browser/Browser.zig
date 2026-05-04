@@ -40,37 +40,38 @@ app: *App,
 session: ?Session,
 allocator: Allocator,
 arena_pool: *ArenaPool,
-http_client: *HttpClient,
+http_client: HttpClient,
 
 // used by sessions to allocate pages.
 page_pool: std.heap.MemoryPool(Page),
 
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
-    http_client: *HttpClient,
 };
 
-pub fn init(app: *App, opts: InitOpts) !Browser {
+pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp_client: ?HttpClient.CDPClient) !void {
     const allocator = app.allocator;
 
     var env = try js.Env.init(app, opts.env);
     errdefer env.deinit();
 
-    return .{
+    self.* = .{
         .app = app,
         .env = env,
         .session = null,
         .allocator = allocator,
         .arena_pool = &app.arena_pool,
-        .http_client = opts.http_client,
+        .http_client = undefined,
         .page_pool = std.heap.MemoryPool(Page).init(allocator),
     };
+    try self.http_client.init(allocator, &app.network, cdp_client);
 }
 
 pub fn deinit(self: *Browser) void {
     self.closeSession();
     self.env.deinit();
     self.page_pool.deinit();
+    self.http_client.deinit();
 }
 
 pub fn newSession(self: *Browser, notification: *Notification) !*Session {

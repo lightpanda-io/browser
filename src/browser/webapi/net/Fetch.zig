@@ -77,7 +77,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     };
 
     const session = exec.context.page.session;
-    const http_client = session.browser.http_client;
+    const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
     if (request._headers) |h| {
         try h.populateHttpHeader(exec.call_arena, &headers);

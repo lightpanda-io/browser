@@ -248,29 +248,26 @@ noinline fn assertionFailure(comptime ctx: []const u8, args: anytype) noreturn {
 // Reference counting helper
 pub fn RC(comptime T: type) type {
     return struct {
-        _refs: T = 0,
+        _refs: std.atomic.Value(T) = .init(0),
 
         pub fn init(refs: T) @This() {
-            return .{ ._refs = refs };
+            return .{ ._refs = .init(refs) };
         }
 
         pub fn acquire(self: *@This()) void {
-            self._refs += 1;
+            _ = self._refs.fetchAdd(1, .monotonic);
         }
 
         pub fn release(self: *@This(), value: anytype, page: *Page) void {
-            assert(self._refs > 0, "release overflow", .{ .type = @typeName(@TypeOf(value)) });
-
-            const refs = self._refs - 1;
-            self._refs = refs;
-            if (refs > 0) {
-                return;
+            const prev = self._refs.fetchSub(1, .acq_rel);
+            assert(prev > 0, "release overflow", .{ .type = @typeName(@TypeOf(value)) });
+            if (prev == 1) {
+                value.deinit(page);
             }
-            value.deinit(page);
         }
 
         pub fn format(self: @This(), writer: *std.Io.Writer) !void {
-            return writer.print("{d}", .{self._refs});
+            return writer.print("{d}", .{self._refs.load(.monotonic)});
         }
     };
 }
