@@ -307,30 +307,23 @@ pub fn suffersPatternMismatch(self: *const Input, frame: *Frame) bool {
     const pattern = self.asConstElement().getAttributeSafe(comptime .wrap("pattern")) orelse return false;
     if (pattern.len == 0) return false;
 
-    // Evaluate `new RegExp("^(?:" + pattern + ")$", "v").test(value)` via V8.
-    // Per spec, an invalid pattern is ignored — the catch arm returns null and
-    // we treat that as "no mismatch".
+    // Per HTML spec, anchor the pattern with ^(?:...)$ and compile under the
+    // "v" (Unicode sets) flag. An invalid pattern is ignored — V8 throws and
+    // we treat that as "no mismatch". TryCatch absorbs the exception so it
+    // doesn't linger in the isolate.
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    const arena = frame.call_arena;
-    const pattern_json = std.json.Stringify.valueAlloc(arena, pattern, .{}) catch return false;
-    const value_json = std.json.Stringify.valueAlloc(arena, value, .{}) catch return false;
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
 
-    const expr = std.fmt.allocPrint(arena,
-        \\(function() {{
-        \\  try {{
-        \\    return new RegExp("^(?:" + {s} + ")$", "v").test({s});
-        \\  }} catch (_) {{
-        \\    return null;
-        \\  }}
-        \\}})()
-    , .{ pattern_json, value_json }) catch return false;
+    const wrapped = std.fmt.allocPrint(frame.call_arena, "^(?:{s})$", .{pattern}) catch return false;
+    const re = js.RegExp.init(&ls.local, wrapped, js.RegExp.Flag.unicode_sets) catch return false;
+    const matched = re.match(value) catch return false;
 
-    const result = ls.local.exec(expr, "Input.suffersPatternMismatch") catch return false;
-    if (result.isNullOrUndefined()) return false;
-    return !result.toBool();
+    return !matched;
 }
 
 pub fn suffersTooLong(self: *const Input) bool {
