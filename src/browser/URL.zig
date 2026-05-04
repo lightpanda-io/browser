@@ -269,9 +269,21 @@ pub fn ensureEncoded(allocator: Allocator, url_in: [:0]const u8, encoding: []con
     return buf.items[0 .. buf.items.len - 1 :0];
 }
 
-const EncodeSet = enum { path, query, query_legacy, userinfo, fragment };
+/// Selects which RFC 3986 / WHATWG URL Standard percent-encode set to apply.
+///
+/// The `path`, `query`, `query_legacy`, `userinfo`, and `fragment` variants
+/// match the corresponding URL spec sets — they assume the input is already
+/// structured (e.g. `key=val&key=val` for `query`) and only encode characters
+/// disallowed in that location.
+///
+/// `component` is stricter: it encodes everything outside the RFC 3986
+/// unreserved set, including sub-delims (`& = + ! * ' ( ) , $ ;`). Use this
+/// when embedding an arbitrary string as a single URI component such as a
+/// query-parameter value, where reserved characters in the input would
+/// otherwise change the URL's structure.
+pub const EncodeSet = enum { path, query, query_legacy, userinfo, fragment, component };
 
-fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime encode_set: EncodeSet) ![]const u8 {
+pub fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime encode_set: EncodeSet) ![]const u8 {
     // Check if encoding is needed
     var needs_encoding = false;
     for (segment) |c| {
@@ -290,8 +302,11 @@ fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime enco
     while (i < segment.len) : (i += 1) {
         const c = segment[i];
 
-        // Check if this is an already-encoded sequence (%XX)
-        if (c == '%' and i + 2 < segment.len) {
+        // For URL-canonicalization sets, preserve existing %XX sequences so
+        // already-encoded inputs round-trip cleanly. The `component` set treats
+        // input as opaque and re-encodes `%` itself, since the caller is
+        // embedding raw user data and a literal '%' must not be misread.
+        if (encode_set != .component and c == '%' and i + 2 < segment.len) {
             const end = i + 2;
             const h1 = segment[i + 1];
             const h2 = segment[end];
@@ -362,13 +377,14 @@ fn shouldPercentEncode(c: u8, comptime encode_set: EncodeSet) bool {
     return switch (c) {
         // Unreserved characters (RFC 3986)
         'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => false,
-        // sub-delims allowed in path/query but some must be encoded in userinfo/query_legacy
-        '!', '$', '\'', '(', ')', '*', '+', ',' => false,
+        // sub-delims allowed in path/query but some must be encoded in userinfo/query_legacy/component
+        '!', '$', '\'', '(', ')', '*', '+', ',' => encode_set == .component,
         // '&' and ';' must be encoded for legacy encoding (to preserve NCRs like &#nnnnn;)
-        '&', ';' => encode_set == .userinfo or encode_set == .query_legacy,
-        '=' => encode_set == .userinfo,
-        // Separators: userinfo must encode these
-        '/', ':', '@' => encode_set == .userinfo,
+        // and for component encoding (so a value can't break out into a new param)
+        '&', ';' => encode_set == .userinfo or encode_set == .query_legacy or encode_set == .component,
+        '=' => encode_set == .userinfo or encode_set == .component,
+        // Separators: userinfo and component must encode these
+        '/', ':', '@' => encode_set == .userinfo or encode_set == .component,
         // '?' is allowed in queries only
         '?' => encode_set != .query and encode_set != .query_legacy,
         // '#' is allowed in fragments only
@@ -1208,6 +1224,37 @@ test "URL: ensureEncoded" {
         const result = try ensureEncoded(testing.arena_allocator, case.url, "UTF-8");
         try testing.expectString(case.expected, result);
     }
+}
+
+test "URL: percentEncodeSegment component passes unreserved chars through" {
+    defer testing.reset();
+    const r = try percentEncodeSegment(testing.arena_allocator, "abcXYZ012-._~", .component);
+    try testing.expectString("abcXYZ012-._~", r);
+}
+
+test "URL: percentEncodeSegment component encodes spaces, sub-delims and reserved chars" {
+    defer testing.reset();
+    const r = try percentEncodeSegment(testing.arena_allocator, "hello world&q=1", .component);
+    try testing.expectString("hello%20world%26q%3D1", r);
+
+    const r2 = try percentEncodeSegment(testing.arena_allocator, "a+b!c*d", .component);
+    try testing.expectString("a%2Bb%21c%2Ad", r2);
+}
+
+test "URL: percentEncodeSegment component encodes UTF-8 bytes" {
+    defer testing.reset();
+    const r = try percentEncodeSegment(testing.arena_allocator, "café", .component);
+    try testing.expectString("caf%C3%A9", r);
+}
+
+test "URL: percentEncodeSegment component re-encodes literal '%' in raw input" {
+    defer testing.reset();
+    const r = try percentEncodeSegment(testing.arena_allocator, "100%", .component);
+    try testing.expectString("100%25", r);
+
+    // Even when followed by hex digits, treat as opaque user data.
+    const r2 = try percentEncodeSegment(testing.arena_allocator, "100%2A", .component);
+    try testing.expectString("100%252A", r2);
 }
 
 test "URL: resolve with encoding" {

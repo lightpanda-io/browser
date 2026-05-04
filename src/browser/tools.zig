@@ -417,7 +417,7 @@ fn execSearch(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode
     const args = try parseArgsOrErr(SearchParams, arena, arguments) orelse return ToolError.InvalidParams;
     if (args.query.len == 0) return ToolError.InvalidParams;
 
-    const encoded = percentEncodeQuery(arena, args.query) catch return ToolError.OutOfMemory;
+    const encoded = lp.URL.percentEncodeSegment(arena, args.query, .component) catch return ToolError.OutOfMemory;
     const google_url = std.fmt.allocPrintSentinel(
         arena,
         "https://www.google.com/search?q={s}&hl=en&gl=us",
@@ -457,21 +457,6 @@ fn renderFrameMarkdown(arena: std.mem.Allocator, frame: *lp.Frame) ToolError![]c
     lp.markdown.dump(frame.document.asNode(), .{}, &aw.writer, frame) catch
         return ToolError.InternalError;
     return aw.written();
-}
-
-fn percentEncodeQuery(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    for (input) |c| {
-        switch (c) {
-            'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => try out.append(arena, c),
-            else => {
-                var hex: [3]u8 = undefined;
-                _ = std.fmt.bufPrint(&hex, "%{X:0>2}", .{c}) catch unreachable;
-                try out.appendSlice(arena, &hex);
-            },
-        }
-    }
-    return out.toOwnedSlice(arena);
 }
 
 fn execMarkdown(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1012,31 +997,6 @@ test "substituteEnvVars missing var kept literal" {
 
     const r = substituteEnvVars(arena.allocator(), "$UNLIKELY_VAR_12345");
     try std.testing.expectEqualStrings("$UNLIKELY_VAR_12345", r);
-}
-
-test "percentEncodeQuery passes unreserved chars through" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const r = try percentEncodeQuery(arena.allocator(), "abcXYZ012-._~");
-    try std.testing.expectEqualStrings("abcXYZ012-._~", r);
-}
-
-test "percentEncodeQuery encodes spaces and reserved chars" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const r = try percentEncodeQuery(arena.allocator(), "hello world&q=1");
-    try std.testing.expectEqualStrings("hello%20world%26q%3D1", r);
-}
-
-test "percentEncodeQuery encodes UTF-8 bytes" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    // "café" → c, a, f, then 0xC3 0xA9 for é
-    const r = try percentEncodeQuery(arena.allocator(), "café");
-    try std.testing.expectEqualStrings("caf%C3%A9", r);
 }
 
 test "substituteEnvVars bare dollar" {
