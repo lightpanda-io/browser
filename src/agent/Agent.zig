@@ -672,22 +672,29 @@ fn pruneMessages(self: *Self) void {
 
     const tail_start = zenai.provider.safeTruncationStart(msgs, msgs.len - prune_keep) orelse return;
 
+    // Dupe the kept tail into a scratch slice in the new arena first. Only
+    // mutate self.messages once every dupe has succeeded — otherwise a
+    // partial failure would leave self.messages.items[1..] pointing into
+    // the freed `new_arena`, since dupeMessage already wrote into it.
     var new_arena: std.heap.ArenaAllocator = .init(self.allocator);
-    const na = new_arena.allocator();
+    const duped = dupeMessages(new_arena.allocator(), msgs[tail_start..]) orelse {
+        new_arena.deinit();
+        return;
+    };
 
-    // System prompt content points outside the arena, so only the tail needs copying.
-    var i: usize = 0;
-    for (msgs[tail_start..]) |msg| {
-        msgs[1 + i] = dupeMessage(na, msg) orelse {
-            new_arena.deinit();
-            return;
-        };
-        i += 1;
-    }
-
-    self.messages.shrinkRetainingCapacity(1 + i);
+    // System prompt at index 0 lives outside the arena and is preserved.
+    @memcpy(self.messages.items[1..][0..duped.len], duped);
+    self.messages.shrinkRetainingCapacity(1 + duped.len);
     self.message_arena.deinit();
     self.message_arena = new_arena;
+}
+
+fn dupeMessages(arena: std.mem.Allocator, msgs: []const zenai.provider.Message) ?[]zenai.provider.Message {
+    const out = arena.alloc(zenai.provider.Message, msgs.len) catch return null;
+    for (msgs, 0..) |msg, i| {
+        out[i] = dupeMessage(arena, msg) orelse return null;
+    }
+    return out;
 }
 
 fn dupeMessage(alloc: std.mem.Allocator, msg: zenai.provider.Message) ?zenai.provider.Message {
@@ -1252,4 +1259,37 @@ test "formatReplacement: multiple commands produce multi-line replacement" {
         "# [Auto-healed] Original: CLICK '#submit'\nCLICK '.cookie-accept'\nCLICK '#submit-v2'\n",
         replacement.new_text,
     );
+}
+
+test "dupeMessages: happy path" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const src = [_]zenai.provider.Message{
+        .{ .role = .user, .content = "hello" },
+        .{ .role = .assistant, .content = "world" },
+    };
+
+    const out = dupeMessages(arena.allocator(), &src) orelse return error.UnexpectedNull;
+    try std.testing.expectEqual(@as(usize, 2), out.len);
+    try std.testing.expectEqualStrings("hello", out[0].content.?);
+    try std.testing.expectEqualStrings("world", out[1].content.?);
+    try std.testing.expect(out[0].content.?.ptr != src[0].content.?.ptr);
+}
+
+test "dupeMessages: returns null on mid-iteration alloc failure" {
+    // The contract pruneMessages depends on: on any partial failure,
+    // dupeMessages returns null without mutating its inputs. pruneMessages
+    // can then deinit the scratch arena and leave self.messages untouched.
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    var failing = std.testing.FailingAllocator.init(arena.allocator(), .{ .fail_index = 2 });
+    const src = [_]zenai.provider.Message{
+        .{ .role = .user, .content = "hello" },
+        .{ .role = .assistant, .content = "world" },
+        .{ .role = .user, .content = "third" },
+    };
+    try std.testing.expect(dupeMessages(failing.allocator(), &src) == null);
+    try std.testing.expect(failing.has_induced_failure);
 }
