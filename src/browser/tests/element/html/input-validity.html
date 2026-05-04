@@ -17,6 +17,13 @@
   <input id="disabled-required" type="text" required disabled>
   <input id="too-long" type="text" maxlength="3">
   <input id="too-short" type="text" minlength="3" value="ab">
+  <input id="zip-bad"   type="text" pattern="[0-9]{5,9}" value="1234">
+  <input id="zip-good"  type="text" pattern="[0-9]{5,9}" value="12345">
+  <input id="zip-empty" type="text" pattern="[0-9]{5,9}">
+  <input id="pat-anchored" type="text" pattern="abc" value="xabcy">
+  <input id="pat-unicode" type="text" pattern="\p{L}+" value="hello">
+  <input id="pat-bad-regex" type="text" pattern="(unclosed" value="anything">
+  <input id="pat-num" type="number" pattern="[0-9]+" value="x">
 </form>
 
 <script id="surface">
@@ -187,5 +194,88 @@
   el.addEventListener('invalid', (e) => { captured = e; });
   el.checkValidity();
   testing.expectEqual(true, captured.isTrusted);
+}
+</script>
+
+<script id="pattern_idl_reflects_attribute">
+{
+  // Per HTML §4.10.5.3.5, HTMLInputElement.pattern reflects the content attribute.
+  testing.expectEqual('[0-9]{5,9}', $('#zip-bad').pattern);
+  testing.expectEqual('[0-9]{5,9}', $('#zip-good').pattern);
+  testing.expectEqual('', $('#filled-required').pattern);
+
+  // Setter writes the content attribute.
+  const el = $('#filled-required');
+  el.pattern = 'foo';
+  testing.expectEqual('foo', el.getAttribute('pattern'));
+  testing.expectEqual('foo', el.pattern);
+  el.pattern = '';
+  testing.expectEqual('', el.getAttribute('pattern'));
+}
+</script>
+
+<script id="pattern_mismatch_basic">
+{
+  // "1234" does not match [0-9]{5,9} — patternMismatch fires.
+  testing.expectEqual(true, $('#zip-bad').validity.patternMismatch);
+  testing.expectEqual(false, $('#zip-bad').validity.valid);
+  // "12345" does match.
+  testing.expectEqual(false, $('#zip-good').validity.patternMismatch);
+  testing.expectEqual(true, $('#zip-good').validity.valid);
+}
+</script>
+
+<script id="pattern_empty_value_does_not_mismatch">
+{
+  // Empty value never triggers patternMismatch (per spec).
+  testing.expectEqual(false, $('#zip-empty').validity.patternMismatch);
+  testing.expectEqual(true, $('#zip-empty').validity.valid);
+}
+</script>
+
+<script id="pattern_anchored_implicitly">
+{
+  // The pattern is implicitly wrapped with ^(?:...)$ — substring "abc" inside
+  // "xabcy" must NOT match the whole value, so patternMismatch fires.
+  testing.expectEqual(true, $('#pat-anchored').validity.patternMismatch);
+}
+</script>
+
+<script id="pattern_v_flag_unicode">
+{
+  // \p{L} requires Unicode-aware matching (v or u flag).
+  testing.expectEqual(false, $('#pat-unicode').validity.patternMismatch);
+}
+</script>
+
+<script id="pattern_invalid_regex_ignored">
+{
+  // An unparseable pattern is ignored per spec — element stays valid.
+  testing.expectEqual(false, $('#pat-bad-regex').validity.patternMismatch);
+}
+</script>
+
+<script id="pattern_only_text_like_types">
+{
+  // pattern only applies to text-like types; type=number ignores the attribute.
+  testing.expectEqual(false, $('#pat-num').validity.patternMismatch);
+}
+</script>
+
+<script id="pattern_validation_message">
+{
+  testing.expectEqual('Please match the requested format.', $('#zip-bad').validationMessage);
+  testing.expectEqual('', $('#zip-good').validationMessage);
+}
+</script>
+
+<script id="pattern_setter_recomputes_validity">
+{
+  const el = $('#filled-required');
+  testing.expectEqual(false, el.validity.patternMismatch);
+  el.pattern = '[0-9]+';
+  testing.expectEqual(true, el.validity.patternMismatch);
+  el.value = '42';
+  testing.expectEqual(false, el.validity.patternMismatch);
 }
 </script>
