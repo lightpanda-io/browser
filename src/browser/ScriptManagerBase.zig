@@ -648,12 +648,19 @@ pub const Script = struct {
 
     pub fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const self: *Script = @ptrCast(@alignCast(ctx));
-        log.warn(.http, "script fetch error", .{
-            .err = err,
-            .req = self.url,
-            .extra = std.meta.activeTag(self.extra),
-            .status = self.status,
-        });
+        if (self.status == 404) {
+            log.info(.http, "script 404", .{
+                .req = self.url,
+                .extra = std.meta.activeTag(self.extra),
+            });
+        } else {
+            log.warn(.http, "script fetch error", .{
+                .err = err,
+                .req = self.url,
+                .extra = std.meta.activeTag(self.extra),
+                .status = self.status,
+            });
+        }
 
         if (self.extra == .frame and self.extra.frame.mode == .normal) {
             // This is blocked in a loop at the end of addFromElement, setting
