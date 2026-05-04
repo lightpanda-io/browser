@@ -132,11 +132,6 @@ jobs:
           tag: ${{ env.RELEASE }}
           makeLatest: true
 
-  package-archlinux:
-    if: github.ref_type == 'tag'
-    needs: build-linux
-    uses: ./.github/workflows/package-archlinux.yml
-
   package-debian:
     if: github.ref_type == 'tag'
     needs: build-linux
