@@ -49,9 +49,9 @@ pub fn record(self: *Self, cmd: Command.Command) void {
 pub fn recordComment(self: *Self, comment: []const u8) void {
     const f = self.file orelse return;
     const prefix: []const u8 = if (self.needs_separator) "\n# " else "# ";
-    const line = std.fmt.allocPrint(self.allocator, "{s}{s}\n", .{ prefix, comment }) catch return;
-    defer self.allocator.free(line);
-    _ = f.write(line) catch return;
+    f.writeAll(prefix) catch return;
+    f.writeAll(comment) catch return;
+    f.writeAll("\n") catch return;
     self.needs_separator = true;
 }
 

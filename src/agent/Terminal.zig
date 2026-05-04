@@ -12,7 +12,6 @@ const ansi_bold = "\x1b[1m";
 const ansi_dim = "\x1b[2m";
 const ansi_cyan = "\x1b[36m";
 const ansi_green = "\x1b[32m";
-const ansi_yellow = "\x1b[33m";
 const ansi_red = "\x1b[31m";
 
 history_path: ?[:0]const u8,

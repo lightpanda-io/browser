@@ -280,7 +280,7 @@ fn runOneShot(self: *Self, task: []const u8) bool {
 
 fn runRepl(self: *Self) void {
     self.terminal.printInfo("Lightpanda Agent (type '/quit' to exit)");
-    self.terminal.printInfo("Tab completes/cycles throuch commands; the dim grey ghost shows the first match.");
+    self.terminal.printInfo("Tab completes/cycles through commands; the dim grey ghost shows the first match.");
     log.debug(.app, "tools loaded", .{ .count = self.tools.len });
     if (self.ai_client) |ai_client| {
         self.terminal.printInfoFmt("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });

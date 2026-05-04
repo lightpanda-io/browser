@@ -93,12 +93,7 @@ fn fieldTypeOf(value: std.json.Value) FieldType {
     if (value != .object) return .other;
     const ty = value.object.get("type") orelse return .other;
     if (ty != .string) return .other;
-    const s = ty.string;
-    if (std.mem.eql(u8, s, "string")) return .string;
-    if (std.mem.eql(u8, s, "integer")) return .integer;
-    if (std.mem.eql(u8, s, "number")) return .number;
-    if (std.mem.eql(u8, s, "boolean")) return .boolean;
-    return .other;
+    return std.meta.stringToEnum(FieldType, ty.string) orelse .other;
 }
 
 pub fn findSchema(schemas: []const SchemaInfo, name: []const u8) ?*const SchemaInfo {

@@ -100,7 +100,7 @@ pub fn handleToolCall(self: *Self, arena: std.mem.Allocator, req: protocol.Reque
     if (args.attachments) |paths| {
         for (paths) |p| {
             if (!isAttachmentPathSafe(p)) {
-                log.warn(.mcp, "rejected unsafe attachment path", .{ .path = p });
+                log.warn(.mcp, "unsafe attachment path", .{ .path = p });
                 return self.transport.sendError(
                     id,
                     .InvalidParams,
