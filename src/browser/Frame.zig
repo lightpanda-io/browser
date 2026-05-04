@@ -1601,7 +1601,20 @@ pub fn checkIntersections(self: *Frame) !void {
     }
 }
 
-pub fn dispatchLoad(self: *Frame) !void {
+pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
+    try self._to_load.append(self.arena, html);
+    if (self._to_load.items.len == 1) {
+        try self.js.scheduler.add(self, struct {
+            fn cleanup(ctx: *anyopaque) !?u32 {
+                const f: *Frame = @ptrCast(@alignCast(ctx));
+                try f.dispatchLoad();
+                return null;
+            }
+        }.cleanup, 0, .{ .name = "frame.dispatchLoad" });
+    }
+}
+
+fn dispatchLoad(self: *Frame) !void {
     const has_dom_load_listener = self._event_manager.has_dom_load_listener;
 
     // Swap buffers - new additions during dispatch go to the other buffer

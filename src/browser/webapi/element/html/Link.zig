@@ -106,7 +106,7 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
         return;
     }
 
-    try frame._to_load.append(frame.arena, self._proto);
+    try frame.queueLoad(self._proto);
 }
 
 pub const JsApi = struct {

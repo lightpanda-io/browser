@@ -84,6 +84,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
     while (true) {
         if (gc_hint_timer.read() >= gc_hint_period_ns) {
             gc_hint_timer.reset();
+            self.frame._page.cleanupClosedPopups();
             self.session.browser.env.memoryPressureNotification(.moderate);
         }
 
@@ -180,9 +181,6 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
             // store http_client.http_active BEFORE this call and then use
             // it AFTER.
             try browser.runMacrotasks();
-
-            // Each call to this runs scheduled load events.
-            try frame.dispatchLoad();
 
             const http_active = http_client.http_active;
             const total_network_activity = http_active + http_client.interception_layer.intercepted;
