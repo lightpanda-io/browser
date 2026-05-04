@@ -548,7 +548,13 @@ fn runScript(self: *Self, path: []const u8) bool {
 
                         if (self.attemptSelfHeal(sa, entry.raw_line, verification.reason, last_comment)) |healed_cmds| {
                             if (formatReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds)) |replacement| {
-                                replacements.append(sa, replacement) catch {};
+                                replacements.append(sa, replacement) catch |err| {
+                                    self.terminal.printErrorFmt(
+                                        "line {d}: out of memory recording heal: {s} (script left unchanged)",
+                                        .{ entry.line_num, @errorName(err) },
+                                    );
+                                    return false;
+                                };
                             }
                             continue;
                         }
@@ -590,29 +596,44 @@ fn formatReplacement(arena: std.mem.Allocator, original_span: []const u8, raw_li
 
 fn flushReplacements(self: *Self, path: []const u8, content: []const u8, replacements: []const Replacement) void {
     if (replacements.len == 0) return;
+    writeHealedScript(self.allocator, std.fs.cwd(), path, content, replacements) catch |err| {
+        self.terminal.printErrorFmt(
+            "Failed to update script {s}: {s} (script left unchanged)",
+            .{ path, @errorName(err) },
+        );
+        return;
+    };
+    self.terminal.printInfoFmt(
+        "Script updated with {d} healed command(s); backup at {s}.bak",
+        .{ replacements.len, path },
+    );
+}
 
-    const bak_path = std.fmt.allocPrint(self.allocator, "{s}.bak", .{path}) catch return;
-    defer self.allocator.free(bak_path);
-    if (std.fs.cwd().writeFile(.{ .sub_path = bak_path, .data = content })) {
-        self.terminal.printInfoFmt("Backup saved to {s}", .{bak_path});
-    } else |_| {}
+/// Write `content` to `dir`/`path`.bak, then atomically replace `dir`/`path`
+/// with `content` after `replacements` are applied. On any failure the
+/// original file is left untouched: the backup write happens before
+/// `atomicFile` is invoked, so a failed `.bak` aborts before mutating the
+/// live file, and `atomicFile.deinit` cleans up the temp file on later
+/// errors. Caller must surface the error to the user.
+fn writeHealedScript(
+    allocator: std.mem.Allocator,
+    dir: std.fs.Dir,
+    path: []const u8,
+    content: []const u8,
+    replacements: []const Replacement,
+) !void {
+    const bak_path = try std.fmt.allocPrint(allocator, "{s}.bak", .{path});
+    defer allocator.free(bak_path);
+    try dir.writeFile(.{ .sub_path = bak_path, .data = content });
 
-    const new_content = applyReplacements(self.allocator, content, replacements) catch return;
-    defer self.allocator.free(new_content);
+    const new_content = try applyReplacements(allocator, content, replacements);
+    defer allocator.free(new_content);
 
     var write_buf: [4096]u8 = undefined;
-    var af = std.fs.cwd().atomicFile(path, .{ .write_buffer = &write_buf }) catch |err| {
-        self.terminal.printErrorFmt("Failed to update script: {s}", .{@errorName(err)});
-        return;
-    };
+    var af = try dir.atomicFile(path, .{ .write_buffer = &write_buf });
     defer af.deinit();
-    af.file_writer.interface.writeAll(new_content) catch return;
-    af.finish() catch |err| {
-        self.terminal.printErrorFmt("Failed to update script: {s}", .{@errorName(err)});
-        return;
-    };
-
-    self.terminal.printInfoFmt("Script updated with {d} healed command(s).", .{replacements.len});
+    try af.file_writer.interface.writeAll(new_content);
+    try af.finish();
 }
 
 /// Build a new buffer by splicing `replacements` into `content`.
@@ -1290,6 +1311,53 @@ test "dupeMessages: happy path" {
     try std.testing.expectEqualStrings("hello", out[0].content.?);
     try std.testing.expectEqualStrings("world", out[1].content.?);
     try std.testing.expect(out[0].content.?.ptr != src[0].content.?.ptr);
+}
+
+test "writeHealedScript: applies replacements and saves backup" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const original = "GOTO https://x\nCLICK 'old'\nCLICK 'tail'\n";
+    try tmp.dir.writeFile(.{ .sub_path = "script.lp", .data = original });
+
+    const span_start = std.mem.indexOf(u8, original, "CLICK 'old'\n").?;
+    const span = original[span_start .. span_start + "CLICK 'old'\n".len];
+    const replacements = [_]Replacement{
+        .{ .original_span = span, .new_text = "CLICK 'new'\n" },
+    };
+
+    try writeHealedScript(std.testing.allocator, tmp.dir, "script.lp", original, &replacements);
+
+    const main = try tmp.dir.readFileAlloc(std.testing.allocator, "script.lp", 1024);
+    defer std.testing.allocator.free(main);
+    try std.testing.expectEqualStrings("GOTO https://x\nCLICK 'new'\nCLICK 'tail'\n", main);
+
+    const bak = try tmp.dir.readFileAlloc(std.testing.allocator, "script.lp.bak", 1024);
+    defer std.testing.allocator.free(bak);
+    try std.testing.expectEqualStrings(original, bak);
+}
+
+test "writeHealedScript: leaves original untouched on backup failure" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const original = "CLICK 'old'\n";
+    try tmp.dir.writeFile(.{ .sub_path = "script.lp", .data = original });
+
+    const replacements = [_]Replacement{
+        .{ .original_span = original[0..], .new_text = "CLICK 'new'\n" },
+    };
+
+    // Force the .bak write to fail by putting a directory at the .bak path.
+    try tmp.dir.makeDir("script.lp.bak");
+
+    try std.testing.expect(std.meta.isError(
+        writeHealedScript(std.testing.allocator, tmp.dir, "script.lp", original, &replacements),
+    ));
+
+    const main = try tmp.dir.readFileAlloc(std.testing.allocator, "script.lp", 1024);
+    defer std.testing.allocator.free(main);
+    try std.testing.expectEqualStrings(original, main);
 }
 
 test "isHealAllowed: blocks goto and eval_js, allows page-local commands" {
