@@ -37,6 +37,7 @@ const Event = @import("Event.zig");
 const Worker = @import("Worker.zig");
 const Crypto = @import("Crypto.zig");
 const Console = @import("Console.zig");
+const Timers = @import("Timers.zig");
 const EventTarget = @import("EventTarget.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
@@ -96,6 +97,8 @@ _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
 _on_message: ?JS.Function.Global = null,
 _on_messageerror: ?JS.Function.Global = null,
+
+_timers: Timers = .{},
 
 pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
     const arena = worker._arena;
@@ -454,6 +457,36 @@ pub fn fetch(_: *const WorkerGlobalScope, input: Fetch.Input, options: ?Fetch.In
     return Fetch.init(input, options, exec);
 }
 
+pub fn queueMicrotask(self: *WorkerGlobalScope, cb: JS.Function) void {
+    self.js.queueMicrotaskFunc(cb);
+}
+
+pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Temp, exec: *JS.Execution) !u32 {
+    const cb = try handler.resolve(exec);
+    return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
+        .repeat = false,
+        .params = params,
+        .name = "worker.setTimeout",
+    });
+}
+
+pub fn clearTimeout(self: *WorkerGlobalScope, id: u32) void {
+    self._timers.clear(id);
+}
+
+pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?u32, params: []JS.Value.Temp, exec: *JS.Execution) !u32 {
+    const cb = try handler.resolve(exec);
+    return self._timers.schedule(exec, cb, delay_ms orelse 0, .{
+        .repeat = true,
+        .params = params,
+        .name = "worker.setInterval",
+    });
+}
+
+pub fn clearInterval(self: *WorkerGlobalScope, id: u32) void {
+    self._timers.clear(id);
+}
+
 const FunctionSetter = union(enum) {
     func: JS.Function.Global,
     anything: JS.Value,
@@ -546,6 +579,11 @@ pub const JsApi = struct {
     pub const close = bridge.function(WorkerGlobalScope.close, .{});
     pub const fetch = bridge.function(WorkerGlobalScope.fetch, .{});
     pub const importScripts = bridge.function(WorkerGlobalScope.importScripts, .{ .dom_exception = true });
+    pub const queueMicrotask = bridge.function(WorkerGlobalScope.queueMicrotask, .{});
+    pub const setTimeout = bridge.function(WorkerGlobalScope.setTimeout, .{});
+    pub const clearTimeout = bridge.function(WorkerGlobalScope.clearTimeout, .{});
+    pub const setInterval = bridge.function(WorkerGlobalScope.setInterval, .{});
+    pub const clearInterval = bridge.function(WorkerGlobalScope.clearInterval, .{});
 
     pub const onmessage = bridge.accessor(WorkerGlobalScope.getOnMessage, WorkerGlobalScope.setOnMessage, .{});
     pub const onmessageerror = bridge.accessor(WorkerGlobalScope.getOnMessageError, WorkerGlobalScope.setOnMessageError, .{});
