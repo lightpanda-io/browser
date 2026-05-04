@@ -858,7 +858,7 @@ fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]
     // Only the LP_ namespace is readable through this tool. Everything else
     // (provider API keys, system env, third-party secrets) reports "not set"
     // so the LLM can't probe for it. Same pattern as Kakoune's `kak_*`.
-    if (!isLpNamespace(args.name)) {
+    if (!std.ascii.startsWithIgnoreCase(args.name, "LP_")) {
         return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{args.name}) catch ToolError.InternalError;
     }
 
@@ -866,10 +866,6 @@ fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]
     const value = std.posix.getenv(name_z) orelse
         return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{args.name}) catch ToolError.InternalError;
     return value;
-}
-
-fn isLpNamespace(name: []const u8) bool {
-    return name.len >= 3 and std.ascii.eqlIgnoreCase(name[0..3], "LP_");
 }
 
 fn execConsoleLogs(
@@ -1017,20 +1013,6 @@ test "substituteEnvVars bare dollar" {
 
     const r = substituteEnvVars(arena.allocator(), "price is $ 5");
     try std.testing.expectEqualStrings("price is $ 5", r);
-}
-
-test "isLpNamespace" {
-    try std.testing.expect(isLpNamespace("LP_FOO"));
-    try std.testing.expect(isLpNamespace("LP_USERNAME"));
-    try std.testing.expect(isLpNamespace("lp_anything"));
-
-    try std.testing.expect(!isLpNamespace("HOME"));
-    try std.testing.expect(!isLpNamespace("PATH"));
-    try std.testing.expect(!isLpNamespace("ANTHROPIC_API_KEY"));
-    try std.testing.expect(!isLpNamespace(""));
-    try std.testing.expect(!isLpNamespace("LP")); // too short, no underscore
-    // "LP_" mid-name must not pass.
-    try std.testing.expect(!isLpNamespace("HELP_TEXT"));
 }
 
 extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
