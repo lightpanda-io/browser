@@ -75,7 +75,7 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "search",
-        .description = "Run a web search and return results as markdown. When TAVILY_API_KEY is set, queries the Tavily Search API and returns a numbered list of {title, url, snippet}. Otherwise (or on Tavily failure) falls back to scraping Google, then DuckDuckGo on Google captcha (prefixed with '[fallback: duckduckgo]'). Prefer this over goto-ing google.com/search directly.",
+        .description = "Run a web search and return results as markdown. When TAVILY_API_KEY is set, queries the Tavily Search API and returns a numbered list of {title, url, snippet}. Otherwise (or on Tavily failure) falls back to scraping the DuckDuckGo HTML endpoint — degraded results, may rate-limit on bursty traffic. Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS).",
         .input_schema = minify(
             \\{
             \\  "type": "object",
@@ -414,16 +414,16 @@ pub const SearchParams = struct {
     waitUntil: ?lp.Config.WaitUntil = null,
 };
 
-const google_block_url_marker = "/sorry/";
-const google_block_text_marker = "detected unusual traffic";
-
 fn execSearch(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrErr(SearchParams, arena, arguments) orelse return ToolError.InvalidParams;
     if (args.query.len == 0) return ToolError.InvalidParams;
 
     // Tavily path: only when TAVILY_API_KEY is set in the process env. On any
-    // failure (network, non-2xx, parse) fall through to the legacy Google→DDG
-    // scrape so a single Tavily outage doesn't kill a whole benchmark run.
+    // failure (network, non-2xx, parse) fall through to the DuckDuckGo scrape
+    // so a single Tavily outage doesn't kill a whole benchmark run. Google was
+    // dropped from this fallback chain — its anti-bot defences (TLS/JA3,
+    // User-Agent, consent walls, /sorry/) reject Lightpanda almost
+    // unconditionally, so the branch was decorative in practice.
     if (std.posix.getenv("TAVILY_API_KEY")) |api_key| {
         if (tavilySearch(arena, api_key, args.query)) |markdown_| {
             return markdown_;
@@ -433,23 +433,6 @@ fn execSearch(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode
     }
 
     const encoded = lp.URL.percentEncodeSegment(arena, args.query, .component) catch return ToolError.OutOfMemory;
-    const google_url = std.fmt.allocPrintSentinel(
-        arena,
-        "https://www.google.com/search?q={s}&hl=en&gl=us",
-        .{encoded},
-        0,
-    ) catch return ToolError.OutOfMemory;
-
-    try performGoto(session, registry, google_url, args.timeout, args.waitUntil);
-    const google_frame = session.currentFrame() orelse return ToolError.FrameNotLoaded;
-
-    if (std.mem.indexOf(u8, google_frame.url, google_block_url_marker) == null) {
-        const google_content = try renderFrameMarkdown(arena, google_frame);
-        if (std.mem.indexOf(u8, google_content, google_block_text_marker) == null) {
-            return google_content;
-        }
-    }
-
     const ddg_url = std.fmt.allocPrintSentinel(
         arena,
         "https://html.duckduckgo.com/html/?q={s}",
@@ -458,13 +441,7 @@ fn execSearch(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode
     ) catch return ToolError.OutOfMemory;
     try performGoto(session, registry, ddg_url, args.timeout, args.waitUntil);
     const ddg_frame = session.currentFrame() orelse return ToolError.FrameNotLoaded;
-    const ddg_content = try renderFrameMarkdown(arena, ddg_frame);
-
-    return std.fmt.allocPrint(
-        arena,
-        "[fallback: duckduckgo]\n{s}",
-        .{ddg_content},
-    ) catch return ToolError.OutOfMemory;
+    return renderFrameMarkdown(arena, ddg_frame);
 }
 
 // Thin wrapper over `zenai.search.tavily.Client` that handles client
