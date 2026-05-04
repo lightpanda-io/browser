@@ -1,5 +1,9 @@
 const std = @import("std");
 const lp = @import("lightpanda");
+const zenai = @import("zenai");
+
+const log = lp.log;
+const tavily = zenai.search.tavily;
 
 const DOMNode = @import("webapi/Node.zig");
 const CDPNode = @import("../cdp/Node.zig");
@@ -71,7 +75,7 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "search",
-        .description = "Run a web search and return results as markdown. Tries Google first; if Google serves a captcha (/sorry/ or 'unusual traffic' page), automatically falls back to DuckDuckGo's HTML endpoint and prefixes the result with '[fallback: duckduckgo]'. Prefer this over goto-ing google.com/search directly.",
+        .description = "Run a web search and return results as markdown. When TAVILY_API_KEY is set, queries the Tavily Search API and returns a numbered list of {title, url, snippet}. Otherwise (or on Tavily failure) falls back to scraping Google, then DuckDuckGo on Google captcha (prefixed with '[fallback: duckduckgo]'). Prefer this over goto-ing google.com/search directly.",
         .input_schema = minify(
             \\{
             \\  "type": "object",
@@ -417,6 +421,17 @@ fn execSearch(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode
     const args = try parseArgsOrErr(SearchParams, arena, arguments) orelse return ToolError.InvalidParams;
     if (args.query.len == 0) return ToolError.InvalidParams;
 
+    // Tavily path: only when TAVILY_API_KEY is set in the process env. On any
+    // failure (network, non-2xx, parse) fall through to the legacy Google→DDG
+    // scrape so a single Tavily outage doesn't kill a whole benchmark run.
+    if (std.posix.getenv("TAVILY_API_KEY")) |api_key| {
+        if (tavilySearch(arena, api_key, args.query)) |markdown_| {
+            return markdown_;
+        } else |err| {
+            log.warn(.browser, "tavily fallback", .{ .err = err });
+        }
+    }
+
     const encoded = lp.URL.percentEncodeSegment(arena, args.query, .component) catch return ToolError.OutOfMemory;
     const google_url = std.fmt.allocPrintSentinel(
         arena,
@@ -450,6 +465,48 @@ fn execSearch(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode
         "[fallback: duckduckgo]\n{s}",
         .{ddg_content},
     ) catch return ToolError.OutOfMemory;
+}
+
+// Thin wrapper over `zenai.search.tavily.Client` that handles client
+// lifetime and renders the structured response as markdown for the agent.
+// `arena` owns the returned slice. `api_key` is the value of TAVILY_API_KEY.
+fn tavilySearch(
+    arena: std.mem.Allocator,
+    api_key: []const u8,
+    query: []const u8,
+) ![]const u8 {
+    var client = tavily.Client.init(arena, api_key, .{});
+    defer client.deinit();
+
+    var response = client.search(query, .{ .max_results = 10 }) catch |err| {
+        if (client.last_error_status) |status| {
+            log.warn(.browser, "tavily non-2xx", .{
+                .status = status,
+                .body = client.last_error_body orelse "",
+            });
+        }
+        return err;
+    };
+    defer response.deinit();
+
+    return formatTavilyMarkdown(arena, response.value);
+}
+
+fn formatTavilyMarkdown(arena: std.mem.Allocator, resp: tavily.types.SearchResponse) ![]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    const w = &aw.writer;
+    if (resp.answer) |a| {
+        if (a.len > 0) {
+            try w.print("**Answer:** {s}\n\n", .{a});
+        }
+    }
+    for (resp.results, 0..) |r, i| {
+        try w.print("{d}. **{s}** — {s}\n   {s}\n\n", .{ i + 1, r.title, r.url, r.content });
+    }
+    if (resp.results.len == 0 and (resp.answer == null or resp.answer.?.len == 0)) {
+        try w.writeAll("No results.");
+    }
+    return aw.written();
 }
 
 fn renderFrameMarkdown(arena: std.mem.Allocator, frame: *lp.Frame) ToolError![]const u8 {
@@ -1056,4 +1113,36 @@ test "execGetEnv hides non-LP_ values even when set" {
         "Environment variable '" ++ var_name ++ "' is not set",
         r,
     );
+}
+
+test "formatTavilyMarkdown renders answer and results" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const resp: tavily.types.SearchResponse = .{
+        .query = "capital of france",
+        .answer = "Paris",
+        .results = &.{
+            .{ .title = "Paris - Wikipedia", .url = "https://en.wikipedia.org/wiki/Paris", .content = "Paris is the capital of France." },
+            .{ .title = "France", .url = "https://example.org/fr", .content = "Country in Western Europe." },
+        },
+    };
+
+    const md = try formatTavilyMarkdown(aa, resp);
+    try std.testing.expect(std.mem.indexOf(u8, md, "**Answer:** Paris") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "1. **Paris - Wikipedia**") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "https://en.wikipedia.org/wiki/Paris") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "Paris is the capital of France.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "2. **France**") != null);
+}
+
+test "formatTavilyMarkdown handles empty results" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const resp: tavily.types.SearchResponse = .{};
+    const md = try formatTavilyMarkdown(aa, resp);
+    try std.testing.expectEqualStrings("No results.", md);
 }
