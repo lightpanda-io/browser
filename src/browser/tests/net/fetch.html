@@ -280,3 +280,53 @@
     }
   }
 </script>
+
+<script id=fetch_in_worker type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./fetch-worker.js');
+    worker.onmessage = (e) => state.resolve(e.data);
+    setTimeout(() => worker.postMessage({ kind: 'basic' }), 100);
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker fetch error: ' + data.err);
+      testing.expectEqual(200, data.status);
+      testing.expectEqual('http://127.0.0.1:9582/xhr', data.url);
+      testing.expectEqual('basic', data.type);
+      testing.expectEqual('text/html; charset=utf-8', data.content_type);
+      testing.expectEqual(100, data.length);
+    });
+  }
+</script>
+
+<script id=fetch_post_in_worker type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./fetch-worker.js');
+    worker.onmessage = (e) => state.resolve(e.data);
+    setTimeout(() => worker.postMessage({ kind: 'post' }), 100);
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker fetch error: ' + data.err);
+      testing.expectEqual(200, data.status);
+      testing.expectEqual(true, data.length > 64);
+    });
+  }
+</script>
+
+<script id=fetch_blob_url_in_worker type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./fetch-worker.js');
+    worker.onmessage = (e) => state.resolve(e.data);
+    setTimeout(() => worker.postMessage({ kind: 'blob' }), 100);
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker fetch error: ' + data.err);
+      testing.expectEqual(200, data.status);
+      testing.expectEqual(true, data.url_matches);
+      testing.expectEqual('text/plain', data.content_type);
+      testing.expectEqual('Hello from worker blob!', data.text);
+    });
+  }
+</script>

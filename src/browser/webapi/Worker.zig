@@ -68,7 +68,7 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
     const arena = try session.getArena(.large, "Worker");
     errdefer session.releaseArena(arena);
 
-    const resolved_url = try URL.resolve(arena, exec.url.*, url, .{});
+    const resolved_url = try URL.resolve(arena, exec.url.*, url, .{ .encoding = frame.charset });
     const self = try frame._page.factory.eventTargetWithAllocator(arena, Worker{
         ._arena = arena,
         ._proto = undefined,
