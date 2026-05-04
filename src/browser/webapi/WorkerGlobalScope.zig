@@ -33,6 +33,7 @@ const EventManagerBase = @import("../EventManagerBase.zig");
 const ScriptManagerBase = @import("../ScriptManagerBase.zig");
 
 const Blob = @import("Blob.zig");
+const Event = @import("Event.zig");
 const Worker = @import("Worker.zig");
 const Crypto = @import("Crypto.zig");
 const Console = @import("Console.zig");
@@ -159,8 +160,6 @@ pub fn base(self: *const WorkerGlobalScope) [:0]const u8 {
 pub fn asEventTarget(self: *WorkerGlobalScope) *EventTarget {
     return self._proto;
 }
-
-const Event = @import("Event.zig");
 
 // Dispatch an event to listeners on the given target within this worker context.
 pub fn dispatch(
@@ -343,6 +342,64 @@ pub fn close(self: *WorkerGlobalScope) void {
     self._closed = true;
 }
 
+pub fn importScripts(self: *WorkerGlobalScope, urls: []const [:0]const u8) !void {
+    const session = self._session;
+    const arena = try session.getArena(.large, "importScript");
+    defer session.releaseArena(arena);
+
+    for (urls) |url| {
+        defer session.arena_pool.resetRetain(arena);
+        try self.importScript(arena, url);
+    }
+}
+
+fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !void {
+    const session = self._session;
+
+    const resolved_url = try URL.resolve(arena, self.url, url, .{});
+
+    const http_client = session.browser.http_client;
+
+    var headers = try http_client.newHeaders();
+    try self.headersForRequest(&headers);
+
+    const response = http_client.syncRequest(arena, .{
+        .url = resolved_url,
+        .method = .GET,
+        .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
+        .headers = headers,
+        .cookie_jar = &session.cookie_jar,
+        .cookie_origin = self.url,
+        .resource_type = .script,
+        .notification = session.notification,
+    }) catch |err| {
+        log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });
+        return error.NetworkError;
+    };
+
+    if (response.status != 200) {
+        log.warn(.http, "importScript", .{ .url = resolved_url, .status = response.status });
+        return error.NetworkError;
+    }
+
+    var ls: JS.Local.Scope = undefined;
+    self.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: JS.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = ls.local.eval(response.body.items, url) catch |err| {
+        const caught = try_catch.caughtOrError(arena, err);
+        log.err(.browser, "importScript", .{ .url = resolved_url, .caught = caught });
+        return;
+    };
+
+    ls.local.runMacrotasks();
+}
+
 pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.temp(),
@@ -396,11 +453,6 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
 pub fn fetch(_: *const WorkerGlobalScope, input: Fetch.Input, options: ?Fetch.InitOpts, exec: *const JS.Execution) !JS.Promise {
     return Fetch.init(input, options, exec);
 }
-
-// TODO: importScripts - needs script loading infrastructure
-// TODO: location - needs WorkerLocation
-// TODO: navigator - needs WorkerNavigator
-// TODO: Timer functions - need scheduler integration
 
 const FunctionSetter = union(enum) {
     func: JS.Function.Global,
@@ -493,6 +545,7 @@ pub const JsApi = struct {
     pub const reportError = bridge.function(WorkerGlobalScope.reportError, .{});
     pub const close = bridge.function(WorkerGlobalScope.close, .{});
     pub const fetch = bridge.function(WorkerGlobalScope.fetch, .{});
+    pub const importScripts = bridge.function(WorkerGlobalScope.importScripts, .{ .dom_exception = true });
 
     pub const onmessage = bridge.accessor(WorkerGlobalScope.getOnMessage, WorkerGlobalScope.setOnMessage, .{});
     pub const onmessageerror = bridge.accessor(WorkerGlobalScope.getOnMessageError, WorkerGlobalScope.setOnMessageError, .{});

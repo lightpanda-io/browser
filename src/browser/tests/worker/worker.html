@@ -275,3 +275,23 @@
     });
   }
 </script>
+
+<script id="importScripts" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('importScripts-worker.js');
+
+    var received = [];
+    worker.onmessage = function(event) {
+      received.push(event);
+      if (received.length == 2) {
+        state.resolve();
+      }
+    };
+
+    await state.done(() => {
+      testing.expectEqual('importScripts-1', received[0].data);
+      testing.expectEqual('importScripts-2', received[1].data);
+    });
+  }
+</script>
