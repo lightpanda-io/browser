@@ -199,7 +199,9 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
 
     var next = client.layer();
 
-    next = layerWith(&client.interception_layer, next);
+    if (network.config.mode == .serve) {
+        next = layerWith(&client.interception_layer, next);
+    }
 
     if (network.config.obeyRobots()) {
         next = layerWith(&client.robots_layer, next);
