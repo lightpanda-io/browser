@@ -747,6 +747,16 @@ fn dupeParts(alloc: std.mem.Allocator, parts: []const zenai.provider.ContentPart
     return out;
 }
 
+/// Self-heal must only patch the current page; navigation and arbitrary
+/// scripting are blocked even if the model emits them via `goto` / `eval`.
+/// docs/agent.md guarantees "no navigation away from the current page".
+fn isHealAllowed(cmd: Command.Command) bool {
+    return switch (cmd) {
+        .goto, .eval_js => false,
+        else => true,
+    };
+}
+
 /// Runs a single LLM turn, captures the commands it called without recording
 /// them — so the caller can splice healed commands into the script directly.
 fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Command.Command {
@@ -781,11 +791,16 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
 
     var cmds: std.ArrayList(Command.Command) = .empty;
     for (result.tool_calls_made) |tc| {
-        if (!tc.is_error) {
-            if (Command.fromToolCall(ma, tc.name, tc.arguments)) |cmd| {
-                cmds.append(arena, cmd) catch {};
-            }
+        if (tc.is_error) continue;
+        const cmd = Command.fromToolCall(ma, tc.name, tc.arguments) orelse continue;
+        if (!isHealAllowed(cmd)) {
+            self.terminal.printInfoFmt(
+                "self-heal: ignoring {s} (navigation and eval are not allowed during heal)",
+                .{tc.name},
+            );
+            continue;
         }
+        cmds.append(arena, cmd) catch {};
     }
 
     if (result.text) |text| {
@@ -1275,6 +1290,19 @@ test "dupeMessages: happy path" {
     try std.testing.expectEqualStrings("hello", out[0].content.?);
     try std.testing.expectEqualStrings("world", out[1].content.?);
     try std.testing.expect(out[0].content.?.ptr != src[0].content.?.ptr);
+}
+
+test "isHealAllowed: blocks goto and eval_js, allows page-local commands" {
+    try std.testing.expect(!isHealAllowed(.{ .goto = "https://x" }));
+    try std.testing.expect(!isHealAllowed(.{ .eval_js = "alert(1)" }));
+
+    try std.testing.expect(isHealAllowed(.{ .click = ".btn" }));
+    try std.testing.expect(isHealAllowed(.{ .hover = ".menu" }));
+    try std.testing.expect(isHealAllowed(.{ .wait = ".loaded" }));
+    try std.testing.expect(isHealAllowed(.{ .type_cmd = .{ .selector = "#u", .value = "x" } }));
+    try std.testing.expect(isHealAllowed(.{ .select = .{ .selector = "#s", .value = "x" } }));
+    try std.testing.expect(isHealAllowed(.{ .check = .{ .selector = "#c", .checked = true } }));
+    try std.testing.expect(isHealAllowed(.{ .scroll = .{ .x = 0, .y = 100 } }));
 }
 
 test "dupeMessages: returns null on mid-iteration alloc failure" {
