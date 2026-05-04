@@ -105,6 +105,12 @@ pub fn deinit(self: *Session) void {
         self.removePage();
     }
     self.cookie_jar.deinit();
+
+    // Force V8 to flush any remaining weak callbacks while
+    // fc_identity_pool is still alive. Identity structs allocated from
+    // this pool back V8 weak-callback parameters; freeing the pool first
+    // would leave dangling pointers that segfault on the next GC.
+    self.browser.env.memoryPressureNotification(.critical);
     self.fc_identity_pool.deinit();
 
     self.storage_shed.deinit(self.browser.app.allocator);
