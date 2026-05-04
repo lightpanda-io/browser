@@ -365,6 +365,16 @@ pub fn disposeBrowserContext(self: *CDP, browser_context_id: []const u8) bool {
     if (std.mem.eql(u8, bc.id, browser_context_id) == false) {
         return false;
     }
+    // Reentrant teardown from a CDP message drained inside HttpClient.syncRequest.
+    // Tearing down the browser context here would free Session/Page state
+    // that the unwinding script-eval frame above us is about to dereference
+    // (see Session.removePage's matching guard). Defer cleanup to
+    // CDP.deinit at connection close, by which time eval has unwound.
+    if (bc.session.currentPage()) |page| {
+        if (page.frame._script_manager.base.is_evaluating) {
+            return true;
+        }
+    }
     bc.deinit();
     self.browser.closeSession();
     self.browser_context = null;
