@@ -204,7 +204,7 @@ const TestContext = struct {
 
             if (self.cdp_) |*cdp__| {
                 if (cdp__.browser_context) |*bc| {
-                    if (bc.session.page != null) {
+                    if (bc.session.hasPage()) {
                         var runner = try bc.session.runner(.{});
                         _ = try runner.tick(.{ .ms = 1000 });
                     }

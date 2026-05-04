@@ -27,6 +27,7 @@ const HttpClient = @import("HttpClient.zig");
 const ArenaPool = App.ArenaPool;
 
 const Session = @import("Session.zig");
+const Page = @import("Page.zig");
 const Notification = @import("../Notification.zig");
 
 // Browser is an instance of the browser.
@@ -40,6 +41,9 @@ session: ?Session,
 allocator: Allocator,
 arena_pool: *ArenaPool,
 http_client: *HttpClient,
+
+// used by sessions to allocate pages.
+page_pool: std.heap.MemoryPool(Page),
 
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
@@ -59,12 +63,14 @@ pub fn init(app: *App, opts: InitOpts) !Browser {
         .allocator = allocator,
         .arena_pool = &app.arena_pool,
         .http_client = opts.http_client,
+        .page_pool = std.heap.MemoryPool(Page).init(allocator),
     };
 }
 
 pub fn deinit(self: *Browser) void {
     self.closeSession();
     self.env.deinit();
+    self.page_pool.deinit();
 }
 
 pub fn newSession(self: *Browser, notification: *Notification) !*Session {

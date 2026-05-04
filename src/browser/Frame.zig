@@ -351,9 +351,9 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
     }
 }
 
-pub fn deinit(self: *Frame, abort_http: bool) void {
+pub fn deinit(self: *Frame) void {
     for (self.child_frames.items) |frame| {
-        frame.deinit(abort_http);
+        frame.deinit();
     }
 
     for (self.workers.items) |worker| {
@@ -413,14 +413,8 @@ pub fn deinit(self: *Frame, abort_http: bool) void {
 
     self._script_manager.base.shutdown = true;
 
-    if (self.parent == null) {
-        browser.http_client.abort();
-    } else if (abort_http) {
-        // a small optimization, it's faster to abort _everything_ on the root
-        // frame, so we prefer that. But if it's just the frame that's going
-        // away (a frame navigation) then we'll abort the frame-related requests
-        browser.http_client.abortFrame(self._frame_id);
-    }
+    // don't abort pending frames.
+    browser.http_client.abortFrame(self._frame_id, .{});
 
     self._script_manager.deinit();
     self._style_manager.deinit();
@@ -633,6 +627,15 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         const ref_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", ref }, 0);
         try headers.add(ref_header);
     }
+
+    // A root navigation issued against a pending Page (i.e. one allocated by
+    // Session.initiateRootNavigation) flags both the notification and the
+    // HTTP request itself: CDP skips its node-registry reset until commit,
+    // and the in-flight transfer survives the OLD page's frame.deinit which
+    // calls http_client.abortFrame(frame_id) on the shared frame_id during
+    // commitPendingPage.
+    const is_pending_root = self._page._state == .pending;
+
     // We dispatch frame_navigate event before sending the request.
     // It ensures the event frame_navigated is not dispatched before this one.
     session.notification.dispatch(.frame_navigate, &.{
@@ -642,6 +645,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
+        .is_pending_root = is_pending_root,
     });
 
     // Record telemetry for navigation
@@ -665,6 +669,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             .cookie_origin = self.url,
             .resource_type = .document,
             .notification = self._session.notification,
+            .protect_from_abort = is_pending_root,
         },
         .header_callback = frameHeaderDoneCallback,
         .data_callback = frameDataCallback,
@@ -755,17 +760,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         .type = target._type,
     });
 
-    // This is a micro-optimization. Terminate any inflight request as early
-    // as we can. This will be more properly shutdown when we process the
-    // scheduled navigation.
-    if (target.parent == null) {
-        session.browser.http_client.abort();
-    } else {
-        // This doesn't terminate any inflight requests for nested frames, but
-        // again, this is just an optimization. We'll correctly shut down all
-        // nested inflight requests when we process the navigation.
-        session.browser.http_client.abortFrame(target._frame_id);
-    }
+    session.browser.http_client.abortFrame(target._frame_id, .{});
 
     // Capture the originating frame's URL as the Referer for this
     // navigation. The originator's frame may be torn down before navigate()
@@ -969,6 +964,28 @@ fn notifyParentLoadComplete(self: *Frame) void {
 
 fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
     var self: *Frame = @ptrCast(@alignCast(response.ctx));
+
+    // Commit point for a pending root navigation. The session has been
+    // holding the OLD page alive during the round-trip; now that response
+    // headers have arrived, swap pending → active. This dispatches
+    // frame_remove (clears OLD V8 context group + CDP node_registry),
+    // tears down the OLD page, flips the pointer, and dispatches
+    // frame_created against the new (now active) frame.
+    //
+    // The OLD page's frame.deinit calls http_client.abortFrame(frame_id) on
+    // the frame_id it shares with the (now-active) pending page; our transfer
+    // survives because Session.initiateRootNavigation flagged the request
+    // protect_from_abort, which abortFrame's default .normal scope honors.
+    // Once we are past commit, that protection is no longer needed and may
+    // interfere with subsequent aborts (e.g. another navigation while we are
+    // still streaming the body), so clear it.
+    if (self._page._state == .pending) {
+        try self._session.commitPendingPage();
+        switch (response.inner) {
+            .transfer => |t| t.req.params.protect_from_abort = false,
+            .fulfilled, .cached => {},
+        }
+    }
 
     const response_url = response.url();
     if (std.mem.eql(u8, response_url, self.url) == false) {
@@ -1199,6 +1216,16 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
     var self: *Frame = @ptrCast(@alignCast(ctx));
 
     log.err(.frame, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
+
+    // A pending root navigation that failed before commit: discard the
+    // pending Page; the OLD active Page (and its V8 context) is untouched.
+    // We do NOT run frameDoneCallback against the pending frame — the frame
+    // is about to be freed.
+    if (self._page._state == .pending) {
+        self._session.discardPendingPage();
+        return;
+    }
+
     self._parse_state.deinit(self);
     self._parse_state = .{ .err = err };
 
@@ -1274,7 +1301,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     const frame_id = session.nextFrameId();
 
     try Frame.init(new_frame, frame_id, self._page, self);
-    errdefer new_frame.deinit(true);
+    errdefer new_frame.deinit();
 
     self._pending_loads += 1;
     new_frame.iframe = iframe;
@@ -1383,7 +1410,7 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
 
     const frame_id = session.nextFrameId();
     try Frame.init(popup, frame_id, page, null);
-    errdefer popup.deinit(true);
+    errdefer popup.deinit();
 
     popup.window._opener = opts.opener;
     if (opts.name.len > 0 and
