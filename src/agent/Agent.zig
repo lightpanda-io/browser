@@ -264,7 +264,7 @@ pub fn deinit(self: *Self) void {
 
 /// Returns true on success.
 pub fn run(self: *Self) bool {
-    if (self.one_shot_task) |task| return self.runOneShot(task);
+    if (self.one_shot_task) |task| return self.runTurn(task, null, "Request");
     if (self.script_file) |path| {
         const script_ok = self.runScript(path);
         if (!self.interactive) return script_ok;
@@ -273,16 +273,14 @@ pub fn run(self: *Self) bool {
     return true;
 }
 
-/// Final answer goes to stdout; tool calls and errors go to stderr,
-/// so the caller can pipe stdout to capture a clean answer.
-fn runOneShot(self: *Self, task: []const u8) bool {
-    const text = self.processUserMessage(task, null) catch |err| switch (err) {
-        error.UnsupportedAttachment, error.AttachmentReadFailed => {
-            // Already logged in buildUserMessageParts with detail.
-            return false;
-        },
+/// Final answer goes to stdout; errors go to stderr, so a caller can
+/// pipe stdout to capture a clean answer.
+fn runTurn(self: *Self, prompt: []const u8, record_comment: ?[]const u8, label: []const u8) bool {
+    const text = self.processUserMessage(prompt, record_comment) catch |err| switch (err) {
+        // buildUserMessageParts has already logged the detail.
+        error.UnsupportedAttachment, error.AttachmentReadFailed => return false,
         else => {
-            self.terminal.printErrorFmt("Request failed: {s}", .{@errorName(err)});
+            self.terminal.printErrorFmt("{s} failed: {s}", .{ label, @errorName(err) });
             return false;
         },
     };
@@ -320,9 +318,9 @@ fn runRepl(self: *Self) void {
 
         switch (cmd) {
             .comment => continue :repl,
-            .login => self.runLlmTurnPrint(login_prompt, line, "LOGIN"),
-            .accept_cookies => self.runLlmTurnPrint(accept_cookies_prompt, line, "ACCEPT_COOKIES"),
-            .natural_language => self.runLlmTurnPrint(line, line, "Request"),
+            .login => _ = self.runTurn(login_prompt, line, "LOGIN"),
+            .accept_cookies => _ = self.runTurn(accept_cookies_prompt, line, "ACCEPT_COOKIES"),
+            .natural_language => _ = self.runTurn(line, line, "Request"),
             else => {
                 self.cmd_executor.execute(cmd);
                 self.recorder.record(cmd);
@@ -851,17 +849,6 @@ pub fn runOneTask(
     self.tool_executor.resetNodeRegistry();
     self.one_shot_attachments = attachments;
     return self.processUserMessage(task, null);
-}
-
-/// REPL helper: run an LLM turn and route the answer to the terminal,
-/// reporting failures with `label` ("LOGIN", "Request", ...). Errors are
-/// swallowed — the REPL must not die from a single failed turn.
-fn runLlmTurnPrint(self: *Self, prompt: []const u8, record_comment: ?[]const u8, label: []const u8) void {
-    const text = self.processUserMessage(prompt, record_comment) catch |err| {
-        self.terminal.printErrorFmt("{s} failed: {s}", .{ label, @errorName(err) });
-        return;
-    };
-    if (text) |t| self.terminal.printAssistant(t) else self.terminal.printInfo("(no response from model)");
 }
 
 /// Returned text lives in `message_arena`, so it's only valid until the
