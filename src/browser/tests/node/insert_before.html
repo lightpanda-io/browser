@@ -39,3 +39,34 @@
   assertChildren([], d1);
   assertChildren([c1, c2], d2);
 </script>
+
+<div id=d3></div>
+<div id=d3_stash></div>
+<script id=insertBefore_disconnect_callback_reparents>
+  // Same disconnectedCallback re-parenting pattern as in append_child.html,
+  // exercised through insertBefore. insertBefore respects the callback's
+  // placement instead of overriding it.
+  const d3 = $('#d3');
+  const stash = $('#d3_stash');
+
+  class IBReparentOnDisconnect extends HTMLElement {
+    disconnectedCallback() {
+      if (this.parentNode === null) {
+        stash.appendChild(this);
+      }
+    }
+  }
+  customElements.define('ib-reparent-on-disconnect', IBReparentOnDisconnect);
+
+  const moving = document.createElement('ib-reparent-on-disconnect');
+  moving.id = 'ib_moving';
+  d3.appendChild(moving);
+
+  const detached = document.createElement('div');
+  const ref = document.createElement('span');
+  detached.appendChild(ref);
+
+  detached.insertBefore(moving, ref);
+
+  testing.expectEqual(stash, moving.parentNode);
+</script>
