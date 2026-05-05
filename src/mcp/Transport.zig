@@ -1,7 +1,6 @@
 //! Stdio JSON-RPC writer shared between the browser-tools MCP server
 //! (`mcp/Server.zig`) and the agent-tool MCP server
-//! (`agent/McpServer.zig`). Owns the output writer, a serialization buffer,
-//! and the mutex that serializes concurrent response writes.
+//! (`agent/McpServer.zig`).
 
 const std = @import("std");
 const protocol = @import("protocol.zig");
