@@ -27,20 +27,17 @@ pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 }
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
-    if (req.params == null or req.id == null) {
-        return server.transport.sendError(req.id orelse .{ .integer = -1 }, .InvalidParams, "Missing params");
-    }
+    const id = req.id orelse return;
+    const params = req.params orelse return server.transport.sendError(id, .InvalidParams, "Missing params");
 
     const CallParams = struct {
         name: []const u8,
         arguments: ?std.json.Value = null,
     };
 
-    const call_params = std.json.parseFromValueLeaky(CallParams, arena, req.params.?, .{ .ignore_unknown_fields = true }) catch {
-        return server.transport.sendError(req.id.?, .InvalidParams, "Invalid params");
+    const call_params = std.json.parseFromValueLeaky(CallParams, arena, params, .{ .ignore_unknown_fields = true }) catch {
+        return server.transport.sendError(id, .InvalidParams, "Invalid params");
     };
-
-    const id = req.id.?;
 
     const action = std.meta.stringToEnum(browser_tools.Action, call_params.name) orelse {
         return server.transport.sendError(id, .MethodNotFound, "Tool not found");
