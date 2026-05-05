@@ -34,8 +34,11 @@ _arena: std.mem.Allocator,
 _last_index: usize,
 _last_length: ?u32,
 _last_node: ?*std.DoublyLinkedList.Node,
+// Version observed on `_owning_frame` the last time we refreshed our cache.
+// Compare against `_owning_frame.version` to detect DOM mutations.
 _cached_version: usize,
 _node: *Node,
+_owning_frame: *Frame,
 
 pub const KeyIterator = GenericIterator(Iterator, "0");
 pub const ValueIterator = GenericIterator(Iterator, "1");
@@ -45,6 +48,8 @@ pub fn init(node: *Node, frame: *Frame) !*ChildNodes {
     const arena = try frame.getArena(.small, "ChildNodes");
     errdefer frame.releaseArena(arena);
 
+    const owning_frame = node.ownerFrame(frame);
+
     const self = try arena.create(ChildNodes);
     self.* = .{
         ._node = node,
@@ -52,7 +57,8 @@ pub fn init(node: *Node, frame: *Frame) !*ChildNodes {
         ._last_index = 0,
         ._last_node = null,
         ._last_length = null,
-        ._cached_version = frame.version,
+        ._cached_version = owning_frame.version,
+        ._owning_frame = owning_frame,
     };
     return self;
 }
@@ -61,8 +67,8 @@ pub fn deinit(self: *const ChildNodes, page: *Page) void {
     page.releaseArena(self._arena);
 }
 
-pub fn length(self: *ChildNodes, frame: *Frame) !u32 {
-    if (self.versionCheck(frame)) {
+pub fn length(self: *ChildNodes, _: *Frame) !u32 {
+    if (self.versionCheck()) {
         if (self._last_length) |cached_length| {
             return cached_length;
         }
@@ -75,16 +81,16 @@ pub fn length(self: *ChildNodes, frame: *Frame) !u32 {
     return len;
 }
 
-pub fn getAtIndex(self: *ChildNodes, index: usize, frame: *Frame) !?*Node {
-    _ = self.versionCheck(frame);
+pub fn getAtIndex(self: *ChildNodes, index: usize, _: *Frame) !?*Node {
+    _ = self.versionCheck();
 
     var current = self._last_index;
     var node: ?*std.DoublyLinkedList.Node = null;
-    if (index < current) {
+    if (index < current or self._last_node == null) {
         current = 0;
         node = self.first() orelse return null;
     } else {
-        node = self._last_node orelse self.first() orelse return null;
+        node = self._last_node;
     }
     defer self._last_index = current;
 
@@ -116,8 +122,8 @@ pub fn entries(self: *ChildNodes, frame: *Frame) !*EntryIterator {
     return .init(.{ .list = self }, frame);
 }
 
-fn versionCheck(self: *ChildNodes, frame: *Frame) bool {
-    const current = frame.version;
+fn versionCheck(self: *ChildNodes) bool {
+    const current = self._owning_frame.version;
     if (current == self._cached_version) {
         return true;
     }

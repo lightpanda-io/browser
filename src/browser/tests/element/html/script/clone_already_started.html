@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<head></head>
+<body></body>
+<script src="../../../testing.js"></script>
+
+<!--
+Per the HTML spec, the "already started" flag must be propagated when a script
+element is cloned. A clone of a script that has already run must NOT run again
+when inserted into a document. This guards a regression where cloneNode lost
+the flag and re-ran every cloned <script> on each insertion.
+-->
+
+<script id=cloned_inline_does_not_rerun>
+  window.cloned_inline_count = 0;
+  const c1_original = document.createElement('script');
+  c1_original.textContent = 'window.cloned_inline_count++;';
+  document.head.appendChild(c1_original);
+  testing.expectEqual(1, window.cloned_inline_count);
+
+  // Clone the executed script and insert the clone. The clone must not re-run.
+  const c1_clone = c1_original.cloneNode(true);
+  document.head.appendChild(c1_clone);
+  testing.expectEqual(1, window.cloned_inline_count);
+
+  // A deep clone of a wrapper containing the script must keep the flag too.
+  const c1_wrapper = document.createElement('div');
+  c1_wrapper.appendChild(c1_original.cloneNode(true));
+  document.body.appendChild(c1_wrapper);
+  testing.expectEqual(1, window.cloned_inline_count);
+</script>
