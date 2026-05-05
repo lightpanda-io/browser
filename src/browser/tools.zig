@@ -403,7 +403,7 @@ pub fn callEval(
 }
 
 fn execGoto(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
-    const args = try parseArgsOrErr(GotoParams, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgs(GotoParams, arena, arguments);
     try performGoto(session, registry, args.url, args.timeout, args.waitUntil);
     return "Navigated successfully.";
 }
@@ -415,7 +415,7 @@ pub const SearchParams = struct {
 };
 
 fn execSearch(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
-    const args = try parseArgsOrErr(SearchParams, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgs(SearchParams, arena, arguments);
     if (args.query.len == 0) return ToolError.InvalidParams;
 
     // Tavily path: only when TAVILY_API_KEY is set in the process env. On any
@@ -545,7 +545,7 @@ fn execTree(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.R
 
 fn execNodeDetails(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct { backendNodeId: CDPNode.Id };
-    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgs(Params, arena, arguments);
 
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
 
@@ -605,8 +605,13 @@ fn execEval(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.R
         timeout: ?u32 = null,
         waitUntil: ?lp.Config.WaitUntil = null,
     };
-    const args = (parseArgsOrErr(Params, arena, arguments) catch return .{ .text = "Error: out of memory", .is_error = true }) orelse
-        return .{ .text = "Error: missing 'script' argument", .is_error = true };
+    const args = parseArgs(Params, arena, arguments) catch |err| return .{
+        .text = switch (err) {
+            error.OutOfMemory => "Error: out of memory",
+            error.InvalidParams => "Error: missing or invalid 'script' argument",
+        },
+        .is_error = true,
+    };
     const page = ensurePage(session, registry, args.url, args.timeout, args.waitUntil) catch return .{ .text = "Error: page not loaded", .is_error = true };
 
     var ls: lp.js.Local.Scope = undefined;
@@ -673,7 +678,7 @@ fn execClick(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.
         backendNodeId: ?CDPNode.Id = null,
         selector: ?[]const u8 = null,
     };
-    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
     lp.actions.click(resolved.node, resolved.page) catch |err| {
@@ -700,7 +705,7 @@ fn execFill(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.R
         selector: ?[]const u8 = null,
         value: []const u8 = "",
     };
-    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgs(Params, arena, arguments);
     if (args.value.len == 0) return ToolError.InvalidParams;
     const raw_text = args.value;
     const text = substituteEnvVars(arena, raw_text);
@@ -746,7 +751,7 @@ fn execWaitForSelector(session: *lp.Session, arena: std.mem.Allocator, registry:
         selector: [:0]const u8,
         timeout: ?u32 = null,
     };
-    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgs(Params, arena, arguments);
 
     _ = session.currentFrame() orelse return ToolError.FrameNotLoaded;
 
@@ -766,7 +771,7 @@ fn execHover(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.
         backendNodeId: ?CDPNode.Id = null,
         selector: ?[]const u8 = null,
     };
-    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
     lp.actions.hover(resolved.node, resolved.page) catch |err| {
@@ -782,7 +787,7 @@ fn execPress(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode.
         key: []const u8,
         backendNodeId: ?CDPNode.Id = null,
     };
-    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgs(Params, arena, arguments);
 
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
     const target_node = try resolveOptionalNode(registry, args.backendNodeId);
@@ -815,7 +820,7 @@ fn execSelectOption(session: *lp.Session, arena: std.mem.Allocator, registry: *C
         selector: ?[]const u8 = null,
         value: []const u8,
     };
-    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
     lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| {
@@ -833,7 +838,7 @@ fn execSetChecked(session: *lp.Session, arena: std.mem.Allocator, registry: *CDP
         selector: ?[]const u8 = null,
         checked: bool,
     };
-    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
     lp.actions.setChecked(resolved.node, args.checked, resolved.page) catch |err| {
@@ -884,7 +889,7 @@ fn execFindElement(session: *lp.Session, arena: std.mem.Allocator, registry: *CD
 
 fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct { name: []const u8 };
-    const args = try parseArgsOrErr(Params, arena, arguments) orelse return ToolError.InvalidParams;
+    const args = try parseArgs(Params, arena, arguments);
 
     // Only the LP_ namespace is readable through this tool. Everything else
     // (provider API keys, system env, third-party secrets) reports "not set"
@@ -968,19 +973,24 @@ fn resolveBySelector(session: *lp.Session, selector: []const u8) ToolError!NodeA
     return .{ .node = node, .page = page };
 }
 
-fn parseArgsOrDefault(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) error{OutOfMemory}!T {
+const ParseArgsError = error{ OutOfMemory, InvalidParams };
+
+/// For tools where every field is optional. Missing args → default `T`;
+/// wrong-typed args still error (don't silently default).
+fn parseArgsOrDefault(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) ParseArgsError!T {
     const args_raw = arguments orelse return .{};
     return std.json.parseFromValueLeaky(T, arena, args_raw, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
-        else => .{},
+        else => error.InvalidParams,
     };
 }
 
-fn parseArgsOrErr(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) error{OutOfMemory}!?T {
-    const args_raw = arguments orelse return null;
+/// Required-args parse: missing or malformed both surface as `InvalidParams`.
+fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) ParseArgsError!T {
+    const args_raw = arguments orelse return error.InvalidParams;
     return std.json.parseFromValueLeaky(T, arena, args_raw, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
-        else => null,
+        else => error.InvalidParams,
     };
 }
 

@@ -546,15 +546,21 @@ fn runScript(self: *Self, path: []const u8) bool {
                         self.terminal.printInfo(msg);
 
                         if (self.attemptSelfHeal(sa, entry.raw_line, verification.reason, last_comment)) |healed_cmds| {
-                            if (formatReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds)) |replacement| {
-                                replacements.append(sa, replacement) catch |err| {
-                                    self.terminal.printErrorFmt(
-                                        "line {d}: out of memory recording heal: {s} (script left unchanged)",
-                                        .{ entry.line_num, @errorName(err) },
-                                    );
-                                    return false;
-                                };
-                            }
+                            const replacement = formatReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds) catch |err| {
+                                self.terminal.printErrorFmt(
+                                    "line {d}: failed to record heal: {s} (script left unchanged)",
+                                    .{ entry.line_num, @errorName(err) },
+                                );
+                                self.flushReplacements(path, content, replacements.items);
+                                return false;
+                            };
+                            replacements.append(sa, replacement) catch |err| {
+                                self.terminal.printErrorFmt(
+                                    "line {d}: out of memory recording heal: {s} (script left unchanged)",
+                                    .{ entry.line_num, @errorName(err) },
+                                );
+                                return false;
+                            };
                             continue;
                         }
                     }
@@ -574,17 +580,17 @@ fn runScript(self: *Self, path: []const u8) bool {
     return true;
 }
 
-fn formatReplacement(arena: std.mem.Allocator, original_span: []const u8, raw_line: []const u8, cmds: []const Command.Command) ?Replacement {
-    if (cmds.len == 0) return null;
+fn formatReplacement(arena: std.mem.Allocator, original_span: []const u8, raw_line: []const u8, cmds: []const Command.Command) !Replacement {
+    std.debug.assert(cmds.len > 0);
     var aw: std.Io.Writer.Allocating = .init(arena);
 
     // Emit every command from the heal turn, not just the first: a heal
     // may need to dismiss a popup or modal before retrying the original
     // action, and both steps must be preserved for replay.
-    aw.writer.print("# [Auto-healed] Original: {s}\n", .{raw_line}) catch return null;
+    try aw.writer.print("# [Auto-healed] Original: {s}\n", .{raw_line});
     for (cmds) |cmd| {
-        cmd.format(&aw.writer) catch return null;
-        aw.writer.writeAll("\n") catch return null;
+        try cmd.format(&aw.writer);
+        try aw.writer.writeAll("\n");
     }
 
     return .{
@@ -1147,24 +1153,17 @@ test "applyReplacements: single-line span replaced with multi-line content" {
     );
 }
 
-test "formatReplacement: empty cmds returns null" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    try std.testing.expect(formatReplacement(arena.allocator(), "CLICK '#x'\n", "CLICK '#x'", &.{}) == null);
-}
-
 test "formatReplacement: single command produces one-line replacement" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
     const cmds = [_]Command.Command{.{ .click = "#submit-v2" }};
-    const replacement = formatReplacement(
+    const replacement = try formatReplacement(
         arena.allocator(),
         "CLICK '#submit'\n",
         "CLICK '#submit'",
         &cmds,
-    ).?;
+    );
 
     try std.testing.expectEqualStrings("CLICK '#submit'\n", replacement.original_span);
     try std.testing.expectEqualStrings(
@@ -1181,12 +1180,12 @@ test "formatReplacement: multiple commands produce multi-line replacement" {
         .{ .click = ".cookie-accept" },
         .{ .click = "#submit-v2" },
     };
-    const replacement = formatReplacement(
+    const replacement = try formatReplacement(
         arena.allocator(),
         "CLICK '#submit'\n",
         "CLICK '#submit'",
         &cmds,
-    ).?;
+    );
 
     try std.testing.expectEqualStrings(
         "# [Auto-healed] Original: CLICK '#submit'\nCLICK '.cookie-accept'\nCLICK '#submit-v2'\n",
