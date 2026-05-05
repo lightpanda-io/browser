@@ -129,7 +129,6 @@ verifier: Verifier,
 recorder: Recorder,
 messages: std.ArrayList(zenai.provider.Message),
 message_arena: std.heap.ArenaAllocator,
-tools: []const zenai.provider.Tool,
 model: []const u8,
 system_prompt: []const u8,
 script_file: ?[]const u8,
@@ -199,11 +198,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         },
     };
 
-    const tools = tool_executor.getTools() catch {
-        log.fatal(.app, "failed to initialize tools", .{});
-        return error.ToolInitFailed;
-    };
-
     const history_path: ?[:0]const u8 = if (will_repl) ".lp-history" else null;
 
     // `-i <file>` means "replay then grow this file"; a script path alone is
@@ -213,7 +207,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     // Reuse the executor's schema arena: the parsed schemas in `tools` already
     // live there, and the cache must outlive only as long as those do.
     const slash_schemas: []const SlashCommand.SchemaInfo = if (will_repl)
-        SlashCommand.buildSchemas(tool_executor.schemaAllocator(), tools) catch {
+        SlashCommand.buildSchemas(tool_executor.schemaAllocator(), tool_executor.tools) catch {
             log.fatal(.app, "failed to build slash schemas", .{});
             return error.SlashSchemaInitFailed;
         }
@@ -230,7 +224,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .recorder = .init(allocator, recorder_path),
         .messages = .empty,
         .message_arena = std.heap.ArenaAllocator.init(allocator),
-        .tools = tools,
         .model = if (opts.provider) |p| (opts.model orelse zenai.provider.defaultModel(p)) else "",
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
@@ -291,7 +284,7 @@ fn runTurn(self: *Self, prompt: []const u8, record_comment: ?[]const u8, label: 
 fn runRepl(self: *Self) void {
     self.terminal.printInfo("Lightpanda Agent (type '/quit' to exit)");
     self.terminal.printInfo("Tab completes/cycles through commands; the dim grey ghost shows the first match.");
-    log.debug(.app, "tools loaded", .{ .count = self.tools.len });
+    log.debug(.app, "tools loaded", .{ .count = self.tool_executor.tools.len });
     if (self.ai_client) |ai_client| {
         self.terminal.printInfoFmt("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
@@ -747,7 +740,7 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
         ma,
         .{ .context = @ptrCast(self), .callFn = &handleToolCall },
         .{
-            .tools = self.tools,
+            .tools = self.tool_executor.tools,
             .max_tool_calls = 4,
             .max_tokens = 4096,
             .tool_choice = .auto,
@@ -886,7 +879,7 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
         ma,
         .{ .context = @ptrCast(self), .callFn = &handleToolCall },
         .{
-            .tools = self.tools,
+            .tools = self.tool_executor.tools,
             .max_turns = 30,
             // Hard cap on total tool invocations per user turn. Safety net,
             // not a budget — max_turns is the primary terminal. A healthy
@@ -946,7 +939,7 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
             ma,
             .{ .context = @ptrCast(self), .callFn = &handleToolCall },
             .{
-                .tools = self.tools,
+                .tools = self.tool_executor.tools,
                 .max_turns = 1,
                 .max_tokens = 4096,
                 .tool_choice = .none,

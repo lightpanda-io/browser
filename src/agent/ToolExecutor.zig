@@ -15,6 +15,9 @@ browser: lp.Browser,
 session: *lp.Session,
 node_registry: CDPNode.Registry,
 tool_schema_arena: std.heap.ArenaAllocator,
+/// Schemas parsed once at init from `browser_tools.tool_defs`. The slice and
+/// every JSON `Value` inside live in `tool_schema_arena`.
+tools: []const zenai.provider.Tool,
 
 pub fn init(allocator: std.mem.Allocator, app: *App) !*Self {
     const notification: *lp.Notification = try .init(allocator);
@@ -31,13 +34,25 @@ pub fn init(allocator: std.mem.Allocator, app: *App) !*Self {
         .session = undefined,
         .node_registry = CDPNode.Registry.init(allocator),
         .tool_schema_arena = std.heap.ArenaAllocator.init(allocator),
+        .tools = &.{},
     };
+
+    self.tools = try buildTools(self.tool_schema_arena.allocator());
 
     try self.browser.init(app, .{}, null);
     errdefer self.browser.deinit();
 
     self.session = try self.browser.newSession(self.notification);
     return self;
+}
+
+fn buildTools(arena: std.mem.Allocator) ![]const zenai.provider.Tool {
+    const tools = try arena.alloc(zenai.provider.Tool, browser_tools.tool_defs.len);
+    for (browser_tools.tool_defs, 0..) |t, i| {
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, t.input_schema, .{});
+        tools[i] = .{ .name = t.name, .description = t.description, .parameters = parsed };
+    }
+    return tools;
 }
 
 pub fn deinit(self: *Self) void {
@@ -69,25 +84,6 @@ pub const CallError = browser_tools.ToolError || error{InvalidJsonArguments};
 /// (e.g. derived caches over `getTools` output).
 pub fn schemaAllocator(self: *Self) std.mem.Allocator {
     return self.tool_schema_arena.allocator();
-}
-
-pub fn getTools(self: *Self) ![]const zenai.provider.Tool {
-    const arena = self.tool_schema_arena.allocator();
-    const tools = try arena.alloc(zenai.provider.Tool, browser_tools.tool_defs.len);
-    for (browser_tools.tool_defs, 0..) |t, i| {
-        const parsed = try std.json.parseFromSliceLeaky(
-            std.json.Value,
-            arena,
-            t.input_schema,
-            .{},
-        );
-        tools[i] = .{
-            .name = t.name,
-            .description = t.description,
-            .parameters = parsed,
-        };
-    }
-    return tools;
 }
 
 pub fn getCurrentUrl(self: *Self) []const u8 {
