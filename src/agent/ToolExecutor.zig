@@ -49,12 +49,17 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Tear down the current `Browser` and `Session` and replace them with
-/// fresh ones. Caller is responsible for clearing any registry/cache
-/// state that depended on the old session.
+/// fresh ones. Also clears the node registry, since backendNodeIds from
+/// the old session would dangle into the new one.
 pub fn resetSession(self: *Self) !void {
     self.browser.deinit();
     try self.browser.init(self.app, .{}, null);
     self.session = try self.browser.newSession(self.notification);
+    self.node_registry.reset();
+}
+
+pub fn resetNodeRegistry(self: *Self) void {
+    self.node_registry.reset();
 }
 
 pub const CallError = browser_tools.ToolError || error{InvalidJsonArguments};

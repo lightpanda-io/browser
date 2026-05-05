@@ -111,7 +111,7 @@ pub fn handleToolCall(self: *Self, arena: std.mem.Allocator, req: protocol.Reque
     }
 
     if (args.fresh orelse false) {
-        self.agent.tool_executor.resetSession() catch |err| {
+        self.agent.resetSession() catch |err| {
             log.err(.mcp, "fresh session reset failed", .{ .err = err });
             return self.sendErrorResult(id, "Failed to start a fresh browser session");
         };

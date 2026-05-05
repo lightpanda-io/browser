@@ -878,6 +878,12 @@ fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []cons
     return null;
 }
 
+/// Tear down the browser session and start fresh. Used by the MCP `task` tool
+/// when the caller asks for an isolated run.
+pub fn resetSession(self: *Self) !void {
+    return self.tool_executor.resetSession();
+}
+
 /// MCP entry point: run a single user task with a clean LLM context. Browser
 /// state (URL, cookies, etc.) is preserved by default; pass a fresh session
 /// upstream if isolation is needed. Returns the assistant text on success
@@ -892,7 +898,7 @@ pub fn runOneTask(
     _ = self.message_arena.reset(.retain_capacity);
     // Each task gets a fresh LLM context; drop registry entries that point
     // into the old session so a stray backendNodeId can't survive a navigation.
-    self.tool_executor.node_registry.reset();
+    self.tool_executor.resetNodeRegistry();
     self.one_shot_attachments = attachments;
     return self.processUserMessage(task, null);
 }
