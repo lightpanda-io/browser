@@ -1011,9 +1011,11 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8
                 // Same gate as `execGetEnv`: only `LP_*` is resolvable. A
                 // prompt-injected `fill('$ANTHROPIC_API_KEY')` would otherwise
                 // leak the resolved value into the page DOM.
-                const env_val: ?[:0]const u8 = if (std.ascii.startsWithIgnoreCase(name, "LP_")) blk: {
-                    const name_z = arena.dupeZ(u8, name) catch return input;
-                    break :blk std.posix.getenv(name_z);
+                var name_buf: [256]u8 = undefined;
+                const env_val: ?[:0]const u8 = if (std.ascii.startsWithIgnoreCase(name, "LP_") and name.len < name_buf.len) blk: {
+                    @memcpy(name_buf[0..name.len], name);
+                    name_buf[name.len] = 0;
+                    break :blk std.posix.getenv(name_buf[0..name.len :0]);
                 } else null;
                 if (env_val) |val| {
                     result.appendSlice(arena, val) catch return input;

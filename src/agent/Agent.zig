@@ -443,17 +443,16 @@ fn runScript(self: *Self, path: []const u8) bool {
     };
     defer file.close();
 
-    const content = file.readToEndAlloc(self.allocator, 10 * 1024 * 1024) catch |err| {
-        self.terminal.printErrorFmt("Failed to read script: {s}", .{@errorName(err)});
-        return false;
-    };
-    defer self.allocator.free(content);
-
     self.terminal.printInfoFmt("Running script: {s}", .{path});
 
     var script_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer script_arena.deinit();
     const sa = script_arena.allocator();
+
+    const content = file.readToEndAlloc(sa, 10 * 1024 * 1024) catch |err| {
+        self.terminal.printErrorFmt("Failed to read script: {s}", .{@errorName(err)});
+        return false;
+    };
 
     var iter: Command.ScriptIterator = .init(sa, content);
     var last_comment: ?[]const u8 = null;
@@ -1021,8 +1020,8 @@ fn buildUserMessageParts(
     }
 
     var parts: std.ArrayList(zenai.provider.ContentPart) = .empty;
-    const combined = try std.fmt.allocPrint(ma, "{s}{s}", .{ text_prefix.items, user_input });
-    try parts.append(ma, .{ .text = combined });
+    try text_prefix.appendSlice(ma, user_input);
+    try parts.append(ma, .{ .text = try text_prefix.toOwnedSlice(ma) });
     for (inline_parts.items) |p| try parts.append(ma, p);
     return parts.toOwnedSlice(ma);
 }
