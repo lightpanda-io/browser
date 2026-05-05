@@ -434,11 +434,8 @@ fn firstSentence(text: []const u8) []const u8 {
 
 fn extractEvalScript(arena: std.mem.Allocator, args_json: []const u8) ![]const u8 {
     if (args_json.len == 0) return error.MissingScript;
-    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, args_json, .{});
-    if (parsed != .object) return error.MissingScript;
-    const v = parsed.object.get("script") orelse return error.MissingScript;
-    if (v != .string) return error.MissingScript;
-    return v.string;
+    const parsed = std.json.parseFromSliceLeaky(struct { script: []const u8 }, arena, args_json, .{ .ignore_unknown_fields = true }) catch return error.MissingScript;
+    return parsed.script;
 }
 
 const Replacement = struct {
