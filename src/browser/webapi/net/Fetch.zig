@@ -249,10 +249,17 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
 
     var response = self._response;
     response._http_response = null;
+
+    // Capture this before we reject. Rejection could trigger httpShutdownCallback
+    // (via a microtask callback). But if we're here, then we'll take care of
+    // cleaning up when we're done.
+    const owns_response = self._owns_response;
+    self._owns_response = false;
+
     // the response is only passed on v8 on success, if we're here, it's safe to
     // clear this. (defer since `self is in the response's arena).
 
-    defer if (self._owns_response) {
+    defer if (owns_response) {
         response.deinit(self._exec.context.page);
     };
 
@@ -266,10 +273,6 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
 
 fn httpShutdownCallback(ctx: *anyopaque) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
-    if (comptime IS_DEBUG) {
-        // should always be true
-        std.debug.assert(self._owns_response);
-    }
 
     if (self._owns_response) {
         var response = self._response;
