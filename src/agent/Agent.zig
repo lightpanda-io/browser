@@ -106,6 +106,20 @@ const accept_cookies_prompt =
     \\Look for "Accept", "Accept All", "I agree", or similar buttons and click them.
 ;
 
+const synthesis_prompt =
+    \\You have used your tool budget or cannot finish the exploration.
+    \\Give your best final answer NOW based ONLY on what you actually observed
+    \\via tool calls in this conversation. Do NOT fall back to prior knowledge —
+    \\if your snapshots show only cookie banners, 403/access-denied pages,
+    \\blocked search results, or empty bodies, say that explicitly
+    \\(e.g. "the page was blocked by a cookie wall and I could not extract X").
+    \\Do not invent details that are not visible in the tool outputs above.
+    \\Do not call any more tools.
+    \\Respond with ONLY the answer — one word, one number, one short phrase,
+    \\or a brief honest explanation of why the page could not be read.
+    \\No prefix, no markdown.
+;
+
 allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
 tool_executor: *ToolExecutor,
@@ -248,8 +262,7 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self);
 }
 
-/// Returns true on success. Interactive mode always returns true; pure
-/// replay mirrors `runScript`'s result; one-shot mirrors `runOneShot`'s.
+/// Returns true on success.
 pub fn run(self: *Self) bool {
     if (self.one_shot_task) |task| return self.runOneShot(task);
     if (self.script_file) |path| {
@@ -260,9 +273,8 @@ pub fn run(self: *Self) bool {
     return true;
 }
 
-/// Final assistant text lands on stdout via `Terminal.printAssistant`;
-/// tool calls, errors, and info go to stderr, so callers can capture stdout
-/// as the clean answer.
+/// Final answer goes to stdout; tool calls and errors go to stderr,
+/// so the caller can pipe stdout to capture a clean answer.
 fn runOneShot(self: *Self, task: []const u8) bool {
     const text = self.processUserMessage(task, null) catch |err| switch (err) {
         error.UnsupportedAttachment, error.AttachmentReadFailed => {
@@ -462,10 +474,9 @@ fn runScript(self: *Self, path: []const u8) bool {
     while (iter.next()) |entry| {
         switch (entry.command) {
             .comment => {
-                // Track the most recent comment — recorded scripts
-                // prefix LLM-generated commands with the natural
-                // language prompt that produced them, which provides
-                // useful context for self-healing.
+                // Recorded scripts prefix LLM-generated commands with the
+                // natural-language prompt that produced them; keep the
+                // last one around so self-heal can use it as context.
                 if (entry.raw_line.len > 2 and entry.raw_line[0] == '#') {
                     last_comment = std.mem.trim(u8, entry.raw_line[1..], &std.ascii.whitespace);
                 }
@@ -856,11 +867,9 @@ fn runLlmTurnPrint(self: *Self, prompt: []const u8, record_comment: ?[]const u8,
     if (text) |t| self.terminal.printAssistant(t) else self.terminal.printInfo("(no response from model)");
 }
 
-/// Run one user-input → final-answer turn. Returns the assistant text on
-/// success (memory lives in `message_arena`), or `null` if the model emitted
-/// nothing even after a synthesis turn. Callers decide how to surface the
-/// result (stdout for the CLI, JSON-RPC payload for MCP). Tool calls,
-/// recording, and pruning all happen here.
+/// Returned text lives in `message_arena`, so it's only valid until the
+/// next prune. `null` means the model emitted nothing even after the
+/// synthesis turn.
 fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]const u8) !?[]const u8 {
     const ma = self.message_arena.allocator();
 
@@ -937,31 +946,13 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
     const final_text: ?[]const u8 = blk: {
         if (result.text) |text| break :blk try ma.dupe(u8, text);
 
-        // The tool-use loop exhausted max_turns or returned an empty turn
-        // with no final text. Ask the model for a synthesis answer without
-        // letting it call more tools, grounded ONLY in what it observed.
-        // The earlier prompt licensed pretraining fallback, which on
-        // benchmark sites that returned 403 / cookie walls / blank bodies
-        // produced fabricated answers instead of honest "couldn't access"
-        // reports. Here we forbid the fallback and authorize a brief
-        // honest failure description as a valid final answer.
+        // Tool loop ended without a final text — force one more turn that
+        // forbids tools and pretraining fallback. Without this, models
+        // confabulate answers when the page was blocked or empty.
         log.info(.app, "synthesizing final answer", .{});
         try self.messages.append(self.allocator, .{
             .role = .user,
-            .content = try ma.dupe(
-                u8,
-                "You have used your tool budget or cannot finish the exploration. " ++
-                    "Give your best final answer NOW based ONLY on what you actually observed " ++
-                    "via tool calls in this conversation. Do NOT fall back to prior knowledge — " ++
-                    "if your snapshots show only cookie banners, 403/access-denied pages, " ++
-                    "blocked search results, or empty bodies, say that explicitly " ++
-                    "(e.g. \"the page was blocked by a cookie wall and I could not extract X\"). " ++
-                    "Do not invent details that are not visible in the tool outputs above. " ++
-                    "Do not call any more tools. " ++
-                    "Respond with ONLY the answer — one word, one number, one short phrase, " ++
-                    "or a brief honest explanation of why the page could not be read. " ++
-                    "No prefix, no markdown.",
-            ),
+            .content = try ma.dupe(u8, synthesis_prompt),
         });
 
         var synth = provider_client.runTools(

@@ -420,10 +420,7 @@ fn execSearch(session: *lp.Session, arena: std.mem.Allocator, registry: *CDPNode
 
     // Tavily path: only when TAVILY_API_KEY is set in the process env. On any
     // failure (network, non-2xx, parse) fall through to the DuckDuckGo scrape
-    // so a single Tavily outage doesn't kill a whole benchmark run. Google was
-    // dropped from this fallback chain — its anti-bot defences (TLS/JA3,
-    // User-Agent, consent walls, /sorry/) reject Lightpanda almost
-    // unconditionally, so the branch was decorative in practice.
+    // so a single Tavily outage doesn't kill a whole benchmark run.
     if (std.posix.getenv("TAVILY_API_KEY")) |api_key| {
         if (tavilySearch(arena, api_key, args.query)) |markdown_| {
             return markdown_;
