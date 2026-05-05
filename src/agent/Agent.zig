@@ -257,7 +257,7 @@ pub fn deinit(self: *Self) void {
 
 /// Returns true on success.
 pub fn run(self: *Self) bool {
-    if (self.one_shot_task) |task| return self.runTurn(task, null, "Request");
+    if (self.one_shot_task) |task| return self.runTurn(task, null, self.one_shot_attachments, "Request");
     if (self.script_file) |path| {
         const script_ok = self.runScript(path);
         if (!self.interactive) return script_ok;
@@ -268,8 +268,8 @@ pub fn run(self: *Self) bool {
 
 /// Final answer goes to stdout; errors go to stderr, so a caller can
 /// pipe stdout to capture a clean answer.
-fn runTurn(self: *Self, prompt: []const u8, record_comment: ?[]const u8, label: []const u8) bool {
-    const text = self.processUserMessage(prompt, record_comment) catch |err| switch (err) {
+fn runTurn(self: *Self, prompt: []const u8, record_comment: ?[]const u8, attachments: ?[]const []const u8, label: []const u8) bool {
+    const text = self.processUserMessage(prompt, record_comment, attachments) catch |err| switch (err) {
         // buildUserMessageParts has already logged the detail.
         error.UnsupportedAttachment, error.AttachmentReadFailed => return false,
         else => {
@@ -311,9 +311,9 @@ fn runRepl(self: *Self) void {
 
         switch (cmd) {
             .comment => continue :repl,
-            .login => _ = self.runTurn(login_prompt, line, "LOGIN"),
-            .accept_cookies => _ = self.runTurn(accept_cookies_prompt, line, "ACCEPT_COOKIES"),
-            .natural_language => _ = self.runTurn(line, line, "Request"),
+            .login => _ = self.runTurn(login_prompt, line, null, "LOGIN"),
+            .accept_cookies => _ = self.runTurn(accept_cookies_prompt, line, null, "ACCEPT_COOKIES"),
+            .natural_language => _ = self.runTurn(line, line, null, "Request"),
             else => {
                 self.cmd_executor.execute(cmd);
                 self.recorder.record(cmd);
@@ -485,7 +485,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                     return false;
                 }
                 const prompt = if (entry.command == .login) login_prompt else accept_cookies_prompt;
-                const text = self.processUserMessage(prompt, null) catch |err| {
+                const text = self.processUserMessage(prompt, null, null) catch |err| {
                     self.terminal.printErrorFmt("line {d}: {s} failed: {s}", .{
                         entry.line_num,
                         entry.raw_line,
@@ -840,24 +840,23 @@ pub fn runOneTask(
     // Each task gets a fresh LLM context; drop registry entries that point
     // into the old session so a stray backendNodeId can't survive a navigation.
     self.tool_executor.resetNodeRegistry();
-    self.one_shot_attachments = attachments;
-    return self.processUserMessage(task, null);
+    return self.processUserMessage(task, null, attachments);
 }
 
 /// Returned text lives in `message_arena`, so it's only valid until the
 /// next prune. `null` means the model emitted nothing even after the
 /// synthesis turn.
-fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]const u8) !?[]const u8 {
+fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]const u8, attachments: ?[]const []const u8) !?[]const u8 {
     const ma = self.message_arena.allocator();
 
     try self.ensureSystemPrompt();
 
     // Attachments only ride on the very first user turn (just after the
     // system prompt) — wired into the message's rich `parts`.
-    const attachments: ?[]const []const u8 =
-        if (self.messages.items.len == 1) self.one_shot_attachments else null;
+    const turn_attachments: ?[]const []const u8 =
+        if (self.messages.items.len == 1) attachments else null;
 
-    if (attachments) |paths| {
+    if (turn_attachments) |paths| {
         const parts = try buildUserMessageParts(self, ma, user_input, paths);
         try self.messages.append(self.allocator, .{
             .role = .user,
