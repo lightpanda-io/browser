@@ -151,6 +151,15 @@ pub const Build = struct {
         const element = self.asElement();
         self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";
     }
+
+    // Per the HTML spec, the "already started" flag must be propagated to the
+    // clone so that re-inserting a cloned <script> doesn't run it again.
+    pub fn cloned(source_element: *Element, cloned_element: *Element, _: *Frame) !void {
+        const source = source_element.as(Script);
+        const clone = cloned_element.as(Script);
+        clone._executed = source._executed;
+        clone._force_async = source._force_async;
+    }
 };
 
 const testing = @import("../../../../testing.zig");

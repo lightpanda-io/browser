@@ -467,7 +467,7 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     const node = self.asNode();
     const parent = node._parent orelse return;
 
-    frame.domChanged();
+    parent.bumpDomVersion(frame);
     if (html.len > 0) {
         const fragment = (try Node.DocumentFragment.init(frame)).asNode();
         try frame.parseHtmlAsChildren(fragment, html);
@@ -493,7 +493,7 @@ pub fn setInnerHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     // fires disconnectedCallback for custom elements, which can mutate
     // the child list and dangle any cached next-pointer the iterator
     // would otherwise hold.
-    frame.domChanged();
+    parent.bumpDomVersion(frame);
     while (parent.firstChild()) |child| {
         frame.removeNode(parent, child, .{ .will_be_reconnected = false });
     }
@@ -879,10 +879,9 @@ pub fn replaceChildren(self: *Element, nodes: []const Node.NodeOrText, frame: *F
 }
 
 pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    frame.domChanged();
-
     const ref_node = self.asNode();
     const parent = ref_node._parent orelse return;
+    parent.bumpDomVersion(frame);
 
     const parent_is_connected = parent.isConnected();
 
@@ -919,9 +918,9 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame
 }
 
 pub fn remove(self: *Element, frame: *Frame) void {
-    frame.domChanged();
     const node = self.asNode();
     const parent = node._parent orelse return;
+    parent.bumpDomVersion(frame);
     frame.removeNode(parent, node, .{ .will_be_reconnected = false });
 }
 

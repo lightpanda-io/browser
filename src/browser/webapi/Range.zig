@@ -374,7 +374,7 @@ pub fn deleteContents(self: *Range, frame: *Frame) !void {
     if (self._proto.getCollapsed()) {
         return;
     }
-    frame.domChanged();
+    self._proto._start_container.bumpDomVersion(frame);
 
     // Simple case: same container
     if (self._proto._start_container == self._proto._end_container) {

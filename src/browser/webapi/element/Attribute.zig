@@ -229,7 +229,7 @@ pub const List = struct {
             };
             try frame.addElementId(parent, element, entry._value.str());
         }
-        frame.domChanged();
+        element.asNode().bumpDomVersion(frame);
         frame.attributeChange(element, result.normalized, entry._value, old_value);
         return entry;
     }
@@ -292,7 +292,7 @@ pub const List = struct {
             frame.removeElementId(element, entry._value.str());
         }
 
-        frame.domChanged();
+        element.asNode().bumpDomVersion(frame);
         frame.attributeRemove(element, result.normalized, old_value);
         _ = frame._attribute_lookup.remove(@intFromPtr(entry));
         self._list.remove(&entry._node);
