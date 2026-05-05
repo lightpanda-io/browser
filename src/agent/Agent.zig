@@ -217,7 +217,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .messages = .empty,
         .message_arena = std.heap.ArenaAllocator.init(allocator),
         .tools = tools,
-        .model = if (opts.provider) |p| (opts.model orelse defaultModel(p)) else "",
+        .model = if (opts.provider) |p| (opts.model orelse zenai.provider.defaultModel(p)) else "",
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
         .self_heal = opts.self_heal,
@@ -1090,30 +1090,12 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
 /// provider, no key is needed.
 fn resolveApiKey(provider: ?Config.AiProvider, needs_llm: bool) !?[:0]const u8 {
     const p = provider orelse return null;
-    if (getEnvApiKey(p)) |key| return key;
+    if (zenai.provider.envApiKey(p)) |key| return key;
     if (!needs_llm) return null;
     log.fatal(.app, "missing API key", .{
         .hint = "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY",
     });
     return error.MissingApiKey;
-}
-
-fn getEnvApiKey(provider_type: Config.AiProvider) ?[:0]const u8 {
-    return switch (provider_type) {
-        .anthropic => std.posix.getenv("ANTHROPIC_API_KEY"),
-        .openai => std.posix.getenv("OPENAI_API_KEY"),
-        .gemini => std.posix.getenv("GOOGLE_API_KEY") orelse std.posix.getenv("GEMINI_API_KEY"),
-        .ollama => "ollama",
-    };
-}
-
-fn defaultModel(provider_type: Config.AiProvider) []const u8 {
-    return switch (provider_type) {
-        .anthropic => "claude-haiku-4-5-20251001",
-        .openai => "gpt-5.4-nano-2026-03-17",
-        .gemini => "gemini-3.1-flash-lite-preview",
-        .ollama => "gemma3",
-    };
 }
 
 // --- Tests ---

@@ -39,8 +39,8 @@
             .hash = "N-V-__8AAJ4HAgCX79UDBfNwhqAqUVoGC44ib6UYa18q6oa_",
         },
         .zenai = .{
-            .url = "git+https://github.com/lightpanda-io/zenai.git#317c8b7026319720509e6686eddc41ccbc3c12af",
-            .hash = "zenai-0.0.0-iOY_VBpsAwDcvCGSoNZAY0-Or7ZK6cMTcpaJVSLRndym",
+            .url = "git+https://github.com/lightpanda-io/zenai.git#37cad37184736fafea8afcff9d1593b7009a71eb",
+            .hash = "zenai-0.0.0-iOY_VGRyAwCRQnr-DCFhnQBC-eM2JVHjS1mUKWBHTWmm",
         },
         .libidn2 = .{
             .url = "https://ftp.gnu.org/gnu/libidn/libidn2-2.3.8.tar.gz",
