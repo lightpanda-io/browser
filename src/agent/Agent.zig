@@ -364,7 +364,7 @@ fn handleSlash(self: *Self, body: []const u8) bool {
         return false;
     };
 
-    if (std.mem.eql(u8, schema.tool_name, "eval")) {
+    if (std.mem.eql(u8, schema.tool_name, @tagName(lp.tools.Action.eval))) {
         // callEval surfaces the is_error flag separately from the text;
         // tool_executor.call discards it.
         const script = extractEvalScript(aa, args_json) catch {
