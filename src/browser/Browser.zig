@@ -86,7 +86,6 @@ pub fn closeSession(self: *Browser) void {
     if (self.session) |*session| {
         session.deinit();
         self.session = null;
-        self.env.memoryPressureNotification(.critical);
     }
 }
 
