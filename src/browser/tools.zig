@@ -997,9 +997,16 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8
                 var_end += 1;
             }
             if (var_end > var_start) {
-                const var_name_z = arena.dupeZ(u8, input[var_start..var_end]) catch return input;
-                if (std.posix.getenv(var_name_z)) |env_val| {
-                    result.appendSlice(arena, env_val) catch return input;
+                const name = input[var_start..var_end];
+                // Same gate as `execGetEnv`: only `LP_*` is resolvable. A
+                // prompt-injected `fill('$ANTHROPIC_API_KEY')` would otherwise
+                // leak the resolved value into the page DOM.
+                const env_val: ?[:0]const u8 = if (std.ascii.startsWithIgnoreCase(name, "LP_")) blk: {
+                    const name_z = arena.dupeZ(u8, name) catch return input;
+                    break :blk std.posix.getenv(name_z);
+                } else null;
+                if (env_val) |val| {
+                    result.appendSlice(arena, val) catch return input;
                 } else {
                     result.appendSlice(arena, input[i..var_end]) catch return input;
                 }
@@ -1021,21 +1028,41 @@ test "substituteEnvVars no vars" {
     try std.testing.expectEqualStrings("hello world", r);
 }
 
-test "substituteEnvVars with HOME" {
+test "substituteEnvVars resolves LP_* vars" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const r = substituteEnvVars(arena.allocator(), "dir=$HOME/test");
-    try std.testing.expect(std.mem.indexOf(u8, r, "$HOME") == null);
-    try std.testing.expect(std.mem.indexOf(u8, r, "/test") != null);
+    const var_name = "LP_SUBST_TEST";
+    const var_value = "secret";
+    _ = setenv(@constCast(var_name), @constCast(var_value), 1);
+    defer _ = unsetenv(@constCast(var_name));
+
+    const r = substituteEnvVars(arena.allocator(), "user=$LP_SUBST_TEST/end");
+    try std.testing.expectEqualStrings("user=secret/end", r);
 }
 
-test "substituteEnvVars missing var kept literal" {
+test "substituteEnvVars keeps non-LP_ refs literal even when set" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const r = substituteEnvVars(arena.allocator(), "$UNLIKELY_VAR_12345");
-    try std.testing.expectEqualStrings("$UNLIKELY_VAR_12345", r);
+    // `execGetEnv` hides non-LP_ vars from the model; `substituteEnvVars`
+    // must hide them too, otherwise a prompt-injected `fill('$X')` would
+    // resolve the value into the page DOM.
+    const var_name = "LIGHTPANDA_SUBST_TEST_OUTSIDE";
+    const var_value = "should-not-leak";
+    _ = setenv(@constCast(var_name), @constCast(var_value), 1);
+    defer _ = unsetenv(@constCast(var_name));
+
+    const r = substituteEnvVars(arena.allocator(), "$LIGHTPANDA_SUBST_TEST_OUTSIDE");
+    try std.testing.expectEqualStrings("$LIGHTPANDA_SUBST_TEST_OUTSIDE", r);
+}
+
+test "substituteEnvVars missing LP_ var kept literal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const r = substituteEnvVars(arena.allocator(), "$LP_UNLIKELY_VAR_12345");
+    try std.testing.expectEqualStrings("$LP_UNLIKELY_VAR_12345", r);
 }
 
 test "substituteEnvVars bare dollar" {
