@@ -305,16 +305,30 @@ pub fn dispatchDirect(
 
         event._current_target = target;
 
+        // Per DOM §2.9 step 4 substep 8 ("Inner invoke"), a listener callback that
+        // throws must have its exception *reported*, not propagated to the dispatch
+        // caller — subsequent listeners must still run. Same shape as the catch on
+        // the property-handler invocation above and on EventManager.dispatchPhase.
         switch (listener.function) {
-            .value => |value| try ls.local.toLocal(value).callWithThis(void, target, .{event}),
+            .value => |value| ls.local.toLocal(value).callWithThis(void, target, .{event}) catch |err| {
+                log.warn(.event, opts.context, .{ .err = err });
+            },
             .string => |string| {
                 const str = try arena.dupeZ(u8, string.str());
-                try ls.local.eval(str, null);
+                ls.local.eval(str, null) catch |err| {
+                    log.warn(.event, opts.context, .{ .err = err });
+                };
             },
             .object => |obj_global| {
                 const obj = ls.local.toLocal(obj_global);
-                if (try obj.getFunction("handleEvent")) |handleEvent| {
-                    try handleEvent.callWithThis(void, obj, .{event});
+                const handle_event = obj.getFunction("handleEvent") catch |err| blk: {
+                    log.warn(.event, opts.context, .{ .err = err });
+                    break :blk null;
+                };
+                if (handle_event) |handleEvent| {
+                    handleEvent.callWithThis(void, obj, .{event}) catch |err| {
+                        log.warn(.event, opts.context, .{ .err = err });
+                    };
                 }
             },
         }

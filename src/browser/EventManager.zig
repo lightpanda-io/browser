@@ -388,16 +388,31 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
             event._target = getAdjustedTarget(original_target, current_target);
         }
 
+        // Per DOM §2.9 step 4 substep 8 ("Inner invoke"), a listener callback that
+        // throws must have its exception *reported* to the global error handler,
+        // not propagated to the dispatch caller — subsequent listeners on the same
+        // target and the rest of the propagation path must still run. Mirrors the
+        // catch on the inline-handler invocation in dispatchDirect.
         switch (listener.function) {
-            .value => |value| try local.toLocal(value).callWithThis(void, current_target, .{event}),
+            .value => |value| local.toLocal(value).callWithThis(void, current_target, .{event}) catch |err| {
+                log.warn(.event, "listener", .{ .err = err });
+            },
             .string => |string| {
                 const str = try frame.call_arena.dupeZ(u8, string.str());
-                try local.eval(str, null);
+                local.eval(str, null) catch |err| {
+                    log.warn(.event, "listener string", .{ .err = err });
+                };
             },
             .object => |obj_global| {
                 const obj = local.toLocal(obj_global);
-                if (try obj.getFunction("handleEvent")) |handleEvent| {
-                    try handleEvent.callWithThis(void, obj, .{event});
+                const handle_event = obj.getFunction("handleEvent") catch |err| blk: {
+                    log.warn(.event, "listener handleEvent", .{ .err = err });
+                    break :blk null;
+                };
+                if (handle_event) |handleEvent| {
+                    handleEvent.callWithThis(void, obj, .{event}) catch |err| {
+                        log.warn(.event, "listener object", .{ .err = err });
+                    };
                 }
             },
         }
