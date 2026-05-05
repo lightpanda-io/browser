@@ -696,9 +696,9 @@ fn pruneMessages(self: *Self) void {
     // Dupe the kept tail into a scratch slice in the new arena first. Only
     // mutate self.messages once every dupe has succeeded — otherwise a
     // partial failure would leave self.messages.items[1..] pointing into
-    // the freed `new_arena`, since dupeMessage already wrote into it.
+    // the freed `new_arena`.
     var new_arena: std.heap.ArenaAllocator = .init(self.allocator);
-    const duped = dupeMessages(new_arena.allocator(), msgs[tail_start..]) orelse {
+    const duped = zenai.provider.dupeMessages(new_arena.allocator(), msgs[tail_start..]) catch {
         new_arena.deinit();
         return;
     };
@@ -708,64 +708,6 @@ fn pruneMessages(self: *Self) void {
     self.messages.shrinkRetainingCapacity(1 + duped.len);
     self.message_arena.deinit();
     self.message_arena = new_arena;
-}
-
-fn dupeMessages(arena: std.mem.Allocator, msgs: []const zenai.provider.Message) ?[]zenai.provider.Message {
-    const out = arena.alloc(zenai.provider.Message, msgs.len) catch return null;
-    for (msgs, 0..) |msg, i| {
-        out[i] = dupeMessage(arena, msg) orelse return null;
-    }
-    return out;
-}
-
-fn dupeMessage(alloc: std.mem.Allocator, msg: zenai.provider.Message) ?zenai.provider.Message {
-    return .{
-        .role = msg.role,
-        .content = if (msg.content) |c| alloc.dupe(u8, c) catch return null else null,
-        .tool_calls = if (msg.tool_calls) |tcs| dupeToolCalls(alloc, tcs) catch return null else null,
-        .tool_results = if (msg.tool_results) |trs| dupeToolResults(alloc, trs) catch return null else null,
-        .parts = if (msg.parts) |ps| dupeParts(alloc, ps) catch return null else null,
-    };
-}
-
-fn dupeToolCalls(alloc: std.mem.Allocator, calls: []const zenai.provider.ToolCall) ![]const zenai.provider.ToolCall {
-    const out = try alloc.alloc(zenai.provider.ToolCall, calls.len);
-    for (calls, 0..) |tc, i| {
-        out[i] = .{
-            .id = try alloc.dupe(u8, tc.id),
-            .name = try alloc.dupe(u8, tc.name),
-            .arguments = try alloc.dupe(u8, tc.arguments),
-            .thought_signature = if (tc.thought_signature) |ts| try alloc.dupe(u8, ts) else null,
-        };
-    }
-    return out;
-}
-
-fn dupeToolResults(alloc: std.mem.Allocator, results: []const zenai.provider.ToolResult) ![]const zenai.provider.ToolResult {
-    const out = try alloc.alloc(zenai.provider.ToolResult, results.len);
-    for (results, 0..) |tr, i| {
-        out[i] = .{
-            .id = try alloc.dupe(u8, tr.id),
-            .name = try alloc.dupe(u8, tr.name),
-            .content = try alloc.dupe(u8, tr.content),
-            .thought_signature = if (tr.thought_signature) |ts| try alloc.dupe(u8, ts) else null,
-        };
-    }
-    return out;
-}
-
-fn dupeParts(alloc: std.mem.Allocator, parts: []const zenai.provider.ContentPart) ![]const zenai.provider.ContentPart {
-    const out = try alloc.alloc(zenai.provider.ContentPart, parts.len);
-    for (parts, 0..) |p, i| {
-        out[i] = switch (p) {
-            .text => |t| .{ .text = try alloc.dupe(u8, t) },
-            .image => |img| .{ .image = .{
-                .data = try alloc.dupe(u8, img.data),
-                .mime_type = try alloc.dupe(u8, img.mime_type),
-            } },
-        };
-    }
-    return out;
 }
 
 /// Self-heal must only patch the current page; navigation and arbitrary
@@ -1303,22 +1245,6 @@ test "formatReplacement: multiple commands produce multi-line replacement" {
     );
 }
 
-test "dupeMessages: happy path" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    const src = [_]zenai.provider.Message{
-        .{ .role = .user, .content = "hello" },
-        .{ .role = .assistant, .content = "world" },
-    };
-
-    const out = dupeMessages(arena.allocator(), &src) orelse return error.UnexpectedNull;
-    try std.testing.expectEqual(@as(usize, 2), out.len);
-    try std.testing.expectEqualStrings("hello", out[0].content.?);
-    try std.testing.expectEqualStrings("world", out[1].content.?);
-    try std.testing.expect(out[0].content.?.ptr != src[0].content.?.ptr);
-}
-
 test "writeHealedScript: applies replacements and saves backup" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1377,21 +1303,4 @@ test "isHealAllowed: blocks goto and eval_js, allows page-local commands" {
     try std.testing.expect(isHealAllowed(.{ .select = .{ .selector = "#s", .value = "x" } }));
     try std.testing.expect(isHealAllowed(.{ .check = .{ .selector = "#c", .checked = true } }));
     try std.testing.expect(isHealAllowed(.{ .scroll = .{ .x = 0, .y = 100 } }));
-}
-
-test "dupeMessages: returns null on mid-iteration alloc failure" {
-    // The contract pruneMessages depends on: on any partial failure,
-    // dupeMessages returns null without mutating its inputs. pruneMessages
-    // can then deinit the scratch arena and leave self.messages untouched.
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    var failing = std.testing.FailingAllocator.init(arena.allocator(), .{ .fail_index = 2 });
-    const src = [_]zenai.provider.Message{
-        .{ .role = .user, .content = "hello" },
-        .{ .role = .assistant, .content = "world" },
-        .{ .role = .user, .content = "third" },
-    };
-    try std.testing.expect(dupeMessages(failing.allocator(), &src) == null);
-    try std.testing.expect(failing.has_induced_failure);
 }
