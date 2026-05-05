@@ -250,7 +250,7 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
-    const page = &server.session.page.?;
+    const page = server.session.currentPage().?;
 
     {
         // Hover by selector

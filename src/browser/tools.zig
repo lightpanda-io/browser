@@ -941,7 +941,7 @@ fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const
 }
 
 fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!void {
-    if (session.page != null) {
+    if (session.hasPage()) {
         registry.reset();
         session.removePage();
     }

@@ -3,7 +3,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
-const HttpClient = @import("../browser/HttpClient.zig");
 const testing = @import("../testing.zig");
 const protocol = @import("protocol.zig");
 const resources = @import("resources.zig");
@@ -17,7 +16,6 @@ const Self = @This();
 allocator: std.mem.Allocator,
 app: *App,
 
-http_client: *HttpClient,
 notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
@@ -26,28 +24,24 @@ node_registry: CDPNode.Registry,
 transport: Transport,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*Self {
-    const http_client = try HttpClient.init(allocator, &app.network);
-    errdefer http_client.deinit();
-
     const notification = try lp.Notification.init(allocator);
     errdefer notification.deinit();
 
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
-    var browser = try lp.Browser.init(app, .{ .http_client = http_client });
-    errdefer browser.deinit();
-
     self.* = .{
         .allocator = allocator,
         .app = app,
-        .browser = browser,
+        .browser = undefined,
         .transport = .init(allocator, writer),
-        .http_client = http_client,
         .notification = notification,
         .session = undefined,
         .node_registry = CDPNode.Registry.init(allocator),
     };
+
+    try self.browser.init(app, .{}, null);
+    errdefer self.browser.deinit();
 
     self.session = try self.browser.newSession(self.notification);
 
@@ -67,7 +61,6 @@ pub fn deinit(self: *Self) void {
     self.transport.deinit();
     self.browser.deinit();
     self.notification.deinit();
-    self.http_client.deinit();
 
     self.allocator.destroy(self);
 }

@@ -68,7 +68,7 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
     const arena = try session.getArena(.large, "Worker");
     errdefer session.releaseArena(arena);
 
-    const resolved_url = try URL.resolve(arena, exec.url.*, url, .{});
+    const resolved_url = try URL.resolve(arena, exec.url.*, url, .{ .encoding = frame.charset });
     const self = try frame._page.factory.eventTargetWithAllocator(arena, Worker{
         ._arena = arena,
         ._proto = undefined,
@@ -92,7 +92,7 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
         return self;
     }
 
-    const http_client = session.browser.http_client;
+    const http_client = &session.browser.http_client;
     http_client.request(.{
         .ctx = self,
         .params = .{
@@ -121,6 +121,8 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
 // Called from Frame.deinit when the frame is destroyed, so we don't need to
 // remove from the frame's worker list.
 pub fn deinit(self: *Worker) void {
+    // No pending frame for workers, so we can abort all frames.
+    self._frame._session.browser.http_client.abortFrame(self._frame_id, .{ .scope = .full });
     if (self._http_response) |res| {
         res.abort(error.Abort);
         self._http_response = null;

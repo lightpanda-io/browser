@@ -3,7 +3,6 @@ const lp = @import("lightpanda");
 const zenai = @import("zenai");
 
 const App = @import("../App.zig");
-const HttpClient = @import("../browser/HttpClient.zig");
 const CDPNode = @import("../cdp/Node.zig");
 const browser_tools = lp.tools;
 
@@ -11,7 +10,6 @@ const Self = @This();
 
 allocator: std.mem.Allocator,
 app: *App,
-http_client: *HttpClient,
 notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
@@ -19,28 +17,24 @@ node_registry: CDPNode.Registry,
 tool_schema_arena: std.heap.ArenaAllocator,
 
 pub fn init(allocator: std.mem.Allocator, app: *App) !*Self {
-    const http_client: *HttpClient = try .init(allocator, &app.network);
-    errdefer http_client.deinit();
-
     const notification: *lp.Notification = try .init(allocator);
     errdefer notification.deinit();
 
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
-    var browser: lp.Browser = try .init(app, .{ .http_client = http_client });
-    errdefer browser.deinit();
-
     self.* = .{
         .allocator = allocator,
         .app = app,
-        .http_client = http_client,
         .notification = notification,
-        .browser = browser,
+        .browser = undefined,
         .session = undefined,
         .node_registry = CDPNode.Registry.init(allocator),
         .tool_schema_arena = std.heap.ArenaAllocator.init(allocator),
     };
+
+    try self.browser.init(app, .{}, null);
+    errdefer self.browser.deinit();
 
     self.session = try self.browser.newSession(self.notification);
     return self;
@@ -51,7 +45,6 @@ pub fn deinit(self: *Self) void {
     self.node_registry.deinit();
     self.browser.deinit();
     self.notification.deinit();
-    self.http_client.deinit();
     self.allocator.destroy(self);
 }
 
@@ -60,7 +53,7 @@ pub fn deinit(self: *Self) void {
 /// state that depended on the old session.
 pub fn resetSession(self: *Self) !void {
     self.browser.deinit();
-    self.browser = try lp.Browser.init(self.app, .{ .http_client = self.http_client });
+    try self.browser.init(self.app, .{}, null);
     self.session = try self.browser.newSession(self.notification);
 }
 

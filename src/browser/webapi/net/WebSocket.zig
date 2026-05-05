@@ -115,7 +115,7 @@ pub fn init(url: []const u8, protocols: [][]const u8, frame: *Frame) !*WebSocket
 
     const resolved_url = try URL.resolve(arena, frame.base(), url, .{ .always_dupe = true, .encoding = frame.charset });
 
-    const http_client = frame._session.browser.http_client;
+    const http_client = &frame._session.browser.http_client;
     const conn = http_client.network.newConnection() orelse {
         return error.NoFreeConnection;
     };

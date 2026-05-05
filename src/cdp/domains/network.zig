@@ -229,9 +229,9 @@ fn getResponseBody(cmd: *CDP.Command) !void {
         requestId: []const u8, // "REQ-{d}" or "LID-{d}"
     })) orelse return error.InvalidParams;
 
-    const request_id = try idFromRequestId(params.requestId);
+    const key = try keyFromRequestId(params.requestId);
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const resp = bc.captured_responses.getPtr(request_id) orelse return error.RequestNotFound;
+    const resp = bc.captured_responses.getPtr(key) orelse return error.RequestNotFound;
 
     if (!resp.must_encode) {
         return cmd.sendResult(.{
@@ -258,7 +258,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
 
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a frame.
-    lp.assert(bc.session.page != null, "CDP.network.httpRequestFail null frame", .{});
+    lp.assert(bc.session.hasPage(), "CDP.network.httpRequestFail null frame", .{});
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
@@ -476,12 +476,13 @@ const ResponseWriter = struct {
     }
 };
 
-fn idFromRequestId(request_id: []const u8) !u64 {
-    // The requesIid for the original document is its loaderId.
-    if (!std.mem.startsWith(u8, request_id, "REQ-") and !std.mem.startsWith(u8, request_id, "LID-")) {
-        return error.InvalidParams;
-    }
-    return std.fmt.parseInt(u64, request_id[4..], 10) catch return error.InvalidParams;
+fn keyFromRequestId(request_id: []const u8) !CDP.BrowserContext.CapturedResponseKey {
+    const key = std.fmt.parseInt(u32, request_id[4..], 10) catch return error.InvalidParams;
+
+    return if (std.mem.startsWith(u8, request_id, "LID-"))
+        .{ .id = key, .kind = .loader }
+    else
+        .{ .id = key, .kind = .request };
 }
 
 const testing = @import("../testing.zig");

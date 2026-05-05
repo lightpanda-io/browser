@@ -45,7 +45,7 @@ pub fn init(session: *Session, _: Opts) !Runner {
     return .{
         .frame = frame,
         .session = session,
-        .http_client = session.browser.http_client,
+        .http_client = &session.browser.http_client,
     };
 }
 
@@ -142,6 +142,10 @@ pub fn tickCDP(self: *Runner, opts: TickOpts) !CDPTickResult {
 }
 
 fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
+    // Refresh self.frame from session. In case of pending page, we want to
+    // take its state while loading. If we use only the current frame, we will
+    // return a .done result immediately.
+    self.frame = self.session.pendingOrCurrentFrame() orelse return .done;
     const frame = self.frame;
     const http_client = self.http_client;
 

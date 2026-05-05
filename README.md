@@ -38,11 +38,24 @@ See [benchmark details](https://github.com/lightpanda-io/demo/blob/main/BENCHMAR
 ## Quick start
 
 ### Install
-**Install from the nightly builds**
+
+**Package Managers**
+
+Latest nightly from Homebrew:
+```console
+brew install lightpanda-io/browser/lightpanda
+```
+
+Latest nightly from Arch Linux User Repository:
+```console
+yay -S lightpanda-nightly-bi
+```
+
+**Download from the nightly builds**
 
 You can download the last binary from the [nightly
 builds](https://github.com/lightpanda-io/browser/releases/tag/nightly) for
-Linux x86_64 and MacOS aarch64.
+Linux and MacOS for both x86_64 and aarch64.
 
 *For Linux*
 ```console

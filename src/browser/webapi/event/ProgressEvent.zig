@@ -19,7 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const Frame = @import("../../Frame.zig");
+const Page = @import("../../Page.zig");
 const Event = @import("../Event.zig");
 
 const String = lp.String;
@@ -39,23 +39,23 @@ const ProgressEventOptions = struct {
 
 const Options = Event.inheritOptions(ProgressEvent, ProgressEventOptions);
 
-pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*ProgressEvent {
-    const arena = try frame.getArena(.tiny, "ProgressEvent");
-    errdefer frame.releaseArena(arena);
+pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*ProgressEvent {
+    const arena = try page.getArena(.tiny, "ProgressEvent");
+    errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
-    return initWithTrusted(arena, type_string, _opts, false, frame);
+    return initWithTrusted(arena, type_string, _opts, false, page);
 }
 
-pub fn initTrusted(typ: String, _opts: ?Options, frame: *Frame) !*ProgressEvent {
-    const arena = try frame.getArena(.tiny, "ProgressEvent.trusted");
-    errdefer frame.releaseArena(arena);
-    return initWithTrusted(arena, typ, _opts, true, frame);
+pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*ProgressEvent {
+    const arena = try page.getArena(.tiny, "ProgressEvent.trusted");
+    errdefer page.releaseArena(arena);
+    return initWithTrusted(arena, typ, _opts, true, page);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, frame: *Frame) !*ProgressEvent {
+fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, page: *Page) !*ProgressEvent {
     const opts = _opts orelse Options{};
 
-    const event = try frame._factory.event(
+    const event = try page.factory.event(
         arena,
         typ,
         ProgressEvent{

@@ -44,10 +44,8 @@ pub fn main() !void {
     var test_arena = std.heap.ArenaAllocator.init(allocator);
     defer test_arena.deinit();
 
-    const http_client = try lp.HttpClient.init(allocator, &app.network);
-    defer http_client.deinit();
-
-    var browser = try lp.Browser.init(app, .{ .http_client = http_client });
+    var browser: lp.Browser = undefined;
+    try browser.init(app, .{}, null);
     defer browser.deinit();
 
     const notification = try lp.Notification.init(allocator);
