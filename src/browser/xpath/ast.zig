@@ -114,11 +114,12 @@ pub const Axis = enum {
 };
 
 pub const NodeTest = union(enum) {
-    /// Element / attribute name. Special values:
-    ///   - "*"            → wildcard
-    ///   - "prefix:*"     → namespace wildcard
-    ///   - "prefix:local" → namespace-prefixed name
-    /// The evaluator splits these.
+    /// Element / attribute name. `"*"` is the wildcard. Namespaced forms
+    /// (`prefix:*`, `prefix:local`) are stored verbatim — the evaluator
+    /// does not split them, so they fall through to a literal `mem.eql`
+    /// against the node name (consistent with the `namespace::` axis stub
+    /// per decision #3).
+    /// TODO: real namespace support if the polyfill ever drops the stub.
     name: []const u8,
     /// `node()`, `text()`, `comment()`, `processing-instruction()`.
     /// The optional target literal of `processing-instruction("foo")`

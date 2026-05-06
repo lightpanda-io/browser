@@ -39,11 +39,18 @@ pub const Error = error{
     UnexpectedToken,
     ExpectedNodeTest,
     ExpectedPrimaryExpr,
+    MaxDepthExceeded,
 };
+
+/// Cap recursive descent to keep adversarial input (e.g. `(((((...)))))`,
+/// `------5`) from blowing the stack. Real XPath expressions never come
+/// close to this; browsers typically allow several hundred.
+const max_depth: u16 = 64;
 
 arena: Allocator,
 tokens: []const Token,
 pos: usize = 0,
+depth: u16 = 0,
 
 pub fn parse(arena: Allocator, input: []const u8) Error!*Ast.Expr {
     var token_list: std.ArrayList(Token) = .empty;
@@ -125,6 +132,9 @@ fn makeBinop(self: *Parser, op: Ast.BinOpKind, left: *Ast.Expr, right: *Ast.Expr
 // Or → And → Equality → Relational → Additive → Mult → Unary → Union → Path
 
 fn parseExpr(self: *Parser) Error!*Ast.Expr {
+    if (self.depth >= max_depth) return error.MaxDepthExceeded;
+    self.depth += 1;
+    defer self.depth -= 1;
     return self.parseOrExpr();
 }
 
@@ -190,6 +200,9 @@ fn parseMultExpr(self: *Parser) Error!*Ast.Expr {
 
 fn parseUnaryExpr(self: *Parser) Error!*Ast.Expr {
     if (self.match(.minus)) {
+        if (self.depth >= max_depth) return error.MaxDepthExceeded;
+        self.depth += 1;
+        defer self.depth -= 1;
         const operand = try self.parseUnaryExpr();
         return try self.makeExpr(.{ .neg = operand });
     }
@@ -921,4 +934,25 @@ test "XPath.Parser: 91-case gem battery — every expression parses" {
             return err;
         };
     }
+}
+
+test "XPath.Parser: deep parenthesization rejected past max_depth" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(testing.allocator);
+    try buf.appendNTimes(testing.allocator, '(', max_depth + 1);
+    try buf.append(testing.allocator, '1');
+    try buf.appendNTimes(testing.allocator, ')', max_depth + 1);
+    try testing.expectError(error.MaxDepthExceeded, parse(arena.allocator(), buf.items));
+}
+
+test "XPath.Parser: deep unary minus rejected past max_depth" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(testing.allocator);
+    try buf.appendNTimes(testing.allocator, '-', max_depth + 1);
+    try buf.append(testing.allocator, '1');
+    try testing.expectError(error.MaxDepthExceeded, parse(arena.allocator(), buf.items));
 }

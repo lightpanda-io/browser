@@ -64,7 +64,7 @@ pub fn init(expression: []const u8, frame: *Frame) !*XPathExpression {
 pub fn evaluate(
     self: *XPathExpression,
     context_node: *Node,
-    requested_type: u16,
+    requested_type: ?u16,
     result: ?*XPathResult,
     frame: *Frame,
 ) !*XPathResult {
@@ -77,7 +77,7 @@ pub fn evaluate(
     errdefer frame.releaseArena(arena);
 
     const eval_result = try xpath.Evaluator.evaluate(arena, self._expr, context_node, frame);
-    return XPathResult.fromResult(arena, requested_type, eval_result);
+    return XPathResult.fromResult(arena, requested_type orelse XPathResult.ANY_TYPE, eval_result);
 }
 
 pub fn deinit(self: *XPathExpression, page: *Page) void {

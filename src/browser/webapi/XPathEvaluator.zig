@@ -46,7 +46,7 @@ pub fn evaluate(
     expression: []const u8,
     context_node: *Node,
     resolver: ?js.Function,
-    requested_type: u16,
+    requested_type: ?u16,
     result: ?*XPathResult,
     frame: *Frame,
 ) !*XPathResult {
@@ -55,7 +55,7 @@ pub fn evaluate(
     // allocates a fresh instance.
     _ = resolver;
     _ = result;
-    return XPathResult.fromExpression(expression, context_node, requested_type, frame);
+    return XPathResult.fromExpression(expression, context_node, requested_type orelse XPathResult.ANY_TYPE, frame);
 }
 
 pub fn createExpression(

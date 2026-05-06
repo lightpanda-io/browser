@@ -419,17 +419,21 @@ pub fn evaluate(
     expression: []const u8,
     context_node: ?*Node,
     resolver: ?js.Function,
-    result_type: u16,
+    result_type: ?u16,
     result: ?*XPathResult,
     frame: *Frame,
 ) !*XPathResult {
     // resolver/result are no-ops in HTML mode (decision #2).
+    // Null/missing context_node falls back to the document — matches the
+    // polyfill (decision #2). Firefox throws TypeError on a *missing*
+    // arg, but the bridge can't distinguish "missing" from "explicit
+    // null" here, so polyfill parity wins for the ambiguity.
     _ = resolver;
     _ = result;
     return XPathResult.fromExpression(
         expression,
         context_node orelse self.asNode(),
-        result_type,
+        result_type orelse XPathResult.ANY_TYPE,
         frame,
     );
 }
