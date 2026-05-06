@@ -83,12 +83,7 @@ fn addPrefixedCompletion(
     partial: []const u8,
 ) void {
     if (!std.ascii.startsWithIgnoreCase(name, partial)) return;
-    const total = prefix.len + name.len + suffix.len;
-    if (total >= name_buf.len) return;
-    @memcpy(name_buf[0..prefix.len], prefix);
-    @memcpy(name_buf[prefix.len .. prefix.len + name.len], name);
-    @memcpy(name_buf[prefix.len + name.len .. total], suffix);
-    name_buf[total] = 0;
+    _ = std.fmt.bufPrintZ(name_buf, "{s}{s}{s}", .{ prefix, name, suffix }) catch return;
     c.linenoiseAddCompletion(lc, name_buf);
 }
 
