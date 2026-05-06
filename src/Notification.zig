@@ -228,6 +228,15 @@ pub const DialogResponse = struct {
     prompt_text: ?[]const u8 = null,
 };
 
+pub const ConsoleMessageType = enum {
+    debug,
+    info,
+    warn,
+    @"error",
+    fatal,
+    trace,
+};
+
 pub const ConsoleMessage = struct {
     timestamp: u64,
     source: enum {
@@ -243,7 +252,7 @@ pub const ConsoleMessage = struct {
         deprecation,
         worker,
     },
-    level: log.Level,
+    type: ConsoleMessageType,
     values: []js.Value,
     url: ?[]const u8 = null,
     line: ?u32 = null,

@@ -72,7 +72,7 @@ pub fn consoleMessage(bc: *CDP.BrowserContext, event: *const Notification.Consol
 
     return bc.cdp.sendEvent("Console.messageAdded", ConsoleMessage{
         .source = @tagName(event.source),
-        .level = @tagName(event.level),
+        .level = @tagName(event.type),
         .text = aw.written(),
     }, .{ .session_id = session_id });
 }

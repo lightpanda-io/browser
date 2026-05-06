@@ -156,7 +156,7 @@ pub fn consoleMessage(bc: *CDP.BrowserContext, event: *const Notification.Consol
     }
 
     return bc.cdp.sendEvent("Runtime.consoleAPICalled", ConsoleMessage{
-        .type = @tagName(event.level),
+        .type = @tagName(event.type),
         .timestamp = event.timestamp,
         .executionContextId = context_id,
         .args = args.items,
