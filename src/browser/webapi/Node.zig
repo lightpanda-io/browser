@@ -226,7 +226,7 @@ pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
 
     try validateNodeInsertion(self, child);
 
-    frame.domChanged();
+    self.bumpDomVersion(frame);
 
     // If the child is currently connected, and if its new parent is connected,
     // then we can remove + add a bit more efficiently (we don't have to fully
@@ -251,6 +251,11 @@ pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
     // Adopt the node tree if moving between documents
     if (adopting_to_new_document) {
         try frame.adoptNodeTree(child, child_owner.?, parent_owner);
+    }
+
+    // A custom element callback can re-parent the node. If it does, we're done
+    if (child._parent != null) {
+        return child;
     }
 
     try frame.appendNode(self, child, .{
@@ -512,9 +517,28 @@ pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
     return frame.document;
 }
 
+// Returns the Frame that owns this node's tree. Used to tie cached state of
+// "live" collections (NodeList, HTMLCollection, etc.) to the right frame's DOM
+// version: cross-realm callers must invalidate based on mutations through the
+// node's owning frame, not the caller's frame.
+//
+// Falls back to `default` when the node has no associated document yet (e.g.,
+// freshly created and detached) or its document has no frame.
 pub fn ownerFrame(self: *const Node, default: *Frame) *Frame {
+    if (self._type == .document) {
+        return self._type.document._frame orelse default;
+    }
     const doc = self.ownerDocument(default) orelse return default;
     return doc._frame orelse default;
+}
+
+// Tells the owning frame that this node's subtree has changed. Use this from
+// mutation paths instead of `frame.domChanged()` so cross-realm mutations
+// (e.g., parent JS mutating an iframe's DOM) bump the iframe's version, not
+// the caller's. Otherwise, live collections that key off the owning frame's
+// version won't see the change and will return stale cached state.
+pub fn bumpDomVersion(self: *const Node, default: *Frame) void {
+    self.ownerFrame(default).domChanged();
 }
 
 pub const ResolveURLOpts = struct {
@@ -548,7 +572,7 @@ pub fn removeChild(self: *Node, child: *Node, frame: *Frame) !*Node {
     var it = self.childrenIterator();
     while (it.next()) |n| {
         if (n == child) {
-            frame.domChanged();
+            self.bumpDomVersion(frame);
             frame.removeNode(self, child, .{ .will_be_reconnected = false });
             return child;
         }
@@ -563,7 +587,7 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fra
 
     // special case: if nodes are the same, ignore the change.
     if (new_node == ref_node_) {
-        frame.domChanged();
+        self.bumpDomVersion(frame);
 
         if (frame.hasMutationObservers()) {
             const parent = new_node._parent.?;
@@ -594,7 +618,7 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fra
     const parent_owner = self.ownerDocument(frame) orelse self.as(Document);
     const adopting_to_new_document = child_owner != null and child_owner.? != parent_owner;
 
-    frame.domChanged();
+    self.bumpDomVersion(frame);
     const will_be_reconnected = self.isConnected() and !adopting_to_new_document;
     if (new_node._parent) |parent| {
         frame.removeNode(parent, new_node, .{ .will_be_reconnected = will_be_reconnected });
@@ -603,6 +627,22 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fra
     // Adopt the node tree if moving between documents
     if (adopting_to_new_document) {
         try frame.adoptNodeTree(new_node, child_owner.?, parent_owner);
+    }
+
+    // See Node.appendChild: a callback above (disconnectedCallback or
+    // adoptedCallback) can re-parent new_node. Let that placement stand.
+    if (new_node._parent != null) {
+        return new_node;
+    }
+
+    // The same callback could also have detached ref_node from self. Fall
+    // back to append so new_node still lands in self.
+    if (ref_node._parent != self) {
+        try frame.appendNode(self, new_node, .{
+            .child_already_connected = child_already_connected,
+            .adopting_to_new_document = adopting_to_new_document,
+        });
+        return new_node;
     }
 
     try frame.insertNodeRelative(
@@ -1049,7 +1089,7 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
         }
     }
 
-    frame.domChanged();
+    self.bumpDomVersion(frame);
 
     // Remove all existing children
     var it = self.childrenIterator();

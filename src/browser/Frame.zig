@@ -3007,7 +3007,7 @@ pub fn appendNode(self: *Frame, parent: *Node, child: *Node, opts: InsertNodeOpt
 }
 
 pub fn appendAllChildren(self: *Frame, parent: *Node, target: *Node) !void {
-    self.domChanged();
+    target.bumpDomVersion(self);
     const dest_connected = target.isConnected();
 
     // Use firstChild() instead of iterator to handle cases where callbacks
@@ -3022,7 +3022,7 @@ pub fn appendAllChildren(self: *Frame, parent: *Node, target: *Node) !void {
 }
 
 pub fn insertAllChildrenBefore(self: *Frame, fragment: *Node, parent: *Node, ref_node: *Node) !void {
-    self.domChanged();
+    parent.bumpDomVersion(self);
     const dest_connected = parent.isConnected();
 
     // Use firstChild() instead of iterator to handle cases where callbacks

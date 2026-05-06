@@ -99,16 +99,19 @@ pub fn NodeLive(comptime mode: Mode) type {
         _last_index: usize,
         _last_length: ?u32,
         _cached_version: usize,
+        _owning_frame: *Frame,
 
         const Self = @This();
 
         pub fn init(root: *Node, filter: Filter, frame: *Frame) Self {
+            const owning_frame = root.ownerFrame(frame);
             return .{
                 ._last_index = 0,
                 ._last_length = null,
                 ._filter = filter,
                 ._tw = TW.init(root, .{}),
-                ._cached_version = frame.version,
+                ._cached_version = owning_frame.version,
+                ._owning_frame = owning_frame,
             };
         }
 
@@ -342,8 +345,8 @@ pub fn NodeLive(comptime mode: Mode) type {
             };
         }
 
-        fn versionCheck(self: *Self, frame: *const Frame) bool {
-            const current = frame.version;
+        fn versionCheck(self: *Self, _: *const Frame) bool {
+            const current = self._owning_frame.version;
             if (current == self._cached_version) {
                 return true;
             }
