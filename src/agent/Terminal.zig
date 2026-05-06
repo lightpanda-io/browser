@@ -37,8 +37,9 @@ const commands = [_]CommandInfo{
 };
 
 // Meta slash commands handled directly by the agent (not by ToolExecutor).
-// Kept in sync with `handleSlash` in `Agent.zig`. Hint slots match the format
-// used by `SlashCommand.SchemaInfo.hint_slots` (e.g. "[tool_name]").
+// Kept in sync with `handleSlash` in `Agent.zig`. Each slot is a pre-baked
+// fragment like "[tool_name]" — meta args are positional (no `key=value`),
+// so we can't reuse `SchemaInfo.hints` which assumes `[name=…]` syntax.
 const MetaCommand = struct {
     name: [:0]const u8,
     hint_slots: []const []const u8,
@@ -68,7 +69,9 @@ pub fn init(history_path: ?[:0]const u8) Self {
     return .{ .history_path = history_path };
 }
 
-fn addSlashCompletion(lc: [*c]c.linenoiseCompletions, name_buf: *[64:0]u8, name: []const u8, partial: []const u8) void {
+const completion_buf_len = 256;
+
+fn addSlashCompletion(lc: [*c]c.linenoiseCompletions, name_buf: *[completion_buf_len:0]u8, name: []const u8, partial: []const u8) void {
     const total = 1 + name.len;
     if (total >= name_buf.len) return;
     if (name.len < partial.len) return;
@@ -111,13 +114,6 @@ fn findMetaSlots(name: []const u8) ?[]const []const u8 {
     return null;
 }
 
-fn containsString(haystack: []const []const u8, needle: []const u8) bool {
-    for (haystack) |s| {
-        if (std.mem.eql(u8, s, needle)) return true;
-    }
-    return false;
-}
-
 // Writes one hint slot into `hint_buf` at `pos.*`. Adds a leading space unless
 // this is the first slot AND the user input already ends in whitespace.
 // Returns false if the slot doesn't fit (caller should bail).
@@ -147,47 +143,89 @@ fn writeHintSlot(
     return true;
 }
 
-// Render the per-argument hint for a browser-tool slash command, skipping any
-// field whose key already appears in `body` (so e.g. `/click backendNodeId=12`
-// doesn't suggest `[backendNodeId=…]` again). The first token without `=`
-// binds positionally to the single required field, mirroring the parser.
+const BodyAnalysis = struct {
+    used_buf: [16][]const u8 = undefined,
+    used_len: usize = 0,
+    // The trailing in-progress token when the user is typing a key prefix
+    // (no `=` yet, not a positional binding). Null if the body is empty,
+    // ends with whitespace, or the trailing token is fully committed.
+    partial_key: ?[]const u8 = null,
+
+    fn used(self: *const BodyAnalysis) []const []const u8 {
+        return self.used_buf[0..self.used_len];
+    }
+};
+
+// Walks `body` once and reports which field keys are already in use plus the
+// partial key (if any) the user is currently typing. The leading token
+// without `=` binds positionally to the single required field, mirroring
+// the parser; that case never produces a partial_key.
+fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, buffer_ends_with_space: bool) BodyAnalysis {
+    var a: BodyAnalysis = .{};
+
+    var tokens_buf: [16][]const u8 = undefined;
+    var tokens_len: usize = 0;
+    var it = std.mem.tokenizeAny(u8, body, &std.ascii.whitespace);
+    while (it.next()) |tok| {
+        if (tokens_len >= tokens_buf.len) break;
+        tokens_buf[tokens_len] = tok;
+        tokens_len += 1;
+    }
+    if (tokens_len == 0) return a;
+
+    const last_idx = tokens_len - 1;
+    for (tokens_buf[0..tokens_len], 0..) |tok, i| {
+        const is_last_in_progress = i == last_idx and !buffer_ends_with_space;
+        const is_first = i == 0;
+        if (std.mem.indexOfScalar(u8, tok, '=')) |eq| {
+            if (a.used_len < a.used_buf.len) {
+                a.used_buf[a.used_len] = tok[0..eq];
+                a.used_len += 1;
+            }
+        } else if (is_first and schema.required.len == 1) {
+            if (a.used_len < a.used_buf.len) {
+                a.used_buf[a.used_len] = schema.required[0];
+                a.used_len += 1;
+            }
+        } else if (is_last_in_progress) {
+            a.partial_key = tok;
+        }
+    }
+    return a;
+}
+
+// Render the per-argument hint for a browser-tool slash command. Three modes:
+//   1. The trailing in-progress token is a key prefix → render the matching
+//      field's name suffix + "=…" (e.g. `/click sel` → `ector=…`).
+//   2. Otherwise → render `<required>` and `[optional=…]` for each unused field.
 fn renderSchemaArgHint(
     schema: *const SlashCommand.SchemaInfo,
     body: []const u8,
     buffer_ends_with_space: bool,
 ) ?[*c]u8 {
-    var used_buf: [16][]const u8 = undefined;
-    var used_len: usize = 0;
+    const a = analyzeBody(schema, body, buffer_ends_with_space);
+    const used = a.used();
 
-    var first_token = true;
-    var i: usize = 0;
-    while (i < body.len) {
-        while (i < body.len and std.ascii.isWhitespace(body[i])) i += 1;
-        if (i >= body.len) break;
-        const tok_start = i;
-        while (i < body.len and !std.ascii.isWhitespace(body[i])) i += 1;
-        const tok = body[tok_start..i];
-
-        const key: ?[]const u8 = blk: {
-            if (std.mem.indexOfScalar(u8, tok, '=')) |eq| break :blk tok[0..eq];
-            if (first_token and schema.required.len == 1) break :blk schema.required[0];
-            break :blk null;
-        };
-        if (key) |k| {
-            if (used_len < used_buf.len) {
-                used_buf[used_len] = k;
-                used_len += 1;
-            }
+    if (a.partial_key) |pk| if (pk.len > 0) {
+        for (schema.hints) |slot| {
+            if (SlashCommand.containsName(used, slot.name)) continue;
+            if (slot.name.len < pk.len) continue;
+            if (!std.ascii.eqlIgnoreCase(slot.name[0..pk.len], pk)) continue;
+            const suffix = slot.name[pk.len..];
+            const trail = "=…";
+            const total = suffix.len + trail.len;
+            if (total >= hint_buf.len) return null;
+            @memcpy(hint_buf[0..suffix.len], suffix);
+            @memcpy(hint_buf[suffix.len .. suffix.len + trail.len], trail);
+            hint_buf[total] = 0;
+            return @ptrCast(&hint_buf);
         }
-        first_token = false;
-    }
-    const used = used_buf[0..used_len];
+    };
 
     var pos: usize = 0;
     var first_slot = true;
-
     for (schema.hints) |slot| {
-        if (containsString(used, slot.name)) continue;
+        if (SlashCommand.containsName(used, slot.name)) continue;
         const open: []const u8 = if (slot.required) "<" else "[";
         const close: []const u8 = if (slot.required) ">" else "=…]";
         if (!writeHintSlot(&pos, &first_slot, buffer_ends_with_space, open, slot.name, close)) return null;
@@ -244,7 +282,7 @@ fn parseHelpArgPrefix(input: []const u8) ?[]const u8 {
     return arg;
 }
 
-fn addHelpArgCompletion(lc: [*c]c.linenoiseCompletions, name_buf: *[64:0]u8, name: []const u8, partial: []const u8) void {
+fn addHelpArgCompletion(lc: [*c]c.linenoiseCompletions, name_buf: *[completion_buf_len:0]u8, name: []const u8, partial: []const u8) void {
     const total = help_arg_prefix.len + name.len;
     if (total >= name_buf.len) return;
     if (name.len < partial.len) return;
@@ -255,17 +293,59 @@ fn addHelpArgCompletion(lc: [*c]c.linenoiseCompletions, name_buf: *[64:0]u8, nam
     c.linenoiseAddCompletion(lc, name_buf);
 }
 
+// Completes `/<known> [body...] <partial>` to `/<known> [body...] <field>=`
+// for each unused field whose name has `partial` as a case-insensitive prefix.
+// Skips when the user is in positional-argument mode (single-required schema,
+// first token without `=`) — we can't usefully complete a value.
+fn addPartialKeyCompletions(
+    input: []const u8,
+    body: []const u8,
+    schema: *const SlashCommand.SchemaInfo,
+    lc: [*c]c.linenoiseCompletions,
+    name_buf: *[completion_buf_len:0]u8,
+) void {
+    const ends_ws = input[input.len - 1] == ' ';
+    const a = analyzeBody(schema, body, ends_ws);
+    // Without a partial AND without trailing whitespace, the user is mid-typing
+    // a positional value or some other non-completable state — bail.
+    if (a.partial_key == null and !ends_ws) return;
+
+    const partial = a.partial_key orelse "";
+    const prefix = input[0 .. input.len - partial.len];
+    for (schema.hints) |slot| {
+        if (SlashCommand.containsName(a.used(), slot.name)) continue;
+        if (slot.name.len < partial.len) continue;
+        if (!std.ascii.eqlIgnoreCase(slot.name[0..partial.len], partial)) continue;
+        const total = prefix.len + slot.name.len + 1;
+        if (total >= name_buf.len) continue;
+        @memcpy(name_buf[0..prefix.len], prefix);
+        @memcpy(name_buf[prefix.len .. prefix.len + slot.name.len], slot.name);
+        name_buf[prefix.len + slot.name.len] = '=';
+        name_buf[total] = 0;
+        c.linenoiseAddCompletion(lc, name_buf);
+    }
+}
+
 fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callconv(.c) void {
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(buf)), 0);
 
-    // linenoise strdup's the string, so a stack buffer reused per match
-    // is fine. 64 covers every name (including "/help " prefix) comfortably.
-    var name_buf: [64:0]u8 = undefined;
+    // linenoise strdup's the string, so a stack buffer reused per match is
+    // fine. 256 leaves room for partial-key completions where the prefix is
+    // the whole input minus the trailing partial token.
+    var name_buf: [completion_buf_len:0]u8 = undefined;
+
+    const has_space = input.len > 0 and std.mem.indexOfScalar(u8, input, ' ') != null;
 
     if (parseHelpArgPrefix(input)) |partial| {
         for (browser_tools.tool_defs) |td| addHelpArgCompletion(lc, &name_buf, td.name, partial);
         for (meta_slash_commands) |meta| addHelpArgCompletion(lc, &name_buf, meta.name, partial);
-    } else if (input.len > 0 and std.mem.indexOfScalar(u8, input, ' ') == null) {
+    } else if (has_space and input[0] == '/') {
+        if (parseSlashCommand(input)) |parts| {
+            if (findSlashSchema(parts.name)) |schema| {
+                addPartialKeyCompletions(input, parts.body, schema, lc, &name_buf);
+            }
+        }
+    } else if (input.len > 0 and !has_space) {
         if (input[0] == '/') {
             const partial = input[1..];
             for (browser_tools.tool_defs) |td| addSlashCompletion(lc, &name_buf, td.name, partial);
@@ -334,7 +414,6 @@ fn hintsCallback(buf: [*c]const u8, color: [*c]c_int, bold: [*c]c_int) callconv(
     if (input[0] == '/') {
         const partial = input[1..];
 
-        // Partial-name match: show the rest of the first matching command name.
         const suffix = blk: {
             for (browser_tools.tool_defs) |td| {
                 if (slashHint(td.name, partial)) |s| break :blk s;

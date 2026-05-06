@@ -117,7 +117,7 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
     return out[0..idx];
 }
 
-fn containsName(names: []const []const u8, target: []const u8) bool {
+pub fn containsName(names: []const []const u8, target: []const u8) bool {
     for (names) |n| if (std.mem.eql(u8, n, target)) return true;
     return false;
 }
