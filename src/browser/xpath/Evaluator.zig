@@ -109,6 +109,7 @@ fn evalExpr(self: *Evaluator, expr: *const Ast.Expr, ctx: *Node, pos: usize, siz
 
 fn evalPath(self: *Evaluator, path: Ast.Path, ctx: *Node) Error!Result.Result {
     if (try self.tryIdLookupFastPath(path, ctx)) |result| return result;
+    if (try self.tryFusedDescendantFastPath(path, ctx)) |result| return result;
 
     const start: *Node = if (path.absolute) blk: {
         if (ctx._type == .document) break :blk ctx;
@@ -146,18 +147,7 @@ fn tryIdLookupFastPath(self: *Evaluator, path: Ast.Path, ctx: *Node) Error!?Resu
     // Two acceptable AST shapes:
     //   //tag[@id='x']   parses to:  ds::node() / child::tag[pred]
     //   .//tag[@id='x']  parses to:  self::node() / ds::node() / child::tag[pred]
-    const target: Ast.Step = switch (path.steps.len) {
-        2 => blk: {
-            if (!isDescendantOrSelfNode(path.steps[0])) return null;
-            break :blk path.steps[1];
-        },
-        3 => blk: {
-            if (!isSelfNode(path.steps[0])) return null;
-            if (!isDescendantOrSelfNode(path.steps[1])) return null;
-            break :blk path.steps[2];
-        },
-        else => return null,
-    };
+    const target = matchDescendantPathShape(path) orelse return null;
 
     if (target.axis != .child) return null;
     if (target.predicates.len != 1) return null;
@@ -203,6 +193,150 @@ fn tryIdLookupFastPath(self: *Evaluator, path: Ast.Path, ctx: *Node) Error!?Resu
     const out = try self.arena.alloc(*Node, 1);
     out[0] = id_node;
     return Result.Result{ .node_set = out };
+}
+
+// Generalization of `tryIdLookupFastPath` to non-ID predicates. Same
+// AST shape (`//<test>[preds]` / `.//<test>[preds]`), but instead of
+// dispatching to `getElementByIdFromNode`, walks the descendants of
+// the search root once in document order, applying the node test and
+// any "safe" non-positional predicates inline. Skips the general path's
+// per-step axis materialization, the per-step `filtered`/`current`
+// ArrayLists, and the dedup hash map (single-context forward walk
+// already preserves doc order).
+//
+// Hits the bulk of the benchmark's remaining cost: `//div`, `//*`,
+// `//*[@class='x']`, `//div[@class='x']`, `//div[contains(@class,'x')]`.
+//
+// "Safe" predicates: not numeric at the top level (number, neg,
+// arithmetic binop, or a fn-call returning a number), and free of
+// `position()`/`last()` anywhere in the predicate AST. Numeric predicates
+// would need `position()` context which the fused walk doesn't track,
+// and a `position()`/`last()` reference inside a sub-path's own step is
+// rejected conservatively even though it's local to that sub-axis.
+fn tryFusedDescendantFastPath(self: *Evaluator, path: Ast.Path, ctx: *Node) Error!?Result.Result {
+    const target = matchDescendantPathShape(path) orelse return null;
+    if (target.axis != .child) return null;
+
+    for (target.predicates) |p| {
+        if (!isSafeNonPositionalPredicate(p)) return null;
+    }
+
+    const lowered_name: ?[]const u8 = switch (target.node_test) {
+        .name => |n| if (std.mem.eql(u8, n, "*")) null else try std.ascii.allocLowerString(self.arena, n),
+        .type_test => null,
+    };
+
+    const search_root: *Node = if (path.absolute) blk: {
+        if (ctx._type == .document) break :blk ctx;
+        const owner = ctx.ownerDocument(self.frame) orelse return null;
+        break :blk owner.asNode();
+    } else ctx;
+
+    var out: std.ArrayList(*Node) = .empty;
+    try self.fusedDescend(search_root, target, lowered_name, &out);
+    return Result.Result{ .node_set = out.items };
+}
+
+fn fusedDescend(
+    self: *Evaluator,
+    parent: *Node,
+    target: Ast.Step,
+    lowered_name: ?[]const u8,
+    out: *std.ArrayList(*Node),
+) Error!void {
+    var it = parent.childrenIterator();
+    while (it.next()) |c| {
+        if (matchTest(c, target.node_test, target.axis, lowered_name)) {
+            var ok = true;
+            for (target.predicates) |pred| {
+                // Position / size are synthetic. Safe because the
+                // predicate-safety gate already rejected any expression
+                // that depends on either.
+                const val = try self.evalExpr(pred, c, 1, 1);
+                if (!Result.toBoolean(val)) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) try out.append(self.arena, c);
+        }
+        try self.fusedDescend(c, target, lowered_name, out);
+    }
+}
+
+fn matchDescendantPathShape(path: Ast.Path) ?Ast.Step {
+    return switch (path.steps.len) {
+        2 => blk: {
+            if (!isDescendantOrSelfNode(path.steps[0])) break :blk null;
+            break :blk path.steps[1];
+        },
+        3 => blk: {
+            if (!isSelfNode(path.steps[0])) break :blk null;
+            if (!isDescendantOrSelfNode(path.steps[1])) break :blk null;
+            break :blk path.steps[2];
+        },
+        else => null,
+    };
+}
+
+fn isSafeNonPositionalPredicate(expr: *const Ast.Expr) bool {
+    if (isNumericTopLevel(expr)) return false;
+    if (containsPositionOrLast(expr)) return false;
+    return true;
+}
+
+fn isNumericTopLevel(expr: *const Ast.Expr) bool {
+    return switch (expr.*) {
+        .number, .neg => true,
+        .binop => |bo| switch (bo.op) {
+            .add, .sub, .mul, .div, .mod => true,
+            else => false,
+        },
+        .fn_call => |fc| isNumericFnName(fc.name),
+        else => false,
+    };
+}
+
+fn isNumericFnName(name: []const u8) bool {
+    const numeric = [_][]const u8{
+        "position",      "last",    "count", "sum",
+        "floor",         "ceiling", "round", "number",
+        "string-length",
+    };
+    for (numeric) |n| {
+        if (std.mem.eql(u8, name, n)) return true;
+    }
+    return false;
+}
+
+fn containsPositionOrLast(expr: *const Ast.Expr) bool {
+    return switch (expr.*) {
+        .number, .literal, .var_ref => false,
+        .neg => |inner| containsPositionOrLast(inner),
+        .binop => |bo| containsPositionOrLast(bo.left) or containsPositionOrLast(bo.right),
+        .filter => |f| containsPositionOrLast(f.expr) or containsPositionOrLast(f.predicate),
+        .filter_path => |fp| containsPositionOrLast(fp.filter) or stepsContainPositionOrLast(fp.steps),
+        .path => |p| stepsContainPositionOrLast(p.steps),
+        .fn_call => |fc| std.mem.eql(u8, fc.name, "position") or
+            std.mem.eql(u8, fc.name, "last") or
+            argsContainPositionOrLast(fc.args),
+    };
+}
+
+fn stepsContainPositionOrLast(steps: []const Ast.Step) bool {
+    for (steps) |s| {
+        for (s.predicates) |p| {
+            if (containsPositionOrLast(p)) return true;
+        }
+    }
+    return false;
+}
+
+fn argsContainPositionOrLast(args: []const *Ast.Expr) bool {
+    for (args) |a| {
+        if (containsPositionOrLast(a)) return true;
+    }
+    return false;
 }
 
 fn isDescendantOrSelfNode(s: Ast.Step) bool {
