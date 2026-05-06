@@ -134,18 +134,20 @@ fn writeHintSlot(pos: *usize, buffer_ends_with_space: bool, slot: SlashCommand.H
     return true;
 }
 
+// Bit per `schema.hints` index. Slots beyond this cap are silently treated
+// as "available"; real schemas have far fewer fields than this.
 const max_tracked_fields = 32;
+const UsedMask = std.bit_set.IntegerBitSet(max_tracked_fields);
 
 const BodyAnalysis = struct {
-    used_buf: [max_tracked_fields][]const u8 = undefined,
-    used_len: usize = 0,
+    used: UsedMask = UsedMask.initEmpty(),
     // The trailing in-progress token when the user is typing a key prefix
     // (no `=` yet, not a positional binding). Null if the body is empty,
     // ends with whitespace, or the trailing token is fully committed.
     partial_key: ?[]const u8 = null,
 
-    fn used(self: *const BodyAnalysis) []const []const u8 {
-        return self.used_buf[0..self.used_len];
+    fn slotUsed(self: *const BodyAnalysis, i: usize) bool {
+        return i < max_tracked_fields and self.used.isSet(i);
     }
 };
 
@@ -154,35 +156,34 @@ const BodyAnalysis = struct {
 fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, buffer_ends_with_space: bool) BodyAnalysis {
     var a: BodyAnalysis = .{};
 
-    var tokens_buf: [max_tracked_fields][]const u8 = undefined;
-    var tokens_len: usize = 0;
+    var tokens: [max_tracked_fields][]const u8 = undefined;
+    var n: usize = 0;
     var it = std.mem.tokenizeAny(u8, body, &std.ascii.whitespace);
     while (it.next()) |tok| {
-        if (tokens_len >= tokens_buf.len) break;
-        tokens_buf[tokens_len] = tok;
-        tokens_len += 1;
+        if (n >= tokens.len) break;
+        tokens[n] = tok;
+        n += 1;
     }
-    if (tokens_len == 0) return a;
+    if (n == 0) return a;
 
-    const last_idx = tokens_len - 1;
-    for (tokens_buf[0..tokens_len], 0..) |tok, i| {
-        const is_last_in_progress = i == last_idx and !buffer_ends_with_space;
-        const is_first = i == 0;
+    const last = n - 1;
+    for (tokens[0..n], 0..) |tok, i| {
+        const in_progress = i == last and !buffer_ends_with_space;
         if (std.mem.indexOfScalar(u8, tok, '=')) |eq| {
-            if (a.used_len < a.used_buf.len) {
-                a.used_buf[a.used_len] = tok[0..eq];
-                a.used_len += 1;
-            }
-        } else if (is_first and schema.required.len == 1) {
-            if (a.used_len < a.used_buf.len) {
-                a.used_buf[a.used_len] = schema.required[0];
-                a.used_len += 1;
-            }
-        } else if (is_last_in_progress) {
+            markUsed(&a, schema, tok[0..eq]);
+        } else if (i == 0 and schema.required.len == 1) {
+            markUsed(&a, schema, schema.required[0]);
+        } else if (in_progress) {
             a.partial_key = tok;
         }
     }
     return a;
+}
+
+fn markUsed(a: *BodyAnalysis, schema: *const SlashCommand.SchemaInfo, key: []const u8) void {
+    if (SlashCommand.hintIndex(schema, key)) |idx| {
+        if (idx < max_tracked_fields) a.used.set(idx);
+    }
 }
 
 // Two modes:
@@ -195,11 +196,10 @@ fn renderSchemaArgHint(
     buffer_ends_with_space: bool,
 ) ?[*c]u8 {
     const a = analyzeBody(schema, body, buffer_ends_with_space);
-    const used = a.used();
 
     if (a.partial_key) |pk| if (pk.len > 0) {
-        for (schema.hints) |slot| {
-            if (SlashCommand.containsName(used, slot.name)) continue;
+        for (schema.hints, 0..) |slot, i| {
+            if (a.slotUsed(i)) continue;
             if (!std.ascii.startsWithIgnoreCase(slot.name, pk)) continue;
             _ = std.fmt.bufPrintZ(&hint_buf, "{s}=…", .{slot.name[pk.len..]}) catch return null;
             return @ptrCast(&hint_buf);
@@ -207,8 +207,8 @@ fn renderSchemaArgHint(
     };
 
     var pos: usize = 0;
-    for (schema.hints) |slot| {
-        if (SlashCommand.containsName(used, slot.name)) continue;
+    for (schema.hints, 0..) |slot, i| {
+        if (a.slotUsed(i)) continue;
         if (!writeHintSlot(&pos, buffer_ends_with_space, slot)) return null;
     }
 
@@ -262,8 +262,8 @@ fn addPartialKeyCompletions(
 
     const partial = a.partial_key orelse "";
     const prefix = input[0 .. input.len - partial.len];
-    for (schema.hints) |slot| {
-        if (SlashCommand.containsName(a.used(), slot.name)) continue;
+    for (schema.hints, 0..) |slot, i| {
+        if (a.slotUsed(i)) continue;
         addPrefixedCompletion(lc, name_buf, prefix, slot.name, "=", partial);
     }
 }

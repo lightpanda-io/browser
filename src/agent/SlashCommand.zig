@@ -117,9 +117,19 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
     return out[0..idx];
 }
 
-pub fn containsName(names: []const []const u8, target: []const u8) bool {
+fn containsName(names: []const []const u8, target: []const u8) bool {
     for (names) |n| if (std.mem.eql(u8, n, target)) return true;
     return false;
+}
+
+/// Index of `name` in `schema.hints`, or null if absent. Used by callers that
+/// need to track which hints are already supplied without an O(used × hints)
+/// scan per render.
+pub fn hintIndex(schema: *const SchemaInfo, name: []const u8) ?usize {
+    for (schema.hints, 0..) |slot, i| {
+        if (std.mem.eql(u8, slot.name, name)) return i;
+    }
+    return null;
 }
 
 fn fieldTypeOf(value: std.json.Value) FieldType {
@@ -405,4 +415,18 @@ test "parse rejects positional when not single-required" {
 
 test "parse handles single-quoted values" {
     try expectParse("click selector='#login-btn'", "click", "{\"selector\":\"#login-btn\"}");
+}
+
+test "parse matches tool name case-insensitively" {
+    try expectParse("GETENV PATH", "getEnv", "{\"name\":\"PATH\"}");
+}
+
+test "parse rejects malformed kv after leading positional" {
+    try expectParseError(error.MalformedKv, "goto https://example.com bare");
+}
+
+test "parse treats first token with = as kv (not positional)" {
+    // `a=b` looks like kv, so the leading-positional shortcut doesn't fire and
+    // the schema's required `url` is missing.
+    try expectParseError(error.MissingRequired, "goto a=b");
 }
