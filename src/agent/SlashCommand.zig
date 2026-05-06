@@ -17,6 +17,12 @@ pub const SchemaInfo = struct {
     input_schema_raw: []const u8,
     required: []const []const u8,
     fields: []const FieldEntry,
+    /// Argument syntax slots used by the REPL to render a greyed-out hint
+    /// after the command name. Each entry is e.g. "<url>" or "[timeout]"
+    /// (no leading space, no null terminator). Required fields come first
+    /// in `required` order, then optional fields in `fields` order. Empty
+    /// when the tool has no fields.
+    hint_slots: []const []const u8,
 };
 
 pub const Parsed = struct {
@@ -54,6 +60,7 @@ fn buildOne(arena: std.mem.Allocator, td: browser_tools.ToolDef, parsed: std.jso
         .input_schema_raw = td.input_schema,
         .required = &.{},
         .fields = &.{},
+        .hint_slots = &.{},
     };
 
     if (parsed != .object) return info;
@@ -86,7 +93,33 @@ fn buildOne(arena: std.mem.Allocator, td: browser_tools.ToolDef, parsed: std.jso
         }
     }
 
+    info.hint_slots = try buildHintSlots(arena, info.required, info.fields);
+
     return info;
+}
+
+fn buildHintSlots(arena: std.mem.Allocator, required: []const []const u8, fields: []const FieldEntry) ![]const []const u8 {
+    if (fields.len == 0) return &.{};
+
+    const slots = try arena.alloc([]const u8, fields.len);
+    var idx: usize = 0;
+    for (required) |name| {
+        slots[idx] = try std.fmt.allocPrint(arena, "<{s}>", .{name});
+        idx += 1;
+    }
+    for (fields) |f| {
+        if (containsName(required, f.name)) continue;
+        slots[idx] = try std.fmt.allocPrint(arena, "[{s}]", .{f.name});
+        idx += 1;
+    }
+    return slots[0..idx];
+}
+
+fn containsName(names: []const []const u8, target: []const u8) bool {
+    for (names) |n| {
+        if (std.mem.eql(u8, n, target)) return true;
+    }
+    return false;
 }
 
 fn fieldTypeOf(value: std.json.Value) FieldType {

@@ -1,6 +1,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const browser_tools = lp.tools;
+const SlashCommand = @import("SlashCommand.zig");
 const c = @cImport({
     @cInclude("linenoise.h");
 });
@@ -36,8 +37,26 @@ const commands = [_]CommandInfo{
 };
 
 // Meta slash commands handled directly by the agent (not by ToolExecutor).
-// Kept in sync with `handleSlash` in `Agent.zig`.
-const meta_slash_commands = [_][:0]const u8{ "help", "quit" };
+// Kept in sync with `handleSlash` in `Agent.zig`. Hint slots match the format
+// used by `SlashCommand.SchemaInfo.hint_slots` (e.g. "[tool_name]").
+const MetaCommand = struct {
+    name: [:0]const u8,
+    hint_slots: []const []const u8,
+};
+
+const meta_slash_commands = [_]MetaCommand{
+    .{ .name = "help", .hint_slots = &.{"[tool_name]"} },
+    .{ .name = "quit", .hint_slots = &.{} },
+};
+
+// Slash command schemas, set by the agent after `SlashCommand.buildSchemas`.
+// File-scope because the linenoise hint callback is a C function pointer with
+// no user-data slot. Empty in non-REPL paths, which is harmless.
+var slash_schemas: []const SlashCommand.SchemaInfo = &.{};
+
+pub fn setSlashSchemas(schemas: []const SlashCommand.SchemaInfo) void {
+    slash_schemas = schemas;
+}
 
 pub fn init(history_path: ?[:0]const u8) Self {
     c.linenoiseSetMultiLine(1);
@@ -66,17 +85,110 @@ fn slashHint(name: []const u8, partial: []const u8) ?[]const u8 {
     return name[partial.len..];
 }
 
+// Splits `/<name>[ <body>]`. Returns null when input doesn't start with `/`,
+// has no name, or is just `/`. `body` is "" when the name is fully typed but
+// no space has been entered yet.
+fn parseSlashCommand(input: []const u8) ?struct { name: []const u8, body: []const u8 } {
+    if (input.len < 2 or input[0] != '/') return null;
+    if (std.mem.indexOfScalar(u8, input, ' ')) |space| {
+        if (space < 2) return null;
+        return .{ .name = input[1..space], .body = input[space + 1 ..] };
+    }
+    return .{ .name = input[1..], .body = "" };
+}
+
+fn findHintSlots(name: []const u8) ?[]const []const u8 {
+    for (slash_schemas) |s| {
+        if (std.ascii.eqlIgnoreCase(s.tool_name, name)) return s.hint_slots;
+    }
+    for (meta_slash_commands) |meta| {
+        if (std.ascii.eqlIgnoreCase(meta.name, name)) return meta.hint_slots;
+    }
+    return null;
+}
+
+// Whitespace-separated token count, including a trailing in-progress token.
+// `/goto www` → 1 (user is filling slot 0); `/goto www ` → 1 (slot 0 done,
+// cursor sits in slot 1's gap); `/goto www 5` → 2.
+fn countSlots(body: []const u8) usize {
+    var n: usize = 0;
+    var in_token = false;
+    for (body) |ch| {
+        if (std.ascii.isWhitespace(ch)) {
+            in_token = false;
+        } else {
+            if (!in_token) n += 1;
+            in_token = true;
+        }
+    }
+    return n;
+}
+
+// Renders `slots[committed..]` into `hint_buf` joined by spaces, with a
+// leading space iff the buffer doesn't already end in whitespace. Returns
+// null when no slots remain or the result wouldn't fit.
+fn renderHintSlots(slots: []const []const u8, body: []const u8, buffer_ends_with_space: bool) ?[*c]u8 {
+    const committed = countSlots(body);
+    if (committed >= slots.len) return null;
+
+    var pos: usize = 0;
+    for (slots[committed..], 0..) |slot, i| {
+        const need_space = i > 0 or !buffer_ends_with_space;
+        const space_len: usize = if (need_space) 1 else 0;
+        if (pos + space_len + slot.len >= hint_buf.len) return null;
+        if (need_space) {
+            hint_buf[pos] = ' ';
+            pos += 1;
+        }
+        @memcpy(hint_buf[pos .. pos + slot.len], slot);
+        pos += slot.len;
+    }
+    if (pos == 0) return null;
+    hint_buf[pos] = 0;
+    return @ptrCast(&hint_buf);
+}
+
+const help_arg_prefix = "/help ";
+
+// Returns the partial argument when `input` matches `/help <partial>` with no
+// trailing arguments (e.g. "/help g" → "g", "/help " → ""). Returns null when
+// it doesn't apply (different command, or arg already terminated by a space).
+fn parseHelpArgPrefix(input: []const u8) ?[]const u8 {
+    if (input.len < help_arg_prefix.len) return null;
+    if (!std.ascii.eqlIgnoreCase(input[0..help_arg_prefix.len], help_arg_prefix)) return null;
+    var i = help_arg_prefix.len;
+    while (i < input.len and input[i] == ' ') i += 1;
+    const arg = input[i..];
+    if (std.mem.indexOfScalar(u8, arg, ' ') != null) return null;
+    return arg;
+}
+
+fn addHelpArgCompletion(lc: [*c]c.linenoiseCompletions, name_buf: *[64:0]u8, name: []const u8, partial: []const u8) void {
+    const total = help_arg_prefix.len + name.len;
+    if (total >= name_buf.len) return;
+    if (name.len < partial.len) return;
+    if (!std.ascii.eqlIgnoreCase(name[0..partial.len], partial)) return;
+    @memcpy(name_buf[0..help_arg_prefix.len], help_arg_prefix);
+    @memcpy(name_buf[help_arg_prefix.len..total], name);
+    name_buf[total] = 0;
+    c.linenoiseAddCompletion(lc, name_buf);
+}
+
 fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callconv(.c) void {
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(buf)), 0);
 
-    if (input.len > 0 and std.mem.indexOfScalar(u8, input, ' ') == null) {
+    // linenoise strdup's the string, so a stack buffer reused per match
+    // is fine. 64 covers every name (including "/help " prefix) comfortably.
+    var name_buf: [64:0]u8 = undefined;
+
+    if (parseHelpArgPrefix(input)) |partial| {
+        for (browser_tools.tool_defs) |td| addHelpArgCompletion(lc, &name_buf, td.name, partial);
+        for (meta_slash_commands) |meta| addHelpArgCompletion(lc, &name_buf, meta.name, partial);
+    } else if (input.len > 0 and std.mem.indexOfScalar(u8, input, ' ') == null) {
         if (input[0] == '/') {
             const partial = input[1..];
-            // linenoise strdup's the string, so a stack buffer reused per match
-            // is fine. 64 covers every name comfortably.
-            var name_buf: [64:0]u8 = undefined;
             for (browser_tools.tool_defs) |td| addSlashCompletion(lc, &name_buf, td.name, partial);
-            for (meta_slash_commands) |name| addSlashCompletion(lc, &name_buf, name, partial);
+            for (meta_slash_commands) |meta| addSlashCompletion(lc, &name_buf, meta.name, partial);
         } else {
             for (commands) |cmd| {
                 if (cmd.name.len >= input.len and std.ascii.eqlIgnoreCase(cmd.name[0..input.len], input)) {
@@ -102,19 +214,49 @@ var hint_buf: [64:0]u8 = undefined;
 fn hintsCallback(buf: [*c]const u8, color: [*c]c_int, bold: [*c]c_int) callconv(.c) [*c]u8 {
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(buf)), 0);
     if (input.len == 0) return null;
-    if (std.mem.indexOfScalar(u8, input, ' ') != null) return null;
 
     color.* = 90;
     bold.* = 0;
 
-    if (input[0] == '/') {
-        const partial = input[1..];
+    // /help <partial> — suggest a tool name (more useful than the slot hint
+    // because we can show concrete completions).
+    if (parseHelpArgPrefix(input)) |partial| {
         const suffix = blk: {
             for (browser_tools.tool_defs) |td| {
                 if (slashHint(td.name, partial)) |s| break :blk s;
             }
-            for (meta_slash_commands) |name| {
-                if (slashHint(name, partial)) |s| break :blk s;
+            for (meta_slash_commands) |meta| {
+                if (slashHint(meta.name, partial)) |s| break :blk s;
+            }
+            return null;
+        };
+        if (suffix.len + 1 > hint_buf.len) return null;
+        @memcpy(hint_buf[0..suffix.len], suffix);
+        hint_buf[suffix.len] = 0;
+        return @ptrCast(&hint_buf);
+    }
+
+    // /<known-name>[ body] — render the remaining argument slots. Handles
+    // both the exact-name case (body=="") and the in-progress-args case.
+    if (parseSlashCommand(input)) |parts| {
+        if (findHintSlots(parts.name)) |slots| {
+            const ends_with_space = input[input.len - 1] == ' ';
+            return renderHintSlots(slots, parts.body, ends_with_space) orelse null;
+        }
+    }
+
+    if (std.mem.indexOfScalar(u8, input, ' ') != null) return null;
+
+    if (input[0] == '/') {
+        const partial = input[1..];
+
+        // Partial-name match: show the rest of the first matching command name.
+        const suffix = blk: {
+            for (browser_tools.tool_defs) |td| {
+                if (slashHint(td.name, partial)) |s| break :blk s;
+            }
+            for (meta_slash_commands) |meta| {
+                if (slashHint(meta.name, partial)) |s| break :blk s;
             }
             return null;
         };
