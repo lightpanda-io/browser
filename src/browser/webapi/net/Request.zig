@@ -22,12 +22,11 @@ const js = @import("../../js/js.zig");
 const http = @import("../../../network/http.zig");
 
 const URL = @import("../URL.zig");
-const Headers = @import("Headers.zig");
 const Blob = @import("../Blob.zig");
 const AbortSignal = @import("../AbortSignal.zig");
-const body_init = @import("BodyInit.zig");
 
-pub const BodyInit = body_init.BodyInit;
+const Headers = @import("Headers.zig");
+const BodyInit = @import("body_init.zig").BodyInit;
 
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
@@ -98,7 +97,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
     };
 
     const body = if (opts.body) |b| blk: {
-        const extracted = try body_init.extract(b, arena);
+        const extracted = try b.extract(arena);
         // Per Fetch §6.5 step 11, the default Content-Type only applies if
         // the user has not already set one via the headers init dict.
         if (extracted.content_type) |ct| {

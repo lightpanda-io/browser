@@ -29,10 +29,11 @@ const Page = @import("../../Page.zig");
 
 const Node = @import("../Node.zig");
 const Event = @import("../Event.zig");
+const EventTarget = @import("../EventTarget.zig");
+
 const Headers = @import("Headers.zig");
 const Request = @import("Request.zig");
-const body_init = @import("BodyInit.zig");
-const EventTarget = @import("../EventTarget.zig");
+const BodyInit = @import("body_init.zig").BodyInit;
 const XMLHttpRequestEventTarget = @import("XMLHttpRequestEventTarget.zig");
 
 const log = lp.log;
@@ -223,7 +224,7 @@ pub fn setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const 
     return self._request_headers.append(name, value, exec);
 }
 
-pub fn send(self: *XMLHttpRequest, body_: ?Request.BodyInit, exec_: *const Execution) !void {
+pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !void {
     if (comptime IS_DEBUG) {
         log.debug(.http, "XMLHttpRequest.send", .{ .url = self._url });
     }
@@ -233,7 +234,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?Request.BodyInit, exec_: *const Execu
 
     if (body_) |b| {
         if (self._method != .GET and self._method != .HEAD) {
-            const extracted = try body_init.extract(b, self._arena);
+            const extracted = try b.extract(self._arena);
             self._request_body = extracted.bytes;
             // Per XHR §4.7.6 "send()" step 4, the default Content-Type only
             // applies if the author hasn't already set one via

@@ -30,17 +30,69 @@
 
 const std = @import("std");
 
+const Blob = @import("../Blob.zig");
+
 const FormData = @import("FormData.zig");
 const URLSearchParams = @import("URLSearchParams.zig");
-const Blob = @import("../Blob.zig");
 
 const Allocator = std.mem.Allocator;
 
 pub const BodyInit = union(enum) {
+    blob: *Blob,
     form_data: *FormData,
     url_search_params: *URLSearchParams,
-    blob: *Blob,
-    bytes: []const u8,
+    bytes: []const u8, // must be last, js.Bridge will map anything to a string
+
+    pub fn extract(self: BodyInit, arena: Allocator) !Extracted {
+        switch (self) {
+            .bytes => |b| {
+                // String bodies: dupe as-is. Per Fetch §6.5 step 4, the default
+                // Content-Type for USVString is "text/plain;charset=UTF-8";
+                // emit it so callers without an explicit header still pass spec
+                // checks. Pre-fix behaviour also omitted this; tests that depend
+                // on no Content-Type for string bodies should set one explicitly.
+                return .{
+                    .bytes = try arena.dupe(u8, b),
+                    .content_type = "text/plain;charset=UTF-8",
+                };
+            },
+            .url_search_params => |usp| {
+                var buf = std.Io.Writer.Allocating.init(arena);
+                try usp.toString(&buf.writer);
+                return .{
+                    .bytes = buf.written(),
+                    .content_type = "application/x-www-form-urlencoded;charset=UTF-8",
+                };
+            },
+            .form_data => |fd| {
+                var rand_bytes: [10]u8 = undefined;
+                std.crypto.random.bytes(&rand_bytes);
+                const hex = std.fmt.bytesToHex(rand_bytes, .lower);
+
+                var boundary: [24]u8 = undefined;
+                @memcpy(boundary[0..4], "----");
+                @memcpy(boundary[4..], &hex);
+
+                var buf = std.Io.Writer.Allocating.init(arena);
+                try fd.write(.{
+                    .allocator = arena,
+                    .encoding = .{ .formdata = &boundary },
+                }, &buf.writer);
+
+                const ct = try std.fmt.allocPrint(arena, "multipart/form-data; boundary={s}", .{boundary});
+                return .{
+                    .bytes = buf.written(),
+                    .content_type = ct,
+                };
+            },
+            .blob => |blob| {
+                return .{
+                    .bytes = try arena.dupe(u8, blob._slice),
+                    .content_type = if (blob._mime.len > 0) try arena.dupe(u8, blob._mime) else null,
+                };
+            },
+        }
+    }
 };
 
 // Result of extracting a body. `bytes` is duped into the caller's arena.
@@ -52,94 +104,45 @@ pub const Extracted = struct {
     content_type: ?[]const u8,
 };
 
-// Boundary length in bytes (32 hex chars = 128 bits of entropy). Chrome
-// uses ~16 bytes; the multipart spec only requires it be unique enough to
-// not collide with any payload bytes, which 128 bits comfortably is.
-const BOUNDARY_HEX_LEN: usize = 32;
-const BOUNDARY_PREFIX: []const u8 = "----LightpandaFormBoundary";
-
-pub fn extract(body: BodyInit, arena: Allocator) !Extracted {
-    switch (body) {
-        .bytes => |b| {
-            // String bodies: dupe as-is. Per Fetch §6.5 step 4, the default
-            // Content-Type for USVString is "text/plain;charset=UTF-8";
-            // emit it so callers without an explicit header still pass spec
-            // checks. Pre-fix behaviour also omitted this; tests that depend
-            // on no Content-Type for string bodies should set one explicitly.
-            return .{
-                .bytes = try arena.dupe(u8, b),
-                .content_type = "text/plain;charset=UTF-8",
-            };
-        },
-        .url_search_params => |usp| {
-            var buf = std.Io.Writer.Allocating.init(arena);
-            try usp.toString(&buf.writer);
-            return .{
-                .bytes = buf.written(),
-                .content_type = "application/x-www-form-urlencoded;charset=UTF-8",
-            };
-        },
-        .form_data => |fd| {
-            const boundary = try randomBoundary(arena);
-            var buf = std.Io.Writer.Allocating.init(arena);
-            try fd.write(.{
-                .encoding = .{ .formdata = boundary },
-                .allocator = arena,
-            }, &buf.writer);
-            const ct = try std.fmt.allocPrint(arena, "multipart/form-data; boundary={s}", .{boundary});
-            return .{
-                .bytes = buf.written(),
-                .content_type = ct,
-            };
-        },
-        .blob => |blob| {
-            return .{
-                .bytes = try arena.dupe(u8, blob._slice),
-                .content_type = if (blob._mime.len > 0) try arena.dupe(u8, blob._mime) else null,
-            };
-        },
-    }
-}
-
-fn randomBoundary(arena: Allocator) ![]const u8 {
-    var rand_bytes: [BOUNDARY_HEX_LEN / 2]u8 = undefined;
-    std.crypto.random.bytes(&rand_bytes);
-    const hex = std.fmt.bytesToHex(rand_bytes, .lower);
-    return std.fmt.allocPrint(arena, "{s}{s}", .{ BOUNDARY_PREFIX, hex });
-}
-
 const testing = @import("../../../testing.zig");
-
 test "BodyInit: bytes pass through with text/plain" {
-    const arena = testing.arena_allocator;
-    const r = try extract(.{ .bytes = "hello" }, arena);
+    defer testing.reset();
+    const r = try (BodyInit{ .bytes = "hello" }).extract(testing.arena_allocator);
     try testing.expectString("hello", r.bytes);
     try testing.expectString("text/plain;charset=UTF-8", r.content_type.?);
 }
 
 test "BodyInit: URLSearchParams emit urlencoded body + content-type" {
+    defer testing.reset();
     const arena = testing.arena_allocator;
+
     const usp = try arena.create(URLSearchParams);
     usp.* = .{ ._arena = arena, ._params = .empty };
     try usp.append("a", "1");
     try usp.append("b", "2");
-    const r = try extract(.{ .url_search_params = usp }, arena);
+
+    const r = try (BodyInit{ .url_search_params = usp }).extract(arena);
     try testing.expectString("a=1&b=2", r.bytes);
     try testing.expectString("application/x-www-form-urlencoded;charset=UTF-8", r.content_type.?);
 }
 
 test "BodyInit: FormData emits multipart with random boundary" {
+    defer testing.reset();
     const arena = testing.arena_allocator;
+
     const fd = try arena.create(FormData);
     fd.* = .{ ._arena = arena, ._entries = .empty };
     try fd.append("username", "alice");
     try fd.append("email", "alice@example.com");
-    const r = try extract(.{ .form_data = fd }, arena);
-    const ct = r.content_type.?;
-    try testing.expect(std.mem.startsWith(u8, ct, "multipart/form-data; boundary=" ++ BOUNDARY_PREFIX));
+
+    const r = try (BodyInit{ .form_data = fd }).extract(arena);
+
     // Body must contain the entries' Content-Disposition lines and end with
     // the closing boundary marker.
-    const boundary = ct["multipart/form-data; boundary=".len..];
+    const boundary = r.content_type.?["multipart/form-data; boundary=".len..];
+    try testing.expectEqual(true, std.mem.startsWith(u8, boundary, "----"));
+    try testing.expectEqual(true, boundary.len > 10);
+
     try testing.expect(std.mem.indexOf(u8, r.bytes, "Content-Disposition: form-data; name=\"username\"") != null);
     try testing.expect(std.mem.indexOf(u8, r.bytes, "Content-Disposition: form-data; name=\"email\"") != null);
     try testing.expect(std.mem.indexOf(u8, r.bytes, "alice") != null);
