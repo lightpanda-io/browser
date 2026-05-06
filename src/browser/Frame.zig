@@ -405,6 +405,10 @@ pub fn deinit(self: *Frame) void {
     }
 
     const browser = page.session.browser;
+
+    // don't abort pending frames.
+    browser.http_client.abortFrame(self._frame_id, .{});
+
     browser.env.destroyContext(self.js);
 
     // Must be after context is destroyed. A finalizer can reach into the *Worker
@@ -414,9 +418,6 @@ pub fn deinit(self: *Frame) void {
     }
 
     self._script_manager.base.shutdown = true;
-
-    // don't abort pending frames.
-    browser.http_client.abortFrame(self._frame_id, .{});
 
     self._script_manager.deinit();
     self._style_manager.deinit();
