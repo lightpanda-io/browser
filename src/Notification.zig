@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const js = @import("browser/js/js.zig");
 const Frame = @import("browser/Frame.zig");
 const Transfer = @import("browser/HttpClient.zig").Transfer;
 const Request = @import("browser/HttpClient.zig").Request;
@@ -87,6 +88,7 @@ const EventListeners = struct {
     http_response_header_done: List = .{},
     javascript_dialog_opening: List = .{},
     console_message: List = .{},
+    runtime_console_message: List = .{},
 };
 
 const Events = union(enum) {
@@ -108,6 +110,7 @@ const Events = union(enum) {
     http_response_header_done: *const ResponseHeaderDone,
     javascript_dialog_opening: *const JavascriptDialogOpening,
     console_message: *const ConsoleMessage,
+    runtime_console_message: *const ConsoleMessage,
 };
 const EventType = std.meta.FieldEnum(Events);
 
@@ -226,6 +229,7 @@ pub const DialogResponse = struct {
 };
 
 pub const ConsoleMessage = struct {
+    timestamp: u64,
     source: enum {
         xml,
         javascript,
@@ -240,7 +244,7 @@ pub const ConsoleMessage = struct {
         worker,
     },
     level: log.Level,
-    text: []const u8,
+    values: []js.Value,
     url: ?[]const u8 = null,
     line: ?u32 = null,
     columns: ?u32 = null,

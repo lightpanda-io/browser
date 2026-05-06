@@ -641,6 +641,14 @@ pub const BrowserContext = struct {
         self.notification.unregister(.console_message, self);
     }
 
+    pub fn runtimeEnable(self: *BrowserContext) !void {
+        try self.notification.register(.runtime_console_message, self, onRuntimeConsoleMessage);
+    }
+
+    pub fn runtimeDisable(self: *BrowserContext) void {
+        self.notification.unregister(.runtime_console_message, self);
+    }
+
     pub fn onFrameRemove(ctx: *anyopaque, _: Notification.FrameRemove) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         @import("domains/page.zig").frameRemove(self);
@@ -802,11 +810,6 @@ pub const BrowserContext = struct {
         };
     }
 
-    pub fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
-        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/console.zig").consoleMessage(self, msg);
-    }
-
     // This is hacky x 2. First, we create the JSON payload by gluing our
     // session_id onto it. Second, we're much more client/websocket aware than
     // we should be.
@@ -845,6 +848,20 @@ pub const BrowserContext = struct {
         }
 
         try cdp.client.sendJSONRaw(buf);
+    }
+
+    pub fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        defer self.resetNotificationArena();
+
+        return @import("domains/console.zig").consoleMessage(self, msg);
+    }
+
+    pub fn onRuntimeConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        defer self.resetNotificationArena();
+
+        return @import("domains/runtime.zig").consoleMessage(self, msg);
     }
 };
 

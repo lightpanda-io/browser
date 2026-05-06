@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
 const Notification = @import("../../Notification.zig");
+const datetime = @import("../../datetime.zig");
 
 const logger = lp.log;
 const LogLevel = lp.log.Level;
@@ -34,24 +35,21 @@ pub const init: Console = .{};
 
 fn dispatchConsoleMessage(values: []js.Value, level: LogLevel, exec: *js.Execution) void {
     const notification = exec.context.page.session.notification;
-    const text = formatValues(values, exec.call_arena) catch return;
+    const ts = datetime.timestamp(.monotonic);
+
     notification.dispatch(.console_message, &.{
         .source = .javascript,
         .level = level,
-        .text = text,
+        .values = values,
+        .timestamp = ts,
     });
-}
 
-fn formatValues(values: []js.Value, allocator: std.mem.Allocator) ![]const u8 {
-    var aw: std.io.Writer.Allocating = .init(allocator);
-    const w = &aw.writer;
-    for (values, 0..) |v, i| {
-        if (i != 0) try w.writeByte(' ');
-
-        const js_str = try v.toString();
-        try js_str.format(w);
-    }
-    return aw.written();
+    notification.dispatch(.runtime_console_message, &.{
+        .source = .javascript,
+        .level = level,
+        .values = values,
+        .timestamp = ts,
+    });
 }
 
 pub fn trace(_: *const Console, values: []js.Value, exec: *js.Execution) !void {

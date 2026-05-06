@@ -19,11 +19,14 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const js = @import("../../browser/js/js.zig");
 const CDP = @import("../CDP.zig");
+const Notification = @import("../../Notification.zig");
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
+        disable,
         runIfWaitingForDebugger,
         evaluate,
         addBinding,
@@ -34,8 +37,22 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 
     switch (action) {
         .runIfWaitingForDebugger => return cmd.sendResult(null, .{}),
+        .enable => return enable(cmd),
+        .disable => return disable(cmd),
         else => return sendInspector(cmd, action),
     }
+}
+
+fn enable(cmd: *CDP.Command) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    try bc.runtimeEnable();
+    return sendInspector(cmd, .enable);
+}
+
+fn disable(cmd: *CDP.Command) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    bc.runtimeDisable();
+    return sendInspector(cmd, .disable);
 }
 
 fn sendInspector(cmd: *CDP.Command, action: anytype) !void {
@@ -90,4 +107,58 @@ fn logInspector(cmd: *CDP.Command, action: anytype) !void {
     const f = try dir.createFile(name, .{});
     defer f.close();
     try f.writeAll(script);
+}
+
+const RemoteObject = struct {
+    type: []const u8,
+    subtype: ?[]const u8,
+    className: ?[]const u8,
+    description: ?[]const u8,
+    objectId: ?[]const u8,
+    value: js.Value,
+};
+
+const ConsoleMessage = struct {
+    type: []const u8,
+    executionContextId: i32,
+    timestamp: u64,
+    args: []RemoteObject,
+};
+
+pub fn consoleMessage(bc: *CDP.BrowserContext, event: *const Notification.ConsoleMessage) !void {
+    const session_id = bc.session_id orelse return;
+    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const context_id = bc.inspector_session.inspector.getContextId(&ls.local);
+    const arena = bc.notification_arena;
+
+    var args: std.ArrayList(RemoteObject) = .empty;
+    for (event.values) |value| {
+        const remote_object = try bc.inspector_session.getRemoteObject(
+            &ls.local,
+            "",
+            value,
+        );
+        defer remote_object.deinit();
+
+        try args.append(arena, .{
+            .type = try remote_object.getType(arena),
+            .subtype = try remote_object.getSubtype(arena),
+            .className = try remote_object.getClassName(arena),
+            .description = try remote_object.getDescription(arena),
+            .objectId = try remote_object.getObjectId(arena),
+            .value = value,
+        });
+    }
+
+    return bc.cdp.sendEvent("Runtime.consoleAPICalled", ConsoleMessage{
+        .type = @tagName(event.level),
+        .timestamp = event.timestamp,
+        .executionContextId = context_id,
+        .args = args.items,
+    }, .{ .session_id = session_id });
 }

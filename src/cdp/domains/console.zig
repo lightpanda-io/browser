@@ -60,9 +60,19 @@ const ConsoleMessage = struct {
 pub fn consoleMessage(bc: *CDP.BrowserContext, event: *const Notification.ConsoleMessage) !void {
     const session_id = bc.session_id orelse return;
 
+    // format values
+    var aw: std.io.Writer.Allocating = .init(bc.notification_arena);
+    const w = &aw.writer;
+    for (event.values, 0..) |v, i| {
+        if (i != 0) try w.writeByte(' ');
+
+        const js_str = try v.toString();
+        try js_str.format(w);
+    }
+
     return bc.cdp.sendEvent("Console.messageAdded", ConsoleMessage{
         .source = @tagName(event.source),
         .level = @tagName(event.level),
-        .text = event.text,
+        .text = aw.written(),
     }, .{ .session_id = session_id });
 }
