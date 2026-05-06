@@ -220,6 +220,14 @@
 
       // URL.createObjectURL / revokeObjectURL
       testing.expectEqual(true, r.blob_url_is_blob);
+
+      // WorkerLocation
+      testing.expectEqual(true, r.loc_is_worker_location);
+      testing.expectEqual(true, r.loc_identity_stable);
+      testing.expectTrue(r.loc_href.endsWith('api-worker.js'));
+      testing.expectEqual(r.loc_href, r.loc_to_string);
+      testing.expectEqual('http:', r.loc_protocol);
+      testing.expectTrue(r.loc_pathname.endsWith('api-worker.js'));
     });
   }
 </script>
