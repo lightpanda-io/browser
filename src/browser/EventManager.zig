@@ -266,7 +266,11 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             was_handled = true;
             event._current_target = target_et;
 
-            try ls.toLocal(inline_handler).callWithThis(void, target_et, .{event});
+            // Inline handlers (e.g. onclick property) follow the same "report,
+            // don't propagate" rule as addEventListener listeners — see Listener.run.
+            ls.toLocal(inline_handler).callWithThis(void, target_et, .{event}) catch |err| {
+                log.warn(.event, "inline handler", .{ .err = err });
+            };
 
             if (event._stop_propagation) {
                 return;
@@ -388,19 +392,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
             event._target = getAdjustedTarget(original_target, current_target);
         }
 
-        switch (listener.function) {
-            .value => |value| try local.toLocal(value).callWithThis(void, current_target, .{event}),
-            .string => |string| {
-                const str = try frame.call_arena.dupeZ(u8, string.str());
-                try local.eval(str, null);
-            },
-            .object => |obj_global| {
-                const obj = local.toLocal(obj_global);
-                if (try obj.getFunction("handleEvent")) |handleEvent| {
-                    try handleEvent.callWithThis(void, obj, .{event});
-                }
-            },
-        }
+        try listener.run(frame.call_arena, local, event, "listener");
 
         // Restore original target (only if we changed it)
         if (event._needs_retargeting) {
