@@ -37,9 +37,9 @@ const commands = [_]CommandInfo{
 };
 
 // Meta slash commands handled directly by the agent (not by ToolExecutor).
-// Kept in sync with `handleSlash` in `Agent.zig`. Each slot is a pre-baked
-// fragment like "[tool_name]" — meta args are positional (no `key=value`),
-// so we can't reuse `SchemaInfo.hints` which assumes `[name=…]` syntax.
+// Kept in sync with `handleSlash` in `Agent.zig`. Meta args are positional
+// (no `key=value`), so the slot strings are pre-bracketed and can't reuse
+// `SchemaInfo.hints` which renders `[name=…]`.
 const MetaCommand = struct {
     name: [:0]const u8,
     hint_slots: []const []const u8,
@@ -50,7 +50,14 @@ const meta_slash_commands = [_]MetaCommand{
     .{ .name = "quit", .hint_slots = &.{} },
 };
 
-// Slash command schemas, set by the agent after `SlashCommand.buildSchemas`.
+// Flat name list for the "match any slash command" search/completion paths.
+const all_slash_names: [browser_tools.tool_defs.len + meta_slash_commands.len][]const u8 = blk: {
+    var names: [browser_tools.tool_defs.len + meta_slash_commands.len][]const u8 = undefined;
+    for (browser_tools.tool_defs, 0..) |td, i| names[i] = td.name;
+    for (meta_slash_commands, 0..) |m, i| names[browser_tools.tool_defs.len + i] = m.name;
+    break :blk names;
+};
+
 // File-scope because the linenoise hint callback is a C function pointer with
 // no user-data slot. Empty in non-REPL paths, which is harmless.
 var slash_schemas: []const SlashCommand.SchemaInfo = &.{};
@@ -71,9 +78,6 @@ pub fn init(history_path: ?[:0]const u8) Self {
 
 const completion_buf_len = 256;
 
-// Build "<prefix><name><suffix>" into `name_buf` and register it with linenoise,
-// when `name` starts with `partial` (case-insensitive). Skips silently if the
-// composed string overflows `name_buf`.
 fn addPrefixedCompletion(
     lc: [*c]c.linenoiseCompletions,
     name_buf: *[completion_buf_len:0]u8,
@@ -93,16 +97,21 @@ fn slashHint(name: []const u8, partial: []const u8) ?[]const u8 {
     return name[partial.len..];
 }
 
-// Splits `/<name>[ <body>]`. Returns null when input doesn't start with `/`,
-// has no name, or is just `/`. `body` is "" when the name is fully typed but
-// no space has been entered yet.
-fn parseSlashCommand(input: []const u8) ?struct { name: []const u8, body: []const u8 } {
-    if (input.len < 2 or input[0] != '/') return null;
-    if (std.mem.indexOfScalar(u8, input, ' ')) |space| {
-        if (space < 2) return null;
-        return .{ .name = input[1..space], .body = input[space + 1 ..] };
+// Writes the first matching name's suffix into `hint_buf` so the user sees
+// `/cli` ghost-completed to `ck`. Searches tool names then meta names.
+fn renderNameSuffixHint(partial: []const u8) [*c]u8 {
+    for (all_slash_names) |name| {
+        if (slashHint(name, partial)) |s| {
+            _ = std.fmt.bufPrintZ(&hint_buf, "{s}", .{s}) catch return null;
+            return @ptrCast(&hint_buf);
+        }
     }
-    return .{ .name = input[1..], .body = "" };
+    return null;
+}
+
+fn parseSlashCommand(input: []const u8) ?SlashCommand.Split {
+    if (input.len < 2 or input[0] != '/' or input[1] == ' ') return null;
+    return SlashCommand.splitNameRest(input[1..]);
 }
 
 fn findMetaSlots(name: []const u8) ?[]const []const u8 {
@@ -112,32 +121,16 @@ fn findMetaSlots(name: []const u8) ?[]const []const u8 {
     return null;
 }
 
-// Writes one hint slot into `hint_buf` at `pos.*`. Adds a leading space unless
-// this is the first slot AND the user input already ends in whitespace.
-// Returns false if the slot doesn't fit (caller should bail).
-fn writeHintSlot(
-    pos: *usize,
-    first_slot: *bool,
-    buffer_ends_with_space: bool,
-    open: []const u8,
-    name: []const u8,
-    close: []const u8,
-) bool {
-    const need_space = !first_slot.* or !buffer_ends_with_space;
-    const space_len: usize = if (need_space) 1 else 0;
-    const total = space_len + open.len + name.len + close.len;
-    if (pos.* + total >= hint_buf.len) return false;
-    if (need_space) {
-        hint_buf[pos.*] = ' ';
-        pos.* += 1;
-    }
-    @memcpy(hint_buf[pos.* .. pos.* + open.len], open);
-    pos.* += open.len;
-    @memcpy(hint_buf[pos.* .. pos.* + name.len], name);
-    pos.* += name.len;
-    @memcpy(hint_buf[pos.* .. pos.* + close.len], close);
-    pos.* += close.len;
-    first_slot.* = false;
+// Returns false if the slot doesn't fit (caller should bail). Leading space
+// is suppressed only on the first slot when the user's input already ends
+// in whitespace, so the hint joins naturally to what they've typed.
+fn writeHintSlot(pos: *usize, buffer_ends_with_space: bool, slot: SlashCommand.HintSlot) bool {
+    const lead: []const u8 = if (pos.* > 0 or !buffer_ends_with_space) " " else "";
+    const written = (if (slot.required)
+        std.fmt.bufPrint(hint_buf[pos.*..], "{s}<{s}>", .{ lead, slot.name })
+    else
+        std.fmt.bufPrint(hint_buf[pos.*..], "{s}[{s}=…]", .{ lead, slot.name })) catch return false;
+    pos.* += written.len;
     return true;
 }
 
@@ -156,10 +149,8 @@ const BodyAnalysis = struct {
     }
 };
 
-// Walks `body` once and reports which field keys are already in use plus the
-// partial key (if any) the user is currently typing. The leading token
-// without `=` binds positionally to the single required field, mirroring
-// the parser; that case never produces a partial_key.
+// The leading token without `=` binds positionally to the single required
+// field, mirroring the parser; that case never produces a partial_key.
 fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, buffer_ends_with_space: bool) BodyAnalysis {
     var a: BodyAnalysis = .{};
 
@@ -194,7 +185,7 @@ fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, buffer_
     return a;
 }
 
-// Render the per-argument hint for a browser-tool slash command. Two modes:
+// Two modes:
 //   1. The trailing in-progress token is a key prefix → render the matching
 //      field's name suffix + "=…" (e.g. `/click sel` → `ector=…`).
 //   2. Otherwise → render `<required>` and `[optional=…]` for each unused field.
@@ -210,24 +201,15 @@ fn renderSchemaArgHint(
         for (schema.hints) |slot| {
             if (SlashCommand.containsName(used, slot.name)) continue;
             if (!std.ascii.startsWithIgnoreCase(slot.name, pk)) continue;
-            const suffix = slot.name[pk.len..];
-            const trail = "=…";
-            const total = suffix.len + trail.len;
-            if (total >= hint_buf.len) return null;
-            @memcpy(hint_buf[0..suffix.len], suffix);
-            @memcpy(hint_buf[suffix.len .. suffix.len + trail.len], trail);
-            hint_buf[total] = 0;
+            _ = std.fmt.bufPrintZ(&hint_buf, "{s}=…", .{slot.name[pk.len..]}) catch return null;
             return @ptrCast(&hint_buf);
         }
     };
 
     var pos: usize = 0;
-    var first_slot = true;
     for (schema.hints) |slot| {
         if (SlashCommand.containsName(used, slot.name)) continue;
-        const open: []const u8 = if (slot.required) "<" else "[";
-        const close: []const u8 = if (slot.required) ">" else "=…]";
-        if (!writeHintSlot(&pos, &first_slot, buffer_ends_with_space, open, slot.name, close)) return null;
+        if (!writeHintSlot(&pos, buffer_ends_with_space, slot)) return null;
     }
 
     if (pos == 0) return null;
@@ -235,31 +217,19 @@ fn renderSchemaArgHint(
     return @ptrCast(&hint_buf);
 }
 
-// Meta-command variant: simple slot-index advance (meta has at most 1 slot).
+// Meta-command variant: positional slots, no `key=` form. Slot strings come
+// pre-bracketed (e.g. "[tool_name]") and are written verbatim.
 fn renderMetaArgHint(slots: []const []const u8, body: []const u8, buffer_ends_with_space: bool) ?[*c]u8 {
     var committed: usize = 0;
-    var in_token = false;
-    for (body) |ch| {
-        if (std.ascii.isWhitespace(ch)) {
-            in_token = false;
-        } else {
-            if (!in_token) committed += 1;
-            in_token = true;
-        }
-    }
+    var it = std.mem.tokenizeAny(u8, body, &std.ascii.whitespace);
+    while (it.next()) |_| committed += 1;
     if (committed >= slots.len) return null;
 
     var pos: usize = 0;
-    for (slots[committed..], 0..) |slot, i| {
-        const need_space = i > 0 or !buffer_ends_with_space;
-        const space_len: usize = if (need_space) 1 else 0;
-        if (pos + space_len + slot.len >= hint_buf.len) return null;
-        if (need_space) {
-            hint_buf[pos] = ' ';
-            pos += 1;
-        }
-        @memcpy(hint_buf[pos .. pos + slot.len], slot);
-        pos += slot.len;
+    for (slots[committed..]) |slot| {
+        const lead: []const u8 = if (pos > 0 or !buffer_ends_with_space) " " else "";
+        const written = std.fmt.bufPrint(hint_buf[pos..], "{s}{s}", .{ lead, slot }) catch return null;
+        pos += written.len;
     }
     if (pos == 0) return null;
     hint_buf[pos] = 0;
@@ -268,23 +238,15 @@ fn renderMetaArgHint(slots: []const []const u8, body: []const u8, buffer_ends_wi
 
 const help_arg_prefix = "/help ";
 
-// Returns the partial argument when `input` matches `/help <partial>` with no
-// trailing arguments (e.g. "/help g" → "g", "/help " → ""). Returns null when
-// it doesn't apply (different command, or arg already terminated by a space).
+// Returns the trailing argument when `input` is `/help <arg>` with no
+// further whitespace; null otherwise (e.g. `/help foo bar`).
 fn parseHelpArgPrefix(input: []const u8) ?[]const u8 {
-    if (input.len < help_arg_prefix.len) return null;
-    if (!std.ascii.eqlIgnoreCase(input[0..help_arg_prefix.len], help_arg_prefix)) return null;
-    var i = help_arg_prefix.len;
-    while (i < input.len and input[i] == ' ') i += 1;
-    const arg = input[i..];
+    if (!std.ascii.startsWithIgnoreCase(input, help_arg_prefix)) return null;
+    const arg = std.mem.trimLeft(u8, input[help_arg_prefix.len..], " ");
     if (std.mem.indexOfScalar(u8, arg, ' ') != null) return null;
     return arg;
 }
 
-// Completes `/<known> [body...] <partial>` to `/<known> [body...] <field>=`
-// for each unused field whose name has `partial` as a case-insensitive prefix.
-// Skips when the user is in positional-argument mode (single-required schema,
-// first token without `=`) — we can't usefully complete a value.
 fn addPartialKeyCompletions(
     input: []const u8,
     body: []const u8,
@@ -320,8 +282,7 @@ fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callcon
     defer if (lc.*.len == 0) c.linenoiseAddCompletion(lc, buf);
 
     if (parseHelpArgPrefix(input)) |partial| {
-        for (browser_tools.tool_defs) |td| addPrefixedCompletion(lc, &name_buf, help_arg_prefix, td.name, "", partial);
-        for (meta_slash_commands) |meta| addPrefixedCompletion(lc, &name_buf, help_arg_prefix, meta.name, "", partial);
+        for (all_slash_names) |name| addPrefixedCompletion(lc, &name_buf, help_arg_prefix, name, "", partial);
         return;
     }
 
@@ -332,14 +293,13 @@ fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callcon
         if (has_space) {
             if (parseSlashCommand(input)) |parts| {
                 if (SlashCommand.findSchema(slash_schemas, parts.name)) |schema| {
-                    addPartialKeyCompletions(input, parts.body, schema, lc, &name_buf);
+                    addPartialKeyCompletions(input, parts.rest, schema, lc, &name_buf);
                 }
             }
             return;
         }
         const partial = input[1..];
-        for (browser_tools.tool_defs) |td| addPrefixedCompletion(lc, &name_buf, "/", td.name, "", partial);
-        for (meta_slash_commands) |meta| addPrefixedCompletion(lc, &name_buf, "/", meta.name, "", partial);
+        for (all_slash_names) |name| addPrefixedCompletion(lc, &name_buf, "/", name, "", partial);
         return;
     }
 
@@ -367,51 +327,23 @@ fn hintsCallback(buf: [*c]const u8, color: [*c]c_int, bold: [*c]c_int) callconv(
     // /help <partial> — suggest a tool name (more useful than the slot hint
     // because we can show concrete completions).
     if (parseHelpArgPrefix(input)) |partial| {
-        const suffix = blk: {
-            for (browser_tools.tool_defs) |td| {
-                if (slashHint(td.name, partial)) |s| break :blk s;
-            }
-            for (meta_slash_commands) |meta| {
-                if (slashHint(meta.name, partial)) |s| break :blk s;
-            }
-            return null;
-        };
-        if (suffix.len + 1 > hint_buf.len) return null;
-        @memcpy(hint_buf[0..suffix.len], suffix);
-        hint_buf[suffix.len] = 0;
-        return @ptrCast(&hint_buf);
+        return renderNameSuffixHint(partial);
     }
 
-    // /<known-name>[ body] — render the remaining argument slots. Handles
-    // both the exact-name case (body=="") and the in-progress-args case.
     if (parseSlashCommand(input)) |parts| {
         const ends_with_space = input[input.len - 1] == ' ';
         if (SlashCommand.findSchema(slash_schemas, parts.name)) |schema| {
-            return renderSchemaArgHint(schema, parts.body, ends_with_space) orelse null;
+            return renderSchemaArgHint(schema, parts.rest, ends_with_space) orelse null;
         }
         if (findMetaSlots(parts.name)) |slots| {
-            return renderMetaArgHint(slots, parts.body, ends_with_space) orelse null;
+            return renderMetaArgHint(slots, parts.rest, ends_with_space) orelse null;
         }
     }
 
     if (std.mem.indexOfScalar(u8, input, ' ') != null) return null;
 
     if (input[0] == '/') {
-        const partial = input[1..];
-
-        const suffix = blk: {
-            for (browser_tools.tool_defs) |td| {
-                if (slashHint(td.name, partial)) |s| break :blk s;
-            }
-            for (meta_slash_commands) |meta| {
-                if (slashHint(meta.name, partial)) |s| break :blk s;
-            }
-            return null;
-        };
-        if (suffix.len + 1 > hint_buf.len) return null;
-        @memcpy(hint_buf[0..suffix.len], suffix);
-        hint_buf[suffix.len] = 0;
-        return @ptrCast(&hint_buf);
+        return renderNameSuffixHint(input[1..]);
     }
 
     for (commands) |cmd| {
