@@ -253,6 +253,11 @@ pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
         try frame.adoptNodeTree(child, child_owner.?, parent_owner);
     }
 
+    // A custom element callback can re-parent the node. If it does, we're done
+    if (child._parent != null) {
+        return child;
+    }
+
     try frame.appendNode(self, child, .{
         .child_already_connected = child_connected,
         .adopting_to_new_document = adopting_to_new_document,
@@ -622,6 +627,22 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fra
     // Adopt the node tree if moving between documents
     if (adopting_to_new_document) {
         try frame.adoptNodeTree(new_node, child_owner.?, parent_owner);
+    }
+
+    // See Node.appendChild: a callback above (disconnectedCallback or
+    // adoptedCallback) can re-parent new_node. Let that placement stand.
+    if (new_node._parent != null) {
+        return new_node;
+    }
+
+    // The same callback could also have detached ref_node from self. Fall
+    // back to append so new_node still lands in self.
+    if (ref_node._parent != self) {
+        try frame.appendNode(self, new_node, .{
+            .child_already_connected = child_already_connected,
+            .adopting_to_new_document = adopting_to_new_document,
+        });
+        return new_node;
     }
 
     try frame.insertNodeRelative(

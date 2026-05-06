@@ -65,3 +65,32 @@
   assertChildren(['a'], d3);
   testing.expectEqual(null, b.parentNode);
 </script>
+
+<div id=d4></div>
+<div id=d4_stash></div>
+<script id=appendChild_disconnect_callback_reparents>
+  // Moving a connected child into a disconnected target makes
+  // will_be_reconnected=false, so disconnectedCallback fires synchronously
+  // inside removeNode. The callback re-parents the child; appendChild
+  // respects that placement instead of overriding it.
+  const d4 = $('#d4');
+  const stash = $('#d4_stash');
+
+  class ReparentOnDisconnect extends HTMLElement {
+    disconnectedCallback() {
+      if (this.parentNode === null) {
+        stash.appendChild(this);
+      }
+    }
+  }
+  customElements.define('reparent-on-disconnect', ReparentOnDisconnect);
+
+  const rpd = document.createElement('reparent-on-disconnect');
+  rpd.id = 'rpd';
+  d4.appendChild(rpd);
+
+  const detached = document.createElement('div');
+  detached.appendChild(rpd);
+
+  testing.expectEqual(stash, rpd.parentNode);
+</script>
