@@ -97,8 +97,6 @@ fn slashHint(name: []const u8, partial: []const u8) ?[]const u8 {
     return name[partial.len..];
 }
 
-// Writes the first matching name's suffix into `hint_buf` so the user sees
-// `/cli` ghost-completed to `ck`. Searches tool names then meta names.
 fn renderNameSuffixHint(partial: []const u8) [*c]u8 {
     for (all_slash_names) |name| {
         if (slashHint(name, partial)) |s| {
@@ -110,7 +108,9 @@ fn renderNameSuffixHint(partial: []const u8) [*c]u8 {
 }
 
 fn parseSlashCommand(input: []const u8) ?SlashCommand.Split {
-    if (input.len < 2 or input[0] != '/' or input[1] == ' ') return null;
+    // Reject `/ foo` (bare slash with arg) — `splitNameRest` would otherwise
+    // accept "foo" as the name after trimming.
+    if (input.len < 2 or input[0] != '/' or std.ascii.isWhitespace(input[1])) return null;
     return SlashCommand.splitNameRest(input[1..]);
 }
 
@@ -121,42 +121,46 @@ fn findMetaSlots(name: []const u8) ?[]const []const u8 {
     return null;
 }
 
-// Returns false if the slot doesn't fit (caller should bail). Leading space
-// is suppressed only on the first slot when the user's input already ends
-// in whitespace, so the hint joins naturally to what they've typed.
-fn writeHintSlot(pos: *usize, buffer_ends_with_space: bool, slot: SlashCommand.HintSlot) bool {
-    const lead: []const u8 = if (pos.* > 0 or !buffer_ends_with_space) " " else "";
-    const written = (if (slot.required)
-        std.fmt.bufPrint(hint_buf[pos.*..], "{s}<{s}>", .{ lead, slot.name })
-    else
-        std.fmt.bufPrint(hint_buf[pos.*..], "{s}[{s}=…]", .{ lead, slot.name })) catch return false;
+// Appends `lead + formatted` to `hint_buf` at `pos`, advancing `pos`. Lead is
+// a single space except on the very first slot when the user's input already
+// ends in whitespace. Returns false if the buffer is full.
+fn appendHint(pos: *usize, ends_ws: bool, comptime fmt: []const u8, args: anytype) bool {
+    const lead: []const u8 = if (pos.* > 0 or !ends_ws) " " else "";
+    const written = std.fmt.bufPrint(hint_buf[pos.*..], "{s}" ++ fmt, .{lead} ++ args) catch return false;
     pos.* += written.len;
     return true;
 }
 
-// Bit per `schema.hints` index. Slots beyond this cap are silently treated
-// as "available"; real schemas have far fewer fields than this.
-const max_tracked_fields = 32;
-const UsedMask = std.bit_set.IntegerBitSet(max_tracked_fields);
+// Cap on tokens we read out of the body. Real schemas and CLI inputs have far
+// fewer fields than this; extra tokens are ignored.
+const max_tokens = 32;
 
 const BodyAnalysis = struct {
-    used: UsedMask = UsedMask.initEmpty(),
-    // The trailing in-progress token when the user is typing a key prefix
-    // (no `=` yet, not a positional binding). Null if the body is empty,
-    // ends with whitespace, or the trailing token is fully committed.
+    used: [max_tokens][]const u8 = undefined,
+    used_len: usize = 0,
+    // Trailing in-progress token when the user is typing a key prefix (no `=`
+    // yet, not a positional binding). Null when the body is empty, ends with
+    // whitespace, or the trailing token is fully committed.
     partial_key: ?[]const u8 = null,
 
-    fn slotUsed(self: *const BodyAnalysis, i: usize) bool {
-        return i < max_tracked_fields and self.used.isSet(i);
+    fn markUsed(self: *BodyAnalysis, name: []const u8) void {
+        if (self.used_len >= self.used.len) return;
+        self.used[self.used_len] = name;
+        self.used_len += 1;
+    }
+
+    fn isUsed(self: *const BodyAnalysis, name: []const u8) bool {
+        for (self.used[0..self.used_len]) |u| {
+            if (std.mem.eql(u8, u, name)) return true;
+        }
+        return false;
     }
 };
 
-// The leading token without `=` binds positionally to the single required
-// field, mirroring the parser; that case never produces a partial_key.
-fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, buffer_ends_with_space: bool) BodyAnalysis {
+fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, ends_ws: bool) BodyAnalysis {
     var a: BodyAnalysis = .{};
 
-    var tokens: [max_tracked_fields][]const u8 = undefined;
+    var tokens: [max_tokens][]const u8 = undefined;
     var n: usize = 0;
     var it = std.mem.tokenizeAny(u8, body, &std.ascii.whitespace);
     while (it.next()) |tok| {
@@ -168,48 +172,47 @@ fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, buffer_
 
     const last = n - 1;
     for (tokens[0..n], 0..) |tok, i| {
-        const in_progress = i == last and !buffer_ends_with_space;
         if (std.mem.indexOfScalar(u8, tok, '=')) |eq| {
-            markUsed(&a, schema, tok[0..eq]);
-        } else if (i == 0 and schema.required.len == 1) {
-            markUsed(&a, schema, schema.required[0]);
-        } else if (in_progress) {
-            a.partial_key = tok;
+            a.markUsed(tok[0..eq]);
+            continue;
         }
+        if (i == 0 and schema.required.len == 1) {
+            a.markUsed(schema.required[0]);
+            continue;
+        }
+        if (i == last and !ends_ws) a.partial_key = tok;
     }
     return a;
 }
 
-fn markUsed(a: *BodyAnalysis, schema: *const SlashCommand.SchemaInfo, key: []const u8) void {
-    if (SlashCommand.hintIndex(schema, key)) |idx| {
-        if (idx < max_tracked_fields) a.used.set(idx);
-    }
-}
-
 // Two modes:
-//   1. The trailing in-progress token is a key prefix → render the matching
-//      field's name suffix + "=…" (e.g. `/click sel` → `ector=…`).
+//   1. Trailing in-progress key prefix → render the matching field's name
+//      suffix + "=…" (e.g. `/click sel` → `ector=…`).
 //   2. Otherwise → render `<required>` and `[optional=…]` for each unused field.
 fn renderSchemaArgHint(
     schema: *const SlashCommand.SchemaInfo,
     body: []const u8,
-    buffer_ends_with_space: bool,
+    ends_ws: bool,
 ) ?[*c]u8 {
-    const a = analyzeBody(schema, body, buffer_ends_with_space);
+    const a = analyzeBody(schema, body, ends_ws);
 
-    if (a.partial_key) |pk| if (pk.len > 0) {
-        for (schema.hints, 0..) |slot, i| {
-            if (a.slotUsed(i)) continue;
+    if (a.partial_key) |pk| {
+        for (schema.hints) |slot| {
+            if (a.isUsed(slot.name)) continue;
             if (!std.ascii.startsWithIgnoreCase(slot.name, pk)) continue;
             _ = std.fmt.bufPrintZ(&hint_buf, "{s}=…", .{slot.name[pk.len..]}) catch return null;
             return @ptrCast(&hint_buf);
         }
-    };
+    }
 
     var pos: usize = 0;
-    for (schema.hints, 0..) |slot, i| {
-        if (a.slotUsed(i)) continue;
-        if (!writeHintSlot(&pos, buffer_ends_with_space, slot)) return null;
+    for (schema.hints) |slot| {
+        if (a.isUsed(slot.name)) continue;
+        const ok = if (slot.required)
+            appendHint(&pos, ends_ws, "<{s}>", .{slot.name})
+        else
+            appendHint(&pos, ends_ws, "[{s}=…]", .{slot.name});
+        if (!ok) return null;
     }
 
     if (pos == 0) return null;
@@ -219,7 +222,7 @@ fn renderSchemaArgHint(
 
 // Meta-command variant: positional slots, no `key=` form. Slot strings come
 // pre-bracketed (e.g. "[tool_name]") and are written verbatim.
-fn renderMetaArgHint(slots: []const []const u8, body: []const u8, buffer_ends_with_space: bool) ?[*c]u8 {
+fn renderMetaArgHint(slots: []const []const u8, body: []const u8, ends_ws: bool) ?[*c]u8 {
     var committed: usize = 0;
     var it = std.mem.tokenizeAny(u8, body, &std.ascii.whitespace);
     while (it.next()) |_| committed += 1;
@@ -227,9 +230,7 @@ fn renderMetaArgHint(slots: []const []const u8, body: []const u8, buffer_ends_wi
 
     var pos: usize = 0;
     for (slots[committed..]) |slot| {
-        const lead: []const u8 = if (pos > 0 or !buffer_ends_with_space) " " else "";
-        const written = std.fmt.bufPrint(hint_buf[pos..], "{s}{s}", .{ lead, slot }) catch return null;
-        pos += written.len;
+        if (!appendHint(&pos, ends_ws, "{s}", .{slot})) return null;
     }
     if (pos == 0) return null;
     hint_buf[pos] = 0;
@@ -262,8 +263,8 @@ fn addPartialKeyCompletions(
 
     const partial = a.partial_key orelse "";
     const prefix = input[0 .. input.len - partial.len];
-    for (schema.hints, 0..) |slot, i| {
-        if (a.slotUsed(i)) continue;
+    for (schema.hints) |slot| {
+        if (a.isUsed(slot.name)) continue;
         addPrefixedCompletion(lc, name_buf, prefix, slot.name, "=", partial);
     }
 }
@@ -331,12 +332,12 @@ fn hintsCallback(buf: [*c]const u8, color: [*c]c_int, bold: [*c]c_int) callconv(
     }
 
     if (parseSlashCommand(input)) |parts| {
-        const ends_with_space = input[input.len - 1] == ' ';
+        const ends_ws = input[input.len - 1] == ' ';
         if (SlashCommand.findSchema(slash_schemas, parts.name)) |schema| {
-            return renderSchemaArgHint(schema, parts.rest, ends_with_space) orelse null;
+            return renderSchemaArgHint(schema, parts.rest, ends_ws) orelse null;
         }
         if (findMetaSlots(parts.name)) |slots| {
-            return renderMetaArgHint(slots, parts.rest, ends_with_space) orelse null;
+            return renderMetaArgHint(slots, parts.rest, ends_ws) orelse null;
         }
     }
 

@@ -122,16 +122,6 @@ fn containsName(names: []const []const u8, target: []const u8) bool {
     return false;
 }
 
-/// Index of `name` in `schema.hints`, or null if absent. Used by callers that
-/// need to track which hints are already supplied without an O(used × hints)
-/// scan per render.
-pub fn hintIndex(schema: *const SchemaInfo, name: []const u8) ?usize {
-    for (schema.hints, 0..) |slot, i| {
-        if (std.mem.eql(u8, slot.name, name)) return i;
-    }
-    return null;
-}
-
 fn fieldTypeOf(value: std.json.Value) FieldType {
     if (value != .object) return .other;
     const ty = value.object.get("type") orelse return .other;
