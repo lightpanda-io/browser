@@ -949,6 +949,7 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/File.zig"),
     @import("../webapi/Console.zig"),
     @import("../webapi/Crypto.zig"),
+    @import("../webapi/SubtleCrypto.zig"),
     @import("../webapi/net/FormData.zig"),
     @import("../webapi/net/Headers.zig"),
     @import("../webapi/net/Request.zig"),
