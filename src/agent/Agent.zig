@@ -390,7 +390,7 @@ fn printSlashHelp(self: *Self, target: []const u8) void {
             const summary = firstSentence(s.description);
             self.terminal.printInfoFmt("  /{s} — {s}", .{ s.tool_name, summary });
         }
-        self.terminal.printInfo("Meta: /help <name>, /quit");
+        self.terminal.printInfo("Meta: /help [name], /quit");
         return;
     }
     const lookup = if (target[0] == '/') target[1..] else target;
