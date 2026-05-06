@@ -97,38 +97,119 @@ fn parseSlashCommand(input: []const u8) ?struct { name: []const u8, body: []cons
     return .{ .name = input[1..], .body = "" };
 }
 
-fn findHintSlots(name: []const u8) ?[]const []const u8 {
-    for (slash_schemas) |s| {
-        if (std.ascii.eqlIgnoreCase(s.tool_name, name)) return s.hint_slots;
+fn findSlashSchema(name: []const u8) ?*const SlashCommand.SchemaInfo {
+    for (slash_schemas) |*s| {
+        if (std.ascii.eqlIgnoreCase(s.tool_name, name)) return s;
     }
+    return null;
+}
+
+fn findMetaSlots(name: []const u8) ?[]const []const u8 {
     for (meta_slash_commands) |meta| {
         if (std.ascii.eqlIgnoreCase(meta.name, name)) return meta.hint_slots;
     }
     return null;
 }
 
-// Whitespace-separated token count, including a trailing in-progress token.
-// `/goto www` → 1 (user is filling slot 0); `/goto www ` → 1 (slot 0 done,
-// cursor sits in slot 1's gap); `/goto www 5` → 2.
-fn countSlots(body: []const u8) usize {
-    var n: usize = 0;
+fn containsString(haystack: []const []const u8, needle: []const u8) bool {
+    for (haystack) |s| {
+        if (std.mem.eql(u8, s, needle)) return true;
+    }
+    return false;
+}
+
+// Writes one hint slot into `hint_buf` at `pos.*`. Adds a leading space unless
+// this is the first slot AND the user input already ends in whitespace.
+// Returns false if the slot doesn't fit (caller should bail).
+fn writeHintSlot(
+    pos: *usize,
+    first_slot: *bool,
+    buffer_ends_with_space: bool,
+    open: []const u8,
+    name: []const u8,
+    close: []const u8,
+) bool {
+    const need_space = !first_slot.* or !buffer_ends_with_space;
+    const space_len: usize = if (need_space) 1 else 0;
+    const total = space_len + open.len + name.len + close.len;
+    if (pos.* + total >= hint_buf.len) return false;
+    if (need_space) {
+        hint_buf[pos.*] = ' ';
+        pos.* += 1;
+    }
+    @memcpy(hint_buf[pos.* .. pos.* + open.len], open);
+    pos.* += open.len;
+    @memcpy(hint_buf[pos.* .. pos.* + name.len], name);
+    pos.* += name.len;
+    @memcpy(hint_buf[pos.* .. pos.* + close.len], close);
+    pos.* += close.len;
+    first_slot.* = false;
+    return true;
+}
+
+// Render the per-argument hint for a browser-tool slash command, skipping any
+// field whose key already appears in `body` (so e.g. `/click backendNodeId=12`
+// doesn't suggest `[backendNodeId=…]` again). The first token without `=`
+// binds positionally to the single required field, mirroring the parser.
+fn renderSchemaArgHint(
+    schema: *const SlashCommand.SchemaInfo,
+    body: []const u8,
+    buffer_ends_with_space: bool,
+) ?[*c]u8 {
+    var used_buf: [16][]const u8 = undefined;
+    var used_len: usize = 0;
+
+    var first_token = true;
+    var i: usize = 0;
+    while (i < body.len) {
+        while (i < body.len and std.ascii.isWhitespace(body[i])) i += 1;
+        if (i >= body.len) break;
+        const tok_start = i;
+        while (i < body.len and !std.ascii.isWhitespace(body[i])) i += 1;
+        const tok = body[tok_start..i];
+
+        const key: ?[]const u8 = blk: {
+            if (std.mem.indexOfScalar(u8, tok, '=')) |eq| break :blk tok[0..eq];
+            if (first_token and schema.required.len == 1) break :blk schema.required[0];
+            break :blk null;
+        };
+        if (key) |k| {
+            if (used_len < used_buf.len) {
+                used_buf[used_len] = k;
+                used_len += 1;
+            }
+        }
+        first_token = false;
+    }
+    const used = used_buf[0..used_len];
+
+    var pos: usize = 0;
+    var first_slot = true;
+
+    for (schema.hints) |slot| {
+        if (containsString(used, slot.name)) continue;
+        const open: []const u8 = if (slot.required) "<" else "[";
+        const close: []const u8 = if (slot.required) ">" else "=…]";
+        if (!writeHintSlot(&pos, &first_slot, buffer_ends_with_space, open, slot.name, close)) return null;
+    }
+
+    if (pos == 0) return null;
+    hint_buf[pos] = 0;
+    return @ptrCast(&hint_buf);
+}
+
+// Meta-command variant: simple slot-index advance (meta has at most 1 slot).
+fn renderMetaArgHint(slots: []const []const u8, body: []const u8, buffer_ends_with_space: bool) ?[*c]u8 {
+    var committed: usize = 0;
     var in_token = false;
     for (body) |ch| {
         if (std.ascii.isWhitespace(ch)) {
             in_token = false;
         } else {
-            if (!in_token) n += 1;
+            if (!in_token) committed += 1;
             in_token = true;
         }
     }
-    return n;
-}
-
-// Renders `slots[committed..]` into `hint_buf` joined by spaces, with a
-// leading space iff the buffer doesn't already end in whitespace. Returns
-// null when no slots remain or the result wouldn't fit.
-fn renderHintSlots(slots: []const []const u8, body: []const u8, buffer_ends_with_space: bool) ?[*c]u8 {
-    const committed = countSlots(body);
     if (committed >= slots.len) return null;
 
     var pos: usize = 0;
@@ -239,9 +320,12 @@ fn hintsCallback(buf: [*c]const u8, color: [*c]c_int, bold: [*c]c_int) callconv(
     // /<known-name>[ body] — render the remaining argument slots. Handles
     // both the exact-name case (body=="") and the in-progress-args case.
     if (parseSlashCommand(input)) |parts| {
-        if (findHintSlots(parts.name)) |slots| {
-            const ends_with_space = input[input.len - 1] == ' ';
-            return renderHintSlots(slots, parts.body, ends_with_space) orelse null;
+        const ends_with_space = input[input.len - 1] == ' ';
+        if (findSlashSchema(parts.name)) |schema| {
+            return renderSchemaArgHint(schema, parts.body, ends_with_space) orelse null;
+        }
+        if (findMetaSlots(parts.name)) |slots| {
+            return renderMetaArgHint(slots, parts.body, ends_with_space) orelse null;
         }
     }
 

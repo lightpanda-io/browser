@@ -10,6 +10,14 @@ pub const FieldEntry = struct {
     field_type: FieldType,
 };
 
+/// One slot of the REPL's argument-syntax hint, in display order: required
+/// fields first, then optionals. Renderer wraps required as `<name>` and
+/// optionals as `[name=…]`.
+pub const HintSlot = struct {
+    name: []const u8,
+    required: bool,
+};
+
 /// Cached, schema-extracted view of a single browser tool.
 pub const SchemaInfo = struct {
     tool_name: []const u8,
@@ -17,12 +25,7 @@ pub const SchemaInfo = struct {
     input_schema_raw: []const u8,
     required: []const []const u8,
     fields: []const FieldEntry,
-    /// Argument syntax slots used by the REPL to render a greyed-out hint
-    /// after the command name. Each entry is e.g. "<url>" or "[timeout]"
-    /// (no leading space, no null terminator). Required fields come first
-    /// in `required` order, then optional fields in `fields` order. Empty
-    /// when the tool has no fields.
-    hint_slots: []const []const u8,
+    hints: []const HintSlot,
 };
 
 pub const Parsed = struct {
@@ -60,7 +63,7 @@ fn buildOne(arena: std.mem.Allocator, td: browser_tools.ToolDef, parsed: std.jso
         .input_schema_raw = td.input_schema,
         .required = &.{},
         .fields = &.{},
-        .hint_slots = &.{},
+        .hints = &.{},
     };
 
     if (parsed != .object) return info;
@@ -93,32 +96,29 @@ fn buildOne(arena: std.mem.Allocator, td: browser_tools.ToolDef, parsed: std.jso
         }
     }
 
-    info.hint_slots = try buildHintSlots(arena, info.required, info.fields);
+    info.hints = try buildHints(arena, info.required, info.fields);
 
     return info;
 }
 
-fn buildHintSlots(arena: std.mem.Allocator, required: []const []const u8, fields: []const FieldEntry) ![]const []const u8 {
+fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []const FieldEntry) ![]const HintSlot {
     if (fields.len == 0) return &.{};
-
-    const slots = try arena.alloc([]const u8, fields.len);
+    const out = try arena.alloc(HintSlot, fields.len);
     var idx: usize = 0;
     for (required) |name| {
-        slots[idx] = try std.fmt.allocPrint(arena, "<{s}>", .{name});
+        out[idx] = .{ .name = name, .required = true };
         idx += 1;
     }
     for (fields) |f| {
         if (containsName(required, f.name)) continue;
-        slots[idx] = try std.fmt.allocPrint(arena, "[{s}]", .{f.name});
+        out[idx] = .{ .name = f.name, .required = false };
         idx += 1;
     }
-    return slots[0..idx];
+    return out[0..idx];
 }
 
 fn containsName(names: []const []const u8, target: []const u8) bool {
-    for (names) |n| {
-        if (std.mem.eql(u8, n, target)) return true;
-    }
+    for (names) |n| if (std.mem.eql(u8, n, target)) return true;
     return false;
 }
 
@@ -171,13 +171,18 @@ pub fn parseArgs(arena: std.mem.Allocator, schema: *const SchemaInfo, rest: []co
 
     const tokens = try tokenize(arena, rest);
 
-    if (tokens.len == 1 and std.mem.indexOfScalar(u8, tokens[0], '=') == null) {
-        if (schema.required.len != 1) return error.PositionalNotAllowed;
-        return try buildJson(arena, schema, &.{.{ .key = schema.required[0], .value = tokens[0] }});
-    }
+    // A leading token without `=` binds positionally to the single required
+    // field; the rest must be `key=value`. Only allowed when the schema has
+    // exactly one required field — otherwise the binding would be ambiguous.
+    const leading_positional = tokens.len >= 1 and std.mem.indexOfScalar(u8, tokens[0], '=') == null;
+    if (leading_positional and schema.required.len != 1) return error.PositionalNotAllowed;
 
     var pairs = try arena.alloc(KvPair, tokens.len);
-    for (tokens, 0..) |tok, i| {
+    const kv_start: usize = if (leading_positional) 1 else 0;
+    if (leading_positional) {
+        pairs[0] = .{ .key = schema.required[0], .value = tokens[0] };
+    }
+    for (tokens[kv_start..], kv_start..) |tok, i| {
         const eq = std.mem.indexOfScalar(u8, tok, '=') orelse return error.MalformedKv;
         if (eq == 0 or eq == tok.len - 1) return error.MalformedKv;
         pairs[i] = .{ .key = tok[0..eq], .value = tok[eq + 1 ..] };
@@ -343,6 +348,14 @@ test "parse zero-arg tool" {
 
 test "parse positional shortcut for single required field" {
     try expectParse("getEnv PATH", "getEnv", "{\"name\":\"PATH\"}");
+}
+
+test "parse leading positional with key=value tail" {
+    try expectParse(
+        "goto https://example.com timeout=5000",
+        "goto",
+        "{\"url\":\"https://example.com\",\"timeout\":5000}",
+    );
 }
 
 test "parse key=value pairs" {
