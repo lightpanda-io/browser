@@ -131,7 +131,7 @@ fn fieldTypeOf(value: std.json.Value) FieldType {
 
 pub fn findSchema(schemas: []const SchemaInfo, name: []const u8) ?*const SchemaInfo {
     for (schemas) |*s| {
-        if (std.mem.eql(u8, s.tool_name, name)) return s;
+        if (std.ascii.eqlIgnoreCase(s.tool_name, name)) return s;
     }
     return null;
 }

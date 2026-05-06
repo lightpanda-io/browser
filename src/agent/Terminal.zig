@@ -71,20 +71,30 @@ pub fn init(history_path: ?[:0]const u8) Self {
 
 const completion_buf_len = 256;
 
-fn addSlashCompletion(lc: [*c]c.linenoiseCompletions, name_buf: *[completion_buf_len:0]u8, name: []const u8, partial: []const u8) void {
-    const total = 1 + name.len;
+// Build "<prefix><name><suffix>" into `name_buf` and register it with linenoise,
+// when `name` starts with `partial` (case-insensitive). Skips silently if the
+// composed string overflows `name_buf`.
+fn addPrefixedCompletion(
+    lc: [*c]c.linenoiseCompletions,
+    name_buf: *[completion_buf_len:0]u8,
+    prefix: []const u8,
+    name: []const u8,
+    suffix: []const u8,
+    partial: []const u8,
+) void {
+    if (!std.ascii.startsWithIgnoreCase(name, partial)) return;
+    const total = prefix.len + name.len + suffix.len;
     if (total >= name_buf.len) return;
-    if (name.len < partial.len) return;
-    if (!std.ascii.eqlIgnoreCase(name[0..partial.len], partial)) return;
-    name_buf[0] = '/';
-    @memcpy(name_buf[1..total], name);
+    @memcpy(name_buf[0..prefix.len], prefix);
+    @memcpy(name_buf[prefix.len .. prefix.len + name.len], name);
+    @memcpy(name_buf[prefix.len + name.len .. total], suffix);
     name_buf[total] = 0;
     c.linenoiseAddCompletion(lc, name_buf);
 }
 
 fn slashHint(name: []const u8, partial: []const u8) ?[]const u8 {
     if (name.len <= partial.len) return null;
-    if (!std.ascii.eqlIgnoreCase(name[0..partial.len], partial)) return null;
+    if (!std.ascii.startsWithIgnoreCase(name, partial)) return null;
     return name[partial.len..];
 }
 
@@ -98,13 +108,6 @@ fn parseSlashCommand(input: []const u8) ?struct { name: []const u8, body: []cons
         return .{ .name = input[1..space], .body = input[space + 1 ..] };
     }
     return .{ .name = input[1..], .body = "" };
-}
-
-fn findSlashSchema(name: []const u8) ?*const SlashCommand.SchemaInfo {
-    for (slash_schemas) |*s| {
-        if (std.ascii.eqlIgnoreCase(s.tool_name, name)) return s;
-    }
-    return null;
 }
 
 fn findMetaSlots(name: []const u8) ?[]const []const u8 {
@@ -143,8 +146,10 @@ fn writeHintSlot(
     return true;
 }
 
+const max_tracked_fields = 32;
+
 const BodyAnalysis = struct {
-    used_buf: [16][]const u8 = undefined,
+    used_buf: [max_tracked_fields][]const u8 = undefined,
     used_len: usize = 0,
     // The trailing in-progress token when the user is typing a key prefix
     // (no `=` yet, not a positional binding). Null if the body is empty,
@@ -163,7 +168,7 @@ const BodyAnalysis = struct {
 fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, buffer_ends_with_space: bool) BodyAnalysis {
     var a: BodyAnalysis = .{};
 
-    var tokens_buf: [16][]const u8 = undefined;
+    var tokens_buf: [max_tracked_fields][]const u8 = undefined;
     var tokens_len: usize = 0;
     var it = std.mem.tokenizeAny(u8, body, &std.ascii.whitespace);
     while (it.next()) |tok| {
@@ -194,7 +199,7 @@ fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, buffer_
     return a;
 }
 
-// Render the per-argument hint for a browser-tool slash command. Three modes:
+// Render the per-argument hint for a browser-tool slash command. Two modes:
 //   1. The trailing in-progress token is a key prefix → render the matching
 //      field's name suffix + "=…" (e.g. `/click sel` → `ector=…`).
 //   2. Otherwise → render `<required>` and `[optional=…]` for each unused field.
@@ -209,8 +214,7 @@ fn renderSchemaArgHint(
     if (a.partial_key) |pk| if (pk.len > 0) {
         for (schema.hints) |slot| {
             if (SlashCommand.containsName(used, slot.name)) continue;
-            if (slot.name.len < pk.len) continue;
-            if (!std.ascii.eqlIgnoreCase(slot.name[0..pk.len], pk)) continue;
+            if (!std.ascii.startsWithIgnoreCase(slot.name, pk)) continue;
             const suffix = slot.name[pk.len..];
             const trail = "=…";
             const total = suffix.len + trail.len;
@@ -282,17 +286,6 @@ fn parseHelpArgPrefix(input: []const u8) ?[]const u8 {
     return arg;
 }
 
-fn addHelpArgCompletion(lc: [*c]c.linenoiseCompletions, name_buf: *[completion_buf_len:0]u8, name: []const u8, partial: []const u8) void {
-    const total = help_arg_prefix.len + name.len;
-    if (total >= name_buf.len) return;
-    if (name.len < partial.len) return;
-    if (!std.ascii.eqlIgnoreCase(name[0..partial.len], partial)) return;
-    @memcpy(name_buf[0..help_arg_prefix.len], help_arg_prefix);
-    @memcpy(name_buf[help_arg_prefix.len..total], name);
-    name_buf[total] = 0;
-    c.linenoiseAddCompletion(lc, name_buf);
-}
-
 // Completes `/<known> [body...] <partial>` to `/<known> [body...] <field>=`
 // for each unused field whose name has `partial` as a case-insensitive prefix.
 // Skips when the user is in positional-argument mode (single-required schema,
@@ -314,15 +307,7 @@ fn addPartialKeyCompletions(
     const prefix = input[0 .. input.len - partial.len];
     for (schema.hints) |slot| {
         if (SlashCommand.containsName(a.used(), slot.name)) continue;
-        if (slot.name.len < partial.len) continue;
-        if (!std.ascii.eqlIgnoreCase(slot.name[0..partial.len], partial)) continue;
-        const total = prefix.len + slot.name.len + 1;
-        if (total >= name_buf.len) continue;
-        @memcpy(name_buf[0..prefix.len], prefix);
-        @memcpy(name_buf[prefix.len .. prefix.len + slot.name.len], slot.name);
-        name_buf[prefix.len + slot.name.len] = '=';
-        name_buf[total] = 0;
-        c.linenoiseAddCompletion(lc, name_buf);
+        addPrefixedCompletion(lc, name_buf, prefix, slot.name, "=", partial);
     }
 }
 
@@ -334,43 +319,48 @@ fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callcon
     // the whole input minus the trailing partial token.
     var name_buf: [completion_buf_len:0]u8 = undefined;
 
-    const has_space = input.len > 0 and std.mem.indexOfScalar(u8, input, ' ') != null;
+    // If nothing matches, register the input itself so linenoise still enters
+    // completion mode. Otherwise it returns the Tab keypress to its edit loop,
+    // which inserts '\t' into the buffer and corrupts the line.
+    defer if (lc.*.len == 0) c.linenoiseAddCompletion(lc, buf);
 
     if (parseHelpArgPrefix(input)) |partial| {
-        for (browser_tools.tool_defs) |td| addHelpArgCompletion(lc, &name_buf, td.name, partial);
-        for (meta_slash_commands) |meta| addHelpArgCompletion(lc, &name_buf, meta.name, partial);
-    } else if (has_space and input[0] == '/') {
-        if (parseSlashCommand(input)) |parts| {
-            if (findSlashSchema(parts.name)) |schema| {
-                addPartialKeyCompletions(input, parts.body, schema, lc, &name_buf);
-            }
-        }
-    } else if (input.len > 0 and !has_space) {
-        if (input[0] == '/') {
-            const partial = input[1..];
-            for (browser_tools.tool_defs) |td| addSlashCompletion(lc, &name_buf, td.name, partial);
-            for (meta_slash_commands) |meta| addSlashCompletion(lc, &name_buf, meta.name, partial);
-        } else {
-            for (commands) |cmd| {
-                if (cmd.name.len >= input.len and std.ascii.eqlIgnoreCase(cmd.name[0..input.len], input)) {
-                    c.linenoiseAddCompletion(lc, cmd.name.ptr);
-                }
-            }
-        }
+        for (browser_tools.tool_defs) |td| addPrefixedCompletion(lc, &name_buf, help_arg_prefix, td.name, "", partial);
+        for (meta_slash_commands) |meta| addPrefixedCompletion(lc, &name_buf, help_arg_prefix, meta.name, "", partial);
+        return;
     }
 
-    // If we found nothing, register the input itself so linenoise enters
-    // completion mode anyway. Otherwise it returns the Tab keypress to its
-    // edit loop, which inserts '\t' into the buffer and corrupts the line.
-    if (lc.*.len == 0) {
-        c.linenoiseAddCompletion(lc, buf);
+    if (input.len == 0) return;
+    const has_space = std.mem.indexOfScalar(u8, input, ' ') != null;
+
+    if (input[0] == '/') {
+        if (has_space) {
+            if (parseSlashCommand(input)) |parts| {
+                if (SlashCommand.findSchema(slash_schemas, parts.name)) |schema| {
+                    addPartialKeyCompletions(input, parts.body, schema, lc, &name_buf);
+                }
+            }
+            return;
+        }
+        const partial = input[1..];
+        for (browser_tools.tool_defs) |td| addPrefixedCompletion(lc, &name_buf, "/", td.name, "", partial);
+        for (meta_slash_commands) |meta| addPrefixedCompletion(lc, &name_buf, "/", meta.name, "", partial);
+        return;
+    }
+
+    if (has_space) return;
+    for (commands) |cmd| {
+        if (std.ascii.startsWithIgnoreCase(cmd.name, input)) {
+            c.linenoiseAddCompletion(lc, cmd.name.ptr);
+        }
     }
 }
 
 // File-scope so the pointer survives the callback's stack frame; linenoise
 // reads the returned hint in refreshShowHints() *after* this function has
-// already returned, so a stack-local buffer would be UB.
-var hint_buf: [64:0]u8 = undefined;
+// already returned, so a stack-local buffer would be UB. Sized for multi-slot
+// schema hints like `<sel> [timeout=…] [text=…] [waitFor=…]`.
+var hint_buf: [completion_buf_len:0]u8 = undefined;
 
 fn hintsCallback(buf: [*c]const u8, color: [*c]c_int, bold: [*c]c_int) callconv(.c) [*c]u8 {
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(buf)), 0);
@@ -401,7 +391,7 @@ fn hintsCallback(buf: [*c]const u8, color: [*c]c_int, bold: [*c]c_int) callconv(
     // both the exact-name case (body=="") and the in-progress-args case.
     if (parseSlashCommand(input)) |parts| {
         const ends_with_space = input[input.len - 1] == ' ';
-        if (findSlashSchema(parts.name)) |schema| {
+        if (SlashCommand.findSchema(slash_schemas, parts.name)) |schema| {
             return renderSchemaArgHint(schema, parts.body, ends_with_space) orelse null;
         }
         if (findMetaSlots(parts.name)) |slots| {
@@ -434,7 +424,7 @@ fn hintsCallback(buf: [*c]const u8, color: [*c]c_int, bold: [*c]c_int) callconv(
             if (cmd.hint.len == 0) return null;
             return @ptrCast(@constCast(cmd.hint.ptr));
         }
-        if (cmd.name.len > input.len and std.ascii.eqlIgnoreCase(cmd.name[0..input.len], input)) {
+        if (cmd.name.len > input.len and std.ascii.startsWithIgnoreCase(cmd.name, input)) {
             return @ptrCast(@constCast(cmd.name.ptr + input.len));
         }
     }
