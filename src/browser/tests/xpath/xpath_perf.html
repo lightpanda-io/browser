@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>XPath perf benchmark</title>
+  <script src="../testing.js"></script>
+</head>
+<body>
+  <!--
+    Micro-benchmark for the XPath evaluator.
+
+    Builds a deterministic DOM (TREE_SIZE = 500), then runs each query
+    a few warmup iterations followed by ITERATIONS timed iterations.
+    Reports mean µs/iter via console.warn (the test harness sets
+    log level to .warn and silently drops info-level lines, so
+    console.log doesn't surface; console.warn does). A snapshotLength
+    mismatch fails the test loudly via testing.fail so a regression in
+    result count can't be hidden by the timing line.
+
+    Run:    make test F=xpath_perf
+    Filter: make test F=xpath_perf 2>&1 | grep '\[xpath-perf\]'
+
+    Query shapes target the optimization roadmap:
+      //*[@id='x']        — global ID lookup (fast-path candidate)
+      //tag[@id='x']      — typed ID lookup (fast-path candidate)
+      //tag               — pure descendant tag scan
+      //*[@class='x']     — non-ID attribute filter (no fast path)
+      (//tag)[1] / [last()] — early-exit candidates (iterator opt)
+      count(//tag)        — early-exit candidate (iterator opt)
+    Plus a few that should NOT change so we can detect regressions.
+
+    Tuning: keep TREE_SIZE × ITERATIONS small enough that the test
+    finishes in <1s on debug builds. Adjust ITERATIONS up if numbers
+    are noisy.
+  -->
+
+<script id=xpath_perf_setup>
+{
+  const TREE_SIZE = 500;
+  const TAGS = ["div", "span", "p"];
+  const CLASSES = ["alpha", "beta", "gamma"];
+  const TARGET_INDEX = 250;
+
+  // Expose the construction parameters for the run script.
+  window.__perf = { TREE_SIZE, TAGS, CLASSES, TARGET_INDEX };
+
+  // Decorrelate tag (period 3) and class (period 4) so that
+  // //div[@class='alpha'] is not a degenerate restatement of //div.
+  function tagOf(i)   { return TAGS[i % TAGS.length]; }
+  function classOf(i) { return CLASSES[(i % 4) % CLASSES.length]; }
+
+  // Pre-compute expected counts so the assertions don't have to
+  // re-derive the formula. Stored on window.__perf for the run script.
+  const tags = Object.fromEntries(TAGS.map(t => [t, 0]));
+  const classes = Object.fromEntries(CLASSES.map(c => [c, 0]));
+  const cross = {};
+  for (let i = 0; i < TREE_SIZE; i++) {
+    const t = tagOf(i), c = classOf(i);
+    tags[t]++;
+    classes[c]++;
+    const k = `${t}-${c}`;
+    cross[k] = (cross[k] || 0) + 1;
+  }
+  window.__perf.tags = tags;
+  window.__perf.classes = classes;
+  window.__perf.cross = cross;
+  window.__perf.targetTag = tagOf(TARGET_INDEX);
+
+  // Build the fixture body via innerHTML in one shot. Faster than
+  // createElement loops because html5ever parses the whole string at
+  // once and we don't pay per-element bridge crossings.
+  const parts = [];
+  for (let i = 0; i < TREE_SIZE; i++) {
+    const id = (i === TARGET_INDEX) ? "target" : `n${i}`;
+    parts.push(`<${tagOf(i)} id="${id}" class="${classOf(i)}">item ${i}</${tagOf(i)}>`);
+  }
+  // Use <main> as the wrapper so //div, //span, //p count only the
+  // generated children (the wrapper itself doesn't share a tag with
+  // any test query).
+  const root = document.createElement("main");
+  root.id = "perf_root";
+  root.innerHTML = parts.join("");
+  document.body.appendChild(root);
+
+  testing.expectEqual(TREE_SIZE, root.children.length);
+}
+</script>
+
+<script id=xpath_perf_run>
+{
+  const ITERATIONS = 50;
+  const WARMUP = 3;
+  const { TREE_SIZE, tags, classes, cross, targetTag } = window.__perf;
+
+  const cases = [
+    // --- ID lookups (fast-path #1 candidates) ---
+    { xp: "//*[@id='target']",                expect: 1,                                   label: "id-any" },
+    { xp: `//${targetTag}[@id='target']`,     expect: 1,                                   label: "id-typed-hit" },
+    { xp: "//div[@id='target']",              expect: targetTag === "div" ? 1 : 0,         label: "id-typed-miss" },
+
+    // --- Pure tag descendant ---
+    { xp: "//div",                            expect: tags.div,                            label: "tag-descendant" },
+    { xp: "//span",                           expect: tags.span,                           label: "tag-descendant-span" },
+    { xp: "//*",                              expect: null,                                label: "universal-descendant" },
+
+    // --- Attribute equality (no fast path planned) ---
+    { xp: "//*[@class='alpha']",              expect: classes.alpha,                       label: "class-eq-any" },
+    { xp: "//div[@class='alpha']",            expect: cross["div-alpha"] || 0,             label: "class-eq-div" },
+
+    // --- Early-exit candidates (iterator optimization) ---
+    { xp: "(//div)[1]",                       expect: 1,                                   label: "first-of-many" },
+    { xp: "(//div)[last()]",                  expect: 1,                                   label: "last-of-many" },
+
+    // --- Functions in predicate (regression guard) ---
+    { xp: "//div[contains(@class,'alpha')]",  expect: cross["div-alpha"] || 0,             label: "contains-class" },
+    { xp: "//div[starts-with(@id,'n')]",      expect: tags.div - (targetTag === "div" ? 1 : 0), label: "starts-with-id" },
+
+    // --- Counting (number result, iterator early-exit candidate) ---
+    { xp: "count(//div)",                     expect: tags.div,                            label: "count" },
+  ];
+
+  function pad(s, w) { s = String(s); return s.length >= w ? s : s + " ".repeat(w - s.length); }
+
+  // Result extractor that handles both node-set and number results.
+  function evalAndCount(xp) {
+    const r = document.evaluate(xp, document, null, XPathResult.ANY_TYPE, null);
+    if (r.resultType === XPathResult.NUMBER_TYPE) return r.numberValue;
+    if (r.resultType === XPathResult.UNORDERED_NODE_ITERATOR_TYPE
+     || r.resultType === XPathResult.ORDERED_NODE_ITERATOR_TYPE) {
+      let n = 0; while (r.iterateNext()) n++;
+      return n;
+    }
+    return null;
+  }
+
+  // Accumulate output into one big string. Per-call console.warn lines
+  // get clobbered by the test harness's interleaved prints; batching
+  // into a single warn call survives the interleaving intact.
+  const out = [];
+  out.push(`tree_size=${TREE_SIZE} iterations=${ITERATIONS} warmup=${WARMUP}`);
+  out.push(`${pad("label", 24)} ${pad("count", 8)} ${pad("µs/iter", 10)} xpath`);
+
+  for (const c of cases) {
+    let actual = null;
+    for (let i = 0; i < WARMUP; i++) {
+      actual = evalAndCount(c.xp);
+    }
+
+    if (c.expect !== null && actual !== c.expect) {
+      testing.fail(`[xpath-perf] ${c.label} returned ${actual}, expected ${c.expect}`);
+    }
+
+    // Time the full document.evaluate call. ANY_TYPE so we don't pay
+    // snapshot allocation we wouldn't pay in the realistic
+    // DOM.performSearch path either.
+    const t0 = performance.now();
+    for (let i = 0; i < ITERATIONS; i++) {
+      document.evaluate(c.xp, document, null, XPathResult.ANY_TYPE, null);
+    }
+    const t1 = performance.now();
+    const us_per_iter = ((t1 - t0) * 1000) / ITERATIONS;
+
+    out.push(`${pad(c.label, 24)} ${pad(actual ?? "-", 8)} ${pad(us_per_iter.toFixed(1), 10)} ${c.xp}`);
+  }
+
+  console.warn("[xpath-perf]\n" + out.map(l => "[xpath-perf] " + l).join("\n"));
+
+  testing.expectEqual(true, true);
+}
+</script>
+</body>
+</html>

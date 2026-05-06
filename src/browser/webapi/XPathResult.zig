@@ -281,3 +281,7 @@ test "WebApi: XPathResult" {
 test "WebApi: XPath conformance" {
     try testing.htmlRunner("xpath/xpath_conformance.html", .{});
 }
+
+test "WebApi: XPath perf" {
+    try testing.htmlRunner("xpath/xpath_perf.html", .{});
+}

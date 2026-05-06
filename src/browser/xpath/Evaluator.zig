@@ -108,6 +108,8 @@ fn evalExpr(self: *Evaluator, expr: *const Ast.Expr, ctx: *Node, pos: usize, siz
 }
 
 fn evalPath(self: *Evaluator, path: Ast.Path, ctx: *Node) Error!Result.Result {
+    if (try self.tryIdLookupFastPath(path, ctx)) |result| return result;
+
     const start: *Node = if (path.absolute) blk: {
         if (ctx._type == .document) break :blk ctx;
         const owner = ctx.ownerDocument(self.frame) orelse break :blk ctx;
@@ -123,6 +125,125 @@ fn evalPath(self: *Evaluator, path: Ast.Path, ctx: *Node) Error!Result.Result {
         current_set = r.node_set;
     }
     return .{ .node_set = current_set };
+}
+
+// Recognize the very common `//tag[@id='x']` and `.//tag[@id='x']`
+// shapes (and their wildcard `//*[@id='x']` variants) and serve them
+// directly from `frame.getElementByIdFromNode`. Accepts the literal on
+// either side of `=`.
+//
+// Mirrors the same tradeoff `webapi/selector/List.zig:optimizeSelector`
+// already makes for `querySelector(All)`: the id-map only stores the
+// first element per ID in document order, so duplicate IDs (invalid
+// HTML, but possible) yield one match here where a strict tree walk
+// would find all. Acceptable because Capybara/Selenium hot paths
+// assume unique IDs and CSS has shipped this compromise for years.
+//
+// Falls through to the general path for any deviation: extra steps,
+// extra predicates, non-eq predicate, non-literal RHS, or the
+// inability to resolve a search root.
+fn tryIdLookupFastPath(self: *Evaluator, path: Ast.Path, ctx: *Node) Error!?Result.Result {
+    // Two acceptable AST shapes:
+    //   //tag[@id='x']   parses to:  ds::node() / child::tag[pred]
+    //   .//tag[@id='x']  parses to:  self::node() / ds::node() / child::tag[pred]
+    const target: Ast.Step = switch (path.steps.len) {
+        2 => blk: {
+            if (!isDescendantOrSelfNode(path.steps[0])) return null;
+            break :blk path.steps[1];
+        },
+        3 => blk: {
+            if (!isSelfNode(path.steps[0])) return null;
+            if (!isDescendantOrSelfNode(path.steps[1])) return null;
+            break :blk path.steps[2];
+        },
+        else => return null,
+    };
+
+    if (target.axis != .child) return null;
+    if (target.predicates.len != 1) return null;
+
+    // Tag name (null = wildcard "*"). type_test (e.g. `node()`,
+    // `text()`) doesn't qualify because getElementByIdFromNode only
+    // returns elements.
+    const tag_name: ?[]const u8 = switch (target.node_test) {
+        .name => |n| if (std.mem.eql(u8, n, "*")) null else n,
+        .type_test => return null,
+    };
+
+    const id_value = matchAttrEqLiteral(target.predicates[0], "id") orelse return null;
+
+    // Resolve search root the same way the general path does.
+    const search_root: *Node = if (path.absolute) blk: {
+        if (ctx._type == .document) break :blk ctx;
+        const owner = ctx.ownerDocument(self.frame) orelse return null;
+        break :blk owner.asNode();
+    } else ctx;
+
+    const id_element = self.frame.getElementByIdFromNode(search_root, id_value) orelse {
+        return Result.Result{ .node_set = &.{} };
+    };
+    const id_node = id_element.asNode();
+
+    // Relative paths must filter to descendants of the context.
+    // getElementByIdFromNode is doc-wide.
+    if (search_root != id_node and !search_root.contains(id_node)) {
+        return Result.Result{ .node_set = &.{} };
+    }
+
+    // Tag check (case-insensitive per decision #2). Element tag names
+    // are stored lowercase via `getTagNameLower`; lowercase the AST
+    // name once and compare.
+    if (tag_name) |tag| {
+        const lowered = try std.ascii.allocLowerString(self.arena, tag);
+        if (!std.mem.eql(u8, lowered, id_element.getTagNameLower())) {
+            return Result.Result{ .node_set = &.{} };
+        }
+    }
+
+    const out = try self.arena.alloc(*Node, 1);
+    out[0] = id_node;
+    return Result.Result{ .node_set = out };
+}
+
+fn isDescendantOrSelfNode(s: Ast.Step) bool {
+    if (s.axis != .descendant_or_self) return false;
+    if (s.predicates.len != 0) return false;
+    return switch (s.node_test) {
+        .type_test => |k| k == .node,
+        .name => false,
+    };
+}
+
+fn isSelfNode(s: Ast.Step) bool {
+    if (s.axis != .self) return false;
+    if (s.predicates.len != 0) return false;
+    return switch (s.node_test) {
+        .type_test => |k| k == .node,
+        .name => false,
+    };
+}
+
+fn matchAttrEqLiteral(expr: *const Ast.Expr, attr_name: []const u8) ?[]const u8 {
+    if (expr.* != .binop) return null;
+    const bo = expr.binop;
+    if (bo.op != .eq) return null;
+    if (isAttrPath(bo.left, attr_name) and bo.right.* == .literal) return bo.right.literal;
+    if (isAttrPath(bo.right, attr_name) and bo.left.* == .literal) return bo.left.literal;
+    return null;
+}
+
+fn isAttrPath(expr: *const Ast.Expr, attr_name: []const u8) bool {
+    if (expr.* != .path) return false;
+    const p = expr.path;
+    if (p.absolute) return false;
+    if (p.steps.len != 1) return false;
+    const s = p.steps[0];
+    if (s.axis != .attribute) return false;
+    if (s.predicates.len != 0) return false;
+    return switch (s.node_test) {
+        .name => |n| std.mem.eql(u8, n, attr_name),
+        .type_test => false,
+    };
 }
 
 fn evalFilterPath(self: *Evaluator, fp: Ast.FilterPath, ctx: *Node, pos: usize, size: usize) Error!Result.Result {
