@@ -301,6 +301,20 @@ fn navigate(cmd: *CDP.Command) !void {
     const frame = session.currentFrame() orelse return error.FrameNotLoaded;
 
     const encoded_url = try URL.ensureEncoded(frame.call_arena, params.url, "UTF-8");
+
+    // Fast path: a freshly-created target whose root frame hasn't navigated
+    // yet has nothing to preserve across the HTTP round-trip. Skip the
+    // pending-Page allocation (which would create a V8 context just to
+    // throw the OLD blank one away at commit) and navigate the active
+    // frame in place.
+    if (frame._load_state == .waiting) {
+        return frame.navigate(encoded_url, .{
+            .reason = .address_bar,
+            .cdp_id = cmd.input.id,
+            .kind = .{ .push = null },
+        });
+    }
+
     try session.initiateRootNavigation(frame._frame_id, encoded_url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
