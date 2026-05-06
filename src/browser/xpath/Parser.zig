@@ -25,11 +25,12 @@
 //! and is valid for as long as the arena and input outlive it.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 
 const Tokenizer = @import("Tokenizer.zig");
+const Ast = @import("ast.zig");
+
 const Token = Tokenizer.Token;
-const Ast = @import("Ast.zig");
+const Allocator = std.mem.Allocator;
 
 const Parser = @This();
 

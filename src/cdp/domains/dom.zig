@@ -130,7 +130,7 @@ fn performSearch(cmd: *CDP.Command) !void {
     if (isXPathQuery(params.query)) {
         const arena = try frame.getArena(.medium, "DOM.performSearch");
         defer frame.releaseArena(arena);
-        const nodes = try xpath.searchAll(arena, frame, root, params.query);
+        const nodes = try xpath.searchAll(arena, root, params.query, frame);
         return finishSearch(cmd, bc, nodes);
     }
 

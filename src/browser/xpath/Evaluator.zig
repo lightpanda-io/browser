@@ -30,17 +30,19 @@
 //! reverse-axis positional predicates evaluate against proximity.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const lp = @import("lightpanda");
 
-const Ast = @import("Ast.zig");
-const Parser = @import("Parser.zig");
-const Result = @import("Result.zig");
-const Functions = @import("Functions.zig");
 const Node = @import("../webapi/Node.zig");
+
+const Ast = @import("ast.zig");
+const Parser = @import("Parser.zig");
+const Result = @import("result.zig");
+const Functions = @import("functions.zig");
+
+const Frame = lp.Frame;
 const Element = Node.Element;
 const Document = Node.Document;
-const Frame = lp.Frame;
+const Allocator = std.mem.Allocator;
 
 const Evaluator = @This();
 
@@ -62,7 +64,7 @@ frame: *Frame,
 
 /// Public entry. Returns the AST's value; node-sets are sorted into
 /// document order before return per XPath spec §3.3.
-pub fn evaluate(arena: Allocator, frame: *Frame, expr: *const Ast.Expr, context_node: *Node) Error!Result.Result {
+pub fn evaluate(arena: Allocator, expr: *const Ast.Expr, context_node: *Node, frame: *Frame) Error!Result.Result {
     var ev = Evaluator{ .arena = arena, .frame = frame };
     const result = try ev.evalExpr(expr, context_node, 1, 1);
     if (result == .node_set) {
@@ -77,9 +79,9 @@ pub const SearchError = Error || Parser.Error;
 /// evaluate and unwrap the node-set. Top-level scalar expressions yield
 /// an empty slice (decision #3 — these APIs are for finding nodes, not
 /// arbitrary computation).
-pub fn searchAll(arena: Allocator, frame: *Frame, root: *Node, expression: []const u8) SearchError![]const *Node {
+pub fn searchAll(arena: Allocator, root: *Node, expression: []const u8, frame: *Frame) SearchError![]const *Node {
     const expr = try Parser.parse(arena, expression);
-    return switch (try evaluate(arena, frame, expr, root)) {
+    return switch (try evaluate(arena, expr, root, frame)) {
         .node_set => |ns| ns,
         else => &.{},
     };
@@ -506,7 +508,7 @@ fn evalFnCall(self: *Evaluator, fc: Ast.FnCall, ctx: *Node, pos: usize, size: us
     const eval_args = try self.arena.alloc(Result.Result, fc.args.len);
     for (fc.args, 0..) |a, i| eval_args[i] = try self.evalExpr(a, ctx, pos, size);
 
-    return Functions.call(self.arena, self.frame, fc.name, eval_args, ctx);
+    return Functions.call(self.arena, fc.name, eval_args, ctx, self.frame);
 }
 
 // ----- helpers -----
@@ -726,7 +728,7 @@ test "Evaluator: searchAll on scalar expression returns empty (decision #3)" {
     // the Frame or the context node. Adding a DOM-touching expression
     // (e.g. `id('x')`) to this list would crash on dereference.
     inline for (.{ "1 + 2", "'hello'", "true()", "1 = 1" }) |expr| {
-        const nodes = try searchAll(a, @ptrFromInt(0x1000), @ptrFromInt(0x2000), expr);
+        const nodes = try searchAll(a, @ptrFromInt(0x2000), expr, @ptrFromInt(0x1000));
         try testing.expectEqual(@as(usize, 0), nodes.len);
     }
 }

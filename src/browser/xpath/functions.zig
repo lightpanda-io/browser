@@ -37,14 +37,16 @@
 //! Allocations land in the caller's per-evaluation arena.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const lp = @import("lightpanda");
 
-const Result = @import("Result.zig");
 const Node = @import("../webapi/Node.zig");
+
+const Result = @import("result.zig");
+
+const Frame = lp.Frame;
 const Element = Node.Element;
 const Document = Node.Document;
-const Frame = lp.Frame;
+const Allocator = std.mem.Allocator;
 
 pub const Error = error{
     OutOfMemory,
@@ -59,14 +61,14 @@ pub const Error = error{
 /// last lookup stop.
 pub fn call(
     arena: Allocator,
-    frame: *Frame,
     name: []const u8,
     args: []const Result.Result,
     ctx: *Node,
+    frame: *Frame,
 ) Error!Result.Result {
     // -- Node-set --
     if (eql(name, "count")) return .{ .number = countFn(args) };
-    if (eql(name, "id")) return idFn(arena, frame, args, ctx);
+    if (eql(name, "id")) return idFn(arena, args, ctx, frame);
     if (eql(name, "local-name")) return .{ .string = try localNameFn(arena, args, ctx) };
     if (eql(name, "name")) return .{ .string = try nameFn(arena, args, ctx) };
     if (eql(name, "namespace-uri")) return .{ .string = "" };
@@ -111,7 +113,7 @@ fn countFn(args: []const Result.Result) f64 {
     return @floatFromInt(args[0].node_set.len);
 }
 
-fn idFn(arena: Allocator, frame: *Frame, args: []const Result.Result, ctx: *Node) Error!Result.Result {
+fn idFn(arena: Allocator, args: []const Result.Result, ctx: *Node, frame: *Frame) Error!Result.Result {
     if (args.len == 0) return .{ .node_set = &.{} };
 
     // Polyfill: node-set arg → join `stringVal(n)` of each by ' '. Scalar
@@ -345,7 +347,7 @@ fn evalScalar(a: Allocator, src: []const u8) !Result.Result {
     // Synthetic Frame/Node pointers — the public `evaluate` entry only
     // touches the Frame for path/axis evaluation. Pure-scalar expressions
     // (arithmetic, function calls returning scalars) never deref it.
-    return Evaluator.evaluate(a, @ptrFromInt(0x1000), expr, @ptrFromInt(0x2000));
+    return Evaluator.evaluate(a, expr, @ptrFromInt(0x2000), @ptrFromInt(0x1000));
 }
 
 test "Functions: count() of non-node-set returns 0" {

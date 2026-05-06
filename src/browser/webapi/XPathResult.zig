@@ -46,7 +46,7 @@ const Node = @import("Node.zig");
 const xpath = struct {
     const Parser = @import("../xpath/Parser.zig");
     const Evaluator = @import("../xpath/Evaluator.zig");
-    const Result = @import("../xpath/Result.zig");
+    const Result = @import("../xpath/result.zig");
 };
 
 const Allocator = std.mem.Allocator;
@@ -101,7 +101,7 @@ pub fn fromExpression(
     // dupe into our long-lived arena before parsing.
     const owned = try arena.dupe(u8, expression);
     const expr = try xpath.Parser.parse(arena, owned);
-    const result = try xpath.Evaluator.evaluate(arena, frame, expr, context_node);
+    const result = try xpath.Evaluator.evaluate(arena, expr, context_node, frame);
     return fromResult(arena, requested_type, result);
 }
 
@@ -220,9 +220,10 @@ pub fn iterateNext(self: *XPathResult) !?*Node {
     if (self._type != UNORDERED_NODE_ITERATOR_TYPE and self._type != ORDERED_NODE_ITERATOR_TYPE) {
         return error.InvalidStateError;
     }
-    if (self._iter_pos >= self._value.nodes.len) return null;
-    const node = self._value.nodes[self._iter_pos];
-    self._iter_pos += 1;
+    const pos = self._iter_pos;
+    if (pos >= self._value.nodes.len) return null;
+    const node = self._value.nodes[pos];
+    self._iter_pos = pos + 1;
     return node;
 }
 

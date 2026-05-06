@@ -33,7 +33,7 @@ const Node = @import("Node.zig");
 const XPathResult = @import("XPathResult.zig");
 
 const xpath = struct {
-    const Ast = @import("../xpath/Ast.zig");
+    const Ast = @import("../xpath/ast.zig");
     const Parser = @import("../xpath/Parser.zig");
     const Evaluator = @import("../xpath/Evaluator.zig");
 };
@@ -76,7 +76,7 @@ pub fn evaluate(
     const arena = try frame.getArena(.medium, "XPathResult");
     errdefer frame.releaseArena(arena);
 
-    const eval_result = try xpath.Evaluator.evaluate(arena, frame, self._expr, context_node);
+    const eval_result = try xpath.Evaluator.evaluate(arena, self._expr, context_node, frame);
     return XPathResult.fromResult(arena, requested_type, eval_result);
 }
 

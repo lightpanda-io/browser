@@ -26,10 +26,11 @@
 //! shortcuts inherited from the polyfill (decision #2).
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 
 const Node = @import("../webapi/Node.zig");
+
 const CData = Node.CData;
+const Allocator = std.mem.Allocator;
 
 pub const Result = union(enum) {
     /// Owned by the evaluator's arena. Order is significant only at the
