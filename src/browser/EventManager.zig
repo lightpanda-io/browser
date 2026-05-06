@@ -266,7 +266,11 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             was_handled = true;
             event._current_target = target_et;
 
-            try ls.toLocal(inline_handler).callWithThis(void, target_et, .{event});
+            // Inline handlers (e.g. onclick property) follow the same "report,
+            // don't propagate" rule as addEventListener listeners — see Listener.run.
+            ls.toLocal(inline_handler).callWithThis(void, target_et, .{event}) catch |err| {
+                log.warn(.event, "inline handler", .{ .err = err });
+            };
 
             if (event._stop_propagation) {
                 return;
@@ -388,34 +392,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
             event._target = getAdjustedTarget(original_target, current_target);
         }
 
-        // Per DOM §2.9 step 4 substep 8 ("Inner invoke"), a listener callback that
-        // throws must have its exception *reported* to the global error handler,
-        // not propagated to the dispatch caller — subsequent listeners on the same
-        // target and the rest of the propagation path must still run. Mirrors the
-        // catch on the inline-handler invocation in dispatchDirect.
-        switch (listener.function) {
-            .value => |value| local.toLocal(value).callWithThis(void, current_target, .{event}) catch |err| {
-                log.warn(.event, "listener", .{ .err = err });
-            },
-            .string => |string| {
-                const str = try frame.call_arena.dupeZ(u8, string.str());
-                local.eval(str, null) catch |err| {
-                    log.warn(.event, "listener string", .{ .err = err });
-                };
-            },
-            .object => |obj_global| {
-                const obj = local.toLocal(obj_global);
-                const handle_event = obj.getFunction("handleEvent") catch |err| blk: {
-                    log.warn(.event, "listener handleEvent", .{ .err = err });
-                    break :blk null;
-                };
-                if (handle_event) |handleEvent| {
-                    handleEvent.callWithThis(void, obj, .{event}) catch |err| {
-                        log.warn(.event, "listener object", .{ .err = err });
-                    };
-                }
-            },
-        }
+        try listener.run(frame.call_arena, local, event, "listener");
 
         // Restore original target (only if we changed it)
         if (event._needs_retargeting) {

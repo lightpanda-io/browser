@@ -305,33 +305,7 @@ pub fn dispatchDirect(
 
         event._current_target = target;
 
-        // Per DOM §2.9 step 4 substep 8 ("Inner invoke"), a listener callback that
-        // throws must have its exception *reported*, not propagated to the dispatch
-        // caller — subsequent listeners must still run. Same shape as the catch on
-        // the property-handler invocation above and on EventManager.dispatchPhase.
-        switch (listener.function) {
-            .value => |value| ls.local.toLocal(value).callWithThis(void, target, .{event}) catch |err| {
-                log.warn(.event, opts.context, .{ .err = err });
-            },
-            .string => |string| {
-                const str = try arena.dupeZ(u8, string.str());
-                ls.local.eval(str, null) catch |err| {
-                    log.warn(.event, opts.context, .{ .err = err });
-                };
-            },
-            .object => |obj_global| {
-                const obj = ls.local.toLocal(obj_global);
-                const handle_event = obj.getFunction("handleEvent") catch |err| blk: {
-                    log.warn(.event, opts.context, .{ .err = err });
-                    break :blk null;
-                };
-                if (handle_event) |handleEvent| {
-                    handleEvent.callWithThis(void, obj, .{event}) catch |err| {
-                        log.warn(.event, opts.context, .{ .err = err });
-                    };
-                }
-            },
-        }
+        try listener.run(arena, &ls.local, event, opts.context);
 
         if (event._stop_immediate_propagation) {
             return;
@@ -406,6 +380,46 @@ pub const Listener = struct {
     signal: ?*@import("webapi/AbortSignal.zig") = null,
     node: std.DoublyLinkedList.Node,
     removed: bool = false,
+
+    // Per DOM §2.9 step 4 substep 8 ("Inner invoke"), a listener callback that
+    // throws must have its exception *reported* to the global error handler,
+    // not propagated to the dispatch caller — subsequent listeners on the same
+    // target and the rest of the propagation path must still run.
+    //
+    // Caller must set `event._current_target` before invoking — the function-
+    // listener variant uses it as `this`, matching the spec contract that a
+    // listener sees its current target via both `event.currentTarget` and `this`.
+    pub fn run(
+        self: *const Listener,
+        arena: Allocator,
+        local: *const js.Local,
+        event: *Event,
+        comptime context: []const u8,
+    ) error{OutOfMemory}!void {
+        switch (self.function) {
+            .value => |value| local.toLocal(value).callWithThis(void, event._current_target.?, .{event}) catch |err| {
+                log.warn(.event, context, .{ .err = err });
+            },
+            .string => |string| {
+                const str = try arena.dupeZ(u8, string.str());
+                local.eval(str, null) catch |err| {
+                    log.warn(.event, context, .{ .err = err });
+                };
+            },
+            .object => |obj_global| {
+                const obj = local.toLocal(obj_global);
+                const handle_event = obj.getFunction("handleEvent") catch |err| blk: {
+                    log.warn(.event, context, .{ .err = err });
+                    break :blk null;
+                };
+                if (handle_event) |handleEvent| {
+                    handleEvent.callWithThis(void, obj, .{event}) catch |err| {
+                        log.warn(.event, context, .{ .err = err });
+                    };
+                }
+            },
+        }
+    }
 };
 
 pub const Function = union(enum) {
