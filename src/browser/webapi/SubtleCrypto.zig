@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const crypto = @import("../../sys/libcrypto.zig");
 
-const Frame = @import("../Frame.zig");
 const js = @import("../js/js.zig");
 
 const CryptoKey = @import("CryptoKey.zig");
@@ -34,6 +33,7 @@ const X25519 = @import("crypto/X25519.zig");
 
 const log = lp.log;
 const String = lp.String;
+const Execution = js.Execution;
 
 /// The SubtleCrypto interface of the Web Crypto API provides a number of low-level
 /// cryptographic functions.
@@ -49,11 +49,11 @@ pub fn generateKey(
     algo: algorithm.Init,
     extractable: bool,
     key_usages: []const []const u8,
-    frame: *Frame,
+    exec: *const Execution,
 ) !js.Promise {
-    const local = frame.js.local.?;
+    const local = exec.context.local.?;
     switch (algo) {
-        .hmac_key_gen => |params| return HMAC.init(params, extractable, key_usages, frame),
+        .hmac_key_gen => |params| return HMAC.init(params, extractable, key_usages, exec),
         .aes_key_gen => |params| {
             AES.validate(params, key_usages) catch |err| {
                 return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
@@ -72,8 +72,8 @@ pub fn generateKey(
             };
             log.warn(.not_implemented, "generateKey", .{ .name = params.name });
         },
-        .name => |js_name| return generateKeyFromName(try js_name.toSSO(false), extractable, key_usages, frame),
-        .object => |object| return generateKeyFromName(try object.name.toSSO(false), extractable, key_usages, frame),
+        .name => |js_name| return generateKeyFromName(try js_name.toSSO(false), extractable, key_usages, exec),
+        .object => |object| return generateKeyFromName(try object.name.toSSO(false), extractable, key_usages, exec),
         .invalid => return local.rejectPromise(.{ .type_error = "invalid algorithm" }),
     }
 
@@ -84,10 +84,10 @@ fn generateKeyFromName(
     name: String,
     extractable: bool,
     key_usages: []const []const u8,
-    frame: *Frame,
+    exec: *const Execution,
 ) !js.Promise {
-    return _generateKeyFromName(name, extractable, key_usages, frame) catch |err| {
-        return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = err } });
+    return _generateKeyFromName(name, extractable, key_usages, exec) catch |err| {
+        return exec.context.local.?.rejectPromise(.{ .dom_exception = .{ .err = err } });
     };
 }
 
@@ -95,10 +95,10 @@ fn _generateKeyFromName(
     name: String,
     extractable: bool,
     key_usages: []const []const u8,
-    frame: *Frame,
+    exec: *const Execution,
 ) !js.Promise {
     if (name.eql(comptime .wrap("X25519"))) {
-        return X25519.init(extractable, key_usages, frame);
+        return X25519.init(extractable, key_usages, exec);
     }
 
     {
@@ -145,14 +145,15 @@ pub fn exportKey(
     _: *const SubtleCrypto,
     format: []const u8,
     key: *CryptoKey,
-    frame: *Frame,
+    exec: *const Execution,
 ) !js.Promise {
+    const local = exec.context.local.?;
     if (!key.canExportKey()) {
-        return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+        return local.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
     }
 
     if (std.mem.eql(u8, format, "raw")) {
-        return frame.js.local.?.resolvePromise(js.ArrayBuffer{ .values = key._key });
+        return local.resolvePromise(js.ArrayBuffer{ .values = key._key });
     }
 
     const is_unsupported = std.mem.eql(u8, format, "pkcs8") or
@@ -160,10 +161,10 @@ pub fn exportKey(
 
     if (is_unsupported) {
         log.warn(.not_implemented, "SubtleCrypto.exportKey", .{ .format = format });
-        return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+        return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
     }
 
-    return frame.js.local.?.rejectPromise(.{ .type_error = "invalid format" });
+    return local.rejectPromise(.{ .type_error = "invalid format" });
 }
 
 /// Derive a secret key from a master key.
@@ -172,27 +173,28 @@ pub fn deriveBits(
     algo: algorithm.Derive,
     base_key: *const CryptoKey, // Private key.
     length: usize,
-    frame: *Frame,
+    exec: *const Execution,
 ) !js.Promise {
+    const local = exec.context.local.?;
     return switch (algo) {
         .ecdh_or_x25519 => |params| {
             const name = params.name;
             if (std.mem.eql(u8, name, "X25519")) {
-                const result = X25519.deriveBits(base_key, params.public, length, frame) catch |err| switch (err) {
-                    error.InvalidAccessError => return frame.js.local.?.rejectPromise(.{
+                const result = X25519.deriveBits(base_key, params.public, length, exec) catch |err| switch (err) {
+                    error.InvalidAccessError => return local.rejectPromise(.{
                         .dom_exception = .{ .err = error.InvalidAccessError },
                     }),
                     else => return err,
                 };
 
-                return frame.js.local.?.resolvePromise(result);
+                return local.resolvePromise(result);
             }
 
             if (std.mem.eql(u8, name, "ECDH")) {
                 log.warn(.not_implemented, "SubtleCrypto.deriveBits", .{ .name = name });
             }
 
-            return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+            return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
         },
     };
 }
@@ -204,14 +206,14 @@ pub fn sign(
     algo: algorithm.Sign,
     key: *CryptoKey,
     data: []const u8, // ArrayBuffer.
-    frame: *Frame,
+    exec: *const Execution,
 ) !js.Promise {
     return switch (key._type) {
         // Call sign for HMAC.
-        .hmac => return HMAC.sign(algo, key, data, frame),
+        .hmac => return HMAC.sign(algo, key, data, exec),
         else => {
             log.warn(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
-            return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+            return exec.context.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
         },
     };
 }
@@ -223,33 +225,34 @@ pub fn verify(
     key: *const CryptoKey,
     signature: []const u8, // ArrayBuffer.
     data: []const u8, // ArrayBuffer.
-    frame: *Frame,
+    exec: *const Execution,
 ) !js.Promise {
+    const local = exec.context.local.?;
     if (!algo.isHMAC()) {
-        return frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+        return local.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
     }
 
     return switch (key._type) {
-        .hmac => HMAC.verify(key, signature, data, frame),
-        else => frame.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } }),
+        .hmac => HMAC.verify(key, signature, data, exec),
+        else => local.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } }),
     };
 }
 
 /// Generates a digest of the given data, using the specified hash function.
-pub fn digest(_: *const SubtleCrypto, algo: []const u8, data: js.TypedArray(u8), frame: *Frame) !js.Promise {
-    const local = frame.js.local.?;
+pub fn digest(_: *const SubtleCrypto, algo: []const u8, data: js.TypedArray(u8), exec: *const Execution) !js.Promise {
+    const local = exec.context.local.?;
 
     if (algo.len > 10) {
         return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
     }
 
-    const normalized = std.ascii.upperString(&frame.buf, algo);
+    const normalized = std.ascii.upperString(exec.buf, algo);
     const digest_type = crypto.findDigest(normalized) catch {
         return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
     };
 
     const bytes = data.values;
-    const out = frame.buf[0..crypto.EVP_MAX_MD_SIZE];
+    const out = exec.buf[0..crypto.EVP_MAX_MD_SIZE];
     var out_size: c_uint = 0;
     const result = crypto.EVP_Digest(bytes.ptr, bytes.len, out, &out_size, digest_type, null);
     lp.assert(result == 1, "SubtleCrypto.digest", .{ .algo = algo });
