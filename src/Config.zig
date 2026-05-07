@@ -121,6 +121,20 @@ fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
 
 pub const AiProvider = std.meta.Tag(zenai.provider.Client);
 
+/// Controls how chatty `agent` mode is on stderr. Defined here (rather
+/// than alongside Terminal) so it stays alongside the CLI flag and stays
+/// reachable from Config without an agent-side import cycle.
+pub const AgentVerbosity = enum {
+    /// Only the final answer (stdout) and errors.
+    quiet,
+    /// + REPL banners, status/retry messages, direct-command results,
+    /// and the `[tool: ...]` line for each LLM tool call. Default.
+    normal,
+    /// + the matching `[result: ...]` body for each tool call.
+    /// Required by the harness in benchmarks/, which parses both lines.
+    verbose,
+};
+
 fn waitScriptFileValidator(allocator: Allocator, args: *std.process.ArgIterator) !?[:0]const u8 {
     const path = args.next() orelse {
         log.fatal(.app, "missing argument value", .{ .arg = "--wait-script-file" });
@@ -190,6 +204,7 @@ const Commands = cli.Builder(.{
             .{ .name = "task", .type = ?[]const u8 },
             .{ .name = "task_attachments", .type = []const u8, .multiple = true },
             .{ .name = "mcp", .type = bool },
+            .{ .name = "verbosity", .type = AgentVerbosity, .default = AgentVerbosity.normal },
         },
         .shared_options = CommonOptions,
     },
@@ -299,7 +314,16 @@ pub fn wsMaxConcurrent(self: *const Config) u8 {
 
 pub fn logLevel(self: *const Config) ?log.Level {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.log_level,
+        // In agent mode, the page itself spams `console.error` (mapped to
+        // log.warn(.js, ...) in webapi/Console.zig). The build default is
+        // `.warn`, which is far too chatty for non-verbose runs — most
+        // sites trip third-party scripts that the agent can ignore. So
+        // when the user hasn't set --log-level, let --verbosity pick.
+        .agent => |opts| opts.log_level orelse switch (opts.verbosity) {
+            .quiet, .normal => .err,
+            .verbose => null,
+        },
+        inline .serve, .fetch, .mcp => |opts| opts.log_level,
         else => unreachable,
     };
 }
@@ -769,6 +793,17 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                the agent and returns only the final answer to the
         \\                MCP client. Requires --provider; cannot be combined
         \\                with --task, -i, or a script file.
+        \\
+        \\--verbosity     Stderr chatter level: quiet, normal, or verbose.
+        \\                Default: normal. quiet keeps only the final answer
+        \\                (stdout) and errors; normal adds REPL banners,
+        \\                direct-command results, and `[tool: ...]` lines;
+        \\                verbose also prints each `[result: ...]` body
+        \\                (required by the benchmarks harness). When --log-level
+        \\                isn't set, quiet/normal raise it to err to suppress
+        \\                page-side console.error spam; verbose keeps the
+        \\                build default (warn). Pass --log-level explicitly
+        \\                to override.
         \\
         \\The API key is read from the environment:
         \\ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.

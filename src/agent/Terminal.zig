@@ -1,6 +1,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const browser_tools = lp.tools;
+const Config = lp.Config;
 const SlashCommand = @import("SlashCommand.zig");
 const c = @cImport({
     @cInclude("linenoise.h");
@@ -15,7 +16,22 @@ const ansi_cyan = "\x1b[36m";
 const ansi_green = "\x1b[32m";
 const ansi_red = "\x1b[31m";
 
+const Verbosity = Config.AgentVerbosity;
+
+fn atLeast(level: Verbosity, min: Verbosity) bool {
+    return @intFromEnum(level) >= @intFromEnum(min);
+}
+
 history_path: ?[:0]const u8,
+verbosity: Verbosity,
+/// True when the user can type at us. Tool results are always shown
+/// here, regardless of verbosity, because in the REPL every tool call
+/// is something the user just asked for (a slash command, or natural
+/// language they sent to the LLM) — suppressing the body would leave
+/// them blind. The `--verbosity` dial only matters in non-interactive
+/// runs (one-shot `--task`, scripts, `--mcp`), where LLM tool traces
+/// are noise.
+is_repl: bool,
 
 const CommandInfo = struct { name: [:0]const u8, hint: [:0]const u8 };
 
@@ -66,14 +82,14 @@ pub fn setSlashSchemas(schemas: []const SlashCommand.SchemaInfo) void {
     slash_schemas = schemas;
 }
 
-pub fn init(history_path: ?[:0]const u8) Self {
+pub fn init(history_path: ?[:0]const u8, verbosity: Verbosity, is_repl: bool) Self {
     c.linenoiseSetMultiLine(1);
     c.linenoiseSetCompletionCallback(&completionCallback);
     c.linenoiseSetHintsCallback(&hintsCallback);
     if (history_path) |path| {
         _ = c.linenoiseHistoryLoad(path.ptr);
     }
-    return .{ .history_path = history_path };
+    return .{ .history_path = history_path, .verbosity = verbosity, .is_repl = is_repl };
 }
 
 const completion_buf_len = 256;
@@ -383,11 +399,13 @@ pub fn printAssistant(_: *Self, text: []const u8) void {
 
 /// Print the result of an action command (GOTO, CLICK, ...) to stderr so
 /// stdout stays reserved for data-producing commands.
-pub fn printActionResult(_: *Self, text: []const u8) void {
+pub fn printActionResult(self: *Self, text: []const u8) void {
+    if (!atLeast(self.verbosity, .normal)) return;
     std.debug.print("{s}\n", .{text});
 }
 
-pub fn printToolCall(_: *Self, name: []const u8, args: []const u8) void {
+pub fn printToolCall(self: *Self, name: []const u8, args: []const u8) void {
+    if (!self.is_repl and !atLeast(self.verbosity, .normal)) return;
     std.debug.print("\n{s}{s}[tool: {s}]{s} {s}\n", .{ ansi_dim, ansi_cyan, name, ansi_reset, args });
 }
 
@@ -399,7 +417,8 @@ pub fn printToolCall(_: *Self, name: []const u8, args: []const u8) void {
 // (1 MiB) via Agent.zig:capToolOutput.
 const max_result_display_len = 2000;
 
-pub fn printToolResult(_: *Self, name: []const u8, result: []const u8) void {
+pub fn printToolResult(self: *Self, name: []const u8, result: []const u8) void {
+    if (!self.is_repl and !atLeast(self.verbosity, .verbose)) return;
     const truncated = result[0..@min(result.len, max_result_display_len)];
     const ellipsis: []const u8 = if (result.len > max_result_display_len) "..." else "";
     std.debug.print("{s}{s}[result: {s}]{s} {s}{s}\n", .{ ansi_dim, ansi_green, name, ansi_reset, truncated, ellipsis });
@@ -413,10 +432,12 @@ pub fn printErrorFmt(_: *Self, comptime fmt: []const u8, args: anytype) void {
     std.debug.print("{s}{s}Error: " ++ fmt ++ "{s}\n", .{ ansi_bold, ansi_red } ++ args ++ .{ansi_reset});
 }
 
-pub fn printInfo(_: *Self, msg: []const u8) void {
+pub fn printInfo(self: *Self, msg: []const u8) void {
+    if (!atLeast(self.verbosity, .normal)) return;
     std.debug.print("{s}{s}{s}\n", .{ ansi_dim, msg, ansi_reset });
 }
 
-pub fn printInfoFmt(_: *Self, comptime fmt: []const u8, args: anytype) void {
+pub fn printInfoFmt(self: *Self, comptime fmt: []const u8, args: anytype) void {
+    if (!atLeast(self.verbosity, .normal)) return;
     std.debug.print("{s}" ++ fmt ++ "{s}\n", .{ansi_dim} ++ args ++ .{ansi_reset});
 }

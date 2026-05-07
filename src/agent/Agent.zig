@@ -218,7 +218,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .allocator = allocator,
         .ai_client = ai_client,
         .tool_executor = tool_executor,
-        .terminal = Terminal.init(history_path),
+        .terminal = Terminal.init(history_path, opts.verbosity, will_repl),
         .cmd_executor = undefined,
         .verifier = .{ .tool_executor = tool_executor },
         .recorder = .init(allocator, recorder_path),
