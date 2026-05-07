@@ -181,7 +181,7 @@ fn getThis(self: *const Function) js.Object {
 }
 
 pub fn src(self: *const Function) ![]const u8 {
-    return self.local.valueToString(.{ .local = self.local, .handle = @ptrCast(self.handle) }, .{});
+    return js.Value.toStringSlice(.{ .local = self.local, .handle = @ptrCast(self.handle) });
 }
 
 pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
