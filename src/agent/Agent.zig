@@ -151,25 +151,19 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         return error.IncompatibleFlags;
     }
 
-    if (opts.self_heal and opts.provider == null) {
-        log.fatal(.app, "missing --provider", .{
-            .hint = "--self-heal requires --provider; drop one or add the other",
-        });
-        return error.SelfHealWithoutProvider;
-    }
-
-    if (is_one_shot and opts.provider == null) {
-        log.fatal(.app, "missing --provider", .{
-            .hint = "--task requires --provider",
-        });
-        return error.TaskWithoutProvider;
-    }
-
-    if (is_mcp and opts.provider == null) {
-        log.fatal(.app, "missing --provider", .{
-            .hint = "--mcp requires --provider",
-        });
-        return error.McpWithoutProvider;
+    if (opts.provider == null) {
+        const required_by: ?[]const u8 = if (opts.self_heal)
+            "--self-heal requires --provider; drop one or add the other"
+        else if (is_one_shot)
+            "--task requires --provider"
+        else if (is_mcp)
+            "--mcp requires --provider"
+        else
+            null;
+        if (required_by) |hint| {
+            log.fatal(.app, "missing --provider", .{ .hint = hint });
+            return error.MissingProvider;
+        }
     }
 
     const api_key = try resolveApiKey(opts.provider, needs_llm);
@@ -537,16 +531,11 @@ fn runActionEntry(self: *Self, sa: std.mem.Allocator, entry: Command.ScriptItera
     defer cmd_arena.deinit();
     const ca = cmd_arena.allocator();
 
-    const pre_state: ?Verifier.PreState = if (self.self_heal)
-        self.verifier.capturePreState(ca, entry.command)
-    else
-        null;
-
     const result = self.cmd_executor.executeWithResult(ca, entry.command);
     self.cmd_executor.printResult(entry.command, result);
 
-    const verification = if (!result.failed and pre_state != null)
-        self.verifier.verify(ca, entry.command, pre_state.?)
+    const verification = if (!result.failed and self.self_heal)
+        self.verifier.verify(ca, entry.command)
     else
         Verifier.VerifyResult{ .result = .passed };
 
@@ -589,10 +578,9 @@ fn retryCommand(self: *Self, ca: std.mem.Allocator, cmd: Command.Command) bool {
     for (0..3) |i| {
         std.Thread.sleep((500 + i * 250) * std.time.ns_per_ms);
         self.terminal.printInfo("Retrying command...");
-        const retry_pre = self.verifier.capturePreState(ca, cmd);
         const retry_result = self.cmd_executor.executeWithResult(ca, cmd);
         if (retry_result.failed) continue;
-        if (self.verifier.verify(ca, cmd, retry_pre).result == .failed) continue;
+        if (self.verifier.verify(ca, cmd).result == .failed) continue;
         self.cmd_executor.printResult(cmd, retry_result);
         return true;
     }
@@ -672,24 +660,27 @@ fn applyReplacements(
     replacements: []const Replacement,
 ) error{OutOfMemory}![]u8 {
     const content_base = @intFromPtr(content.ptr);
+    var total = content.len;
+    for (replacements) |r| total = total + r.new_text.len - r.original_span.len;
+
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
-    try out.ensureTotalCapacity(allocator, content.len);
+    try out.ensureTotalCapacity(allocator, total);
     var pos: usize = 0;
     for (replacements) |r| {
         const r_start = @intFromPtr(r.original_span.ptr) - content_base;
         const r_end = r_start + r.original_span.len;
-        try out.appendSlice(allocator, content[pos..r_start]);
-        try out.appendSlice(allocator, r.new_text);
+        out.appendSliceAssumeCapacity(content[pos..r_start]);
+        out.appendSliceAssumeCapacity(r.new_text);
         pos = r_end;
     }
-    try out.appendSlice(allocator, content[pos..]);
+    out.appendSliceAssumeCapacity(content[pos..]);
     return out.toOwnedSlice(allocator);
 }
 
 fn isRetryable(cmd: Command.Command) bool {
     return switch (cmd) {
-        .type_cmd, .check, .click, .select => true,
+        .type_cmd, .check, .select => true,
         else => false,
     };
 }
@@ -788,14 +779,14 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
             );
             continue;
         }
-        cmds.append(arena, cmd) catch {};
+        try cmds.append(arena, cmd);
     }
 
     if (result.text) |text| {
         self.terminal.printAssistant(text);
     }
 
-    return cmds.toOwnedSlice(arena) catch &.{};
+    return cmds.toOwnedSlice(arena);
 }
 
 fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []const u8, verify_context: ?[]const u8, context_comment: ?[]const u8) ?[]Command.Command {

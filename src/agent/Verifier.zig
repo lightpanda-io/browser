@@ -17,27 +17,14 @@ pub const VerifyResult = struct {
     reason: ?[]const u8 = null,
 };
 
-pub const PreState = struct {
-    url: []const u8,
-    dom_element_count: ?u32,
-};
-
-pub fn capturePreState(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) PreState {
-    return .{
-        .url = self.tool_executor.getCurrentUrl(),
-        .dom_element_count = if (cmd == .click) self.getDomElementCount(arena) else null,
-    };
-}
-
 /// Verify that a command achieved its intent after execution and return
 /// both the verdict and a human-readable failure reason (if applicable).
 /// Only called when the command did not hard-fail (ExecResult.failed == false).
-pub fn verify(self: *Self, arena: std.mem.Allocator, cmd: Command.Command, pre: PreState) VerifyResult {
+pub fn verify(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) VerifyResult {
     return switch (cmd) {
         .type_cmd => |args| self.verifyFill(arena, args.selector, args.value),
         .check => |args| self.verifyCheck(arena, args.selector, args.checked),
         .select => |args| self.verifySelect(arena, args.selector, args.value),
-        .click => self.verifyClick(arena, pre),
         else => .{ .result = .passed },
     };
 }
@@ -66,7 +53,6 @@ fn verifySelect(self: *Self, arena: std.mem.Allocator, selector: []const u8, exp
     return self.verifyElementValue(arena, selector, "value", expected_value, "selected value");
 }
 
-/// Shared verification: query a DOM property and compare against an expected value.
 fn verifyElementValue(self: *Self, arena: std.mem.Allocator, selector: []const u8, js_property: []const u8, expected: []const u8, label: []const u8) VerifyResult {
     const actual = self.queryElementProperty(arena, selector, js_property) orelse return .{ .result = .inconclusive };
     if (!std.mem.eql(u8, actual, expected))
@@ -86,23 +72,4 @@ fn queryElementProperty(self: *Self, arena: std.mem.Allocator, selector: []const
     const result = self.tool_executor.callEval(arena, script);
     if (result.is_error) return null;
     return result.text;
-}
-
-fn verifyClick(self: *Self, arena: std.mem.Allocator, pre: PreState) VerifyResult {
-    const current_url = self.tool_executor.getCurrentUrl();
-    if (!std.mem.eql(u8, pre.url, current_url)) return .{ .result = .passed };
-
-    if (pre.dom_element_count) |before_count| {
-        if (self.getDomElementCount(arena)) |ac| {
-            if (ac != before_count) return .{ .result = .passed };
-        }
-    }
-
-    return .{ .result = .inconclusive };
-}
-
-fn getDomElementCount(self: *Self, arena: std.mem.Allocator) ?u32 {
-    const result = self.tool_executor.callEval(arena, "document.querySelectorAll('*').length");
-    if (result.is_error) return null;
-    return std.fmt.parseInt(u32, result.text, 10) catch null;
 }
