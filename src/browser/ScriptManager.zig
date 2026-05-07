@@ -233,7 +233,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         defer self.base.is_evaluating = was_evaluating;
 
         const headers = try self.getHeaders();
-        errdefer headers.deinit();
 
         if (is_blocking) {
             const response = try self.base.client.syncRequest(arena, .{
