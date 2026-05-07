@@ -293,7 +293,7 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "getUrl",
-        .description = "Get the current page URL. Useful to check if a navigation or redirect occurred.",
+        .description = "Get the current page URL. The browser may already have a page loaded from a user slash command or a replayed script that is not visible in this conversation — call this before assuming nothing is loaded whenever the user references the current page/site/website (explicitly or implicitly) or you otherwise lack the URL needed to ground the request. Also useful to verify a navigation or detect a redirect.",
         .input_schema = minify(
             \\{ "type": "object", "properties": {} }
         ),
