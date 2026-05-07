@@ -449,10 +449,17 @@ pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: Substitute
 /// return null if the tool name doesn't correspond to a PandaScript
 /// command. Variants emitted by `toToolCall` round-trip through this.
 pub fn fromToolCall(arena: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) ?Command {
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, arguments, .{}) catch return null;
+    return fromToolCallValue(tool_name, parsed);
+}
+
+/// Like `fromToolCall` but takes the already-parsed JSON value directly,
+/// skipping the string round-trip when the caller already has it (e.g. the
+/// MCP server, which dispatches off `std.json.Value`).
+pub fn fromToolCallValue(tool_name: []const u8, arguments: std.json.Value) ?Command {
     const Action = lp.tools.Action;
     const action = std.meta.stringToEnum(Action, tool_name) orelse return null;
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, arguments, .{}) catch return null;
-    const obj = switch (parsed) {
+    const obj = switch (arguments) {
         .object => |o| o,
         else => return null,
     };

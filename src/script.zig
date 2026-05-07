@@ -90,8 +90,11 @@ pub fn applyReplacements(
     replacements: []const Replacement,
 ) error{OutOfMemory}![]u8 {
     const content_base = @intFromPtr(content.ptr);
+    // Subtract before adding so intermediate arithmetic on usize cannot
+    // underflow when individual replacements shrink even though the net
+    // delta is positive.
     var total = content.len;
-    for (replacements) |r| total = total + r.new_text.len - r.original_span.len;
+    for (replacements) |r| total = total - r.original_span.len + r.new_text.len;
 
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
@@ -100,6 +103,7 @@ pub fn applyReplacements(
     for (replacements) |r| {
         const r_start = @intFromPtr(r.original_span.ptr) - content_base;
         const r_end = r_start + r.original_span.len;
+        std.debug.assert(r_start >= pos and r_end <= content.len);
         out.appendSliceAssumeCapacity(content[pos..r_start]);
         out.appendSliceAssumeCapacity(r.new_text);
         pos = r_end;
