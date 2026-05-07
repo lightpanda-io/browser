@@ -137,13 +137,23 @@ pub fn agentSetThinking(self: *Self) void {
     self.spinner.setThinking();
 }
 
-/// Called after the tool returns. In spinner mode, only flag failure
-/// (the running label flashes red for the dwell window). In per-line
-/// modes (high/highest) and at non-TTY normal, commit a `● [tool: …]`
-/// line whose bullet color reflects the outcome.
+/// Called after the tool returns.
+///
+/// - Spinner mode (TTY REPL): the running label flashes red on failure
+///   (handled by `markToolFailed`). At `medium`+, *also* commit a
+///   `● [tool: …]` line above the spinner so the run leaves a trace.
+/// - No spinner (non-TTY/non-REPL): print the same line directly,
+///   gated on `medium`+. In non-TTY contexts ANSI is still emitted —
+///   pipes that strip color see plain text via the bullet character.
 pub fn agentToolDone(self: *Self, name: []const u8, args: []const u8, ok: bool) void {
     if (self.spinner.enabled) {
         if (!ok) self.spinner.markToolFailed();
+        if (!atLeast(self.verbosity, .medium)) return;
+        if (self.repl_arena) |*a| {
+            defer _ = a.reset(.retain_capacity);
+            const bytes = formatBulletLine(a.allocator(), name, args, ok) catch return;
+            _ = self.spinner.emitAbove(bytes);
+        }
         return;
     }
     if (!atLeast(self.verbosity, .medium)) return;
@@ -160,6 +170,17 @@ pub fn agentToolDone(self: *Self, name: []const u8, args: []const u8, ok: bool) 
             .{ ansi_dim, ansi_cyan, name, ansi_reset, args },
         );
     }
+}
+
+fn formatBulletLine(arena: std.mem.Allocator, name: []const u8, args: []const u8, ok: bool) ![]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    const w = &aw.writer;
+    const bullet_color = if (ok) ansi_green else ansi_red;
+    try w.print(
+        "{s}●{s} {s}[tool: {s}]{s} {s}\n",
+        .{ bullet_color, ansi_reset, ansi_dim, name, ansi_reset, args },
+    );
+    return aw.written();
 }
 
 const completion_buf_len = 256;
