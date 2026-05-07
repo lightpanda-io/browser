@@ -491,6 +491,9 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
         log.debug(.browser, "initiate root navigation", .{ .url = url });
     }
 
+    // Cancel existing http requests for the active page.
+    self.browser.http_client.abortFrame(page.frame._frame_id, .{ .scope = .full });
+
     // No frame_created notification yet — CDP must not see the pending page
     // (no isolated worlds, no Target.* visibility). Both the pending main
     // world and the isolated worlds get registered with the V8 inspector at
