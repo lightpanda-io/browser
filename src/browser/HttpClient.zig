@@ -205,7 +205,9 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: 
         next = layerWith(&self.cache_layer, next);
     }
 
-    next = layerWith(&self.interception_layer, next);
+    if (network.config.mode == .serve) {
+        next = layerWith(&self.interception_layer, next);
+    }
 
     if (network.config.webBotAuth() != null) {
         next = layerWith(&self.web_bot_auth_layer, next);
