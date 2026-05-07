@@ -750,6 +750,7 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
 
     const provider_client = self.ai_client orelse return error.NoAiClient;
 
+    self.terminal.agentTurnStart();
     var result = provider_client.runTools(
         self.model,
         &self.messages,
@@ -763,9 +764,11 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
             .tool_choice = .auto,
         },
     ) catch |err| {
+        self.terminal.agentTurnCancel();
         log.err(.app, "AI API error", .{ .err = err });
         return error.ApiError;
     };
+    self.terminal.agentTurnStop();
     defer result.deinit();
 
     var cmds: std.ArrayList(Command.Command) = .empty;
@@ -888,6 +891,10 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
 
     const provider_client = self.ai_client orelse return error.NoAiClient;
 
+    self.terminal.agentTurnStart();
+    var commit_turn = true;
+    defer if (commit_turn) self.terminal.agentTurnStop() else self.terminal.agentTurnCancel();
+
     var result = provider_client.runTools(
         self.model,
         &self.messages,
@@ -915,6 +922,7 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
             .thinking_budget = 2048,
         },
     ) catch |err| {
+        commit_turn = false;
         log.err(.app, "AI API error", .{ .err = err });
         return error.ApiError;
     };
@@ -1056,13 +1064,13 @@ fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
 
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) zenai.provider.Client.ToolHandler.Result {
     const self: *Self = @ptrCast(@alignCast(ctx));
-    self.terminal.printToolCall(tool_name, arguments);
+    self.terminal.agentSetTool(tool_name, arguments);
+    defer self.terminal.agentSetThinking();
     if (self.tool_executor.call(allocator, tool_name, arguments)) |output| {
         const capped = capToolOutput(allocator, output);
-        // Only the user-explicit path (slash commands) should surface tool
-        // result bodies in the REPL. Agent-driven calls show only the call
-        // line; bodies are hidden unless `--verbosity verbose` (also needed
-        // by the benchmark harness which parses both lines).
+        // Verbose mode keeps the per-call `[result: …]` line for the
+        // benchmark harness, which parses it. Default REPL UX is the
+        // single-line indicator only.
         if (self.terminal.verbosity == .verbose) self.terminal.printToolResult(tool_name, capped);
         return .{ .content = capped };
     } else |err| {

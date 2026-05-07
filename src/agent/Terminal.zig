@@ -3,6 +3,7 @@ const lp = @import("lightpanda");
 const browser_tools = lp.tools;
 const Config = lp.Config;
 const SlashCommand = @import("SlashCommand.zig");
+const Spinner = @import("Spinner.zig");
 const c = @cImport({
     @cInclude("linenoise.h");
 });
@@ -36,6 +37,9 @@ verbosity: Verbosity,
 /// `std.json.Value` tree. Reset on every `printToolResult` call so
 /// memory is bounded by the largest single tool output.
 repl_arena: ?std.heap.ArenaAllocator,
+/// Drives the single-line agent indicator during LLM-driven turns.
+/// No-op when not in a TTY-attached REPL.
+spinner: Spinner,
 
 const CommandInfo = struct { name: [:0]const u8, hint: [:0]const u8 };
 
@@ -97,6 +101,7 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
         .history_path = history_path,
         .verbosity = verbosity,
         .repl_arena = if (is_repl) std.heap.ArenaAllocator.init(allocator) else null,
+        .spinner = .init(verbosity, is_repl),
     };
 }
 
@@ -105,7 +110,32 @@ fn isRepl(self: *const Self) bool {
 }
 
 pub fn deinit(self: *Self) void {
+    self.spinner.deinit();
     if (self.repl_arena) |*a| a.deinit();
+}
+
+pub fn agentTurnStart(self: *Self) void {
+    self.spinner.start();
+}
+
+pub fn agentTurnStop(self: *Self) void {
+    self.spinner.stop();
+}
+
+pub fn agentTurnCancel(self: *Self) void {
+    self.spinner.cancel();
+}
+
+pub fn agentSetTool(self: *Self, name: []const u8, args: []const u8) void {
+    if (self.spinner.enabled) {
+        self.spinner.setTool(name, args);
+    } else {
+        self.printToolCall(name, args);
+    }
+}
+
+pub fn agentSetThinking(self: *Self) void {
+    self.spinner.setThinking();
 }
 
 const completion_buf_len = 256;
@@ -435,7 +465,9 @@ pub fn printToolResult(self: *Self, name: []const u8, result: []const u8) void {
     if (!self.isRepl() and !atLeast(self.verbosity, .verbose)) return;
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
-        printRepl(a.allocator(), name, result);
+        const bytes = formatReplResult(a.allocator(), name, result) catch return;
+        if (self.spinner.emitAbove(bytes)) return;
+        _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
         return;
     }
     const truncated = result[0..@min(result.len, max_result_display_len)];
@@ -444,14 +476,11 @@ pub fn printToolResult(self: *Self, name: []const u8, result: []const u8) void {
 }
 
 /// REPL output: header + body, pretty-print JSON if parseable, raw otherwise.
-/// Streams via `std.json.Stringify.value` to a stderr writer — no intermediate
-/// output buffer. Non-JSON tool output (markdown, plain extract) goes raw.
-fn printRepl(arena: std.mem.Allocator, name: []const u8, result: []const u8) void {
-    std.debug.lockStdErr();
-    defer std.debug.unlockStdErr();
-    var buf: [4096]u8 = undefined;
-    var fw = std.fs.File.stderr().writer(&buf);
-    const w = &fw.interface;
+/// Builds the entire payload in the arena so callers can route it past the
+/// spinner (`emitAbove`) without interleaving with frame writes.
+fn formatReplResult(arena: std.mem.Allocator, name: []const u8, result: []const u8) ![]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    const w = &aw.writer;
 
     // Most tool results are plain text (markdown, URLs, action confirmations).
     // Skip the JSON parse + Value tree allocation unless the payload could
@@ -463,16 +492,16 @@ fn printRepl(arena: std.mem.Allocator, name: []const u8, result: []const u8) voi
     else
         null;
     const sep: []const u8 = if (parsed != null) "\n" else " ";
-    w.print("{s}{s}[result: {s}]{s}{s}", .{ ansi_dim, ansi_green, name, ansi_reset, sep }) catch return;
+    try w.print("{s}{s}[result: {s}]{s}{s}", .{ ansi_dim, ansi_green, name, ansi_reset, sep });
     if (parsed) |v| {
         std.json.Stringify.value(v, .{ .whitespace = .indent_2 }, w) catch {
-            w.writeAll(result) catch {};
+            try w.writeAll(result);
         };
     } else {
-        w.writeAll(result) catch {};
+        try w.writeAll(result);
     }
-    w.writeByte('\n') catch {};
-    w.flush() catch {};
+    try w.writeByte('\n');
+    return aw.written();
 }
 
 pub fn printError(_: *Self, msg: []const u8) void {
