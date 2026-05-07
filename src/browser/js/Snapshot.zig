@@ -673,9 +673,12 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
                 }).?;
                 const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                 v8.v8__FunctionTemplate__SetClassName(function_template, js_name);
-                if (value.static) {
+                if (value.static and !own_properties) {
                     v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
                 } else {
+                    // For own_properties namespaces, static methods still belong
+                    // on the instance — `CSS` is exposed as an instance via
+                    // `window.CSS`, not as a constructor.
                     v8.v8__Template__Set(@ptrCast(member_template), js_name, @ptrCast(function_template), v8.None);
                 }
             },
