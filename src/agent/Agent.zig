@@ -629,8 +629,8 @@ fn writeHealedScript(
     content: []const u8,
     replacements: []const Replacement,
 ) !void {
-    const bak_path = try std.fmt.allocPrint(allocator, "{s}.bak", .{path});
-    defer allocator.free(bak_path);
+    var bak_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const bak_path = try std.fmt.bufPrint(&bak_buf, "{s}.bak", .{path});
     try dir.writeFile(.{ .sub_path = bak_path, .data = content });
 
     const new_content = try applyReplacements(allocator, content, replacements);
@@ -688,9 +688,9 @@ fn ensureSystemPrompt(self: *Self) !void {
     }
 }
 
-/// When the message list exceeds `prune_high`, drop older turns (keeping
-/// the system prompt) so only the last `prune_keep` messages remain.
-/// All string data is deep-copied into a fresh arena and the old one freed.
+// Old turns are dropped (system prompt always kept) and survivors are
+// deep-copied into a fresh arena so the previous arena can be freed —
+// otherwise dropped messages still pin their backing strings.
 const prune_high = 30;
 const prune_keep = 20;
 
@@ -1029,12 +1029,10 @@ fn buildUserMessageParts(
     return parts.toOwnedSlice(ma);
 }
 
-// Cap tool output at 1 MiB. A handful of calls on a heavy page (e.g. the
-// full `markdown` of a JS-rendered SPA) can otherwise balloon the message
-// arena and the next Gemini request body without bound. 1 MiB fits any
-// reasonable single-page extract and is still tiny next to modern context
-// windows; anything larger is almost always a sign the model is dumping an
-// entire DOM/HTML that won't be useful anyway.
+// A handful of calls on a heavy page (e.g. the full `markdown` of a
+// JS-rendered SPA) can otherwise balloon the message arena and the next
+// Gemini request body without bound. 1 MiB fits any reasonable single-page
+// extract; anything larger is almost always the model dumping a full DOM.
 const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 
 fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {

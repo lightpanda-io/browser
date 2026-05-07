@@ -23,15 +23,15 @@ pub const ExecResult = struct {
     failed: bool,
 };
 
-pub fn executeWithResult(self: *Self, a: std.mem.Allocator, cmd: Command.Command) ExecResult {
+pub fn executeWithResult(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) ExecResult {
     // EXTRACT has no 1:1 tool mapping — it compiles to a custom `eval` script.
-    if (cmd == .extract) return self.execExtract(a, cmd.extract);
+    if (cmd == .extract) return self.execExtract(arena, cmd.extract);
 
-    const tc = Command.toToolCall(a, cmd, browser_tools.substituteEnvVars) orelse switch (cmd) {
+    const tc = Command.toToolCall(arena, cmd, browser_tools.substituteEnvVars) orelse switch (cmd) {
         .natural_language, .comment, .login, .accept_cookies => unreachable,
         else => return .{ .output = "command has no tool mapping", .failed = true },
     };
-    return self.callTool(a, tc.name, tc.args_json);
+    return self.callTool(arena, tc.name, tc.args_json);
 }
 
 pub fn execute(self: *Self, cmd: Command.Command) void {

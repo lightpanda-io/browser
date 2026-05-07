@@ -45,12 +45,12 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 
     // JS errors are returned as isError tool results, not protocol errors
     if (action == .eval) {
-        const result = browser_tools.callEval(server.session, arena, &server.node_registry, call_params.arguments);
+        const result = browser_tools.callEval(arena, server.session, &server.node_registry, call_params.arguments);
         const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
         return server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });
     }
 
-    const result = browser_tools.call(server.session, arena, &server.node_registry, call_params.name, call_params.arguments) catch |err| {
+    const result = browser_tools.call(arena, server.session, &server.node_registry, call_params.name, call_params.arguments) catch |err| {
         const code: protocol.ErrorCode = switch (err) {
             error.FrameNotLoaded => .FrameNotLoaded,
             error.NodeNotFound, error.InvalidParams => .InvalidParams,
