@@ -126,16 +126,40 @@ pub fn agentTurnCancel(self: *Self) void {
     self.spinner.cancel();
 }
 
+/// Signal to the spinner that a tool call is starting. No-op when the
+/// spinner is disabled — the per-line path waits for the result via
+/// `agentToolDone` so it can color the bullet by outcome.
 pub fn agentSetTool(self: *Self, name: []const u8, args: []const u8) void {
-    if (self.spinner.enabled) {
-        self.spinner.setTool(name, args);
-    } else {
-        self.printToolCall(name, args);
-    }
+    self.spinner.setTool(name, args);
 }
 
 pub fn agentSetThinking(self: *Self) void {
     self.spinner.setThinking();
+}
+
+/// Called after the tool returns. In spinner mode, only flag failure
+/// (the running label flashes red for the dwell window). In per-line
+/// modes (high/highest) and at non-TTY normal, commit a `● [tool: …]`
+/// line whose bullet color reflects the outcome.
+pub fn agentToolDone(self: *Self, name: []const u8, args: []const u8, ok: bool) void {
+    if (self.spinner.enabled) {
+        if (!ok) self.spinner.markToolFailed();
+        return;
+    }
+    if (!atLeast(self.verbosity, .medium)) return;
+    const tty = std.posix.isatty(std.posix.STDERR_FILENO);
+    if (tty) {
+        const bullet_color = if (ok) ansi_green else ansi_red;
+        std.debug.print(
+            "{s}●{s} {s}[tool: {s}]{s} {s}\n",
+            .{ bullet_color, ansi_reset, ansi_dim, name, ansi_reset, args },
+        );
+    } else {
+        std.debug.print(
+            "{s}{s}[tool: {s}]{s} {s}\n",
+            .{ ansi_dim, ansi_cyan, name, ansi_reset, args },
+        );
+    }
 }
 
 const completion_buf_len = 256;
@@ -444,15 +468,11 @@ pub fn printAssistant(_: *Self, text: []const u8) void {
 }
 
 /// Print the result of an action command (GOTO, CLICK, ...) to stderr so
-/// stdout stays reserved for data-producing commands.
+/// stdout stays reserved for data-producing commands. User-driven, so
+/// shown unconditionally in REPL; outside REPL gated on `medium+`.
 pub fn printActionResult(self: *Self, text: []const u8) void {
-    if (!atLeast(self.verbosity, .normal)) return;
+    if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
     std.debug.print("{s}\n", .{text});
-}
-
-pub fn printToolCall(self: *Self, name: []const u8, args: []const u8) void {
-    if (!self.isRepl() and !atLeast(self.verbosity, .normal)) return;
-    std.debug.print("\n{s}{s}[tool: {s}]{s} {s}\n", .{ ansi_dim, ansi_cyan, name, ansi_reset, args });
 }
 
 // Must exceed the downstream LLM-judge's snapshot window so it has full
@@ -462,7 +482,7 @@ pub fn printToolCall(self: *Self, name: []const u8, args: []const u8) void {
 const max_result_display_len = 2000;
 
 pub fn printToolResult(self: *Self, name: []const u8, result: []const u8) void {
-    if (!self.isRepl() and !atLeast(self.verbosity, .verbose)) return;
+    if (!self.isRepl() and !atLeast(self.verbosity, .high)) return;
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
         const bytes = formatReplResult(a.allocator(), name, result) catch return;
@@ -513,11 +533,11 @@ pub fn printErrorFmt(_: *Self, comptime fmt: []const u8, args: anytype) void {
 }
 
 pub fn printInfo(self: *Self, msg: []const u8) void {
-    if (!atLeast(self.verbosity, .normal)) return;
+    if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
     std.debug.print("{s}{s}{s}\n", .{ ansi_dim, msg, ansi_reset });
 }
 
 pub fn printInfoFmt(self: *Self, comptime fmt: []const u8, args: anytype) void {
-    if (!atLeast(self.verbosity, .normal)) return;
+    if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
     std.debug.print("{s}" ++ fmt ++ "{s}\n", .{ansi_dim} ++ args ++ .{ansi_reset});
 }

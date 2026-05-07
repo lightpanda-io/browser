@@ -125,14 +125,17 @@ pub const AiProvider = std.meta.Tag(zenai.provider.Client);
 /// than alongside Terminal) so it stays alongside the CLI flag and stays
 /// reachable from Config without an agent-side import cycle.
 pub const AgentVerbosity = enum {
-    /// Only the final answer (stdout) and errors.
-    quiet,
-    /// + REPL banners, status/retry messages, direct-command results,
-    /// and the `[tool: ...]` line for each LLM tool call. Default.
-    normal,
-    /// + the matching `[result: ...]` body for each tool call.
+    /// Default. In a TTY REPL: a single self-updating status indicator
+    /// shows progress; only the per-turn summary commits to scrollback.
+    /// Outside a TTY REPL: silent — final answer (stdout) and hard
+    /// errors only.
+    low,
+    /// One `● [tool: <name>] <args>` line per LLM tool call (green
+    /// bullet on success, red on failure). Result bodies hidden.
+    medium,
+    /// + the matching `[result: <name>] <body>` for each tool call.
     /// Required by the harness in benchmarks/, which parses both lines.
-    verbose,
+    high,
 };
 
 fn waitScriptFileValidator(allocator: Allocator, args: *std.process.ArgIterator) !?[:0]const u8 {
@@ -204,7 +207,7 @@ const Commands = cli.Builder(.{
             .{ .name = "task", .type = ?[]const u8 },
             .{ .name = "task_attachments", .type = []const u8, .multiple = true },
             .{ .name = "mcp", .type = bool },
-            .{ .name = "verbosity", .type = AgentVerbosity, .default = AgentVerbosity.normal },
+            .{ .name = "verbosity", .type = AgentVerbosity, .default = AgentVerbosity.low },
         },
         .shared_options = CommonOptions,
     },
@@ -324,8 +327,8 @@ pub fn logLevel(self: *const Config) ?log.Level {
         // sites trip third-party scripts that the agent can ignore. So
         // when the user hasn't set --log-level, let --verbosity pick.
         .agent => |opts| opts.log_level orelse switch (opts.verbosity) {
-            .quiet, .normal => .err,
-            .verbose => null,
+            .low, .medium => .err,
+            .high => null,
         },
         inline .serve, .fetch, .mcp => |opts| opts.log_level,
         else => unreachable,
@@ -798,16 +801,18 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                MCP client. Requires --provider; cannot be combined
         \\                with --task, -i, or a script file.
         \\
-        \\--verbosity     Stderr chatter level: quiet, normal, or verbose.
-        \\                Default: normal. quiet keeps only the final answer
-        \\                (stdout) and errors; normal adds REPL banners,
-        \\                direct-command results, and `[tool: ...]` lines;
-        \\                verbose also prints each `[result: ...]` body
-        \\                (required by the benchmarks harness). When --log-level
-        \\                isn't set, quiet/normal raise it to err to suppress
-        \\                page-side console.error spam; verbose keeps the
-        \\                build default (warn). Pass --log-level explicitly
-        \\                to override.
+        \\--verbosity     Stderr chatter level: low, medium, high.
+        \\                Default: low. In a TTY REPL, low shows a single-
+        \\                line agent indicator and a per-turn summary;
+        \\                outside a TTY REPL, low is silent (final answer
+        \\                only). medium prints one `● [tool: ...]` line
+        \\                per LLM tool call (green bullet on success, red
+        \\                on failure). high also prints each `[result: ...]`
+        \\                body (required by the benchmarks harness). When
+        \\                --log-level is not set, low/medium raise it to
+        \\                err to suppress page-side console.error spam;
+        \\                high keeps the build default (warn). Pass
+        \\                --log-level explicitly to override.
         \\
         \\The API key is read from the environment:
         \\ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.

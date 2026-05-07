@@ -1076,18 +1076,20 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     defer self.terminal.agentSetThinking();
     if (self.tool_executor.call(allocator, tool_name, arguments)) |output| {
         const capped = capToolOutput(allocator, output);
-        // Verbose mode keeps the per-call `[result: …]` line for the
-        // benchmark harness, which parses it. Default REPL UX is the
-        // single-line indicator only.
-        if (self.terminal.verbosity == .verbose) self.terminal.printToolResult(tool_name, capped);
+        self.terminal.agentToolDone(tool_name, arguments, true);
+        // `highest` keeps the per-call `[result: …]` body line — the
+        // benchmark harness parses it. Lower levels surface success
+        // implicitly via the green bullet (or the spinner label).
+        if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, capped);
         return .{ .content = capped };
     } else |err| {
         const msg = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
-        // Tool errors go back to the model so it can self-correct, but we
-        // don't surface them to the user — the spinner stays clean and the
-        // final summary or assistant text reflects the eventual outcome.
-        // Verbose mode keeps them visible for the benchmark harness.
-        if (self.terminal.verbosity == .verbose) self.terminal.printToolResult(tool_name, msg);
+        // Errors go back to the model so it can self-correct. We don't
+        // print the error body unless `--verbosity highest` (harness);
+        // the red bullet (per-line) or red spinner label is the user-
+        // facing failure signal.
+        self.terminal.agentToolDone(tool_name, arguments, false);
+        if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, msg);
         return .{ .content = msg, .is_error = true };
     }
 }
