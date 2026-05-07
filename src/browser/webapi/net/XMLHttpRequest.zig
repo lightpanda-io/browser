@@ -145,8 +145,8 @@ fn releaseSelfRef(self: *XMLHttpRequest) void {
     if (self._active_request == false) {
         return;
     }
-    self.releaseRef(self._exec.context.page);
     self._active_request = false;
+    self.releaseRef(self._exec.context.page);
 }
 
 pub fn releaseRef(self: *XMLHttpRequest, page: *Page) void {
