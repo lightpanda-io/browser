@@ -667,9 +667,8 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--wait-script-file
         \\                Like --wait-script, but reads the script from a file.
         \\
-        \\--inject-script JavaScript to inject as an inline <script> element in
-        \\                <head> once the --wait-* conditions have been met,
-        \\                before the dump.
+        \\--inject-script JavaScript to execute as the document's <head> is
+        \\                parsed, before any other scripts in the page run.
         \\                Can be passed multiple times; scripts run in order.
         \\
         \\--inject-script-file
