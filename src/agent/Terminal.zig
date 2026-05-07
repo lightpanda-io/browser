@@ -425,13 +425,10 @@ pub fn printToolCall(self: *Self, name: []const u8, args: []const u8) void {
     std.debug.print("\n{s}{s}[tool: {s}]{s} {s}\n", .{ ansi_dim, ansi_cyan, name, ansi_reset, args });
 }
 
-// 2000 keeps stderr readable while exposing the full window the LLM-judge
-// actually consumes (SNAPSHOT_MAX_CHARS=900 in benchmarks/llm_judge.py); the
-// 500 cap was the binding upstream limit and silently starved the judge of
-// grounding evidence on tasks where the agent had observed the answer.
-// Does NOT affect the agent's own LLM, which gets up to tool_output_max_bytes
-// (1 MiB) via Agent.zig:capToolOutput. Bypassed in REPL: a human just asked
-// for the data and would rather scroll than be silently lied to.
+// Must exceed the downstream LLM-judge's snapshot window so it has full
+// grounding evidence. Does not cap the agent's own LLM, which gets up to
+// tool_output_max_bytes (1 MiB) via Agent.zig:capToolOutput. Bypassed in
+// REPL where the human can scroll.
 const max_result_display_len = 2000;
 
 pub fn printToolResult(self: *Self, name: []const u8, result: []const u8) void {

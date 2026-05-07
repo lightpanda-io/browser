@@ -93,9 +93,7 @@ pub fn getCurrentUrl(self: *Self) []const u8 {
 
 /// Run a JavaScript expression and return the full result (text + error flag).
 pub fn callEval(self: *Self, arena: std.mem.Allocator, script: []const u8) browser_tools.EvalResult {
-    var obj: std.json.ObjectMap = .init(arena);
-    obj.put("script", .{ .string = script }) catch return .{ .text = "out of memory", .is_error = true };
-    return browser_tools.callEval(arena, self.session, &self.node_registry, .{ .object = obj });
+    return browser_tools.evalScript(arena, self.session, &self.node_registry, script);
 }
 
 pub fn call(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments_json: []const u8) CallError![]const u8 {

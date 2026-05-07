@@ -402,6 +402,20 @@ pub fn callEval(
     return execEval(arena, session, registry, arguments);
 }
 
+/// Run JavaScript against the current page, skipping the JSON parameter
+/// round-trip that `callEval` requires. The script need not be 0-terminated;
+/// a copy is made internally.
+pub fn evalScript(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *CDPNode.Registry,
+    script: []const u8,
+) EvalResult {
+    const z = arena.dupeZ(u8, script) catch return .{ .text = "Error: out of memory", .is_error = true };
+    const page = ensurePage(session, registry, null, null, null) catch return .{ .text = "Error: page not loaded", .is_error = true };
+    return runEval(arena, page, z);
+}
+
 fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgs(GotoParams, arena, arguments);
     try performGoto(session, registry, args.url, args.timeout, args.waitUntil);
@@ -503,12 +517,7 @@ fn execLinks(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
     const links_list = lp.links.collectLinks(arena, page.document.asNode(), page) catch
         return ToolError.InternalError;
 
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    for (links_list, 0..) |href, i| {
-        if (i > 0) aw.writer.writeByte('\n') catch {};
-        aw.writer.writeAll(href) catch {};
-    }
-    return aw.written();
+    return std.mem.join(arena, "\n", links_list) catch return ToolError.InternalError;
 }
 
 fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -613,7 +622,10 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
         .is_error = true,
     };
     const page = ensurePage(session, registry, args.url, args.timeout, args.waitUntil) catch return .{ .text = "Error: page not loaded", .is_error = true };
+    return runEval(arena, page, args.script);
+}
 
+fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) EvalResult {
     var ls: lp.js.Local.Scope = undefined;
     page.js.localScope(&ls);
     defer ls.deinit();
@@ -622,7 +634,7 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
-    const js_result = ls.local.compileAndRun(args.script, null) catch |err| {
+    const js_result = ls.local.compileAndRun(script, null) catch |err| {
         const caught = try_catch.caughtOrError(arena, err);
         var aw: std.Io.Writer.Allocating = .init(arena);
         caught.format(&aw.writer) catch {};
@@ -650,6 +662,19 @@ fn resolveOptionalNode(registry: *CDPNode.Registry, backend_node_id: ?CDPNode.Id
     const id = backend_node_id orelse return null;
     const node = registry.lookup_by_id.get(id) orelse return ToolError.NodeNotFound;
     return node.dom;
+}
+
+fn mapActionError(err: anytype) ToolError {
+    return if (err == error.InvalidNodeType) ToolError.InvalidParams else ToolError.InternalError;
+}
+
+/// If the previous action queued a navigation (form submit, link click,
+/// Enter on an input), drive the runner until it completes or times out.
+fn awaitQueuedNavigation(session: *lp.Session) ToolError!void {
+    const page = session.currentPage() orelse return;
+    if (page.queued_navigation.items.len == 0) return;
+    var runner = session.runner(.{}) catch return ToolError.InternalError;
+    runner.wait(.{ .ms = 10000, .until = .done }) catch return ToolError.NavigationFailed;
 }
 
 /// Render `"{prefix} ({target}){suffix}. Page url: X, title: Y"`, where target
@@ -680,19 +705,9 @@ fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
-    lp.actions.click(resolved.node, resolved.page) catch |err| {
-        if (err == error.InvalidNodeType) return ToolError.InvalidParams;
-        return ToolError.InternalError;
-    };
+    lp.actions.click(resolved.node, resolved.page) catch |err| return mapActionError(err);
 
-    // If the click triggered a navigation (e.g. form submission, link click),
-    // wait for it to complete.
-    if (session.currentPage()) |page| {
-        if (page.queued_navigation.items.len != 0) {
-            var runner = session.runner(.{}) catch return ToolError.InternalError;
-            runner.wait(.{ .ms = 10000, .until = .done }) catch return ToolError.NavigationFailed;
-        }
-    }
+    try awaitQueuedNavigation(session);
 
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
     return formatActionResult(arena, "Clicked element", args.selector, args.backendNodeId, "", page);
@@ -710,10 +725,7 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     const text = substituteEnvVars(arena, raw_text);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
-    lp.actions.fill(resolved.node, text, resolved.page) catch |err| {
-        if (err == error.InvalidNodeType) return ToolError.InvalidParams;
-        return ToolError.InternalError;
-    };
+    lp.actions.fill(resolved.node, text, resolved.page) catch |err| return mapActionError(err);
 
     // Show the original reference (e.g. $LP_PASSWORD) in the result, not the resolved value
     const display_text = if (text.ptr != raw_text.ptr) raw_text else text;
@@ -731,10 +743,7 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
     const target_node = try resolveOptionalNode(registry, args.backendNodeId);
 
-    lp.actions.scroll(target_node, args.x, args.y, page) catch |err| {
-        if (err == error.InvalidNodeType) return ToolError.InvalidParams;
-        return ToolError.InternalError;
-    };
+    lp.actions.scroll(target_node, args.x, args.y, page) catch |err| return mapActionError(err);
 
     const page_title = page.getTitle() catch null;
     return std.fmt.allocPrint(arena, "Scrolled to x: {d}, y: {d}. Page url: {s}, title: {s}", .{
@@ -773,10 +782,7 @@ fn execHover(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
-    lp.actions.hover(resolved.node, resolved.page) catch |err| {
-        if (err == error.InvalidNodeType) return ToolError.InvalidParams;
-        return ToolError.InternalError;
-    };
+    lp.actions.hover(resolved.node, resolved.page) catch |err| return mapActionError(err);
 
     return formatActionResult(arena, "Hovered element", args.selector, args.backendNodeId, "", resolved.page);
 }
@@ -791,18 +797,10 @@ fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
     const target_node = try resolveOptionalNode(registry, args.backendNodeId);
 
-    lp.actions.press(target_node, args.key, page) catch |err| {
-        if (err == error.InvalidNodeType) return ToolError.InvalidParams;
-        return ToolError.InternalError;
-    };
+    lp.actions.press(target_node, args.key, page) catch |err| return mapActionError(err);
 
     // Pressing Enter on a form input triggers implicit form submission.
-    if (session.currentPage()) |p| {
-        if (p.queued_navigation.items.len != 0) {
-            var runner = session.runner(.{}) catch return ToolError.InternalError;
-            runner.wait(.{ .ms = 10000, .until = .done }) catch return ToolError.NavigationFailed;
-        }
-    }
+    try awaitQueuedNavigation(session);
 
     const current_page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
     const page_title = current_page.getTitle() catch null;
@@ -822,10 +820,7 @@ fn execSelectOption(arena: std.mem.Allocator, session: *lp.Session, registry: *C
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
-    lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| {
-        if (err == error.InvalidNodeType) return ToolError.InvalidParams;
-        return ToolError.InternalError;
-    };
+    lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| return mapActionError(err);
 
     const prefix = std.fmt.allocPrint(arena, "Selected option '{s}'", .{args.value}) catch return ToolError.InternalError;
     return formatActionResult(arena, prefix, args.selector, args.backendNodeId, "", resolved.page);
@@ -840,10 +835,7 @@ fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *CDP
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
-    lp.actions.setChecked(resolved.node, args.checked, resolved.page) catch |err| {
-        if (err == error.InvalidNodeType) return ToolError.InvalidParams;
-        return ToolError.InternalError;
-    };
+    lp.actions.setChecked(resolved.node, args.checked, resolved.page) catch |err| return mapActionError(err);
 
     const state_str: []const u8 = if (args.checked) "checked" else "unchecked";
     const suffix = std.fmt.allocPrint(arena, " to {s}", .{state_str}) catch return ToolError.InternalError;
@@ -999,39 +991,36 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8
 
     var result: std.ArrayList(u8) = .empty;
     var i: usize = 0;
-    while (i < input.len) {
-        if (input[i] == '$') {
-            const var_start = i + 1;
-            var var_end = var_start;
-            while (var_end < input.len and (std.ascii.isAlphanumeric(input[var_end]) or input[var_end] == '_')) {
-                var_end += 1;
-            }
-            if (var_end > var_start) {
-                const name = input[var_start..var_end];
-                // Same gate as `execGetEnv`: only `LP_*` is resolvable. A
-                // prompt-injected `fill('$ANTHROPIC_API_KEY')` would otherwise
-                // leak the resolved value into the page DOM.
-                var name_buf: [256]u8 = undefined;
-                const env_val: ?[:0]const u8 = if (std.ascii.startsWithIgnoreCase(name, "LP_") and name.len < name_buf.len) blk: {
-                    @memcpy(name_buf[0..name.len], name);
-                    name_buf[name.len] = 0;
-                    break :blk std.posix.getenv(name_buf[0..name.len :0]);
-                } else null;
-                if (env_val) |val| {
-                    result.appendSlice(arena, val) catch return input;
-                } else {
-                    result.appendSlice(arena, input[i..var_end]) catch return input;
-                }
-                i = var_end;
-            } else {
-                result.append(arena, '$') catch return input;
-                i += 1;
-            }
-        } else {
-            result.append(arena, input[i]) catch return input;
-            i += 1;
+    var last_copy: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, input, i, '$')) |dollar| {
+        const var_start = dollar + 1;
+        var var_end = var_start;
+        while (var_end < input.len and (std.ascii.isAlphanumeric(input[var_end]) or input[var_end] == '_')) {
+            var_end += 1;
         }
+        if (var_end == var_start) {
+            i = dollar + 1;
+            continue;
+        }
+        const name = input[var_start..var_end];
+        // Same gate as `execGetEnv`: only `LP_*` is resolvable. A
+        // prompt-injected `fill('$ANTHROPIC_API_KEY')` would otherwise
+        // leak the resolved value into the page DOM.
+        var name_buf: [256]u8 = undefined;
+        const env_val: ?[:0]const u8 = if (std.ascii.startsWithIgnoreCase(name, "LP_") and name.len < name_buf.len) blk: {
+            @memcpy(name_buf[0..name.len], name);
+            name_buf[name.len] = 0;
+            break :blk std.posix.getenv(name_buf[0..name.len :0]);
+        } else null;
+        if (env_val) |val| {
+            result.appendSlice(arena, input[last_copy..dollar]) catch return input;
+            result.appendSlice(arena, val) catch return input;
+            last_copy = var_end;
+        }
+        i = var_end;
     }
+    if (last_copy == 0) return input;
+    result.appendSlice(arena, input[last_copy..]) catch return input;
     return result.toOwnedSlice(arena) catch input;
 }
 

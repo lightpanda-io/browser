@@ -26,7 +26,7 @@ pub fn init(allocator: std.mem.Allocator, path: ?[]const u8) Self {
             break :blk null;
         };
         const pos = f.getPos() catch 0;
-        if (pos > 0) _ = f.write("\n") catch {};
+        if (pos > 0) f.writeAll("\n") catch {};
         break :blk f;
     } else null;
 
@@ -45,16 +45,18 @@ pub fn record(self: *Self, cmd: Command.Command) void {
     self.buf.clearRetainingCapacity();
     cmd.format(&self.buf.writer) catch return;
     self.buf.writer.writeByte('\n') catch return;
-    _ = f.write(self.buf.written()) catch return;
+    f.writeAll(self.buf.written()) catch return;
     self.needs_separator = true;
 }
 
 pub fn recordComment(self: *Self, comment: []const u8) void {
     const f = self.file orelse return;
+    self.buf.clearRetainingCapacity();
     const prefix: []const u8 = if (self.needs_separator) "\n# " else "# ";
-    f.writeAll(prefix) catch return;
-    f.writeAll(comment) catch return;
-    f.writeAll("\n") catch return;
+    self.buf.writer.writeAll(prefix) catch return;
+    self.buf.writer.writeAll(comment) catch return;
+    self.buf.writer.writeByte('\n') catch return;
+    f.writeAll(self.buf.written()) catch return;
     self.needs_separator = true;
 }
 

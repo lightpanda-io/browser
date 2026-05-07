@@ -451,8 +451,8 @@ pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: Substitute
 pub fn fromToolCall(arena: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) ?Command {
     const Action = lp.tools.Action;
     const action = std.meta.stringToEnum(Action, tool_name) orelse return null;
-    const parsed = std.json.parseFromSlice(std.json.Value, arena, arguments, .{}) catch return null;
-    const obj = switch (parsed.value) {
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, arguments, .{}) catch return null;
+    const obj = switch (parsed) {
         .object => |o| o,
         else => return null,
     };

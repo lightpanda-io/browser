@@ -802,12 +802,12 @@ fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []cons
     const ha = self.message_arena.allocator();
 
     const verify_section = if (verify_context) |ctx|
-        std.fmt.allocPrint(ha, "\n\nVerification detected a problem:\n{s}", .{ctx}) catch ""
+        std.fmt.allocPrint(ha, "\n\nVerification detected a problem:\n{s}", .{ctx}) catch return null
     else
         "";
 
     const comment_section = if (context_comment) |c|
-        std.fmt.allocPrint(ha, "\n\nThe original user request that generated this command was:\n{s}", .{c}) catch ""
+        std.fmt.allocPrint(ha, "\n\nThe original user request that generated this command was:\n{s}", .{c}) catch return null
     else
         "";
 
