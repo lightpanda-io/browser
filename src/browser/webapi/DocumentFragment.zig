@@ -154,7 +154,7 @@ pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer, frame: *Fra
 pub fn setInnerHTML(self: *DocumentFragment, html: []const u8, frame: *Frame) !void {
     const parent = self.asNode();
 
-    parent.bumpDomVersion(frame);
+    frame.domChanged();
     var it = parent.childrenIterator();
     while (it.next()) |child| {
         frame.removeNode(parent, child, .{ .will_be_reconnected = false });

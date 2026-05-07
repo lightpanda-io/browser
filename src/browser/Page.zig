@@ -45,6 +45,19 @@ const Page = @This();
 
 session: *Session,
 
+// DOM version used to invalidate cached state of "live" collections. Ideally
+// this would be on the Frame (and that's where it used to be). But getting the
+// frame from a DOM mutation call is [relatively] expensive. You can't use
+// the bridge-injected *Frame, because that's the frame where the JS is being
+// executed, which might not be the *Frame that owns the node. We don't store
+// *Frame in node (think of the memory!), so we have to iterate through its
+// parents, find the Document, which has the frame.
+// So the choice is between making every DOM mutation (which has to increase
+// the dom_version) + every read (which has to check the version) slow, or
+// putting this on the Page, and having an DOM mutation in Frame 1 invalidate
+// a cached lookup on Frame 2. We picked the latter.
+dom_version: usize = 0,
+
 // DOM object factory scoped to this Page's documents.
 factory: Factory,
 
