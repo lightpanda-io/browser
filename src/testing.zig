@@ -657,6 +657,15 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/slow_fetch")) {
+        std.Thread.sleep(100 * std.time.ns_per_ms);
+        return req.respond("slow", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/echo_referer")) {
         // Echo the request's Referer header back as HTML so tests can assert
         // what Referer the navigation sent. Used by the cross-page Referer test.

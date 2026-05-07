@@ -27,6 +27,15 @@
   }
 </script>
 
+<script id=fetch_teardown_with_pending_request type=module>
+  {
+    // Regression for https://github.com/lightpanda-io/browser/issues/2373:
+    // page teardown aborts in-flight fetches after the JS context is destroyed.
+    fetch('http://127.0.0.1:9582/slow_fetch').catch(() => {});
+    testing.expectEqual(true, true);
+  }
+</script>
+
 <script id=fetch_json type=module>
   {
     const state = await testing.async();

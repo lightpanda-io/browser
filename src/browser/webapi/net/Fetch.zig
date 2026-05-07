@@ -37,6 +37,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 const Fetch = @This();
 
 _exec: *const Execution,
+_page: *Page,
 _url: []const u8,
 _buf: std.ArrayList(u8),
 _response: *Response,
@@ -68,6 +69,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     const fetch = try response._arena.create(Fetch);
     fetch.* = .{
         ._exec = exec,
+        ._page = exec.context.page,
         ._buf = .empty,
         ._url = try response._arena.dupe(u8, request._url),
         ._resolver = try resolver.persist(),
@@ -260,7 +262,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // clear this. (defer since `self is in the response's arena).
 
     defer if (owns_response) {
-        response.deinit(self._exec.context.page);
+        response.deinit(self._page);
     };
 
     var ls: js.Local.Scope = undefined;
@@ -277,7 +279,7 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
     if (self._owns_response) {
         var response = self._response;
         response._http_response = null;
-        response.deinit(self._exec.context.page);
+        response.deinit(self._page);
         // Do not access `self` after this point: the Fetch struct was
         // allocated from response._arena which has been released.
     }
