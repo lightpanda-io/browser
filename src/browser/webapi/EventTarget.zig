@@ -203,7 +203,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: EventTarget" {
-    const filter: testing.LogFilter = .init(&.{.js, .event});
+    const filter: testing.LogFilter = .init(&.{ .js, .event });
     defer filter.deinit();
 
     // we create thousands of these per frame. Nothing should bloat it.
