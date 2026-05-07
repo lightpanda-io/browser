@@ -940,6 +940,7 @@ pub const PageJsApis = flattenTypes(&.{
 // TODO: Expand this list to include all worker-appropriate APIs.
 pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/WorkerGlobalScope.zig"),
+    @import("../webapi/WorkerLocation.zig"),
     @import("../webapi/EventTarget.zig"),
     @import("../webapi/DOMException.zig"),
     @import("../webapi/net/URLSearchParams.zig"),
@@ -978,7 +979,10 @@ pub const WorkerJsApis = flattenTypes(&.{
 // to know about all possible types. Individual snapshots use their own
 // subsets (PageJsApis, WorkerSnapshot.JsApis).
 pub const JsApis = blk: {
-    const base = PageJsApis ++ [_]type{@import("../webapi/WorkerGlobalScope.zig").JsApi};
+    const base = PageJsApis ++ [_]type{
+        @import("../webapi/WorkerGlobalScope.zig").JsApi,
+        @import("../webapi/WorkerLocation.zig").JsApi,
+    };
     if (lp.build_config.wpt_extensions == false) {
         break :blk base;
     }

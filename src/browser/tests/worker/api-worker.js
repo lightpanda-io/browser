@@ -50,6 +50,15 @@
     const blob_url_is_blob = blob_url.startsWith('blob:');
     URL.revokeObjectURL(blob_url);
 
+    // self.location
+    const loc = self.location;
+    const loc_is_worker_location = loc instanceof WorkerLocation;
+    const loc_identity_stable = self.location === loc;
+    const loc_href = loc.href;
+    const loc_protocol = loc.protocol;
+    const loc_pathname = loc.pathname;
+    const loc_to_string = String(loc);
+
     postMessage({
       ok: true,
       results: {
@@ -75,6 +84,12 @@
         pre_aborted,
         pre_threw,
         blob_url_is_blob,
+        loc_is_worker_location,
+        loc_identity_stable,
+        loc_href,
+        loc_protocol,
+        loc_pathname,
+        loc_to_string,
       },
     });
   } catch (e) {
