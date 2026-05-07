@@ -516,7 +516,25 @@ fn countInternalFields(comptime JsApi: type) u8 {
 // Shared illegal constructor callback for types without explicit constructors
 fn illegalConstructorCallback(raw_info: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
     const isolate = v8.v8__FunctionCallbackInfo__GetIsolate(raw_info);
-    log.warn(.js, "Illegal constructor call", .{});
+
+    // Recover the constructor's name via NewTarget, whose .name property was
+    // set via SetClassName when the FunctionTemplate was built. Lets us tell
+    // `new DOMException()` apart from `new MutationRecord()` in the warning.
+    var name_buf: [128]u8 = undefined;
+    var name: []const u8 = "<unknown>";
+    if (v8.v8__FunctionCallbackInfo__NewTarget(raw_info)) |new_target| {
+        if (v8.v8__Value__IsFunction(new_target)) {
+            const func: *const v8.Function = @ptrCast(new_target);
+            if (v8.v8__Function__GetName(func)) |name_value| {
+                if (v8.v8__Value__IsString(name_value)) {
+                    const str: *const v8.String = @ptrCast(name_value);
+                    const n = v8.v8__String__WriteUtf8(str, isolate, &name_buf, name_buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+                    name = name_buf[0..@intCast(n)];
+                }
+            }
+        }
+    }
+    log.info(.js, "Illegal constructor call", .{ .name = name });
 
     const message = v8.v8__String__NewFromUtf8(isolate, "Illegal Constructor", v8.kNormal, 19);
     const js_exception = v8.v8__Exception__TypeError(message);
