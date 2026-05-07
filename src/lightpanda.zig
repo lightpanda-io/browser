@@ -47,6 +47,7 @@ pub const HttpClient = @import("browser/HttpClient.zig");
 
 pub const mcp = @import("mcp.zig");
 pub const agent = @import("agent.zig");
+pub const script = @import("script.zig");
 pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
@@ -144,11 +145,11 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
         _ = try runner.waitForSelector(selector, remaining);
     }
 
-    if (opts.wait_script) |script| {
+    if (opts.wait_script) |wait_script| {
         const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
         const remaining = opts.wait_ms -| elapsed;
         if (remaining == 0) return error.Timeout;
-        try runner.waitForScript(script, remaining);
+        try runner.waitForScript(wait_script, remaining);
     }
 
     const writer = opts.writer orelse return;

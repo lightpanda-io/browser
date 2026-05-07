@@ -171,6 +171,44 @@ For sub-task delegation in the other direction — calling Lightpanda's
 own LLM-driven agent in a one-shot fashion — use `--task` on stdin
 instead.
 
+### Recording PandaScript over MCP
+
+`lightpanda mcp` exposes three recording tools so an external agent can
+capture a session as a `.lp` script for later deterministic replay:
+
+| Tool             | Args                  | Effect                                                                                          |
+|------------------|-----------------------|-------------------------------------------------------------------------------------------------|
+| `record_start`   | `{ path: string }`    | Begin appending state-mutating tool calls to `path` (relative, no `..`). Errors if already on. |
+| `record_stop`    | `{}`                  | Close the recording and return `{path, line_count}`. Errors if no recording is active.          |
+| `record_comment` | `{ text: string }`    | Write `# <text>` to the active recording — useful as a breadcrumb above LLM-driven steps.       |
+
+While recording is active, every `goto` / `click` / `fill` / `scroll` /
+`hover` / `selectOption` / `setChecked` / `waitForSelector` / `eval`
+that succeeds is appended verbatim. Query-only tools (`tree`,
+`markdown`, `findElement`, `consoleLogs`, …) are not recorded. The
+resulting file replays without an LLM via `./lightpanda agent
+session.lp`.
+
+### Replay + self-heal over MCP
+
+Self-heal is a two-tool roundtrip: lightpanda runs steps and reports
+structured failures, the calling agent synthesizes a replacement, and
+lightpanda atomically rewrites the script.
+
+| Tool          | Args                                                     | Effect                                                                                                                                              |
+|---------------|----------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `script_step` | `{ line: string }`                                       | Parse one PandaScript line and run it on the current session. Comments and blank lines are no-ops. Returns `isError: true` with a structured message on failure. |
+| `script_heal` | `{ path: string, replacements: [{original_line, replacement_lines}] }` | Atomically rewrite the script in place. A `<path>.bak` of the original is written first; each `original_line` must match verbatim. The first replacement gets a `# [Auto-healed] Original: …` header. |
+
+Typical loop on the caller side: read the script, walk lines, call
+`script_step` per line, on failure ask the caller's LLM for a
+replacement, call `script_heal` with the patch, then continue. Lines
+executed via `script_step` are intentionally NOT auto-recorded — replay
+shouldn't double-record.
+
+`LOGIN`, `ACCEPT_COOKIES`, and natural-language steps are rejected by
+`script_step`: those require an LLM and belong to the calling agent.
+
 ## Browser tools
 
 The agent and MCP server share the tool set defined in `src/browser/tools.zig`.

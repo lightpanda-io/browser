@@ -80,6 +80,10 @@ pub const InitializeResult = struct {
     protocolVersion: []const u8,
     capabilities: ServerCapabilities,
     serverInfo: Implementation,
+    /// Free-form guidance the client should fold into its system prompt.
+    /// Per the MCP spec, this is how a server tells a driver "here is how
+    /// to use me correctly" without requiring a separate tool call.
+    instructions: ?[]const u8 = null,
 };
 
 pub const ServerCapabilities = struct {

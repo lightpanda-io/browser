@@ -3,12 +3,15 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const js = lp.js;
 const browser_tools = lp.tools;
+const script = lp.script;
 
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
+const Command = @import("../agent/Command.zig");
+const Recorder = @import("../agent/Recorder.zig");
 
 /// Convert browser tool_defs to MCP protocol.Tool format (comptime).
-const tool_list = blk: {
+const browser_tool_list = blk: {
     var tools: [browser_tools.tool_defs.len]protocol.Tool = undefined;
     for (browser_tools.tool_defs, 0..) |td, i| {
         tools[i] = .{
@@ -20,10 +23,99 @@ const tool_list = blk: {
     break :blk tools;
 };
 
+const record_start_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "path": { "type": "string", "description": "Relative path (no '..' segments) where PandaScript commands will be appended. The file is created if missing. Only one recording can be active at a time." }
+    \\  },
+    \\  "required": ["path"]
+    \\}
+);
+
+const record_stop_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {}
+    \\}
+);
+
+const record_comment_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "text": { "type": "string", "description": "Comment text. Written as `# <text>` to the active recording. Errors if no recording is active." }
+    \\  },
+    \\  "required": ["text"]
+    \\}
+);
+
+const script_step_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "line": { "type": "string", "description": "A single PandaScript command (e.g. `GOTO https://x`, `CLICK '#btn'`, `TYPE '#email' 'a@b.c'`). Comments (`# …`) and blank lines are accepted as no-ops. LLM-driven keywords (LOGIN, ACCEPT_COOKIES, natural language) are rejected — the calling agent owns those." }
+    \\  },
+    \\  "required": ["line"]
+    \\}
+);
+
+const script_heal_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "path": { "type": "string", "description": "Relative path of the .lp script to rewrite (no '..' segments). A `<path>.bak` of the original is written before any in-place edit." },
+    \\    "replacements": {
+    \\      "type": "array",
+    \\      "description": "List of in-place line splices applied atomically.",
+    \\      "items": {
+    \\        "type": "object",
+    \\        "properties": {
+    \\          "original_line": { "type": "string", "description": "Verbatim line to replace, exactly as it appears in the script (without trailing newline)." },
+    \\          "replacement_lines": { "type": "array", "items": { "type": "string" }, "description": "New lines (without trailing newlines) to splice in. The first replacement is prefixed with `# [Auto-healed] Original: <original_line>` automatically." }
+    \\        },
+    \\        "required": ["original_line", "replacement_lines"]
+    \\      }
+    \\    }
+    \\  },
+    \\  "required": ["path", "replacements"]
+    \\}
+);
+
+const extra_tools = [_]protocol.Tool{
+    .{
+        .name = "record_start",
+        .description = "Start recording state-mutating browser tool calls into a PandaScript file. Subsequent calls to `goto`, `click`, `fill`, `scroll`, `hover`, `selectOption`, `setChecked`, `waitForSelector`, and `eval` get appended as PandaScript lines. Query-only tools (tree, markdown, links, findElement, …) are not recorded.",
+        .inputSchema = record_start_schema,
+    },
+    .{
+        .name = "record_stop",
+        .description = "Stop the active recording and return the path and number of lines written. Errors if no recording is active.",
+        .inputSchema = record_stop_schema,
+    },
+    .{
+        .name = "record_comment",
+        .description = "Append a `# <text>` comment line to the active recording. Useful as a breadcrumb above LLM-driven steps.",
+        .inputSchema = record_comment_schema,
+    },
+    .{
+        .name = "script_step",
+        .description = "Parse and execute one PandaScript line on the current browser session. Returns success or a structured failure descriptor (failed line, page URL, error reason) so the calling agent can synthesize a heal step. Comments and blank lines are accepted as no-ops.",
+        .inputSchema = script_step_schema,
+    },
+    .{
+        .name = "script_heal",
+        .description = "Atomically rewrite a .lp script with in-place line replacements. A `.bak` of the original is written first. Designed for the script_step → fail → script_heal roundtrip where the calling agent owns the LLM that synthesizes replacements.",
+        .inputSchema = script_heal_schema,
+    },
+};
+
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
-    _ = arena;
     const id = req.id orelse return;
-    try server.transport.sendResult(id, .{ .tools = &tool_list });
+    const all = arena.alloc(protocol.Tool, browser_tool_list.len + extra_tools.len) catch return;
+    @memcpy(all[0..browser_tool_list.len], &browser_tool_list);
+    @memcpy(all[browser_tool_list.len..], &extra_tools);
+    try server.transport.sendResult(id, .{ .tools = all });
 }
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -34,18 +126,40 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         return server.transport.sendError(id, .InvalidParams, "Invalid params");
     };
 
-    const action = std.meta.stringToEnum(browser_tools.Action, call_params.name) orelse {
+    // Hand-written tools: dispatch first so they don't collide with the
+    // generated browser tools.
+    if (std.mem.eql(u8, call_params.name, "record_start")) return handleRecordStart(server, arena, id, call_params.arguments);
+    if (std.mem.eql(u8, call_params.name, "record_stop")) return handleRecordStop(server, arena, id);
+    if (std.mem.eql(u8, call_params.name, "record_comment")) return handleRecordComment(server, arena, id, call_params.arguments);
+    if (std.mem.eql(u8, call_params.name, "script_step")) return handleScriptStep(server, arena, id, call_params.arguments);
+    if (std.mem.eql(u8, call_params.name, "script_heal")) return handleScriptHeal(server, arena, id, call_params.arguments);
+
+    return dispatchBrowserTool(server, arena, id, call_params.name, call_params.arguments);
+}
+
+/// Browser-tool dispatch shared by direct MCP calls and `script_step`.
+/// On success, if a recorder is active and the call maps cleanly to a
+/// PandaScript Command, the call is appended to the recording.
+fn dispatchBrowserTool(
+    server: *Server,
+    arena: std.mem.Allocator,
+    id: std.json.Value,
+    name: []const u8,
+    arguments: ?std.json.Value,
+) !void {
+    const action = std.meta.stringToEnum(browser_tools.Action, name) orelse {
         return server.transport.sendError(id, .MethodNotFound, "Tool not found");
     };
 
     // JS errors are returned as isError tool results, not protocol errors
     if (action == .eval) {
-        const result = browser_tools.callEval(arena, server.session, &server.node_registry, call_params.arguments);
+        const result = browser_tools.callEval(arena, server.session, &server.node_registry, arguments);
+        if (!result.is_error) recordIfActive(server, arena, name, arguments);
         const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
         return server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });
     }
 
-    const result = browser_tools.call(arena, server.session, &server.node_registry, call_params.name, call_params.arguments) catch |err| {
+    const result = browser_tools.call(arena, server.session, &server.node_registry, name, arguments) catch |err| {
         const code: protocol.ErrorCode = switch (err) {
             error.FrameNotLoaded => .FrameNotLoaded,
             error.NodeNotFound, error.InvalidParams => .InvalidParams,
@@ -54,8 +168,230 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         return server.transport.sendError(id, code, @errorName(err));
     };
 
+    recordIfActive(server, arena, name, arguments);
+
     const content = [_]protocol.TextContent([]const u8){.{ .text = result }};
     try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+/// If a recorder is active and the (name, args) pair maps to a PandaScript
+/// Command, append it to the recording. Tools without a Command mapping
+/// (tree, markdown, findElement, etc.) are silently skipped.
+fn recordIfActive(server: *Server, arena: std.mem.Allocator, name: []const u8, arguments: ?std.json.Value) void {
+    if (server.recorder == null) return;
+    const args_value = arguments orelse return;
+    const args_json = Command.stringifyJson(arena, args_value);
+    const cmd = Command.fromToolCall(arena, name, args_json) orelse return;
+    server.recorder.?.record(cmd);
+    server.record_lines += 1;
+}
+
+fn handleRecordStart(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    if (server.recorder != null) {
+        return sendErrorContent(server, id, "a recording is already active; call record_stop first");
+    }
+    const args_value = arguments orelse return server.transport.sendError(id, .InvalidParams, "missing arguments");
+    const Args = struct { path: []const u8 };
+    const args = std.json.parseFromValueLeaky(Args, arena, args_value, .{ .ignore_unknown_fields = true }) catch {
+        return server.transport.sendError(id, .InvalidParams, "expected { path: string }");
+    };
+
+    if (!script.isPathSafe(args.path)) {
+        return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
+    }
+
+    const path_owned = server.allocator.dupe(u8, args.path) catch return sendErrorContent(server, id, "out of memory");
+    errdefer server.allocator.free(path_owned);
+
+    server.recorder = Recorder.init(server.allocator, path_owned);
+    server.record_path = path_owned;
+    server.record_lines = 0;
+
+    const msg = std.fmt.allocPrint(arena, "recording started: {s}", .{path_owned}) catch return;
+    const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
+    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleRecordStop(server: *Server, arena: std.mem.Allocator, id: std.json.Value) !void {
+    if (server.recorder == null) {
+        return sendErrorContent(server, id, "no recording is active");
+    }
+    const path = server.record_path.?;
+    const lines = server.record_lines;
+
+    var r = server.recorder.?;
+    r.deinit();
+    server.recorder = null;
+    server.record_path = null;
+    server.record_lines = 0;
+
+    const msg = std.fmt.allocPrint(arena, "recording stopped: {s} ({d} line(s) written)", .{ path, lines }) catch return;
+    server.allocator.free(path);
+
+    const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
+    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleRecordComment(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    if (server.recorder == null) {
+        return sendErrorContent(server, id, "no recording is active");
+    }
+    _ = arena;
+    const args_value = arguments orelse return server.transport.sendError(id, .InvalidParams, "missing arguments");
+    const Args = struct { text: []const u8 };
+    const args = std.json.parseFromValueLeaky(Args, server.allocator, args_value, .{ .ignore_unknown_fields = true }) catch {
+        return server.transport.sendError(id, .InvalidParams, "expected { text: string }");
+    };
+
+    server.recorder.?.recordComment(args.text);
+    server.record_lines += 1;
+
+    const content = [_]protocol.TextContent([]const u8){.{ .text = "ok" }};
+    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const args_value = arguments orelse return server.transport.sendError(id, .InvalidParams, "missing arguments");
+    const Args = struct { line: []const u8 };
+    const args = std.json.parseFromValueLeaky(Args, arena, args_value, .{ .ignore_unknown_fields = true }) catch {
+        return server.transport.sendError(id, .InvalidParams, "expected { line: string }");
+    };
+
+    const cmd = Command.parse(args.line);
+
+    switch (cmd) {
+        .comment => {
+            const content = [_]protocol.TextContent([]const u8){.{ .text = "comment" }};
+            return server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+        },
+        .login, .accept_cookies, .natural_language => {
+            return sendErrorContent(server, id, "LOGIN / ACCEPT_COOKIES / natural-language steps require an LLM and are not handled by lightpanda mcp; the calling agent owns those");
+        },
+        .extract => |sel| {
+            const eval_script = std.fmt.allocPrint(
+                arena,
+                "JSON.stringify(Array.from(document.querySelectorAll({s})).map(el => el.textContent.trim()))",
+                .{Command.stringifyJson(arena, sel)},
+            ) catch return sendErrorContent(server, id, "out of memory building extract script");
+            const result = browser_tools.evalScript(arena, server.session, &server.node_registry, eval_script);
+            const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
+            return server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });
+        },
+        else => {},
+    }
+
+    // Map the Command to its underlying browser tool and dispatch through
+    // the same path as a direct MCP call. Recording is intentionally NOT
+    // applied to script_step lines: replay shouldn't double-record.
+    const tc = Command.toToolCall(arena, cmd, Command.noSubstitute) orelse {
+        return sendErrorContent(server, id, "command has no browser-tool mapping");
+    };
+
+    const tc_args: ?std.json.Value = if (tc.args_json.len == 0)
+        null
+    else
+        std.json.parseFromSliceLeaky(std.json.Value, arena, tc.args_json, .{}) catch {
+            return sendErrorContent(server, id, "internal: failed to reparse tool arguments");
+        };
+
+    const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse {
+        return sendErrorContent(server, id, "internal: unknown action from Command.toToolCall");
+    };
+
+    if (action == .eval) {
+        const result = browser_tools.callEval(arena, server.session, &server.node_registry, tc_args);
+        const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
+        return server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });
+    }
+
+    const result = browser_tools.call(arena, server.session, &server.node_registry, tc.name, tc_args) catch |err| {
+        const url = currentUrl(server) catch "";
+        const msg = std.fmt.allocPrint(arena, "{s} failed at line `{s}` (url: {s}): {s}", .{ tc.name, args.line, url, @errorName(err) }) catch @errorName(err);
+        return sendErrorContent(server, id, msg);
+    };
+
+    const content = [_]protocol.TextContent([]const u8){.{ .text = result }};
+    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const args_value = arguments orelse return server.transport.sendError(id, .InvalidParams, "missing arguments");
+
+    const ReplacementSpec = struct {
+        original_line: []const u8,
+        replacement_lines: []const []const u8,
+    };
+    const Args = struct {
+        path: []const u8,
+        replacements: []const ReplacementSpec,
+    };
+    const args = std.json.parseFromValueLeaky(Args, arena, args_value, .{ .ignore_unknown_fields = true }) catch {
+        return server.transport.sendError(id, .InvalidParams, "expected { path: string, replacements: [{ original_line, replacement_lines }] }");
+    };
+
+    if (!script.isPathSafe(args.path)) {
+        return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
+    }
+
+    const content = std.fs.cwd().readFileAlloc(arena, args.path, 10 * 1024 * 1024) catch |err| {
+        const msg = std.fmt.allocPrint(arena, "failed to read {s}: {s}", .{ args.path, @errorName(err) }) catch @errorName(err);
+        return sendErrorContent(server, id, msg);
+    };
+
+    var splices = arena.alloc(script.Replacement, args.replacements.len) catch return sendErrorContent(server, id, "out of memory");
+
+    for (args.replacements, 0..) |spec, i| {
+        const span = findLineSpan(content, spec.original_line) orelse {
+            const msg = std.fmt.allocPrint(arena, "original_line not found verbatim: `{s}`", .{spec.original_line}) catch "original_line not found";
+            return sendErrorContent(server, id, msg);
+        };
+
+        var aw: std.Io.Writer.Allocating = .init(arena);
+        aw.writer.print("# [Auto-healed] Original: {s}\n", .{spec.original_line}) catch return sendErrorContent(server, id, "out of memory formatting heal header");
+        for (spec.replacement_lines) |rl| {
+            aw.writer.writeAll(rl) catch return sendErrorContent(server, id, "out of memory writing replacement line");
+            aw.writer.writeByte('\n') catch return sendErrorContent(server, id, "out of memory writing replacement line");
+        }
+
+        splices[i] = .{ .original_span = span, .new_text = aw.written() };
+    }
+
+    script.writeAtomic(arena, std.fs.cwd(), args.path, content, splices) catch |err| {
+        const msg = std.fmt.allocPrint(arena, "failed to write {s}: {s} (script left unchanged)", .{ args.path, @errorName(err) }) catch @errorName(err);
+        return sendErrorContent(server, id, msg);
+    };
+
+    const msg = std.fmt.allocPrint(arena, "healed {d} line(s) in {s}; backup at {s}.bak", .{ args.replacements.len, args.path, args.path }) catch "ok";
+    const out_content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
+    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &out_content });
+}
+
+/// Find a line in `content` that exactly equals `line` (after trimming the
+/// trailing newline). Returns the slice covering the line plus its
+/// terminating `\n` if present, ready for `script.applyReplacements`.
+fn findLineSpan(content: []const u8, line: []const u8) ?[]const u8 {
+    var pos: usize = 0;
+    while (pos <= content.len) {
+        const nl = std.mem.indexOfScalarPos(u8, content, pos, '\n') orelse content.len;
+        const this_line = content[pos..nl];
+        if (std.mem.eql(u8, this_line, line)) {
+            const end = if (nl < content.len) nl + 1 else nl;
+            return content[pos..end];
+        }
+        if (nl == content.len) return null;
+        pos = nl + 1;
+    }
+    return null;
+}
+
+fn currentUrl(server: *Server) ![]const u8 {
+    const frame = server.session.currentFrame() orelse return "(no page loaded)";
+    return frame.url;
+}
+
+fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void {
+    const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
+    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = true });
 }
 
 const router = @import("router.zig");
@@ -88,6 +424,75 @@ test "MCP - eval error reporting" {
         .isError = true,
         .content = &.{.{ .type = "text" }},
     } }, out.written());
+}
+
+test "MCP - findLineSpan: exact match returns line + trailing newline" {
+    const content = "GOTO https://x\nCLICK 'old'\nWAIT '.thanks'\n";
+    const span = findLineSpan(content, "CLICK 'old'").?;
+    try std.testing.expectEqualStrings("CLICK 'old'\n", span);
+}
+
+test "MCP - findLineSpan: no match returns null" {
+    const content = "GOTO https://x\nCLICK 'a'\n";
+    try std.testing.expect(findLineSpan(content, "CLICK 'b'") == null);
+}
+
+test "MCP - findLineSpan: last line without trailing newline" {
+    const content = "GOTO https://x\nCLICK 'last'";
+    const span = findLineSpan(content, "CLICK 'last'").?;
+    try std.testing.expectEqualStrings("CLICK 'last'", span);
+}
+
+test "MCP - record_start rejects unsafe path" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"record_start","arguments":{"path":"../escape.lp"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "must be relative") != null);
+}
+
+test "MCP - record_stop without active recording errors" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"record_stop","arguments":{}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "no recording is active") != null);
+}
+
+test "MCP - script_step rejects natural-language input" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"please summarize this page"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "require an LLM") != null);
+}
+
+test "MCP - script_step accepts comment line" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"# fetch the homepage"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") == null);
 }
 
 test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked" {

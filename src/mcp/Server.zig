@@ -10,6 +10,7 @@ const router = @import("router.zig");
 const tools = @import("tools.zig");
 const Transport = @import("Transport.zig");
 const CDPNode = @import("../cdp/Node.zig");
+const Recorder = @import("../agent/Recorder.zig");
 
 const Self = @This();
 
@@ -22,6 +23,17 @@ session: *lp.Session,
 node_registry: CDPNode.Registry,
 
 transport: Transport,
+
+/// Optional PandaScript recorder. Activated by the `record_start` tool;
+/// cleared by `record_stop`. State-mutating browser tool calls are
+/// serialized into the active recorder via `Command.fromToolCall`.
+recorder: ?Recorder = null,
+/// Caller-supplied path of the active recording, owned by the server so
+/// `record_stop` can return it to the MCP client.
+record_path: ?[]const u8 = null,
+/// Count of `record_*` calls during the current session, returned by
+/// `record_stop` so callers can confirm something was captured.
+record_lines: u32 = 0,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*Self {
     const notification = try lp.Notification.init(allocator);
@@ -57,6 +69,9 @@ pub fn deinit(self: *Self) void {
         lp.cookies.saveToFile(&self.session.cookie_jar, cookie_jar_path);
     }
 
+    if (self.recorder) |*r| r.deinit();
+    if (self.record_path) |p| self.allocator.free(p);
+
     self.node_registry.deinit();
     self.transport.deinit();
     self.browser.deinit();
@@ -74,6 +89,7 @@ pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
             .tools = .{},
         },
         .serverInfo = .{ .name = "lightpanda", .version = "0.1.0" },
+        .instructions = lp.script.mcp_driver_guidance,
     });
 }
 
