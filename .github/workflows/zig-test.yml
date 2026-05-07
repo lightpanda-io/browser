@@ -50,29 +50,11 @@ jobs:
 
       - name: Run zig fmt
         id: fmt
-        run: |
-          zig fmt --check ./*.zig ./**/*.zig 2> zig-fmt.err > zig-fmt.err2 || echo "Failed"
-          delimiter="$(openssl rand -hex 8)"
-          echo "zig_fmt_errs<<${delimiter}" >> "${GITHUB_OUTPUT}"
-
-          if [ -s zig-fmt.err ]; then
-            echo "// The following errors occurred:" >> "${GITHUB_OUTPUT}"
-            cat zig-fmt.err >> "${GITHUB_OUTPUT}"
-          fi
-
-          if [ -s zig-fmt.err2 ]; then
-            echo "// The following files were not formatted:" >> "${GITHUB_OUTPUT}"
-            cat zig-fmt.err2 >> "${GITHUB_OUTPUT}"
-          fi
-
-          echo "${delimiter}" >> "${GITHUB_OUTPUT}"
-
-      - name: Fail the job
-        if: steps.fmt.outputs.zig_fmt_errs != ''
-        run: exit 1
+        run: zig fmt --check ./
 
   zig-test-debug:
     name: zig test using v8 in debug mode
+    needs: zig-fmt
 
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -93,6 +75,7 @@ jobs:
 
   zig-test-release:
     name: zig test
+    needs: zig-fmt
 
     runs-on: ubuntu-latest
     timeout-minutes: 15
