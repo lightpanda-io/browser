@@ -132,6 +132,11 @@ pub const Resource = struct {
     mimeType: ?[]const u8 = null,
 };
 
+pub const CallParams = struct {
+    name: []const u8,
+    arguments: ?std.json.Value = null,
+};
+
 pub fn TextContent(comptime T: type) type {
     return struct {
         type: []const u8 = "text",

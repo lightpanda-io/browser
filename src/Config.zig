@@ -220,20 +220,24 @@ mode: Mode,
 exec_name: []const u8,
 http_headers: HttpHeaders,
 
+fn modeNeedsHttp(mode: Mode) bool {
+    return mode != .help and mode != .version;
+}
+
 pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
     var config = Config{
         .mode = mode,
         .exec_name = exec_name,
         .http_headers = undefined,
     };
-    if (mode != .help and mode != .version) {
+    if (modeNeedsHttp(mode)) {
         config.http_headers = try HttpHeaders.init(allocator, &config);
     }
     return config;
 }
 
 pub fn deinit(self: *const Config, allocator: Allocator) void {
-    if (self.mode != .help and self.mode != .version) {
+    if (modeNeedsHttp(self.mode)) {
         self.http_headers.deinit(allocator);
     }
 }

@@ -30,12 +30,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
     const id = req.id orelse return;
     const params = req.params orelse return server.transport.sendError(id, .InvalidParams, "Missing params");
 
-    const CallParams = struct {
-        name: []const u8,
-        arguments: ?std.json.Value = null,
-    };
-
-    const call_params = std.json.parseFromValueLeaky(CallParams, arena, params, .{ .ignore_unknown_fields = true }) catch {
+    const call_params = std.json.parseFromValueLeaky(protocol.CallParams, arena, params, .{ .ignore_unknown_fields = true }) catch {
         return server.transport.sendError(id, .InvalidParams, "Invalid params");
     };
 

@@ -882,17 +882,21 @@ fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]
     const Params = struct { name: []const u8 };
     const args = try parseArgs(Params, arena, arguments);
 
-    // Only the LP_ namespace is readable through this tool. Everything else
-    // (provider API keys, system env, third-party secrets) reports "not set"
-    // so the LLM can't probe for it. Same pattern as Kakoune's `kak_*`.
-    if (!std.ascii.startsWithIgnoreCase(args.name, "LP_")) {
-        return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{args.name}) catch ToolError.InternalError;
-    }
+    if (lookupLpEnv(args.name)) |value| return value;
+    return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{args.name}) catch ToolError.InternalError;
+}
 
-    const name_z = arena.dupeZ(u8, args.name) catch return ToolError.InternalError;
-    const value = std.posix.getenv(name_z) orelse
-        return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{args.name}) catch ToolError.InternalError;
-    return value;
+/// Resolve an LP_-prefixed environment variable, or `null` for any other name.
+/// Only the LP_ namespace is readable from the model; everything else
+/// (provider API keys, system env, third-party secrets) is hidden so the LLM
+/// can't probe for it. Same pattern as Kakoune's `kak_*`.
+fn lookupLpEnv(name: []const u8) ?[:0]const u8 {
+    if (!std.ascii.startsWithIgnoreCase(name, "LP_")) return null;
+    var name_buf: [256]u8 = undefined;
+    if (name.len >= name_buf.len) return null;
+    @memcpy(name_buf[0..name.len], name);
+    name_buf[name.len] = 0;
+    return std.posix.getenv(name_buf[0..name.len :0]);
 }
 
 fn execConsoleLogs(arena: std.mem.Allocator, session: *lp.Session) ToolError![]const u8 {
@@ -1003,16 +1007,7 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8
             continue;
         }
         const name = input[var_start..var_end];
-        // Same gate as `execGetEnv`: only `LP_*` is resolvable. A
-        // prompt-injected `fill('$ANTHROPIC_API_KEY')` would otherwise
-        // leak the resolved value into the page DOM.
-        var name_buf: [256]u8 = undefined;
-        const env_val: ?[:0]const u8 = if (std.ascii.startsWithIgnoreCase(name, "LP_") and name.len < name_buf.len) blk: {
-            @memcpy(name_buf[0..name.len], name);
-            name_buf[name.len] = 0;
-            break :blk std.posix.getenv(name_buf[0..name.len :0]);
-        } else null;
-        if (env_val) |val| {
+        if (lookupLpEnv(name)) |val| {
             result.appendSlice(arena, input[last_copy..dollar]) catch return input;
             result.appendSlice(arena, val) catch return input;
             last_copy = var_end;
