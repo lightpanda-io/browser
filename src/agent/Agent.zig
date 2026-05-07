@@ -500,78 +500,19 @@ fn runScript(self: *Self, path: []const u8) bool {
             },
             else => {
                 self.terminal.printInfoFmt("[{d}] {s}", .{ entry.line_num, entry.raw_line });
-
-                var cmd_arena: std.heap.ArenaAllocator = .init(self.allocator);
-                defer cmd_arena.deinit();
-
-                const pre_state: ?Verifier.PreState = if (self.self_heal)
-                    self.verifier.capturePreState(cmd_arena.allocator(), entry.command)
-                else
-                    null;
-
-                const result = self.cmd_executor.executeWithResult(cmd_arena.allocator(), entry.command);
-                self.cmd_executor.printResult(entry.command, result);
-
-                const verification = if (!result.failed and pre_state != null)
-                    self.verifier.verify(cmd_arena.allocator(), entry.command, pre_state.?)
-                else
-                    Verifier.VerifyResult{ .result = .passed };
-
-                const effective_failed = result.failed or verification.result == .failed;
-
-                if (effective_failed) {
-                    if (self.self_heal and self.ai_client != null) {
-                        // Retry with wait before LLM escalation for
-                        // verification failures (not hard failures).
-                        if (!result.failed and isRetryable(entry.command)) {
-                            var retried = false;
-                            for (0..3) |i| {
-                                std.Thread.sleep((500 + i * 250) * std.time.ns_per_ms);
-                                self.terminal.printInfo("Retrying command...");
-                                const retry_pre = self.verifier.capturePreState(cmd_arena.allocator(), entry.command);
-                                const retry_result = self.cmd_executor.executeWithResult(cmd_arena.allocator(), entry.command);
-                                if (!retry_result.failed) {
-                                    if (self.verifier.verify(cmd_arena.allocator(), entry.command, retry_pre).result != .failed) {
-                                        self.cmd_executor.printResult(entry.command, retry_result);
-                                        retried = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (retried) continue;
-                        }
-
-                        const msg = if (result.failed)
-                            "Command failed, attempting self-healing..."
-                        else
-                            "Command succeeded but verification failed, attempting self-healing...";
-                        self.terminal.printInfo(msg);
-
-                        if (self.attemptSelfHeal(sa, entry.raw_line, verification.reason, last_comment)) |healed_cmds| {
-                            const replacement = formatReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds) catch |err| {
-                                self.terminal.printErrorFmt(
-                                    "line {d}: failed to record heal: {s} (script left unchanged)",
-                                    .{ entry.line_num, @errorName(err) },
-                                );
-                                self.flushReplacements(path, content, replacements.items);
-                                return false;
-                            };
-                            replacements.append(sa, replacement) catch |err| {
-                                self.terminal.printErrorFmt(
-                                    "line {d}: out of memory recording heal: {s} (script left unchanged)",
-                                    .{ entry.line_num, @errorName(err) },
-                                );
-                                return false;
-                            };
-                            continue;
-                        }
-                    }
-                    self.terminal.printErrorFmt("line {d}: command failed: {s}", .{
-                        entry.line_num,
-                        entry.raw_line,
-                    });
-                    self.flushReplacements(path, content, replacements.items);
-                    return false;
+                switch (self.runActionEntry(sa, entry, last_comment)) {
+                    .ok => {},
+                    .healed => |r| replacements.append(sa, r) catch |err| {
+                        self.terminal.printErrorFmt(
+                            "line {d}: out of memory recording heal: {s} (script left unchanged)",
+                            .{ entry.line_num, @errorName(err) },
+                        );
+                        return false;
+                    },
+                    .fail => {
+                        self.flushReplacements(path, content, replacements.items);
+                        return false;
+                    },
                 }
             },
         }
@@ -580,6 +521,84 @@ fn runScript(self: *Self, path: []const u8) bool {
     self.flushReplacements(path, content, replacements.items);
     self.terminal.printInfo("Script completed.");
     return true;
+}
+
+const ActionOutcome = union(enum) {
+    /// Command succeeded (possibly after retry).
+    ok,
+    /// Command was rewritten by self-heal — caller appends to replacements.
+    healed: Replacement,
+    /// Unrecoverable failure; the per-line error has already been printed.
+    fail,
+};
+
+/// Execute one action-style script entry, including post-execution
+/// verification, transient-failure retry, and LLM self-heal escalation.
+fn runActionEntry(self: *Self, sa: std.mem.Allocator, entry: Command.ScriptIterator.Entry, last_comment: ?[]const u8) ActionOutcome {
+    var cmd_arena: std.heap.ArenaAllocator = .init(self.allocator);
+    defer cmd_arena.deinit();
+    const ca = cmd_arena.allocator();
+
+    const pre_state: ?Verifier.PreState = if (self.self_heal)
+        self.verifier.capturePreState(ca, entry.command)
+    else
+        null;
+
+    const result = self.cmd_executor.executeWithResult(ca, entry.command);
+    self.cmd_executor.printResult(entry.command, result);
+
+    const verification = if (!result.failed and pre_state != null)
+        self.verifier.verify(ca, entry.command, pre_state.?)
+    else
+        Verifier.VerifyResult{ .result = .passed };
+
+    if (!result.failed and verification.result != .failed) return .ok;
+
+    if (self.self_heal and self.ai_client != null) {
+        // Verification-only failures often resolve with a brief wait
+        // (animations, lazy-load); skip the LLM round-trip when they do.
+        if (!result.failed and isRetryable(entry.command) and self.retryCommand(ca, entry.command)) {
+            return .ok;
+        }
+
+        const msg = if (result.failed)
+            "Command failed, attempting self-healing..."
+        else
+            "Command succeeded but verification failed, attempting self-healing...";
+        self.terminal.printInfo(msg);
+
+        if (self.attemptSelfHeal(sa, entry.raw_line, verification.reason, last_comment)) |healed_cmds| {
+            const replacement = formatReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds) catch |err| {
+                self.terminal.printErrorFmt(
+                    "line {d}: failed to record heal: {s} (script left unchanged)",
+                    .{ entry.line_num, @errorName(err) },
+                );
+                return .fail;
+            };
+            return .{ .healed = replacement };
+        }
+    }
+    self.terminal.printErrorFmt("line {d}: command failed: {s}", .{
+        entry.line_num,
+        entry.raw_line,
+    });
+    return .fail;
+}
+
+/// Re-run a verification-failed command with bounded backoff. Returns true
+/// once both execution and verification pass, false after 3 attempts.
+fn retryCommand(self: *Self, ca: std.mem.Allocator, cmd: Command.Command) bool {
+    for (0..3) |i| {
+        std.Thread.sleep((500 + i * 250) * std.time.ns_per_ms);
+        self.terminal.printInfo("Retrying command...");
+        const retry_pre = self.verifier.capturePreState(ca, cmd);
+        const retry_result = self.cmd_executor.executeWithResult(ca, cmd);
+        if (retry_result.failed) continue;
+        if (self.verifier.verify(ca, cmd, retry_pre).result == .failed) continue;
+        self.cmd_executor.printResult(cmd, retry_result);
+        return true;
+    }
+    return false;
 }
 
 fn formatReplacement(arena: std.mem.Allocator, original_span: []const u8, raw_line: []const u8, cmds: []const Command.Command) !Replacement {

@@ -24,18 +24,17 @@ fn atLeast(level: Verbosity, min: Verbosity) bool {
 
 history_path: ?[:0]const u8,
 verbosity: Verbosity,
-/// True when the user can type at us. Tool results are always shown
-/// here, regardless of verbosity, because in the REPL every tool call
-/// is something the user just asked for (a slash command, or natural
-/// language they sent to the LLM) — suppressing the body would leave
-/// them blind. The `--verbosity` dial only matters in non-interactive
-/// runs (one-shot `--task`, scripts, `--mcp`), where LLM tool traces
-/// are noise.
-is_repl: bool,
-/// Scratch arena for the REPL pretty-printer's `std.json.Value` tree.
-/// Reset on every `printToolResult` call so memory is bounded by the
-/// largest single tool output, not the session length — important when
-/// the LLM loop fires many tool calls per turn.
+/// Non-null when the user can type at us. Tool calls and results are
+/// always shown in REPL mode regardless of verbosity, because every
+/// call is something the user just asked for (a slash command, or
+/// natural language they sent to the LLM) — suppressing the body
+/// would leave them blind. The `--verbosity` dial only matters in
+/// non-interactive runs (one-shot `--task`, scripts, `--mcp`), where
+/// LLM tool traces are noise.
+///
+/// Doubles as the scratch arena for the pretty-printer's
+/// `std.json.Value` tree. Reset on every `printToolResult` call so
+/// memory is bounded by the largest single tool output.
 repl_arena: ?std.heap.ArenaAllocator,
 
 const CommandInfo = struct { name: [:0]const u8, hint: [:0]const u8 };
@@ -97,9 +96,12 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
     return .{
         .history_path = history_path,
         .verbosity = verbosity,
-        .is_repl = is_repl,
         .repl_arena = if (is_repl) std.heap.ArenaAllocator.init(allocator) else null,
     };
+}
+
+fn isRepl(self: *const Self) bool {
+    return self.repl_arena != null;
 }
 
 pub fn deinit(self: *Self) void {
@@ -419,7 +421,7 @@ pub fn printActionResult(self: *Self, text: []const u8) void {
 }
 
 pub fn printToolCall(self: *Self, name: []const u8, args: []const u8) void {
-    if (!self.is_repl and !atLeast(self.verbosity, .normal)) return;
+    if (!self.isRepl() and !atLeast(self.verbosity, .normal)) return;
     std.debug.print("\n{s}{s}[tool: {s}]{s} {s}\n", .{ ansi_dim, ansi_cyan, name, ansi_reset, args });
 }
 
@@ -433,7 +435,7 @@ pub fn printToolCall(self: *Self, name: []const u8, args: []const u8) void {
 const max_result_display_len = 2000;
 
 pub fn printToolResult(self: *Self, name: []const u8, result: []const u8) void {
-    if (!self.is_repl and !atLeast(self.verbosity, .verbose)) return;
+    if (!self.isRepl() and !atLeast(self.verbosity, .verbose)) return;
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
         printRepl(a.allocator(), name, result);
