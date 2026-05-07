@@ -28,11 +28,6 @@ pub const SchemaInfo = struct {
     hints: []const HintSlot,
 };
 
-pub const Parsed = struct {
-    schema: *const SchemaInfo,
-    args_json: []const u8,
-};
-
 pub const ParseError = error{
     MissingName,
     UnknownTool,
@@ -150,14 +145,6 @@ pub fn splitNameRest(input: []const u8) ?Split {
         .name = trimmed[0..name_end],
         .rest = std.mem.trim(u8, trimmed[name_end..], &std.ascii.whitespace),
     };
-}
-
-/// Parse a slash command body (without the leading `/`).
-/// `arena` is used for the resulting JSON string and any temporary storage.
-pub fn parse(arena: std.mem.Allocator, schemas: []const SchemaInfo, input: []const u8) ParseError!Parsed {
-    const split = splitNameRest(input) orelse return error.MissingName;
-    const schema = findSchema(schemas, split.name) orelse return error.UnknownTool;
-    return .{ .schema = schema, .args_json = try parseArgs(arena, schema, split.rest) };
 }
 
 /// Parse the args portion of a slash command for an already-resolved schema.
@@ -315,7 +302,12 @@ fn lookupFieldType(schema: *const SchemaInfo, key: []const u8) FieldType {
 
 const testing = std.testing;
 
-fn parseWithCache(arena: std.mem.Allocator, input: []const u8) !Parsed {
+const ParsedTest = struct {
+    schema: *const SchemaInfo,
+    args_json: []const u8,
+};
+
+fn parseWithCache(arena: std.mem.Allocator, input: []const u8) !ParsedTest {
     const tools = try arena.alloc(zenai.provider.Tool, browser_tools.tool_defs.len);
     for (browser_tools.tool_defs, 0..) |td, i| {
         tools[i] = .{
@@ -325,7 +317,9 @@ fn parseWithCache(arena: std.mem.Allocator, input: []const u8) !Parsed {
         };
     }
     const schemas = try buildSchemas(arena, tools);
-    return parse(arena, schemas, input);
+    const split = splitNameRest(input) orelse return error.MissingName;
+    const schema = findSchema(schemas, split.name) orelse return error.UnknownTool;
+    return .{ .schema = schema, .args_json = try parseArgs(arena, schema, split.rest) };
 }
 
 fn expectParse(input: []const u8, expected_tool: []const u8, expected_json: []const u8) !void {
