@@ -173,7 +173,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .tool_executor = tool_executor,
         .terminal = .init(allocator, history_path, opts.verbosity, will_repl),
         .cmd_executor = undefined,
-        .verifier = .{ .tool_executor = tool_executor },
+        .verifier = .{ .session = tool_executor.session, .node_registry = &tool_executor.node_registry },
         .recorder = .init(allocator, recorder_path),
         .messages = .empty,
         .message_arena = .init(allocator),

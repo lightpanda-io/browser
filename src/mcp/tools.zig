@@ -310,6 +310,17 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendErrorContent(server, id, msg);
     };
 
+    // Post-execution verification for TYPE / CHECK / SELECT: confirm the
+    // DOM actually reflects the intent. Failure here drives the heal
+    // roundtrip the same way an exec failure does.
+    const verification = server.verifier.verify(arena, cmd);
+    if (verification.result == .failed) {
+        const url = currentUrl(server) catch "";
+        const reason = verification.reason orelse "verification failed";
+        const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tc.name, args.line, url, reason }) catch reason;
+        return sendErrorContent(server, id, msg);
+    }
+
     const content = [_]protocol.TextContent([]const u8){.{ .text = result }};
     try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
@@ -480,6 +491,22 @@ test "MCP - script_step rejects natural-language input" {
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expect(std.mem.indexOf(u8, out.written(), "require an LLM") != null);
+}
+
+test "MCP - script_step runs TYPE and verifier passes" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    // TYPE on the input that exists on the test page; verifier checks
+    // the field's `value` property after execution.
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"TYPE '#inp' 'hello world'"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "verification failed") == null);
 }
 
 test "MCP - script_step accepts comment line" {

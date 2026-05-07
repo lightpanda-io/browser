@@ -11,6 +11,7 @@ const tools = @import("tools.zig");
 const Transport = @import("Transport.zig");
 const CDPNode = @import("../cdp/Node.zig");
 const Recorder = @import("../agent/Recorder.zig");
+const Verifier = @import("../agent/Verifier.zig");
 
 const Self = @This();
 
@@ -21,6 +22,7 @@ notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
 node_registry: CDPNode.Registry,
+verifier: Verifier,
 
 transport: Transport,
 
@@ -50,12 +52,14 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
         .notification = notification,
         .session = undefined,
         .node_registry = CDPNode.Registry.init(allocator),
+        .verifier = undefined,
     };
 
     try self.browser.init(app, .{}, null);
     errdefer self.browser.deinit();
 
     self.session = try self.browser.newSession(self.notification);
+    self.verifier = .{ .session = self.session, .node_registry = &self.node_registry };
 
     if (app.config.cookieFile()) |cookie_path| {
         lp.cookies.loadFromFile(self.session, cookie_path);

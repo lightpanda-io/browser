@@ -1,10 +1,13 @@
 const std = @import("std");
+const lp = @import("lightpanda");
+const browser_tools = lp.tools;
 const Command = @import("Command.zig");
-const ToolExecutor = @import("ToolExecutor.zig");
+const CDPNode = @import("../cdp/Node.zig");
 
 const Self = @This();
 
-tool_executor: *ToolExecutor,
+session: *lp.Session,
+node_registry: *CDPNode.Registry,
 
 pub const Result = enum {
     passed,
@@ -69,7 +72,7 @@ fn queryElementProperty(self: *Self, arena: std.mem.Allocator, selector: []const
         "(function(){{ var el = document.querySelector({s}); return el ? {s} : null; }})()",
         .{ Command.stringifyJson(arena, selector), js_property },
     ) catch return null;
-    const result = self.tool_executor.callEval(arena, script);
+    const result = browser_tools.evalScript(arena, self.session, self.node_registry, script);
     if (result.is_error) return null;
     return result.text;
 }
