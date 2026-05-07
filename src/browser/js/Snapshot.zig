@@ -633,6 +633,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
                     const cb = v8.v8__FunctionTemplate__New__Config(isolate, &.{
                         .callback = setter,
                         .signature = getter_signature,
+                        .length = 1,
                     }).?;
                     const setter_name_str = "set " ++ name;
                     const setter_name_v8 = v8.v8__String__NewFromUtf8(isolate, setter_name_str.ptr, v8.kNormal, @intCast(setter_name_str.len));

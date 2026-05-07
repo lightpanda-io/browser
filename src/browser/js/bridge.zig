@@ -153,7 +153,9 @@ pub const Function = struct {
             .cache = opts.cache,
             .static = opts.static,
             .wpt_only = opts.wpt_only,
-            .arity = getArity(@TypeOf(func), 1),
+            // Non-static methods receive `self` as their first param; static
+            // methods don't, so don't skip the first param for them.
+            .arity = getArity(@TypeOf(func), if (opts.static) 0 else 1),
             .func = if (opts.noop) noopFunction else struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
                     Caller.Function.call(T, handle.?, func, opts);
