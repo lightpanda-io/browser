@@ -456,7 +456,15 @@ fn printRepl(arena: std.mem.Allocator, name: []const u8, result: []const u8) voi
     var fw = std.fs.File.stderr().writer(&buf);
     const w = &fw.interface;
 
-    const parsed: ?std.json.Value = std.json.parseFromSliceLeaky(std.json.Value, arena, result, .{}) catch null;
+    // Most tool results are plain text (markdown, URLs, action confirmations).
+    // Skip the JSON parse + Value tree allocation unless the payload could
+    // plausibly be JSON — `result` may be up to 1 MiB.
+    const trimmed = std.mem.trimLeft(u8, result, " \t\r\n");
+    const looks_json = trimmed.len > 0 and (trimmed[0] == '{' or trimmed[0] == '[');
+    const parsed: ?std.json.Value = if (looks_json)
+        std.json.parseFromSliceLeaky(std.json.Value, arena, result, .{}) catch null
+    else
+        null;
     const sep: []const u8 = if (parsed != null) "\n" else " ";
     w.print("{s}{s}[result: {s}]{s}{s}", .{ ansi_dim, ansi_green, name, ansi_reset, sep }) catch return;
     if (parsed) |v| {

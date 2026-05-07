@@ -993,13 +993,9 @@ fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Va
 pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8 {
     // No `$LP_` prefix → no substitution possible, skip the rebuild entirely.
     // Pages routinely contain `$5.99`-style content where `$` is incidental.
-    var scan: usize = 0;
-    const has_lp_ref = while (std.mem.indexOfScalarPos(u8, input, scan, '$')) |dollar| {
-        const name_start = dollar + 1;
-        if (name_start + 3 <= input.len and std.ascii.startsWithIgnoreCase(input[name_start..], "LP_")) break true;
-        scan = name_start;
-    } else false;
-    if (!has_lp_ref) return input;
+    // Lowercase `$lp_…` falls through here too — `std.posix.getenv` is
+    // case-sensitive on Linux, so it would never resolve anyway.
+    if (std.mem.indexOf(u8, input, "$LP_") == null) return input;
 
     var result: std.ArrayList(u8) = .empty;
     var i: usize = 0;

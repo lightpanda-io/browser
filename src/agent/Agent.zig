@@ -524,11 +524,9 @@ fn runScript(self: *Self, path: []const u8) bool {
 }
 
 const ActionOutcome = union(enum) {
-    /// Command succeeded (possibly after retry).
     ok,
-    /// Command was rewritten by self-heal — caller appends to replacements.
     healed: Replacement,
-    /// Unrecoverable failure; the per-line error has already been printed.
+    /// The per-line error has already been printed; caller must not re-report.
     fail,
 };
 
@@ -707,9 +705,10 @@ fn ensureSystemPrompt(self: *Self) !void {
     }
 }
 
-// Old turns are dropped (system prompt always kept) and survivors are
-// deep-copied into a fresh arena so the previous arena can be freed —
-// otherwise dropped messages still pin their backing strings.
+// Once messages exceed `prune_high`, drop older turns until only the last
+// `prune_keep` survive (system prompt always kept). Survivors are deep-copied
+// into a fresh arena so the previous arena can be freed — otherwise dropped
+// messages still pin their backing strings.
 const prune_high = 30;
 const prune_keep = 20;
 
