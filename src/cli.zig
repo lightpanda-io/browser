@@ -552,8 +552,10 @@ pub fn Builder(comptime commands: anytype) type {
                     // We allow both `--my-option` and `--my_option` variants;
                     // assuming given `option` struct prefer snake_case for `name`.
                     // Match an option.
+                    const matches_short = comptime @hasField(@TypeOf(option), "short");
                     if (std.mem.eql(u8, option_name, "--" ++ option.name) or
-                        std.mem.eql(u8, option_name, "--" ++ comptime toKebabCase(option.name)))
+                        std.mem.eql(u8, option_name, "--" ++ comptime toKebabCase(option.name)) or
+                        (matches_short and std.mem.eql(u8, option_name, "-" ++ [_]u8{option.short})))
                     {
                         try parseValue(allocator, args, &@field(c, option.name), option);
                         continue :iter_args;

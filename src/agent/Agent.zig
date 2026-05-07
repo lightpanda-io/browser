@@ -1059,7 +1059,11 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.printToolCall(tool_name, arguments);
     if (self.tool_executor.call(allocator, tool_name, arguments)) |output| {
         const capped = capToolOutput(allocator, output);
-        self.terminal.printToolResult(tool_name, capped);
+        // Only the user-explicit path (slash commands) should surface tool
+        // result bodies in the REPL. Agent-driven calls show only the call
+        // line; bodies are hidden unless `--verbosity verbose` (also needed
+        // by the benchmark harness which parses both lines).
+        if (self.terminal.verbosity == .verbose) self.terminal.printToolResult(tool_name, capped);
         return .{ .content = capped };
     } else |err| {
         const msg = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
