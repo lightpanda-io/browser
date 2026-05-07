@@ -23,6 +23,10 @@ pub const ExecResult = struct {
     failed: bool,
 };
 
+/// Caller contract: `cmd` must not be `.natural_language`, `.comment`,
+/// `.login`, or `.accept_cookies` — those are filtered upstream (see
+/// `Agent.runRepl`) because they have no tool mapping and would hit the
+/// `unreachable` arm below.
 pub fn executeWithResult(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) ExecResult {
     if (cmd == .extract) return self.execExtract(arena, cmd.extract);
 
@@ -64,7 +68,7 @@ fn execExtract(self: *Self, arena: std.mem.Allocator, raw_selector: []const u8) 
     const script = std.fmt.allocPrint(
         arena,
         "JSON.stringify(Array.from(document.querySelectorAll({s})).map(el => el.textContent.trim()))",
-        .{Command.buildJson(arena, selector)},
+        .{Command.stringifyJson(arena, selector)},
     ) catch return .{ .output = "failed to build extract script", .failed = true };
 
     const result = self.tool_executor.callEval(arena, script);

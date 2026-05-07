@@ -967,23 +967,22 @@ fn resolveBySelector(session: *lp.Session, selector: []const u8) ToolError!NodeA
 
 const ParseArgsError = error{ OutOfMemory, InvalidParams };
 
-/// For tools where every field is optional. Missing args → default `T`;
-/// wrong-typed args still error (don't silently default).
-fn parseArgsOrDefault(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) ParseArgsError!T {
-    const args_raw = arguments orelse return .{};
-    return std.json.parseFromValueLeaky(T, arena, args_raw, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+fn parseValue(comptime T: type, arena: std.mem.Allocator, value: std.json.Value) ParseArgsError!T {
+    return std.json.parseFromValueLeaky(T, arena, value, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         else => error.InvalidParams,
     };
 }
 
+/// For tools where every field is optional. Missing args → default `T`;
+/// wrong-typed args still error (don't silently default).
+fn parseArgsOrDefault(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) ParseArgsError!T {
+    return parseValue(T, arena, arguments orelse return .{});
+}
+
 /// Required-args parse: missing or malformed both surface as `InvalidParams`.
 fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) ParseArgsError!T {
-    const args_raw = arguments orelse return error.InvalidParams;
-    return std.json.parseFromValueLeaky(T, arena, args_raw, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => error.InvalidParams,
-    };
+    return parseValue(T, arena, arguments orelse return error.InvalidParams);
 }
 
 pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8 {
@@ -991,10 +990,10 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8
     // Pages routinely contain `$5.99`-style content where `$` is incidental.
     // Lowercase `$lp_…` falls through here too — `std.posix.getenv` is
     // case-sensitive on Linux, so it would never resolve anyway.
-    if (std.mem.indexOf(u8, input, "$LP_") == null) return input;
+    const first_lp = std.mem.indexOf(u8, input, "$LP_") orelse return input;
 
     var result: std.ArrayList(u8) = .empty;
-    var i: usize = 0;
+    var i: usize = first_lp;
     var last_copy: usize = 0;
     while (std.mem.indexOfScalarPos(u8, input, i, '$')) |dollar| {
         const var_start = dollar + 1;

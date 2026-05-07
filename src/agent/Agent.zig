@@ -923,15 +923,13 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
     if (self.recorder.file != null) {
         var recorded_any = false;
         for (result.tool_calls_made) |tc| {
-            if (!tc.is_error) {
-                if (Command.fromToolCall(ma, tc.name, tc.arguments)) |cmd| {
-                    if (!recorded_any) {
-                        if (record_comment) |c| self.recorder.recordComment(c);
-                        recorded_any = true;
-                    }
-                    self.recorder.record(cmd);
-                }
+            if (tc.is_error) continue;
+            const cmd = Command.fromToolCall(ma, tc.name, tc.arguments) orelse continue;
+            if (!recorded_any) {
+                if (record_comment) |c| self.recorder.recordComment(c);
+                recorded_any = true;
             }
+            self.recorder.record(cmd);
         }
     }
 

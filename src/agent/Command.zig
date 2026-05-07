@@ -421,26 +421,26 @@ pub fn noSubstitute(_: std.mem.Allocator, input: []const u8) []const u8 {
 pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: SubstituteFn) ?ToolCall {
     const Action = lp.tools.Action;
     return switch (cmd) {
-        .goto => |url| .{ .name = @tagName(Action.goto), .args_json = buildJson(arena, .{ .url = substitute(arena, url) }) },
-        .click => |sel| .{ .name = @tagName(Action.click), .args_json = buildJson(arena, .{ .selector = substitute(arena, sel) }) },
-        .type_cmd => |args| .{ .name = @tagName(Action.fill), .args_json = buildJson(arena, .{
+        .goto => |url| .{ .name = @tagName(Action.goto), .args_json = stringifyJson(arena, .{ .url = substitute(arena, url) }) },
+        .click => |sel| .{ .name = @tagName(Action.click), .args_json = stringifyJson(arena, .{ .selector = substitute(arena, sel) }) },
+        .type_cmd => |args| .{ .name = @tagName(Action.fill), .args_json = stringifyJson(arena, .{
             .selector = substitute(arena, args.selector),
             .value = args.value,
         }) },
-        .wait => |sel| .{ .name = @tagName(Action.waitForSelector), .args_json = buildJson(arena, .{ .selector = sel }) },
-        .scroll => |args| .{ .name = @tagName(Action.scroll), .args_json = buildJson(arena, .{ .x = args.x, .y = args.y }) },
-        .hover => |sel| .{ .name = @tagName(Action.hover), .args_json = buildJson(arena, .{ .selector = substitute(arena, sel) }) },
-        .select => |args| .{ .name = @tagName(Action.selectOption), .args_json = buildJson(arena, .{
+        .wait => |sel| .{ .name = @tagName(Action.waitForSelector), .args_json = stringifyJson(arena, .{ .selector = sel }) },
+        .scroll => |args| .{ .name = @tagName(Action.scroll), .args_json = stringifyJson(arena, .{ .x = args.x, .y = args.y }) },
+        .hover => |sel| .{ .name = @tagName(Action.hover), .args_json = stringifyJson(arena, .{ .selector = substitute(arena, sel) }) },
+        .select => |args| .{ .name = @tagName(Action.selectOption), .args_json = stringifyJson(arena, .{
             .selector = substitute(arena, args.selector),
             .value = substitute(arena, args.value),
         }) },
-        .check => |args| .{ .name = @tagName(Action.setChecked), .args_json = buildJson(arena, .{
+        .check => |args| .{ .name = @tagName(Action.setChecked), .args_json = stringifyJson(arena, .{
             .selector = substitute(arena, args.selector),
             .checked = args.checked,
         }) },
         .tree => .{ .name = @tagName(Action.tree), .args_json = "" },
         .markdown => .{ .name = @tagName(Action.markdown), .args_json = "" },
-        .eval_js => |script| .{ .name = @tagName(Action.eval), .args_json = buildJson(arena, .{ .script = script }) },
+        .eval_js => |script| .{ .name = @tagName(Action.eval), .args_json = stringifyJson(arena, .{ .script = script }) },
         .extract, .natural_language, .comment, .login, .accept_cookies => null,
     };
 }
@@ -501,7 +501,7 @@ fn getJsonString(o: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     };
 }
 
-pub fn buildJson(arena: std.mem.Allocator, value: anytype) []const u8 {
+pub fn stringifyJson(arena: std.mem.Allocator, value: anytype) []const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     std.json.Stringify.value(value, .{}, &aw.writer) catch return "{}";
     return aw.written();

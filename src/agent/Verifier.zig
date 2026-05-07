@@ -67,7 +67,7 @@ fn queryElementProperty(self: *Self, arena: std.mem.Allocator, selector: []const
     const script = std.fmt.allocPrint(
         arena,
         "(function(){{ var el = document.querySelector({s}); return el ? {s} : null; }})()",
-        .{ Command.buildJson(arena, selector), js_property },
+        .{ Command.stringifyJson(arena, selector), js_property },
     ) catch return null;
     const result = self.tool_executor.callEval(arena, script);
     if (result.is_error) return null;
