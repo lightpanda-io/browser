@@ -173,16 +173,17 @@ A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpand
 
 `lightpanda agent` runs an interactive agent on top of the same browser. It
 supports an LLM-driven REPL (Anthropic, OpenAI, Gemini, Ollama), a one-shot
-`--task` mode that prints the answer to stdout, an `--mcp` mode that exposes
-the agent itself as an MCP `task` tool so other agents can delegate sub-tasks
-without polluting their context, and a small scripting language (PandaScript)
-for recording and deterministically replaying browser sessions, with optional
-`--self-heal` recovery from selector drift.
+`--task` mode that prints the answer to stdout, and a small scripting
+language (PandaScript) for recording and deterministically replaying browser
+sessions, with optional `--self-heal` recovery from selector drift.
+
+To drive Lightpanda from another LLM agent (Claude Code, an MCP-aware client,
+etc.), use `lightpanda mcp` above — it exposes the same browser tools without
+needing an LLM (or API key) inside Lightpanda.
 
 ```console
 ./lightpanda agent --provider anthropic
 ./lightpanda agent --provider gemini --task "top story on news.ycombinator.com?"
-./lightpanda agent --mcp --provider anthropic
 ./lightpanda agent session.lp
 ```
 

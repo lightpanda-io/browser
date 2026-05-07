@@ -148,24 +148,14 @@ slash_schemas: []const SlashCommand.SchemaInfo,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
     const is_one_shot = opts.task != null;
-    const is_mcp = opts.mcp;
-    const will_repl = !is_one_shot and !is_mcp and (opts.interactive or opts.script_file == null);
-    const needs_llm = will_repl or is_one_shot or is_mcp;
-
-    if (is_mcp and (is_one_shot or opts.interactive or opts.script_file != null)) {
-        log.fatal(.app, "incompatible flags", .{
-            .hint = "--mcp cannot be combined with --task, --interactive, or a script file",
-        });
-        return error.IncompatibleFlags;
-    }
+    const will_repl = !is_one_shot and (opts.interactive or opts.script_file == null);
+    const needs_llm = will_repl or is_one_shot;
 
     if (opts.provider == null) {
         const required_by: ?[]const u8 = if (opts.self_heal)
             "--self-heal requires --provider; drop one or add the other"
         else if (is_one_shot)
             "--task requires --provider"
-        else if (is_mcp)
-            "--mcp requires --provider"
         else
             null;
         if (required_by) |hint| {
@@ -845,30 +835,6 @@ fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []cons
         self.messages.shrinkRetainingCapacity(msg_baseline);
     }
     return null;
-}
-
-/// Tear down the browser session and start fresh. Used by the MCP `task` tool
-/// when the caller asks for an isolated run.
-pub fn resetSession(self: *Self) !void {
-    return self.tool_executor.resetSession();
-}
-
-/// MCP entry point: run a single user task with a clean LLM context. Browser
-/// state (URL, cookies, etc.) is preserved by default; pass a fresh session
-/// upstream if isolation is needed. Returns the assistant text on success
-/// (memory tied to `message_arena`, valid until the next call), or `null`
-/// if the model emitted nothing.
-pub fn runOneTask(
-    self: *Self,
-    task: []const u8,
-    attachments: ?[]const []const u8,
-) !?[]const u8 {
-    self.messages.clearRetainingCapacity();
-    _ = self.message_arena.reset(.retain_capacity);
-    // Each task gets a fresh LLM context; drop registry entries that point
-    // into the old session so a stray backendNodeId can't survive a navigation.
-    self.tool_executor.resetNodeRegistry();
-    return self.processUserMessage(task, null, attachments);
 }
 
 /// Returned text lives in `message_arena`, so it's only valid until the

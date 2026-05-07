@@ -5,13 +5,12 @@ const protocol = @import("protocol.zig");
 
 const log = lp.log;
 
-/// Generic over the server type so both `mcp/Server.zig` (browser tools) and
-/// `agent/McpServer.zig` (the `task` tool) can reuse this loop. The server
-/// must expose: `allocator`, a `transport: Transport` field, and the
-/// per-method `handleInitialize`, `handleToolList`, `handleToolCall`
-/// methods. `handleResourceList` / `handleResourceRead` are optional —
-/// servers that don't expose resources can omit them and the router
-/// returns `MethodNotFound` automatically.
+/// Generic over the server type. The server must expose: `allocator`, a
+/// `transport: Transport` field, and the per-method `handleInitialize`,
+/// `handleToolList`, `handleToolCall` methods. `handleResourceList` /
+/// `handleResourceRead` are optional — servers that don't expose
+/// resources can omit them and the router returns `MethodNotFound`
+/// automatically.
 pub fn processRequests(server: anytype, reader: *std.io.Reader) !void {
     var arena: std.heap.ArenaAllocator = .init(server.allocator);
     defer arena.deinit();

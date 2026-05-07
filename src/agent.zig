@@ -6,7 +6,6 @@ pub const CommandExecutor = @import("agent/CommandExecutor.zig");
 pub const Recorder = @import("agent/Recorder.zig");
 pub const Verifier = @import("agent/Verifier.zig");
 pub const SlashCommand = @import("agent/SlashCommand.zig");
-pub const McpServer = @import("agent/McpServer.zig");
 
 test {
     _ = Agent;
@@ -15,5 +14,4 @@ test {
     _ = Recorder;
     _ = Verifier;
     _ = SlashCommand;
-    _ = McpServer;
 }

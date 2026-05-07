@@ -1,6 +1,5 @@
-//! Stdio JSON-RPC writer shared between the browser-tools MCP server
-//! (`mcp/Server.zig`) and the agent-tool MCP server
-//! (`agent/McpServer.zig`).
+//! Stdio JSON-RPC writer for the browser-tools MCP server
+//! (`mcp/Server.zig`).
 
 const std = @import("std");
 const protocol = @import("protocol.zig");

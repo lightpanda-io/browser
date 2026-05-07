@@ -206,7 +206,6 @@ const Commands = cli.Builder(.{
             .{ .name = "interactive", .short = 'i', .type = bool },
             .{ .name = "task", .type = ?[]const u8 },
             .{ .name = "task_attachments", .type = []const u8, .multiple = true },
-            .{ .name = "mcp", .type = bool },
             .{ .name = "verbosity", .type = AgentVerbosity, .default = AgentVerbosity.low },
         },
         .shared_options = CommonOptions,
@@ -794,12 +793,6 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                into the REPL with the browser state preserved. When
         \\                a positional script is present, any new commands
         \\                entered in the REPL are appended to that file.
-        \\
-        \\--mcp           Run as an MCP server over stdio that exposes a single
-        \\                `task` tool. Each call delegates a high-level task to
-        \\                the agent and returns only the final answer to the
-        \\                MCP client. Requires --provider; cannot be combined
-        \\                with --task, -i, or a script file.
         \\
         \\--verbosity     Stderr chatter level: low, medium, high.
         \\                Default: low. In a TTY REPL, low shows a single-

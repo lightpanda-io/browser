@@ -6,13 +6,13 @@ It can act as:
 - an **LLM agent** that drives the browser with tool calls (`--provider`),
 - a **scripted runner** that replays a `.lp` script deterministically,
 - a **dumb REPL** for hand-driven PandaScript with no LLM at all,
-- a **one-shot task runner** that prints a single answer to stdout (`--task`),
-- an **MCP server** that exposes the agent itself as a single `task` tool
-  for other agents to delegate to (`--mcp`).
+- a **one-shot task runner** that prints a single answer to stdout (`--task`).
 
-All five modes share the same browser tools (`goto`, `click`, `fill`, `tree`,
+All four modes share the same browser tools (`goto`, `click`, `fill`, `tree`,
 `markdown`, `search`, ...). The same set is exposed over MCP via `lightpanda
-mcp`, so an agent script and an MCP client see the same surface.
+mcp`, so an agent script and an MCP client see the same surface — that is
+also the way to drive Lightpanda from an external LLM agent (Claude Code,
+etc.) without giving Lightpanda its own API key.
 
 ## Quick start
 
@@ -31,9 +31,6 @@ mcp`, so an agent script and an MCP client see the same surface.
 
 # One-shot: ask a question, capture the answer on stdout
 ./lightpanda agent --provider gemini --task "what is on the front page of hn?"
-
-# MCP server: expose a single `task` tool for other agents to delegate to
-./lightpanda agent --mcp --provider anthropic
 ```
 
 ## Providers and API keys
@@ -151,53 +148,28 @@ from selector drift, not to redesign the script.
 exits. Combine with `--task-attachment <path>` (repeatable) to feed local
 files to providers that accept attachments.
 
-## MCP server mode (`--mcp`)
+## Driving Lightpanda from an external LLM agent
 
-`lightpanda agent --mcp --provider <p>` runs the agent as an MCP server
-over stdio. It exposes a single tool, `task`, so a calling agent can
-delegate a high-level browsing task and receive only the final answer
-without the intermediate browser tool calls (tree dumps, clicks, scrolls)
-filling its own context.
-
-```console
-./lightpanda agent --mcp --provider anthropic
-```
-
-MCP configuration:
+When the calling agent already has its own LLM (e.g. Claude Code), use
+`lightpanda mcp` rather than `lightpanda agent`. The MCP server exposes
+the same browser tools (`goto`, `click`, `fill`, ...) listed below, so
+the external agent does the planning while Lightpanda only drives the
+browser. No `--provider` or API key is required on the Lightpanda side.
 
 ```json
 {
   "mcpServers": {
-    "lightpanda-agent": {
+    "lightpanda": {
       "command": "/path/to/lightpanda",
-      "args": ["agent", "--mcp", "--provider", "anthropic"]
+      "args": ["mcp"]
     }
   }
 }
 ```
 
-The `task` tool accepts:
-
-| Field         | Type             | Notes                                                                  |
-|---------------|------------------|------------------------------------------------------------------------|
-| `task`        | string, required | Natural-language instruction for the agent.                            |
-| `attachments` | string[]         | Optional local file paths (image / PDF / text) for providers that accept attachments. Paths must be relative to lightpanda's working directory and must not contain `..` segments; absolute paths and traversal are rejected. |
-| `fresh`       | boolean          | If true, start the task from a fresh browser session (no cookies, no current page). |
-
-Each call resets the agent's LLM conversation, so tasks are independent
-from each other at the model level. The browser session, by contrast,
-persists across calls by default — set `fresh: true` to reset it.
-
-This mode is distinct from `lightpanda mcp`, which exposes the raw
-browser tools (`goto`, `click`, `fill`, ...) and does not depend on an
-LLM. Pick `lightpanda mcp` when the calling agent wants to drive the
-browser itself, and `lightpanda agent --mcp` when it wants to hand off
-the whole sub-task. `--mcp` cannot be combined with `--task`, `-i`, or a
-script file.
-
-Limitations: the JSON-RPC loop is single-threaded, so a long-running
-task call blocks subsequent calls until it finishes. There is no
-cancellation from the client side yet.
+For sub-task delegation in the other direction — calling Lightpanda's
+own LLM-driven agent in a one-shot fashion — use `--task` on stdin
+instead.
 
 ## Browser tools
 
