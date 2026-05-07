@@ -32,6 +32,11 @@ verbosity: Verbosity,
 /// runs (one-shot `--task`, scripts, `--mcp`), where LLM tool traces
 /// are noise.
 is_repl: bool,
+/// Scratch arena for the REPL pretty-printer's `std.json.Value` tree.
+/// Reset on every `printToolResult` call so memory is bounded by the
+/// largest single tool output, not the session length — important when
+/// the LLM loop fires many tool calls per turn.
+repl_arena: ?std.heap.ArenaAllocator,
 
 const CommandInfo = struct { name: [:0]const u8, hint: [:0]const u8 };
 
@@ -82,14 +87,23 @@ pub fn setSlashSchemas(schemas: []const SlashCommand.SchemaInfo) void {
     slash_schemas = schemas;
 }
 
-pub fn init(history_path: ?[:0]const u8, verbosity: Verbosity, is_repl: bool) Self {
+pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity: Verbosity, is_repl: bool) Self {
     c.linenoiseSetMultiLine(1);
     c.linenoiseSetCompletionCallback(&completionCallback);
     c.linenoiseSetHintsCallback(&hintsCallback);
     if (history_path) |path| {
         _ = c.linenoiseHistoryLoad(path.ptr);
     }
-    return .{ .history_path = history_path, .verbosity = verbosity, .is_repl = is_repl };
+    return .{
+        .history_path = history_path,
+        .verbosity = verbosity,
+        .is_repl = is_repl,
+        .repl_arena = if (is_repl) std.heap.ArenaAllocator.init(allocator) else null,
+    };
+}
+
+pub fn deinit(self: *Self) void {
+    if (self.repl_arena) |*a| a.deinit();
 }
 
 const completion_buf_len = 256;
@@ -414,14 +428,44 @@ pub fn printToolCall(self: *Self, name: []const u8, args: []const u8) void {
 // 500 cap was the binding upstream limit and silently starved the judge of
 // grounding evidence on tasks where the agent had observed the answer.
 // Does NOT affect the agent's own LLM, which gets up to tool_output_max_bytes
-// (1 MiB) via Agent.zig:capToolOutput.
+// (1 MiB) via Agent.zig:capToolOutput. Bypassed in REPL: a human just asked
+// for the data and would rather scroll than be silently lied to.
 const max_result_display_len = 2000;
 
 pub fn printToolResult(self: *Self, name: []const u8, result: []const u8) void {
     if (!self.is_repl and !atLeast(self.verbosity, .verbose)) return;
+    if (self.repl_arena) |*a| {
+        defer _ = a.reset(.retain_capacity);
+        printRepl(a.allocator(), name, result);
+        return;
+    }
     const truncated = result[0..@min(result.len, max_result_display_len)];
     const ellipsis: []const u8 = if (result.len > max_result_display_len) "..." else "";
     std.debug.print("{s}{s}[result: {s}]{s} {s}{s}\n", .{ ansi_dim, ansi_green, name, ansi_reset, truncated, ellipsis });
+}
+
+/// REPL output: header + body, pretty-print JSON if parseable, raw otherwise.
+/// Streams via `std.json.Stringify.value` to a stderr writer — no intermediate
+/// output buffer. Non-JSON tool output (markdown, plain extract) goes raw.
+fn printRepl(arena: std.mem.Allocator, name: []const u8, result: []const u8) void {
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+    var buf: [4096]u8 = undefined;
+    var fw = std.fs.File.stderr().writer(&buf);
+    const w = &fw.interface;
+
+    const parsed: ?std.json.Value = std.json.parseFromSliceLeaky(std.json.Value, arena, result, .{}) catch null;
+    const sep: []const u8 = if (parsed != null) "\n" else " ";
+    w.print("{s}{s}[result: {s}]{s}{s}", .{ ansi_dim, ansi_green, name, ansi_reset, sep }) catch return;
+    if (parsed) |v| {
+        std.json.Stringify.value(v, .{ .whitespace = .indent_2 }, w) catch {
+            w.writeAll(result) catch {};
+        };
+    } else {
+        w.writeAll(result) catch {};
+    }
+    w.writeByte('\n') catch {};
+    w.flush() catch {};
 }
 
 pub fn printError(_: *Self, msg: []const u8) void {

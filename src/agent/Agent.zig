@@ -218,12 +218,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .allocator = allocator,
         .ai_client = ai_client,
         .tool_executor = tool_executor,
-        .terminal = Terminal.init(history_path, opts.verbosity, will_repl),
+        .terminal = .init(allocator, history_path, opts.verbosity, will_repl),
         .cmd_executor = undefined,
         .verifier = .{ .tool_executor = tool_executor },
         .recorder = .init(allocator, recorder_path),
         .messages = .empty,
-        .message_arena = std.heap.ArenaAllocator.init(allocator),
+        .message_arena = .init(allocator),
         .model = if (opts.provider) |p| (opts.model orelse zenai.provider.defaultModel(p)) else "",
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
@@ -243,6 +243,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
 
 pub fn deinit(self: *Self) void {
     self.recorder.deinit();
+    self.terminal.deinit();
     self.message_arena.deinit();
     self.messages.deinit(self.allocator);
     self.tool_executor.deinit();
