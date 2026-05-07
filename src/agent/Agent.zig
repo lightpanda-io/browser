@@ -758,7 +758,7 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
 
     const provider_client = self.ai_client orelse return error.NoAiClient;
 
-    self.terminal.agentTurnStart();
+    self.terminal.spinner.start();
     var result = provider_client.runTools(
         self.model,
         &self.messages,
@@ -772,11 +772,11 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
             .tool_choice = .auto,
         },
     ) catch |err| {
-        self.terminal.agentTurnCancel();
+        self.terminal.spinner.cancel();
         log.err(.app, "AI API error", .{ .err = err });
         return error.ApiError;
     };
-    self.terminal.agentTurnStop();
+    self.terminal.spinner.stop();
     defer result.deinit();
 
     var cmds: std.ArrayList(Command.Command) = .empty;
@@ -899,10 +899,7 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
 
     const provider_client = self.ai_client orelse return error.NoAiClient;
 
-    self.terminal.agentTurnStart();
-    var commit_turn = true;
-    defer if (commit_turn) self.terminal.agentTurnStop() else self.terminal.agentTurnCancel();
-
+    self.terminal.spinner.start();
     var result = provider_client.runTools(
         self.model,
         &self.messages,
@@ -930,10 +927,11 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
             .thinking_budget = 2048,
         },
     ) catch |err| {
-        commit_turn = false;
+        self.terminal.spinner.cancel();
         log.err(.app, "AI API error", .{ .err = err });
         return error.ApiError;
     };
+    self.terminal.spinner.stop();
     defer result.deinit();
 
     if (self.recorder.file != null) {
@@ -1072,22 +1070,21 @@ fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
 
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) zenai.provider.Client.ToolHandler.Result {
     const self: *Self = @ptrCast(@alignCast(ctx));
-    self.terminal.agentSetTool(tool_name, arguments);
-    defer self.terminal.agentSetThinking();
+    self.terminal.spinner.setTool(tool_name, arguments);
+    defer self.terminal.spinner.setThinking();
     if (self.tool_executor.call(allocator, tool_name, arguments)) |output| {
         const capped = capToolOutput(allocator, output);
         self.terminal.agentToolDone(tool_name, arguments, true);
-        // `highest` keeps the per-call `[result: …]` body line — the
+        // Only `high` keeps the per-call `[result: …]` body line — the
         // benchmark harness parses it. Lower levels surface success
         // implicitly via the green bullet (or the spinner label).
         if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, capped);
         return .{ .content = capped };
     } else |err| {
         const msg = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
-        // Errors go back to the model so it can self-correct. We don't
-        // print the error body unless `--verbosity highest` (harness);
-        // the red bullet (per-line) or red spinner label is the user-
-        // facing failure signal.
+        // Errors go back to the model so it can self-correct. The red
+        // bullet (per-line) or red spinner label is the user-facing
+        // failure signal; we only print the body at `high` (harness).
         self.terminal.agentToolDone(tool_name, arguments, false);
         if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, msg);
         return .{ .content = msg, .is_error = true };

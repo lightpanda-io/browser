@@ -10,12 +10,15 @@ const c = @cImport({
 
 const Self = @This();
 
-const ansi_reset = "\x1b[0m";
-const ansi_bold = "\x1b[1m";
-const ansi_dim = "\x1b[2m";
-const ansi_cyan = "\x1b[36m";
-const ansi_green = "\x1b[32m";
-const ansi_red = "\x1b[31m";
+pub const ansi = struct {
+    pub const reset = "\x1b[0m";
+    pub const bold = "\x1b[1m";
+    pub const dim = "\x1b[2m";
+    pub const cyan = "\x1b[36m";
+    pub const green = "\x1b[32m";
+    pub const yellow = "\x1b[33m";
+    pub const red = "\x1b[31m";
+};
 
 const Verbosity = Config.AgentVerbosity;
 
@@ -37,6 +40,8 @@ verbosity: Verbosity,
 /// `std.json.Value` tree. Reset on every `printToolResult` call so
 /// memory is bounded by the largest single tool output.
 repl_arena: ?std.heap.ArenaAllocator,
+/// Cached at init so per-tool-call paths don't fstat stderr each time.
+stderr_is_tty: bool,
 /// Drives the single-line agent indicator during LLM-driven turns.
 /// No-op when not in a TTY-attached REPL.
 spinner: Spinner,
@@ -101,7 +106,8 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
         .history_path = history_path,
         .verbosity = verbosity,
         .repl_arena = if (is_repl) std.heap.ArenaAllocator.init(allocator) else null,
-        .spinner = .init(verbosity, is_repl),
+        .stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO),
+        .spinner = .init(is_repl),
     };
 }
 
@@ -114,28 +120,9 @@ pub fn deinit(self: *Self) void {
     if (self.repl_arena) |*a| a.deinit();
 }
 
-pub fn agentTurnStart(self: *Self) void {
-    self.spinner.start();
-}
-
-pub fn agentTurnStop(self: *Self) void {
-    self.spinner.stop();
-}
-
-pub fn agentTurnCancel(self: *Self) void {
-    self.spinner.cancel();
-}
-
-/// Signal to the spinner that a tool call is starting. No-op when the
-/// spinner is disabled — the per-line path waits for the result via
-/// `agentToolDone` so it can color the bullet by outcome.
-pub fn agentSetTool(self: *Self, name: []const u8, args: []const u8) void {
-    self.spinner.setTool(name, args);
-}
-
-pub fn agentSetThinking(self: *Self) void {
-    self.spinner.setThinking();
-}
+// Shared between the spinner-emit path (writes to an arena buffer) and the
+// non-spinner TTY path (writes to stderr via std.debug.print).
+const bullet_line_fmt = "{s}●{s} {s}[tool: {s}]{s} {s}\n";
 
 /// Called after the tool returns.
 ///
@@ -157,17 +144,13 @@ pub fn agentToolDone(self: *Self, name: []const u8, args: []const u8, ok: bool) 
         return;
     }
     if (!atLeast(self.verbosity, .medium)) return;
-    const tty = std.posix.isatty(std.posix.STDERR_FILENO);
-    if (tty) {
-        const bullet_color = if (ok) ansi_green else ansi_red;
-        std.debug.print(
-            "{s}●{s} {s}[tool: {s}]{s} {s}\n",
-            .{ bullet_color, ansi_reset, ansi_dim, name, ansi_reset, args },
-        );
+    if (self.stderr_is_tty) {
+        const bullet_color = if (ok) ansi.green else ansi.red;
+        std.debug.print(bullet_line_fmt, .{ bullet_color, ansi.reset, ansi.dim, name, ansi.reset, args });
     } else {
         std.debug.print(
             "{s}{s}[tool: {s}]{s} {s}\n",
-            .{ ansi_dim, ansi_cyan, name, ansi_reset, args },
+            .{ ansi.dim, ansi.cyan, name, ansi.reset, args },
         );
     }
 }
@@ -175,11 +158,8 @@ pub fn agentToolDone(self: *Self, name: []const u8, args: []const u8, ok: bool) 
 fn formatBulletLine(arena: std.mem.Allocator, name: []const u8, args: []const u8, ok: bool) ![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     const w = &aw.writer;
-    const bullet_color = if (ok) ansi_green else ansi_red;
-    try w.print(
-        "{s}●{s} {s}[tool: {s}]{s} {s}\n",
-        .{ bullet_color, ansi_reset, ansi_dim, name, ansi_reset, args },
-    );
+    const bullet_color = if (ok) ansi.green else ansi.red;
+    try w.print(bullet_line_fmt, .{ bullet_color, ansi.reset, ansi.dim, name, ansi.reset, args });
     return aw.written();
 }
 
@@ -513,7 +493,7 @@ pub fn printToolResult(self: *Self, name: []const u8, result: []const u8) void {
     }
     const truncated = result[0..@min(result.len, max_result_display_len)];
     const ellipsis: []const u8 = if (result.len > max_result_display_len) "..." else "";
-    std.debug.print("{s}{s}[result: {s}]{s} {s}{s}\n", .{ ansi_dim, ansi_green, name, ansi_reset, truncated, ellipsis });
+    std.debug.print("{s}{s}[result: {s}]{s} {s}{s}\n", .{ ansi.dim, ansi.green, name, ansi.reset, truncated, ellipsis });
 }
 
 /// REPL output: header + body, pretty-print JSON if parseable, raw otherwise.
@@ -533,7 +513,7 @@ fn formatReplResult(arena: std.mem.Allocator, name: []const u8, result: []const 
     else
         null;
     const sep: []const u8 = if (parsed != null) "\n" else " ";
-    try w.print("{s}{s}[result: {s}]{s}{s}", .{ ansi_dim, ansi_green, name, ansi_reset, sep });
+    try w.print("{s}{s}[result: {s}]{s}{s}", .{ ansi.dim, ansi.green, name, ansi.reset, sep });
     if (parsed) |v| {
         std.json.Stringify.value(v, .{ .whitespace = .indent_2 }, w) catch {
             try w.writeAll(result);
@@ -546,19 +526,19 @@ fn formatReplResult(arena: std.mem.Allocator, name: []const u8, result: []const 
 }
 
 pub fn printError(_: *Self, msg: []const u8) void {
-    std.debug.print("{s}{s}Error: {s}{s}\n", .{ ansi_bold, ansi_red, msg, ansi_reset });
+    std.debug.print("{s}{s}Error: {s}{s}\n", .{ ansi.bold, ansi.red, msg, ansi.reset });
 }
 
 pub fn printErrorFmt(_: *Self, comptime fmt: []const u8, args: anytype) void {
-    std.debug.print("{s}{s}Error: " ++ fmt ++ "{s}\n", .{ ansi_bold, ansi_red } ++ args ++ .{ansi_reset});
+    std.debug.print("{s}{s}Error: " ++ fmt ++ "{s}\n", .{ ansi.bold, ansi.red } ++ args ++ .{ansi.reset});
 }
 
 pub fn printInfo(self: *Self, msg: []const u8) void {
     if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
-    std.debug.print("{s}{s}{s}\n", .{ ansi_dim, msg, ansi_reset });
+    std.debug.print("{s}{s}{s}\n", .{ ansi.dim, msg, ansi.reset });
 }
 
 pub fn printInfoFmt(self: *Self, comptime fmt: []const u8, args: anytype) void {
     if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
-    std.debug.print("{s}" ++ fmt ++ "{s}\n", .{ansi_dim} ++ args ++ .{ansi_reset});
+    std.debug.print("{s}" ++ fmt ++ "{s}\n", .{ansi.dim} ++ args ++ .{ansi.reset});
 }
