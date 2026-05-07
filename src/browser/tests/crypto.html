@@ -261,3 +261,96 @@
     testing.expectEqual("6cad17e6f3f76680d6dd18ed043b75b4f6e1aa1d08b917294942e882fb6466c3510948c34af8b903ed0725b582b3b39c0e485ae2c1b7dfdb192ee38b79c782b6", await hash('sha-512', 'over 9000'));
   });
 </script>
+
+<script>
+  // Helper for worker-based crypto tests. Spawns a worker, waits for it to
+  // signal readiness, then sends `kind` and forwards the worker's reply to
+  // `state.resolve`. Avoids racing worker startup, which matters on slow CI.
+  window.runCryptoInWorker = function(kind, state) {
+    const worker = new Worker('./crypto-worker.js');
+    worker.onmessage = (e) => {
+      if (e.data && e.data.ready) {
+        worker.postMessage({ kind });
+        return;
+      }
+      state.resolve(e.data);
+    };
+  };
+</script>
+
+<script id=worker-getRandomValues type=module>
+  {
+    const state = await testing.async();
+    runCryptoInWorker('getRandomValues', state);
+    await state.done((data) => {
+      testing.expectTrue(data.ok);
+      testing.expectEqual(true, data.same);
+      testing.expectEqual(true, data.looks_random);
+    });
+  }
+</script>
+
+<script id=worker-randomUUID type=module>
+  {
+    const state = await testing.async();
+    runCryptoInWorker('randomUUID', state);
+    await state.done((data) => {
+      testing.expectTrue(data.ok);
+      testing.expectEqual('string', data.type);
+      testing.expectEqual(36, data.length);
+      testing.expectEqual(true, data.valid);
+    });
+  }
+</script>
+
+<script id=worker-digest type=module>
+  {
+    const state = await testing.async();
+    runCryptoInWorker('digest', state);
+    await state.done((data) => {
+      testing.expectTrue(data.ok);
+      testing.expectEqual(
+        '1bc375bb92459685194dda18a4b835f4e2972ec1bde6d9ab3db53fcc584a6580',
+        data.hex,
+      );
+    });
+  }
+</script>
+
+<script id=worker-hmac-sign-verify type=module>
+  {
+    const state = await testing.async();
+    runCryptoInWorker('hmac', state);
+    await state.done((data) => {
+      testing.expectTrue(data.ok);
+      testing.expectEqual('object', data.key_type);
+      testing.expectEqual(128, data.raw_byte_length);
+      testing.expectEqual(true, data.is_array_buffer);
+      testing.expectEqual(true, data.verified);
+    });
+  }
+</script>
+
+<script id=worker-x25519-derive type=module>
+  {
+    const state = await testing.async();
+    runCryptoInWorker('x25519', state);
+    await state.done((data) => {
+      testing.expectTrue(data.ok);
+      testing.expectEqual('object', data.private_key_type);
+      testing.expectEqual('object', data.public_key_type);
+      testing.expectEqual(16, data.shared_byte_length);
+    });
+  }
+</script>
+
+<script id=worker-generateKey-rejects type=module>
+  {
+    const state = await testing.async();
+    runCryptoInWorker('generateKey-rejection', state);
+    await state.done((data) => {
+      testing.expectTrue(data.ok);
+      testing.expectEqual('SyntaxError', data.err_name);
+    });
+  }
+</script>

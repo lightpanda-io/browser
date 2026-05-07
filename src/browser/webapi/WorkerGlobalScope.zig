@@ -39,6 +39,7 @@ const Crypto = @import("Crypto.zig");
 const Console = @import("Console.zig");
 const Timers = @import("Timers.zig");
 const EventTarget = @import("EventTarget.zig");
+const WorkerLocation = @import("WorkerLocation.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const Fetch = @import("net/Fetch.zig");
@@ -98,6 +99,8 @@ _on_unhandled_rejection: ?JS.Function.Global = null,
 _on_message: ?JS.Function.Global = null,
 _on_messageerror: ?JS.Function.Global = null,
 
+_location: WorkerLocation,
+
 _timers: Timers = .{},
 
 pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
@@ -125,6 +128,7 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
         ._loader_id = worker._loader_id,
         ._event_manager = .init(arena),
         ._script_manager = undefined,
+        ._location = .{ ._url = url },
     });
     errdefer factory.destroy(self);
 
@@ -216,6 +220,10 @@ pub fn getConsole(self: *WorkerGlobalScope) *Console {
 
 pub fn getCrypto(self: *WorkerGlobalScope) *Crypto {
     return &self._crypto;
+}
+
+pub fn getLocation(self: *WorkerGlobalScope) *WorkerLocation {
+    return &self._location;
 }
 
 pub fn getOnError(self: *const WorkerGlobalScope) ?JS.Function.Global {
@@ -566,6 +574,7 @@ pub const JsApi = struct {
     pub const self = bridge.accessor(WorkerGlobalScope.getSelf, null, .{});
     pub const console = bridge.accessor(WorkerGlobalScope.getConsole, null, .{});
     pub const crypto = bridge.accessor(WorkerGlobalScope.getCrypto, null, .{});
+    pub const location = bridge.accessor(WorkerGlobalScope.getLocation, null, .{});
 
     pub const onerror = bridge.accessor(WorkerGlobalScope.getOnError, WorkerGlobalScope.setOnError, .{});
     pub const onrejectionhandled = bridge.accessor(WorkerGlobalScope.getOnRejectionHandled, WorkerGlobalScope.setOnRejectionHandled, .{});

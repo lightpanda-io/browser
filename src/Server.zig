@@ -44,23 +44,22 @@ conns_mutex: std.Thread.Mutex = .{},
 conns_pool: std.heap.MemoryPool(CDP),
 
 pub fn init(app: *App, address: net.Address) !*Server {
-    const json_version_response = try buildJSONVersionResponse(app);
-    errdefer app.allocator.free(json_version_response);
-
     const self = try app.allocator.create(Server);
     errdefer app.allocator.destroy(self);
 
     self.* = .{
         .app = app,
         .conns_pool = .init(app.allocator),
-        .json_version_response = json_version_response,
+        .json_version_response = "",
     };
     errdefer self.conns_pool.deinit();
 
+    // Bind first so /json/version can advertise the OS-assigned port (--port 0).
     var bound_address = address;
     try self.app.network.bind(&bound_address, self, onAccept);
     log.info(.app, "server running", .{ .address = bound_address });
 
+    self.json_version_response = try buildJSONVersionResponse(app, bound_address.getPort());
     return self;
 }
 
@@ -237,10 +236,7 @@ fn unregisterConn(self: *Server, conn: *CDP) void {
 // Utils
 // --------
 
-fn buildJSONVersionResponse(
-    app: *const App,
-) ![]const u8 {
-    const port = app.config.port();
+fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
     const host = app.config.advertiseHost();
     if (std.mem.eql(u8, host, "0.0.0.0")) {
         log.info(.cdp, "unreachable advertised host", .{
@@ -276,7 +272,7 @@ pub const milliTimestamp = @import("datetime.zig").milliTimestamp;
 
 const testing = @import("testing.zig");
 test "server: buildJSONVersionResponse" {
-    const res = try buildJSONVersionResponse(testing.test_app);
+    const res = try buildJSONVersionResponse(testing.test_app, testing.test_app.config.port());
     defer testing.test_app.allocator.free(res);
 
     // The response includes the build version, so check structure rather than exact bytes.
@@ -509,7 +505,7 @@ test "server: get /json/version" {
         try testing.expect(std.mem.startsWith(u8, res1, "HTTP/1.1 200 OK\r\n"));
         try testing.expect(std.mem.indexOf(u8, res1, "\"Browser\": \"Lightpanda/") != null);
         try testing.expect(std.mem.indexOf(u8, res1, "\"Protocol-Version\": \"1.3\"") != null);
-        try testing.expect(std.mem.indexOf(u8, res1, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res1, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9583/\"") != null);
     }
 
     {

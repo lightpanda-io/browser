@@ -22,21 +22,22 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const crypto = @import("../../../sys/libcrypto.zig");
 
-const Frame = @import("../../Frame.zig");
 const js = @import("../../js/js.zig");
 
 const CryptoKey = @import("../CryptoKey.zig");
 
+const Execution = js.Execution;
+
 pub fn init(
     extractable: bool,
     key_usages: []const []const u8,
-    frame: *Frame,
+    exec: *const Execution,
 ) !js.Promise {
     // This code has too many allocations here and there, might be nice to
     // gather them together with a single alloc call. Not sure if factory
     // pattern is suitable for it though.
 
-    const local = frame.js.local.?;
+    const local = exec.context.local.?;
 
     // Calculate usages; only matters for private key.
     // Only deriveKey() and deriveBits() be used for X25519.
@@ -59,11 +60,11 @@ pub fn init(
         });
     }
 
-    const public_value = try frame.arena.alloc(u8, crypto.X25519_PUBLIC_VALUE_LEN);
-    errdefer frame.arena.free(public_value);
+    const public_value = try exec.arena.alloc(u8, crypto.X25519_PUBLIC_VALUE_LEN);
+    errdefer exec.arena.free(public_value);
 
-    const private_key = try frame.arena.alloc(u8, crypto.X25519_PRIVATE_KEY_LEN);
-    errdefer frame.arena.free(private_key);
+    const private_key = try exec.arena.alloc(u8, crypto.X25519_PRIVATE_KEY_LEN);
+    errdefer exec.arena.free(private_key);
 
     // There's no info about whether this can fail; so I assume it cannot.
     crypto.X25519_keypair(@ptrCast(public_value), @ptrCast(private_key));
@@ -90,16 +91,16 @@ pub fn init(
         private_key.len,
     ) orelse return error.OutOfMemory;
 
-    const private = try frame._factory.create(CryptoKey{
+    const private = try exec._factory.create(CryptoKey{
         ._type = .x25519,
         ._extractable = extractable,
         ._usages = mask,
         ._key = private_key,
         ._vary = .{ .pkey = private_pkey },
     });
-    errdefer frame._factory.destroy(private);
+    errdefer exec._factory.destroy(private);
 
-    const public = try frame._factory.create(CryptoKey{
+    const public = try exec._factory.create(CryptoKey{
         ._type = .x25519,
         // Public keys are always extractable.
         ._extractable = true,
@@ -116,7 +117,7 @@ pub fn deriveBits(
     private: *const CryptoKey,
     public: *const CryptoKey,
     length_in_bits: usize,
-    frame: *Frame,
+    exec: *const Execution,
 ) !js.ArrayBuffer {
     if (!private.canDeriveBits()) {
         return error.InvalidAccessError;
@@ -137,8 +138,8 @@ pub fn deriveBits(
         return error.Internal;
     }
 
-    const derived_key = try frame.call_arena.alloc(u8, 32);
-    errdefer frame.call_arena.free(derived_key);
+    const derived_key = try exec.call_arena.alloc(u8, 32);
+    errdefer exec.call_arena.free(derived_key);
 
     var out_key_len: usize = derived_key.len;
     const result = crypto.EVP_PKEY_derive(ctx, derived_key.ptr, &out_key_len);
