@@ -58,6 +58,14 @@ const default_system_prompt =
     \\- When filling credentials, pass environment variable references like
     \\  $LP_USERNAME and $LP_PASSWORD directly as the value — they will be
     \\  resolved automatically. Do NOT use getEnv to resolve them first.
+    \\- If the user asks for account-scoped information (their karma, profile,
+    \\  history, inbox, dashboard, settings, etc.) and the page shows you are
+    \\  not signed in, attempt to log in proactively before reporting that the
+    \\  data is unavailable. Find the login link or form on the current page
+    \\  (interactiveElements or findElement), dismiss any cookie banner first,
+    \\  then fill the username field with $LP_USERNAME and the password field
+    \\  with $LP_PASSWORD and submit. Only fall back to "I couldn't access X"
+    \\  if the form is missing or the credentials are rejected — and say which.
     \\
     \\Search engines:
     \\- For web searches, prefer the `search` tool over goto-ing google.com
@@ -1075,7 +1083,11 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
         return .{ .content = capped };
     } else |err| {
         const msg = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
-        self.terminal.printToolResult(tool_name, msg);
+        // Tool errors go back to the model so it can self-correct, but we
+        // don't surface them to the user — the spinner stays clean and the
+        // final summary or assistant text reflects the eventual outcome.
+        // Verbose mode keeps them visible for the benchmark harness.
+        if (self.terminal.verbosity == .verbose) self.terminal.printToolResult(tool_name, msg);
         return .{ .content = msg, .is_error = true };
     }
 }
