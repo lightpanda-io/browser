@@ -105,6 +105,8 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .notification = notification,
         .fc_identity_pool = .init(allocator),
         .cookie_jar = storage.Cookie.Jar.init(allocator),
+        // CLI default; LP.setSubframeLoading can flip this per-session.
+        .subframe_loading_enabled = !browser.app.config.disableSubframes(),
     };
 }
 
