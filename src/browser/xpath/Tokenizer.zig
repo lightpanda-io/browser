@@ -18,8 +18,6 @@
 
 //! XPath 1.0 expression tokenizer.
 //!
-//! Mirrors the polyfill `tokenize()` in capybara-lightpanda
-//! (lib/capybara/lightpanda/javascripts/index.js) to preserve its
 //! HTML-pragmatic behavior: lenient whitespace, case-preserving names,
 //! no escape processing in string literals (use the other quote type
 //! to embed), unknown characters silently skipped.

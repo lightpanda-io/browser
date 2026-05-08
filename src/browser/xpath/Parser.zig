@@ -18,11 +18,10 @@
 
 //! XPath 1.0 expression parser.
 //!
-//! Mirrors the polyfill `Parser.prototype.*` chain in capybara-lightpanda
-//! (lib/capybara/lightpanda/javascripts/index.js): recursive descent over
-//! a fully-tokenized stream, producing an `ast.Expr` tree allocated on
-//! the caller's arena. The AST borrows string/name slices from `input`
-//! and is valid for as long as the arena and input outlive it.
+//! Recursive descent over a fully-tokenized stream, producing an
+//! `ast.Expr` tree allocated on the caller's arena. The AST borrows
+//! string/name slices from `input` and is valid for as long as the
+//! arena and input outlive it.
 
 const std = @import("std");
 
@@ -827,10 +826,10 @@ test "XPath.Parser: empty string falls through to step and reports missing node 
     try expectParseError("", error.ExpectedNodeTest);
 }
 
-test "XPath.Parser: 91-case gem battery — every expression parses" {
-    // Source: capybara-lightpanda spec/features/driver_spec.rb,
-    // describe "XPath polyfill — XPath 1.0 conformance" battery.
-    // Phase 2 acceptance criterion (references/phases.md).
+test "XPath.Parser: 91-case battery — every expression parses" {
+    // 91-case XPath 1.0 conformance battery covering every expression
+    // shape the public API surface accepts. Each entry must parse
+    // without error.
     const battery = [_][]const u8{
         "/html",
         "/html/body",

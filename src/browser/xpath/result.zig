@@ -18,12 +18,10 @@
 
 //! XPath 1.0 runtime values.
 //!
-//! Mirrors the polyfill's untagged JS values (lib/capybara/lightpanda/
-//! javascripts/index.js, the `evaluate()` return convention): a node-set
-//! is a JS array of nodes, and the three scalar types are JS primitives.
-//! In Zig we tag the union explicitly. Type coercion (`toString`,
-//! `toNumber`, `toBoolean`) follows XPath 1.0 spec §3, with HTML-pragmatic
-//! shortcuts inherited from the polyfill (decision #2).
+//! Tagged union over the four XPath value types: node-set, number,
+//! string, boolean. Type coercion (`toString`, `toNumber`, `toBoolean`)
+//! follows XPath 1.0 spec §3, with HTML-pragmatic shortcuts (decision
+//! #2).
 
 const std = @import("std");
 

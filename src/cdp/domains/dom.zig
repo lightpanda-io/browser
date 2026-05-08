@@ -112,10 +112,9 @@ const xpath_axis_names = std.StaticStringMap(void).initComptime(.{
     .{ "namespace", {} },
 });
 
-// Polyfill-parity heuristic (decision #2/#9): treat the query as XPath
-// when it begins with a path operator or contains an axis specifier;
-// otherwise fall through to CSS. Lifted from capybara-lightpanda's
-// xpathFind dispatch logic.
+// Heuristic (decision #2/#9): treat the query as XPath when it begins
+// with a path operator or contains an axis specifier; otherwise fall
+// through to CSS.
 fn isXPathQuery(q: []const u8) bool {
     if (q.len == 0) return false;
     if (q[0] == '/') return true;

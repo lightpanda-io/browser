@@ -17,13 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! XPath 1.0 evaluator — runs an `ast.Expr` against a context node and
-//! produces a `Result`. Mirrors the polyfill's `evaluate()` and
-//! `evalStep()` (lib/capybara/lightpanda/javascripts/index.js, lines
-//! 344–644). The evaluator allocates intermediate values (node-set
-//! slices, formatted numbers, materialized attribute nodes) into the
-//! caller's arena. The context `Frame` is needed for `getElementById`
-//! and to materialize attributes (the attribute axis returns full
-//! `Attribute` nodes so the result is `*Node`-uniform).
+//! produces a `Result`. The evaluator allocates intermediate values
+//! (node-set slices, formatted numbers, materialized attribute nodes)
+//! into the caller's arena. The context `Frame` is needed for
+//! `getElementById` and to materialize attributes (the attribute axis
+//! returns full `Attribute` nodes so the result is `*Node`-uniform).
 //!
 //! Document-order sort happens once at the public boundary
 //! (`evaluate()`); intermediate step results stay in axis order so
@@ -75,10 +73,10 @@ pub fn evaluate(arena: Allocator, expr: *const ast.Expr, context_node: *Node, fr
 
 pub const SearchError = Error || Parser.Error;
 
-/// Convenience for `DOM.performSearch` and capybara `xpathFind`: parse +
-/// evaluate and unwrap the node-set. Top-level scalar expressions yield
-/// an empty slice (decision #3 — these APIs are for finding nodes, not
-/// arbitrary computation).
+/// Convenience for `DOM.performSearch`: parse + evaluate and unwrap the
+/// node-set. Top-level scalar expressions yield an empty slice
+/// (decision #3 — these APIs are for finding nodes, not arbitrary
+/// computation).
 pub fn searchAll(arena: Allocator, root: *Node, expression: []const u8, frame: *Frame) SearchError![]const *Node {
     const expr = try Parser.parse(arena, expression);
     return switch (try evaluate(arena, expr, root, frame)) {

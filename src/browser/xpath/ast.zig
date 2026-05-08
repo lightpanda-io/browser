@@ -18,10 +18,8 @@
 
 //! XPath 1.0 AST.
 //!
-//! Mirrors the polyfill AST in capybara-lightpanda
-//! (lib/capybara/lightpanda/javascripts/index.js, the `op:`-tagged
-//! object literals built by Parser.prototype.parse*). Slices and
-//! pointers are arena-owned by the Parser; the AST has no destructor.
+//! Slices and pointers are arena-owned by the Parser; the AST has no
+//! destructor.
 
 pub const Expr = union(enum) {
     /// Absolute or relative location path: `/foo/bar`, `//x`, `foo/bar`.

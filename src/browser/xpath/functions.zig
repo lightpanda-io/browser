@@ -16,20 +16,18 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! XPath 1.0 core function library — 25 functions per polyfill parity
-//! (lib/capybara/lightpanda/javascripts/index.js, `evalFunc` at lines
-//! 646–770). `position()` and `last()` live in `Evaluator.evalFnCall`
-//! because they need the `(pos, size)` closure that this module never
-//! sees.
+//! XPath 1.0 core function library — 25 functions covering the spec's
+//! core function set. `position()` and `last()` live in
+//! `Evaluator.evalFnCall` because they need the `(pos, size)` closure
+//! that this module never sees.
 //!
 //! Args are pre-evaluated by the caller (`Evaluator.evalFnCall`). Eager
-//! evaluation matches the polyfill's `evaluate(args[i], ctx, pos, size)`
-//! pattern — short-circuit operators (`or`/`and`) are binops, not
-//! function calls, so laziness isn't required here. The pre-evaluation
-//! contract also keeps Functions.zig free of a circular import on
-//! Evaluator.zig.
+//! evaluation is fine here — short-circuit operators (`or`/`and`) are
+//! binops, not function calls, so laziness isn't required. The
+//! pre-evaluation contract also keeps functions.zig free of a circular
+//! import on Evaluator.zig.
 //!
-//! Stubs per decision #3 (XPATH_COMPLIANCE.md):
+//! Stubs per decision #3:
 //!   - `lang(string)`         → always false
 //!   - `namespace-uri(...)`   → always ""
 //!   - `name`/`local-name`    → lowercased (HTML pragmatism)
