@@ -41,7 +41,7 @@ const lp = @import("lightpanda");
 
 const Node = @import("../webapi/Node.zig");
 
-const Result = @import("result.zig");
+const result = @import("result.zig");
 
 const Frame = lp.Frame;
 const Element = Node.Element;
@@ -62,10 +62,10 @@ pub const Error = error{
 pub fn call(
     arena: Allocator,
     name: []const u8,
-    args: []const Result.Result,
+    args: []const result.Result,
     ctx: *Node,
     frame: *Frame,
-) Error!Result.Result {
+) Error!result.Result {
     // -- Node-set --
     if (eql(name, "count")) return .{ .number = countFn(args) };
     if (eql(name, "id")) return idFn(arena, args, ctx, frame);
@@ -86,8 +86,8 @@ pub fn call(
     if (eql(name, "translate")) return .{ .string = try translateFn(arena, args) };
 
     // -- Boolean --
-    if (eql(name, "boolean")) return .{ .boolean = if (args.len == 0) false else Result.toBoolean(args[0]) };
-    if (eql(name, "not")) return .{ .boolean = if (args.len == 0) true else !Result.toBoolean(args[0]) };
+    if (eql(name, "boolean")) return .{ .boolean = if (args.len == 0) false else result.toBoolean(args[0]) };
+    if (eql(name, "not")) return .{ .boolean = if (args.len == 0) true else !result.toBoolean(args[0]) };
     if (eql(name, "true")) return .{ .boolean = true };
     if (eql(name, "false")) return .{ .boolean = false };
     if (eql(name, "lang")) return .{ .boolean = false };
@@ -95,9 +95,9 @@ pub fn call(
     // -- Number --
     if (eql(name, "number")) return .{ .number = try numberFn(arena, args, ctx) };
     if (eql(name, "sum")) return .{ .number = try sumFn(arena, args) };
-    if (eql(name, "floor")) return .{ .number = if (args.len == 0) std.math.nan(f64) else std.math.floor(try Result.toNumber(arena, args[0])) };
-    if (eql(name, "ceiling")) return .{ .number = if (args.len == 0) std.math.nan(f64) else std.math.ceil(try Result.toNumber(arena, args[0])) };
-    if (eql(name, "round")) return .{ .number = if (args.len == 0) std.math.nan(f64) else roundHalfToPosInf(try Result.toNumber(arena, args[0])) };
+    if (eql(name, "floor")) return .{ .number = if (args.len == 0) std.math.nan(f64) else std.math.floor(try result.toNumber(arena, args[0])) };
+    if (eql(name, "ceiling")) return .{ .number = if (args.len == 0) std.math.nan(f64) else std.math.ceil(try result.toNumber(arena, args[0])) };
+    if (eql(name, "round")) return .{ .number = if (args.len == 0) std.math.nan(f64) else roundHalfToPosInf(try result.toNumber(arena, args[0])) };
 
     return error.UnknownFunction;
 }
@@ -108,12 +108,12 @@ inline fn eql(a: []const u8, b: []const u8) bool {
 
 // ----- node-set fns -----
 
-fn countFn(args: []const Result.Result) f64 {
+fn countFn(args: []const result.Result) f64 {
     if (args.len == 0 or args[0] != .node_set) return 0;
     return @floatFromInt(args[0].node_set.len);
 }
 
-fn idFn(arena: Allocator, args: []const Result.Result, ctx: *Node, frame: *Frame) Error!Result.Result {
+fn idFn(arena: Allocator, args: []const result.Result, ctx: *Node, frame: *Frame) Error!result.Result {
     if (args.len == 0) return .{ .node_set = &.{} };
 
     // Polyfill: node-set arg → join `stringVal(n)` of each by ' '. Scalar
@@ -123,12 +123,12 @@ fn idFn(arena: Allocator, args: []const Result.Result, ctx: *Node, frame: *Frame
             var buf = std.Io.Writer.Allocating.init(arena);
             for (args[0].node_set, 0..) |n, i| {
                 if (i > 0) try buf.writer.writeByte(' ');
-                const sv = try Result.stringValueOf(arena, n);
+                const sv = try result.stringValueOf(arena, n);
                 try buf.writer.writeAll(sv);
             }
             break :blk buf.written();
         }
-        break :blk try Result.toString(arena, args[0]);
+        break :blk try result.toString(arena, args[0]);
     };
 
     // `ctx.ownerDocument || ctx` — document nodes own themselves.
@@ -144,7 +144,7 @@ fn idFn(arena: Allocator, args: []const Result.Result, ctx: *Node, frame: *Frame
     return .{ .node_set = seen.keys() };
 }
 
-fn localNameFn(arena: Allocator, args: []const Result.Result, ctx: *Node) Error![]const u8 {
+fn localNameFn(arena: Allocator, args: []const result.Result, ctx: *Node) Error![]const u8 {
     const node = firstNodeOrCtx(args, ctx) orelse return "";
     // For Element, `getLocalName` returns a slice into `_tag_name`
     // (lowercase, namespace-prefix stripped) — lifetime exceeds the
@@ -154,7 +154,7 @@ fn localNameFn(arena: Allocator, args: []const Result.Result, ctx: *Node) Error!
     return std.ascii.allocLowerString(arena, node.getNodeName(&buf));
 }
 
-fn nameFn(arena: Allocator, args: []const Result.Result, ctx: *Node) Error![]const u8 {
+fn nameFn(arena: Allocator, args: []const result.Result, ctx: *Node) Error![]const u8 {
     const node = firstNodeOrCtx(args, ctx) orelse return "";
     // Diverges from `local-name` only on namespaced elements: `name`
     // keeps the prefix (`ns:foo`), `local-name` strips it (`foo`).
@@ -163,7 +163,7 @@ fn nameFn(arena: Allocator, args: []const Result.Result, ctx: *Node) Error![]con
     return std.ascii.allocLowerString(arena, node.getNodeName(&buf));
 }
 
-fn firstNodeOrCtx(args: []const Result.Result, ctx: *Node) ?*Node {
+fn firstNodeOrCtx(args: []const result.Result, ctx: *Node) ?*Node {
     if (args.len == 0) return ctx;
     if (args[0] != .node_set) return null;
     if (args[0].node_set.len == 0) return null;
@@ -172,64 +172,64 @@ fn firstNodeOrCtx(args: []const Result.Result, ctx: *Node) ?*Node {
 
 // ----- string fns -----
 
-fn stringFn(arena: Allocator, args: []const Result.Result, ctx: *Node) Error![]const u8 {
-    if (args.len == 0) return try Result.stringValueOf(arena, ctx);
-    return try Result.toString(arena, args[0]);
+fn stringFn(arena: Allocator, args: []const result.Result, ctx: *Node) Error![]const u8 {
+    if (args.len == 0) return try result.stringValueOf(arena, ctx);
+    return try result.toString(arena, args[0]);
 }
 
-fn concatFn(arena: Allocator, args: []const Result.Result) Error![]const u8 {
+fn concatFn(arena: Allocator, args: []const result.Result) Error![]const u8 {
     var buf = std.Io.Writer.Allocating.init(arena);
     for (args) |a| {
-        const s = try Result.toString(arena, a);
+        const s = try result.toString(arena, a);
         try buf.writer.writeAll(s);
     }
     return buf.written();
 }
 
-fn startsWithFn(arena: Allocator, args: []const Result.Result) Error!bool {
+fn startsWithFn(arena: Allocator, args: []const result.Result) Error!bool {
     if (args.len < 2) return false;
-    const s1 = try Result.toString(arena, args[0]);
-    const s2 = try Result.toString(arena, args[1]);
+    const s1 = try result.toString(arena, args[0]);
+    const s2 = try result.toString(arena, args[1]);
     return std.mem.startsWith(u8, s1, s2);
 }
 
-fn containsFn(arena: Allocator, args: []const Result.Result) Error!bool {
+fn containsFn(arena: Allocator, args: []const result.Result) Error!bool {
     if (args.len < 2) return false;
-    const s1 = try Result.toString(arena, args[0]);
-    const s2 = try Result.toString(arena, args[1]);
+    const s1 = try result.toString(arena, args[0]);
+    const s2 = try result.toString(arena, args[1]);
     return std.mem.indexOf(u8, s1, s2) != null;
 }
 
-fn substringBeforeFn(arena: Allocator, args: []const Result.Result) Error![]const u8 {
+fn substringBeforeFn(arena: Allocator, args: []const result.Result) Error![]const u8 {
     if (args.len < 2) return "";
-    const s1 = try Result.toString(arena, args[0]);
-    const s2 = try Result.toString(arena, args[1]);
+    const s1 = try result.toString(arena, args[0]);
+    const s2 = try result.toString(arena, args[1]);
     if (std.mem.indexOf(u8, s1, s2)) |idx| {
         return s1[0..idx];
     }
     return "";
 }
 
-fn substringAfterFn(arena: Allocator, args: []const Result.Result) Error![]const u8 {
+fn substringAfterFn(arena: Allocator, args: []const result.Result) Error![]const u8 {
     if (args.len < 2) return "";
-    const s1 = try Result.toString(arena, args[0]);
-    const s2 = try Result.toString(arena, args[1]);
+    const s1 = try result.toString(arena, args[0]);
+    const s2 = try result.toString(arena, args[1]);
     if (std.mem.indexOf(u8, s1, s2)) |idx| {
         return s1[idx + s2.len ..];
     }
     return "";
 }
 
-fn substringFn(arena: Allocator, args: []const Result.Result) Error![]const u8 {
+fn substringFn(arena: Allocator, args: []const result.Result) Error![]const u8 {
     if (args.len < 2) return "";
-    const s = try Result.toString(arena, args[0]);
-    const start_raw = try Result.toNumber(arena, args[1]);
+    const s = try result.toString(arena, args[0]);
+    const start_raw = try result.toNumber(arena, args[1]);
     if (std.math.isNan(start_raw)) return "";
     const start = roundHalfToPosInf(start_raw);
 
     const s_len: f64 = @floatFromInt(s.len);
     if (args.len >= 3) {
-        const len_raw = try Result.toNumber(arena, args[2]);
+        const len_raw = try result.toNumber(arena, args[2]);
         if (std.math.isNan(len_raw)) return "";
         const len = roundHalfToPosInf(len_raw);
         const sum = start - 1 + len;
@@ -249,22 +249,22 @@ fn substringFn(arena: Allocator, args: []const Result.Result) Error![]const u8 {
     return s[si..];
 }
 
-fn stringLengthFn(arena: Allocator, args: []const Result.Result, ctx: *Node) Error!f64 {
+fn stringLengthFn(arena: Allocator, args: []const result.Result, ctx: *Node) Error!f64 {
     const s = if (args.len == 0)
-        try Result.stringValueOf(arena, ctx)
+        try result.stringValueOf(arena, ctx)
     else
-        try Result.toString(arena, args[0]);
+        try result.toString(arena, args[0]);
     // Polyfill returns UTF-16 code units; we return UTF-8 bytes. They
     // agree on ASCII (the gem's 91-case battery is ASCII-only). See
     // .claude/skills/xpath-port/NOTES.md for the divergence rationale.
     return @floatFromInt(s.len);
 }
 
-fn normalizeSpaceFn(arena: Allocator, args: []const Result.Result, ctx: *Node) Error![]const u8 {
+fn normalizeSpaceFn(arena: Allocator, args: []const result.Result, ctx: *Node) Error![]const u8 {
     const s = if (args.len == 0)
-        try Result.stringValueOf(arena, ctx)
+        try result.stringValueOf(arena, ctx)
     else
-        try Result.toString(arena, args[0]);
+        try result.toString(arena, args[0]);
 
     const trimmed = std.mem.trim(u8, s, &std.ascii.whitespace);
     if (trimmed.len == 0) return "";
@@ -283,11 +283,11 @@ fn normalizeSpaceFn(arena: Allocator, args: []const Result.Result, ctx: *Node) E
     return buf.written();
 }
 
-fn translateFn(arena: Allocator, args: []const Result.Result) Error![]const u8 {
+fn translateFn(arena: Allocator, args: []const result.Result) Error![]const u8 {
     if (args.len < 3) return "";
-    const s = try Result.toString(arena, args[0]);
-    const from = try Result.toString(arena, args[1]);
-    const to = try Result.toString(arena, args[2]);
+    const s = try result.toString(arena, args[0]);
+    const from = try result.toString(arena, args[1]);
+    const to = try result.toString(arena, args[2]);
 
     var buf = std.Io.Writer.Allocating.init(arena);
     for (s) |c| {
@@ -303,20 +303,20 @@ fn translateFn(arena: Allocator, args: []const Result.Result) Error![]const u8 {
 
 // ----- number fns -----
 
-fn numberFn(arena: Allocator, args: []const Result.Result, ctx: *Node) Error!f64 {
+fn numberFn(arena: Allocator, args: []const result.Result, ctx: *Node) Error!f64 {
     if (args.len == 0) {
-        const sv = try Result.stringValueOf(arena, ctx);
-        return Result.stringToNumber(sv);
+        const sv = try result.stringValueOf(arena, ctx);
+        return result.stringToNumber(sv);
     }
-    return try Result.toNumber(arena, args[0]);
+    return try result.toNumber(arena, args[0]);
 }
 
-fn sumFn(arena: Allocator, args: []const Result.Result) Error!f64 {
+fn sumFn(arena: Allocator, args: []const result.Result) Error!f64 {
     if (args.len == 0 or args[0] != .node_set) return std.math.nan(f64);
     var total: f64 = 0;
     for (args[0].node_set) |n| {
-        const sv = try Result.stringValueOf(arena, n);
-        total += Result.stringToNumber(sv);
+        const sv = try result.stringValueOf(arena, n);
+        total += result.stringToNumber(sv);
     }
     return total;
 }
@@ -342,7 +342,7 @@ const Tokenizer = @import("Tokenizer.zig");
 const Parser = @import("Parser.zig");
 const Evaluator = @import("Evaluator.zig");
 
-fn evalScalar(a: Allocator, src: []const u8) !Result.Result {
+fn evalScalar(a: Allocator, src: []const u8) !result.Result {
     const expr = try Parser.parse(a, src);
     // Synthetic Frame/Node pointers — the public `evaluate` entry only
     // touches the Frame for path/axis evaluation. Pure-scalar expressions

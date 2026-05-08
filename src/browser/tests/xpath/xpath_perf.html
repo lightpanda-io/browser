@@ -16,8 +16,8 @@
     mismatch fails the test loudly via testing.fail so a regression in
     result count can't be hidden by the timing line.
 
-    Run:    make test F=xpath_perf
-    Filter: make test F=xpath_perf 2>&1 | grep '\[xpath-perf\]'
+    Tun run, uncomment the test in XPathResult.zig (bottom of the file), then:
+    Run:    make test F="#xpath_perf"
 
     Query shapes target the optimization roadmap:
       //*[@id='x']        — global ID lookup (fast-path candidate)

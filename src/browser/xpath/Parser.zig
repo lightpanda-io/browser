@@ -20,14 +20,14 @@
 //!
 //! Mirrors the polyfill `Parser.prototype.*` chain in capybara-lightpanda
 //! (lib/capybara/lightpanda/javascripts/index.js): recursive descent over
-//! a fully-tokenized stream, producing an `Ast.Expr` tree allocated on
+//! a fully-tokenized stream, producing an `ast.Expr` tree allocated on
 //! the caller's arena. The AST borrows string/name slices from `input`
 //! and is valid for as long as the arena and input outlive it.
 
 const std = @import("std");
 
 const Tokenizer = @import("Tokenizer.zig");
-const Ast = @import("ast.zig");
+const ast = @import("ast.zig");
 
 const Token = Tokenizer.Token;
 const Allocator = std.mem.Allocator;
@@ -52,7 +52,7 @@ tokens: []const Token,
 pos: usize = 0,
 depth: u16 = 0,
 
-pub fn parse(arena: Allocator, input: []const u8) Error!*Ast.Expr {
+pub fn parse(arena: Allocator, input: []const u8) Error!*ast.Expr {
     var token_list: std.ArrayList(Token) = .empty;
     // Token count is bounded by input length; ¼-byte-per-token is
     // generous for typical XPath and skips ArrayList regrowth.
@@ -117,13 +117,13 @@ fn matchKeyword(self: *Parser, keyword: []const u8) bool {
     return false;
 }
 
-fn makeExpr(self: *Parser, value: Ast.Expr) Error!*Ast.Expr {
-    const expr = try self.arena.create(Ast.Expr);
+fn makeExpr(self: *Parser, value: ast.Expr) Error!*ast.Expr {
+    const expr = try self.arena.create(ast.Expr);
     expr.* = value;
     return expr;
 }
 
-fn makeBinop(self: *Parser, op: Ast.BinOpKind, left: *Ast.Expr, right: *Ast.Expr) Error!*Ast.Expr {
+fn makeBinop(self: *Parser, op: ast.BinOpKind, left: *ast.Expr, right: *ast.Expr) Error!*ast.Expr {
     return try self.makeExpr(.{ .binop = .{ .op = op, .left = left, .right = right } });
 }
 
@@ -131,14 +131,14 @@ fn makeBinop(self: *Parser, op: Ast.BinOpKind, left: *Ast.Expr, right: *Ast.Expr
 //
 // Or → And → Equality → Relational → Additive → Mult → Unary → Union → Path
 
-fn parseExpr(self: *Parser) Error!*Ast.Expr {
+fn parseExpr(self: *Parser) Error!*ast.Expr {
     if (self.depth >= max_depth) return error.MaxDepthExceeded;
     self.depth += 1;
     defer self.depth -= 1;
     return self.parseOrExpr();
 }
 
-fn parseOrExpr(self: *Parser) Error!*Ast.Expr {
+fn parseOrExpr(self: *Parser) Error!*ast.Expr {
     var left = try self.parseAndExpr();
     while (self.matchKeyword("or")) {
         const right = try self.parseAndExpr();
@@ -147,7 +147,7 @@ fn parseOrExpr(self: *Parser) Error!*Ast.Expr {
     return left;
 }
 
-fn parseAndExpr(self: *Parser) Error!*Ast.Expr {
+fn parseAndExpr(self: *Parser) Error!*ast.Expr {
     var left = try self.parseEqualityExpr();
     while (self.matchKeyword("and")) {
         const right = try self.parseEqualityExpr();
@@ -156,7 +156,7 @@ fn parseAndExpr(self: *Parser) Error!*Ast.Expr {
     return left;
 }
 
-fn parseEqualityExpr(self: *Parser) Error!*Ast.Expr {
+fn parseEqualityExpr(self: *Parser) Error!*ast.Expr {
     var left = try self.parseRelationalExpr();
     while (equalityOp(self.peek())) |op| {
         _ = self.advance();
@@ -166,7 +166,7 @@ fn parseEqualityExpr(self: *Parser) Error!*Ast.Expr {
     return left;
 }
 
-fn parseRelationalExpr(self: *Parser) Error!*Ast.Expr {
+fn parseRelationalExpr(self: *Parser) Error!*ast.Expr {
     var left = try self.parseAdditiveExpr();
     while (relationalOp(self.peek())) |op| {
         _ = self.advance();
@@ -176,7 +176,7 @@ fn parseRelationalExpr(self: *Parser) Error!*Ast.Expr {
     return left;
 }
 
-fn parseAdditiveExpr(self: *Parser) Error!*Ast.Expr {
+fn parseAdditiveExpr(self: *Parser) Error!*ast.Expr {
     var left = try self.parseMultExpr();
     while (additiveOp(self.peek())) |op| {
         _ = self.advance();
@@ -188,7 +188,7 @@ fn parseAdditiveExpr(self: *Parser) Error!*Ast.Expr {
 
 // After a complete unary expression, `*` is multiply; `div`/`mod` are
 // operator-position keywords (tokenized as Name).
-fn parseMultExpr(self: *Parser) Error!*Ast.Expr {
+fn parseMultExpr(self: *Parser) Error!*ast.Expr {
     var left = try self.parseUnaryExpr();
     while (multOp(self.peek())) |op| {
         _ = self.advance();
@@ -198,7 +198,7 @@ fn parseMultExpr(self: *Parser) Error!*Ast.Expr {
     return left;
 }
 
-fn parseUnaryExpr(self: *Parser) Error!*Ast.Expr {
+fn parseUnaryExpr(self: *Parser) Error!*ast.Expr {
     if (self.match(.minus)) {
         if (self.depth >= max_depth) return error.MaxDepthExceeded;
         self.depth += 1;
@@ -209,7 +209,7 @@ fn parseUnaryExpr(self: *Parser) Error!*Ast.Expr {
     return self.parseUnionExpr();
 }
 
-fn parseUnionExpr(self: *Parser) Error!*Ast.Expr {
+fn parseUnionExpr(self: *Parser) Error!*ast.Expr {
     var left = try self.parsePathExpr();
     while (self.match(.pipe)) {
         const right = try self.parsePathExpr();
@@ -220,7 +220,7 @@ fn parseUnionExpr(self: *Parser) Error!*Ast.Expr {
 
 // --- path expressions ---
 
-fn parsePathExpr(self: *Parser) Error!*Ast.Expr {
+fn parsePathExpr(self: *Parser) Error!*ast.Expr {
     const t = self.peek();
 
     if (t == .slash or t == .double_slash) {
@@ -245,7 +245,7 @@ fn parsePathExpr(self: *Parser) Error!*Ast.Expr {
         }
         if (self.peek() == .slash or self.peek() == .double_slash) {
             const dsl = self.advance() == .double_slash;
-            var steps: std.ArrayList(Ast.Step) = .empty;
+            var steps: std.ArrayList(ast.Step) = .empty;
             if (dsl) try steps.append(self.arena, descendantOrSelfStep());
             try self.parseRelStepsInto(&steps);
             return try self.makeExpr(.{ .filter_path = .{
@@ -259,8 +259,8 @@ fn parsePathExpr(self: *Parser) Error!*Ast.Expr {
     return self.parseRelPath();
 }
 
-fn parseAbsPath(self: *Parser) Error!*Ast.Expr {
-    var steps: std.ArrayList(Ast.Step) = .empty;
+fn parseAbsPath(self: *Parser) Error!*ast.Expr {
+    var steps: std.ArrayList(ast.Step) = .empty;
     if (self.match(.double_slash)) {
         try steps.append(self.arena, descendantOrSelfStep());
         try self.parseRelStepsInto(&steps);
@@ -275,8 +275,8 @@ fn parseAbsPath(self: *Parser) Error!*Ast.Expr {
     } });
 }
 
-fn parseRelPath(self: *Parser) Error!*Ast.Expr {
-    var steps: std.ArrayList(Ast.Step) = .empty;
+fn parseRelPath(self: *Parser) Error!*ast.Expr {
+    var steps: std.ArrayList(ast.Step) = .empty;
     try self.parseRelStepsInto(&steps);
     return try self.makeExpr(.{ .path = .{
         .absolute = false,
@@ -284,7 +284,7 @@ fn parseRelPath(self: *Parser) Error!*Ast.Expr {
     } });
 }
 
-fn parseRelStepsInto(self: *Parser, steps: *std.ArrayList(Ast.Step)) Error!void {
+fn parseRelStepsInto(self: *Parser, steps: *std.ArrayList(ast.Step)) Error!void {
     try steps.append(self.arena, try self.parseStep());
     while (self.peek() == .slash or self.peek() == .double_slash) {
         if (self.advance() == .double_slash) {
@@ -301,13 +301,13 @@ fn canStartStep(self: *const Parser) bool {
     };
 }
 
-fn parseStep(self: *Parser) Error!Ast.Step {
+fn parseStep(self: *Parser) Error!ast.Step {
     // Abbreviated steps `.` and `..` carry no axis, node-test, or
     // predicates — predicates after `.` are a parse error per polyfill.
     if (self.match(.dot)) return abbreviatedStep(.self);
     if (self.match(.double_dot)) return abbreviatedStep(.parent);
 
-    var axis: Ast.Axis = .child;
+    var axis: ast.Axis = .child;
     if (self.match(.at)) {
         axis = .attribute;
     } else if (self.peek() == .name and self.lookahead(1) == .double_colon) {
@@ -318,7 +318,7 @@ fn parseStep(self: *Parser) Error!Ast.Step {
 
     const node_test = try self.parseNodeTest();
 
-    var preds: std.ArrayList(*Ast.Expr) = .empty;
+    var preds: std.ArrayList(*ast.Expr) = .empty;
     while (self.match(.lbracket)) {
         const pred = try self.parseExpr();
         _ = try self.expect(.rbracket);
@@ -328,7 +328,7 @@ fn parseStep(self: *Parser) Error!Ast.Step {
     return .{ .axis = axis, .node_test = node_test, .predicates = preds.items };
 }
 
-fn parseNodeTest(self: *Parser) Error!Ast.NodeTest {
+fn parseNodeTest(self: *Parser) Error!ast.NodeTest {
     if (self.match(.star)) return .{ .name = "*" };
     if (self.peek() != .name) return error.ExpectedNodeTest;
 
@@ -349,7 +349,7 @@ fn parseNodeTest(self: *Parser) Error!Ast.NodeTest {
     return .{ .name = name };
 }
 
-fn parsePrimaryExpr(self: *Parser) Error!*Ast.Expr {
+fn parsePrimaryExpr(self: *Parser) Error!*ast.Expr {
     switch (self.peek()) {
         .string => |s| {
             _ = self.advance();
@@ -373,7 +373,7 @@ fn parsePrimaryExpr(self: *Parser) Error!*Ast.Expr {
         .name => |name| {
             _ = self.advance();
             _ = try self.expect(.lparen);
-            var args: std.ArrayList(*Ast.Expr) = .empty;
+            var args: std.ArrayList(*ast.Expr) = .empty;
             if (self.peek() != .rparen) {
                 try args.append(self.arena, try self.parseExpr());
                 while (self.match(.comma)) {
@@ -389,7 +389,7 @@ fn parsePrimaryExpr(self: *Parser) Error!*Ast.Expr {
 
 // --- pure helpers ---
 
-fn equalityOp(t: Token) ?Ast.BinOpKind {
+fn equalityOp(t: Token) ?ast.BinOpKind {
     return switch (t) {
         .eq => .eq,
         .neq => .neq,
@@ -397,7 +397,7 @@ fn equalityOp(t: Token) ?Ast.BinOpKind {
     };
 }
 
-fn relationalOp(t: Token) ?Ast.BinOpKind {
+fn relationalOp(t: Token) ?ast.BinOpKind {
     return switch (t) {
         .lt => .lt,
         .gt => .gt,
@@ -407,7 +407,7 @@ fn relationalOp(t: Token) ?Ast.BinOpKind {
     };
 }
 
-fn additiveOp(t: Token) ?Ast.BinOpKind {
+fn additiveOp(t: Token) ?ast.BinOpKind {
     return switch (t) {
         .plus => .add,
         .minus => .sub,
@@ -415,7 +415,7 @@ fn additiveOp(t: Token) ?Ast.BinOpKind {
     };
 }
 
-fn multOp(t: Token) ?Ast.BinOpKind {
+fn multOp(t: Token) ?ast.BinOpKind {
     return switch (t) {
         .star => .mul,
         .name => |name| blk: {
@@ -427,7 +427,7 @@ fn multOp(t: Token) ?Ast.BinOpKind {
     };
 }
 
-fn descendantOrSelfStep() Ast.Step {
+fn descendantOrSelfStep() ast.Step {
     return .{
         .axis = .descendant_or_self,
         .node_test = .{ .type_test = .node },
@@ -435,7 +435,7 @@ fn descendantOrSelfStep() Ast.Step {
     };
 }
 
-fn abbreviatedStep(axis: Ast.Axis) Ast.Step {
+fn abbreviatedStep(axis: ast.Axis) ast.Step {
     return .{
         .axis = axis,
         .node_test = .{ .type_test = .node },
@@ -447,18 +447,18 @@ fn isNodeTypeName(name: []const u8) bool {
     return typeTestKind(name) != null;
 }
 
-const type_test_lookup = std.StaticStringMap(Ast.TypeTest).initComptime(.{
+const type_test_lookup = std.StaticStringMap(ast.TypeTest).initComptime(.{
     .{ "node", .node },
     .{ "text", .text },
     .{ "comment", .comment },
     .{ "processing-instruction", .processing_instruction },
 });
 
-fn typeTestKind(name: []const u8) ?Ast.TypeTest {
+fn typeTestKind(name: []const u8) ?ast.TypeTest {
     return type_test_lookup.get(name);
 }
 
-const axis_lookup = std.StaticStringMap(Ast.Axis).initComptime(.{
+const axis_lookup = std.StaticStringMap(ast.Axis).initComptime(.{
     .{ "child", .child },
     .{ "descendant", .descendant },
     .{ "descendant-or-self", .descendant_or_self },
@@ -474,7 +474,7 @@ const axis_lookup = std.StaticStringMap(Ast.Axis).initComptime(.{
     .{ "namespace", .namespace },
 });
 
-fn parseAxisName(name: []const u8) Ast.Axis {
+fn parseAxisName(name: []const u8) ast.Axis {
     return axis_lookup.get(name) orelse .unknown;
 }
 
@@ -484,7 +484,7 @@ fn parseAxisName(name: []const u8) Ast.Axis {
 
 const testing = std.testing;
 
-fn parseFixture(input: []const u8) !struct { arena: std.heap.ArenaAllocator, expr: *Ast.Expr } {
+fn parseFixture(input: []const u8) !struct { arena: std.heap.ArenaAllocator, expr: *ast.Expr } {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     errdefer arena.deinit();
     const expr = try parse(arena.allocator(), input);
@@ -538,10 +538,10 @@ test "XPath.Parser: arithmetic precedence — mul binds tighter than add" {
     defer fx.arena.deinit();
     // Expected AST: add(1, mul(2, 3))
     const top = fx.expr.binop;
-    try testing.expectEqual(Ast.BinOpKind.add, top.op);
+    try testing.expectEqual(ast.BinOpKind.add, top.op);
     try testing.expectEqual(@as(f64, 1), top.left.number);
     const mul = top.right.binop;
-    try testing.expectEqual(Ast.BinOpKind.mul, mul.op);
+    try testing.expectEqual(ast.BinOpKind.mul, mul.op);
     try testing.expectEqual(@as(f64, 2), mul.left.number);
     try testing.expectEqual(@as(f64, 3), mul.right.number);
 }
@@ -551,10 +551,10 @@ test "XPath.Parser: arithmetic left-associativity" {
     defer fx.arena.deinit();
     // Expected AST: sub(sub(1, 2), 3)
     const top = fx.expr.binop;
-    try testing.expectEqual(Ast.BinOpKind.sub, top.op);
+    try testing.expectEqual(ast.BinOpKind.sub, top.op);
     try testing.expectEqual(@as(f64, 3), top.right.number);
     const inner = top.left.binop;
-    try testing.expectEqual(Ast.BinOpKind.sub, inner.op);
+    try testing.expectEqual(ast.BinOpKind.sub, inner.op);
     try testing.expectEqual(@as(f64, 1), inner.left.number);
     try testing.expectEqual(@as(f64, 2), inner.right.number);
 }
@@ -562,21 +562,21 @@ test "XPath.Parser: arithmetic left-associativity" {
 test "XPath.Parser: div and mod are operator-position keywords" {
     var fx = try parseFixture("7 div 2");
     defer fx.arena.deinit();
-    try testing.expectEqual(Ast.BinOpKind.div, fx.expr.binop.op);
+    try testing.expectEqual(ast.BinOpKind.div, fx.expr.binop.op);
 
     var fx2 = try parseFixture("7 mod 2");
     defer fx2.arena.deinit();
-    try testing.expectEqual(Ast.BinOpKind.mod, fx2.expr.binop.op);
+    try testing.expectEqual(ast.BinOpKind.mod, fx2.expr.binop.op);
 }
 
 test "XPath.Parser: comparison operators" {
     inline for (.{
-        .{ "1 = 2", Ast.BinOpKind.eq },
-        .{ "1 != 2", Ast.BinOpKind.neq },
-        .{ "1 < 2", Ast.BinOpKind.lt },
-        .{ "1 <= 2", Ast.BinOpKind.lte },
-        .{ "1 > 2", Ast.BinOpKind.gt },
-        .{ "1 >= 2", Ast.BinOpKind.gte },
+        .{ "1 = 2", ast.BinOpKind.eq },
+        .{ "1 != 2", ast.BinOpKind.neq },
+        .{ "1 < 2", ast.BinOpKind.lt },
+        .{ "1 <= 2", ast.BinOpKind.lte },
+        .{ "1 > 2", ast.BinOpKind.gt },
+        .{ "1 >= 2", ast.BinOpKind.gte },
     }) |case| {
         var fx = try parseFixture(case[0]);
         defer fx.arena.deinit();
@@ -589,8 +589,8 @@ test "XPath.Parser: logical or/and short-circuit chain" {
     defer fx.arena.deinit();
     // Expected AST: or(path(a), and(path(b), path(c))) — and binds tighter
     const top = fx.expr.binop;
-    try testing.expectEqual(Ast.BinOpKind.or_, top.op);
-    try testing.expectEqual(Ast.BinOpKind.and_, top.right.binop.op);
+    try testing.expectEqual(ast.BinOpKind.or_, top.op);
+    try testing.expectEqual(ast.BinOpKind.and_, top.right.binop.op);
 }
 
 test "XPath.Parser: unary minus" {
@@ -602,7 +602,7 @@ test "XPath.Parser: unary minus" {
 test "XPath.Parser: union" {
     var fx = try parseFixture("a | b");
     defer fx.arena.deinit();
-    try testing.expectEqual(Ast.BinOpKind.union_, fx.expr.binop.op);
+    try testing.expectEqual(ast.BinOpKind.union_, fx.expr.binop.op);
 }
 
 test "XPath.Parser: absolute path / alone is document root" {
@@ -628,8 +628,8 @@ test "XPath.Parser: //foo expands to descendant-or-self::node()/foo" {
     const path = fx.expr.path;
     try testing.expect(path.absolute);
     try testing.expectEqual(@as(usize, 2), path.steps.len);
-    try testing.expectEqual(Ast.Axis.descendant_or_self, path.steps[0].axis);
-    try testing.expectEqual(Ast.TypeTest.node, path.steps[0].node_test.type_test);
+    try testing.expectEqual(ast.Axis.descendant_or_self, path.steps[0].axis);
+    try testing.expectEqual(ast.TypeTest.node, path.steps[0].node_test.type_test);
     try testing.expectEqualStrings("foo", path.steps[1].node_test.name);
 }
 
@@ -639,7 +639,7 @@ test "XPath.Parser: relative path child::foo/bar" {
     const path = fx.expr.path;
     try testing.expect(!path.absolute);
     try testing.expectEqual(@as(usize, 2), path.steps.len);
-    try testing.expectEqual(Ast.Axis.child, path.steps[0].axis);
+    try testing.expectEqual(ast.Axis.child, path.steps[0].axis);
     try testing.expectEqualStrings("foo", path.steps[0].node_test.name);
     try testing.expectEqualStrings("bar", path.steps[1].node_test.name);
 }
@@ -649,32 +649,32 @@ test "XPath.Parser: abbreviated steps . and .." {
     defer fx.arena.deinit();
     const path = fx.expr.path;
     try testing.expectEqual(@as(usize, 2), path.steps.len);
-    try testing.expectEqual(Ast.Axis.self, path.steps[0].axis);
-    try testing.expectEqual(Ast.Axis.parent, path.steps[1].axis);
+    try testing.expectEqual(ast.Axis.self, path.steps[0].axis);
+    try testing.expectEqual(ast.Axis.parent, path.steps[1].axis);
 }
 
 test "XPath.Parser: attribute axis @class" {
     var fx = try parseFixture("@class");
     defer fx.arena.deinit();
     const step = fx.expr.path.steps[0];
-    try testing.expectEqual(Ast.Axis.attribute, step.axis);
+    try testing.expectEqual(ast.Axis.attribute, step.axis);
     try testing.expectEqualStrings("class", step.node_test.name);
 }
 
 test "XPath.Parser: all 12 named axes parse correctly" {
     inline for (.{
-        .{ "child::a", Ast.Axis.child },
-        .{ "descendant::a", Ast.Axis.descendant },
-        .{ "descendant-or-self::a", Ast.Axis.descendant_or_self },
-        .{ "self::a", Ast.Axis.self },
-        .{ "parent::a", Ast.Axis.parent },
-        .{ "ancestor::a", Ast.Axis.ancestor },
-        .{ "ancestor-or-self::a", Ast.Axis.ancestor_or_self },
-        .{ "following-sibling::a", Ast.Axis.following_sibling },
-        .{ "preceding-sibling::a", Ast.Axis.preceding_sibling },
-        .{ "following::a", Ast.Axis.following },
-        .{ "preceding::a", Ast.Axis.preceding },
-        .{ "namespace::a", Ast.Axis.namespace },
+        .{ "child::a", ast.Axis.child },
+        .{ "descendant::a", ast.Axis.descendant },
+        .{ "descendant-or-self::a", ast.Axis.descendant_or_self },
+        .{ "self::a", ast.Axis.self },
+        .{ "parent::a", ast.Axis.parent },
+        .{ "ancestor::a", ast.Axis.ancestor },
+        .{ "ancestor-or-self::a", ast.Axis.ancestor_or_self },
+        .{ "following-sibling::a", ast.Axis.following_sibling },
+        .{ "preceding-sibling::a", ast.Axis.preceding_sibling },
+        .{ "following::a", ast.Axis.following },
+        .{ "preceding::a", ast.Axis.preceding },
+        .{ "namespace::a", ast.Axis.namespace },
     }) |case| {
         var fx = try parseFixture(case[0]);
         defer fx.arena.deinit();
@@ -685,7 +685,7 @@ test "XPath.Parser: all 12 named axes parse correctly" {
 test "XPath.Parser: unknown axis name maps to .unknown — polyfill parity" {
     var fx = try parseFixture("wibble::a");
     defer fx.arena.deinit();
-    try testing.expectEqual(Ast.Axis.unknown, fx.expr.path.steps[0].axis);
+    try testing.expectEqual(ast.Axis.unknown, fx.expr.path.steps[0].axis);
 }
 
 test "XPath.Parser: wildcard *" {
@@ -706,10 +706,10 @@ test "XPath.Parser: namespace-prefixed name and wildcard" {
 
 test "XPath.Parser: node-type tests" {
     inline for (.{
-        .{ "node()", Ast.TypeTest.node },
-        .{ "text()", Ast.TypeTest.text },
-        .{ "comment()", Ast.TypeTest.comment },
-        .{ "processing-instruction()", Ast.TypeTest.processing_instruction },
+        .{ "node()", ast.TypeTest.node },
+        .{ "text()", ast.TypeTest.text },
+        .{ "comment()", ast.TypeTest.comment },
+        .{ "processing-instruction()", ast.TypeTest.processing_instruction },
     }) |case| {
         var fx = try parseFixture(case[0]);
         defer fx.arena.deinit();
@@ -720,7 +720,7 @@ test "XPath.Parser: node-type tests" {
 test "XPath.Parser: processing-instruction with literal target — consumed but ignored" {
     var fx = try parseFixture("processing-instruction('xml-stylesheet')");
     defer fx.arena.deinit();
-    try testing.expectEqual(Ast.TypeTest.processing_instruction, fx.expr.path.steps[0].node_test.type_test);
+    try testing.expectEqual(ast.TypeTest.processing_instruction, fx.expr.path.steps[0].node_test.type_test);
 }
 
 test "XPath.Parser: predicate on step" {
@@ -770,7 +770,7 @@ test "XPath.Parser: filter with // tail prepends descendant-or-self" {
     defer fx.arena.deinit();
     const fp = fx.expr.filter_path;
     try testing.expectEqual(@as(usize, 2), fp.steps.len);
-    try testing.expectEqual(Ast.Axis.descendant_or_self, fp.steps[0].axis);
+    try testing.expectEqual(ast.Axis.descendant_or_self, fp.steps[0].axis);
     try testing.expectEqualStrings("b", fp.steps[1].node_test.name);
 }
 
@@ -788,7 +788,7 @@ test "XPath.Parser: complex representative expression" {
     const path = fx.expr.path;
     try testing.expect(path.absolute);
     try testing.expectEqual(@as(usize, 3), path.steps.len);
-    try testing.expectEqual(Ast.Axis.descendant_or_self, path.steps[0].axis);
+    try testing.expectEqual(ast.Axis.descendant_or_self, path.steps[0].axis);
     try testing.expectEqualStrings("div", path.steps[1].node_test.name);
     try testing.expectEqual(@as(usize, 1), path.steps[1].predicates.len);
     try testing.expectEqualStrings("p", path.steps[2].node_test.name);

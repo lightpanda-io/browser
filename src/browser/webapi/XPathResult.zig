@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! WHATWG `XPathResult` (full surface, all 10 type constants — decision
-//! #4). Wraps the evaluator's `Result.Result` for JS consumption:
+//! #4). Wraps the evaluator's `result.Result` for JS consumption:
 //! coerces to the requested result type at construction, exposes the
 //! type-tagged accessors, and serves the iterator/snapshot APIs.
 //!
@@ -44,9 +44,9 @@ const Node = @import("Node.zig");
 // XPath runtime helpers. Aliased to keep the cross-directory imports
 // readable when both modules expose a `Result` type.
 const xpath = struct {
+    const result = @import("../xpath/result.zig");
     const Parser = @import("../xpath/Parser.zig");
     const Evaluator = @import("../xpath/Evaluator.zig");
-    const Result = @import("../xpath/result.zig");
 };
 
 const Allocator = std.mem.Allocator;
@@ -105,14 +105,14 @@ pub fn fromExpression(
     return fromResult(arena, requested_type, result);
 }
 
-/// Wrap an already-evaluated `Result.Result` into an XPathResult. The
+/// Wrap an already-evaluated `result.result` into an XPathResult. The
 /// caller hands over ownership of `arena` — the XPathResult will release
 /// it on deinit. Used by `XPathExpression.evaluate` (which has its own
 /// AST cache and only allocates a fresh result arena).
 pub fn fromResult(
     arena: Allocator,
     requested_type: u16,
-    result: xpath.Result.Result,
+    result: xpath.result.Result,
 ) !*XPathResult {
     const value: Value = switch (requested_type) {
         ANY_TYPE => switch (result) {
@@ -121,9 +121,9 @@ pub fn fromResult(
             .boolean => |b| .{ .boolean = b },
             .node_set => |ns| .{ .nodes = ns },
         },
-        NUMBER_TYPE => .{ .number = try xpath.Result.toNumber(arena, result) },
-        STRING_TYPE => .{ .string = try xpath.Result.toString(arena, result) },
-        BOOLEAN_TYPE => .{ .boolean = xpath.Result.toBoolean(result) },
+        NUMBER_TYPE => .{ .number = try xpath.result.toNumber(arena, result) },
+        STRING_TYPE => .{ .string = try xpath.result.toString(arena, result) },
+        BOOLEAN_TYPE => .{ .boolean = xpath.result.toBoolean(result) },
         UNORDERED_NODE_ITERATOR_TYPE,
         ORDERED_NODE_ITERATOR_TYPE,
         UNORDERED_NODE_SNAPSHOT_TYPE,
@@ -282,6 +282,7 @@ test "WebApi: XPath conformance" {
     try testing.htmlRunner("xpath/xpath_conformance.html", .{});
 }
 
-test "WebApi: XPath perf" {
-    try testing.htmlRunner("xpath/xpath_perf.html", .{});
-}
+// This uses console.warn, uncomment if you want to run it
+// test "WebApi: XPath perf" {
+//     try testing.htmlRunner("xpath/xpath_perf.html", .{});
+// }
