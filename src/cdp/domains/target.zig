@@ -144,6 +144,75 @@ fn disposeBrowserContext(cmd: *CDP.Command) !void {
     try cmd.sendResult(null, .{});
 }
 
+// Lazy promotion of the synthetic STARTUP session into a real
+// BrowserContext + Target + Session whose session_id is the literal
+// string "STARTUP". Used by CDP.dispatchStartupCommand when a driver
+// (notably Playwright's chromium.connectOverCDP) starts driving the
+// synthetic STARTUP target Lightpanda advertised in setAutoAttach
+// without ever calling Target.createBrowserContext / Target.createTarget.
+//
+// Mirrors the bootstrap portion of createTarget but deliberately omits
+// the Target.targetCreated and Target.attachedToTarget events:
+// setAutoAttach already sent Target.attachedToTarget for the synthetic
+// STARTUP target, and emitting another attached/created event for what
+// the driver considers the same target produces duplicate sessions in
+// Playwright.
+//
+// The synthetic Target.attachedToTarget event sent by setAutoAttach
+// already advertised this target with the same FID-0000000001 /
+// BID-1 strings the freshly-created BrowserContext + root frame are
+// assigned (Session.nextFrameId returns 1 first; the bc id generator
+// returns BID-1 first), so events emitted after promotion line up with
+// what the driver already recorded.
+// Puppeteer never reaches this path (it always issues
+// createBrowserContext + createTarget without sessionId before sending
+// any STARTUP-tagged command).
+pub fn promoteStartupSession(cmd: *CDP.Command) !void {
+    lp.assert(cmd.browser_context == null, "promoteStartupSession with existing bc", .{});
+
+    const bc = cmd.createBrowserContext() catch |err| switch (err) {
+        error.AlreadyExists => unreachable,
+        else => return err,
+    };
+
+    lp.assert(!bc.session.hasPage(), "promoteStartupSession with existing page", .{});
+    lp.assert(bc.session_id == null, "promoteStartupSession with existing session_id", .{});
+
+    const frame = try bc.session.createPage();
+
+    // target_id == frame_id of the root frame, matching createTarget.
+    const frame_id = id.toFrameId(frame._frame_id);
+    bc.target_id = frame_id;
+    const target_id = &bc.target_id.?;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
+        bc.inspector_session.inspector.contextCreated(
+            &ls.local,
+            "",
+            "", // @ZIGDOM
+            aux_data,
+            true,
+        );
+    }
+
+    bc.security_origin = "://";
+    bc.secure_context_type = "InsecureScheme";
+
+    // Bind the existing "STARTUP" sessionId to this bc so the dispatcher's
+    // isValidSessionId check passes for subsequent commands. Mirror
+    // doAttachtoTarget's first-attach extra-headers reset.
+    bc.extra_headers.clearRetainingCapacity();
+    bc.session_id = "STARTUP";
+    // The synthetic advertisement is now backed by a real bc/target; no
+    // future doAttachtoTarget should reuse the literal "STARTUP" string.
+    cmd.cdp.startup_session_advertised = false;
+}
+
 fn createTarget(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         url: [:0]const u8 = "about:blank",
@@ -444,28 +513,58 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     // there.
     // This hack requires the main cdp dispatch handler to special case
     // messages from this "STARTUP" session.
+    //
+    // The synthetic targetId / browserContextId here are deliberately the
+    // same strings the first real frame and BrowserContext will be assigned
+    // when promoted (Session.nextFrameId starts at 0 and returns 1 first;
+    // CDP.browser_context_id_gen returns BID-1 first). Drivers that bind
+    // the page to whatever targetId we advertise here (Playwright's
+    // chromium.connectOverCDP, in particular) reconcile cleanly with the
+    // events emitted after promotion. Puppeteer-style drivers ignore this
+    // synthetic event entirely.
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
         .sessionId = "STARTUP",
         .targetInfo = TargetInfo{
             .type = "page",
-            .targetId = "TID-STARTUP",
+            .targetId = "FID-0000000001",
             .title = "",
             .url = "about:blank",
-            .browserContextId = "BID-STARTUP",
+            .browserContextId = "BID-1",
         },
     }, .{});
+    cmd.cdp.startup_session_advertised = true;
 
     try cmd.sendResult(null, .{});
 }
 
 fn doAttachtoTarget(cmd: *CDP.Command, target_id: []const u8) !void {
     const bc = cmd.browser_context.?;
-    const session_id = bc.session_id orelse cmd.cdp.session_id_gen.next();
+    const cdp = cmd.cdp;
+
+    // If setAutoAttach already advertised the synthetic STARTUP session
+    // for this connection (Puppeteer-style flow: setAutoAttach -> silent
+    // STARTUP commands -> createBrowserContext + createTarget), reuse
+    // "STARTUP" as the session_id so the driver sees a single coherent
+    // session for the target it already knows about, rather than receiving
+    // a second Target.attachedToTarget event with a different sessionId
+    // for the same targetId (which would make the driver try to drive two
+    // separate Page-init flows over the same target).
+    const reuse_startup = cdp.startup_session_advertised and bc.session_id == null;
+    const session_id: []const u8 = if (reuse_startup) "STARTUP" else (bc.session_id orelse cdp.session_id_gen.next());
 
     if (bc.session_id == null) {
         // extra_headers should not be kept on a new frame or tab,
         // currently we have only 1 frame, we clear it just in case
         bc.extra_headers.clearRetainingCapacity();
+    }
+
+    if (reuse_startup) {
+        // The driver already received Target.attachedToTarget for this
+        // session in setAutoAttach; suppress the duplicate. Just bind
+        // bc.session_id so the dispatcher accepts STARTUP-tagged commands.
+        cdp.startup_session_advertised = false;
+        bc.session_id = session_id;
+        return;
     }
 
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{

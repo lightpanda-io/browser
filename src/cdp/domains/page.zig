@@ -87,13 +87,18 @@ const CDPFrame = struct {
 };
 
 fn getFrameTree(cmd: *CDP.Command) !void {
-    // Stagehand parses the response and error if we don't return a
-    // correct one for this call when browser context or target id are missing.
+    // Stagehand parses the response and errors if we don't return a
+    // correct one for this call when no browser context / target id
+    // exists yet. The synthetic frameId / loaderId here deliberately
+    // match what the first real frame and loader will be assigned when
+    // a STARTUP session is later promoted (Session.nextFrameId / nextLoaderId
+    // both return 1 first), so drivers that bind to the synthetic ids
+    // reconcile cleanly with the post-promotion frame tree.
     const startup = .{
         .frameTree = .{
             .frame = .{
-                .id = "TID-STARTUP",
-                .loaderId = "LID-STARTUP",
+                .id = "FID-0000000001",
+                .loaderId = "LID-0000000001",
                 .securityOrigin = @import("../CDP.zig").URL_BASE,
                 .url = "about:blank",
                 .secureContextType = "Secure",
@@ -875,13 +880,15 @@ test "cdp.frame: getFrameTree" {
     defer ctx.deinit();
 
     {
-        // no browser context - should return TID-STARTUP
+        // no browser context - synthetic placeholder; ids deliberately
+        // match what the first promoted frame/loader will be assigned
+        // (Session.nextFrameId / nextLoaderId both return 1 first).
         try ctx.processMessage(.{ .id = 1, .method = "Page.getFrameTree", .sessionId = "STARTUP" });
         try ctx.expectSentResult(.{
             .frameTree = .{
                 .frame = .{
-                    .id = "TID-STARTUP",
-                    .loaderId = "LID-STARTUP",
+                    .id = "FID-0000000001",
+                    .loaderId = "LID-0000000001",
                     .url = "about:blank",
                     .secureContextType = "Secure",
                 },
