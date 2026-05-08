@@ -749,6 +749,13 @@ pub const Script = struct {
         try_catch.init(local);
         defer try_catch.deinit();
 
+        // Custom-element reactions: the script body is a JS-execution
+        // boundary. Open a scope so any reactions it queues (or that were
+        // queued by the parser since the previous boundary) drain at the
+        // end of the script, before the parser resumes.
+        const ce_checkpoint = frame._ce_reactions.push();
+        defer frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
+
         const success = blk: {
             const content = self.source.content();
             switch (fe.kind) {

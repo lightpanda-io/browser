@@ -27,6 +27,7 @@ const Element = @import("../../Element.zig");
 const Document = @import("../../Document.zig");
 const HtmlElement = @import("../Html.zig");
 const CustomElementDefinition = @import("../../CustomElementDefinition.zig");
+const Reaction = @import("../../../CustomElementReactions.zig").Reaction;
 
 const log = lp.log;
 const String = lp.String;
@@ -45,53 +46,18 @@ pub fn asNode(self: *Custom) *Node {
     return self.asElement().asNode();
 }
 
-pub fn invokeConnectedCallback(self: *Custom, frame: *Frame) void {
-    // Only invoke if we haven't already called it while connected
-    if (self._connected_callback_invoked) {
-        return;
-    }
+// Reactions are queued via enqueue* and fired via fireReaction at the outer
+// CEReactions boundary (set up by the JS bridge, the parser pump, etc.).
+//
+// Dedup happens at enqueue time: the connected/disconnected flags flip when
+// we queue a reaction so that a redundant enqueue (already-in-this-state)
+// is dropped, and a remove+re-insert in the same scope queues both reactions
+// in order. Fire-time is unconditional.
 
-    self._connected_callback_invoked = true;
-    self._disconnected_callback_invoked = false;
-    self.invokeCallback("connectedCallback", .{}, frame);
-}
-
-pub fn invokeDisconnectedCallback(self: *Custom, frame: *Frame) void {
-    // Only invoke if we haven't already called it while disconnected
-    if (self._disconnected_callback_invoked) {
-        return;
-    }
-
-    self._disconnected_callback_invoked = true;
-    self._connected_callback_invoked = false;
-    self.invokeCallback("disconnectedCallback", .{}, frame);
-}
-
-pub fn invokeAttributeChangedCallback(self: *Custom, name: String, old_value: ?String, new_value: ?String, namespace: ?String, frame: *Frame) void {
-    const definition = self._definition orelse return;
-    if (!definition.isAttributeObserved(name)) {
-        return;
-    }
-    self.invokeCallback("attributeChangedCallback", .{ name, old_value, new_value, namespace }, frame);
-}
-
-pub fn invokeAdoptedCallback(self: *Custom, old_document: *Document, new_document: *Document, frame: *Frame) void {
-    self.invokeCallback("adoptedCallback", .{ old_document, new_document }, frame);
-}
-
-pub fn invokeAdoptedCallbackOnElement(element: *Element, old_document: *Document, new_document: *Document, frame: *Frame) void {
-    if (element.is(Custom)) |custom| {
-        custom.invokeAdoptedCallback(old_document, new_document, frame);
-        return;
-    }
-    const definition = frame.getCustomizedBuiltInDefinition(element) orelse return;
-    invokeCallbackOnElement(element, definition, "adoptedCallback", .{ old_document, new_document }, frame);
-}
-
-pub fn invokeConnectedCallbackOnElement(comptime from_parser: bool, element: *Element, frame: *Frame) !void {
+pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *Element, frame: *Frame) error{OutOfMemory}!void {
     // Autonomous custom element
     if (element.is(Custom)) |custom| {
-        // If the element is undefined, check if a definition now exists and upgrade
+        // Upgrade if a definition exists but isn't yet attached
         if (custom._definition == null) {
             const name = custom._tag_name.str();
             if (frame.window._custom_elements._definitions.get(name)) |definition| {
@@ -99,30 +65,31 @@ pub fn invokeConnectedCallbackOnElement(comptime from_parser: bool, element: *El
                 CustomElementRegistry.upgradeCustomElement(custom, definition, frame) catch {};
                 return;
             }
+            // Element is undefined and no definition exists yet — nothing to queue.
+            return;
         }
 
-        if (comptime from_parser) {
-            // From parser, we know the element is brand new
-            custom._connected_callback_invoked = true;
-            custom.invokeCallback("connectedCallback", .{}, frame);
-        } else {
-            custom.invokeConnectedCallback(frame);
-        }
+        // Dedup: skip if already queued/fired while connected.
+        if (custom._connected_callback_invoked) return;
+        custom._connected_callback_invoked = true;
+        custom._disconnected_callback_invoked = false;
+        try frame._ce_reactions.enqueueConnected(element);
         return;
     }
 
     // Customized built-in element - check if it actually has a definition first
-    const definition = frame.getCustomizedBuiltInDefinition(element) orelse return;
+    if (frame.getCustomizedBuiltInDefinition(element) == null) {
+        return;
+    }
 
     if (comptime from_parser) {
-        // From parser, we know the element is brand new, skip the tracking check
+        // From parser, we know the element is brand new; skip the dedup check.
         try frame._customized_builtin_connected_callback_invoked.put(
             frame.arena,
             element,
             {},
         );
     } else {
-        // Not from parser, check if we've already invoked while connected
         const gop = try frame._customized_builtin_connected_callback_invoked.getOrPut(
             frame.arena,
             element,
@@ -134,43 +101,95 @@ pub fn invokeConnectedCallbackOnElement(comptime from_parser: bool, element: *El
     }
 
     _ = frame._customized_builtin_disconnected_callback_invoked.remove(element);
-    invokeCallbackOnElement(element, definition, "connectedCallback", .{}, frame);
+    try frame._ce_reactions.enqueueConnected(element);
 }
 
-pub fn invokeDisconnectedCallbackOnElement(element: *Element, frame: *Frame) void {
-    // Autonomous custom element
+pub fn enqueueDisconnectedCallbackOnElement(element: *Element, frame: *Frame) void {
     if (element.is(Custom)) |custom| {
-        custom.invokeDisconnectedCallback(frame);
+        if (custom._definition == null) return;
+        if (custom._disconnected_callback_invoked) return;
+        custom._disconnected_callback_invoked = true;
+        custom._connected_callback_invoked = false;
+        frame._ce_reactions.enqueueDisconnected(element) catch |err| {
+            log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
+        };
         return;
     }
 
-    // Customized built-in element - check if it actually has a definition first
-    const definition = frame.getCustomizedBuiltInDefinition(element) orelse return;
+    if (frame.getCustomizedBuiltInDefinition(element) == null) {
+        return;
+    }
 
-    // Check if we've already invoked disconnectedCallback while disconnected
     const gop = frame._customized_builtin_disconnected_callback_invoked.getOrPut(
         frame.arena,
         element,
     ) catch return;
     if (gop.found_existing) return;
     gop.value_ptr.* = {};
-
     _ = frame._customized_builtin_connected_callback_invoked.remove(element);
 
-    invokeCallbackOnElement(element, definition, "disconnectedCallback", .{}, frame);
+    frame._ce_reactions.enqueueDisconnected(element) catch |err| {
+        log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
+    };
 }
 
-pub fn invokeAttributeChangedCallbackOnElement(element: *Element, name: String, old_value: ?String, new_value: ?String, namespace: ?String, frame: *Frame) void {
-    // Autonomous custom element
+pub fn enqueueAdoptedCallbackOnElement(element: *Element, old_document: *Document, new_document: *Document, frame: *Frame) void {
     if (element.is(Custom)) |custom| {
-        custom.invokeAttributeChangedCallback(name, old_value, new_value, namespace, frame);
-        return;
+        if (custom._definition == null) return;
+    } else {
+        if (frame.getCustomizedBuiltInDefinition(element) == null) return;
     }
+    frame._ce_reactions.enqueueAdopted(element, old_document, new_document) catch |err| {
+        log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
+    };
+}
 
-    // Customized built-in element - check if attribute is observed
-    const definition = frame.getCustomizedBuiltInDefinition(element) orelse return;
-    if (!definition.isAttributeObserved(name)) return;
-    invokeCallbackOnElement(element, definition, "attributeChangedCallback", .{ name, old_value, new_value, namespace }, frame);
+pub fn enqueueAttributeChangedCallbackOnElement(element: *Element, name: String, old_value: ?String, new_value: ?String, namespace: ?String, frame: *Frame) void {
+    if (element.is(Custom)) |custom| {
+        const definition = custom._definition orelse return;
+        if (!definition.isAttributeObserved(name)) return;
+    } else {
+        const definition = frame.getCustomizedBuiltInDefinition(element) orelse return;
+        if (!definition.isAttributeObserved(name)) return;
+    }
+    frame._ce_reactions.enqueueAttributeChanged(element, name, old_value, new_value, namespace) catch |err| {
+        log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
+    };
+}
+
+// Called by CustomElementReactions.popAndInvoke for each queued reaction.
+// Filtering already happened at enqueue time, so just fire unconditionally.
+pub fn fireReaction(reaction: Reaction, frame: *Frame) void {
+    switch (reaction) {
+        .connected => |el| {
+            if (el.is(Custom)) |custom| {
+                custom.invokeCallback("connectedCallback", .{}, frame);
+            } else if (frame.getCustomizedBuiltInDefinition(el)) |definition| {
+                invokeCallbackOnElement(el, definition, "connectedCallback", .{}, frame);
+            }
+        },
+        .disconnected => |el| {
+            if (el.is(Custom)) |custom| {
+                custom.invokeCallback("disconnectedCallback", .{}, frame);
+            } else if (frame.getCustomizedBuiltInDefinition(el)) |definition| {
+                invokeCallbackOnElement(el, definition, "disconnectedCallback", .{}, frame);
+            }
+        },
+        .adopted => |a| {
+            if (a.element.is(Custom)) |custom| {
+                custom.invokeCallback("adoptedCallback", .{ a.old_document, a.new_document }, frame);
+            } else if (frame.getCustomizedBuiltInDefinition(a.element)) |definition| {
+                invokeCallbackOnElement(a.element, definition, "adoptedCallback", .{ a.old_document, a.new_document }, frame);
+            }
+        },
+        .attribute_changed => |a| {
+            if (a.element.is(Custom)) |custom| {
+                custom.invokeCallback("attributeChangedCallback", .{ a.name, a.old_value, a.new_value, a.namespace }, frame);
+            } else if (frame.getCustomizedBuiltInDefinition(a.element)) |definition| {
+                invokeCallbackOnElement(a.element, definition, "attributeChangedCallback", .{ a.name, a.old_value, a.new_value, a.namespace }, frame);
+            }
+        },
+    }
 }
 
 fn invokeCallbackOnElement(element: *Element, definition: *CustomElementDefinition, comptime callback_name: [:0]const u8, args: anytype, frame: *Frame) void {
