@@ -423,19 +423,19 @@ pub const JsApi = struct {
         pub const enumerable = false;
     };
 
-    pub const data = bridge.accessor(CData.getData, CData._setData, .{});
+    pub const data = bridge.accessor(CData.getData, CData._setData, .{ .ce_reactions = true });
     pub const length = bridge.accessor(CData.getLength, null, .{});
 
-    pub const appendData = bridge.function(CData.appendData, .{});
-    pub const deleteData = bridge.function(CData.deleteData, .{ .dom_exception = true });
-    pub const insertData = bridge.function(CData.insertData, .{ .dom_exception = true });
-    pub const replaceData = bridge.function(CData.replaceData, .{ .dom_exception = true });
+    pub const appendData = bridge.function(CData.appendData, .{ .ce_reactions = true });
+    pub const deleteData = bridge.function(CData.deleteData, .{ .dom_exception = true, .ce_reactions = true });
+    pub const insertData = bridge.function(CData.insertData, .{ .dom_exception = true, .ce_reactions = true });
+    pub const replaceData = bridge.function(CData.replaceData, .{ .dom_exception = true, .ce_reactions = true });
     pub const substringData = bridge.function(CData.substringData, .{ .dom_exception = true });
 
-    pub const remove = bridge.function(CData.remove, .{});
-    pub const before = bridge.function(CData.before, .{});
-    pub const after = bridge.function(CData.after, .{});
-    pub const replaceWith = bridge.function(CData.replaceWith, .{});
+    pub const remove = bridge.function(CData.remove, .{ .ce_reactions = true });
+    pub const before = bridge.function(CData.before, .{ .ce_reactions = true });
+    pub const after = bridge.function(CData.after, .{ .ce_reactions = true });
+    pub const replaceWith = bridge.function(CData.replaceWith, .{ .ce_reactions = true });
 
     pub const nextElementSibling = bridge.accessor(CData.nextElementSibling, null, .{});
     pub const previousElementSibling = bridge.accessor(CData.previousElementSibling, null, .{});

@@ -474,11 +474,7 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
         try frame.insertAllChildrenBefore(fragment, parent, node);
     }
 
-    // A custom element callback fired during insertAllChildrenBefore may
-    // have already detached `node`; only remove it if it's still here.
-    if (node._parent == parent) {
-        frame.removeNode(parent, node, .{ .will_be_reconnected = false });
-    }
+    frame.removeNode(parent, node, .{ .will_be_reconnected = false });
 }
 
 pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void {
@@ -489,21 +485,16 @@ pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void
 pub fn setInnerHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     const parent = self.asNode();
 
-    // Remove all existing children. Drain via firstChild(): removeNode
-    // fires disconnectedCallback for custom elements, which can mutate
-    // the child list and dangle any cached next-pointer the iterator
-    // would otherwise hold.
     frame.domChanged();
-    while (parent.firstChild()) |child| {
+    var it = parent.childrenIterator();
+    while (it.next()) |child| {
         frame.removeNode(parent, child, .{ .will_be_reconnected = false });
     }
 
-    // Fast path: skip parsing if html is empty
     if (html.len == 0) {
         return;
     }
 
-    // Parse and add new children
     try frame.parseHtmlAsChildren(parent, html);
 }
 
@@ -1743,21 +1734,21 @@ pub const JsApi = struct {
     }
     pub const namespaceURI = bridge.accessor(Element.getNamespaceURI, null, .{});
 
-    pub const innerText = bridge.accessor(_innerText, Element.setInnerText, .{});
+    pub const innerText = bridge.accessor(_innerText, Element.setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *Element, frame: *const Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.getInnerText(&buf.writer);
         return buf.written();
     }
 
-    pub const outerHTML = bridge.accessor(_outerHTML, Element.setOuterHTML, .{});
+    pub const outerHTML = bridge.accessor(_outerHTML, Element.setOuterHTML, .{ .ce_reactions = true });
     fn _outerHTML(self: *Element, frame: *Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.getOuterHTML(&buf.writer, frame);
         return buf.written();
     }
 
-    pub const innerHTML = bridge.accessor(_innerHTML, Element.setInnerHTML, .{});
+    pub const innerHTML = bridge.accessor(_innerHTML, Element.setInnerHTML, .{ .ce_reactions = true });
     fn _innerHTML(self: *Element, frame: *Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.getInnerHTML(&buf.writer, frame);
@@ -1766,24 +1757,24 @@ pub const JsApi = struct {
 
     pub const prefix = bridge.accessor(Element._prefix, null, .{});
 
-    pub const setAttribute = bridge.function(_setAttribute, .{ .dom_exception = true });
+    pub const setAttribute = bridge.function(_setAttribute, .{ .dom_exception = true, .ce_reactions = true });
     fn _setAttribute(self: *Element, name: String, value: js.Value, frame: *Frame) !void {
         return self.setAttribute(name, .wrap(try value.toStringSlice()), frame);
     }
 
-    pub const setAttributeNS = bridge.function(_setAttributeNS, .{ .dom_exception = true });
+    pub const setAttributeNS = bridge.function(_setAttributeNS, .{ .dom_exception = true, .ce_reactions = true });
     fn _setAttributeNS(self: *Element, maybe_ns: ?[]const u8, qn: []const u8, value: js.Value, frame: *Frame) !void {
         return self.setAttributeNS(maybe_ns, qn, .wrap(try value.toStringSlice()), frame);
     }
 
     pub const localName = bridge.accessor(Element.getLocalName, null, .{});
-    pub const id = bridge.accessor(Element.getId, Element.setId, .{});
-    pub const slot = bridge.accessor(Element.getSlot, Element.setSlot, .{});
-    pub const ariaAtomic = bridge.accessor(Element.getAriaAtomic, Element.setAriaAtomic, .{});
-    pub const ariaLive = bridge.accessor(Element.getAriaLive, Element.setAriaLive, .{});
-    pub const dir = bridge.accessor(Element.getDir, Element.setDir, .{});
-    pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{});
-    pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{});
+    pub const id = bridge.accessor(Element.getId, Element.setId, .{ .ce_reactions = true });
+    pub const slot = bridge.accessor(Element.getSlot, Element.setSlot, .{ .ce_reactions = true });
+    pub const ariaAtomic = bridge.accessor(Element.getAriaAtomic, Element.setAriaAtomic, .{ .ce_reactions = true });
+    pub const ariaLive = bridge.accessor(Element.getAriaLive, Element.setAriaLive, .{ .ce_reactions = true });
+    pub const dir = bridge.accessor(Element.getDir, Element.setDir, .{ .ce_reactions = true });
+    pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{ .ce_reactions = true });
+    pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{ .ce_reactions = true });
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});
     pub const style = bridge.accessor(Element.getOrCreateStyle, null, .{});
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});
@@ -1792,17 +1783,17 @@ pub const JsApi = struct {
     pub const getAttribute = bridge.function(Element.getAttribute, .{});
     pub const getAttributeNS = bridge.function(Element.getAttributeNS, .{});
     pub const getAttributeNode = bridge.function(Element.getAttributeNode, .{});
-    pub const setAttributeNode = bridge.function(Element.setAttributeNode, .{});
-    pub const removeAttribute = bridge.function(Element.removeAttribute, .{});
-    pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{ .dom_exception = true });
+    pub const setAttributeNode = bridge.function(Element.setAttributeNode, .{ .ce_reactions = true });
+    pub const removeAttribute = bridge.function(Element.removeAttribute, .{ .ce_reactions = true });
+    pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{ .dom_exception = true, .ce_reactions = true });
     pub const getAttributeNames = bridge.function(Element.getAttributeNames, .{});
-    pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .dom_exception = true });
+    pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .dom_exception = true, .ce_reactions = true });
     pub const shadowRoot = bridge.accessor(Element.getShadowRoot, null, .{});
     pub const assignedSlot = bridge.accessor(Element.getAssignedSlot, null, .{});
     pub const attachShadow = bridge.function(_attachShadow, .{ .dom_exception = true });
-    pub const insertAdjacentHTML = bridge.function(Element.insertAdjacentHTML, .{ .dom_exception = true });
-    pub const insertAdjacentElement = bridge.function(Element.insertAdjacentElement, .{ .dom_exception = true });
-    pub const insertAdjacentText = bridge.function(Element.insertAdjacentText, .{ .dom_exception = true });
+    pub const insertAdjacentHTML = bridge.function(Element.insertAdjacentHTML, .{ .dom_exception = true, .ce_reactions = true });
+    pub const insertAdjacentElement = bridge.function(Element.insertAdjacentElement, .{ .dom_exception = true, .ce_reactions = true });
+    pub const insertAdjacentText = bridge.function(Element.insertAdjacentText, .{ .dom_exception = true, .ce_reactions = true });
 
     const ShadowRootInit = struct {
         mode: []const u8,
@@ -1810,13 +1801,13 @@ pub const JsApi = struct {
     fn _attachShadow(self: *Element, init: ShadowRootInit, frame: *Frame) !*ShadowRoot {
         return self.attachShadow(init.mode, frame);
     }
-    pub const replaceChildren = bridge.function(Element.replaceChildren, .{ .dom_exception = true });
-    pub const replaceWith = bridge.function(Element.replaceWith, .{ .dom_exception = true });
-    pub const remove = bridge.function(Element.remove, .{});
-    pub const append = bridge.function(Element.append, .{ .dom_exception = true });
-    pub const prepend = bridge.function(Element.prepend, .{ .dom_exception = true });
-    pub const before = bridge.function(Element.before, .{ .dom_exception = true });
-    pub const after = bridge.function(Element.after, .{ .dom_exception = true });
+    pub const replaceChildren = bridge.function(Element.replaceChildren, .{ .dom_exception = true, .ce_reactions = true });
+    pub const replaceWith = bridge.function(Element.replaceWith, .{ .dom_exception = true, .ce_reactions = true });
+    pub const remove = bridge.function(Element.remove, .{ .ce_reactions = true });
+    pub const append = bridge.function(Element.append, .{ .dom_exception = true, .ce_reactions = true });
+    pub const prepend = bridge.function(Element.prepend, .{ .dom_exception = true, .ce_reactions = true });
+    pub const before = bridge.function(Element.before, .{ .dom_exception = true, .ce_reactions = true });
+    pub const after = bridge.function(Element.after, .{ .dom_exception = true, .ce_reactions = true });
     pub const firstElementChild = bridge.accessor(Element.firstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(Element.lastElementChild, null, .{});
     pub const nextElementSibling = bridge.accessor(Element.nextElementSibling, null, .{});
