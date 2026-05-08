@@ -7,9 +7,7 @@ const Self = @This();
 
 allocator: std.mem.Allocator,
 file: ?std.fs.File,
-needs_separator: bool,
-/// Reused between `record()` calls so each command line doesn't alloc/free.
-/// Cleared with `clearRetainingCapacity` instead.
+/// Reused between writes so each line doesn't alloc/free.
 buf: std.Io.Writer.Allocating,
 
 /// Append-open `path`, inserting a leading newline if the file is non-empty.
@@ -30,7 +28,7 @@ pub fn init(allocator: std.mem.Allocator, path: ?[]const u8) Self {
         break :blk f;
     } else null;
 
-    return .{ .allocator = allocator, .file = file, .needs_separator = false, .buf = .init(allocator) };
+    return .{ .allocator = allocator, .file = file, .buf = .init(allocator) };
 }
 
 pub fn deinit(self: *Self) void {
@@ -46,18 +44,15 @@ pub fn record(self: *Self, cmd: Command.Command) void {
     cmd.format(&self.buf.writer) catch return;
     self.buf.writer.writeByte('\n') catch return;
     f.writeAll(self.buf.written()) catch return;
-    self.needs_separator = true;
 }
 
 pub fn recordComment(self: *Self, comment: []const u8) void {
     const f = self.file orelse return;
     self.buf.clearRetainingCapacity();
-    const prefix: []const u8 = if (self.needs_separator) "\n# " else "# ";
-    self.buf.writer.writeAll(prefix) catch return;
+    self.buf.writer.writeAll("# ") catch return;
     self.buf.writer.writeAll(comment) catch return;
     self.buf.writer.writeByte('\n') catch return;
     f.writeAll(self.buf.written()) catch return;
-    self.needs_separator = true;
 }
 
 test "record writes state-mutating commands" {
@@ -66,7 +61,7 @@ test "record writes state-mutating commands" {
 
     const file = tmp.dir.createFile("test.lp", .{ .read = true }) catch unreachable;
 
-    var recorder: Self = .{ .allocator = std.testing.allocator, .file = file, .needs_separator = false, .buf = .init(std.testing.allocator) };
+    var recorder: Self = .{ .allocator = std.testing.allocator, .file = file, .buf = .init(std.testing.allocator) };
     defer recorder.deinit();
 
     recorder.record(Command.parse("GOTO https://example.com"));
@@ -108,7 +103,7 @@ test "record skips empty and comment lines" {
 
     const file = tmp.dir.createFile("test2.lp", .{ .read = true }) catch unreachable;
 
-    var recorder: Self = .{ .allocator = std.testing.allocator, .file = file, .needs_separator = false, .buf = .init(std.testing.allocator) };
+    var recorder: Self = .{ .allocator = std.testing.allocator, .file = file, .buf = .init(std.testing.allocator) };
     defer recorder.deinit();
 
     recorder.record(Command.parse(""));
@@ -125,7 +120,7 @@ test "record skips empty and comment lines" {
 }
 
 test "recorder with null file is no-op" {
-    var recorder: Self = .{ .allocator = std.testing.allocator, .file = null, .needs_separator = false, .buf = .init(std.testing.allocator) };
+    var recorder: Self = .{ .allocator = std.testing.allocator, .file = null, .buf = .init(std.testing.allocator) };
     recorder.record(Command.parse("GOTO https://example.com"));
     recorder.recordComment("# test");
     recorder.deinit();

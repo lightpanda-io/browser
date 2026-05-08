@@ -121,20 +121,13 @@ fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
 
 pub const AiProvider = std.meta.Tag(zenai.provider.Client);
 
-/// Controls how chatty `agent` mode is on stderr. Defined here (rather
-/// than alongside Terminal) so it stays alongside the CLI flag and stays
-/// reachable from Config without an agent-side import cycle.
+/// Controls how chatty `agent` mode is on stderr.
 pub const AgentVerbosity = enum {
-    /// Default. In a TTY REPL: a single self-updating status indicator
-    /// shows progress; only the per-turn summary commits to scrollback.
-    /// Outside a TTY REPL: silent — final answer (stdout) and hard
-    /// errors only.
+    /// REPL: spinner + per-turn summary. Non-REPL: final answer + errors only.
     low,
-    /// One `● [tool: <name>] <args>` line per LLM tool call (green
-    /// bullet on success, red on failure). Result bodies hidden.
+    /// + one `● [tool: …]` line per tool call.
     medium,
-    /// + the matching `[result: <name>] <body>` for each tool call.
-    /// Required by the harness in benchmarks/, which parses both lines.
+    /// + the matching `[result: …]` body for each call.
     high,
 };
 
@@ -320,11 +313,7 @@ pub fn wsMaxConcurrent(self: *const Config) u8 {
 
 pub fn logLevel(self: *const Config) ?log.Level {
     return switch (self.mode) {
-        // In agent mode, the page itself spams `console.error` (mapped to
-        // log.warn(.js, ...) in webapi/Console.zig). The build default is
-        // `.warn`, which is far too chatty for non-verbose runs — most
-        // sites trip third-party scripts that the agent can ignore. So
-        // when the user hasn't set --log-level, let --verbosity pick.
+        // Agent mode quiets page-driven `console.error` noise unless verbosity=high.
         .agent => |opts| opts.log_level orelse switch (opts.verbosity) {
             .low, .medium => .err,
             .high => null,

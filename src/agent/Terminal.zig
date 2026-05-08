@@ -28,22 +28,12 @@ fn atLeast(level: Verbosity, min: Verbosity) bool {
 
 history_path: ?[:0]const u8,
 verbosity: Verbosity,
-/// Non-null when the user can type at us. Tool calls and results are
-/// always shown in REPL mode regardless of verbosity, because every
-/// call is something the user just asked for (a slash command, or
-/// natural language they sent to the LLM) — suppressing the body
-/// would leave them blind. The `--verbosity` dial only matters in
-/// non-interactive runs (one-shot `--task`, scripts, `--mcp`), where
-/// LLM tool traces are noise.
-///
-/// Doubles as the scratch arena for the pretty-printer's
-/// `std.json.Value` tree. Reset on every `printToolResult` call so
-/// memory is bounded by the largest single tool output.
+/// Non-null in REPL mode. Doubles as scratch arena for the pretty-printer
+/// (reset per `printToolResult`, so memory is bounded by the largest single
+/// tool output). REPL forces tool calls/results visible regardless of
+/// verbosity — the dial only gates non-interactive runs.
 repl_arena: ?std.heap.ArenaAllocator,
-/// Cached at init so per-tool-call paths don't fstat stderr each time.
 stderr_is_tty: bool,
-/// Drives the single-line agent indicator during LLM-driven turns.
-/// No-op when not in a TTY-attached REPL.
 spinner: Spinner,
 
 const CommandInfo = struct { name: [:0]const u8, hint: [:0]const u8 };
@@ -102,12 +92,13 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
     if (history_path) |path| {
         _ = c.linenoiseHistoryLoad(path.ptr);
     }
+    const stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO);
     return .{
         .history_path = history_path,
         .verbosity = verbosity,
         .repl_arena = if (is_repl) std.heap.ArenaAllocator.init(allocator) else null,
-        .stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO),
-        .spinner = .init(is_repl),
+        .stderr_is_tty = stderr_is_tty,
+        .spinner = .init(is_repl, stderr_is_tty),
     };
 }
 

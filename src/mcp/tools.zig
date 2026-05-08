@@ -366,15 +366,8 @@ fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
             return sendErrorContent(server, id, msg);
         };
 
-        var aw: std.Io.Writer.Allocating = .init(arena);
-        aw.writer.print("# [Auto-healed] Original: {s}\n", .{spec.original_line}) catch |err|
+        splices[i] = script.formatHealReplacementLines(arena, span, spec.original_line, spec.replacement_lines) catch |err|
             return sendErrorContent(server, id, @errorName(err));
-        for (spec.replacement_lines) |rl| {
-            aw.writer.writeAll(rl) catch |err| return sendErrorContent(server, id, @errorName(err));
-            aw.writer.writeByte('\n') catch |err| return sendErrorContent(server, id, @errorName(err));
-        }
-
-        splices[i] = .{ .original_span = span, .new_text = aw.written() };
     }
 
     script.writeAtomic(arena, std.fs.cwd(), args.path, content, splices) catch |err| {

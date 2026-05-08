@@ -148,7 +148,7 @@ pub fn formatHealReplacement(
     std.debug.assert(cmds.len > 0);
     var aw: std.Io.Writer.Allocating = .init(arena);
 
-    try aw.writer.print("# [Auto-healed] Original: {s}\n", .{raw_line});
+    try writeHealHeader(&aw.writer, raw_line);
     for (cmds) |cmd| {
         try cmd.format(&aw.writer);
         try aw.writer.writeAll("\n");
@@ -158,6 +158,33 @@ pub fn formatHealReplacement(
         .original_span = original_span,
         .new_text = aw.written(),
     };
+}
+
+/// Same shape as `formatHealReplacement` but for callers that already have
+/// rendered replacement lines (no Command round-trip). Used by the MCP
+/// `script_heal` tool where the LLM driver supplies raw PandaScript lines.
+pub fn formatHealReplacementLines(
+    arena: std.mem.Allocator,
+    original_span: []const u8,
+    raw_line: []const u8,
+    replacement_lines: []const []const u8,
+) !Replacement {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+
+    try writeHealHeader(&aw.writer, raw_line);
+    for (replacement_lines) |line| {
+        try aw.writer.writeAll(line);
+        try aw.writer.writeByte('\n');
+    }
+
+    return .{
+        .original_span = original_span,
+        .new_text = aw.written(),
+    };
+}
+
+fn writeHealHeader(writer: anytype, raw_line: []const u8) !void {
+    try writer.print("# [Auto-healed] Original: {s}\n", .{raw_line});
 }
 
 /// Reject paths that an untrusted MCP client could use to escape the

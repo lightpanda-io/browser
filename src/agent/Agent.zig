@@ -388,20 +388,14 @@ fn extractEvalScript(arena: std.mem.Allocator, args_json: []const u8) ![]const u
 const Replacement = script.Replacement;
 
 fn runScript(self: *Self, path: []const u8) bool {
-    const file = std.fs.cwd().openFile(path, .{}) catch |err| {
-        self.terminal.printErrorFmt("Failed to open script '{s}': {s}", .{ path, @errorName(err) });
-        return false;
-    };
-    defer file.close();
-
     self.terminal.printInfoFmt("Running script: {s}", .{path});
 
     var script_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer script_arena.deinit();
     const sa = script_arena.allocator();
 
-    const content = file.readToEndAlloc(sa, 10 * 1024 * 1024) catch |err| {
-        self.terminal.printErrorFmt("Failed to read script: {s}", .{@errorName(err)});
+    const content = std.fs.cwd().readFileAlloc(sa, path, 10 * 1024 * 1024) catch |err| {
+        self.terminal.printErrorFmt("Failed to read script '{s}': {s}", .{ path, @errorName(err) });
         return false;
     };
 
@@ -574,10 +568,8 @@ fn ensureSystemPrompt(self: *Self) !void {
     }
 }
 
-// Once messages exceed `prune_high`, drop older turns until only the last
-// `prune_keep` survive (system prompt always kept). Survivors are deep-copied
-// into a fresh arena so the previous arena can be freed — otherwise dropped
-// messages still pin their backing strings.
+// Drop older turns once `prune_high` is hit; survivors are deep-copied so
+// the old arena (which still pins dropped strings) can be released.
 const prune_high = 30;
 const prune_keep = 20;
 
@@ -755,21 +747,12 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
         .{
             .tools = self.tool_executor.tools,
             .max_turns = 30,
-            // Hard cap on total tool invocations per user turn. Safety net,
-            // not a budget — max_turns is the primary terminal. A healthy
-            // 30-turn run with a model emitting 2-5 tool calls per turn can
-            // legitimately hit 60-150 calls, so set comfortably above that
-            // so we never cut off a well-behaved run. Combined with the
-            // 1 MiB per-call output cap, 200 × 1 MiB = 200 MiB worst-case
-            // accumulation in the message arena — well inside budget.
+            // Safety net; max_turns is the primary terminal.
             .max_tool_calls = 200,
             .max_tokens = 4096,
             .tool_choice = .auto,
-            // Cap per-turn reasoning for thinking models. Without this,
-            // Gemini thinking models can spend minutes per turn exploring,
-            // which makes 30-turn tool-use loops take 7-10 min per task on
-            // open-ended questions. 2048 tokens is enough to plan the next
-            // tool call or finalize; it's ignored by non-thinking models.
+            // Cap per-turn reasoning so thinking models don't burn
+            // minutes per turn. Ignored by non-thinking models.
             .thinking_budget = 2048,
         },
     ) catch |err| {
@@ -821,7 +804,7 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
                 .tool_choice = .none,
                 // Cap thinking on the finalize turn. Fully disabling it (0)
                 // leaves reasoning-heavy tasks with no answer at all; letting
-                // it run unbounded lets Gemini fill the turn with thoughts
+                // it run unbounded lets models fill the turn with thoughts
                 // and emit nothing as the final text. 512 tokens is enough
                 // for the model to pick its answer but not to freewheel.
                 .thinking_budget = 512,
@@ -860,16 +843,10 @@ fn buildUserMessageParts(
             return error.UnsupportedAttachment;
         };
 
-        const file = std.fs.cwd().openFile(path, .{}) catch |err| {
-            log.err(.app, "open attachment failed", .{ .path = path, .err = err });
-            self.terminal.printErrorFmt("could not open attachment: {s}", .{path});
-            return error.AttachmentReadFailed;
-        };
-        defer file.close();
-
         if (std.mem.startsWith(u8, mime, "text/")) {
-            const bytes = file.readToEndAlloc(ma, 512 * 1024) catch |err| {
+            const bytes = std.fs.cwd().readFileAlloc(ma, path, 512 * 1024) catch |err| {
                 log.err(.app, "read attachment failed", .{ .path = path, .err = err });
+                self.terminal.printErrorFmt("could not read attachment: {s}", .{path});
                 return error.AttachmentReadFailed;
             };
             try text_prefix.writer(ma).print(
@@ -877,8 +854,9 @@ fn buildUserMessageParts(
                 .{ path, bytes },
             );
         } else {
-            const raw = file.readToEndAlloc(ma, 20 * 1024 * 1024) catch |err| {
+            const raw = std.fs.cwd().readFileAlloc(ma, path, 20 * 1024 * 1024) catch |err| {
                 log.err(.app, "read attachment failed", .{ .path = path, .err = err });
+                self.terminal.printErrorFmt("could not read attachment: {s}", .{path});
                 return error.AttachmentReadFailed;
             };
             const b64_len = std.base64.standard.Encoder.calcSize(raw.len);
@@ -898,10 +876,8 @@ fn buildUserMessageParts(
     return parts.toOwnedSlice(ma);
 }
 
-// A handful of calls on a heavy page (e.g. the full `markdown` of a
-// JS-rendered SPA) can otherwise balloon the message arena and the next
-// Gemini request body without bound. 1 MiB fits any reasonable single-page
-// extract; anything larger is almost always the model dumping a full DOM.
+// Cap per-call tool output so heavy pages don't balloon the message arena
+// (and the next request body) without bound.
 const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 
 fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
@@ -921,9 +897,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     if (self.tool_executor.call(allocator, tool_name, arguments)) |output| {
         const capped = capToolOutput(allocator, output);
         self.terminal.agentToolDone(tool_name, arguments, true);
-        // Only `high` keeps the per-call `[result: …]` body line — the
-        // benchmark harness parses it. Lower levels surface success
-        // implicitly via the green bullet (or the spinner label).
+        // Only `high` keeps the per-call body line — benchmark harness parses it.
         if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, capped);
         return .{ .content = capped };
     } else |err| {

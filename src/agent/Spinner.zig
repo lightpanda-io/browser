@@ -5,11 +5,8 @@ const Self = @This();
 
 const dots = [_][]const u8{ "   ", ".  ", ".. ", "..." };
 const interval_ns: u64 = 350 * std.time.ns_per_ms;
-/// Minimum time a tool-call label stays on screen so the user can read it.
-/// Other CLIs (Claude Code, Gemini CLI, Codex) commit tool lines to scrollback,
-/// so they stay visible "until the next event" — 1s+ in practice. We're
-/// transient, so we synthesize a similar dwell here. Slow tools naturally
-/// exceed this; fast tools (getUrl, getCookies) get padded to this.
+/// Minimum dwell on a tool label so the user can read it. Slow tools exceed
+/// this naturally; fast ones (getUrl, getCookies) get padded.
 const min_tool_display_ns: u64 = 1500 * std.time.ns_per_ms;
 const clear_eol = "\x1b[K";
 
@@ -45,13 +42,11 @@ tool_failed: bool = false,
 thread: ?std.Thread = null,
 should_exit: bool = false,
 
-pub fn init(is_repl: bool) Self {
-    const tty = std.posix.isatty(std.posix.STDERR_FILENO);
-    // Indicator runs in any TTY REPL — verbosity only controls what gets
-    // committed *above* the indicator (per-call bullet lines at medium+,
-    // result bodies at high), and that's gated by the caller. Outside a
-    // TTY REPL, the caller falls through to per-line / silent output.
-    return .{ .enabled = is_repl and tty };
+last_render_buf: [frame_buf_bytes]u8 = undefined,
+last_render_len: usize = 0,
+
+pub fn init(is_repl: bool, stderr_is_tty: bool) Self {
+    return .{ .enabled = is_repl and stderr_is_tty };
 }
 
 pub fn deinit(self: *Self) void {
@@ -101,6 +96,7 @@ pub fn stop(self: *Self) void {
     _ = std.posix.write(std.posix.STDERR_FILENO, summary) catch {};
 
     self.state = .idle;
+    self.last_render_len = 0;
 }
 
 /// End a turn with no commit (used on hard API errors, where the caller will
@@ -112,6 +108,7 @@ pub fn cancel(self: *Self) void {
     if (self.state == .idle) return;
     _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
     self.state = .idle;
+    self.last_render_len = 0;
 }
 
 /// Switch the indicator to "running tool <name> <args>". Counts toward the
@@ -171,6 +168,7 @@ pub fn emitAbove(self: *Self, text: []const u8) bool {
     if (text.len == 0 or text[text.len - 1] != '\n') {
         _ = std.posix.write(std.posix.STDERR_FILENO, "\n") catch {};
     }
+    self.last_render_len = 0;
     self.renderLocked();
     return true;
 }
@@ -220,5 +218,8 @@ fn renderLocked(self: *Self) void {
             },
         ) catch return,
     };
+    if (written.len == self.last_render_len and std.mem.eql(u8, written, self.last_render_buf[0..self.last_render_len])) return;
+    @memcpy(self.last_render_buf[0..written.len], written);
+    self.last_render_len = written.len;
     _ = std.posix.write(std.posix.STDERR_FILENO, written) catch {};
 }
