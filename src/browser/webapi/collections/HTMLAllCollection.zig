@@ -32,21 +32,18 @@ _tw: TreeWalker.FullExcludeSelf,
 _last_index: usize,
 _last_length: ?u32,
 _cached_version: usize,
-_owning_frame: *Frame,
 
 pub fn init(root: *Node, frame: *Frame) HTMLAllCollection {
-    const owning_frame = root.ownerFrame(frame);
     return .{
         ._last_index = 0,
         ._last_length = null,
         ._tw = TreeWalker.FullExcludeSelf.init(root, .{}),
-        ._cached_version = owning_frame.version,
-        ._owning_frame = owning_frame,
+        ._cached_version = frame._page.dom_version,
     };
 }
 
-fn versionCheck(self: *HTMLAllCollection, _: *const Frame) bool {
-    const current = self._owning_frame.version;
+fn versionCheck(self: *HTMLAllCollection, frame: *const Frame) bool {
+    const current = frame._page.dom_version;
     if (self._cached_version != current) {
         self._cached_version = current;
         self._last_index = 0;

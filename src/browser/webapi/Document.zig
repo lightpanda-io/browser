@@ -489,7 +489,7 @@ pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !v
     try validateDocumentNodes(self, nodes, false);
 
     const parent = self.asNode();
-    parent.bumpDomVersion(frame);
+    frame.domChanged();
     const parent_is_connected = parent.isConnected();
 
     for (nodes) |node_or_text| {
@@ -514,7 +514,7 @@ pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !
     try validateDocumentNodes(self, nodes, false);
 
     const parent = self.asNode();
-    parent.bumpDomVersion(frame);
+    frame.domChanged();
     const parent_is_connected = parent.isConnected();
 
     var i = nodes.len;
@@ -736,7 +736,7 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
         insert_after = child;
     }
 
-    parent.bumpDomVersion(frame);
+    frame.domChanged();
     self._write_insertion_point = children_to_insert.getLast();
 }
 

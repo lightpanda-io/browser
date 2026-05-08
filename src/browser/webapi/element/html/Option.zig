@@ -80,7 +80,7 @@ pub fn setSelected(self: *Option, selected: bool, frame: *Frame) !void {
     // TODO: When setting selected=true, may need to unselect other options
     // in the parent <select> if it doesn't have multiple attribute
     self._selected = selected;
-    self.asElement().asNode().bumpDomVersion(frame);
+    frame.domChanged();
 }
 
 pub fn getDefaultSelected(self: *const Option) bool {

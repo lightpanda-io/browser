@@ -243,9 +243,6 @@ child_frames: std.ArrayList(*Frame) = .{},
 // Workers created by this frame. Cleaned up when frame is destroyed.
 workers: std.ArrayList(*Worker) = .{},
 
-// DOM version used to invalidate cached state of "live" collections
-version: usize = 0,
-
 // This is maybe not great. It's a counter on the number of events that we're
 // waiting on before triggering the "load" event. Essentially, we need all
 // synchronous scripts and all iframes to be loaded. Scripts are handled by the
@@ -1441,7 +1438,7 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
 }
 
 pub fn domChanged(self: *Frame) void {
-    self.version += 1;
+    self._page.dom_version += 1;
 
     if (self._intersection_check_scheduled) {
         return;
@@ -3008,7 +3005,7 @@ pub fn appendNode(self: *Frame, parent: *Node, child: *Node, opts: InsertNodeOpt
 }
 
 pub fn appendAllChildren(self: *Frame, parent: *Node, target: *Node) !void {
-    target.bumpDomVersion(self);
+    self.domChanged();
     const dest_connected = target.isConnected();
 
     // Use firstChild() instead of iterator to handle cases where callbacks
@@ -3023,7 +3020,7 @@ pub fn appendAllChildren(self: *Frame, parent: *Node, target: *Node) !void {
 }
 
 pub fn insertAllChildrenBefore(self: *Frame, fragment: *Node, parent: *Node, ref_node: *Node) !void {
-    parent.bumpDomVersion(self);
+    self.domChanged();
     const dest_connected = parent.isConnected();
 
     // Use firstChild() instead of iterator to handle cases where callbacks

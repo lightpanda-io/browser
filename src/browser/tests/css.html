@@ -82,3 +82,18 @@
     testing.expectEqual('\uFFFDabc', CSS.escape('\x00abc'));
   }
 </script>
+
+<script id="static_no_this_binding">
+  // react-jss extracts CSS.escape and calls it with no `this`. Per spec these
+  // are static namespace methods, so the call must not throw Illegal invocation.
+  {
+    const escape = CSS.escape;
+    testing.expectEqual('foo\\#bar', escape('foo#bar'));
+    testing.expectEqual('foo\\#bar', escape.call(null, 'foo#bar'));
+    testing.expectEqual('foo\\#bar', escape.call(undefined, 'foo#bar'));
+    testing.expectEqual('foo\\#bar', escape.call({}, 'foo#bar'));
+
+    const supports = CSS.supports;
+    testing.expectEqual(true, supports('display', 'block'));
+  }
+</script>

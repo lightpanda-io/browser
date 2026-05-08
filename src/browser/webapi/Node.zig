@@ -226,7 +226,7 @@ pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
 
     try validateNodeInsertion(self, child);
 
-    self.bumpDomVersion(frame);
+    frame.domChanged();
 
     // If the child is currently connected, and if its new parent is connected,
     // then we can remove + add a bit more efficiently (we don't have to fully
@@ -532,15 +532,6 @@ pub fn ownerFrame(self: *const Node, default: *Frame) *Frame {
     return doc._frame orelse default;
 }
 
-// Tells the owning frame that this node's subtree has changed. Use this from
-// mutation paths instead of `frame.domChanged()` so cross-realm mutations
-// (e.g., parent JS mutating an iframe's DOM) bump the iframe's version, not
-// the caller's. Otherwise, live collections that key off the owning frame's
-// version won't see the change and will return stale cached state.
-pub fn bumpDomVersion(self: *const Node, default: *Frame) void {
-    self.ownerFrame(default).domChanged();
-}
-
 pub const ResolveURLOpts = struct {
     allocator: ?Allocator = null,
 };
@@ -572,7 +563,7 @@ pub fn removeChild(self: *Node, child: *Node, frame: *Frame) !*Node {
     var it = self.childrenIterator();
     while (it.next()) |n| {
         if (n == child) {
-            self.bumpDomVersion(frame);
+            frame.domChanged();
             frame.removeNode(self, child, .{ .will_be_reconnected = false });
             return child;
         }
@@ -587,7 +578,7 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fra
 
     // special case: if nodes are the same, ignore the change.
     if (new_node == ref_node_) {
-        self.bumpDomVersion(frame);
+        frame.domChanged();
 
         if (frame.hasMutationObservers()) {
             const parent = new_node._parent.?;
@@ -618,7 +609,7 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fra
     const parent_owner = self.ownerDocument(frame) orelse self.as(Document);
     const adopting_to_new_document = child_owner != null and child_owner.? != parent_owner;
 
-    self.bumpDomVersion(frame);
+    frame.domChanged();
     const will_be_reconnected = self.isConnected() and !adopting_to_new_document;
     if (new_node._parent) |parent| {
         frame.removeNode(parent, new_node, .{ .will_be_reconnected = will_be_reconnected });
@@ -1089,7 +1080,7 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
         }
     }
 
-    self.bumpDomVersion(frame);
+    frame.domChanged();
 
     // Remove all existing children
     var it = self.childrenIterator();
