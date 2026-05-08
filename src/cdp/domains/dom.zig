@@ -92,6 +92,26 @@ fn getDocument(cmd: *CDP.Command) !void {
     return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
 }
 
+// Closed set of XPath 1.0 named axes. Matched literally before `::` so
+// CSS pseudo-elements (`a::before`, `div::first-line`) don't get
+// misrouted to the XPath evaluator just because they have an
+// identifier-looking word before `::`.
+const xpath_axis_names = std.StaticStringMap(void).initComptime(.{
+    .{ "child", {} },
+    .{ "descendant", {} },
+    .{ "descendant-or-self", {} },
+    .{ "self", {} },
+    .{ "parent", {} },
+    .{ "ancestor", {} },
+    .{ "ancestor-or-self", {} },
+    .{ "following-sibling", {} },
+    .{ "preceding-sibling", {} },
+    .{ "following", {} },
+    .{ "preceding", {} },
+    .{ "attribute", {} },
+    .{ "namespace", {} },
+});
+
 // Polyfill-parity heuristic (decision #2/#9): treat the query as XPath
 // when it begins with a path operator or contains an axis specifier;
 // otherwise fall through to CSS. Lifted from capybara-lightpanda's
@@ -104,14 +124,21 @@ fn isXPathQuery(q: []const u8) bool {
         if (q[1] == '/') return true;
         if (q[1] == '.' and q.len > 2 and q[2] == '/') return true;
     }
-    // Require axis-name shape immediately before `::` so CSS pseudo-elements
-    // (`a::before`) and attribute values containing `::` (`[data-x="x::y"]`)
-    // aren't misrouted to the XPath evaluator.
+    // For `::` to be an XPath axis separator, the identifier immediately
+    // before it must be one of the 13 named axes. Walk back the run of
+    // [a-zA-Z-] characters and look it up in the closed set.
     var idx: usize = 0;
     while (std.mem.indexOfPos(u8, q, idx, "::")) |hit| : (idx = hit + 1) {
         if (hit == 0) continue;
-        const c = q[hit - 1];
-        if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '-') return true;
+        var start = hit;
+        while (start > 0) {
+            const c = q[start - 1];
+            const is_axis_char = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '-';
+            if (!is_axis_char) break;
+            start -= 1;
+        }
+        if (start == hit) continue;
+        if (xpath_axis_names.has(q[start..hit])) return true;
     }
     return false;
 }
@@ -711,6 +738,14 @@ test "cdp.dom: isXPathQuery heuristic" {
     try std.testing.expect(!isXPathQuery("[data-x]"));
     try std.testing.expect(!isXPathQuery("(p)")); // parens without path → CSS
     try std.testing.expect(!isXPathQuery(".x")); // leading dot without /
+
+    // CSS pseudo-elements: identifier before `::` is not an XPath axis name.
+    try std.testing.expect(!isXPathQuery("a::before"));
+    try std.testing.expect(!isXPathQuery("div::after"));
+    try std.testing.expect(!isXPathQuery("p::first-line"));
+    try std.testing.expect(!isXPathQuery("input::placeholder"));
+    // Attribute selector with `::` inside a literal — nothing axis-like before it.
+    try std.testing.expect(!isXPathQuery("[data-x=\"x::y\"]"));
 }
 
 test "cdp.dom: querySelector unknown search id" {
