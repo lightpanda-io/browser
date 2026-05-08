@@ -1276,6 +1276,15 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     if (iframe._executed) {
         return;
     }
+    if (!self._session.subframe_loading_enabled) {
+        // The CDP driver opted out of subframe loading via
+        // LP.setSubframeLoading. Mark the iframe as "executed" so the
+        // parser doesn't keep handing it back to us, but skip the child
+        // frame creation / navigation / notification entirely — no child
+        // Frame, no Page.frameAttached, no Runtime.executionContextCreated.
+        iframe._executed = true;
+        return;
+    }
 
     var src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse "";
     if (src.len == 0) {

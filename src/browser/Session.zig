@@ -76,6 +76,17 @@ _pending: ?*Page = null,
 frame_id_gen: u32 = 0,
 loader_id_gen: u32 = 0,
 
+// When false, the HTML parser silently skips loading <iframe> elements
+// (no child frame is created, no document fetch, no Page.frameAttached /
+// Page.frameNavigated / Runtime.executionContextCreated events emitted).
+// Lets CDP drivers opt out of subframe processing for pages that load
+// large numbers of analytics / pixel iframes — useful as a workaround
+// for #2400 (child-iframe navigation churns the main frame's
+// executionContextId because IsolatedWorld is shared and CONTEXT_GROUP_ID
+// is per-BrowserContext rather than per-frame). Toggled via
+// LP.setSubframeLoading from CDP.
+subframe_loading_enabled: bool = true,
+
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
     const arena_pool = browser.arena_pool;
