@@ -76,7 +76,7 @@ pub fn init(arena: Allocator, node: *Node, frame: *Frame) Parser {
     };
 }
 
-fn flushPendingText(self: *Parser) !void {
+pub fn flushPendingText(self: *Parser) !void {
     var pt = self.pending_text orelse return;
     self.pending_text = null;
     defer pt.buf.deinit(self.arena);
@@ -309,7 +309,14 @@ pub const Streaming = struct {
     }
 
     pub fn done(self: *Streaming) !void {
-        h5e.html5ever_streaming_parser_finish(self.handle.?);
+        // Null the handle before finish() so a flushPendingText failure can't
+        // leave a finished-but-still-referenced handle behind for deinit to
+        // double-free. flushPendingText doesn't touch the html5ever handle —
+        // it only reads pending_text and writes to a text node's _data — so
+        // running it after finish is safe.
+        const handle = self.handle.?;
+        self.handle = null;
+        h5e.html5ever_streaming_parser_finish(handle);
         try self.parser.flushPendingText();
     }
 };
@@ -510,6 +517,11 @@ fn removeFromParentCallback(ctx: *anyopaque, target_ref: *anyopaque) callconv(.c
     };
 }
 fn _removeFromParentCallback(self: *Parser, node: *Node) !void {
+    // Removing a node mid-parse can detach the pending text node or its
+    // parent; either way the pending invariant breaks. Flush first so the
+    // accumulated bytes land on a still-attached text node (and pending_text
+    // is cleared before any subsequent chunk targets a fresh node).
+    try self.flushPendingText();
     const parent = node.parentNode() orelse return;
     _ = try parent.removeChild(node, self.frame);
 }
@@ -521,6 +533,10 @@ fn reparentChildrenCallback(ctx: *anyopaque, node_ref: *anyopaque, new_parent_re
     };
 }
 fn _reparentChildrenCallback(self: *Parser, node: *Node, new_parent: *Node) !void {
+    // Reparenting can move the pending text node out from under us — the
+    // node's _parent changes but pending_text.parent does not. Flush so the
+    // accumulator commits before the tree is rearranged.
+    try self.flushPendingText();
     try self.frame.appendAllChildren(node, new_parent);
 }
 
