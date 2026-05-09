@@ -200,6 +200,7 @@ const Commands = cli.Builder(.{
             .{ .name = "task", .type = ?[]const u8 },
             .{ .name = "task_attachments", .type = []const u8, .multiple = true },
             .{ .name = "verbosity", .type = AgentVerbosity, .default = AgentVerbosity.low },
+            .{ .name = "list_models", .type = bool },
         },
         .shared_options = CommonOptions,
     },
@@ -782,6 +783,10 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                into the REPL with the browser state preserved. When
         \\                a positional script is present, any new commands
         \\                entered in the REPL are appended to that file.
+        \\
+        \\--list-models   Print the model IDs usable with `agent` for
+        \\                --provider, one per line, sorted, and exit.
+        \\                Requires --provider; the API key must be set.
         \\
         \\--verbosity     Stderr chatter level: low, medium, high.
         \\                Default: low. In a TTY REPL, low shows a single-

@@ -63,6 +63,14 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             try stdout.interface.print("{s}\n", .{lp.build_config.version});
             return std.process.cleanExit();
         },
+        .agent => |opts| if (opts.list_models) {
+            const provider = opts.provider orelse {
+                log.fatal(.app, "missing --provider", .{ .flag = "--list-models" });
+                return args.printUsageAndExit(false);
+            };
+            try lp.agent.listModels(allocator, provider, opts.base_url);
+            return std.process.cleanExit();
+        },
         else => {},
     }
 
