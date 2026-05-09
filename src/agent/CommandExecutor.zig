@@ -30,11 +30,14 @@ pub const ExecResult = struct {
 pub fn executeWithResult(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) ExecResult {
     if (cmd == .extract) return self.execExtract(arena, cmd.extract);
 
-    const tc = Command.toToolCall(arena, cmd, browser_tools.substituteEnvVars) orelse switch (cmd) {
+    const tcv = Command.toToolCallValue(arena, cmd, browser_tools.substituteEnvVars) orelse switch (cmd) {
         .natural_language, .comment, .login, .accept_cookies => unreachable,
         else => return .{ .output = "command has no tool mapping", .failed = true },
     };
-    return self.callTool(arena, tc.name, tc.args_json);
+    if (browser_tools.call(arena, self.tool_executor.session, &self.tool_executor.node_registry, tcv.name, tcv.args)) |output|
+        return .{ .output = output, .failed = false }
+    else |err|
+        return .{ .output = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tcv.name, @errorName(err) }) catch "tool failed", .failed = true };
 }
 
 pub fn execute(self: *Self, cmd: Command.Command) void {
@@ -53,13 +56,6 @@ pub fn printResult(self: *Self, cmd: Command.Command, result: ExecResult) void {
     } else {
         self.terminal.printActionResult(result.output);
     }
-}
-
-fn callTool(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments_json: []const u8) ExecResult {
-    if (self.tool_executor.call(arena, tool_name, arguments_json)) |output|
-        return .{ .output = output, .failed = false }
-    else |err|
-        return .{ .output = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tool_name, @errorName(err) }) catch "tool failed", .failed = true };
 }
 
 fn execExtract(self: *Self, arena: std.mem.Allocator, raw_selector: []const u8) ExecResult {

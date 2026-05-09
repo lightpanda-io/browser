@@ -410,6 +410,14 @@ pub fn noSubstitute(_: std.mem.Allocator, input: []const u8) []const u8 {
     return input;
 }
 
+/// Same shape as `ToolCall` but the args are an already-built `std.json.Value`,
+/// so callers can hand them straight to `lp.tools.call` without a stringify/
+/// reparse round-trip on the hot replay path.
+pub const ToolCallValue = struct {
+    name: []const u8,
+    args: ?std.json.Value,
+};
+
 /// Map a Command to its (tool_name, JSON args) representation. Returns
 /// null for variants without a 1:1 tool mapping (login, accept_cookies,
 /// natural_language, comment, extract — extract is rendered as a
@@ -419,30 +427,64 @@ pub fn noSubstitute(_: std.mem.Allocator, input: []const u8) []const u8 {
 /// `type_cmd` is intentionally NOT substituted: `execFill` in
 /// `browser/tools.zig` substitutes it itself so the secret never appears
 /// in the result text echoed back to the LLM/terminal.
-pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: SubstituteFn) ?ToolCall {
+pub fn toToolCallValue(arena: std.mem.Allocator, cmd: Command, substitute: SubstituteFn) ?ToolCallValue {
     const Action = lp.tools.Action;
-    return switch (cmd) {
-        .goto => |url| .{ .name = @tagName(Action.goto), .args_json = stringifyJson(arena, .{ .url = substitute(arena, url) }) },
-        .click => |sel| .{ .name = @tagName(Action.click), .args_json = stringifyJson(arena, .{ .selector = substitute(arena, sel) }) },
-        .type_cmd => |args| .{ .name = @tagName(Action.fill), .args_json = stringifyJson(arena, .{
-            .selector = substitute(arena, args.selector),
-            .value = args.value,
-        }) },
-        .wait => |sel| .{ .name = @tagName(Action.waitForSelector), .args_json = stringifyJson(arena, .{ .selector = sel }) },
-        .scroll => |args| .{ .name = @tagName(Action.scroll), .args_json = stringifyJson(arena, .{ .x = args.x, .y = args.y }) },
-        .hover => |sel| .{ .name = @tagName(Action.hover), .args_json = stringifyJson(arena, .{ .selector = substitute(arena, sel) }) },
-        .select => |args| .{ .name = @tagName(Action.selectOption), .args_json = stringifyJson(arena, .{
-            .selector = substitute(arena, args.selector),
-            .value = substitute(arena, args.value),
-        }) },
-        .check => |args| .{ .name = @tagName(Action.setChecked), .args_json = stringifyJson(arena, .{
-            .selector = substitute(arena, args.selector),
-            .checked = args.checked,
-        }) },
-        .tree => .{ .name = @tagName(Action.tree), .args_json = "" },
-        .markdown => .{ .name = @tagName(Action.markdown), .args_json = "" },
-        .eval_js => |script| .{ .name = @tagName(Action.eval), .args_json = stringifyJson(arena, .{ .script = script }) },
-        .extract, .natural_language, .comment, .login, .accept_cookies => null,
+    var obj: std.json.ObjectMap = .init(arena);
+    switch (cmd) {
+        .goto => |url| {
+            obj.put("url", .{ .string = substitute(arena, url) }) catch return null;
+            return .{ .name = @tagName(Action.goto), .args = .{ .object = obj } };
+        },
+        .click => |sel| {
+            obj.put("selector", .{ .string = substitute(arena, sel) }) catch return null;
+            return .{ .name = @tagName(Action.click), .args = .{ .object = obj } };
+        },
+        .type_cmd => |args| {
+            obj.put("selector", .{ .string = substitute(arena, args.selector) }) catch return null;
+            obj.put("value", .{ .string = args.value }) catch return null;
+            return .{ .name = @tagName(Action.fill), .args = .{ .object = obj } };
+        },
+        .wait => |sel| {
+            obj.put("selector", .{ .string = sel }) catch return null;
+            return .{ .name = @tagName(Action.waitForSelector), .args = .{ .object = obj } };
+        },
+        .scroll => |args| {
+            obj.put("x", .{ .integer = args.x }) catch return null;
+            obj.put("y", .{ .integer = args.y }) catch return null;
+            return .{ .name = @tagName(Action.scroll), .args = .{ .object = obj } };
+        },
+        .hover => |sel| {
+            obj.put("selector", .{ .string = substitute(arena, sel) }) catch return null;
+            return .{ .name = @tagName(Action.hover), .args = .{ .object = obj } };
+        },
+        .select => |args| {
+            obj.put("selector", .{ .string = substitute(arena, args.selector) }) catch return null;
+            obj.put("value", .{ .string = substitute(arena, args.value) }) catch return null;
+            return .{ .name = @tagName(Action.selectOption), .args = .{ .object = obj } };
+        },
+        .check => |args| {
+            obj.put("selector", .{ .string = substitute(arena, args.selector) }) catch return null;
+            obj.put("checked", .{ .bool = args.checked }) catch return null;
+            return .{ .name = @tagName(Action.setChecked), .args = .{ .object = obj } };
+        },
+        .tree => return .{ .name = @tagName(Action.tree), .args = null },
+        .markdown => return .{ .name = @tagName(Action.markdown), .args = null },
+        .eval_js => |script| {
+            obj.put("script", .{ .string = script }) catch return null;
+            return .{ .name = @tagName(Action.eval), .args = .{ .object = obj } };
+        },
+        .extract, .natural_language, .comment, .login, .accept_cookies => return null,
+    }
+}
+
+/// Stringified flavor of `toToolCallValue` — used by the recorder/diagnostic
+/// paths (and tests) that want a JSON string. Hot dispatch should use
+/// `toToolCallValue` instead and skip the stringify+reparse.
+pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: SubstituteFn) ?ToolCall {
+    const tcv = toToolCallValue(arena, cmd, substitute) orelse return null;
+    return .{
+        .name = tcv.name,
+        .args_json = if (tcv.args) |v| stringifyJson(arena, v) else "",
     };
 }
 

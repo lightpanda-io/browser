@@ -283,30 +283,23 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     // Map the Command to its underlying browser tool and dispatch through
     // the same path as a direct MCP call. Recording is intentionally NOT
     // applied to script_step lines: replay shouldn't double-record.
-    const tc = Command.toToolCall(arena, cmd, Command.noSubstitute) orelse {
+    const tcv = Command.toToolCallValue(arena, cmd, Command.noSubstitute) orelse {
         return sendErrorContent(server, id, "command has no browser-tool mapping");
     };
 
-    const tc_args: ?std.json.Value = if (tc.args_json.len == 0)
-        null
-    else
-        std.json.parseFromSliceLeaky(std.json.Value, arena, tc.args_json, .{}) catch {
-            return sendErrorContent(server, id, "internal: failed to reparse tool arguments");
-        };
-
-    const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse {
-        return sendErrorContent(server, id, "internal: unknown action from Command.toToolCall");
+    const action = std.meta.stringToEnum(browser_tools.Action, tcv.name) orelse {
+        return sendErrorContent(server, id, "internal: unknown action from Command.toToolCallValue");
     };
 
     if (action == .eval) {
-        const result = browser_tools.callEval(arena, server.session, &server.node_registry, tc_args);
+        const result = browser_tools.callEval(arena, server.session, &server.node_registry, tcv.args);
         const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
         return server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });
     }
 
-    const result = browser_tools.call(arena, server.session, &server.node_registry, tc.name, tc_args) catch |err| {
+    const result = browser_tools.call(arena, server.session, &server.node_registry, tcv.name, tcv.args) catch |err| {
         const url = currentUrl(server) catch "";
-        const msg = std.fmt.allocPrint(arena, "{s} failed at line `{s}` (url: {s}): {s}", .{ tc.name, args.line, url, @errorName(err) }) catch @errorName(err);
+        const msg = std.fmt.allocPrint(arena, "{s} failed at line `{s}` (url: {s}): {s}", .{ tcv.name, args.line, url, @errorName(err) }) catch @errorName(err);
         return sendErrorContent(server, id, msg);
     };
 
@@ -317,7 +310,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     if (verification.result == .failed) {
         const url = currentUrl(server) catch "";
         const reason = verification.reason orelse "verification failed";
-        const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tc.name, args.line, url, reason }) catch reason;
+        const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tcv.name, args.line, url, reason }) catch reason;
         return sendErrorContent(server, id, msg);
     }
 
