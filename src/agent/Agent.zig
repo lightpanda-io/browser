@@ -98,11 +98,7 @@ verifier: Verifier,
 recorder: Recorder,
 messages: std.ArrayList(zenai.provider.Message),
 message_arena: std.heap.ArenaAllocator,
-model: []const u8,
-/// When non-null, `model` aliases this heap buffer (allocated by --pick-model)
-/// and `deinit` must free it. When null, `model` aliases an arg-parser slice
-/// or a comptime literal (`zenai.provider.defaultModel`) and we don't own it.
-model_owned: ?[]u8,
+model: []u8,
 system_prompt: []const u8,
 script_file: ?[]const u8,
 self_heal: bool,
@@ -145,18 +141,15 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     // Resolve model BEFORE the heavy init so --pick-model's prompt fires
     // before tool_executor / ai_client setup.
     // Precedence: --model > --pick-model > defaultModel.
-    var model_owned: ?[]u8 = null;
-    errdefer if (model_owned) |buf| allocator.free(buf);
-    const model: []const u8 = if (opts.model) |m|
-        m
-    else if (opts.pick_model and effective_provider != null and api_key != null) blk: {
-        const picked = try pickModel(allocator, effective_provider.?, api_key.?, opts.base_url);
-        model_owned = picked;
-        break :blk picked;
-    } else if (effective_provider) |p|
-        zenai.provider.defaultModel(p)
+    const model: []u8 = if (opts.pick_model and effective_provider != null and api_key != null)
+        try pickModel(allocator, effective_provider.?, api_key.?, opts.base_url)
+    else if (opts.model) |m|
+        try allocator.dupe(u8, m)
+    else if (effective_provider) |p|
+        try allocator.dupe(u8, zenai.provider.defaultModel(p))
     else
-        "";
+        try allocator.dupe(u8, "");
+    errdefer allocator.free(model);
 
     const tool_executor: *ToolExecutor = try .init(allocator, app);
     errdefer tool_executor.deinit();
@@ -209,7 +202,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .messages = .empty,
         .message_arena = .init(allocator),
         .model = model,
-        .model_owned = model_owned,
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
         .self_heal = opts.self_heal,
@@ -240,7 +232,7 @@ pub fn deinit(self: *Self) void {
             },
         }
     }
-    if (self.model_owned) |buf| self.allocator.free(buf);
+    self.allocator.free(self.model);
     self.allocator.destroy(self);
 }
 
@@ -961,8 +953,7 @@ fn resolveApiKey(provider: ?Config.AiProvider, needs_llm: bool) !?[:0]const u8 {
 
 /// One-shot for `--list-models`: resolve the provider (explicit, then env
 /// auto-detect), reject `--no-llm`, fetch chat-capable model IDs from the
-/// provider, and print them to stdout (sorted, one per line). Shares
-/// provider-resolution logic with `init` so the two paths can't drift.
+/// provider, and print them to stdout (one per line).
 pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     if (opts.no_llm) {
         log.fatal(.app, "list-models needs LLM", .{

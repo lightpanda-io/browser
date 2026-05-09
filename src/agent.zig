@@ -6,8 +6,6 @@ pub const CommandExecutor = @import("agent/CommandExecutor.zig");
 pub const Recorder = @import("agent/Recorder.zig");
 pub const Verifier = @import("agent/Verifier.zig");
 pub const SlashCommand = @import("agent/SlashCommand.zig");
-pub const autoDetectProvider = Agent.autoDetectProvider;
-pub const listModels = Agent.listModels;
 
 test {
     _ = Agent;

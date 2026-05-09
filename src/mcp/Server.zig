@@ -28,8 +28,7 @@ transport: Transport,
 
 /// Optional PandaScript recorder. Activated by the `record_start` tool;
 /// cleared by `record_stop`. State-mutating browser tool calls are
-/// serialized into the active recorder via `Command.fromToolCall`. The
-/// Recorder owns its path string and line counter — see `agent/Recorder.zig`.
+/// serialized into the active recorder via `Command.fromToolCall`.
 recorder: ?Recorder = null,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*Self {

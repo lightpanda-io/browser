@@ -64,7 +64,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             return std.process.cleanExit();
         },
         .agent => |opts| if (opts.list_models) {
-            try lp.agent.listModels(allocator, opts);
+            try lp.agent.Agent.listModels(allocator, opts);
             return std.process.cleanExit();
         },
         else => {},
