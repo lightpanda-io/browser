@@ -516,8 +516,8 @@ fn formatReplResult(arena: std.mem.Allocator, name: []const u8, result: []const 
     return aw.written();
 }
 
-pub fn printError(_: *Self, msg: []const u8) void {
-    std.debug.print("{s}{s}Error: {s}{s}\n", .{ ansi.bold, ansi.red, msg, ansi.reset });
+pub fn printError(self: *Self, msg: []const u8) void {
+    self.printErrorFmt("{s}", .{msg});
 }
 
 pub fn printErrorFmt(_: *Self, comptime fmt: []const u8, args: anytype) void {

@@ -911,11 +911,8 @@ const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
     if (output.len <= tool_output_max_bytes) return output;
     const prefix = output[0..tool_output_max_bytes];
-    return std.fmt.allocPrint(
-        allocator,
-        "{s}\n...[truncated, original {d} bytes]",
-        .{ prefix, output.len },
-    ) catch prefix;
+    const suffix = std.fmt.allocPrint(allocator, "\n...[truncated, original {d} bytes]", .{output.len}) catch return prefix;
+    return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
 }
 
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) zenai.provider.Client.ToolHandler.Result {

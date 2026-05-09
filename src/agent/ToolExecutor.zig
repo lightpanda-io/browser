@@ -73,8 +73,7 @@ pub fn schemaAllocator(self: *Self) std.mem.Allocator {
 }
 
 pub fn getCurrentUrl(self: *Self) []const u8 {
-    const page = self.session.currentFrame() orelse return "(no page loaded)";
-    return page.url;
+    return browser_tools.currentUrlOrPlaceholder(self.session);
 }
 
 /// Run a JavaScript expression and return the full result (text + error flag).

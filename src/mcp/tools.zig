@@ -288,7 +288,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     }
 
     const result = browser_tools.call(arena, server.session, &server.node_registry, tcv.name, tcv.args) catch |err| {
-        const url = currentUrl(server) catch "";
+        const url = browser_tools.currentUrlOrPlaceholder(server.session);
         const msg = std.fmt.allocPrint(arena, "{s} failed at line `{s}` (url: {s}): {s}", .{ tcv.name, args.line, url, @errorName(err) }) catch @errorName(err);
         return sendErrorContent(server, id, msg);
     };
@@ -298,7 +298,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     // roundtrip the same way an exec failure does.
     const verification = server.verifier.verify(arena, cmd);
     if (verification.result == .failed) {
-        const url = currentUrl(server) catch "";
+        const url = browser_tools.currentUrlOrPlaceholder(server.session);
         const reason = verification.reason orelse "verification failed";
         const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tcv.name, args.line, url, reason }) catch reason;
         return sendErrorContent(server, id, msg);
@@ -379,11 +379,6 @@ fn findLineSpan(content: []const u8, line: []const u8) error{ NotFound, Ambiguou
         pos = nl + 1;
     }
     return found orelse error.NotFound;
-}
-
-fn currentUrl(server: *Server) ![]const u8 {
-    const frame = server.session.currentFrame() orelse return "(no page loaded)";
-    return frame.url;
 }
 
 fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void {

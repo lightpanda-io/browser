@@ -948,6 +948,14 @@ fn execGetUrl(session: *lp.Session) ToolError![]const u8 {
     return page.url;
 }
 
+/// URL of the active frame, or a stable placeholder when no page is loaded.
+/// Use from contexts that just want a string for display/logging; callers
+/// that need to react to "no page" should check `currentFrame()` directly.
+pub fn currentUrlOrPlaceholder(session: *lp.Session) []const u8 {
+    const frame = session.currentFrame() orelse return "(no page loaded)";
+    return frame.url;
+}
+
 fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session) ToolError![]const u8 {
     const cookies = session.cookie_jar.cookies.items;
     if (cookies.len == 0) return "No cookies.";
@@ -1030,6 +1038,7 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8
     const first_lp = std.mem.indexOf(u8, input, "$LP_") orelse return input;
 
     var result: std.ArrayList(u8) = .empty;
+    result.ensureTotalCapacity(arena, input.len) catch return input;
     var i: usize = first_lp;
     var last_copy: usize = 0;
     while (std.mem.indexOfScalarPos(u8, input, i, '$')) |dollar| {

@@ -530,15 +530,7 @@ pub fn fromToolCallValue(tool_name: []const u8, arguments: std.json.Value) ?Comm
         } },
         .scroll => blk: {
             if (obj.get("backendNodeId") != null) break :blk null;
-            const x: i32 = switch (obj.get("x") orelse std.json.Value{ .integer = 0 }) {
-                .integer => |i| @intCast(i),
-                else => 0,
-            };
-            const y: i32 = switch (obj.get("y") orelse std.json.Value{ .integer = 0 }) {
-                .integer => |i| @intCast(i),
-                else => 0,
-            };
-            break :blk .{ .scroll = .{ .x = x, .y = y } };
+            break :blk .{ .scroll = .{ .x = getJsonI32(obj, "x", 0), .y = getJsonI32(obj, "y", 0) } };
         },
         else => null,
     };
@@ -548,6 +540,13 @@ fn getJsonString(o: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     return switch (o.get(key) orelse return null) {
         .string => |s| s,
         else => null,
+    };
+}
+
+fn getJsonI32(o: std.json.ObjectMap, key: []const u8, default: i32) i32 {
+    return switch (o.get(key) orelse return default) {
+        .integer => |i| std.math.cast(i32, i) orelse default,
+        else => default,
     };
 }
 
