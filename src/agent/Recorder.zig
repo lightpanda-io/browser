@@ -7,33 +7,63 @@ const Self = @This();
 
 allocator: std.mem.Allocator,
 file: ?std.fs.File,
+/// Path of the active recording, owned by the Recorder. null when disabled.
+path: ?[]const u8,
+/// Number of lines successfully appended since init. Bumped only on success
+/// so callers see the actual file line count, not the attempt count.
+lines: u32,
 /// Reused between writes so each line doesn't alloc/free.
 buf: std.Io.Writer.Allocating,
 
 /// Append-open `path`, inserting a leading newline if the file is non-empty.
 /// A null path disables recording.
 pub fn init(allocator: std.mem.Allocator, path: ?[]const u8) Self {
-    const file: ?std.fs.File = if (path) |p| blk: {
-        const f = std.fs.cwd().createFile(p, .{ .truncate = false }) catch |err| {
-            log.warn(.app, "could not open recording file", .{ .err = @errorName(err) });
-            break :blk null;
-        };
-        f.seekFromEnd(0) catch |err| {
-            log.warn(.app, "could not seek recording file", .{ .err = @errorName(err) });
-            f.close();
-            break :blk null;
-        };
-        const pos = f.getPos() catch 0;
-        if (pos > 0) f.writeAll("\n") catch {};
-        break :blk f;
-    } else null;
+    const opened = openRecording(allocator, path);
+    return .{
+        .allocator = allocator,
+        .file = opened.file,
+        .path = opened.path,
+        .lines = 0,
+        .buf = .init(allocator),
+    };
+}
 
-    return .{ .allocator = allocator, .file = file, .buf = .init(allocator) };
+const OpenedRecording = struct {
+    file: ?std.fs.File,
+    path: ?[]const u8,
+};
+
+fn openRecording(allocator: std.mem.Allocator, path: ?[]const u8) OpenedRecording {
+    const p = path orelse return .{ .file = null, .path = null };
+    const owned_path = allocator.dupe(u8, p) catch {
+        log.warn(.app, "recording path alloc failed", .{});
+        return .{ .file = null, .path = null };
+    };
+
+    const f = std.fs.cwd().createFile(p, .{ .truncate = false }) catch |err| {
+        log.warn(.app, "could not open recording file", .{ .err = @errorName(err) });
+        allocator.free(owned_path);
+        return .{ .file = null, .path = null };
+    };
+    f.seekFromEnd(0) catch |err| {
+        log.warn(.app, "could not seek recording file", .{ .err = @errorName(err) });
+        f.close();
+        allocator.free(owned_path);
+        return .{ .file = null, .path = null };
+    };
+    const pos = f.getPos() catch 0;
+    if (pos > 0) f.writeAll("\n") catch {};
+    return .{ .file = f, .path = owned_path };
 }
 
 pub fn deinit(self: *Self) void {
     self.buf.deinit();
     if (self.file) |f| f.close();
+    if (self.path) |p| self.allocator.free(p);
+}
+
+pub fn isActive(self: *const Self) bool {
+    return self.file != null;
 }
 
 pub fn record(self: *Self, cmd: Command.Command) void {
@@ -44,6 +74,7 @@ pub fn record(self: *Self, cmd: Command.Command) void {
     cmd.format(&self.buf.writer) catch return;
     self.buf.writer.writeByte('\n') catch return;
     f.writeAll(self.buf.written()) catch return;
+    self.lines += 1;
 }
 
 pub fn recordComment(self: *Self, comment: []const u8) void {
@@ -53,6 +84,7 @@ pub fn recordComment(self: *Self, comment: []const u8) void {
     self.buf.writer.writeAll(comment) catch return;
     self.buf.writer.writeByte('\n') catch return;
     f.writeAll(self.buf.written()) catch return;
+    self.lines += 1;
 }
 
 test "record writes state-mutating commands" {
@@ -61,7 +93,13 @@ test "record writes state-mutating commands" {
 
     const file = tmp.dir.createFile("test.lp", .{ .read = true }) catch unreachable;
 
-    var recorder: Self = .{ .allocator = std.testing.allocator, .file = file, .buf = .init(std.testing.allocator) };
+    var recorder: Self = .{
+        .allocator = std.testing.allocator,
+        .file = file,
+        .path = null,
+        .lines = 0,
+        .buf = .init(std.testing.allocator),
+    };
     defer recorder.deinit();
 
     recorder.record(Command.parse("GOTO https://example.com"));
@@ -103,7 +141,13 @@ test "record skips empty and comment lines" {
 
     const file = tmp.dir.createFile("test2.lp", .{ .read = true }) catch unreachable;
 
-    var recorder: Self = .{ .allocator = std.testing.allocator, .file = file, .buf = .init(std.testing.allocator) };
+    var recorder: Self = .{
+        .allocator = std.testing.allocator,
+        .file = file,
+        .path = null,
+        .lines = 0,
+        .buf = .init(std.testing.allocator),
+    };
     defer recorder.deinit();
 
     recorder.record(Command.parse(""));
@@ -120,10 +164,40 @@ test "record skips empty and comment lines" {
 }
 
 test "recorder with null file is no-op" {
-    var recorder: Self = .{ .allocator = std.testing.allocator, .file = null, .buf = .init(std.testing.allocator) };
+    var recorder: Self = .{
+        .allocator = std.testing.allocator,
+        .file = null,
+        .path = null,
+        .lines = 0,
+        .buf = .init(std.testing.allocator),
+    };
     recorder.record(Command.parse("GOTO https://example.com"));
     recorder.recordComment("# test");
+    try std.testing.expectEqual(@as(u32, 0), recorder.lines);
     recorder.deinit();
+}
+
+test "lines counter tracks successful appends" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = tmp.dir.createFile("count.lp", .{ .read = true }) catch unreachable;
+
+    var recorder: Self = .{
+        .allocator = std.testing.allocator,
+        .file = file,
+        .path = null,
+        .lines = 0,
+        .buf = .init(std.testing.allocator),
+    };
+    defer recorder.deinit();
+
+    recorder.record(Command.parse("GOTO https://example.com")); // +1
+    recorder.record(Command.parse("TREE")); // skipped — not isRecorded()
+    recorder.record(Command.parse("CLICK 'Login'")); // +1
+    recorder.recordComment("a note"); // +1
+
+    try std.testing.expectEqual(@as(u32, 3), recorder.lines);
 }
 
 test "init appends to an existing file without truncating" {
@@ -144,6 +218,9 @@ test "init appends to an existing file without truncating" {
     var recorder: Self = .init(std.testing.allocator, abs_path);
     defer recorder.deinit();
     recorder.record(Command.parse("CLICK 'Login'"));
+
+    try std.testing.expect(recorder.isActive());
+    try std.testing.expectEqualStrings(abs_path, recorder.path.?);
 
     // Read back.
     const file = tmp.dir.openFile("script.lp", .{}) catch unreachable;

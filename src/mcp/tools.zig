@@ -182,7 +182,6 @@ fn recordIfActive(server: *Server, name: []const u8, arguments: ?std.json.Value)
     const args_value = arguments orelse return;
     const cmd = Command.fromToolCallValue(name, args_value) orelse return;
     server.recorder.?.record(cmd);
-    server.record_lines += 1;
 }
 
 fn handleRecordStart(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -199,17 +198,16 @@ fn handleRecordStart(server: *Server, arena: std.mem.Allocator, id: std.json.Val
         return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
     }
 
-    const path_owned = server.allocator.dupe(u8, args.path) catch return sendErrorContent(server, id, "out of memory");
-    errdefer server.allocator.free(path_owned);
-
-    const msg = std.fmt.allocPrint(arena, "recording started: {s}", .{path_owned}) catch {
-        server.allocator.free(path_owned);
+    var recorder: Recorder = .init(server.allocator, args.path);
+    if (!recorder.isActive()) {
+        recorder.deinit();
+        return sendErrorContent(server, id, "could not open recording file");
+    }
+    const msg = std.fmt.allocPrint(arena, "recording started: {s}", .{recorder.path.?}) catch {
+        recorder.deinit();
         return sendErrorContent(server, id, "out of memory");
     };
-
-    server.recorder = Recorder.init(server.allocator, path_owned);
-    server.record_path = path_owned;
-    server.record_lines = 0;
+    server.recorder = recorder;
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
     try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
@@ -219,20 +217,13 @@ fn handleRecordStop(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     if (server.recorder == null) {
         return sendErrorContent(server, id, "no recording is active");
     }
-    const path = server.record_path.?;
-    const lines = server.record_lines;
-
-    // Build the response before nulling state so an allocPrint failure doesn't
-    // strand `path` (record_path = null would hide it from Server.deinit).
-    const msg = std.fmt.allocPrint(arena, "recording stopped: {s} ({d} line(s) written)", .{ path, lines }) catch
+    var r = server.recorder.?;
+    // Build the response before deinit so we can quote the path/lines.
+    const msg = std.fmt.allocPrint(arena, "recording stopped: {s} ({d} line(s) written)", .{ r.path.?, r.lines }) catch
         return sendErrorContent(server, id, "out of memory");
 
-    var r = server.recorder.?;
     r.deinit();
     server.recorder = null;
-    server.record_path = null;
-    server.record_lines = 0;
-    server.allocator.free(path);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
     try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
@@ -249,7 +240,6 @@ fn handleRecordComment(server: *Server, arena: std.mem.Allocator, id: std.json.V
     };
 
     server.recorder.?.recordComment(args.text);
-    server.record_lines += 1;
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = "ok" }};
     try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });

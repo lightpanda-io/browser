@@ -13,7 +13,25 @@ const clear_eol = "\x1b[K";
 const max_args_bytes: usize = 100;
 const frame_buf_bytes: usize = 256;
 
-const State = enum { idle, thinking, tool };
+const ToolState = struct {
+    name_buf: [64]u8 = undefined,
+    name_len: usize = 0,
+    args_buf: [max_args_bytes]u8 = undefined,
+    args_len: usize = 0,
+    /// Wall-clock at which `setTool` last fired; gates dwell-honoring.
+    set_ns: i128 = 0,
+    /// Worker should flip back to thinking once dwell elapses. Cleared by a
+    /// fresh `setTool` (which overrides the dwell with a new label).
+    dwell_pending: bool = false,
+    /// Render the label in red — set by `markToolFailed`, cleared by next setTool.
+    failed: bool = false,
+};
+
+const State = union(enum) {
+    idle,
+    thinking,
+    tool: ToolState,
+};
 
 enabled: bool,
 
@@ -22,22 +40,8 @@ cv: std.Thread.Condition = .{},
 state: State = .idle,
 frame: u8 = 0,
 
-tool_name_buf: [64]u8 = undefined,
-tool_name_len: usize = 0,
-tool_args_buf: [max_args_bytes]u8 = undefined,
-tool_args_len: usize = 0,
-
 tool_calls: u32 = 0,
 turn_started_ns: i128 = 0,
-tool_set_ns: i128 = 0,
-/// The model has moved past the current tool back to thinking, but the
-/// spinner is still showing the tool label until `min_tool_display_ns`
-/// elapses. Cleared when the worker flips back to `.thinking`, or by a
-/// fresh `setTool` that overrides the dwell.
-still_thinking: bool = false,
-/// Set by `markToolFailed` so the active tool label renders in red.
-/// Cleared on the next `setTool`.
-tool_failed: bool = false,
 
 thread: ?std.Thread = null,
 should_exit: bool = false,
@@ -69,8 +73,6 @@ pub fn start(self: *Self) void {
     self.frame = 0;
     self.tool_calls = 0;
     self.turn_started_ns = std.time.nanoTimestamp();
-    self.still_thinking = false;
-    self.tool_set_ns = 0;
     if (self.thread == null) {
         self.thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch null;
     }
@@ -118,14 +120,12 @@ pub fn setTool(self: *Self, name: []const u8, args: []const u8) void {
     self.mu.lock();
     defer self.mu.unlock();
     self.tool_calls += 1;
-    self.tool_name_len = @min(name.len, self.tool_name_buf.len);
-    @memcpy(self.tool_name_buf[0..self.tool_name_len], name[0..self.tool_name_len]);
-    self.tool_args_len = @min(args.len, self.tool_args_buf.len);
-    @memcpy(self.tool_args_buf[0..self.tool_args_len], args[0..self.tool_args_len]);
-    self.state = .tool;
-    self.still_thinking = false;
-    self.tool_failed = false;
-    self.tool_set_ns = std.time.nanoTimestamp();
+    var tool: ToolState = .{ .set_ns = std.time.nanoTimestamp() };
+    tool.name_len = @min(name.len, tool.name_buf.len);
+    @memcpy(tool.name_buf[0..tool.name_len], name[0..tool.name_len]);
+    tool.args_len = @min(args.len, tool.args_buf.len);
+    @memcpy(tool.args_buf[0..tool.args_len], args[0..tool.args_len]);
+    self.state = .{ .tool = tool };
     self.renderLocked();
     self.cv.signal();
 }
@@ -137,9 +137,13 @@ pub fn markToolFailed(self: *Self) void {
     if (!self.enabled) return;
     self.mu.lock();
     defer self.mu.unlock();
-    if (self.state != .tool) return;
-    self.tool_failed = true;
-    self.renderLocked();
+    switch (self.state) {
+        .tool => {
+            self.state.tool.failed = true;
+            self.renderLocked();
+        },
+        else => {},
+    }
 }
 
 /// Request a transition back to the cycling "thinking" state. The worker
@@ -149,8 +153,11 @@ pub fn setThinking(self: *Self) void {
     if (!self.enabled) return;
     self.mu.lock();
     defer self.mu.unlock();
-    if (self.state == .idle) return;
-    self.still_thinking = true;
+    switch (self.state) {
+        .idle => return,
+        .thinking => {},
+        .tool => self.state.tool.dwell_pending = true,
+    }
     self.cv.signal();
 }
 
@@ -181,13 +188,17 @@ fn workerLoop(self: *Self) void {
         if (self.should_exit) return;
 
         // Honor minimum tool-display time before reverting to thinking.
-        if (self.state == .tool and self.still_thinking) {
-            const elapsed_ns: u64 = @intCast(std.time.nanoTimestamp() - self.tool_set_ns);
-            if (elapsed_ns >= min_tool_display_ns) {
-                self.state = .thinking;
-                self.still_thinking = false;
-                self.frame = 0;
-            }
+        switch (self.state) {
+            .tool => {
+                if (self.state.tool.dwell_pending) {
+                    const elapsed_ns: u64 = @intCast(std.time.nanoTimestamp() - self.state.tool.set_ns);
+                    if (elapsed_ns >= min_tool_display_ns) {
+                        self.state = .thinking;
+                        self.frame = 0;
+                    }
+                }
+            },
+            else => {},
         }
 
         self.renderLocked();
@@ -208,13 +219,13 @@ fn renderLocked(self: *Self) void {
             "\r" ++ ansi.yellow ++ "●" ++ ansi.reset ++ " " ++ ansi.dim ++ "[agent: thinking{s}]" ++ ansi.reset ++ clear_eol,
             .{dots[self.frame % dots.len]},
         ) catch return,
-        .tool => std.fmt.bufPrint(
+        .tool => |tool| std.fmt.bufPrint(
             &buf,
             "\r{s}●" ++ ansi.reset ++ " " ++ ansi.dim ++ "[agent: {s} {s}]" ++ ansi.reset ++ clear_eol,
             .{
-                if (self.tool_failed) ansi.red else ansi.green,
-                self.tool_name_buf[0..self.tool_name_len],
-                self.tool_args_buf[0..self.tool_args_len],
+                if (tool.failed) ansi.red else ansi.green,
+                tool.name_buf[0..tool.name_len],
+                tool.args_buf[0..tool.args_len],
             },
         ) catch return,
     };

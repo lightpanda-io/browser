@@ -28,14 +28,9 @@ transport: Transport,
 
 /// Optional PandaScript recorder. Activated by the `record_start` tool;
 /// cleared by `record_stop`. State-mutating browser tool calls are
-/// serialized into the active recorder via `Command.fromToolCall`.
+/// serialized into the active recorder via `Command.fromToolCall`. The
+/// Recorder owns its path string and line counter — see `agent/Recorder.zig`.
 recorder: ?Recorder = null,
-/// Caller-supplied path of the active recording, owned by the server so
-/// `record_stop` can return it to the MCP client.
-record_path: ?[]const u8 = null,
-/// Count of `record_*` calls during the current session, returned by
-/// `record_stop` so callers can confirm something was captured.
-record_lines: u32 = 0,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*Self {
     const notification = try lp.Notification.init(allocator);
@@ -74,7 +69,6 @@ pub fn deinit(self: *Self) void {
     }
 
     if (self.recorder) |*r| r.deinit();
-    if (self.record_path) |p| self.allocator.free(p);
 
     self.node_registry.deinit();
     self.transport.deinit();

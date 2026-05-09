@@ -211,9 +211,22 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self);
 }
 
+/// One agent turn: the prompt sent to the model, plus optional context
+/// (a recorder comment to write before the turn, file attachments to bundle
+/// into the first user message, and a display label used in error output).
+pub const TurnInput = struct {
+    prompt: []const u8,
+    record_comment: ?[]const u8 = null,
+    attachments: ?[]const []const u8 = null,
+    label: []const u8 = "Request",
+};
+
 /// Returns true on success.
 pub fn run(self: *Self) bool {
-    if (self.one_shot_task) |task| return self.runTurn(task, null, self.one_shot_attachments, "Request");
+    if (self.one_shot_task) |task| return self.runTurn(.{
+        .prompt = task,
+        .attachments = self.one_shot_attachments,
+    });
     if (self.script_file) |path| {
         const script_ok = self.runScript(path);
         if (!self.interactive) return script_ok;
@@ -224,12 +237,12 @@ pub fn run(self: *Self) bool {
 
 /// Final answer goes to stdout; errors go to stderr, so a caller can
 /// pipe stdout to capture a clean answer.
-fn runTurn(self: *Self, prompt: []const u8, record_comment: ?[]const u8, attachments: ?[]const []const u8, label: []const u8) bool {
-    const text = self.processUserMessage(prompt, record_comment, attachments) catch |err| switch (err) {
+fn runTurn(self: *Self, input: TurnInput) bool {
+    const text = self.processUserMessage(input) catch |err| switch (err) {
         // buildUserMessageParts has already logged the detail.
         error.UnsupportedAttachment, error.AttachmentReadFailed => return false,
         else => {
-            self.terminal.printErrorFmt("{s} failed: {s}", .{ label, @errorName(err) });
+            self.terminal.printErrorFmt("{s} failed: {s}", .{ input.label, @errorName(err) });
             return false;
         },
     };
@@ -267,9 +280,9 @@ fn runRepl(self: *Self) void {
 
         switch (cmd) {
             .comment => continue :repl,
-            .login => _ = self.runTurn(login_prompt, line, null, "LOGIN"),
-            .accept_cookies => _ = self.runTurn(accept_cookies_prompt, line, null, "ACCEPT_COOKIES"),
-            .natural_language => _ = self.runTurn(line, line, null, "Request"),
+            .login => _ = self.runTurn(.{ .prompt = login_prompt, .record_comment = line, .label = "LOGIN" }),
+            .accept_cookies => _ = self.runTurn(.{ .prompt = accept_cookies_prompt, .record_comment = line, .label = "ACCEPT_COOKIES" }),
+            .natural_language => _ = self.runTurn(.{ .prompt = line, .record_comment = line }),
             else => {
                 self.cmd_executor.execute(cmd);
                 self.recorder.record(cmd);
@@ -429,7 +442,7 @@ fn runScript(self: *Self, path: []const u8) bool {
                     return false;
                 }
                 const prompt = if (entry.command == .login) login_prompt else accept_cookies_prompt;
-                const text = self.processUserMessage(prompt, null, null) catch |err| {
+                const text = self.processUserMessage(.{ .prompt = prompt }) catch |err| {
                     self.terminal.printErrorFmt("line {d}: {s} failed: {s}", .{
                         entry.line_num,
                         entry.raw_line,
@@ -702,7 +715,7 @@ fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []cons
 /// Returned text lives in `message_arena`, so it's only valid until the
 /// next prune. `null` means the model emitted nothing even after the
 /// synthesis turn.
-fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]const u8, attachments: ?[]const []const u8) !?[]const u8 {
+fn processUserMessage(self: *Self, input: TurnInput) !?[]const u8 {
     const ma = self.message_arena.allocator();
 
     try self.ensureSystemPrompt();
@@ -710,10 +723,10 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
     // Attachments only ride on the very first user turn (just after the
     // system prompt) — wired into the message's rich `parts`.
     const turn_attachments: ?[]const []const u8 =
-        if (self.messages.items.len == 1) attachments else null;
+        if (self.messages.items.len == 1) input.attachments else null;
 
     if (turn_attachments) |paths| {
-        const parts = try buildUserMessageParts(self, ma, user_input, paths);
+        const parts = try buildUserMessageParts(self, ma, input.prompt, paths);
         try self.messages.append(self.allocator, .{
             .role = .user,
             .parts = parts,
@@ -721,7 +734,7 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
     } else {
         try self.messages.append(self.allocator, .{
             .role = .user,
-            .content = try ma.dupe(u8, user_input),
+            .content = try ma.dupe(u8, input.prompt),
         });
     }
 
@@ -753,13 +766,13 @@ fn processUserMessage(self: *Self, user_input: []const u8, record_comment: ?[]co
     self.terminal.spinner.stop();
     defer result.deinit();
 
-    if (self.recorder.file != null) {
+    if (self.recorder.isActive()) {
         var recorded_any = false;
         for (result.tool_calls_made) |tc| {
             if (tc.is_error) continue;
             const cmd = Command.fromToolCall(ma, tc.name, tc.arguments) orelse continue;
             if (!recorded_any) {
-                if (record_comment) |c| self.recorder.recordComment(c);
+                if (input.record_comment) |c| self.recorder.recordComment(c);
                 recorded_any = true;
             }
             self.recorder.record(cmd);
