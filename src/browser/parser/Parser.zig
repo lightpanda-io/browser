@@ -23,6 +23,7 @@ const h5e = @import("html5ever.zig");
 const Frame = @import("../Frame.zig");
 const Node = @import("../webapi/Node.zig");
 const Element = @import("../webapi/Element.zig");
+const CData = @import("../webapi/CData.zig");
 
 pub const AttributeIterator = h5e.AttributeIterator;
 
@@ -39,6 +40,19 @@ pub const ParsedNode = struct {
     data: ?*anyopaque,
 };
 
+// html5ever's tokenizer flushes the script-data character buffer on every '<'
+// (script-data-less-than-sign-state transition), which produces a separate
+// AppendText callback per chunk. Merging via String.concat in the previous
+// implementation was O(N^2/chunk_size) on the page-lifetime arena, blowing
+// memory on inline JS that contains embedded HTML strings (issue #2397).
+// Instead, we accumulate same-parent chunks in this struct and commit a
+// single allocation on flush.
+const PendingText = struct {
+    parent: *Node,
+    text_node: *CData,
+    buf: std.ArrayListUnmanaged(u8) = .empty,
+};
+
 const Parser = @This();
 
 frame: *Frame,
@@ -46,6 +60,7 @@ err: ?Error,
 container: ParsedNode,
 arena: Allocator,
 strings: std.StringHashMapUnmanaged(void),
+pending_text: ?PendingText,
 
 pub fn init(arena: Allocator, node: *Node, frame: *Frame) Parser {
     return .{
@@ -57,6 +72,54 @@ pub fn init(arena: Allocator, node: *Node, frame: *Frame) Parser {
             .data = null,
             .node = node,
         },
+        .pending_text = null,
+    };
+}
+
+fn flushPendingText(self: *Parser) !void {
+    var pt = self.pending_text orelse return;
+    self.pending_text = null;
+    defer pt.buf.deinit(self.arena);
+    pt.text_node._data = try lp.String.init(
+        self.frame.arena,
+        pt.buf.items,
+        .{ .dupe = true },
+    );
+}
+
+fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
+    if (self.pending_text) |*pt| {
+        if (pt.parent == parent and parent.lastChild() == pt.text_node.asNode()) {
+            try pt.buf.appendSlice(self.arena, txt);
+            return;
+        }
+        try self.flushPendingText();
+    }
+
+    if (parent.lastChild()) |sibling| {
+        if (sibling.is(CData.Text)) |tn| {
+            const cdata = tn._proto;
+            const existing = cdata.getData().str();
+            var buf: std.ArrayListUnmanaged(u8) = .empty;
+            errdefer buf.deinit(self.arena);
+            try buf.ensureTotalCapacityPrecise(self.arena, existing.len + txt.len);
+            buf.appendSliceAssumeCapacity(existing);
+            buf.appendSliceAssumeCapacity(txt);
+            self.pending_text = .{ .parent = parent, .text_node = cdata, .buf = buf };
+            return;
+        }
+    }
+
+    const new_text = try self.frame.createTextNode(txt);
+    try self.frame.appendNew(parent, new_text);
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer buf.deinit(self.arena);
+    try buf.appendSlice(self.arena, txt);
+    self.pending_text = .{
+        .parent = parent,
+        .text_node = new_text.is(CData.Text).?._proto,
+        .buf = buf,
     };
 }
 
@@ -101,6 +164,9 @@ pub fn parse(self: *Parser, html: []const u8) void {
         appendBeforeSiblingCallback,
         appendBasedOnParentNodeCallback,
     );
+    self.flushPendingText() catch |err| {
+        if (self.err == null) self.err = .{ .err = err, .source = .append };
+    };
 }
 
 /// Parse HTML with encoding conversion. Converts from charset to UTF-8 before parsing.
@@ -127,6 +193,9 @@ pub fn parseWithEncoding(self: *Parser, html: []const u8, charset: []const u8) v
         appendBeforeSiblingCallback,
         appendBasedOnParentNodeCallback,
     );
+    self.flushPendingText() catch |err| {
+        if (self.err == null) self.err = .{ .err = err, .source = .append };
+    };
 }
 
 pub fn parseXML(self: *Parser, xml: []const u8) void {
@@ -150,6 +219,9 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
         appendBeforeSiblingCallback,
         appendBasedOnParentNodeCallback,
     );
+    self.flushPendingText() catch |err| {
+        if (self.err == null) self.err = .{ .err = err, .source = .append };
+    };
 }
 
 pub fn parseFragment(self: *Parser, html: []const u8) void {
@@ -173,6 +245,9 @@ pub fn parseFragment(self: *Parser, html: []const u8) void {
         appendBeforeSiblingCallback,
         appendBasedOnParentNodeCallback,
     );
+    self.flushPendingText() catch |err| {
+        if (self.err == null) self.err = .{ .err = err, .source = .append };
+    };
 }
 
 pub const Streaming = struct {
@@ -233,8 +308,9 @@ pub const Streaming = struct {
         }
     }
 
-    pub fn done(self: *Streaming) void {
+    pub fn done(self: *Streaming) !void {
         h5e.html5ever_streaming_parser_finish(self.handle.?);
+        try self.parser.flushPendingText();
     }
 };
 
@@ -252,6 +328,9 @@ fn popCallback(ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void {
 }
 
 fn _popCallback(self: *Parser, node: *Node) !void {
+    // Flush before any nodeComplete so Build.complete (and any custom-element
+    // callbacks reachable from it) observe the final text data.
+    try self.flushPendingText();
     try self.frame.nodeComplete(node);
 }
 
@@ -340,7 +419,7 @@ fn _appendDoctypeToDocument(self: *Parser, name: []const u8, public_id: []const 
     });
 
     // Append it to the document
-    try frame.appendNew(self.container.node, .{ .node = doctype.asNode() });
+    try frame.appendNew(self.container.node, doctype.asNode());
 }
 
 fn addAttrsIfMissingCallback(ctx: *anyopaque, target_ref: *anyopaque, attributes: h5e.AttributeIterator) callconv(.c) void {
@@ -402,6 +481,10 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
     // child node is guaranteed not to belong to another parent
     switch (node_or_text.toUnion()) {
         .node => |cpn| {
+            // Inserting a non-text child terminates any pending text run; flush
+            // before the insertion so that connectedCallback (etc.) sees the
+            // final data on the preceding text sibling.
+            try self.flushPendingText();
             const child = getNode(cpn);
             if (child._parent) |previous_parent| {
                 // html5ever says this can't happen, but we might be screwing up
@@ -414,9 +497,9 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
                 }
                 self.frame.removeNode(previous_parent, child, .{ .will_be_reconnected = parent.isConnected() });
             }
-            try self.frame.appendNew(parent, .{ .node = child });
+            try self.frame.appendNew(parent, child);
         },
-        .text => |txt| try self.frame.appendNew(parent, .{ .text = txt }),
+        .text => |txt| try self.appendTextChunk(parent, txt),
     }
 }
 
@@ -448,6 +531,10 @@ fn appendBeforeSiblingCallback(ctx: *anyopaque, sibling_ref: *anyopaque, node_or
     };
 }
 fn _appendBeforeSiblingCallback(self: *Parser, sibling: *Node, node_or_text: h5e.NodeOrText) !void {
+    // Foster parenting / before-sibling insertions interrupt any pending text
+    // run (the new node lands at a different position from the pending text's
+    // tail). Flush before reading the parent's structure.
+    try self.flushPendingText();
     const parent = sibling.parentNode() orelse return error.NoParent;
     const node: *Node = switch (node_or_text.toUnion()) {
         .node => |cpn| blk: {

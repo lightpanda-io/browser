@@ -837,7 +837,7 @@ pub fn close(self: *Document, frame: *Frame) !void {
 
     // done() calls html5ever_streaming_parser_finish which frees the parser
     // We must NOT call deinit() after done() as that would be a double-free
-    self._script_created_parser.?.done();
+    try self._script_created_parser.?.done();
     // Just null out the handle since done() already freed it
     self._script_created_parser.?.handle = null;
     self._script_created_parser = null;

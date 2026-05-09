@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!--
+  Regression test for issue #2397.
+
+  When the html5ever tokenizer is in script-data / rawtext / rcdata state and
+  encounters '<', it flushes the pending character buffer and re-enters via a
+  fresh AppendText callback. Before the fix, every chunk re-allocated and
+  re-copied the growing text on the page-lifetime arena (O(N^2)). Real pages
+  with embedded HTML strings inside JS literals blew memory to gigabytes.
+
+  After the fix, raw-text-mode element bodies must still parse to exactly ONE
+  text node whose data is byte-identical to the source body.
+-->
+
+<script class="big-script">
+  var s = "<a><b><c><d><e><f><g><h><i><j><k><l><m><n><o><p><q><r><s><t><u><v><w><x><y><z>";
+  var t = "<aa><bb><cc><dd><ee><ff><gg><hh><ii><jj><kk><ll><mm><nn><oo><pp><qq><rr><ss><tt>";
+  var u = "<uu><vv><ww><xx><yy><zz>";
+  var done = "yes";
+</script>
+
+<style class="big-style">
+  .a::before { content: "<a><b><c><d>"; }
+  .b::before { content: "<e><f><g><h>"; }
+  .c::before { content: "<i><j><k><l>"; }
+  .d::before { content: "<m><n><o><p>"; }
+</style>
+
+<textarea class="big-textarea">line1 with &lt;a&gt; and &lt;b&gt;
+line2 with &lt;c&gt; and &lt;d&gt;
+line3 with &lt;e&gt; and &lt;f&gt;</textarea>
+
+<title>A page &lt;with&gt; many &lt;tags&gt; in &lt;the&gt; title</title>
+
+<script id="rawtextchunked">
+  // 1. Each raw-text element parses to exactly one text node child.
+  let script = document.querySelector('script.big-script');
+  testing.expectEqual(1, script.childNodes.length);
+  testing.expectTrue(script.firstChild === script.lastChild);
+  testing.expectEqual(3, script.firstChild.nodeType); // TEXT_NODE
+  testing.expectTrue(script.textContent.indexOf('<a><b><c>') !== -1);
+  testing.expectTrue(script.textContent.indexOf('<uu><vv><ww>') !== -1);
+  testing.expectTrue(script.textContent.indexOf('var done = "yes"') !== -1);
+
+  let style = document.querySelector('style.big-style');
+  testing.expectEqual(1, style.childNodes.length);
+  testing.expectTrue(style.firstChild === style.lastChild);
+  testing.expectTrue(style.textContent.indexOf('"<a><b><c><d>"') !== -1);
+  testing.expectTrue(style.textContent.indexOf('"<m><n><o><p>"') !== -1);
+
+  let textarea = document.querySelector('textarea.big-textarea');
+  testing.expectEqual(1, textarea.childNodes.length);
+  testing.expectTrue(textarea.firstChild === textarea.lastChild);
+  // textarea is RCDATA: entities decoded
+  testing.expectTrue(textarea.value.indexOf('line1 with <a> and <b>') !== -1);
+  testing.expectTrue(textarea.value.indexOf('line3 with <e> and <f>') !== -1);
+
+  let title = document.querySelector('title');
+  testing.expectEqual(1, title.childNodes.length);
+  testing.expectTrue(title.firstChild === title.lastChild);
+  // title is RCDATA: entities decoded
+  testing.expectEqual('A page <with> many <tags> in <the> title', title.textContent);
+
+  // 2. Reading the script body via the DOM yields the verbatim source bytes
+  //    (no chunks, no missing characters).
+  // 26 (a-z) + 20 (aa-tt) + 6 (uu-zz) = 52 '<' characters in the source.
+  let count = (script.firstChild.nodeValue.match(/</g) || []).length;
+  testing.expectEqual(52, count);
+</script>
