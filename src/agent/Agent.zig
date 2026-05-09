@@ -663,27 +663,17 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
 }
 
 fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []const u8, verify_context: ?[]const u8, context_comment: ?[]const u8) ?[]Command.Command {
-    const ha = self.message_arena.allocator();
-
-    const verify_section = if (verify_context) |ctx|
-        std.fmt.allocPrint(ha, "\n\nVerification detected a problem:\n{s}", .{ctx}) catch return null
-    else
-        "";
-
-    const comment_section = if (context_comment) |c|
-        std.fmt.allocPrint(ha, "\n\nThe original user request that generated this command was:\n{s}", .{c}) catch return null
-    else
-        "";
-
-    const prompt = std.fmt.allocPrint(ha, "{s}{s}{s}{s}{s}{s}{s}", .{
-        self_heal_prompt_prefix,
-        failed_command,
-        self_heal_prompt_page_state,
-        self.tool_executor.getCurrentUrl(),
-        comment_section,
-        verify_section,
-        self_heal_prompt_instructions,
-    }) catch return null;
+    var aw: std.Io.Writer.Allocating = .init(self.message_arena.allocator());
+    aw.writer.writeAll(self_heal_prompt_prefix) catch return null;
+    aw.writer.writeAll(failed_command) catch return null;
+    aw.writer.writeAll(self_heal_prompt_page_state) catch return null;
+    aw.writer.writeAll(self.tool_executor.getCurrentUrl()) catch return null;
+    if (context_comment) |c|
+        aw.writer.print("\n\nThe original user request that generated this command was:\n{s}", .{c}) catch return null;
+    if (verify_context) |ctx|
+        aw.writer.print("\n\nVerification detected a problem:\n{s}", .{ctx}) catch return null;
+    aw.writer.writeAll(self_heal_prompt_instructions) catch return null;
+    const prompt = aw.written();
 
     // Save message count so we can roll back between attempts — each failed
     // heal turn would otherwise accumulate in context, confusing the next try.

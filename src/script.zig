@@ -187,6 +187,14 @@ fn writeHealHeader(writer: anytype, raw_line: []const u8) !void {
     try writer.print("# [Auto-healed] Original: {s}\n", .{raw_line});
 }
 
+/// JSON-encode an arbitrary value into the arena and return the encoded slice.
+/// Returns "{}" on encode failure (only allocation failure is plausible here).
+pub fn stringifyJson(arena: std.mem.Allocator, value: anytype) []const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    std.json.Stringify.value(value, .{}, &aw.writer) catch return "{}";
+    return aw.written();
+}
+
 /// Reject paths that an untrusted MCP client could use to escape the
 /// working directory: empty paths, absolute paths, and any path with a
 /// `..` segment. Operator-controlled symlinks already inside CWD are out

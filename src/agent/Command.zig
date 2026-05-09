@@ -1,5 +1,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
+pub const stringifyJson = @import("../script.zig").stringifyJson;
 
 pub const TypeArgs = struct {
     selector: []const u8,
@@ -506,12 +507,6 @@ fn getJsonString(o: std.json.ObjectMap, key: []const u8) ?[]const u8 {
         .string => |s| s,
         else => null,
     };
-}
-
-pub fn stringifyJson(arena: std.mem.Allocator, value: anytype) []const u8 {
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    std.json.Stringify.value(value, .{}, &aw.writer) catch return "{}";
-    return aw.written();
 }
 
 // --- Tests ---

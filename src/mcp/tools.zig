@@ -273,12 +273,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
             return sendErrorContent(server, id, "LOGIN / ACCEPT_COOKIES / natural-language steps require an LLM and are not handled by lightpanda mcp; the calling agent owns those");
         },
         .extract => |sel| {
-            const eval_script = std.fmt.allocPrint(
-                arena,
-                "JSON.stringify(Array.from(document.querySelectorAll({s})).map(el => el.textContent.trim()))",
-                .{Command.stringifyJson(arena, sel)},
-            ) catch return sendErrorContent(server, id, "out of memory building extract script");
-            const result = browser_tools.evalScript(arena, server.session, &server.node_registry, eval_script);
+            const result = browser_tools.extractText(arena, server.session, &server.node_registry, sel);
             const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
             return server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });
         },

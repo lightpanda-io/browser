@@ -416,6 +416,23 @@ pub fn evalScript(
     return runEval(arena, page, z);
 }
 
+/// JSON-encoded array of `el.textContent.trim()` for every element matching
+/// `selector`. Shared between PandaScript's EXTRACT command and the MCP
+/// `script_step` extract arm.
+pub fn extractText(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *CDPNode.Registry,
+    selector: []const u8,
+) EvalResult {
+    const eval_script = std.fmt.allocPrint(
+        arena,
+        "JSON.stringify(Array.from(document.querySelectorAll({s})).map(el => el.textContent.trim()))",
+        .{lp.script.stringifyJson(arena, selector)},
+    ) catch return .{ .text = "Error: out of memory", .is_error = true };
+    return evalScript(arena, session, registry, eval_script);
+}
+
 fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgs(GotoParams, arena, arguments);
     try performGoto(session, registry, args.url, args.timeout, args.waitUntil);
@@ -688,13 +705,16 @@ fn formatActionResult(
     page: *lp.Frame,
 ) ToolError![]const u8 {
     const page_title = page.getTitle() catch null;
-    const target = if (selector) |sel|
-        std.fmt.allocPrint(arena, "selector: {s}", .{sel}) catch return ToolError.InternalError
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    if (selector) |sel|
+        aw.writer.print("{s} (selector: {s}){s}. Page url: {s}, title: {s}", .{
+            prefix, sel, suffix, page.url, page_title orelse "(none)",
+        }) catch return ToolError.InternalError
     else
-        std.fmt.allocPrint(arena, "backendNodeId: {d}", .{backend_node_id.?}) catch return ToolError.InternalError;
-    return std.fmt.allocPrint(arena, "{s} ({s}){s}. Page url: {s}, title: {s}", .{
-        prefix, target, suffix, page.url, page_title orelse "(none)",
-    }) catch ToolError.InternalError;
+        aw.writer.print("{s} (backendNodeId: {d}){s}. Page url: {s}, title: {s}", .{
+            prefix, backend_node_id.?, suffix, page.url, page_title orelse "(none)",
+        }) catch return ToolError.InternalError;
+    return aw.written();
 }
 
 fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
