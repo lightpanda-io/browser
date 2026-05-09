@@ -34,7 +34,7 @@ pub fn executeWithResult(self: *Self, arena: std.mem.Allocator, cmd: Command.Com
         .natural_language, .comment, .login, .accept_cookies => unreachable,
         else => return .{ .output = "command has no tool mapping", .failed = true },
     };
-    if (browser_tools.call(arena, self.tool_executor.session, &self.tool_executor.node_registry, tcv.name, tcv.args)) |output|
+    if (self.tool_executor.callValue(arena, tcv.name, tcv.args)) |output|
         return .{ .output = output, .failed = false }
     else |err|
         return .{ .output = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tcv.name, @errorName(err) }) catch "tool failed", .failed = true };
@@ -60,6 +60,6 @@ pub fn printResult(self: *Self, cmd: Command.Command, result: ExecResult) void {
 
 fn execExtract(self: *Self, arena: std.mem.Allocator, raw_selector: []const u8) ExecResult {
     const selector = browser_tools.substituteEnvVars(arena, raw_selector);
-    const result = browser_tools.extractText(arena, self.tool_executor.session, &self.tool_executor.node_registry, selector);
+    const result = self.tool_executor.extractText(arena, selector);
     return .{ .output = result.text, .failed = result.is_error };
 }

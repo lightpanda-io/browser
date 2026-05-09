@@ -1026,39 +1026,21 @@ fn envVarName(p: Config.AiProvider) []const u8 {
 }
 
 fn promptForProvider(found: []const Config.AiProvider) !Config.AiProvider {
-    const stdin_tty = std.posix.isatty(std.posix.STDIN_FILENO);
-    const stderr_tty = std.posix.isatty(std.posix.STDERR_FILENO);
-    if (!stdin_tty or !stderr_tty) {
+    if (!interactiveTty()) {
         log.fatal(.app, "multiple API keys detected", .{
             .hint = "Pass --provider explicitly when running non-interactively",
         });
         return error.AmbiguousProvider;
     }
 
-    var stdin_buf: [16]u8 = undefined;
-    var stdin = std.fs.File.stdin().reader(&stdin_buf);
+    var labels_buf: [@typeInfo(Config.AiProvider).@"enum".fields.len][]const u8 = undefined;
+    for (found, 0..) |p, i| labels_buf[i] = @tagName(p);
 
-    var attempt: u8 = 0;
-    while (attempt < 3) : (attempt += 1) {
-        std.debug.print("Multiple API keys detected. Pick provider:\n", .{});
-        for (found, 0..) |p, idx| {
-            std.debug.print("  {d}) {s}\n", .{ idx + 1, @tagName(p) });
-        }
-        std.debug.print("> ", .{});
-
-        const line = stdin.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
-            error.EndOfStream, error.StreamTooLong, error.ReadFailed => return error.UserCancelled,
-        };
-        const trimmed = std.mem.trim(u8, line, " \t\r\n");
-        const choice = std.fmt.parseInt(usize, trimmed, 10) catch {
-            std.debug.print("Invalid input — type a number.\n", .{});
-            continue;
-        };
-        if (choice >= 1 and choice <= found.len) return found[choice - 1];
-        std.debug.print("Out of range.\n", .{});
-    }
-    log.fatal(.app, "could not pick provider", .{ .hint = "Pass --provider explicitly" });
-    return error.AmbiguousProvider;
+    const idx = (promptNumberedChoice("Multiple API keys detected. Pick provider:", labels_buf[0..found.len], false, null) catch {
+        log.fatal(.app, "could not pick provider", .{ .hint = "Pass --provider explicitly" });
+        return error.AmbiguousProvider;
+    }) orelse unreachable;
+    return found[idx];
 }
 
 /// Fetch the provider's chat-capable model list and prompt the user to pick
@@ -1071,9 +1053,7 @@ fn pickModel(
     api_key: [:0]const u8,
     base_url: ?[:0]const u8,
 ) ![]u8 {
-    const stdin_tty = std.posix.isatty(std.posix.STDIN_FILENO);
-    const stderr_tty = std.posix.isatty(std.posix.STDERR_FILENO);
-    if (!stdin_tty or !stderr_tty) {
+    if (!interactiveTty()) {
         log.fatal(.app, "pick-model needs a TTY", .{
             .hint = "rerun in a terminal or pass --model explicitly",
         });
@@ -1095,16 +1075,44 @@ fn pickModel(
     }
 
     const default_model = zenai.provider.defaultModel(provider);
+    var default_idx: ?usize = null;
+    for (ids, 0..) |id, i| if (std.mem.eql(u8, id, default_model)) {
+        default_idx = i;
+        break;
+    };
 
+    var header_buf: [128]u8 = undefined;
+    const header = std.fmt.bufPrint(&header_buf, "Pick model for {s} (Enter for default):", .{@tagName(provider)}) catch
+        "Pick model (Enter for default):";
+
+    const result = promptNumberedChoice(header, ids, true, default_idx) catch {
+        log.fatal(.app, "could not pick model", .{ .hint = "Pass --model explicitly" });
+        return error.NoChoice;
+    };
+    if (result) |idx| return try allocator.dupe(u8, ids[idx]);
+    // Honor the baked-in default even when it isn't in the listed ids.
+    std.debug.print("Using default: {s}\n", .{default_model});
+    return try allocator.dupe(u8, default_model);
+}
+
+fn interactiveTty() bool {
+    return std.posix.isatty(std.posix.STDIN_FILENO) and std.posix.isatty(std.posix.STDERR_FILENO);
+}
+
+/// Numbered TTY picker. With `allow_default`, empty input returns null so
+/// the caller can substitute its own default; `default_marker_idx` (if set)
+/// just renders `(default)` next to that row. Errors with NoChoice after
+/// 3 invalid attempts.
+fn promptNumberedChoice(header: []const u8, items: []const []const u8, allow_default: bool, default_marker_idx: ?usize) !?usize {
     var stdin_buf: [128]u8 = undefined;
     var stdin = std.fs.File.stdin().reader(&stdin_buf);
 
     var attempt: u8 = 0;
     while (attempt < 3) : (attempt += 1) {
-        std.debug.print("Pick model for {s} (Enter for default):\n", .{@tagName(provider)});
-        for (ids, 0..) |id, idx| {
-            const marker: []const u8 = if (std.mem.eql(u8, id, default_model)) " (default)" else "";
-            std.debug.print("  {d:>3}) {s}{s}\n", .{ idx + 1, id, marker });
+        std.debug.print("{s}\n", .{header});
+        for (items, 0..) |item, idx| {
+            const marker: []const u8 = if (default_marker_idx) |d| (if (d == idx) " (default)" else "") else "";
+            std.debug.print("  {d:>3}) {s}{s}\n", .{ idx + 1, item, marker });
         }
         std.debug.print("> ", .{});
 
@@ -1113,19 +1121,18 @@ fn pickModel(
         };
         const trimmed = std.mem.trim(u8, line, " \t\r\n");
         if (trimmed.len == 0) {
-            std.debug.print("Using default: {s}\n", .{default_model});
-            return try allocator.dupe(u8, default_model);
+            if (allow_default) return null;
+            std.debug.print("Invalid input — type a number.\n", .{});
+            continue;
         }
         const choice = std.fmt.parseInt(usize, trimmed, 10) catch {
-            std.debug.print("Invalid input — type a number (or press Enter for default).\n", .{});
+            const hint: []const u8 = if (allow_default) " (or press Enter for default)" else "";
+            std.debug.print("Invalid input — type a number{s}.\n", .{hint});
             continue;
         };
-        if (choice >= 1 and choice <= ids.len) {
-            return try allocator.dupe(u8, ids[choice - 1]);
-        }
+        if (choice >= 1 and choice <= items.len) return choice - 1;
         std.debug.print("Out of range.\n", .{});
     }
-    log.fatal(.app, "could not pick model", .{ .hint = "Pass --model explicitly" });
     return error.NoChoice;
 }
 

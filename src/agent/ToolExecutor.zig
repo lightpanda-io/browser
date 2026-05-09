@@ -89,5 +89,16 @@ pub fn call(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, argume
     else
         null;
 
+    return self.callValue(arena, tool_name, arguments);
+}
+
+/// Like `call` but takes an already-parsed JSON value. Skips the
+/// stringify+reparse for callers (e.g. PandaScript replay) that already
+/// have a `std.json.Value`.
+pub fn callValue(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) browser_tools.ToolError![]const u8 {
     return browser_tools.call(arena, self.session, &self.node_registry, tool_name, arguments);
+}
+
+pub fn extractText(self: *Self, arena: std.mem.Allocator, selector: []const u8) browser_tools.EvalResult {
+    return browser_tools.extractText(arena, self.session, &self.node_registry, selector);
 }
