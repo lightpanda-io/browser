@@ -226,7 +226,7 @@ pub fn deinit(self: *Context) void {
     env.isolate.notifyContextDisposed();
     // There can be other tasks associated with this context that we need to
     // purge while the context is still alive.
-    _ = env.pumpMessageLoop();
+    _ = env.pumpMessageLoop(null);
     v8.v8__MicrotaskQueue__DELETE(self.microtask_queue);
 }
 

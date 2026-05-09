@@ -79,10 +79,16 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
     });
 }
 
-pub fn run(self: *Scheduler) !void {
+// `deadline_ms` is an optional monotonic-clock deadline. When non-null, the
+// scheduler returns after the currently-running task finishes if the clock
+// has reached the deadline, leaving any still-ready tasks queued. The outer
+// tick uses this to bound CDP message-handling latency on busy pages — see
+// `Runner._tick` and the GitHub issue at lightpanda-io/browser#2402.
+pub fn run(self: *Scheduler, deadline_ms: ?u64) !void {
     const now = milliTimestamp(.monotonic);
-    try self.runQueue(&self.low_priority, now);
-    try self.runQueue(&self.high_priority, now);
+    try self.runQueue(&self.low_priority, now, deadline_ms);
+    if (deadlineElapsed(deadline_ms)) return;
+    try self.runQueue(&self.high_priority, now, deadline_ms);
 }
 
 pub fn hasReadyTasks(self: *Scheduler) bool {
@@ -99,7 +105,7 @@ pub fn msToNextHigh(self: *Scheduler) ?u64 {
     return @intCast(task.run_at - now);
 }
 
-fn runQueue(self: *Scheduler, queue: *Queue, now: u64) !void {
+fn runQueue(self: *Scheduler, queue: *Queue, now: u64, deadline_ms: ?u64) !void {
     if (queue.count() == 0) {
         return;
     }
@@ -126,8 +132,15 @@ fn runQueue(self: *Scheduler, queue: *Queue, now: u64) !void {
             task.run_at = now + ms;
             try self.low_priority.add(task);
         }
+
+        if (deadlineElapsed(deadline_ms)) return;
     }
     return;
+}
+
+inline fn deadlineElapsed(deadline_ms: ?u64) bool {
+    const d = deadline_ms orelse return false;
+    return milliTimestamp(.monotonic) >= d;
 }
 
 fn queueHasReadyTask(queue: *Queue, now: u64) bool {
@@ -155,3 +168,58 @@ const Task = struct {
 
 const Callback = *const fn (ctx: *anyopaque) anyerror!?u32;
 const Finalizer = *const fn (ctx: *anyopaque) void;
+
+const Counter = struct {
+    n: u32 = 0,
+    fn cb(ctx: *anyopaque) anyerror!?u32 {
+        const self: *Counter = @ptrCast(@alignCast(ctx));
+        self.n += 1;
+        return null;
+    }
+};
+
+test "Scheduler.run with no deadline drains all ready tasks" {
+    // Scheduler.deinit doesn't free the underlying PriorityQueue storage
+    // (the production code relies on an arena allocator), so use an arena
+    // here too to avoid noise from the testing allocator's leak detector.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var sched = Scheduler.init(arena.allocator());
+    defer sched.deinit();
+
+    var counter: Counter = .{};
+    for (0..50) |_| {
+        try sched.add(&counter, Counter.cb, 0, .{});
+    }
+
+    try sched.run(null);
+    try std.testing.expectEqual(@as(u32, 50), counter.n);
+}
+
+test "Scheduler.run with already-elapsed deadline yields after first task" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var sched = Scheduler.init(arena.allocator());
+    defer sched.deinit();
+
+    var counter: Counter = .{};
+    // Add to the queue Scheduler.run drains first so the inner loop has
+    // something to do before the outer deadline check kicks in.
+    for (0..50) |_| {
+        try sched.add(&counter, Counter.cb, 0, .{ .low_priority = true });
+    }
+
+    // A deadline of 1 is in the past relative to the monotonic clock, so the
+    // loop runs exactly one task (the post-callback check yields) and the
+    // outer between-queues check then prevents the high_priority queue from
+    // running.
+    try sched.run(1);
+    try std.testing.expectEqual(@as(u32, 1), counter.n);
+
+    // Remaining tasks are still queued — re-running drains them when no
+    // deadline is set.
+    try sched.run(null);
+    try std.testing.expectEqual(@as(u32, 50), counter.n);
+}

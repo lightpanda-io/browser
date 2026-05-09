@@ -93,11 +93,16 @@ pub fn runMicrotasks(self: *Browser) void {
     self.env.runMicrotasks();
 }
 
-pub fn runMacrotasks(self: *Browser) !void {
+// `deadline_ms` is an optional monotonic-clock deadline. When non-null, the
+// macrotask drain yields back to the caller as soon as the deadline elapses,
+// leaving any remaining ready tasks in the queue. Used by Runner._tick in
+// CDP mode to bound how long we go between WebSocket polls (issue #2402).
+// Pass null for unbounded drains (e.g. fetch-mode wait, shutdown).
+pub fn runMacrotasks(self: *Browser, deadline_ms: ?u64) !void {
     const env = &self.env;
 
-    try self.env.runMacrotasks();
-    env.pumpMessageLoop();
+    try self.env.runMacrotasks(deadline_ms);
+    env.pumpMessageLoop(deadline_ms);
 
     // either of the above could have queued more microtasks
     env.runMicrotasks();

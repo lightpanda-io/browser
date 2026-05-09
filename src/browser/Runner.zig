@@ -27,9 +27,17 @@ const HttpClient = @import("HttpClient.zig");
 
 const Node = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
+const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
 const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
+
+// In CDP mode, cap each macrotask drain at this many milliseconds so the
+// outer tick can poll the WebSocket between drain rounds. Without this,
+// pages with sustained JS activity (e.g. Angular RAF chains) hold the V8
+// thread for many seconds at a time and queued CDP commands stall behind
+// them — see lightpanda-io/browser#2402.
+const CDP_MACROTASK_BUDGET_MS: u64 = 50;
 
 const Runner = @This();
 
@@ -181,10 +189,19 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
             // The HTML page was parsed. We now either have JS scripts to
             // download, or scheduled tasks to execute, or both.
 
+            // In CDP mode, bound the drain so a long Angular-style macrotask
+            // chain doesn't block us from polling the WebSocket below. In
+            // non-CDP mode (fetch), let the drain run to completion — there
+            // is no socket to service and `wait_ms` already caps wall time.
+            const macrotask_deadline: ?u64 = if (comptime is_cdp)
+                milliTimestamp(.monotonic) + CDP_MACROTASK_BUDGET_MS
+            else
+                null;
+
             // scheduler.run could trigger new http transfers, so do not
             // store http_client.http_active BEFORE this call and then use
             // it AFTER.
-            try browser.runMacrotasks();
+            try browser.runMacrotasks(macrotask_deadline);
 
             const http_active = http_client.http_active;
             const total_network_activity = http_active + http_client.interception_layer.intercepted;

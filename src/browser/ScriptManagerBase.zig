@@ -768,7 +768,7 @@ pub const Script = struct {
 
         defer {
             local.runMacrotasks(); // also runs microtasks
-            _ = frame.js.scheduler.run() catch |err| {
+            _ = frame.js.scheduler.run(null) catch |err| {
                 log.err(.frame, "scheduler", .{ .err = err });
             };
         }

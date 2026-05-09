@@ -31,6 +31,7 @@ const App = @import("../../App.zig");
 const Frame = @import("../Frame.zig");
 const Window = @import("../webapi/Window.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
+const milliTimestamp = @import("../../datetime.zig").milliTimestamp;
 
 const v8 = js.v8;
 const log = lp.log;
@@ -385,7 +386,11 @@ pub fn runMicrotasks(self: *Env) void {
     }
 }
 
-pub fn runMacrotasks(self: *Env) !void {
+// `deadline_ms` is an optional monotonic-clock deadline. When non-null, this
+// returns as soon as the clock reaches the deadline so the caller can yield
+// to socket I/O (see Runner._tick). Pass null when running to completion is
+// required (e.g. shutdown drains).
+pub fn runMacrotasks(self: *Env, deadline_ms: ?u64) !void {
     if (v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle)) {
         return;
     }
@@ -404,7 +409,8 @@ pub fn runMacrotasks(self: *Env) !void {
         var hs: js.HandleScope = undefined;
         const entered = ctx.enter(&hs);
         defer entered.exit();
-        try ctx.scheduler.run();
+        try ctx.scheduler.run(deadline_ms);
+        if (deadlineElapsed(deadline_ms)) return;
     }
 }
 
@@ -417,14 +423,23 @@ pub fn msToNextMacrotask(self: *Env) ?u64 {
     return if (next_task == std.math.maxInt(u64)) null else next_task;
 }
 
-pub fn pumpMessageLoop(self: *const Env) void {
+// `deadline_ms`: see runMacrotasks. Existing callers that need an unbounded
+// drain pass null.
+pub fn pumpMessageLoop(self: *const Env, deadline_ms: ?u64) void {
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate.handle);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
     const isolate = self.isolate.handle;
     const platform = self.platform.handle;
-    while (v8.v8__Platform__PumpMessageLoop(platform, isolate, false)) {}
+    while (v8.v8__Platform__PumpMessageLoop(platform, isolate, false)) {
+        if (deadlineElapsed(deadline_ms)) return;
+    }
+}
+
+inline fn deadlineElapsed(deadline_ms: ?u64) bool {
+    const d = deadline_ms orelse return false;
+    return milliTimestamp(.monotonic) >= d;
 }
 
 pub fn hasBackgroundTasks(self: *const Env) bool {
