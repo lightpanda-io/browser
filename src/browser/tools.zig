@@ -384,12 +384,29 @@ pub fn call(
     const action = std.meta.stringToEnum(Action, tool_name) orelse return ToolError.InvalidParams;
 
     return switch (action) {
+        .goto => execGoto(arena, session, registry, arguments),
+        .search => execSearch(arena, session, registry, arguments),
+        .markdown => execMarkdown(arena, session, registry, arguments),
+        .links => execLinks(arena, session, registry, arguments),
+        .tree => execTree(arena, session, registry, arguments),
+        .nodeDetails => execNodeDetails(arena, session, registry, arguments),
+        .interactiveElements => execInteractiveElements(arena, session, registry, arguments),
+        .structuredData => execStructuredData(arena, session, registry, arguments),
+        .detectForms => execDetectForms(arena, session, registry, arguments),
+        .click => execClick(arena, session, registry, arguments),
+        .fill => execFill(arena, session, registry, arguments),
+        .scroll => execScroll(arena, session, registry, arguments),
+        .waitForSelector => execWaitForSelector(arena, session, registry, arguments),
+        .hover => execHover(arena, session, registry, arguments),
+        .press => execPress(arena, session, registry, arguments),
+        .selectOption => execSelectOption(arena, session, registry, arguments),
+        .setChecked => execSetChecked(arena, session, registry, arguments),
+        .findElement => execFindElement(arena, session, registry, arguments),
         .eval => execEval(arena, session, registry, arguments).text,
         .getEnv => execGetEnv(arena, arguments),
         .consoleLogs => execConsoleLogs(arena, session),
         .getUrl => execGetUrl(session),
         .getCookies => execGetCookies(arena, session),
-        inline else => |tag| @field(@This(), "exec" ++ [1]u8{std.ascii.toUpper(@tagName(tag)[0])} ++ @tagName(tag)[1..])(arena, session, registry, arguments),
     };
 }
 
