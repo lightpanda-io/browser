@@ -112,20 +112,29 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     const will_repl = !is_one_shot and (opts.interactive or opts.script_file == null);
     const needs_llm = will_repl or is_one_shot;
 
-    if (opts.provider == null) {
-        const required_by: ?[]const u8 = if (opts.self_heal)
-            "--self-heal requires --provider; drop one or add the other"
-        else if (is_one_shot)
-            "--task requires --provider"
+    // Precedence: --no-llm > --provider > env auto-detect.
+    const effective_provider: ?Config.AiProvider = if (opts.no_llm)
+        null
+    else if (opts.provider) |p|
+        p
+    else
+        try autoDetectProvider();
+
+    // The REPL itself can run without an LLM (basic mode), but --task and
+    // --self-heal genuinely need one.
+    const requires_llm = is_one_shot or opts.self_heal;
+    if (effective_provider == null and requires_llm) {
+        const hint: []const u8 = if (opts.no_llm)
+            "drop --no-llm, then set an API key or pass --provider"
+        else if (opts.self_heal)
+            "--self-heal needs an LLM; set an API key or pass --provider"
         else
-            null;
-        if (required_by) |hint| {
-            log.fatal(.app, "missing --provider", .{ .hint = hint });
-            return error.MissingProvider;
-        }
+            "set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY) or pass --provider";
+        log.fatal(.app, "no LLM available", .{ .hint = hint });
+        return error.MissingProvider;
     }
 
-    const api_key = try resolveApiKey(opts.provider, needs_llm);
+    const api_key = try resolveApiKey(effective_provider, needs_llm);
 
     const tool_executor: *ToolExecutor = try .init(allocator, app);
     errdefer tool_executor.deinit();
@@ -133,7 +142,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
-    const ai_client: ?zenai.provider.Client = if (api_key) |key| switch (opts.provider.?) {
+    const ai_client: ?zenai.provider.Client = if (api_key) |key| switch (effective_provider.?) {
         inline else => |tag| blk: {
             const ProviderClient = zenai.provider.Client;
             const ClientPtr = @FieldType(ProviderClient, @tagName(tag));
@@ -177,7 +186,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .recorder = .init(allocator, recorder_path),
         .messages = .empty,
         .message_arena = .init(allocator),
-        .model = if (opts.provider) |p| (opts.model orelse zenai.provider.defaultModel(p)) else "",
+        .model = if (effective_provider) |p| (opts.model orelse zenai.provider.defaultModel(p)) else "",
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
         .self_heal = opts.self_heal,
@@ -257,7 +266,7 @@ fn runRepl(self: *Self) void {
     if (self.ai_client) |ai_client| {
         self.terminal.printInfoFmt("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
-        self.terminal.printInfo("Dumb REPL (no --provider) — PandaScript only. Pass --provider for natural-language, LOGIN, and ACCEPT_COOKIES.");
+        self.terminal.printInfo("Basic REPL — PandaScript only. Set an API key or pass --provider for natural-language, LOGIN, and ACCEPT_COOKIES (and drop --no-llm if you set it).");
     }
 
     repl: while (true) {
@@ -274,7 +283,7 @@ fn runRepl(self: *Self) void {
         const cmd = Command.parse(line);
 
         if (cmd.needsLlm() and self.ai_client == null) {
-            self.terminal.printError("This command requires --provider. PandaScript commands (GOTO, CLICK, EXTRACT, ...) work without one.");
+            self.terminal.printError("This command needs an LLM. Set an API key or pass --provider (and drop --no-llm if you set it). PandaScript commands (GOTO, CLICK, EXTRACT, ...) work without one.");
             continue;
         }
 
@@ -924,6 +933,82 @@ fn resolveApiKey(provider: ?Config.AiProvider, needs_llm: bool) !?[:0]const u8 {
         .hint = "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY",
     });
     return error.MissingApiKey;
+}
+
+/// Pick a provider from env keys when `--provider` was not given.
+/// Notices go to stderr unconditionally so users always know which mode they're in.
+pub fn autoDetectProvider() !?Config.AiProvider {
+    const candidates = [_]Config.AiProvider{ .anthropic, .openai, .gemini };
+    var found_buf: [candidates.len]Config.AiProvider = undefined;
+    var found_len: usize = 0;
+    for (candidates) |p| {
+        if (zenai.provider.envApiKey(p) != null) {
+            found_buf[found_len] = p;
+            found_len += 1;
+        }
+    }
+    const found = found_buf[0..found_len];
+
+    return switch (found.len) {
+        0 => blk: {
+            std.debug.print(
+                "No API key detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY, or pass --provider — or pass --no-llm for the basic REPL.\n",
+                .{},
+            );
+            break :blk null;
+        },
+        1 => blk: {
+            const p = found[0];
+            std.debug.print("Detected {s} — using --provider {s}.\n", .{ envVarName(p), @tagName(p) });
+            break :blk p;
+        },
+        else => try promptForProvider(found),
+    };
+}
+
+fn envVarName(p: Config.AiProvider) []const u8 {
+    return switch (p) {
+        .anthropic => "ANTHROPIC_API_KEY",
+        .openai => "OPENAI_API_KEY",
+        .gemini => "GOOGLE_API_KEY/GEMINI_API_KEY",
+        .ollama => "<ollama>",
+    };
+}
+
+fn promptForProvider(found: []const Config.AiProvider) !Config.AiProvider {
+    const stdin_tty = std.posix.isatty(std.posix.STDIN_FILENO);
+    const stderr_tty = std.posix.isatty(std.posix.STDERR_FILENO);
+    if (!stdin_tty or !stderr_tty) {
+        log.fatal(.app, "multiple API keys detected", .{
+            .hint = "Pass --provider explicitly when running non-interactively",
+        });
+        return error.AmbiguousProvider;
+    }
+
+    var stdin_buf: [16]u8 = undefined;
+    var stdin = std.fs.File.stdin().reader(&stdin_buf);
+
+    var attempt: u8 = 0;
+    while (attempt < 3) : (attempt += 1) {
+        std.debug.print("Multiple API keys detected. Pick provider:\n", .{});
+        for (found, 0..) |p, idx| {
+            std.debug.print("  {d}) {s}\n", .{ idx + 1, @tagName(p) });
+        }
+        std.debug.print("> ", .{});
+
+        const line = stdin.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
+            error.EndOfStream, error.StreamTooLong, error.ReadFailed => return error.UserCancelled,
+        };
+        const trimmed = std.mem.trim(u8, line, " \t\r\n");
+        const choice = std.fmt.parseInt(usize, trimmed, 10) catch {
+            std.debug.print("Invalid input — type a number.\n", .{});
+            continue;
+        };
+        if (choice >= 1 and choice <= found.len) return found[choice - 1];
+        std.debug.print("Out of range.\n", .{});
+    }
+    log.fatal(.app, "could not pick provider", .{ .hint = "Pass --provider explicitly" });
+    return error.AmbiguousProvider;
 }
 
 // --- Tests ---

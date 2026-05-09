@@ -182,9 +182,11 @@ etc.), use `lightpanda mcp` above — it exposes the same browser tools without
 needing an LLM (or API key) inside Lightpanda.
 
 ```console
-./lightpanda agent --provider anthropic
-./lightpanda agent --provider gemini --task "top story on news.ycombinator.com?"
-./lightpanda agent session.lp
+./lightpanda agent                                    # auto-detects API key from env
+./lightpanda agent --task "top story on news.ycombinator.com?"
+./lightpanda agent --no-llm                           # basic REPL, no LLM
+./lightpanda agent session.lp                         # replay a recorded script
+./lightpanda agent --provider gemini --task "..."     # force a specific provider
 ```
 
 See [docs/agent.md](docs/agent.md) for the full reference.

@@ -7,6 +7,7 @@ pub const Recorder = @import("agent/Recorder.zig");
 pub const Verifier = @import("agent/Verifier.zig");
 pub const SlashCommand = @import("agent/SlashCommand.zig");
 pub const listModels = @import("agent/list_models.zig").run;
+pub const autoDetectProvider = Agent.autoDetectProvider;
 
 test {
     _ = Agent;

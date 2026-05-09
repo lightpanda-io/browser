@@ -5,7 +5,7 @@ It can act as:
 
 - an **LLM agent** that drives the browser with tool calls (`--provider`),
 - a **scripted runner** that replays a `.lp` script deterministically,
-- a **dumb REPL** for hand-driven PandaScript with no LLM at all,
+- a **basic REPL** for hand-driven PandaScript with no LLM at all,
 - a **one-shot task runner** that prints a single answer to stdout (`--task`).
 
 All four modes share the same browser tools (`goto`, `click`, `fill`, `tree`,
@@ -17,11 +17,14 @@ etc.) without giving Lightpanda its own API key.
 ## Quick start
 
 ```console
-# Interactive REPL with an LLM
+# Interactive REPL — auto-detects an API key from your environment
+./lightpanda agent
+
+# Force a specific provider
 ./lightpanda agent --provider anthropic
 
-# Dumb REPL (no API key, PandaScript only)
-./lightpanda agent
+# Basic REPL (no LLM, PandaScript only)
+./lightpanda agent --no-llm
 
 # Replay a recorded script
 ./lightpanda agent session.lp
@@ -30,7 +33,7 @@ etc.) without giving Lightpanda its own API key.
 ./lightpanda agent -i session.lp
 
 # One-shot: ask a question, capture the answer on stdout
-./lightpanda agent --provider gemini --task "what is on the front page of hn?"
+./lightpanda agent --task "what is on the front page of hn?"
 ```
 
 ## Providers and API keys
@@ -45,8 +48,24 @@ etc.) without giving Lightpanda its own API key.
 Defaults: `--model` falls back to a sensible per-provider default; `--base-url`
 overrides the API endpoint (Ollama defaults to `http://localhost:11434/v1`).
 
-Without `--provider`, the REPL still works for PandaScript commands. Natural
-language, `LOGIN`, `ACCEPT_COOKIES`, and `--self-heal` all require a provider.
+### Provider auto-detection
+
+When `--provider` is omitted, lightpanda inspects the environment and picks one:
+
+- **No keys set** → falls back to the basic REPL (PandaScript only). Natural
+  language, `LOGIN`, `ACCEPT_COOKIES`, and `--self-heal` will reject. A
+  one-line notice is printed so you know which mode you landed in.
+- **Exactly one key set** → that provider is used. A one-line notice
+  identifies the env var that won.
+- **Multiple keys set, on a TTY** → a numbered prompt asks which to use.
+- **Multiple keys set, non-interactive** → the agent fails fast and tells
+  you to pass `--provider` explicitly. Ollama is never auto-detected
+  (no env var to look at) — pass `--provider ollama` if you want it.
+
+`--no-llm` is the explicit bypass: it forces the basic REPL even when an
+API key is present or `--provider` is set. Use it to test PandaScript
+without burning tokens, or to disable the LLM in a saved command without
+editing the existing flags. `--no-llm` wins over `--provider`.
 
 ## PandaScript
 

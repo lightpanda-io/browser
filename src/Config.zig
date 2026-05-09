@@ -201,6 +201,7 @@ const Commands = cli.Builder(.{
             .{ .name = "task_attachments", .type = []const u8, .multiple = true },
             .{ .name = "verbosity", .type = AgentVerbosity, .default = AgentVerbosity.low },
             .{ .name = "list_models", .type = bool },
+            .{ .name = "no_llm", .type = bool },
         },
         .shared_options = CommonOptions,
     },
@@ -745,9 +746,10 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\agent command
         \\Starts an interactive AI agent that can browse the web
-        \\Example: {0s} agent                         (dumb PandaScript-only REPL)
+        \\Example: {0s} agent                         (auto-detects API key from env)
         \\Example: {0s} agent --provider anthropic --model claude-haiku-4-5-20251001
         \\Example: {0s} agent --provider ollama --model gemma4
+        \\Example: {0s} agent --no-llm                (basic PandaScript-only REPL)
         \\Example: {0s} agent script.lp            (replay a recorded script)
         \\Example: {0s} agent -i script.lp         (replay then drop into REPL,
         \\                                             appending new commands to the file)
@@ -761,10 +763,21 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\Options:
         \\--provider      The AI provider: anthropic, openai, gemini, or ollama.
-        \\                Optional. When omitted, the REPL runs in "dumb mode":
-        \\                PandaScript commands work, but natural-language input,
-        \\                LOGIN / ACCEPT_COOKIES keywords, and --self-heal all
-        \\                require a provider. Dumb mode needs no API key.
+        \\                Optional. When omitted, lightpanda auto-detects an API
+        \\                key from your environment (ANTHROPIC_API_KEY,
+        \\                OPENAI_API_KEY, GOOGLE_API_KEY/GEMINI_API_KEY). With
+        \\                exactly one key set: that provider is used. With
+        \\                multiple keys on a TTY: you'll be prompted to pick;
+        \\                in non-interactive contexts, pass --provider
+        \\                explicitly. With no keys set: falls back to the basic
+        \\                REPL (PandaScript only, no natural-language input,
+        \\                no LOGIN / ACCEPT_COOKIES keywords, no --self-heal).
+        \\
+        \\--no-llm        Force the basic REPL even when an API key is present
+        \\                or --provider is set. Useful for testing PandaScript
+        \\                without burning tokens, or for disabling the LLM in
+        \\                a saved command without editing the existing flags.
+        \\                Wins over --provider.
         \\
         \\--model         The model name to use.
         \\                Defaults to a sensible default per provider.
@@ -786,7 +799,8 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--list-models   Print the model IDs usable with `agent` for
         \\                --provider, one per line, sorted, and exit.
-        \\                Requires --provider; the API key must be set.
+        \\                Auto-detects the provider from env when --provider
+        \\                is omitted.
         \\
         \\--verbosity     Stderr chatter level: low, medium, high.
         \\                Default: low. In a TTY REPL, low shows a single-
@@ -801,8 +815,8 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                high keeps the build default (warn). Pass
         \\                --log-level explicitly to override.
         \\
-        \\The API key is read from the environment:
-        \\ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
+        \\API keys are read from the environment:
+        \\ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY/GEMINI_API_KEY.
         \\Ollama does not require an API key.
         \\
     ++ common_options ++
