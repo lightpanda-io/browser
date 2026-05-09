@@ -202,6 +202,7 @@ const Commands = cli.Builder(.{
             .{ .name = "verbosity", .type = AgentVerbosity, .default = AgentVerbosity.low },
             .{ .name = "list_models", .type = bool },
             .{ .name = "no_llm", .type = bool },
+            .{ .name = "pick_model", .type = bool },
         },
         .shared_options = CommonOptions,
     },
@@ -781,6 +782,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--model         The model name to use.
         \\                Defaults to a sensible default per provider.
+        \\                Wins over --pick-model.
+        \\
+        \\--pick-model    Fetch the provider's model list and prompt you to
+        \\                pick one at startup, instead of using the baked-in
+        \\                default. Requires a TTY. Ignored when --model is
+        \\                also passed.
         \\
         \\--base-url      Override the API base URL for the provider.
         \\                Defaults to the provider's standard endpoint.

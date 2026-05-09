@@ -99,6 +99,10 @@ recorder: Recorder,
 messages: std.ArrayList(zenai.provider.Message),
 message_arena: std.heap.ArenaAllocator,
 model: []const u8,
+/// When non-null, `model` aliases this heap buffer (allocated by --pick-model)
+/// and `deinit` must free it. When null, `model` aliases an arg-parser slice
+/// or a comptime literal (`zenai.provider.defaultModel`) and we don't own it.
+model_owned: ?[]u8,
 system_prompt: []const u8,
 script_file: ?[]const u8,
 self_heal: bool,
@@ -120,14 +124,16 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     else
         try autoDetectProvider();
 
-    // The REPL itself can run without an LLM (basic mode), but --task and
-    // --self-heal genuinely need one.
-    const requires_llm = is_one_shot or opts.self_heal;
+    // The REPL itself can run without an LLM (basic mode), but --task,
+    // --self-heal, and --pick-model genuinely need one.
+    const requires_llm = is_one_shot or opts.self_heal or opts.pick_model;
     if (effective_provider == null and requires_llm) {
         const hint: []const u8 = if (opts.no_llm)
             "drop --no-llm, then set an API key or pass --provider"
         else if (opts.self_heal)
             "--self-heal needs an LLM; set an API key or pass --provider"
+        else if (opts.pick_model)
+            "--pick-model needs an LLM; set an API key or pass --provider"
         else
             "set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY) or pass --provider";
         log.fatal(.app, "no LLM available", .{ .hint = hint });
@@ -135,6 +141,22 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     }
 
     const api_key = try resolveApiKey(effective_provider, needs_llm);
+
+    // Resolve model BEFORE the heavy init so --pick-model's prompt fires
+    // before tool_executor / ai_client setup.
+    // Precedence: --model > --pick-model > defaultModel.
+    var model_owned: ?[]u8 = null;
+    errdefer if (model_owned) |buf| allocator.free(buf);
+    const model: []const u8 = if (opts.model) |m|
+        m
+    else if (opts.pick_model and effective_provider != null and api_key != null) blk: {
+        const picked = try pickModel(allocator, effective_provider.?, api_key.?, opts.base_url);
+        model_owned = picked;
+        break :blk picked;
+    } else if (effective_provider) |p|
+        zenai.provider.defaultModel(p)
+    else
+        "";
 
     const tool_executor: *ToolExecutor = try .init(allocator, app);
     errdefer tool_executor.deinit();
@@ -186,7 +208,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
         .recorder = .init(allocator, recorder_path),
         .messages = .empty,
         .message_arena = .init(allocator),
-        .model = if (effective_provider) |p| (opts.model orelse zenai.provider.defaultModel(p)) else "",
+        .model = model,
+        .model_owned = model_owned,
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
         .self_heal = opts.self_heal,
@@ -217,6 +240,7 @@ pub fn deinit(self: *Self) void {
             },
         }
     }
+    if (self.model_owned) |buf| self.allocator.free(buf);
     self.allocator.destroy(self);
 }
 
@@ -1009,6 +1033,74 @@ fn promptForProvider(found: []const Config.AiProvider) !Config.AiProvider {
     }
     log.fatal(.app, "could not pick provider", .{ .hint = "Pass --provider explicitly" });
     return error.AmbiguousProvider;
+}
+
+/// Fetch the provider's chat-capable model list and prompt the user to pick
+/// one. Empty input picks the baked-in default. Always returns an owned
+/// heap buffer (including for the default case) so the caller has one
+/// uniform free path.
+fn pickModel(
+    allocator: std.mem.Allocator,
+    provider: Config.AiProvider,
+    api_key: [:0]const u8,
+    base_url: ?[:0]const u8,
+) ![]u8 {
+    const stdin_tty = std.posix.isatty(std.posix.STDIN_FILENO);
+    const stderr_tty = std.posix.isatty(std.posix.STDERR_FILENO);
+    if (!stdin_tty or !stderr_tty) {
+        log.fatal(.app, "pick-model needs a TTY", .{
+            .hint = "rerun in a terminal or pass --model explicitly",
+        });
+        return error.NotInteractive;
+    }
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    std.debug.print("Fetching models for {s}…\n", .{@tagName(provider)});
+    const ids = zenai.provider.listChatModelIds(allocator, arena, provider, api_key, base_url) catch |err| {
+        log.fatal(.app, "list models failed", .{ .err = @errorName(err) });
+        return err;
+    };
+    if (ids.len == 0) {
+        log.fatal(.app, "no models returned", .{ .provider = @tagName(provider) });
+        return error.NoModels;
+    }
+
+    const default_model = zenai.provider.defaultModel(provider);
+
+    var stdin_buf: [128]u8 = undefined;
+    var stdin = std.fs.File.stdin().reader(&stdin_buf);
+
+    var attempt: u8 = 0;
+    while (attempt < 3) : (attempt += 1) {
+        std.debug.print("Pick model for {s} (Enter for default):\n", .{@tagName(provider)});
+        for (ids, 0..) |id, idx| {
+            const marker: []const u8 = if (std.mem.eql(u8, id, default_model)) " (default)" else "";
+            std.debug.print("  {d:>3}) {s}{s}\n", .{ idx + 1, id, marker });
+        }
+        std.debug.print("> ", .{});
+
+        const line = stdin.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
+            error.EndOfStream, error.StreamTooLong, error.ReadFailed => return error.UserCancelled,
+        };
+        const trimmed = std.mem.trim(u8, line, " \t\r\n");
+        if (trimmed.len == 0) {
+            std.debug.print("Using default: {s}\n", .{default_model});
+            return try allocator.dupe(u8, default_model);
+        }
+        const choice = std.fmt.parseInt(usize, trimmed, 10) catch {
+            std.debug.print("Invalid input — type a number (or press Enter for default).\n", .{});
+            continue;
+        };
+        if (choice >= 1 and choice <= ids.len) {
+            return try allocator.dupe(u8, ids[choice - 1]);
+        }
+        std.debug.print("Out of range.\n", .{});
+    }
+    log.fatal(.app, "could not pick model", .{ .hint = "Pass --model explicitly" });
+    return error.NoChoice;
 }
 
 // --- Tests ---
