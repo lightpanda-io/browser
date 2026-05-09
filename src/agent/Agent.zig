@@ -959,6 +959,41 @@ fn resolveApiKey(provider: ?Config.AiProvider, needs_llm: bool) !?[:0]const u8 {
     return error.MissingApiKey;
 }
 
+/// One-shot for `--list-models`: resolve the provider (explicit, then env
+/// auto-detect), reject `--no-llm`, fetch chat-capable model IDs from the
+/// provider, and print them to stdout (sorted, one per line). Shares
+/// provider-resolution logic with `init` so the two paths can't drift.
+pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
+    if (opts.no_llm) {
+        log.fatal(.app, "list-models needs LLM", .{
+            .hint = "--no-llm and --list-models conflict; drop --no-llm",
+        });
+        return error.ConflictingFlags;
+    }
+    const provider = opts.provider orelse (try autoDetectProvider()) orelse {
+        log.fatal(.app, "list-models needs LLM", .{
+            .hint = "set ANTHROPIC_API_KEY (or OPENAI_API_KEY / GOOGLE_API_KEY) or pass --provider",
+        });
+        return error.MissingProvider;
+    };
+    const api_key = zenai.provider.envApiKey(provider) orelse {
+        log.fatal(.app, "missing API key", .{
+            .provider = @tagName(provider),
+            .env = envVarName(provider),
+        });
+        return error.MissingApiKey;
+    };
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const ids = try zenai.provider.listChatModelIds(allocator, arena_state.allocator(), provider, api_key, opts.base_url);
+
+    var stdout_file = std.fs.File.stdout().writer(&.{});
+    const w = &stdout_file.interface;
+    for (ids) |id| try w.print("{s}\n", .{id});
+    try w.flush();
+}
+
 /// Pick a provider from env keys when `--provider` was not given.
 /// Notices go to stderr unconditionally so users always know which mode they're in.
 pub fn autoDetectProvider() !?Config.AiProvider {

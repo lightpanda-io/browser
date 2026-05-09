@@ -64,19 +64,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             return std.process.cleanExit();
         },
         .agent => |opts| if (opts.list_models) {
-            if (opts.no_llm) {
-                log.fatal(.app, "list-models needs LLM", .{
-                    .hint = "--no-llm and --list-models conflict; drop --no-llm",
-                });
-                return args.printUsageAndExit(false);
-            }
-            const provider = opts.provider orelse (try lp.agent.autoDetectProvider()) orelse {
-                log.fatal(.app, "list-models needs LLM", .{
-                    .hint = "set ANTHROPIC_API_KEY (or OPENAI_API_KEY / GOOGLE_API_KEY) or pass --provider",
-                });
-                return args.printUsageAndExit(false);
-            };
-            try lp.agent.listModels(allocator, provider, opts.base_url);
+            try lp.agent.listModels(allocator, opts);
             return std.process.cleanExit();
         },
         else => {},
