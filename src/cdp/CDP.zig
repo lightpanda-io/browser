@@ -371,7 +371,7 @@ pub fn disposeBrowserContext(self: *CDP, browser_context_id: []const u8) bool {
     // (see Session.removePage's matching guard). Defer cleanup to
     // CDP.deinit at connection close, by which time eval has unwound.
     if (bc.session.currentPage()) |page| {
-        if (page.frame._script_manager.base.is_evaluating) {
+        if (page.frame.anyScriptEvaluating()) {
             return true;
         }
     }
