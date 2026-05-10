@@ -133,9 +133,32 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
 
     var headers = try http_client.newHeaders();
     errdefer headers.deinit();
+    var has_extra_headers = false;
+
     if (protocols.len > 0) {
         const header = try std.fmt.allocPrintSentinel(arena, "Sec-WebSocket-Protocol: {s}", .{try std.mem.join(arena, ", ", protocols)}, 0);
         try headers.add(header);
+        has_extra_headers = true;
+    }
+
+    // Attach matching cookies from the session jar. Real browsers send
+    // cookies on the WebSocket upgrade request just like any other
+    // same-origin HTTP request — without this, server-side session
+    // checks (Phoenix LiveView, anything cookie-authenticated) reject
+    // the upgrade.
+    var cookie_buf: std.Io.Writer.Allocating = .init(arena);
+    try exec.session.cookie_jar.forRequest(resolved_url, &cookie_buf.writer, .{
+        .is_http = true,
+        .is_navigation = false,
+        .origin_url = exec.url.*,
+    });
+    if (cookie_buf.written().len > 0) {
+        const cookie_header = try std.fmt.allocPrintSentinel(arena, "Cookie: {s}", .{cookie_buf.written()}, 0);
+        try headers.add(cookie_header);
+        has_extra_headers = true;
+    }
+
+    if (has_extra_headers) {
         try conn.setHeaders(&headers);
     }
 
