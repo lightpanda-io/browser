@@ -641,10 +641,12 @@ pub fn Builder(comptime commands: anytype) type {
                 }
             }
 
-            // A non-optional positional that is still null after parsing is missing.
+            // Positional descriptors use optional storage so parsing can fill them
+            // after struct initialization, but the argument is still required by
+            // the CLI contract. Do not let commands reach runtime with a null
+            // positional and then crash on a force unwrap.
             if (comptime @hasField(@TypeOf(command), "positional")) {
-                const is_optional = @typeInfo(command.positional.type) == .optional;
-                if (!is_optional and @field(c, command.positional.name) == null) {
+                if (@field(c, command.positional.name) == null) {
                     return error.MissingArgument;
                 }
             }
