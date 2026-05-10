@@ -227,6 +227,7 @@ fn tokenize(arena: std.mem.Allocator, input: []const u8) ParseError![][]const u8
 
 fn stripQuotes(arena: std.mem.Allocator, raw: []const u8) ParseError![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
+    try buf.ensureTotalCapacity(arena, raw.len);
     var i: usize = 0;
     while (i < raw.len) {
         const ch = raw[i];

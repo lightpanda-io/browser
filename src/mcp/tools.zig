@@ -110,12 +110,12 @@ const extra_tools = [_]protocol.Tool{
     },
 };
 
+const all_tools = browser_tool_list ++ extra_tools;
+
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
+    _ = arena;
     const id = req.id orelse return;
-    const all = arena.alloc(protocol.Tool, browser_tool_list.len + extra_tools.len) catch return;
-    @memcpy(all[0..browser_tool_list.len], &browser_tool_list);
-    @memcpy(all[browser_tool_list.len..], &extra_tools);
-    try server.transport.sendResult(id, .{ .tools = all });
+    try server.transport.sendResult(id, .{ .tools = &all_tools });
 }
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -153,8 +153,7 @@ fn dispatchBrowserTool(
     if (action == .eval) {
         const result = browser_tools.callEval(arena, server.session, &server.node_registry, arguments);
         if (!result.is_error) recordIfActive(server, name, arguments);
-        const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
-        return server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });
+        return sendToolResultText(server, id, result.text, result.is_error);
     }
 
     const result = browser_tools.call(arena, server.session, &server.node_registry, name, arguments) catch |err| {
@@ -168,8 +167,7 @@ fn dispatchBrowserTool(
 
     recordIfActive(server, name, arguments);
 
-    const content = [_]protocol.TextContent([]const u8){.{ .text = result }};
-    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try sendToolResultText(server, id, result, false);
 }
 
 /// If a recorder is active and the (name, args) pair maps to a PandaScript
@@ -206,8 +204,7 @@ fn handleRecordStart(server: *Server, arena: std.mem.Allocator, id: std.json.Val
     };
     server.recorder = recorder;
 
-    const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
-    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try sendToolResultText(server, id, msg, false);
 }
 
 fn handleRecordStop(server: *Server, arena: std.mem.Allocator, id: std.json.Value) !void {
@@ -222,8 +219,7 @@ fn handleRecordStop(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     r.deinit();
     server.recorder = null;
 
-    const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
-    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try sendToolResultText(server, id, msg, false);
 }
 
 fn handleRecordComment(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -237,8 +233,7 @@ fn handleRecordComment(server: *Server, arena: std.mem.Allocator, id: std.json.V
 
     server.recorder.?.recordComment(args.text);
 
-    const content = [_]protocol.TextContent([]const u8){.{ .text = "ok" }};
-    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try sendToolResultText(server, id, "ok", false);
 }
 
 fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -255,13 +250,11 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
 
     switch (cmd) {
         .comment => {
-            const content = [_]protocol.TextContent([]const u8){.{ .text = "comment" }};
-            return server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+            return sendToolResultText(server, id, "comment", false);
         },
         .extract => |sel| {
             const result = browser_tools.extractText(arena, server.session, &server.node_registry, sel);
-            const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
-            return server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });
+            return sendToolResultText(server, id, result.text, result.is_error);
         },
         else => {},
     }
@@ -279,8 +272,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
 
     if (action == .eval) {
         const result = browser_tools.callEval(arena, server.session, &server.node_registry, tcv.args);
-        const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
-        return server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = result.is_error });
+        return sendToolResultText(server, id, result.text, result.is_error);
     }
 
     const result = browser_tools.call(arena, server.session, &server.node_registry, tcv.name, tcv.args) catch |err| {
@@ -300,8 +292,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendErrorContent(server, id, msg);
     }
 
-    const content = [_]protocol.TextContent([]const u8){.{ .text = result }};
-    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try sendToolResultText(server, id, result, false);
 }
 
 fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -348,8 +339,7 @@ fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     };
 
     const msg = std.fmt.allocPrint(arena, "healed {d} line(s) in {s}; backup at {s}.bak", .{ args.replacements.len, args.path, args.path }) catch "ok";
-    const out_content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
-    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &out_content });
+    try sendToolResultText(server, id, msg, false);
 }
 
 /// Find a line in `content` that exactly equals `line` (after trimming the
@@ -375,9 +365,13 @@ fn findLineSpan(content: []const u8, line: []const u8) error{ NotFound, Ambiguou
     return found orelse error.NotFound;
 }
 
-fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void {
+fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
-    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = true });
+    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = is_error });
+}
+
+fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void {
+    return sendToolResultText(server, id, msg, true);
 }
 
 const router = @import("router.zig");
