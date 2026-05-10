@@ -264,7 +264,6 @@ pub fn run(self: *Self) bool {
 /// pipe stdout to capture a clean answer.
 fn runTurn(self: *Self, input: TurnInput) bool {
     const text = self.processUserMessage(input) catch |err| switch (err) {
-        // buildUserMessageParts has already logged the detail.
         error.UnsupportedAttachment, error.AttachmentReadFailed => return false,
         else => {
             self.terminal.printErrorFmt("{s} failed: {s}", .{ input.label, @errorName(err) });
@@ -395,15 +394,16 @@ fn printSlashHelp(self: *Self, target: []const u8) void {
 }
 
 fn printSlashParseError(self: *Self, err: SlashCommand.ParseError, name: []const u8) void {
-    switch (err) {
-        error.UnknownTool => self.terminal.printErrorFmt("unknown tool '{s}'. Try /help.", .{name}),
-        error.MissingName => self.terminal.printError("missing tool name. Try /help."),
-        error.MissingRequired => self.terminal.printErrorFmt("{s}: missing required argument. Try /help {s}.", .{ name, name }),
-        error.MalformedKv => self.terminal.printErrorFmt("{s}: malformed key=value. Use key=value or {{json}}.", .{name}),
-        error.PositionalNotAllowed => self.terminal.printErrorFmt("{s}: positional only works for tools with one required field. Use key=value.", .{name}),
-        error.UnterminatedQuote => self.terminal.printErrorFmt("{s}: unterminated quote.", .{name}),
-        error.OutOfMemory => self.terminal.printError("out of memory"),
-    }
+    const reason: []const u8 = switch (err) {
+        error.UnknownTool => "unknown tool",
+        error.MissingName => return self.terminal.printError("missing tool name. Try /help."),
+        error.MissingRequired => "missing required argument",
+        error.MalformedKv => "malformed key=value. Use key=value or {json}",
+        error.PositionalNotAllowed => "positional only works for tools with one required field. Use key=value",
+        error.UnterminatedQuote => "unterminated quote",
+        error.OutOfMemory => return self.terminal.printError("out of memory"),
+    };
+    self.terminal.printErrorFmt("{s}: {s}. Try /help {s}.", .{ name, reason, name });
 }
 
 fn firstSentence(text: []const u8) []const u8 {
@@ -701,11 +701,14 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
 }
 
 fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []const u8, verify_context: ?[]const u8, context_comment: ?[]const u8) ?[]Command.Command {
-    var aw: std.Io.Writer.Allocating = .init(self.message_arena.allocator());
-    aw.writer.writeAll(self_heal_prompt_prefix) catch return null;
-    aw.writer.writeAll(failed_command) catch return null;
-    aw.writer.writeAll(self_heal_prompt_page_state) catch return null;
-    aw.writer.writeAll(self.tool_executor.getCurrentUrl()) catch return null;
+    const ma = self.message_arena.allocator();
+    var aw: std.Io.Writer.Allocating = .init(ma);
+    aw.writer.print("{s}{s}{s}{s}", .{
+        self_heal_prompt_prefix,
+        failed_command,
+        self_heal_prompt_page_state,
+        self.tool_executor.getCurrentUrl(),
+    }) catch return null;
     if (context_comment) |c|
         aw.writer.print("\n\nThe original user request that generated this command was:\n{s}", .{c}) catch return null;
     if (verify_context) |ctx|
@@ -911,8 +914,7 @@ const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
     if (output.len <= tool_output_max_bytes) return output;
     const prefix = output[0..tool_output_max_bytes];
-    const suffix = std.fmt.allocPrint(allocator, "\n...[truncated, original {d} bytes]", .{output.len}) catch return prefix;
-    return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
+    return std.fmt.allocPrint(allocator, "{s}\n...[truncated, original {d} bytes]", .{ prefix, output.len }) catch prefix;
 }
 
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) zenai.provider.Client.ToolHandler.Result {

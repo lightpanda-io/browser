@@ -122,12 +122,10 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
     const id = req.id orelse return;
     const params = req.params orelse return server.transport.sendError(id, .InvalidParams, "Missing params");
 
-    const call_params = std.json.parseFromValueLeaky(protocol.CallParams, arena, params, .{ .ignore_unknown_fields = true }) catch {
+    const call_params = browser_tools.parseValue(protocol.CallParams, arena, params) catch {
         return server.transport.sendError(id, .InvalidParams, "Invalid params");
     };
 
-    // Hand-written tools: dispatch first so they don't collide with the
-    // generated browser tools.
     if (std.mem.eql(u8, call_params.name, "record_start")) return handleRecordStart(server, arena, id, call_params.arguments);
     if (std.mem.eql(u8, call_params.name, "record_stop")) return handleRecordStop(server, arena, id);
     if (std.mem.eql(u8, call_params.name, "record_comment")) return handleRecordComment(server, arena, id, call_params.arguments);
@@ -188,9 +186,8 @@ fn handleRecordStart(server: *Server, arena: std.mem.Allocator, id: std.json.Val
     if (server.recorder != null) {
         return sendErrorContent(server, id, "a recording is already active; call record_stop first");
     }
-    const args_value = arguments orelse return server.transport.sendError(id, .InvalidParams, "missing arguments");
     const Args = struct { path: []const u8 };
-    const args = std.json.parseFromValueLeaky(Args, arena, args_value, .{ .ignore_unknown_fields = true }) catch {
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
         return server.transport.sendError(id, .InvalidParams, "expected { path: string }");
     };
 
@@ -233,9 +230,8 @@ fn handleRecordComment(server: *Server, arena: std.mem.Allocator, id: std.json.V
     if (server.recorder == null) {
         return sendErrorContent(server, id, "no recording is active");
     }
-    const args_value = arguments orelse return server.transport.sendError(id, .InvalidParams, "missing arguments");
     const Args = struct { text: []const u8 };
-    const args = std.json.parseFromValueLeaky(Args, arena, args_value, .{ .ignore_unknown_fields = true }) catch {
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
         return server.transport.sendError(id, .InvalidParams, "expected { text: string }");
     };
 
@@ -246,21 +242,21 @@ fn handleRecordComment(server: *Server, arena: std.mem.Allocator, id: std.json.V
 }
 
 fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args_value = arguments orelse return server.transport.sendError(id, .InvalidParams, "missing arguments");
     const Args = struct { line: []const u8 };
-    const args = std.json.parseFromValueLeaky(Args, arena, args_value, .{ .ignore_unknown_fields = true }) catch {
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
         return server.transport.sendError(id, .InvalidParams, "expected { line: string }");
     };
 
     const cmd = Command.parse(args.line);
 
+    if (cmd.needsLlm()) {
+        return sendErrorContent(server, id, "LOGIN / ACCEPT_COOKIES / natural-language steps require an LLM and are not handled by lightpanda mcp; the calling agent owns those");
+    }
+
     switch (cmd) {
         .comment => {
             const content = [_]protocol.TextContent([]const u8){.{ .text = "comment" }};
             return server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-        },
-        .login, .accept_cookies, .natural_language => {
-            return sendErrorContent(server, id, "LOGIN / ACCEPT_COOKIES / natural-language steps require an LLM and are not handled by lightpanda mcp; the calling agent owns those");
         },
         .extract => |sel| {
             const result = browser_tools.extractText(arena, server.session, &server.node_registry, sel);
@@ -309,8 +305,6 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
 }
 
 fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args_value = arguments orelse return server.transport.sendError(id, .InvalidParams, "missing arguments");
-
     const ReplacementSpec = struct {
         original_line: []const u8,
         replacement_lines: []const []const u8,
@@ -319,7 +313,7 @@ fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         path: []const u8,
         replacements: []const ReplacementSpec,
     };
-    const args = std.json.parseFromValueLeaky(Args, arena, args_value, .{ .ignore_unknown_fields = true }) catch {
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
         return server.transport.sendError(id, .InvalidParams, "expected { path: string, replacements: [{ original_line, replacement_lines }] }");
     };
 

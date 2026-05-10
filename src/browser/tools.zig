@@ -722,16 +722,13 @@ fn formatActionResult(
     page: *lp.Frame,
 ) ToolError![]const u8 {
     const page_title = page.getTitle() catch null;
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    if (selector) |sel|
-        aw.writer.print("{s} (selector: {s}){s}. Page url: {s}, title: {s}", .{
-            prefix, sel, suffix, page.url, page_title orelse "(none)",
-        }) catch return ToolError.InternalError
+    const target = if (selector) |sel|
+        std.fmt.allocPrint(arena, "selector: {s}", .{sel}) catch return ToolError.InternalError
     else
-        aw.writer.print("{s} (backendNodeId: {d}){s}. Page url: {s}, title: {s}", .{
-            prefix, backend_node_id.?, suffix, page.url, page_title orelse "(none)",
-        }) catch return ToolError.InternalError;
-    return aw.written();
+        std.fmt.allocPrint(arena, "backendNodeId: {d}", .{backend_node_id.?}) catch return ToolError.InternalError;
+    return std.fmt.allocPrint(arena, "{s} ({s}){s}. Page url: {s}, title: {s}", .{
+        prefix, target, suffix, page.url, page_title orelse "(none)",
+    }) catch ToolError.InternalError;
 }
 
 fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1010,9 +1007,9 @@ fn resolveBySelector(session: *lp.Session, selector: []const u8) ToolError!NodeA
     return .{ .node = node, .page = page };
 }
 
-const ParseArgsError = error{ OutOfMemory, InvalidParams };
+pub const ParseArgsError = error{ OutOfMemory, InvalidParams };
 
-fn parseValue(comptime T: type, arena: std.mem.Allocator, value: std.json.Value) ParseArgsError!T {
+pub fn parseValue(comptime T: type, arena: std.mem.Allocator, value: std.json.Value) ParseArgsError!T {
     return std.json.parseFromValueLeaky(T, arena, value, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         else => error.InvalidParams,
@@ -1021,12 +1018,12 @@ fn parseValue(comptime T: type, arena: std.mem.Allocator, value: std.json.Value)
 
 /// For tools where every field is optional. Missing args → default `T`;
 /// wrong-typed args still error (don't silently default).
-fn parseArgsOrDefault(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) ParseArgsError!T {
+pub fn parseArgsOrDefault(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) ParseArgsError!T {
     return parseValue(T, arena, arguments orelse return .{});
 }
 
 /// Required-args parse: missing or malformed both surface as `InvalidParams`.
-fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) ParseArgsError!T {
+pub fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) ParseArgsError!T {
     return parseValue(T, arena, arguments orelse return error.InvalidParams);
 }
 
