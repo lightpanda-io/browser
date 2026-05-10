@@ -94,7 +94,12 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .@"same-origin" => if (exec.isSameOrigin(request._url)) &session.cookie_jar else null,
     };
 
-    try http_client.request(.{
+    // Synchronous failures from request layers (e.g. RobotsLayer returning
+    // RobotsBlocked when robots.txt is already cached) are dispatched to
+    // httpErrorCallback by Client.request, which rejects the promise and
+    // releases response._arena. Propagating the error from here would also
+    // fire the `errdefer response.deinit` above and double-free the arena.
+    http_client.request(.{
         .ctx = fetch,
         .params = .{
             .url = request._url,
@@ -114,7 +119,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
-    });
+    }) catch {};
     return resolver.promise();
 }
 
