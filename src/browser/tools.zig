@@ -305,14 +305,13 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "getEnv",
-        .description = "Read an environment variable from the lightpanda LP_* namespace. Other names are reported as not set. Use $LP_* placeholders in fill values to inject secrets into the page without exposing them to the model.",
+        .description = "With `name`: read an environment variable from the LP_* namespace (other names are reported as not set). Without `name`: list all LP_* variable names that are set (names only, no values) — safe for discovering what site-scoped credentials are available. Operators commonly name site-scoped values as LP_<SITE>_<FIELD> (e.g. LP_HN_USERNAME, LP_GH_TOKEN). For credentials specifically, do NOT pass `name` — the return value would land in your context. Use $LP_* placeholders in fill values instead: substitution happens inside the Lightpanda subprocess so the secret never reaches the model. getEnv with a name is for non-secret config (base URLs, feature flags, defaults).",
         .input_schema = minify(
             \\{
             \\  "type": "object",
             \\  "properties": {
-            \\    "name": { "type": "string", "description": "Environment variable name; must start with LP_." }
-            \\  },
-            \\  "required": ["name"]
+            \\    "name": { "type": "string", "description": "Optional. If provided, must start with LP_; returns the value. If omitted, returns the list of LP_* names that are set." }
+            \\  }
             \\}
         ),
     },
@@ -497,7 +496,7 @@ fn tavilySearch(
     api_key: []const u8,
     query: []const u8,
 ) ![]const u8 {
-    var client = tavily.Client.init(arena, api_key, .{});
+    var client: tavily.Client = .init(arena, api_key, .{});
     defer client.deinit();
 
     var response = client.search(query, .{ .max_results = 10 }) catch |err| {
@@ -913,11 +912,46 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *CD
 }
 
 fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
-    const Params = struct { name: []const u8 };
-    const args = try parseArgs(Params, arena, arguments);
+    const Params = struct { name: ?[]const u8 = null };
+    const args = try parseArgsOrDefault(Params, arena, arguments);
 
-    if (lookupLpEnv(args.name)) |value| return value;
-    return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{args.name}) catch ToolError.InternalError;
+    if (args.name) |name| {
+        if (lookupLpEnv(name)) |value| return value;
+        return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{name}) catch ToolError.InternalError;
+    }
+    return listLpEnvNames(arena);
+}
+
+fn lpNameLessThan(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.lessThan(u8, a, b);
+}
+
+fn listLpEnvNames(arena: std.mem.Allocator) ToolError![]const u8 {
+    var lines: std.ArrayList([]const u8) = .empty;
+    lines.ensureTotalCapacity(arena, std.os.environ.len) catch return ToolError.InternalError;
+    for (std.os.environ) |entry| {
+        lines.appendAssumeCapacity(std.mem.span(entry));
+    }
+    return formatLpEnvNames(arena, lines.items);
+}
+
+fn formatLpEnvNames(arena: std.mem.Allocator, env_lines: []const []const u8) ToolError![]const u8 {
+    var names: std.ArrayList([]const u8) = .empty;
+    for (env_lines) |line| {
+        const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const name = line[0..eq_idx];
+        if (!std.ascii.startsWithIgnoreCase(name, "LP_")) continue;
+        names.append(arena, name) catch return ToolError.InternalError;
+    }
+    if (names.items.len == 0) return "No LP_* environment variables are set.";
+    std.mem.sort([]const u8, names.items, {}, lpNameLessThan);
+
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    aw.writer.print("LP_* environment variables ({d}):\n", .{names.items.len}) catch return ToolError.InternalError;
+    for (names.items) |n| {
+        aw.writer.print("  {s}\n", .{n}) catch return ToolError.InternalError;
+    }
+    return aw.written();
 }
 
 /// Resolve an LP_-prefixed environment variable, or `null` for any other name.
@@ -1070,7 +1104,7 @@ test "substituteEnvVars no vars" {
 }
 
 test "substituteEnvVars resolves LP_* vars" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
     const var_name = "LP_SUBST_TEST";
@@ -1083,7 +1117,7 @@ test "substituteEnvVars resolves LP_* vars" {
 }
 
 test "substituteEnvVars keeps non-LP_ refs literal even when set" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
     // `execGetEnv` hides non-LP_ vars from the model; `substituteEnvVars`
@@ -1099,7 +1133,7 @@ test "substituteEnvVars keeps non-LP_ refs literal even when set" {
 }
 
 test "substituteEnvVars missing LP_ var kept literal" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
     const r = substituteEnvVars(arena.allocator(), "$LP_UNLIKELY_VAR_12345");
@@ -1107,7 +1141,7 @@ test "substituteEnvVars missing LP_ var kept literal" {
 }
 
 test "substituteEnvVars bare dollar" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
     const r = substituteEnvVars(arena.allocator(), "price is $ 5");
@@ -1118,7 +1152,7 @@ extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
 extern fn unsetenv(name: [*:0]u8) c_int;
 
 test "execGetEnv reads LP_* values" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -1136,7 +1170,7 @@ test "execGetEnv reads LP_* values" {
 }
 
 test "execGetEnv hides non-LP_ values even when set" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -1157,8 +1191,36 @@ test "execGetEnv hides non-LP_ values even when set" {
     );
 }
 
+test "formatLpEnvNames lists names without values" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const lines = [_][]const u8{
+        "LP_FOO=secret",
+        "HOME=/home/x",
+        "LP_BAR=other-secret",
+    };
+    const r = try formatLpEnvNames(aa, &lines);
+
+    try std.testing.expect(std.mem.indexOf(u8, r, "LP_FOO") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r, "LP_BAR") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r, "HOME") == null);
+    try std.testing.expect(std.mem.indexOf(u8, r, "secret") == null);
+}
+
+test "formatLpEnvNames reports empty when no LP_* entries" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const lines = [_][]const u8{"HOME=/home/x"};
+    const r = try formatLpEnvNames(aa, &lines);
+    try std.testing.expectEqualStrings("No LP_* environment variables are set.", r);
+}
+
 test "formatTavilyMarkdown renders answer and results" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -1180,7 +1242,7 @@ test "formatTavilyMarkdown renders answer and results" {
 }
 
 test "formatTavilyMarkdown handles empty results" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 

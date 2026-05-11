@@ -189,7 +189,9 @@ needing an LLM (or API key) inside Lightpanda.
 ./lightpanda agent --provider gemini --task "..."     # force a specific provider
 ```
 
-See [docs/agent.md](docs/agent.md) for the full reference.
+See [docs/agent.md](docs/agent.md) for the full reference, or
+[docs/agent-tutorial.md](docs/agent-tutorial.md) for a step-by-step
+end-to-end walkthrough.
 
 ### Telemetry
 By default, Lightpanda collects and sends usage telemetry. This can be disabled by setting an environment variable `LIGHTPANDA_DISABLE_TELEMETRY=true`. You can read Lightpanda's privacy policy at: [https://lightpanda.io/privacy-policy](https://lightpanda.io/privacy-policy).

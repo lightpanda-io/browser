@@ -32,9 +32,13 @@ const default_system_prompt = script.mcp_driver_guidance ++
     \\  not signed in, attempt to log in proactively before reporting that the
     \\  data is unavailable. Find the login link or form on the current page
     \\  (interactiveElements or findElement), dismiss any cookie banner first,
-    \\  then fill the username field with $LP_USERNAME and the password field
-    \\  with $LP_PASSWORD and submit. Only fall back to "I couldn't access X"
-    \\  if the form is missing or the credentials are rejected — and say which.
+    \\  call getEnv with no `name` argument to see which LP_* credentials are
+    \\  available, then fill the username/password fields with the matching
+    \\  $LP_* placeholders (prefer site-prefixed forms like $LP_HN_USERNAME /
+    \\  $LP_HN_PASSWORD; fall back to unprefixed $LP_USERNAME / $LP_PASSWORD)
+    \\  and submit. Only fall back to "I couldn't access X" if no credentials
+    \\  are set, the form is missing, or the credentials are rejected — and
+    \\  say which.
 ;
 
 const self_heal_prompt_prefix =
@@ -64,10 +68,21 @@ const self_heal_prompt_instructions =
 
 const login_prompt =
     \\Find the login form on the current page. Fill in the credentials using
-    \\environment variables (look for $LP_EMAIL or $LP_USERNAME for the username
-    \\field, and $LP_PASSWORD for the password field). Handle any cookie banners
-    \\or popups first, then submit the form by clicking its submit button or
-    \\pressing Enter in a filled field — there is no dedicated submit tool.
+    \\$LP_* placeholders — the substitution happens inside the Lightpanda
+    \\subprocess so the secret never enters your context. Do NOT call getEnv
+    \\with a credential name (it would return the value).
+    \\
+    \\Call getEnv with NO `name` argument first to see which LP_* variables
+    \\are set (names only, values never included). Then pick:
+    \\- Site-prefixed form (LP_<SITE>_<FIELD>) when the list shows one for
+    \\  the current site — e.g. $LP_HN_USERNAME for news.ycombinator.com,
+    \\  $LP_GH_TOKEN for github.com.
+    \\- Otherwise fall back to the unprefixed $LP_USERNAME / $LP_PASSWORD
+    \\  (or $LP_EMAIL) form.
+    \\
+    \\Handle any cookie banners or popups first, then submit the form by
+    \\clicking its submit button or pressing Enter in a filled field — there
+    \\is no dedicated submit tool.
 ;
 
 const accept_cookies_prompt =

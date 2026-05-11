@@ -1,5 +1,10 @@
 # Agent mode
 
+> Looking for a step-by-step walkthrough instead of a reference?
+> See [agent-tutorial.md](agent-tutorial.md) — it builds one end-to-end
+> Hacker News scenario covering the REPL, recording, replay,
+> `--self-heal`, and the MCP roundtrip.
+
 `lightpanda agent` runs a browsing agent backed by Lightpanda's headless engine.
 It can act as:
 
@@ -93,7 +98,7 @@ command. In the REPL, TAB completion fills in the canonical caps form for you.
 | `EVAL`           | `EVAL '<js>'` or `EVAL '''…'''`       | Triple-quote for multi-line JS.                      |
 | `TREE`           | `TREE`                                | Print the semantic tree (not recorded).              |
 | `MARKDOWN`       | `MARKDOWN`                            | Print page as markdown (not recorded).               |
-| `LOGIN`          | `LOGIN`                               | LLM-driven: fill `$LP_USERNAME` / `$LP_PASSWORD`.    |
+| `LOGIN`          | `LOGIN`                               | LLM-driven: fills credentials from `$LP_*` env vars. |
 | `ACCEPT_COOKIES` | `ACCEPT_COOKIES`                      | LLM-driven: dismiss the consent banner.              |
 
 In the REPL, anything that does not parse as a PandaScript command is sent to
@@ -103,10 +108,12 @@ the LLM as natural language. To leave the REPL, use the `/quit` slash command.
 
 ```pandascript
 # Log into the demo and grab the dashboard title.
+# Site-scoped vars (LP_<SITE>_<FIELD>) avoid collisions when you have
+# credentials for several sites; the unprefixed form is the fallback.
 GOTO https://demo-browser.lightpanda.io/
 ACCEPT_COOKIES
-TYPE '#email' '$LP_USERNAME'
-TYPE '#password' '$LP_PASSWORD'
+TYPE '#email' '$LP_DEMO_USERNAME'
+TYPE '#password' '$LP_DEMO_PASSWORD'
 CLICK 'button[type="submit"]'
 WAIT '.dashboard'
 EXTRACT '.dashboard h1'
@@ -254,11 +261,16 @@ for the LLM.
 - The agent treats page content as untrusted data, not instructions. URLs
   surfaced by a page are not followed unless they match the user's task.
 - `$LP_*` environment variable references in `TYPE` / `fill` values are
-  resolved at execution time, so credentials never enter the LLM context.
+  resolved at execution time inside the subprocess, so credentials never
+  enter the LLM context. Conventional naming for site-scoped values is
+  `LP_<SITE>_<FIELD>` (e.g. `LP_HN_USERNAME`, `LP_GH_TOKEN`); the
+  unprefixed `LP_USERNAME` / `LP_PASSWORD` form is the generic fallback.
 - The `getEnv` tool only reads variables whose name starts with `LP_`.
   Everything else (provider API keys, system env, third-party secrets)
   reports "not set" so the model can't probe for it. The user controls
-  what lives under `LP_*`.
+  what lives under `LP_*`. Note that `getEnv` returns the *value* to the
+  model — fine for non-secret config like base URLs, but never call it
+  on credentials (use `$LP_*` placeholders in fill values instead).
 - `--obey-robots`, `--http-proxy`, `--user-agent`, and the rest of the
   browser-level CLI flags apply to `agent` the same way they apply to
   `serve`, `fetch`, and `mcp`.

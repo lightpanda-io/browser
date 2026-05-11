@@ -57,8 +57,17 @@ pub const mcp_driver_guidance =
     \\- When filling credentials, pass environment variable references like
     \\  $LP_USERNAME and $LP_PASSWORD directly as the `value` field of fill —
     \\  they are resolved inside the Lightpanda subprocess so the literal
-    \\  secret never enters your context. Do NOT call getEnv to resolve them
-    \\  first.
+    \\  secret never enters your context. Do NOT call getEnv with a credential
+    \\  name; getEnv returns the value and would leak it into your context.
+    \\- To discover which variables are available, call getEnv with NO `name`
+    \\  argument — it lists every LP_* variable that is set, names only,
+    \\  values never included. Safe to call before logging in to pick the
+    \\  right placeholder.
+    \\- Naming convention: site-scoped variables follow LP_<SITE>_<FIELD>
+    \\  (e.g. $LP_HN_USERNAME / $LP_HN_PASSWORD for news.ycombinator.com,
+    \\  $LP_GH_TOKEN for github.com). Prefer the site-prefixed form when the
+    \\  list shows one for the current site; fall back to the unprefixed
+    \\  $LP_USERNAME / $LP_PASSWORD form otherwise.
     \\
     \\Search:
     \\- For web searches, prefer the `search` tool over `goto`-ing google.com

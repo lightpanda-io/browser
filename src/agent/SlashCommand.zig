@@ -342,7 +342,12 @@ test "parse zero-arg tool" {
 }
 
 test "parse positional shortcut for single required field" {
-    try expectParse("getEnv PATH", "getEnv", "{\"name\":\"PATH\"}");
+    try expectParse("eval document.title", "eval", "{\"script\":\"document.title\"}");
+}
+
+test "parse getEnv with no args is valid (list mode)" {
+    // getEnv's `name` is optional; no args returns the list of LP_* names.
+    try expectParse("getEnv", "getEnv", "");
 }
 
 test "parse leading positional with key=value tail" {
@@ -386,7 +391,7 @@ test "parse rejects unknown tool" {
 }
 
 test "parse rejects missing required field" {
-    try expectParseError(error.MissingRequired, "getEnv");
+    try expectParseError(error.MissingRequired, "eval");
 }
 
 test "parse rejects malformed key=value" {
@@ -403,7 +408,7 @@ test "parse handles single-quoted values" {
 }
 
 test "parse matches tool name case-insensitively" {
-    try expectParse("GETENV PATH", "getEnv", "{\"name\":\"PATH\"}");
+    try expectParse("EVAL document.title", "eval", "{\"script\":\"document.title\"}");
 }
 
 test "parse rejects malformed kv after leading positional" {
