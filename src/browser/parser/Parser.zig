@@ -45,12 +45,11 @@ pub const ParsedNode = struct {
 // AppendText callback per chunk. Merging via String.concat in the previous
 // implementation was O(N^2/chunk_size) on the page-lifetime arena, blowing
 // memory on inline JS that contains embedded HTML strings (issue #2397).
-// Instead, we accumulate same-parent chunks in this struct and commit a
-// single allocation on flush.
+// Instead, we keep a single Parser-level buf and accumulate same-parent
+// chunks into it, committing once on flush.
 const PendingText = struct {
     parent: *Node,
     text_node: *CData,
-    buf: std.ArrayListUnmanaged(u8) = .empty,
 };
 
 const Parser = @This();
@@ -61,6 +60,16 @@ container: ParsedNode,
 arena: Allocator,
 strings: std.StringHashMapUnmanaged(void),
 pending_text: ?PendingText,
+// One buffer reused across every text run in this parser. clearRetainingCapacity
+// on flush keeps the largest capacity ever needed, so total dead memory on the
+// parser arena is bounded to one peak-run-sized allocation regardless of how
+// many text runs the parse contains. Matters for Streaming, whose arena is the
+// page-lifetime frame.arena (individual frees are no-ops there).
+//
+// Single-chunk text runs leave this buf empty: the chunk lives only in
+// CData._data via createTextNode. The buf is seeded from _data.str() on the
+// second chunk of a run, so the common case stays at one copy.
+buf: std.ArrayListUnmanaged(u8),
 
 pub fn init(arena: Allocator, node: *Node, frame: *Frame) Parser {
     return .{
@@ -73,24 +82,34 @@ pub fn init(arena: Allocator, node: *Node, frame: *Frame) Parser {
             .node = node,
         },
         .pending_text = null,
+        .buf = .empty,
     };
 }
 
 pub fn flushPendingText(self: *Parser) !void {
-    var pt = self.pending_text orelse return;
+    const pt = self.pending_text orelse return;
     self.pending_text = null;
-    defer pt.buf.deinit(self.arena);
+    // Single-chunk run: data already lives on _data via createTextNode.
+    if (self.buf.items.len == 0) return;
+    defer self.buf.clearRetainingCapacity();
     pt.text_node._data = try lp.String.init(
         self.frame.arena,
-        pt.buf.items,
+        self.buf.items,
         .{ .dupe = true },
     );
 }
 
 fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
-    if (self.pending_text) |*pt| {
+    if (self.pending_text) |pt| {
         if (pt.parent == parent and parent.lastChild() == pt.text_node.asNode()) {
-            try pt.buf.appendSlice(self.arena, txt);
+            // Second+ chunk of the same run. If buf is still empty, promote
+            // from the single-chunk fast path by seeding from _data first.
+            if (self.buf.items.len == 0) {
+                const existing = pt.text_node.getData().str();
+                try self.buf.ensureTotalCapacity(self.arena, existing.len + txt.len);
+                self.buf.appendSliceAssumeCapacity(existing);
+            }
+            try self.buf.appendSlice(self.arena, txt);
             return;
         }
         try self.flushPendingText();
@@ -98,28 +117,26 @@ fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
 
     if (parent.lastChild()) |sibling| {
         if (sibling.is(CData.Text)) |tn| {
+            // Existing text sibling without a matching pending_text. Seed the
+            // buf from its _data and register pending so subsequent chunks
+            // accumulate cheaply.
             const cdata = tn._proto;
             const existing = cdata.getData().str();
-            var buf: std.ArrayListUnmanaged(u8) = .empty;
-            errdefer buf.deinit(self.arena);
-            try buf.ensureTotalCapacityPrecise(self.arena, existing.len + txt.len);
-            buf.appendSliceAssumeCapacity(existing);
-            buf.appendSliceAssumeCapacity(txt);
-            self.pending_text = .{ .parent = parent, .text_node = cdata, .buf = buf };
+            try self.buf.ensureTotalCapacity(self.arena, existing.len + txt.len);
+            self.buf.appendSliceAssumeCapacity(existing);
+            self.buf.appendSliceAssumeCapacity(txt);
+            self.pending_text = .{ .parent = parent, .text_node = cdata };
             return;
         }
     }
 
+    // Fresh text run: the first chunk lives on _data only. buf stays empty
+    // until (and unless) a second chunk arrives.
     const new_text = try self.frame.createTextNode(txt);
     try self.frame.appendNew(parent, new_text);
-
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer buf.deinit(self.arena);
-    try buf.appendSlice(self.arena, txt);
     self.pending_text = .{
         .parent = parent,
         .text_node = new_text.is(CData.Text).?._proto,
-        .buf = buf,
     };
 }
 
