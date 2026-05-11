@@ -942,12 +942,13 @@ fn listLpEnvNames(arena: std.mem.Allocator) ToolError![]const u8 {
 /// source as the `getEnv` tool (no-name variant), just unformatted.
 pub fn lpEnvNames(arena: std.mem.Allocator) error{OutOfMemory}![]const []const u8 {
     var names: std.ArrayList([]const u8) = .empty;
+    try names.ensureTotalCapacity(arena, std.os.environ.len);
     for (std.os.environ) |entry| {
         const line = std.mem.span(entry);
         const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
         const name = line[0..eq_idx];
         if (!std.ascii.startsWithIgnoreCase(name, "LP_")) continue;
-        try names.append(arena, name);
+        names.appendAssumeCapacity(name);
     }
     std.mem.sort([]const u8, names.items, {}, lpNameLessThan);
     return names.items;
