@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const idna = @import("../sys/idna.zig");
+
 const Allocator = std.mem.Allocator;
 
 pub const ResolveOpts = struct {
@@ -190,11 +192,35 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, source_path: anytype, o
 }
 
 fn processResolved(allocator: Allocator, url: [:0]const u8, opts: ResolveOpts) ![:0]const u8 {
-    const encoding = opts.encoding orelse return url;
+    const encoding = opts.encoding orelse return ensureHostAscii(allocator, url);
     return ensureEncoded(allocator, url, encoding);
 }
 
-pub fn ensureEncoded(allocator: Allocator, url: [:0]const u8, encoding: []const u8) ![:0]const u8 {
+/// IDNA-only pass: converts a non-ASCII host (`räksmörgås.se`) to its
+/// punycode form (`xn--rksmrgs-5wao1o.se`) and leaves everything else alone.
+fn ensureHostAscii(allocator: Allocator, url: [:0]const u8) ![:0]const u8 {
+    const hostname = getHostname(url);
+    if (hostname.len == 0 or !idna.needsAscii(hostname)) {
+        return url;
+    }
+
+    const ascii = try idna.toAscii(allocator, hostname);
+
+    // hostname is a slice of url, so its start offset is just pointer arithmetic.
+    const start = @intFromPtr(hostname.ptr) - @intFromPtr(url.ptr);
+    const end = start + hostname.len;
+    var buf = try std.ArrayList(u8).initCapacity(allocator, url.len - hostname.len + ascii.len + 1);
+    buf.appendSliceAssumeCapacity(url[0..start]);
+    buf.appendSliceAssumeCapacity(ascii);
+    buf.appendSliceAssumeCapacity(url[end..]);
+    buf.appendAssumeCapacity(0);
+    return buf.items[0 .. buf.items.len - 1 :0];
+}
+
+pub fn ensureEncoded(allocator: Allocator, url_in: [:0]const u8, encoding: []const u8) ![:0]const u8 {
+    // Resolve any IDN host first; everything below operates on the ASCII form.
+    const url = try ensureHostAscii(allocator, url_in);
+
     const scheme_end = std.mem.indexOf(u8, url, "://");
     const authority_start = if (scheme_end) |end| end + 3 else 0;
     const path_start = std.mem.indexOfScalarPos(u8, url, authority_start, '/') orelse return url;

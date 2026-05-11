@@ -27,6 +27,7 @@ const EventTarget = @import("EventTarget.zig");
 const ProgressEvent = @import("event/ProgressEvent.zig");
 const Blob = @import("Blob.zig");
 
+const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
 /// https://w3c.github.io/FileAPI/#dfn-filereader
@@ -34,7 +35,7 @@ const Allocator = std.mem.Allocator;
 const FileReader = @This();
 
 _rc: lp.RC(u8) = .{},
-_frame: *Frame,
+_exec: *Execution,
 _proto: *EventTarget,
 _arena: Allocator,
 
@@ -59,15 +60,16 @@ const ReadyState = enum(u8) {
 
 const Result = union(enum) {
     string: []const u8,
+    binary_string: js.String.OneByte,
     arraybuffer: js.ArrayBuffer,
 };
 
-pub fn init(frame: *Frame) !*FileReader {
-    const arena = try frame.getArena(.tiny, "FileReader");
-    errdefer frame.releaseArena(arena);
+pub fn init(exec: *Execution) !*FileReader {
+    const arena = try exec.getArena(.tiny, "FileReader");
+    errdefer exec.releaseArena(arena);
 
-    return frame._factory.eventTargetWithAllocator(arena, FileReader{
-        ._frame = frame,
+    return exec._factory.eventTargetWithAllocator(arena, FileReader{
+        ._exec = exec,
         ._arena = arena,
         ._proto = undefined,
     });
@@ -191,9 +193,9 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
     self._error = null;
     self._aborted = false;
 
-    const frame = self._frame;
+    const exec = self._exec;
 
-    try self.dispatch(.load_start, .{ .loaded = 0, .total = blob.getSize() }, frame);
+    try self.dispatch(.load_start, .{ .loaded = 0, .total = blob.getSize() }, exec);
     if (self._aborted) {
         return;
     }
@@ -201,7 +203,7 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
     // Perform the read (synchronous since data is in memory)
     const data = blob._slice;
     const size = data.len;
-    try self.dispatch(.progress, .{ .loaded = size, .total = size }, frame);
+    try self.dispatch(.progress, .{ .loaded = size, .total = size }, exec);
     if (self._aborted) {
         return;
     }
@@ -209,7 +211,7 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
     // Process the data based on read type
     self._result = switch (read_type) {
         .arraybuffer => .{ .arraybuffer = .{ .values = data } },
-        .binary_string => .{ .string = data },
+        .binary_string => .{ .binary_string = .{ .bytes = data } },
         .text => .{ .string = data },
         .data_url => blk: {
             // Create data URL with base64 encoding
@@ -221,8 +223,8 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
 
     self._ready_state = .done;
 
-    try self.dispatch(.load, .{ .loaded = size, .total = size }, frame);
-    try self.dispatch(.load_end, .{ .loaded = size, .total = size }, frame);
+    try self.dispatch(.load, .{ .loaded = size, .total = size }, exec);
+    try self.dispatch(.load_end, .{ .loaded = size, .total = size }, exec);
 }
 
 pub fn abort(self: *FileReader) !void {
@@ -234,14 +236,12 @@ pub fn abort(self: *FileReader) !void {
     self._ready_state = .done;
     self._result = null;
 
-    const frame = self._frame;
-
-    try self.dispatch(.abort, null, frame);
-
-    try self.dispatch(.load_end, null, frame);
+    const exec = self._exec;
+    try self.dispatch(.abort, null, exec);
+    try self.dispatch(.load_end, null, exec);
 }
 
-fn dispatch(self: *FileReader, comptime event_type: DispatchType, progress_: ?Progress, frame: *Frame) !void {
+fn dispatch(self: *FileReader, comptime event_type: DispatchType, progress_: ?Progress, exec: *Execution) !void {
     const field, const typ = comptime blk: {
         break :blk switch (event_type) {
             .abort => .{ "_on_abort", "abort" },
@@ -257,10 +257,10 @@ fn dispatch(self: *FileReader, comptime event_type: DispatchType, progress_: ?Pr
     const event = (try ProgressEvent.initTrusted(
         comptime .wrap(typ),
         .{ .total = progress.total, .loaded = progress.loaded },
-        frame,
+        exec.context.page,
     )).asEvent();
 
-    return frame._event_manager.dispatchDirect(
+    return exec.dispatch(
         self.asEventTarget(),
         event,
         @field(self, field),

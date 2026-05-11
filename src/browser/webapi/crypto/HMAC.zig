@@ -22,43 +22,44 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const crypto = @import("../../../sys/libcrypto.zig");
 
-const Frame = @import("../../Frame.zig");
 const js = @import("../../js/js.zig");
 const algorithm = @import("algorithm.zig");
 
 const CryptoKey = @import("../CryptoKey.zig");
 
+const Execution = js.Execution;
+
 pub fn init(
     params: algorithm.Init.HmacKeyGen,
     extractable: bool,
     key_usages: []const []const u8,
-    frame: *Frame,
+    exec: *const Execution,
 ) !js.Promise {
-    const local = frame.js.local.?;
-    // Find digest.
+    const local = exec.context.local.?;
+    // Per spec, an unrecognized hash is caught during algorithm normalization
+    // and surfaces as NotSupportedError.
     const digest = crypto.findDigest(switch (params.hash) {
         .string => |str| str,
         .object => |obj| obj.name,
     }) catch return local.rejectPromise(.{
-        .dom_exception = .{ .err = error.SyntaxError },
+        .dom_exception = .{ .err = error.NotSupported },
     });
 
-    // Calculate usages mask.
-    if (key_usages.len == 0) {
-        return local.rejectPromise(.{
-            .dom_exception = .{ .err = error.SyntaxError },
-        });
-    }
-    const decls = @typeInfo(CryptoKey.Usages).@"struct".decls;
+    // HMAC only accepts sign / verify; any other usage is a SyntaxError per
+    // the spec, even when the entry exists elsewhere in CryptoKey.Usages.
     var mask: u8 = 0;
-    iter_usages: for (key_usages) |usage| {
-        inline for (decls) |decl| {
-            if (std.mem.eql(u8, decl.name, usage)) {
-                mask |= @field(CryptoKey.Usages, decl.name);
-                continue :iter_usages;
-            }
+    for (key_usages) |usage| {
+        if (std.mem.eql(u8, usage, "sign")) {
+            mask |= CryptoKey.Usages.sign;
+        } else if (std.mem.eql(u8, usage, "verify")) {
+            mask |= CryptoKey.Usages.verify;
+        } else {
+            return local.rejectPromise(.{
+                .dom_exception = .{ .err = error.SyntaxError },
+            });
         }
-        // Unknown usage if got here.
+    }
+    if (key_usages.len == 0) {
         return local.rejectPromise(.{
             .dom_exception = .{ .err = error.SyntaxError },
         });
@@ -74,14 +75,14 @@ pub fn init(
     };
 
     // Should we reject this in promise too?
-    const key = try frame.arena.alloc(u8, block_size);
-    errdefer frame.arena.free(key);
+    const key = try exec.arena.alloc(u8, block_size);
+    errdefer exec.arena.free(key);
 
     // HMAC is simply CSPRNG.
     const res = crypto.RAND_bytes(key.ptr, key.len);
     lp.assert(res == 1, "HMAC.init", .{ .res = res });
 
-    const crypto_key = try frame._factory.create(CryptoKey{
+    const crypto_key = try exec._factory.create(CryptoKey{
         ._type = .hmac,
         ._extractable = extractable,
         ._usages = mask,
@@ -96,16 +97,16 @@ pub fn sign(
     algo: algorithm.Sign,
     crypto_key: *const CryptoKey,
     data: []const u8,
-    frame: *Frame,
+    exec: *const Execution,
 ) !js.Promise {
-    var resolver = frame.js.local.?.createPromiseResolver();
+    var resolver = exec.context.local.?.createPromiseResolver();
 
     if (!algo.isHMAC() or !crypto_key.canSign()) {
         resolver.rejectError("HMAC.sign", .{ .dom_exception = .{ .err = error.InvalidAccessError } });
         return resolver.promise();
     }
 
-    const buffer = try frame.call_arena.alloc(u8, crypto.EVP_MD_size(crypto_key.getDigest()));
+    const buffer = try exec.call_arena.alloc(u8, crypto.EVP_MD_size(crypto_key.getDigest()));
     var out_len: u32 = 0;
     // Try to sign.
     _ = crypto.HMAC(
@@ -117,7 +118,7 @@ pub fn sign(
         buffer.ptr,
         &out_len,
     ) orelse {
-        frame.call_arena.free(buffer);
+        exec.call_arena.free(buffer);
         // Failure.
         resolver.rejectError("HMAC.sign", .{ .dom_exception = .{ .err = error.InvalidAccessError } });
         return resolver.promise();
@@ -132,9 +133,9 @@ pub fn verify(
     crypto_key: *const CryptoKey,
     signature: []const u8,
     data: []const u8,
-    frame: *Frame,
+    exec: *const Execution,
 ) !js.Promise {
-    var resolver = frame.js.local.?.createPromiseResolver();
+    var resolver = exec.context.local.?.createPromiseResolver();
 
     if (!crypto_key.canVerify()) {
         resolver.rejectError("HMAC.verify", .{ .dom_exception = .{ .err = error.InvalidAccessError } });

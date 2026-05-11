@@ -27,6 +27,7 @@ const dump = @import("../../browser/dump.zig");
 const js = @import("../../browser/js/js.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
 const Selector = @import("../../browser/webapi/selector/Selector.zig");
+const xpath = @import("../../browser/xpath/Evaluator.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -91,6 +92,56 @@ fn getDocument(cmd: *CDP.Command) !void {
     return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
 }
 
+// Closed set of XPath 1.0 named axes. Matched literally before `::` so
+// CSS pseudo-elements (`a::before`, `div::first-line`) don't get
+// misrouted to the XPath evaluator just because they have an
+// identifier-looking word before `::`.
+const xpath_axis_names = std.StaticStringMap(void).initComptime(.{
+    .{ "child", {} },
+    .{ "descendant", {} },
+    .{ "descendant-or-self", {} },
+    .{ "self", {} },
+    .{ "parent", {} },
+    .{ "ancestor", {} },
+    .{ "ancestor-or-self", {} },
+    .{ "following-sibling", {} },
+    .{ "preceding-sibling", {} },
+    .{ "following", {} },
+    .{ "preceding", {} },
+    .{ "attribute", {} },
+    .{ "namespace", {} },
+});
+
+// Heuristic (decision #2/#9): treat the query as XPath when it begins
+// with a path operator or contains an axis specifier; otherwise fall
+// through to CSS.
+fn isXPathQuery(q: []const u8) bool {
+    if (q.len == 0) return false;
+    if (q[0] == '/') return true;
+    if (q[0] == '.' and q.len > 1 and q[1] == '/') return true;
+    if (q[0] == '(' and q.len > 1) {
+        if (q[1] == '/') return true;
+        if (q[1] == '.' and q.len > 2 and q[2] == '/') return true;
+    }
+    // For `::` to be an XPath axis separator, the identifier immediately
+    // before it must be one of the 13 named axes. Walk back the run of
+    // [a-zA-Z-] characters and look it up in the closed set.
+    var idx: usize = 0;
+    while (std.mem.indexOfPos(u8, q, idx, "::")) |hit| : (idx = hit + 1) {
+        if (hit == 0) continue;
+        var start = hit;
+        while (start > 0) {
+            const c = q[start - 1];
+            const is_axis_char = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '-';
+            if (!is_axis_char) break;
+            start -= 1;
+        }
+        if (start == hit) continue;
+        if (xpath_axis_names.has(q[start..hit])) return true;
+    }
+    return false;
+}
+
 // https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-performSearch
 fn performSearch(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
@@ -100,15 +151,23 @@ fn performSearch(cmd: *CDP.Command) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
-    const list = try Selector.querySelectorAll(frame.window._document.asNode(), params.query, frame);
+    const root = frame.window._document.asNode();
+
+    if (isXPathQuery(params.query)) {
+        const arena = try frame.getArena(.medium, "DOM.performSearch");
+        defer frame.releaseArena(arena);
+        const nodes = try xpath.searchAll(arena, root, params.query, frame);
+        return finishSearch(cmd, bc, nodes);
+    }
+
+    const list = try Selector.querySelectorAll(root, params.query, frame);
     defer list.deinit(frame._page);
+    return finishSearch(cmd, bc, list._nodes);
+}
 
-    const search = try bc.node_search_list.create(list._nodes);
-
-    // dispatch setChildNodesEvents to inform the client of the subpart of node
-    // tree covering the results.
-    try dispatchSetChildNodes(cmd, list._nodes);
-
+fn finishSearch(cmd: *CDP.Command, bc: *CDP.BrowserContext, nodes: []const *DOMNode) !void {
+    const search = try bc.node_search_list.create(nodes);
+    try dispatchSetChildNodes(cmd, nodes);
     return cmd.sendResult(.{
         .searchId = search.name,
         .resultCount = @as(u32, @intCast(search.node_ids.len)),
@@ -616,6 +675,78 @@ test "cdp.dom: search flow" {
     try ctx.expectSentError(-31998, "SearchResultNotFound", .{ .id = 17 });
 }
 
+test "cdp.dom: performSearch with XPath" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/perform_search_xpath.html" });
+
+    try ctx.processMessage(.{
+        .id = 20,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "//p" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 3 }, .{ .id = 20 });
+
+    try ctx.processMessage(.{
+        .id = 21,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "descendant::p" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "1", .resultCount = 3 }, .{ .id = 21 });
+
+    try ctx.processMessage(.{
+        .id = 22,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "//*[@id='outer']" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "2", .resultCount = 1 }, .{ .id = 22 });
+
+    try ctx.processMessage(.{
+        .id = 23,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "p" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "3", .resultCount = 3 }, .{ .id = 23 });
+
+    try ctx.processMessage(.{
+        .id = 24,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "div p" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "4", .resultCount = 2 }, .{ .id = 24 });
+}
+
+test "cdp.dom: isXPathQuery heuristic" {
+    // XPath-shaped queries — each line covers a distinct heuristic branch.
+    try std.testing.expect(isXPathQuery("/html"));
+    try std.testing.expect(isXPathQuery("//p"));
+    try std.testing.expect(isXPathQuery(".//foo"));
+    try std.testing.expect(isXPathQuery("(//foo)[1]"));
+    try std.testing.expect(isXPathQuery("(./bar)[2]"));
+    try std.testing.expect(isXPathQuery("descendant::p"));
+    try std.testing.expect(isXPathQuery("ancestor-or-self::*"));
+    try std.testing.expect(isXPathQuery("//*[@id='x']"));
+
+    // CSS-shaped queries — fall through to the existing path.
+    try std.testing.expect(!isXPathQuery(""));
+    try std.testing.expect(!isXPathQuery("p"));
+    try std.testing.expect(!isXPathQuery("div p"));
+    try std.testing.expect(!isXPathQuery("#main"));
+    try std.testing.expect(!isXPathQuery(".cls"));
+    try std.testing.expect(!isXPathQuery("[data-x]"));
+    try std.testing.expect(!isXPathQuery("(p)")); // parens without path → CSS
+    try std.testing.expect(!isXPathQuery(".x")); // leading dot without /
+
+    // CSS pseudo-elements: identifier before `::` is not an XPath axis name.
+    try std.testing.expect(!isXPathQuery("a::before"));
+    try std.testing.expect(!isXPathQuery("div::after"));
+    try std.testing.expect(!isXPathQuery("p::first-line"));
+    try std.testing.expect(!isXPathQuery("input::placeholder"));
+    // Attribute selector with `::` inside a literal — nothing axis-like before it.
+    try std.testing.expect(!isXPathQuery("[data-x=\"x::y\"]"));
+}
+
 test "cdp.dom: querySelector unknown search id" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -713,13 +844,16 @@ test "cdp.dom: getBoxModel" {
     });
     try ctx.expectSentResult(.{ .nodeId = 3 }, .{ .id = 4 });
 
+    // Box model on the <p> nodeId returned above.
+    // Note: nodeId 6 is <head>, which is `display: none` per HTML Rendering
+    // §15.3.1, so its box model is all-zeros — exercise a visible element.
     try ctx.processMessage(.{
         .id = 5,
         .method = "DOM.getBoxModel",
-        .params = .{ .nodeId = 6 },
+        .params = .{ .nodeId = 3 },
     });
     try ctx.expectSentResult(.{ .model = BoxModel{
-        .content = Quad{ 10.0, 10.0, 15.0, 10.0, 15.0, 15.0, 10.0, 15.0 },
+        .content = Quad{ 25.0, 25.0, 30.0, 25.0, 30.0, 30.0, 25.0, 30.0 },
         .padding = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
         .border = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
         .margin = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },

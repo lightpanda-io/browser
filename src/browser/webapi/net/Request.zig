@@ -22,9 +22,11 @@ const js = @import("../../js/js.zig");
 const http = @import("../../../network/http.zig");
 
 const URL = @import("../URL.zig");
-const Headers = @import("Headers.zig");
 const Blob = @import("../Blob.zig");
 const AbortSignal = @import("../AbortSignal.zig");
+
+const Headers = @import("Headers.zig");
+const BodyInit = @import("body_init.zig").BodyInit;
 
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
@@ -48,7 +50,7 @@ pub const Input = union(enum) {
 pub const InitOpts = struct {
     method: ?[]const u8 = null,
     headers: ?Headers.InitOpts = null,
-    body: ?[]const u8 = null,
+    body: ?BodyInit = null,
     cache: Cache = .default,
     credentials: Credentials = .@"same-origin",
     signal: ?*AbortSignal = null,
@@ -86,7 +88,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .request => |r| r._method,
     };
 
-    const headers = if (opts.headers) |headers_init| switch (headers_init) {
+    var headers = if (opts.headers) |headers_init| switch (headers_init) {
         .obj => |h| h,
         else => try Headers.init(headers_init, exec),
     } else switch (input) {
@@ -94,9 +96,19 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .request => |r| r._headers,
     };
 
-    const body = if (opts.body) |b|
-        try arena.dupe(u8, b)
-    else switch (input) {
+    const body = if (opts.body) |b| blk: {
+        const extracted = try b.extract(arena);
+        // Per Fetch §6.5 step 11, the default Content-Type only applies if
+        // the user has not already set one via the headers init dict.
+        if (extracted.content_type) |ct| {
+            const hs = headers orelse try Headers.init(null, exec);
+            if (!hs.has("content-type", exec)) {
+                try hs.append("content-type", ct, exec);
+            }
+            headers = hs;
+        }
+        break :blk extracted.bytes;
+    } else switch (input) {
         .url => null,
         .request => |r| r._body,
     };

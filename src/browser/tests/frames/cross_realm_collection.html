@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<script src="../testing.js"></script>
+
+<!--
+Live collections (NodeList from .childNodes, HTMLCollection, NodeLive variants
+like getElementsByTagName) cache state and invalidate on the owning frame's
+DOM version. Cross-realm callers — parent JS reading `iframe.x.childNodes` —
+must still see mutations applied through the iframe's frame, even though the
+caller's own frame.version doesn't bump on those mutations.
+
+This guards a regression where the cache was tied to the calling frame and
+returned stale results after iframe-side mutations.
+-->
+
+<iframe id=if_collection src="support/cross_realm_collection.html"></iframe>
+
+<script id=childNodes_invalidates_after_iframe_mutation>
+  testing.onload(() => {
+    const idoc = document.getElementById('if_collection').contentDocument;
+    const iwin = document.getElementById('if_collection').contentWindow;
+    const testDiv = idoc.querySelector('#test');
+    const p0 = idoc.querySelector('#p0');
+    const p1 = idoc.querySelector('#p1');
+
+    // Prime the parent-realm view of the live NodeList.
+    const cn = testDiv.childNodes;
+    testing.expectEqual(3, cn.length);
+    testing.expectEqual(p0, cn[0]);
+
+    // Mutate the iframe's DOM through parent-realm code. The mutation only
+    // bumps the iframe frame's version; the parent's stays unchanged. The
+    // cached collection must still reflect the new state.
+    testDiv.removeChild(p0);
+
+    testing.expectEqual(2, cn.length);
+    testing.expectEqual(p1, cn[0]);
+    testing.expectEqual(undefined, cn[2]);
+  });
+</script>
+
+<script id=getElementsByTagName_invalidates_after_iframe_mutation>
+  testing.onload(() => {
+    const idoc = document.getElementById('if_collection').contentDocument;
+    const ps = idoc.getElementsByTagName('p');
+    const seen_initial = ps.length;
+
+    // Append a new <p> through the iframe's document.
+    const fresh = idoc.createElement('p');
+    fresh.id = 'pfresh';
+    idoc.querySelector('#test').appendChild(fresh);
+
+    testing.expectEqual(seen_initial + 1, ps.length);
+    testing.expectEqual(fresh, ps[ps.length - 1]);
+  });
+</script>
+</body>

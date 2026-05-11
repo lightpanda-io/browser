@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/refs/tags/v0.4.1.tar.gz",
-            .hash = "v8-0.0.0-xddH672HBAA1hQIa2Uv4mzs_qHC9-Py-M5ssqSSVhWtK",
+            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/refs/tags/v0.4.4.tar.gz",
+            .hash = "v8-0.0.0-xddH6xiUBACrbPC02HPqL4IOl_1EKAF6zf0IwNKaCILK",
         },
         // .v8 = .{ .path = "../zig-v8-fork" },
         .brotli = .{
@@ -33,6 +33,10 @@
         .sqlite3 = .{
             .url = "https://github.com/allyourcodebase/sqlite3/archive/8f840560eae88ab66668c6827c64ffbd0d74ef37.tar.gz",
             .hash = "sqlite3-3.51.0-DMxLWssOAABZ8cAvU_LfBIbp0kZjm824PU8sSLXpEDdr",
+        },
+        .libidn2 = .{
+            .url = "https://ftp.gnu.org/gnu/libidn/libidn2-2.3.8.tar.gz",
+            .hash = "N-V-__8AABGOuAC_dhAN07kfoP4dycCFi8Bka4O-tuhriNH8",
         },
     },
     .paths = .{""},

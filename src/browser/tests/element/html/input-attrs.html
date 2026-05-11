@@ -85,3 +85,205 @@
     testing.expectEqual('', i3.autocomplete);
   }
 </script>
+
+<script id="range-clamp">
+  {
+    // Per WHATWG HTML spec, value sanitization for `type=range` clamps to
+    // [min, max] with defaults of 0 and 100.
+    // https://html.spec.whatwg.org/multipage/input.html#range-state-(type=range)
+    const r = document.createElement('input');
+    r.type = 'range';
+    r.min = '0';
+    r.max = '100';
+
+    // Above max -> max
+    r.value = '999';
+    testing.expectEqual('100', r.value);
+
+    // Below min -> min
+    r.value = '-10';
+    testing.expectEqual('0', r.value);
+
+    // In range -> unchanged
+    r.value = '50';
+    testing.expectEqual('50', r.value);
+
+    // Negative range
+    const r2 = document.createElement('input');
+    r2.type = 'range';
+    r2.min = '-50';
+    r2.max = '50';
+    r2.value = '0';
+    testing.expectEqual('0', r2.value);
+    r2.value = '100';
+    testing.expectEqual('50', r2.value);
+    r2.value = '-100';
+    testing.expectEqual('-50', r2.value);
+
+    // Fractional bounds
+    const r3 = document.createElement('input');
+    r3.type = 'range';
+    r3.min = '0.5';
+    r3.max = '1.5';
+    r3.value = '2';
+    testing.expectEqual('1.5', r3.value);
+    r3.value = '0';
+    testing.expectEqual('0.5', r3.value);
+
+    // Default min/max (0..100) when attributes absent
+    const r4 = document.createElement('input');
+    r4.type = 'range';
+    r4.value = '999';
+    testing.expectEqual('100', r4.value);
+    r4.value = '-1';
+    testing.expectEqual('0', r4.value);
+
+    // Non-numeric value falls back to spec default `min + (max - min) / 2`
+    const r5 = document.createElement('input');
+    r5.type = 'range';
+    r5.min = '0';
+    r5.max = '100';
+    r5.value = 'garbage';
+    testing.expectEqual('50', r5.value);
+
+    // Spec default is the midpoint, not a hardcoded "50"
+    const r6 = document.createElement('input');
+    r6.type = 'range';
+    r6.min = '20';
+    r6.max = '40';
+    r6.value = 'garbage';
+    testing.expectEqual('30', r6.value);
+  }
+</script>
+
+<script id="range-step-matching">
+  {
+    // Per WHATWG HTML "Suffering from a step mismatch":
+    //   step base = min (defaults to 0)
+    //   step value = step attr (defaults to 1)
+    //   value rounds to nearest `step base + step * n`; ties round up
+    //   if rounded-up neighbor exceeds max, use rounded-down neighbor
+
+    // Default step=1, fractional min -> ladder [0.5, 1.5]; '1' is a tie, rounds up
+    const s1 = document.createElement('input');
+    s1.type = 'range';
+    s1.min = '0.5';
+    s1.max = '1.5';
+    s1.value = '1';
+    testing.expectEqual('1.5', s1.value);
+
+    // step=2, ladder [0,2,4,6,8,10]; '3' is a tie between 2 and 4, rounds up to 4
+    const s2 = document.createElement('input');
+    s2.type = 'range';
+    s2.min = '0';
+    s2.max = '10';
+    s2.step = '2';
+    s2.value = '3';
+    testing.expectEqual('4', s2.value);
+    s2.value = '7';   // tie between 6 and 8 -> 8
+    testing.expectEqual('8', s2.value);
+    s2.value = '5.4'; // closer to 6
+    testing.expectEqual('6', s2.value);
+
+    // step="any" -> no rounding
+    const s3 = document.createElement('input');
+    s3.type = 'range';
+    s3.min = '0';
+    s3.max = '10';
+    s3.step = 'any';
+    s3.value = '3.7';
+    testing.expectEqual('3.7', s3.value);
+    s3.step = 'ANY';  // case-insensitive
+    s3.value = '3.7';
+    testing.expectEqual('3.7', s3.value);
+
+    // step=3, ladder [0,3,6,9]; clamp '11' to 10, then nearest rung is 9
+    const s4 = document.createElement('input');
+    s4.type = 'range';
+    s4.min = '0';
+    s4.max = '10';
+    s4.step = '3';
+    s4.value = '11';
+    testing.expectEqual('9', s4.value);
+
+    // step=4, ladder [0,4,8,12]; '10' is a tie between 8 and 12, but 12 > max=10
+    // so use the rounded-down neighbor 8
+    const s5 = document.createElement('input');
+    s5.type = 'range';
+    s5.min = '0';
+    s5.max = '10';
+    s5.step = '4';
+    s5.value = '10';
+    testing.expectEqual('8', s5.value);
+
+    // Already on the ladder -> preserve original string (no canonicalization)
+    const s6 = document.createElement('input');
+    s6.type = 'range';
+    s6.min = '0';
+    s6.max = '10';
+    s6.value = '4';
+    testing.expectEqual('4', s6.value);
+
+    // Invalid step (<= 0) falls back to default step=1
+    const s7 = document.createElement('input');
+    s7.type = 'range';
+    s7.min = '0';
+    s7.max = '10';
+    s7.step = '0';
+    s7.value = '3.4';
+    testing.expectEqual('3', s7.value);
+    s7.step = '-2';
+    s7.value = '3.4';
+    testing.expectEqual('3', s7.value);
+
+    // Negative range with step matching
+    const s8 = document.createElement('input');
+    s8.type = 'range';
+    s8.min = '-10';
+    s8.max = '10';
+    s8.step = '5';  // ladder: -10, -5, 0, 5, 10
+    s8.value = '-3'; // tie between -5 and 0 (each 2 away)? no: |-3-(-5)|=2, |0-(-3)|=3 -> -5
+    testing.expectEqual('-5', s8.value);
+    s8.value = '-2.5'; // tie between -5 and 0 -> rounds up to 0
+    testing.expectEqual('0', s8.value);
+
+    // Non-numeric value falls back to midpoint, then snaps to ladder
+    const s9 = document.createElement('input');
+    s9.type = 'range';
+    s9.min = '0';
+    s9.max = '100';
+    s9.step = '7';  // ladder: 0, 7, 14, ..., 98; midpoint=50; nearest is 49
+    s9.value = 'garbage';
+    testing.expectEqual('49', s9.value);
+
+    // Step base falls back through `min` content attr -> `value` content attr -> 0
+    // (https://html.spec.whatwg.org/multipage/input.html#concept-input-min).
+    // When `min` is absent but a parseable `value` content attribute exists,
+    // it becomes the step base — so the ladder shifts.
+    const s10 = document.createElement('input');
+    s10.type = 'range';
+    s10.max = '10';
+    s10.setAttribute('value', '3.5');  // content attr only; step_base = 3.5
+    s10.value = '5.3';                 // ladder [3.5, 4.5, 5.5, ...]; nearest is 5.5
+    testing.expectEqual('5.5', s10.value);
+
+    // Unparseable `value` content attr fails the fallback chain and step base
+    // defaults to 0 (ladder [0, 1, 2, ...]; nearest to 5.3 is 5).
+    const s11 = document.createElement('input');
+    s11.type = 'range';
+    s11.max = '10';
+    s11.setAttribute('value', 'garbage');
+    s11.value = '5.3';
+    testing.expectEqual('5', s11.value);
+
+    // `min` content attr wins over `value` content attr in the fallback chain
+    // (step_base = 0 from min, not 3.5 from value attr).
+    const s12 = document.createElement('input');
+    s12.type = 'range';
+    s12.min = '0';
+    s12.max = '10';
+    s12.setAttribute('value', '3.5');
+    s12.value = '5.3';
+    testing.expectEqual('5', s12.value);
+  }
+</script>

@@ -59,12 +59,17 @@ pub fn fromError(err: anyerror) ?DOMException {
         error.InvalidNodeType => .{ ._code = .invalid_node_type_error },
         error.DataClone => .{ ._code = .data_clone_error },
         error.InvalidAccessError => .{ ._code = .invalid_access_error },
+        error.OperationError => .{ ._code = .operation_error },
         else => null,
     };
 }
 
 pub fn getCode(self: *const DOMException) u8 {
-    return @intFromEnum(self._code);
+    return switch (self._code) {
+        // WebCrypto-only error: no legacy numeric code.
+        .operation_error => 0,
+        else => @intFromEnum(self._code),
+    };
 }
 
 pub fn getName(self: *const DOMException) []const u8 {
@@ -95,6 +100,7 @@ pub fn getName(self: *const DOMException) []const u8 {
         .timeout_error => "TimeoutError",
         .invalid_node_type_error => "InvalidNodeTypeError",
         .data_clone_error => "DataCloneError",
+        .operation_error => "OperationError",
     };
 }
 
@@ -125,6 +131,7 @@ pub fn getMessage(self: *const DOMException) []const u8 {
         .timeout_error => "The operation timed out",
         .invalid_node_type_error => "The supplied node is incorrect or has an incorrect ancestor for this operation",
         .data_clone_error => "The object can not be cloned",
+        .operation_error => "The operation failed for an operation-specific reason",
     };
 }
 
@@ -164,6 +171,8 @@ const Code = enum(u8) {
     timeout_error = 23,
     invalid_node_type_error = 24,
     data_clone_error = 25,
+    /// Defined by WebCrypto; no legacy code, exposed via name only.
+    operation_error = 0xFF,
 
     /// Maps a standard error name to its legacy code
     /// Returns .none (code 0) for non-legacy error names
@@ -190,6 +199,7 @@ const Code = enum(u8) {
             .{ "TimeoutError", .timeout_error },
             .{ "InvalidNodeTypeError", .invalid_node_type_error },
             .{ "DataCloneError", .data_clone_error },
+            .{ "OperationError", .operation_error },
         });
         return lookup.get(name) orelse .none;
     }

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<form id="invalid-form">
+  <input type="text" required>
+  <input type="email" value="not-an-email">
+</form>
+
+<form id="valid-form">
+  <input type="text" required value="ok">
+  <input type="email" value="ok@example.com">
+</form>
+
+<form id="empty-form"></form>
+
+<script id="surface">
+{
+  const f = $('#valid-form');
+  testing.expectEqual('function', typeof f.checkValidity);
+  testing.expectEqual('function', typeof f.reportValidity);
+}
+</script>
+
+<script id="invalid_form_returns_false">
+{
+  testing.expectEqual(false, $('#invalid-form').checkValidity());
+}
+</script>
+
+<script id="valid_form_returns_true">
+{
+  testing.expectEqual(true, $('#valid-form').checkValidity());
+  testing.expectEqual(true, $('#empty-form').checkValidity());
+}
+</script>
+
+<script id="invalid_event_per_element">
+{
+  const form = $('#invalid-form');
+  let fired = 0;
+  for (const el of form.elements) {
+    el.addEventListener('invalid', () => { fired++; });
+  }
+  form.checkValidity();
+  testing.expectEqual(2, fired); // both inputs fail
+}
+</script>
+
+<script id="report_validity_matches">
+{
+  testing.expectEqual(false, $('#invalid-form').reportValidity());
+  testing.expectEqual(true, $('#valid-form').reportValidity());
+}
+</script>

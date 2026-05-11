@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id=basic>
+{
+  // window.open returns a Window-like object.
+  const w = window.open('about:blank');
+  testing.expectEqual(true, w != null);
+  testing.expectEqual(false, w.closed);
+
+  // The popup is a top-level browsing context.
+  testing.expectEqual(w, w.self);
+  testing.expectEqual(w, w.window);
+  testing.expectEqual(w, w.top);
+  testing.expectEqual(w, w.parent);
+
+  // Opener points back at us.
+  testing.expectEqual(window, w.opener);
+
+  w.close();
+  testing.expectEqual(true, w.closed);
+}
+</script>
+
+<script id=main_opener_is_null>
+  testing.expectEqual(null, window.opener);
+</script>
+
+<script id=about_blank_default>
+{
+  // No-arg open defaults to about:blank.
+  const w = window.open();
+  testing.expectEqual(true, w != null);
+  testing.expectEqual(false, w.closed);
+  w.close();
+}
+</script>
+
+<script id=noopener>
+{
+  // noopener returns null.
+  const w = window.open('about:blank', '_blank', 'noopener');
+  testing.expectEqual(null, w);
+}
+</script>
+
+<script id=noreferrer>
+{
+  // noreferrer also returns null (and implies noopener).
+  const w = window.open('about:blank', '_blank', 'noreferrer');
+  testing.expectEqual(null, w);
+}
+</script>
+
+<script id=named_reuse>
+{
+  // Second open with the same name reuses the popup — same Window identity.
+  const a = window.open('about:blank', 'myPopup');
+  testing.expectEqual('myPopup', a.name);
+
+  const b = window.open('about:blank', 'myPopup');
+  testing.expectEqual(a, b);
+
+  a.close();
+}
+</script>
+
+<script id=close_noop_on_main>
+  // close() on a non-popup window is a no-op.
+  window.close();
+  testing.expectEqual(false, window.closed);
+</script>
+
+<script id=double_close>
+{
+  const w = window.open('about:blank');
+  w.close();
+  testing.expectEqual(true, w.closed);
+  // Second close is safe.
+  w.close();
+  testing.expectEqual(true, w.closed);
+}
+</script>
+
+<script id=name_setter>
+{
+  const w = window.open('about:blank');
+  testing.expectEqual('', w.name);
+  w.name = 'renamed';
+  testing.expectEqual('renamed', w.name);
+
+  // Now it can be looked up by name.
+  const again = window.open('about:blank', 'renamed');
+  testing.expectEqual(w, again);
+  w.close();
+}
+</script>
+
+<script id=close_drops_opener>
+{
+  // Closing a popup that was opened from main shouldn't touch window.opener.
+  const w = window.open('about:blank', 'outer');
+  testing.expectEqual(window, w.opener);
+  w.close();
+  testing.expectEqual(true, w.closed);
+  testing.expectEqual(null, window.opener);
+}
+</script>
+
+<script id=popup_self_close type=module>
+{
+  // Popup navigates to a real URL (not about:blank, which takes a synchronous
+  // shortcut) and calls window.close() from inside its own running script.
+  // Regression: synchronous frame teardown here used to destroy the popup's
+  // V8 context mid-eval, panicking on the deferred load-event dispatch.
+  // Receiving the postMessage proves the popup's script ran to completion
+  // (including the close call) without crashing.
+  const state = await testing.async();
+  window.addEventListener('message', (e) => {
+    if (e.data && e.data.from === 'popup_self_close') {
+      state.resolve(e.data);
+    }
+  }, { once: true });
+
+  const w = window.open(testing.BASE_URL + 'window/support/popup_self_close.html');
+  testing.expectTrue(w != null);
+
+  await state.done((data) => {
+    testing.expectEqual('popup_self_close', data.from);
+  });
+}
+</script>

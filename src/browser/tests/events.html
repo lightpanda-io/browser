@@ -762,3 +762,95 @@
     testing.expectEqual(2, calls.length);
   }
 </script>
+
+<div id=throw_host><div id=throw_mid><span id=throw_leaf></span></div></div>
+<script id=listenerThrowDoesNotHaltDispatch>
+  // Per DOM §2.9 step 4 substep 8 "Inner invoke", a listener callback that
+  // throws must have its exception reported, not propagated — subsequent
+  // listeners on the same target and the rest of the propagation path must
+  // still run.
+  {
+    const leaf = $('#throw_leaf');
+    const mid  = $('#throw_mid');
+    const host = $('#throw_host');
+    const hits = [];
+
+    leaf.addEventListener('throw_test', () => {
+      hits.push('leaf-throwing');
+      throw new Error('listener-throw probe');
+    });
+    leaf.addEventListener('throw_test', () => hits.push('leaf-sibling'));
+    mid.addEventListener ('throw_test', () => hits.push('mid'));
+    host.addEventListener('throw_test', () => hits.push('host'));
+    document.body.addEventListener('throw_test', () => hits.push('body'));
+
+    // dispatchEvent must NOT throw to the caller — if it did, this assignment
+    // would be skipped and the next testing.expectEqual would never run.
+    const result = leaf.dispatchEvent(new Event('throw_test', {bubbles: true}));
+
+    testing.expectEqual('leaf-throwing', hits[0]);
+    testing.expectEqual('leaf-sibling',  hits[1]);
+    testing.expectEqual('mid',           hits[2]);
+    testing.expectEqual('host',          hits[3]);
+    testing.expectEqual('body',          hits[4]);
+    testing.expectEqual(5, hits.length);
+    testing.expectEqual(true, result);
+  }
+</script>
+
+<div id=throw_capture_host><div id=throw_capture_mid><span id=throw_capture_leaf></span></div></div>
+<script id=listenerThrowDuringCapturePhase>
+  // Capture-phase variant: a throwing capture listener on an ancestor must
+  // not skip the rest of the capture walk, the at-target listener, or the
+  // bubble walk.
+  {
+    const leaf = $('#throw_capture_leaf');
+    const mid  = $('#throw_capture_mid');
+    const host = $('#throw_capture_host');
+    const order = [];
+
+    host.addEventListener('cap_test', () => {
+      order.push('host-capture-throwing');
+      throw new Error('capture-throw probe');
+    }, true);
+    mid.addEventListener('cap_test', () => order.push('mid-capture'),  true);
+    leaf.addEventListener('cap_test', () => order.push('leaf-target'));
+    mid.addEventListener('cap_test', () => order.push('mid-bubble'));
+    host.addEventListener('cap_test', () => order.push('host-bubble'));
+
+    leaf.dispatchEvent(new Event('cap_test', {bubbles: true}));
+
+    testing.expectEqual('host-capture-throwing', order[0]);
+    testing.expectEqual('mid-capture',           order[1]);
+    testing.expectEqual('leaf-target',           order[2]);
+    testing.expectEqual('mid-bubble',            order[3]);
+    testing.expectEqual('host-bubble',           order[4]);
+    testing.expectEqual(5, order.length);
+  }
+</script>
+
+<script id=listenerThrowOnWindowTarget>
+  // Direct-dispatch variant (non-DOM target — Window). Same contract: a
+  // throwing listener must not stop later listeners from running.
+  {
+    const calls = [];
+    const a = () => { calls.push('a-throwing'); throw new Error('window-throw probe'); };
+    const b = () => calls.push('b');
+    const c = () => calls.push('c');
+
+    window.addEventListener('win_throw', a);
+    window.addEventListener('win_throw', b);
+    window.addEventListener('win_throw', c);
+
+    window.dispatchEvent(new Event('win_throw'));
+
+    testing.expectEqual('a-throwing', calls[0]);
+    testing.expectEqual('b',          calls[1]);
+    testing.expectEqual('c',          calls[2]);
+    testing.expectEqual(3, calls.length);
+
+    window.removeEventListener('win_throw', a);
+    window.removeEventListener('win_throw', b);
+    window.removeEventListener('win_throw', c);
+  }
+</script>

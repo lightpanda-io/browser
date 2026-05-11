@@ -284,23 +284,42 @@ fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is
     lib.root_module.sanitize_thread = is_tsan;
 
     const macros = [_]struct { []const u8, []const u8 }{
-        .{ "SQLITE_DQS", "0" },
+        .{ "SQLITE_DEFAULT_FILE_PERMISSIONS", "0600" },
+        .{ "SQLITE_DEFAULT_MEMSTATUS", "0" },
         .{ "SQLITE_DEFAULT_WAL_SYNCHRONOUS", "1" },
-        .{ "SQLITE_USE_ALLOCA", "1" },
-        .{ "SQLITE_THREADSAFE", "1" },
-        .{ "SQLITE_TEMP_STORE", "3" },
+        .{ "SQLITE_DQS", "0" },
         .{ "SQLITE_ENABLE_API_ARMOR", "1" },
         .{ "SQLITE_ENABLE_UNLOCK_NOTIFY", "1" },
-        .{ "SQLITE_DEFAULT_FILE_PERMISSIONS", "0600" },
+        .{ "SQLITE_TEMP_STORE", "3" },
+        .{ "SQLITE_THREADSAFE", "1" },
+        .{ "SQLITE_UNTESTABLE", "1" },
+        .{ "SQLITE_USE_ALLOCA", "1" },
+        .{ "SQLITE_OMIT_AUTHORIZATION", "1" },
+        .{ "SQLITE_OMIT_AUTOMATIC_INDEX", "1" },
+        .{ "SQLITE_OMIT_AUTORESET", "1" },
+        .{ "SQLITE_OMIT_AUTOVACUUM", "1" },
+        .{ "SQLITE_OMIT_BETWEEN_OPTIMIZATION", "1" },
+        .{ "SQLITE_OMIT_CASE_SENSITIVE_LIKE_PRAGMA", "1" },
+        .{ "SQLITE_OMIT_COMPLETE", "1" },
         .{ "SQLITE_OMIT_DECLTYPE", "1" },
         .{ "SQLITE_OMIT_DEPRECATED", "1" },
+        .{ "SQLITE_OMIT_DESERIALIZE", "1" },
+        .{ "SQLITE_OMIT_GET_TABLE", "1" },
+        .{ "SQLITE_OMIT_INCRBLOB", "1" },
+        .{ "SQLITE_OMIT_JSON", "1" },
+        .{ "SQLITE_OMIT_LIKE_OPTIMIZATION", "1" },
         .{ "SQLITE_OMIT_LOAD_EXTENSION", "1" },
         .{ "SQLITE_OMIT_PROGRESS_CALLBACK", "1" },
         .{ "SQLITE_OMIT_SHARED_CACHE", "1" },
+        .{ "SQLITE_OMIT_TCL_VARIABLE", "1" },
+        .{ "SQLITE_OMIT_TEMPDB", "1" },
         .{ "SQLITE_OMIT_TRACE", "1" },
         .{ "SQLITE_OMIT_UTF16", "1" },
+        .{ "SQLITE_OMIT_XFER_OPT", "1" },
     };
-    for (macros) |m| lib.root_module.addCMacro(m[0], m[1]);
+    for (macros) |m| {
+        lib.root_module.addCMacro(m[0], m[1]);
+    }
 
     mod.linkLibrary(lib);
 }
@@ -322,6 +341,13 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) !void {
 
     const boringssl = buildBoringSsl(b, target, mod.optimize.?);
     for (boringssl) |lib| curl.root_module.linkLibrary(lib);
+
+    const libidn2 = buildLibidn2(b, target, mod.optimize.?, is_tsan);
+    curl.root_module.linkLibrary(libidn2);
+    // Also expose libidn2 to the consuming module so src/sys/idna.zig's
+    // @cImport of <idn2.h> resolves. Without this, lightpanda_module only
+    // sees idn2.h transitively if a system libidn2 happens to be installed.
+    mod.linkLibrary(libidn2);
 
     switch (target.result.os.tag) {
         .macos => {
@@ -477,6 +503,168 @@ fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.O
     return lib;
 }
 
+fn buildLibidn2(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    is_tsan: bool,
+) *Build.Step.Compile {
+    const dep = b.dependency("libidn2", .{});
+
+    const os = target.result.os.tag;
+    const is_darwin = os.isDarwin();
+
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .sanitize_thread = is_tsan,
+    });
+
+    // libidn2's autoconf+gnulib stack expects a config.h with hundreds of
+    // HAVE_*/_GL_ATTRIBUTE_* defines — including ~800 lines of attribute-
+    // detection macros emitted from gnulib-common.m4 via AH_VERBATIM. We
+    // vendor a single autoconf-generated config.h rather than try to
+    // reproduce that machinery in the Zig build system.
+    mod.addIncludePath(b.path("vendor/libidn2"));
+
+    // Substitute the gnulib-style .in.h templates. All @VAR@ in them are
+    // either DLL-visibility markers (empty for static POSIX) or
+    // HAVE_UNISTRING_WOE32DLL_H (0).
+    inline for (.{ "unitypes", "unistr", "uniconv", "unictype", "uninorm" }) |name| {
+        mod.addConfigHeader(renderUnistringHeader(b, dep, name));
+    }
+
+    mod.addIncludePath(dep.path("lib"));
+    mod.addIncludePath(dep.path("unistring"));
+    // gl/ holds gnulib helpers — only malloca and version-etc headers are
+    // referenced from the sources we compile; we don't need the full gl/ shim
+    // layer (system header replacements).
+    mod.addIncludePath(dep.path("gl"));
+
+    const lib = b.addLibrary(.{ .name = "idn2", .root_module = mod });
+    lib.installHeader(dep.path("lib/idn2.h"), "idn2.h");
+
+    if (is_darwin) {
+        // unistring's striconveh.c calls real iconv_*, which on macOS lives
+        // in libiconv (separate from libSystem). On glibc Linux iconv is in
+        // libc itself; on musl it would also need a separate -liconv.
+        mod.linkSystemLibrary("iconv", .{});
+
+        // libidn2's lib/lookup.c calls strchrnul() without including
+        // <string.h>; the prototype is declared in vendor/libidn2/config.h
+        // alongside the existing strverscmp shim. macOS libc lacked the
+        // symbol entirely before 15.4 — provide it here so the link
+        // succeeds. Mirrors how gl/strverscmp.c is wired up below.
+        lib.addCSourceFile(.{
+            .file = b.path("vendor/libidn2/darwin/strchrnul.c"),
+            .flags = &.{},
+        });
+    }
+
+    lib.addCSourceFiles(.{
+        .root = dep.path("lib"),
+        .flags = &.{ "-DHAVE_CONFIG_H", "-DIDN2_STATIC" },
+        .files = &.{
+            "bidi.c",     "context.c",  "data.c",   "decode.c",
+            "error.c",    "free.c",     "idna.c",   "lookup.c",
+            "punycode.c", "register.c", "tables.c", "tr46map.c",
+            "version.c",
+        },
+    });
+    lib.addCSourceFiles(.{
+        .root = dep.path("gl"),
+        .flags = &.{"-DHAVE_CONFIG_H"},
+        // malloca.c provides striconveha's stack-or-heap allocator; strverscmp
+        // is a glibc extension absent on macOS that lib/version.c needs.
+        .files = &.{ "malloca.c", "strverscmp.c" },
+    });
+    lib.addCSourceFiles(.{
+        .root = dep.path("unistring"),
+        .flags = &.{"-DHAVE_CONFIG_H"},
+        .files = &.{
+            "c-ctype.c",                    "c-strcasecmp.c",                    "c-strncasecmp.c",
+            "free.c",                       "iconv.c",                           "iconv_close.c",
+            "iconv_open.c",                 "localcharset.c",                    "stdlib.c",
+            "striconveh.c",                 "striconveha.c",                     "unistd.c",
+            "uniconv/u8-conv-from-enc.c",   "uniconv/u8-strconv-from-enc.c",     "uniconv/u8-strconv-from-locale.c",
+            "uniconv/u8-strconv-to-enc.c",  "uniconv/u8-strconv-to-locale.c",    "unictype/bidi_of.c",
+            "unictype/categ_M.c",           "unictype/categ_none.c",             "unictype/categ_of.c",
+            "unictype/categ_test.c",        "unictype/combiningclass.c",         "unictype/joiningtype_of.c",
+            "unictype/scripts.c",           "uninorm/canonical-decomposition.c", "uninorm/composition.c",
+            "uninorm/decompose-internal.c", "uninorm/decomposition-table.c",     "uninorm/nfc.c",
+            "uninorm/nfd.c",                "uninorm/u32-normalize.c",           "unistr/u32-cmp.c",
+            "unistr/u32-cpy-alloc.c",       "unistr/u32-cpy.c",                  "unistr/u32-mbtouc-unsafe.c",
+            "unistr/u32-strlen.c",          "unistr/u32-to-u8.c",                "unistr/u32-uctomb.c",
+            "unistr/u8-check.c",            "unistr/u8-mblen.c",                 "unistr/u8-mbtouc.c",
+            "unistr/u8-mbtouc-aux.c",       "unistr/u8-mbtouc-unsafe.c",         "unistr/u8-mbtouc-unsafe-aux.c",
+            "unistr/u8-mbtoucr.c",          "unistr/u8-prev.c",                  "unistr/u8-strlen.c",
+            "unistr/u8-to-u32.c",           "unistr/u8-uctomb.c",                "unistr/u8-uctomb-aux.c",
+        },
+    });
+
+    return lib;
+}
+
+/// Process one of unistring's `.in.h` template headers into a real `.h`.
+/// All `@VAR@` substitutions in these headers are either DLL-visibility markers
+/// (empty for static POSIX builds) or `HAVE_UNISTRING_WOE32DLL_H` (0).
+fn renderUnistringHeader(b: *Build, dep: *Build.Dependency, name: []const u8) *Build.Step.ConfigHeader {
+    const in_rel = b.fmt("unistring/{s}.in.h", .{name});
+    const out_name = b.fmt("{s}.h", .{name});
+    const lazy = dep.path(in_rel);
+    const path = lazy.getPath3(b, null);
+
+    const file = path.root_dir.handle.openFile(path.sub_path, .{}) catch |e| {
+        std.debug.panic("openFile {s}: {s}", .{ path.sub_path, @errorName(e) });
+    };
+    defer file.close();
+    const contents = file.readToEndAlloc(b.allocator, 4 << 20) catch @panic("OOM");
+
+    const ch = b.addConfigHeader(.{
+        .include_path = out_name,
+        .style = .{ .autoconf_at = lazy },
+    }, .{});
+
+    var seen = std.StringHashMap(void).init(b.allocator);
+    var i: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, contents, i, '@')) |s| {
+        const a = s + 1;
+        const e = std.mem.indexOfScalarPos(u8, contents, a, '@') orelse break;
+        const var_name = contents[a..e];
+        if (!isAtConfigName(var_name)) {
+            // Stray '@' (e.g. an email address in a comment); advance past it
+            // alone so we don't mis-pair with a later '@'.
+            i = s + 1;
+            continue;
+        }
+        const owned = b.allocator.dupe(u8, var_name) catch @panic("OOM");
+        const gop = seen.getOrPut(owned) catch @panic("OOM");
+        if (!gop.found_existing) {
+            if (std.mem.eql(u8, var_name, "HAVE_UNISTRING_WOE32DLL_H")) {
+                ch.addValue(owned, c_int, 0);
+            } else {
+                ch.addValue(owned, []const u8, "");
+            }
+        }
+        i = e + 1;
+    }
+    return ch;
+}
+
+fn isAtConfigName(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s, 0..) |c, idx| {
+        const ok = switch (c) {
+            'A'...'Z', '_' => true,
+            '0'...'9' => idx > 0,
+            else => false,
+        };
+        if (!ok) return false;
+    }
+    return true;
+}
+
 fn buildCurl(
     b: *Build,
     target: Build.ResolvedTarget,
@@ -553,6 +741,11 @@ fn buildCurl(
         ._FILE_OFFSET_BITS = 64,
 
         .USE_IPV6 = true,
+        // Route IDN hostnames through libidn2 (vendored, see buildLibidn2).
+        // Without this, libcurl ships UTF-8 host bytes to SNI/cert validation
+        // and breaks for non-ASCII hostnames like räksmörgås.se.
+        .HAVE_LIBIDN2 = true,
+        .HAVE_IDN2_H = true,
         .CURL_OS = switch (os) {
             .linux => if (is_android) "\"android\"" else "\"linux\"",
             else => std.fmt.allocPrint(b.allocator, "\"{s}\"", .{@tagName(os)}) catch @panic("OOM"),

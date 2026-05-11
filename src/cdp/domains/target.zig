@@ -171,7 +171,7 @@ fn createTarget(cmd: *CDP.Command) !void {
     }
 
     // if target_id is null, we should never have a blank frame
-    lp.assert(bc.session.page == null, "CDP.target.createTarget not null page", .{});
+    lp.assert(!bc.session.hasPage(), "CDP.target.createTarget not null page", .{});
 
     // if target_id is null, we should never have a session_id
     lp.assert(bc.session_id == null, "CDP.target.createTarget not null session_id", .{});
@@ -284,7 +284,7 @@ fn closeTarget(cmd: *CDP.Command) !void {
     }
 
     // can't be null if we have a target_id
-    lp.assert(bc.session.page != null, "CDP.target.closeTarget null frame", .{});
+    lp.assert(bc.session.hasPage(), "CDP.target.closeTarget null frame", .{});
 
     try cmd.sendResult(.{ .success = true }, .{ .include_session_id = false });
 
@@ -636,7 +636,7 @@ test "cdp.target: closeTarget" {
     {
         try ctx.processMessage(.{ .id = 11, .method = "Target.closeTarget", .params = .{ .targetId = "TID-000000000A" } });
         try ctx.expectSentResult(.{ .success = true }, .{ .id = 11 });
-        try testing.expectEqual(null, bc.session.page);
+        try testing.expectEqual(false, bc.session.hasPage());
         try testing.expectEqual(null, bc.target_id);
     }
 }

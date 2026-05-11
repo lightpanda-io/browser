@@ -220,6 +220,31 @@
 
       // URL.createObjectURL / revokeObjectURL
       testing.expectEqual(true, r.blob_url_is_blob);
+
+      // WorkerLocation
+      testing.expectEqual(true, r.loc_is_worker_location);
+      testing.expectEqual(true, r.loc_identity_stable);
+      testing.expectTrue(r.loc_href.endsWith('api-worker.js'));
+      testing.expectEqual(r.loc_href, r.loc_to_string);
+      testing.expectEqual('http:', r.loc_protocol);
+      testing.expectTrue(r.loc_pathname.endsWith('api-worker.js'));
+    });
+  }
+</script>
+
+<script id="worker_dynamic_import" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./import-worker.js');
+
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+
+    await state.done((response) => {
+      testing.expectTrue(response.ok, 'worker import error: ' + response.err);
+      testing.expectEqual('imported from module', response.message);
+      testing.expectEqual(42, response.product);
     });
   }
 </script>
@@ -255,6 +280,60 @@
       testing.expectEqual('value', response.echo.array[2].nested);
       testing.expectTrue(response.echo.date instanceof Date);
       testing.expectTrue(response.echo.buffer instanceof ArrayBuffer);
+    });
+  }
+</script>
+
+<script id="worker_timers" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./timers-worker.js');
+
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker timers error: ' + data.err);
+      const r = data.results;
+
+      testing.expectEqual(true, r.setTimeout_id_is_number);
+      testing.expectEqual(5, r.setTimeout_args);
+      testing.expectEqual(true, r.setTimeout_this_is_self);
+      testing.expectEqual(1, r.setTimeout_length);
+
+      testing.expectEqual(true, r.setInterval_ids_distinct);
+      testing.expectEqual(true, r.setInterval_fired_multiple);
+      testing.expectEqual(true, r.setInterval_clear_stops);
+      testing.expectEqual(true, r.setInterval_pre_clear_silent);
+
+      testing.expectEqual(true, r.clear_invalid_silent);
+
+      testing.expectEqual(true, r.setTimeout_string_id_is_number);
+      testing.expectEqual(42, r.setTimeout_string_ran);
+      testing.expectEqual(true, r.setInterval_string_ran);
+
+      testing.expectEqual(true, r.setTimeout_invalid_throws);
+    });
+  }
+</script>
+
+<script id="importScripts" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('importScripts-worker.js');
+
+    var received = [];
+    worker.onmessage = function(event) {
+      received.push(event);
+      if (received.length == 2) {
+        state.resolve();
+      }
+    };
+
+    await state.done(() => {
+      testing.expectEqual('importScripts-1', received[0].data);
+      testing.expectEqual('importScripts-2', received[1].data);
     });
   }
 </script>

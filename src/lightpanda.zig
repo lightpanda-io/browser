@@ -55,20 +55,15 @@ pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     wait_until: ?Config.WaitUntil = null,
     wait_script: ?[:0]const u8 = null,
+    inject_script: std.ArrayList([]const u8) = .{},
     wait_selector: ?[:0]const u8 = null,
     dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
     writer: ?*std.Io.Writer = null,
 };
-pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
-    const http_client = try HttpClient.init(app.allocator, &app.network);
-    defer http_client.deinit();
-
+pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !void {
     const notification = try Notification.init(app.allocator);
     defer notification.deinit();
-
-    var browser = try Browser.init(app, .{ .http_client = http_client });
-    defer browser.deinit();
 
     var session = try browser.newSession(notification);
 
@@ -81,6 +76,9 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
             cookies.saveToFile(&session.cookie_jar, cookie_jar_path);
         }
     }
+
+    // Stash scripts user want to inject.
+    session.inject_scripts = opts.inject_script.items;
 
     const frame = try session.createPage();
 
@@ -254,29 +252,26 @@ noinline fn assertionFailure(comptime ctx: []const u8, args: anytype) noreturn {
 // Reference counting helper
 pub fn RC(comptime T: type) type {
     return struct {
-        _refs: T = 0,
+        _refs: std.atomic.Value(T) = .init(0),
 
         pub fn init(refs: T) @This() {
-            return .{ ._refs = refs };
+            return .{ ._refs = .init(refs) };
         }
 
         pub fn acquire(self: *@This()) void {
-            self._refs += 1;
+            _ = self._refs.fetchAdd(1, .monotonic);
         }
 
         pub fn release(self: *@This(), value: anytype, page: *Page) void {
-            assert(self._refs > 0, "release overflow", .{ .type = @typeName(@TypeOf(value)) });
-
-            const refs = self._refs - 1;
-            self._refs = refs;
-            if (refs > 0) {
-                return;
+            const prev = self._refs.fetchSub(1, .acq_rel);
+            assert(prev > 0, "release overflow", .{ .type = @typeName(@TypeOf(value)) });
+            if (prev == 1) {
+                value.deinit(page);
             }
-            value.deinit(page);
         }
 
         pub fn format(self: @This(), writer: *std.Io.Writer) !void {
-            return writer.print("{d}", .{self._refs});
+            return writer.print("{d}", .{self._refs.load(.monotonic)});
         }
     };
 }

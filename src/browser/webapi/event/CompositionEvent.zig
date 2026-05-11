@@ -22,12 +22,14 @@ const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
+const UIEvent = @import("UIEvent.zig");
+const Window = @import("../Window.zig");
 
 const String = lp.String;
 
 const CompositionEvent = @This();
 
-_proto: *Event,
+_proto: *UIEvent,
 _data: []const u8 = "",
 
 const CompositionEventOptions = struct {
@@ -42,7 +44,7 @@ pub fn init(typ: []const u8, opts_: ?Options, frame: *Frame) !*CompositionEvent 
     const type_string = try String.init(arena, typ, .{});
 
     const opts = opts_ orelse Options{};
-    const event = try frame._factory.event(
+    const event = try frame._factory.uiEvent(
         arena,
         type_string,
         CompositionEvent{
@@ -56,11 +58,33 @@ pub fn init(typ: []const u8, opts_: ?Options, frame: *Frame) !*CompositionEvent 
 }
 
 pub fn asEvent(self: *CompositionEvent) *Event {
-    return self._proto;
+    return self._proto.asEvent();
 }
 
 pub fn getData(self: *const CompositionEvent) []const u8 {
     return self._data;
+}
+
+pub fn initCompositionEvent(
+    self: *CompositionEvent,
+    typ: []const u8,
+    bubbles: ?bool,
+    cancelable: ?bool,
+    view: ?*Window,
+    data: ?[]const u8,
+) !void {
+    const ui = self._proto;
+    const event = ui._proto;
+    if (event._event_phase != .none) {
+        return;
+    }
+
+    const arena = event._arena;
+    event._type_string = try String.init(arena, typ, .{});
+    event._bubbles = bubbles orelse false;
+    event._cancelable = cancelable orelse false;
+    ui._view = view;
+    self._data = if (data) |d| try arena.dupe(u8, d) else "";
 }
 
 pub const JsApi = struct {
@@ -74,6 +98,7 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(CompositionEvent.init, .{});
     pub const data = bridge.accessor(CompositionEvent.getData, null, .{});
+    pub const initCompositionEvent = bridge.function(CompositionEvent.initCompositionEvent, .{});
 };
 
 const testing = @import("../../../testing.zig");

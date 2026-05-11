@@ -166,7 +166,7 @@ pub fn findAdjacentNodes(self: *Node, position: []const u8) !struct { *Node, ?*N
     // Returned if:
     // * position is not one of the four listed values.
     // * The input is XML that is not well-formed.
-    return error.Syntax;
+    return error.SyntaxError;
 }
 
 pub fn firstChild(self: *const Node) ?*Node {
@@ -251,6 +251,11 @@ pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
     // Adopt the node tree if moving between documents
     if (adopting_to_new_document) {
         try frame.adoptNodeTree(child, child_owner.?, parent_owner);
+    }
+
+    // A custom element callback can re-parent the node. If it does, we're done
+    if (child._parent != null) {
+        return child;
     }
 
     try frame.appendNode(self, child, .{
@@ -512,7 +517,17 @@ pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
     return frame.document;
 }
 
+// Returns the Frame that owns this node's tree. Used to tie cached state of
+// "live" collections (NodeList, HTMLCollection, etc.) to the right frame's DOM
+// version: cross-realm callers must invalidate based on mutations through the
+// node's owning frame, not the caller's frame.
+//
+// Falls back to `default` when the node has no associated document yet (e.g.,
+// freshly created and detached) or its document has no frame.
 pub fn ownerFrame(self: *const Node, default: *Frame) *Frame {
+    if (self._type == .document) {
+        return self._type.document._frame orelse default;
+    }
     const doc = self.ownerDocument(default) orelse return default;
     return doc._frame orelse default;
 }
@@ -603,6 +618,22 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fra
     // Adopt the node tree if moving between documents
     if (adopting_to_new_document) {
         try frame.adoptNodeTree(new_node, child_owner.?, parent_owner);
+    }
+
+    // See Node.appendChild: a callback above (disconnectedCallback or
+    // adoptedCallback) can re-parent new_node. Let that placement stand.
+    if (new_node._parent != null) {
+        return new_node;
+    }
+
+    // The same callback could also have detached ref_node from self. Fall
+    // back to append so new_node still lands in self.
+    if (ref_node._parent != self) {
+        try frame.appendNode(self, new_node, .{
+            .child_already_connected = child_already_connected,
+            .adopting_to_new_document = adopting_to_new_document,
+        });
+        return new_node;
     }
 
     try frame.insertNodeRelative(
@@ -763,6 +794,7 @@ const CloneError = error{
     NotImplemented,
     InvalidCharacterError,
     CloneError,
+    Idna,
     IFrameLoadError,
     TooManyContexts,
     LinkLoadError,
@@ -989,7 +1021,7 @@ pub fn getElementsByTagName(self: *Node, tag_name: []const u8, frame: *Frame) !G
     }
 
     const arena = frame.arena;
-    const filter = try String.init(arena, lower, .{});
+    const filter = try String.init(arena, tag_name, .{});
     return .{ .tag_name = collections.NodeLive(.tag_name).init(self, filter, frame) };
 }
 

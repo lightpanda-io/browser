@@ -45,7 +45,7 @@ pub fn init(session: *Session, _: Opts) !Runner {
     return .{
         .frame = frame,
         .session = session,
-        .http_client = session.browser.http_client,
+        .http_client = &session.browser.http_client,
     };
 }
 
@@ -84,6 +84,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
     while (true) {
         if (gc_hint_timer.read() >= gc_hint_period_ns) {
             gc_hint_timer.reset();
+            self.frame._page.cleanupClosedPopups();
             self.session.browser.env.memoryPressureNotification(.moderate);
         }
 
@@ -141,6 +142,10 @@ pub fn tickCDP(self: *Runner, opts: TickOpts) !CDPTickResult {
 }
 
 fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
+    // Refresh self.frame from session. In case of pending page, we want to
+    // take its state while loading. If we use only the current frame, we will
+    // return a .done result immediately.
+    self.frame = self.session.pendingOrCurrentFrame() orelse return .done;
     const frame = self.frame;
     const http_client = self.http_client;
 
@@ -181,11 +186,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
             // it AFTER.
             try browser.runMacrotasks();
 
-            // Each call to this runs scheduled load events.
-            try frame.dispatchLoad();
-
             const http_active = http_client.http_active;
-            const total_network_activity = http_active + http_client.intercepted;
+            const total_network_activity = http_active + http_client.interception_layer.intercepted;
             if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
                 frame.notifyNetworkAlmostIdle();
             }
@@ -211,7 +213,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
                 // because is_cdp is false, and that can only be
                 // the case when interception isn't possible.
                 if (comptime IS_DEBUG) {
-                    std.debug.assert(http_client.intercepted == 0);
+                    std.debug.assert(http_client.interception_layer.intercepted == 0);
                 }
 
                 if (browser.hasBackgroundTasks()) {

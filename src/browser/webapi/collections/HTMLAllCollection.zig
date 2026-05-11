@@ -38,13 +38,14 @@ pub fn init(root: *Node, frame: *Frame) HTMLAllCollection {
         ._last_index = 0,
         ._last_length = null,
         ._tw = TreeWalker.FullExcludeSelf.init(root, .{}),
-        ._cached_version = frame.version,
+        ._cached_version = frame._page.dom_version,
     };
 }
 
 fn versionCheck(self: *HTMLAllCollection, frame: *const Frame) bool {
-    if (self._cached_version != frame.version) {
-        self._cached_version = frame.version;
+    const current = frame._page.dom_version;
+    if (self._cached_version != current) {
+        self._cached_version = current;
         self._last_index = 0;
         self._last_length = null;
         self._tw.reset();

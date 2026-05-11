@@ -107,6 +107,7 @@ pub fn Builder(comptime T: type) type {
 }
 
 pub const Constructor = struct {
+    arity: c_int,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     const Opts = struct {
@@ -118,21 +119,24 @@ pub const Constructor = struct {
     };
 
     fn init(comptime T: type, comptime func: anytype, comptime opts: Opts) Constructor {
-        return .{ .func = struct {
-            fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
-                var caller: Caller = undefined;
-                if (!caller.init(v8_isolate)) {
-                    return;
-                }
-                defer caller.deinit();
+        return .{
+            .arity = comptime Function.getArity(@TypeOf(func), if (opts.new_target) 1 else 0),
+            .func = struct {
+                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                    const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
+                    var caller: Caller = undefined;
+                    if (!caller.init(v8_isolate)) {
+                        return;
+                    }
+                    defer caller.deinit();
 
-                caller.constructor(T, func, handle.?, .{
-                    .dom_exception = opts.dom_exception,
-                    .new_target = opts.new_target,
-                });
-            }
-        }.wrap };
+                    caller.constructor(T, func, handle.?, .{
+                        .dom_exception = opts.dom_exception,
+                        .new_target = opts.new_target,
+                    });
+                }
+            }.wrap,
+        };
     }
 };
 
@@ -149,7 +153,9 @@ pub const Function = struct {
             .cache = opts.cache,
             .static = opts.static,
             .wpt_only = opts.wpt_only,
-            .arity = getArity(@TypeOf(func)),
+            // Non-static methods receive `self` as their first param; static
+            // methods don't, so don't skip the first param for them.
+            .arity = getArity(@TypeOf(func), if (opts.static) 0 else 1),
             .func = if (opts.noop) noopFunction else struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
                     Caller.Function.call(T, handle.?, func, opts);
@@ -160,14 +166,32 @@ pub const Function = struct {
 
     pub fn noopFunction(_: ?*const v8.FunctionCallbackInfo) callconv(.c) void {}
 
-    fn getArity(comptime T: type) usize {
+    fn getArity(comptime T: type, comptime start: usize) usize {
+        const Execution = js.Execution;
+
+        const Page = @import("../Page.zig");
+        const Session = @import("../Session.zig");
+
         var count: usize = 0;
         var params = @typeInfo(T).@"fn".params;
-        for (params[1..]) |p| { // start at 1, skip self
+        for (params[start..]) |p| { // start at 1, skip self
             const PT = p.type.?;
             if (PT == *Frame or PT == *const Frame) {
                 break;
             }
+
+            if (PT == *Page or PT == *const Page) {
+                break;
+            }
+
+            if (PT == *Execution or PT == *const Execution) {
+                break;
+            }
+
+            if (PT == *Session or PT == *const Session) {
+                break;
+            }
+
             if (@typeInfo(PT) == .optional) {
                 break;
             }
@@ -778,6 +802,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/element/html/Embed.zig"),
     @import("../webapi/element/html/FieldSet.zig"),
     @import("../webapi/element/html/Font.zig"),
+    @import("../webapi/element/html/FrameSet.zig"),
     @import("../webapi/element/html/Form.zig"),
     @import("../webapi/element/html/Generic.zig"),
     @import("../webapi/element/html/Head.zig"),
@@ -826,6 +851,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/element/html/Video.zig"),
     @import("../webapi/element/html/UL.zig"),
     @import("../webapi/element/html/Unknown.zig"),
+    @import("../webapi/element/html/ValidityState.zig"),
     @import("../webapi/element/Svg.zig"),
     @import("../webapi/element/svg/Generic.zig"),
     @import("../webapi/encoding/TextDecoder.zig"),
@@ -909,6 +935,9 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/CryptoKey.zig"),
     @import("../webapi/Selection.zig"),
     @import("../webapi/ImageData.zig"),
+    @import("../webapi/XPathResult.zig"),
+    @import("../webapi/XPathExpression.zig"),
+    @import("../webapi/XPathEvaluator.zig"),
 });
 
 // APIs available on Worker context globals (constructors like URL, Headers, etc.)
@@ -916,6 +945,7 @@ pub const PageJsApis = flattenTypes(&.{
 // TODO: Expand this list to include all worker-appropriate APIs.
 pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/WorkerGlobalScope.zig"),
+    @import("../webapi/WorkerLocation.zig"),
     @import("../webapi/EventTarget.zig"),
     @import("../webapi/DOMException.zig"),
     @import("../webapi/net/URLSearchParams.zig"),
@@ -925,6 +955,7 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/File.zig"),
     @import("../webapi/Console.zig"),
     @import("../webapi/Crypto.zig"),
+    @import("../webapi/SubtleCrypto.zig"),
     @import("../webapi/net/FormData.zig"),
     @import("../webapi/net/Headers.zig"),
     @import("../webapi/net/Request.zig"),
@@ -942,6 +973,9 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/AbortController.zig"),
     @import("../webapi/URL.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
+    @import("../webapi/net/XMLHttpRequest.zig"),
+    @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
+    @import("../webapi/FileReader.zig"),
     // @import("../webapi/Performance.zig"),
 });
 
@@ -950,7 +984,10 @@ pub const WorkerJsApis = flattenTypes(&.{
 // to know about all possible types. Individual snapshots use their own
 // subsets (PageJsApis, WorkerSnapshot.JsApis).
 pub const JsApis = blk: {
-    const base = PageJsApis ++ [_]type{@import("../webapi/WorkerGlobalScope.zig").JsApi};
+    const base = PageJsApis ++ [_]type{
+        @import("../webapi/WorkerGlobalScope.zig").JsApi,
+        @import("../webapi/WorkerLocation.zig").JsApi,
+    };
     if (lp.build_config.wpt_extensions == false) {
         break :blk base;
     }

@@ -116,3 +116,76 @@
     testing.expectEqual(true, called);
   }
 </script>
+
+<script id=domKeyLocationConstants>
+  {
+    testing.expectEqual(0, KeyboardEvent.DOM_KEY_LOCATION_STANDARD);
+    testing.expectEqual(1, KeyboardEvent.DOM_KEY_LOCATION_LEFT);
+    testing.expectEqual(2, KeyboardEvent.DOM_KEY_LOCATION_RIGHT);
+    testing.expectEqual(3, KeyboardEvent.DOM_KEY_LOCATION_NUMPAD);
+
+    let evt = new KeyboardEvent('keydown', {key: 'a'});
+    testing.expectEqual(0, evt.DOM_KEY_LOCATION_STANDARD);
+    testing.expectEqual(1, evt.DOM_KEY_LOCATION_LEFT);
+    testing.expectEqual(2, evt.DOM_KEY_LOCATION_RIGHT);
+    testing.expectEqual(3, evt.DOM_KEY_LOCATION_NUMPAD);
+  }
+</script>
+
+<script id=keyCodeAndCharCodeAreZeroForSyntheticEvents>
+  {
+    // Per Chrome behavior, both legacy `keyCode` and `charCode` return 0 for
+    // events constructed via `new KeyboardEvent(...)` because such events
+    // have `isTrusted === false`. The legacy mapping (a -> 65, Enter -> 13,
+    // etc.) is only exposed for events dispatched by the user agent itself.
+    // The full mapping table is exercised via Zig unit tests in
+    // `webapi/event/KeyboardEvent.zig`.
+
+    // Letters
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: 'a'}).keyCode);
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: 'Z'}).keyCode);
+    // Digits
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: '5'}).keyCode);
+    // Space
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: ' '}).keyCode);
+    // Named keys
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: 'Enter'}).keyCode);
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: 'F1'}).keyCode);
+    // Unknown key
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: 'Dead'}).keyCode);
+
+    // charCode follows the same rule across event types.
+    testing.expectEqual(0, new KeyboardEvent('keypress', {key: 'a'}).charCode);
+    testing.expectEqual(0, new KeyboardEvent('keypress', {key: 'Enter'}).charCode);
+    testing.expectEqual(0, new KeyboardEvent('keydown', {key: 'a'}).charCode);
+    testing.expectEqual(0, new KeyboardEvent('keyup', {key: 'a'}).charCode);
+  }
+</script>
+
+<script id=initKeyboardEvent>
+  {
+    let evt = new KeyboardEvent('keydown', {key: 'a'});
+    evt.initKeyboardEvent('keyup', true, true, window, 'q', 1, true, false, true, false);
+    testing.expectEqual('keyup', evt.type);
+    testing.expectEqual(true, evt.bubbles);
+    testing.expectEqual(true, evt.cancelable);
+    testing.expectEqual('q', evt.key);
+    testing.expectEqual(1, evt.location);
+    testing.expectEqual(true, evt.ctrlKey);
+    testing.expectEqual(false, evt.altKey);
+    testing.expectEqual(true, evt.shiftKey);
+    testing.expectEqual(false, evt.metaKey);
+  }
+</script>
+
+<script id=initKeyboardEventOptional>
+  {
+    let evt = new KeyboardEvent('keydown', {key: 'x'});
+    evt.initKeyboardEvent('foo');
+    testing.expectEqual('foo', evt.type);
+    testing.expectEqual(false, evt.bubbles);
+    testing.expectEqual(false, evt.cancelable);
+    testing.expectEqual('', evt.key);
+    testing.expectEqual(0, evt.location);
+  }
+</script>

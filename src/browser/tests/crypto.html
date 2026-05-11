@@ -120,6 +120,135 @@
   });
 </script>
 
+<script>
+  // helper
+  window.expectGenKeyRejects = async function(algo, extractable, usages, expected) {
+    try {
+      await crypto.subtle.generateKey(algo, extractable, usages);
+      testing.fail(`expected ${expected}, but generateKey resolved for ${JSON.stringify(algo)}`);
+    } catch (err) {
+      testing.expectEqual(expected, err.name);
+    }
+  };
+</script>
+
+<script id=generateKey-unrecognized-algorithm>
+  testing.async(async () => {
+    // Unknown name (string and object form) -> NotSupportedError.
+    await expectGenKeyRejects("AES", true, ["encrypt"], "NotSupportedError");
+    await expectGenKeyRejects({ name: "AES" }, true, ["encrypt"], "NotSupportedError");
+    await expectGenKeyRejects({ name: "AES-CMAC", length: 128 }, true, ["encrypt"], "NotSupportedError");
+    await expectGenKeyRejects({ name: "EC", namedCurve: "P-256" }, true, ["sign"], "NotSupportedError");
+    // Empty algorithm dictionary -> TypeError (missing required `name`).
+    await expectGenKeyRejects({}, true, ["encrypt"], "TypeError");
+  });
+</script>
+
+<script id=generateKey-aes-validation>
+  testing.async(async () => {
+    // Bad usages: SyntaxError.
+    await expectGenKeyRejects({ name: "AES-CBC", length: 128 }, true, ["sign"], "SyntaxError");
+    await expectGenKeyRejects({ name: "AES-GCM", length: 128 }, true, ["encrypt", "deriveBits"], "SyntaxError");
+    // AES-KW only allows wrapKey / unwrapKey.
+    await expectGenKeyRejects({ name: "AES-KW", length: 128 }, true, ["encrypt"], "SyntaxError");
+
+    // Bad length: OperationError.
+    for (const length of [64, 127, 129, 255, 257, 512]) {
+      await expectGenKeyRejects({ name: "AES-CBC", length }, true, ["encrypt"], "OperationError");
+    }
+
+    // Empty usages on a secret key: SyntaxError.
+    await expectGenKeyRejects({ name: "AES-CBC", length: 128 }, true, [], "SyntaxError");
+    await expectGenKeyRejects({ name: "AES-KW", length: 256 }, true, [], "SyntaxError");
+  });
+</script>
+
+<script id=generateKey-ec-validation>
+  testing.async(async () => {
+    // Bad usages: SyntaxError.
+    await expectGenKeyRejects({ name: "ECDSA", namedCurve: "P-256" }, true, ["encrypt"], "SyntaxError");
+    await expectGenKeyRejects({ name: "ECDH", namedCurve: "P-256" }, true, ["sign"], "SyntaxError");
+
+    // Unknown curve: NotSupportedError (not OperationError, per spec).
+    await expectGenKeyRejects({ name: "ECDSA", namedCurve: "P-512" }, true, ["sign"], "NotSupportedError");
+    await expectGenKeyRejects({ name: "ECDH", namedCurve: "Curve25519" }, true, ["deriveBits"], "NotSupportedError");
+
+    // Empty usages: SyntaxError (mandatoryUsages aside, the spec rejects empty for private keys).
+    await expectGenKeyRejects({ name: "ECDSA", namedCurve: "P-256" }, true, [], "SyntaxError");
+  });
+</script>
+
+<script id=generateKey-rsa-validation>
+  testing.async(async () => {
+    const goodExp = new Uint8Array([1, 0, 1]); // 65537
+
+    // Bad name: NotSupportedError.
+    await expectGenKeyRejects(
+      { name: "RSA", hash: "SHA-256", modulusLength: 2048, publicExponent: goodExp },
+      true, ["sign"], "NotSupportedError",
+    );
+
+    // Bad hash: NotSupportedError.
+    await expectGenKeyRejects(
+      { name: "RSA-PSS", hash: "SHA", modulusLength: 2048, publicExponent: goodExp },
+      true, ["sign"], "NotSupportedError",
+    );
+
+    // Bad usages: SyntaxError. RSASSA only allows sign/verify.
+    await expectGenKeyRejects(
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256", modulusLength: 2048, publicExponent: goodExp },
+      true, ["encrypt"], "SyntaxError",
+    );
+    // RSA-OAEP only allows encrypt/decrypt/wrapKey/unwrapKey.
+    await expectGenKeyRejects(
+      { name: "RSA-OAEP", hash: "SHA-256", modulusLength: 2048, publicExponent: goodExp },
+      true, ["sign"], "SyntaxError",
+    );
+
+    // Bad publicExponent: OperationError.
+    await expectGenKeyRejects(
+      { name: "RSA-OAEP", hash: "SHA-256", modulusLength: 2048, publicExponent: new Uint8Array([1]) },
+      true, ["encrypt"], "OperationError",
+    );
+    await expectGenKeyRejects(
+      { name: "RSA-OAEP", hash: "SHA-256", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 0]) },
+      true, ["encrypt"], "OperationError",
+    );
+
+    // Empty usages: SyntaxError.
+    await expectGenKeyRejects(
+      { name: "RSA-OAEP", hash: "SHA-256", modulusLength: 2048, publicExponent: goodExp },
+      true, [], "SyntaxError",
+    );
+  });
+</script>
+
+<script id=generateKey-hmac-validation>
+  testing.async(async () => {
+    // Unknown hash: NotSupportedError.
+    await expectGenKeyRejects({ name: "HMAC", hash: "MD5" }, true, ["sign"], "NotSupportedError");
+
+    // Bad usages: SyntaxError. HMAC only allows sign/verify.
+    await expectGenKeyRejects({ name: "HMAC", hash: "SHA-256" }, true, ["encrypt"], "SyntaxError");
+    await expectGenKeyRejects({ name: "HMAC", hash: "SHA-256" }, true, ["sign", "deriveBits"], "SyntaxError");
+
+    // Empty usages: SyntaxError.
+    await expectGenKeyRejects({ name: "HMAC", hash: "SHA-256" }, true, [], "SyntaxError");
+  });
+</script>
+
+<script id=generateKey-edxxx-validation>
+  testing.async(async () => {
+    // Ed25519 / Ed448 only allow sign/verify; X448 only allows deriveKey/deriveBits.
+    await expectGenKeyRejects("Ed25519", true, ["encrypt"], "SyntaxError");
+    await expectGenKeyRejects({ name: "Ed448" }, true, ["deriveBits"], "SyntaxError");
+    await expectGenKeyRejects("X448", true, ["sign"], "SyntaxError");
+
+    // Empty usages: SyntaxError.
+    await expectGenKeyRejects("Ed25519", true, [], "SyntaxError");
+  });
+</script>
+
 <script id="digest">
   testing.async(async () => {
     async function hash(algo, data) {
@@ -131,4 +260,97 @@
     testing.expectEqual("a4260d64c2eea9fd30c1f895c5e48a26d817e19d3a700b61b3ce665864ff4b8e012bd357d345aa614c5f642dab865ea1", await hash('sha-384', 'over 9000'));
     testing.expectEqual("6cad17e6f3f76680d6dd18ed043b75b4f6e1aa1d08b917294942e882fb6466c3510948c34af8b903ed0725b582b3b39c0e485ae2c1b7dfdb192ee38b79c782b6", await hash('sha-512', 'over 9000'));
   });
+</script>
+
+<script>
+  // Helper for worker-based crypto tests. Spawns a worker, waits for it to
+  // signal readiness, then sends `kind` and forwards the worker's reply to
+  // `state.resolve`. Avoids racing worker startup, which matters on slow CI.
+  window.runCryptoInWorker = function(kind, state) {
+    const worker = new Worker('./crypto-worker.js');
+    worker.onmessage = (e) => {
+      if (e.data && e.data.ready) {
+        worker.postMessage({ kind });
+        return;
+      }
+      state.resolve(e.data);
+    };
+  };
+</script>
+
+<script id=worker-getRandomValues type=module>
+  {
+    const state = await testing.async();
+    runCryptoInWorker('getRandomValues', state);
+    await state.done((data) => {
+      testing.expectTrue(data.ok);
+      testing.expectEqual(true, data.same);
+      testing.expectEqual(true, data.looks_random);
+    });
+  }
+</script>
+
+<script id=worker-randomUUID type=module>
+  {
+    const state = await testing.async();
+    runCryptoInWorker('randomUUID', state);
+    await state.done((data) => {
+      testing.expectTrue(data.ok);
+      testing.expectEqual('string', data.type);
+      testing.expectEqual(36, data.length);
+      testing.expectEqual(true, data.valid);
+    });
+  }
+</script>
+
+<script id=worker-digest type=module>
+  {
+    const state = await testing.async();
+    runCryptoInWorker('digest', state);
+    await state.done((data) => {
+      testing.expectTrue(data.ok);
+      testing.expectEqual(
+        '1bc375bb92459685194dda18a4b835f4e2972ec1bde6d9ab3db53fcc584a6580',
+        data.hex,
+      );
+    });
+  }
+</script>
+
+<script id=worker-hmac-sign-verify type=module>
+  {
+    const state = await testing.async();
+    runCryptoInWorker('hmac', state);
+    await state.done((data) => {
+      testing.expectTrue(data.ok);
+      testing.expectEqual('object', data.key_type);
+      testing.expectEqual(128, data.raw_byte_length);
+      testing.expectEqual(true, data.is_array_buffer);
+      testing.expectEqual(true, data.verified);
+    });
+  }
+</script>
+
+<script id=worker-x25519-derive type=module>
+  {
+    const state = await testing.async();
+    runCryptoInWorker('x25519', state);
+    await state.done((data) => {
+      testing.expectTrue(data.ok);
+      testing.expectEqual('object', data.private_key_type);
+      testing.expectEqual('object', data.public_key_type);
+      testing.expectEqual(16, data.shared_byte_length);
+    });
+  }
+</script>
+
+<script id=worker-generateKey-rejects type=module>
+  {
+    const state = await testing.async();
+    runCryptoInWorker('generateKey-rejection', state);
+    await state.done((data) => {
+      testing.expectTrue(data.ok);
+      testing.expectEqual('SyntaxError', data.err_name);
+    });
+  }
 </script>

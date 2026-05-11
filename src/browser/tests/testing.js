@@ -87,7 +87,12 @@
           const res = await this.promise;
           async_pending.delete(script_id);
           async_capture = this.capture;
-          cb(res);
+          try {
+            cb(res);
+          } catch (err) {
+          	console.warn(script_id, err);
+          	failed = true;
+          }
           async_capture = false;
         }
       };

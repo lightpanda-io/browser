@@ -52,7 +52,7 @@ pub fn init(node: *Node, frame: *Frame) !*ChildNodes {
         ._last_index = 0,
         ._last_node = null,
         ._last_length = null,
-        ._cached_version = frame.version,
+        ._cached_version = frame._page.dom_version,
     };
     return self;
 }
@@ -61,7 +61,7 @@ pub fn deinit(self: *const ChildNodes, page: *Page) void {
     page.releaseArena(self._arena);
 }
 
-pub fn length(self: *ChildNodes, frame: *Frame) !u32 {
+pub fn length(self: *ChildNodes, frame: *const Frame) !u32 {
     if (self.versionCheck(frame)) {
         if (self._last_length) |cached_length| {
             return cached_length;
@@ -75,16 +75,16 @@ pub fn length(self: *ChildNodes, frame: *Frame) !u32 {
     return len;
 }
 
-pub fn getAtIndex(self: *ChildNodes, index: usize, frame: *Frame) !?*Node {
+pub fn getAtIndex(self: *ChildNodes, index: usize, frame: *const Frame) !?*Node {
     _ = self.versionCheck(frame);
 
     var current = self._last_index;
     var node: ?*std.DoublyLinkedList.Node = null;
-    if (index < current) {
+    if (index < current or self._last_node == null) {
         current = 0;
         node = self.first() orelse return null;
     } else {
-        node = self._last_node orelse self.first() orelse return null;
+        node = self._last_node;
     }
     defer self._last_index = current;
 
@@ -116,8 +116,8 @@ pub fn entries(self: *ChildNodes, frame: *Frame) !*EntryIterator {
     return .init(.{ .list = self }, frame);
 }
 
-fn versionCheck(self: *ChildNodes, frame: *Frame) bool {
-    const current = frame.version;
+fn versionCheck(self: *ChildNodes, frame: *const Frame) bool {
+    const current = frame._page.dom_version;
     if (current == self._cached_version) {
         return true;
     }

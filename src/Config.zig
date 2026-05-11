@@ -51,12 +51,24 @@ fn logFilterScopesValidator(allocator: Allocator, args: *std.process.ArgIterator
     var it = std.mem.splitScalar(u8, str, ',');
     while (it.next()) |part| {
         const v = std.meta.stringToEnum(log.Scope, part) orelse {
-            log.fatal(.app, "invalid option choice", .{ .arg = "log-filter-scopes", .value = part });
+            log.fatal(.app, "invalid option choice", .{ .arg = "--log-filter-scopes", .value = part });
             return error.InvalidOption;
         };
 
         try list.append(allocator, v);
     }
+}
+
+fn logLevelValidator(_: Allocator, args: *std.process.ArgIterator) !?log.Level {
+    const str = args.next() orelse return error.MissingArgument;
+    if (std.mem.eql(u8, str, "error")) {
+        return .err;
+    }
+
+    return std.meta.stringToEnum(log.Level, str) orelse {
+        log.fatal(.app, "invalid option choice", .{ .arg = "--log-level", .value = str });
+        return error.InvalidArgument;
+    };
 }
 
 /// Common CLI args.
@@ -71,7 +83,7 @@ const CommonOptions = .{
     .{ .name = "http_max_response_size", .type = ?usize },
     .{ .name = "ws_max_concurrent", .type = ?u8 },
     .{ .name = "insecure_disable_tls_host_verification", .type = bool },
-    .{ .name = "log_level", .type = ?log.Level },
+    .{ .name = "log_level", .type = ?log.Level, .validator = logLevelValidator },
     .{ .name = "log_format", .type = ?log.Format },
     .{ .name = "log_filter_scopes", .type = log.Scope, .multiple = true, .validator = logFilterScopesValidator },
     .{ .name = "user_agent_suffix", .type = ?[]const u8 },
@@ -106,6 +118,36 @@ fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
     return .html;
 }
 
+fn waitScriptFileValidator(allocator: Allocator, args: *std.process.ArgIterator) !?[:0]const u8 {
+    const path = args.next() orelse {
+        log.fatal(.app, "missing argument value", .{ .arg = "--wait-script-file" });
+        return error.InvalidArgument;
+    };
+
+    return std.fs.cwd().readFileAllocOptions(allocator, path, 1024 * 1024, null, .of(u8), 0) catch |err| {
+        log.fatal(.app, "failed to read file", .{ .arg = "--wait-script-file", .path = path, .err = err });
+        return error.InvalidArgument;
+    };
+}
+
+fn injectScriptFileValidator(
+    allocator: Allocator,
+    args: *std.process.ArgIterator,
+    list: *std.ArrayList([]const u8),
+) !void {
+    const path = args.next() orelse {
+        log.fatal(.app, "missing argument value", .{ .arg = "--inject-script-file" });
+        return error.InvalidArgument;
+    };
+
+    const bytes = std.fs.cwd().readFileAllocOptions(allocator, path, std.math.maxInt(usize), null, .of(u8), null) catch |err| {
+        log.fatal(.app, "failed to read file", .{ .arg = "--inject-script-file", .path = path, .err = err });
+        return error.InvalidArgument;
+    };
+
+    return list.append(allocator, bytes);
+}
+
 /// Definition for all the commands and its arguments. See @cli.zig for further.
 const Commands = cli.Builder(.{
     .{
@@ -131,8 +173,23 @@ const Commands = cli.Builder(.{
             .{ .name = "strip_mode", .type = dump.Opts.Strip, .default = dump.Opts.Strip{} },
             .{ .name = "wait_ms", .type = u32, .default = 5_000 },
             .{ .name = "wait_until", .type = ?WaitUntil },
-            .{ .name = "wait_script", .type = ?[:0]const u8 },
+            .{
+                .name = "wait_script",
+                .type = ?[:0]const u8,
+                .variants = .{
+                    .{ .name = "wait_script_file", .validator = waitScriptFileValidator },
+                },
+            },
             .{ .name = "wait_selector", .type = ?[:0]const u8 },
+            .{
+                .name = "inject_script",
+                .type = []const u8,
+                .multiple = true,
+                .variants = .{
+                    .{ .name = "inject_script_file", .validator = injectScriptFileValidator },
+                },
+            },
+            .{ .name = "terminate_ms", .type = ?u32 },
         },
         .shared_options = CommonOptions,
     },
@@ -557,8 +614,8 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Defaults to no caching.
         \\
         \\--storage-engine
-        \\                The storage engine to use. Choices are: sqlite.
-        \\                Default to sqlite.
+        \\                The storage engine to use. Choices are: none, sqlite.
+        \\                Default to none.
         \\
         \\--storage-sqlite-path
         \\                Path to SQLite database file for persistent storage.
@@ -609,6 +666,21 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--wait-script-file
         \\                Like --wait-script, but reads the script from a file.
+        \\
+        \\--inject-script JavaScript to execute as the document's <head> is
+        \\                parsed, before any other scripts in the page run.
+        \\                Can be passed multiple times; scripts run in order.
+        \\
+        \\--inject-script-file
+        \\                Like --inject-script, but reads the script from a file.
+        \\                Can be passed multiple times; can be mixed with
+        \\                --inject-script and runs in CLI order.
+        \\
+        \\--terminate-ms  Hard deadline in milliseconds. After this time elapses,
+        \\                JavaScript execution is forcibly terminated (e.g. for
+        \\                pages with endless scripts). Unlike --wait-ms, which
+        \\                only stops waiting, --terminate-ms aborts the page.
+        \\                Defaults to no terminate.
         \\
         \\--cookie        Path to a JSON file to load cookies from (read-only).
         \\                Defaults to no cookie loading.

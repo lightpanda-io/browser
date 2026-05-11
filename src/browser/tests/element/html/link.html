@@ -1,6 +1,32 @@
 <!DOCTYPE html>
 <script src="../../testing.js"></script>
 
+<link id="lh1" rel="stylesheet" href="/styles/main.css" media="screen" as="style" crossorigin="anonymous">
+<link id="lh2">
+
+<script id="link-from-html">
+  {
+    const lh1 = document.getElementById('lh1');
+    testing.expectEqual('HTMLLinkElement', lh1.constructor.name);
+    testing.expectEqual('stylesheet', lh1.rel);
+    testing.expectEqual(testing.ORIGIN + '/styles/main.css', lh1.href);
+    testing.expectEqual('screen', lh1.media);
+    testing.expectEqual('style', lh1.as);
+    testing.expectEqual('anonymous', lh1.crossOrigin);
+
+    lh1.rel = 'preload';
+    testing.expectEqual('preload', lh1.rel);
+    lh1.media = 'print';
+    testing.expectEqual('print', lh1.media);
+
+    const lh2 = document.getElementById('lh2');
+    testing.expectEqual('', lh2.rel);
+    testing.expectEqual('', lh2.href);
+    testing.expectEqual('', lh2.media);
+    testing.expectEqual('', lh2.as);
+  }
+</script>
+
 <script id=link>
   let l2 = document.createElement('link');
   testing.expectEqual('', l2.href);
@@ -18,6 +44,12 @@
 
   l2.crossOrigin = '';
   testing.expectEqual('anonymous', l2.crossOrigin);
+
+  testing.expectEqual('', l2.media);
+  l2.media = 'screen and (max-width: 600px)';
+  testing.expectEqual('screen and (max-width: 600px)', l2.media);
+  l2.media = 'print';
+  testing.expectEqual('print', l2.media);
 </script>
 
 <script id="link-load-event">

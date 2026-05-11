@@ -218,6 +218,7 @@ pub fn getTagNameLower(self: *const Element) []const u8 {
                 .embed => "embed",
                 .fieldset => "fieldset",
                 .font => "font",
+                .frameset => "frameset",
                 .form => "form",
                 .generic => |e| e._tag_name.str(),
                 .heading => |e| e._tag_name.str(),
@@ -297,6 +298,7 @@ pub fn getTagNameSpec(self: *const Element, buf: []u8) []const u8 {
             .embed => "EMBED",
             .fieldset => "FIELDSET",
             .font => "FONT",
+            .frameset => "FRAMESET",
             .form => "FORM",
             .generic => |e| upperTagName(&e._tag_name, buf),
             .heading => |e| upperTagName(&e._tag_name, buf),
@@ -472,7 +474,11 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
         try frame.insertAllChildrenBefore(fragment, parent, node);
     }
 
-    frame.removeNode(parent, node, .{ .will_be_reconnected = false });
+    // A custom element callback fired during insertAllChildrenBefore may
+    // have already detached `node`; only remove it if it's still here.
+    if (node._parent == parent) {
+        frame.removeNode(parent, node, .{ .will_be_reconnected = false });
+    }
 }
 
 pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void {
@@ -483,10 +489,12 @@ pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void
 pub fn setInnerHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     const parent = self.asNode();
 
-    // Remove all existing children
+    // Remove all existing children. Drain via firstChild(): removeNode
+    // fires disconnectedCallback for custom elements, which can mutate
+    // the child list and dangle any cached next-pointer the iterator
+    // would otherwise hold.
     frame.domChanged();
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
+    while (parent.firstChild()) |child| {
         frame.removeNode(parent, child, .{ .will_be_reconnected = false });
     }
 
@@ -598,9 +606,40 @@ pub fn hasAttributeSafe(self: *const Element, name: String) bool {
     return attributes.hasSafe(name);
 }
 
+// Per HTML "concept-fe-disabled", only listed elements participate in the
+// disabled concept. Anything else (e.g. <div disabled>) has no disabled
+// state and never matches :disabled / :enabled.
+pub fn hasDisabledConcept(self: *const Element) bool {
+    return switch (self.getTag()) {
+        .button, .input, .select, .textarea, .optgroup, .option, .fieldset => true,
+        else => false,
+    };
+}
+
 pub fn isDisabled(self: *Element) bool {
+    if (!self.hasDisabledConcept()) {
+        return false;
+    }
+
     if (self.getAttributeSafe(comptime .wrap("disabled")) != null) {
         return true;
+    }
+
+    // <option> takes a different inheritance path: per HTML
+    // "concept-option-disabled" an option is disabled when its parent is an
+    // <optgroup disabled>. It does NOT inherit from <select disabled> or
+    // an ancestor <fieldset disabled>.
+    if (self.getTag() == .option) {
+        if (self.asNode()._parent) |parent_node| {
+            if (parent_node.is(Element)) |parent_el| {
+                if (parent_el.getTag() == .optgroup and
+                    parent_el.getAttributeSafe(comptime .wrap("disabled")) != null)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     const element_node = self.asNode();
@@ -840,10 +879,9 @@ pub fn replaceChildren(self: *Element, nodes: []const Node.NodeOrText, frame: *F
 }
 
 pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    frame.domChanged();
-
     const ref_node = self.asNode();
     const parent = ref_node._parent orelse return;
+    frame.domChanged();
 
     const parent_is_connected = parent.isConnected();
 
@@ -880,9 +918,9 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame
 }
 
 pub fn remove(self: *Element, frame: *Frame) void {
-    frame.domChanged();
     const node = self.asNode();
     const parent = node._parent orelse return;
+    frame.domChanged();
     frame.removeNode(parent, node, .{ .will_be_reconnected = false });
 }
 
@@ -1033,15 +1071,15 @@ pub fn getChildElementCount(self: *Element) usize {
 }
 
 pub fn matches(self: *Element, selector: []const u8, frame: *Frame) !bool {
-    return Selector.matches(self, selector, frame);
+    return Selector.matches(self, selector, frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
 pub fn querySelector(self: *Element, selector: []const u8, frame: *Frame) !?*Element {
-    return Selector.querySelector(self.asNode(), selector, frame);
+    return Selector.querySelector(self.asNode(), selector, frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
 pub fn querySelectorAll(self: *Element, input: []const u8, frame: *Frame) !*Selector.List {
-    return Selector.querySelectorAll(self.asNode(), input, frame);
+    return Selector.querySelectorAll(self.asNode(), input, frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
 pub fn getAnimations(_: *const Element) []*Animation {
@@ -1447,6 +1485,7 @@ pub fn getTag(self: *const Element) Tag {
             .canvas => .canvas,
             .fieldset => .fieldset,
             .font => .font,
+            .frameset => .frameset,
             .heading => |h| h._tag,
             .label => .label,
             .legend => .legend,
@@ -1540,6 +1579,7 @@ pub const Tag = enum {
     em,
     fieldset,
     figure,
+    frameset,
     form,
     font,
     footer,
@@ -1656,6 +1696,32 @@ pub const Tag = enum {
     pub fn isMetadata(self: Tag) bool {
         return switch (self) {
             .base, .head, .link, .meta, .noscript, .script, .style, .template, .title => true,
+            else => false,
+        };
+    }
+
+    // UA stylesheet display:none defaults per HTML Rendering §15.3.1
+    // "Hidden elements" (https://html.spec.whatwg.org/multipage/rendering.html#hidden-elements).
+    // The spec also lists basefont, noembed, noframes, rp; those tags are
+    // obsolete and not represented in this enum, so they fall through to
+    // `.unknown`/`.custom` and aren't matched here.
+    pub fn isHiddenByUaStylesheet(self: Tag) bool {
+        return switch (self) {
+            .area,
+            .base,
+            .datalist,
+            .head,
+            .link,
+            .meta,
+            .noscript,
+            .param,
+            .script,
+            .source,
+            .style,
+            .template,
+            .title,
+            .track,
+            => true,
             else => false,
         };
     }

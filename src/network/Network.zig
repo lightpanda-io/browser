@@ -70,6 +70,7 @@ ws_mutex: std.Thread.Mutex = .{},
 
 pollfds: []posix.pollfd,
 listener: ?Listener = null,
+accept: std.atomic.Value(bool) = .init(true),
 
 // Wakeup pipe: workers write to [1], main thread polls [0]
 wakeup_pipe: [2]posix.fd_t = .{ -1, -1 },
@@ -351,10 +352,14 @@ pub fn deinit(self: *Network) void {
 
 pub fn bind(
     self: *Network,
-    address: net.Address,
+    address: *net.Address,
     ctx: *anyopaque,
     on_accept: *const fn (ctx: *anyopaque, socket: posix.socket_t) void,
 ) !void {
+    if (self.listener != null) return error.TooManyListeners;
+
+    self.accept.store(true, .release);
+
     const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
     const listener = try posix.socket(address.any.family, flags, posix.IPPROTO.TCP);
     errdefer posix.close(listener);
@@ -367,7 +372,12 @@ pub fn bind(
     try posix.bind(listener, &address.any, address.getOsSockLen());
     try posix.listen(listener, self.config.maxPendingConnections());
 
-    if (self.listener != null) return error.TooManyListeners;
+    // When the caller requests port 0, the OS assigns an ephemeral port; read
+    // the actual bound address back so callers (e.g. logging) see the real port.
+    var bound: posix.sockaddr.storage = undefined;
+    var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
+    try posix.getsockname(listener, @ptrCast(&bound), &bound_len);
+    address.* = net.Address.initPosix(@ptrCast(@alignCast(&bound)));
 
     self.listener = .{
         .socket = listener,
@@ -379,6 +389,11 @@ pub fn bind(
         .events = posix.POLL.IN,
         .revents = 0,
     };
+}
+
+pub fn unbind(self: *Network) void {
+    self.accept.store(false, .release);
+    self.wakeupPoll();
 }
 
 pub fn onTick(self: *Network, ctx: *anyopaque, callback: *const fn (*anyopaque) void) void {
@@ -417,6 +432,12 @@ pub fn run(self: *Network) void {
     // telemetry, but we stop accepting new connections. It is the responsibility
     // of external code to terminate its requests upon shutdown.
     while (true) {
+        if (self.listener != null and !self.accept.load(.acquire)) {
+            posix.close(self.listener.?.socket);
+            self.listener = null;
+            self.pollfds[1] = .{ .fd = -1, .events = 0, .revents = 0 };
+        }
+
         self.drainQueue();
 
         if (self.multi) |multi| {
@@ -565,6 +586,28 @@ fn acceptConnections(self: *Network) void {
                     continue;
                 },
             }
+        };
+
+        // Liveness is enforced at the TCP layer via keepalive probes sent by the
+        // kernel. This is transparent to CDP clients — unlike a WebSocket ping, which
+        // go-rod panics on and chromedp logs as "malformed". Tunables in Config.zig.
+        posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.KEEPALIVE, &std.mem.toBytes(@as(c_int, 1))) catch |err| {
+            log.warn(.app, "SO_KEEPALIVE", .{ .err = err });
+            return;
+        };
+
+        const option = switch (@import("builtin").os.tag) {
+            .macos, .ios => posix.TCP.KEEPALIVE,
+            else => posix.TCP.KEEPIDLE,
+        };
+        posix.setsockopt(socket, posix.IPPROTO.TCP, option, &std.mem.toBytes(Config.CDP_KEEPALIVE_IDLE_S)) catch |err| {
+            log.warn(.app, "TCP_KEEPIDLE", .{ .err = err });
+        };
+        posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPINTVL, &std.mem.toBytes(Config.CDP_KEEPALIVE_INTVL_S)) catch |err| {
+            log.warn(.app, "TCP_KEEPINTVL", .{ .err = err });
+        };
+        posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPCNT, &std.mem.toBytes(Config.CDP_KEEPALIVE_CNT)) catch |err| {
+            log.warn(.app, "TCP_KEEPCNT", .{ .err = err });
         };
 
         listener.onAccept(listener.ctx, socket);

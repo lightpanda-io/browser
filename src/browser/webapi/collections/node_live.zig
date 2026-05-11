@@ -79,7 +79,7 @@ const Filters = union(Mode) {
 // But, if the version hasn't changed, then we can leverage other stateful data
 // to improve performance. For example, we cache the length property. So once
 // we've walked the tree to figure the length, we can re-use the cached property
-// if the DOM is unchanged (i.e. if our _cached_version == frame.version).
+// if the DOM is unchanged (i.e. if our _cached_version == page.dom_version).
 //
 // We do something similar for indexed getter (e.g. coll[4]), by preserving the
 // last node visited in the tree (implicitly by not resetting the TreeWalker).
@@ -108,7 +108,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 ._last_length = null,
                 ._filter = filter,
                 ._tw = TW.init(root, .{}),
-                ._cached_version = frame.version,
+                ._cached_version = frame._page.dom_version,
             };
         }
 
@@ -343,7 +343,7 @@ pub fn NodeLive(comptime mode: Mode) type {
         }
 
         fn versionCheck(self: *Self, frame: *const Frame) bool {
-            const current = frame.version;
+            const current = frame._page.dom_version;
             if (current == self._cached_version) {
                 return true;
             }

@@ -56,3 +56,7 @@ const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Details" {
     try testing.htmlRunner("element/html/details.html", .{});
 }
+
+test "WebApi: HTML.Summary click toggles parent details" {
+    try testing.htmlRunner("element/html/summary_click.html", .{});
+}

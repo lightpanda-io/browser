@@ -128,7 +128,7 @@ pub fn imageAddedCallback(self: *Image, frame: *Frame) !void {
     const src = element.getAttributeSafe(comptime .wrap("src")) orelse return;
     if (src.len == 0) return;
 
-    try frame._to_load.append(frame.arena, self._proto);
+    try frame.queueLoad(self._proto);
 }
 
 pub const JsApi = struct {

@@ -22,7 +22,7 @@ const HttpClient = @import("../../HttpClient.zig");
 const Cors = @import("../../../network/Cors.zig");
 
 const js = @import("../../js/js.zig");
-const Frame = @import("../../Frame.zig");
+const Page = @import("../../Page.zig");
 const URL = @import("../../URL.zig");
 
 const Blob = @import("../Blob.zig");
@@ -32,11 +32,12 @@ const AbortSignal = @import("../AbortSignal.zig");
 const DOMException = @import("../DOMException.zig");
 
 const log = lp.log;
+const Execution = js.Execution;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Fetch = @This();
 
-_frame: *Frame,
+_exec: *const Execution,
 _url: []const u8,
 _buf: std.ArrayList(u8),
 _response: *Response,
@@ -48,9 +49,9 @@ _allow_credentials: bool,
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
 
-pub fn init(input: Input, options: ?InitOpts, frame: *Frame) !js.Promise {
-    const request = try Request.init(input, options, &frame.js.execution);
-    const resolver = frame.js.local.?.createPromiseResolver();
+pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promise {
+    const request = try Request.init(input, options, exec);
+    const resolver = exec.context.local.?.createPromiseResolver();
 
     if (request._signal) |signal| {
         if (signal._aborted) {
@@ -60,15 +61,15 @@ pub fn init(input: Input, options: ?InitOpts, frame: *Frame) !js.Promise {
     }
 
     if (std.mem.startsWith(u8, request._url, "blob:")) {
-        return handleBlobUrl(request._url, resolver, frame);
+        return handleBlobUrl(request._url, resolver, exec);
     }
 
-    const response = try Response.init(null, .{ .status = 0 }, &frame.js.execution);
-    errdefer response.deinit(frame._page);
+    const response = try Response.init(null, .{ .status = 0 }, exec);
+    errdefer response.deinit(exec.context.page);
 
     const fetch = try response._arena.create(Fetch);
     fetch.* = .{
-        ._frame = frame,
+        ._exec = exec,
         ._buf = .empty,
         ._url = try response._arena.dupe(u8, request._url),
         ._resolver = try resolver.persist(),
@@ -78,12 +79,13 @@ pub fn init(input: Input, options: ?InitOpts, frame: *Frame) !js.Promise {
         ._allow_credentials = request._credentials == .include,
     };
 
-    const http_client = frame._session.browser.http_client;
+    const session = exec.context.page.session;
+    const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
     if (request._headers) |h| {
-        try h.populateHttpHeader(frame.call_arena, &headers);
+        try h.populateHttpHeader(exec.call_arena, &headers);
     }
-    try frame.headersForRequest(&headers);
+    try exec.headersForRequest(&headers);
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });
@@ -91,48 +93,55 @@ pub fn init(input: Input, options: ?InitOpts, frame: *Frame) !js.Promise {
 
     const cookie_jar = switch (request._credentials) {
         .omit => null,
-        .include => &frame._session.cookie_jar,
-        .@"same-origin" => if (frame.isSameOrigin(request._url)) &frame._session.cookie_jar else null,
+        .include => &session.cookie_jar,
+        .@"same-origin" => if (exec.isSameOrigin(request._url)) &session.cookie_jar else null,
     };
 
-    try http_client.request(.{
+    // Synchronous failures from request layers (e.g. RobotsLayer returning
+    // RobotsBlocked when robots.txt is already cached) are dispatched to
+    // httpErrorCallback by Client.request, which rejects the promise and
+    // releases response._arena. Propagating the error from here would also
+    // fire the `errdefer response.deinit` above and double-free the arena.
+    http_client.request(.{
         .ctx = fetch,
-        .url = request._url,
-        .method = request._method,
-        .frame_id = frame._frame_id,
-        .loader_id = frame._loader_id,
-        .body = request._body,
-        .headers = headers,
-        .resource_type = .fetch,
-        .cookie_jar = cookie_jar,
-        .cookie_origin = frame.url,
-        .notification = frame._session.notification,
+        .params = .{
+            .url = request._url,
+            .method = request._method,
+            .frame_id = exec.frameId(),
+            .loader_id = exec.loaderId(),
+            .body = request._body,
+            .headers = headers,
+            .resource_type = .fetch,
+            .cookie_jar = cookie_jar,
+            .cookie_origin = exec.url.*,
+            .notification = session.notification,
+        },
         .start_callback = httpStartCallback,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
-    });
+    }) catch {};
     return resolver.promise();
 }
 
-fn handleBlobUrl(url: []const u8, resolver: js.PromiseResolver, frame: *Frame) !js.Promise {
-    const blob: *Blob = frame.lookupBlobUrl(url) orelse {
+fn handleBlobUrl(url: []const u8, resolver: js.PromiseResolver, exec: *const Execution) !js.Promise {
+    const blob: *Blob = exec.lookupBlobUrl(url) orelse {
         resolver.rejectError("fetch blob error", .{ .type_error = "BlobNotFound" });
         return resolver.promise();
     };
 
-    const response = try Response.init(null, .{ .status = 200 }, &frame.js.execution);
+    const response = try Response.init(null, .{ .status = 200 }, exec);
     response._body = .{ .bytes = try response._arena.dupe(u8, blob._slice) };
     response._url = try response._arena.dupeZ(u8, url);
     response._type = .basic;
 
     if (blob._mime.len > 0) {
-        try response._headers.append("Content-Type", blob._mime, &frame.js.execution);
+        try response._headers.append("Content-Type", blob._mime, exec);
     }
 
-    const js_val = try frame.js.local.?.zigValueToJs(response, .{});
+    const js_val = try exec.context.local.?.zigValueToJs(response, .{});
     resolver.resolve("fetch blob done", js_val);
     return resolver.promise();
 }
@@ -174,7 +183,9 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
     res._url = try arena.dupeZ(u8, response.url());
     res._is_redirected = response.redirectCount().? > 0;
 
-    const request_origin = URL.getOrigin(arena, self._frame.url) catch null;
+    // Determine response type based on origin comparison
+    const exec = self._exec;
+    const requesting_origin = URL.getOrigin(arena, exec.url.*) catch null;
     const response_origin = URL.getOrigin(arena, res._url) catch null;
     const cross_origin = if (request_origin != null and response_origin != null)
         !std.mem.eql(u8, request_origin.?, response_origin.?)
@@ -193,6 +204,16 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
             allow_credentials = true;
         }
         try res._headers.append(hdr.name, hdr.value, &self._frame.js.execution);
+    }
+
+    if (cross_origin) {
+        if (!Cors.isResponseAllowed(allow_origin, allow_credentials, request_origin.?, self._allow_credentials)) {
+            response.abort(error.CorsBlocked);
+            return false;
+        }
+        res._type = .cors;
+    } else {
+        res._type = .basic;
     }
 
     if (cross_origin) {
@@ -235,7 +256,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     });
 
     var ls: js.Local.Scope = undefined;
-    self._frame.js.localScope(&ls);
+    self._exec.context.localScope(&ls);
     defer ls.deinit();
 
     const js_val = try ls.local.zigValueToJs(self._response, .{});
@@ -255,15 +276,22 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
 
     var response = self._response;
     response._http_response = null;
+
+    // Capture this before we reject. Rejection could trigger httpShutdownCallback
+    // (via a microtask callback). But if we're here, then we'll take care of
+    // cleaning up when we're done.
+    const owns_response = self._owns_response;
+    self._owns_response = false;
+
     // the response is only passed on v8 on success, if we're here, it's safe to
     // clear this. (defer since `self is in the response's arena).
 
-    defer if (self._owns_response) {
-        response.deinit(self._frame._page);
+    defer if (owns_response) {
+        response.deinit(self._exec.context.page);
     };
 
     var ls: js.Local.Scope = undefined;
-    self._frame.js.localScope(&ls);
+    self._exec.context.localScope(&ls);
     defer ls.deinit();
 
     // fetch() must reject with a TypeError on network errors per spec
@@ -272,15 +300,11 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
 
 fn httpShutdownCallback(ctx: *anyopaque) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
-    if (comptime IS_DEBUG) {
-        // should always be true
-        std.debug.assert(self._owns_response);
-    }
 
     if (self._owns_response) {
         var response = self._response;
         response._http_response = null;
-        response.deinit(self._frame._page);
+        response.deinit(self._exec.context.page);
         // Do not access `self` after this point: the Fetch struct was
         // allocated from response._arena which has been released.
     }

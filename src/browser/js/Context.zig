@@ -28,7 +28,7 @@ const Execution = @import("Execution.zig");
 const Frame = @import("../Frame.zig");
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
-const ScriptManager = @import("../ScriptManager.zig");
+const ScriptManagerBase = @import("../ScriptManagerBase.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 
 const v8 = js.v8;
@@ -138,8 +138,9 @@ module_cache: std.StringHashMapUnmanaged(ModuleEntry) = .empty,
 // necessary to lookup/store the dependent module in the module_cache.
 module_identifier: std.AutoHashMapUnmanaged(u32, [:0]const u8) = .empty,
 
-// the frame's script manager
-script_manager: ?*ScriptManager,
+// Module-loading plumbing. Frame contexts point at the ScriptManager's
+// embedded Base; worker contexts point at WorkerGlobalScope's Base directly.
+script_manager: *ScriptManagerBase,
 
 // Our macrotasks
 scheduler: Scheduler,
@@ -484,7 +485,7 @@ fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *
     // dependent modules this module has and start downloading them asap.
     const requests = mod.getModuleRequests();
     const request_len = requests.len();
-    const script_manager = self.script_manager.?;
+    const script_manager = self.script_manager;
     for (0..request_len) |i| {
         const specifier = requests.get(i).specifier(local);
         const normalized_specifier = try script_manager.resolveSpecifier(
@@ -590,7 +591,7 @@ pub fn dynamicModuleCallback(
         return @constCast(local.rejectPromise(.{ .generic_error = "Out of memory" }).handle);
     };
 
-    const normalized_specifier = self.script_manager.?.resolveSpecifier(
+    const normalized_specifier = self.script_manager.resolveSpecifier(
         self.arena, // might need to survive until the module is loaded
         resource,
         specifier,
@@ -643,7 +644,7 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
         return error.UnknownModuleReferrer;
     };
 
-    const normalized_specifier = try self.script_manager.?.resolveSpecifier(
+    const normalized_specifier = try self.script_manager.resolveSpecifier(
         self.arena,
         referrer_path,
         specifier,
@@ -654,12 +655,12 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
         return local.toLocal(m).handle;
     }
 
-    var source = self.script_manager.?.waitForImport(normalized_specifier) catch |err| switch (err) {
+    var source = self.script_manager.waitForImport(normalized_specifier) catch |err| switch (err) {
         error.UnknownModule => blk: {
             // Module is in cache but was consumed from imported_modules
             // (e.g., by a previous failed resolution). Re-preload and retry.
-            try self.script_manager.?.preloadImport(normalized_specifier, referrer_path);
-            break :blk try self.script_manager.?.waitForImport(normalized_specifier);
+            try self.script_manager.preloadImport(normalized_specifier, referrer_path);
+            break :blk try self.script_manager.waitForImport(normalized_specifier);
         },
         else => return err,
     };
@@ -728,7 +729,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         };
 
         // Next, we need to actually load it.
-        self.script_manager.?.getAsyncImport(specifier, dynamicModuleSourceCallback, state, referrer) catch |err| {
+        self.script_manager.getAsyncImport(specifier, dynamicModuleSourceCallback, state, referrer) catch |err| {
             const error_msg = local.newString(@errorName(err));
             _ = resolver.reject("dynamic module get async", error_msg);
         };
@@ -797,7 +798,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     return promise;
 }
 
-fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptManager.ModuleSource) void {
+fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptManagerBase.ModuleSource) void {
     const state: *DynamicModuleResolveState = @ptrCast(@alignCast(ctx));
     var self = state.context;
 

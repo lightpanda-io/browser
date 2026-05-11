@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<form id="f">
+  <input id="empty-required" type="text" required>
+  <input id="filled-required" type="text" required value="x">
+  <input id="bad-email" type="email" value="not-an-email">
+  <input id="good-email" type="email" value="ok@example.com">
+  <input id="bad-url" type="url" value="not a url">
+  <input id="good-url" type="url" value="https://example.com">
+  <input id="too-low" type="number" min="10" value="3">
+  <input id="too-high" type="number" max="10" value="99">
+  <input id="ok-number" type="number" min="0" max="10" value="5">
+  <input id="cb-required" type="checkbox" required>
+  <input id="cb-checked" type="checkbox" required checked>
+  <input id="hidden-required" type="hidden" required>
+  <input id="disabled-required" type="text" required disabled>
+  <input id="too-long" type="text" maxlength="3">
+  <input id="too-short" type="text" minlength="3" value="ab">
+  <input id="zip-bad"   type="text" pattern="[0-9]{5,9}" value="1234">
+  <input id="zip-good"  type="text" pattern="[0-9]{5,9}" value="12345">
+  <input id="zip-empty" type="text" pattern="[0-9]{5,9}">
+  <input id="pat-anchored" type="text" pattern="abc" value="xabcy">
+  <input id="pat-unicode" type="text" pattern="\p{L}+" value="hello">
+  <input id="pat-bad-regex" type="text" pattern="(unclosed" value="anything">
+  <input id="pat-num" type="number" pattern="[0-9]+" value="x">
+</form>
+
+<script id="surface">
+{
+  const i = $('#filled-required');
+  testing.expectEqual(true, 'validity' in i);
+  testing.expectEqual(true, 'validationMessage' in i);
+  testing.expectEqual('function', typeof i.checkValidity);
+  testing.expectEqual('function', typeof i.reportValidity);
+  testing.expectEqual('function', typeof i.setCustomValidity);
+  testing.expectEqual('function', typeof ValidityState);
+}
+</script>
+
+<script id="value_missing">
+{
+  testing.expectEqual(true, $('#empty-required').validity.valueMissing);
+  testing.expectEqual(false, $('#empty-required').validity.valid);
+  testing.expectEqual(false, $('#filled-required').validity.valueMissing);
+  testing.expectEqual(true, $('#filled-required').validity.valid);
+}
+</script>
+
+<script id="checkbox_required">
+{
+  testing.expectEqual(true, $('#cb-required').validity.valueMissing);
+  testing.expectEqual(false, $('#cb-checked').validity.valueMissing);
+}
+</script>
+
+<script id="type_mismatch_email">
+{
+  testing.expectEqual(true, $('#bad-email').validity.typeMismatch);
+  testing.expectEqual(false, $('#good-email').validity.typeMismatch);
+}
+</script>
+
+<script id="type_mismatch_url">
+{
+  testing.expectEqual(true, $('#bad-url').validity.typeMismatch);
+  testing.expectEqual(false, $('#good-url').validity.typeMismatch);
+}
+</script>
+
+<script id="range">
+{
+  testing.expectEqual(true, $('#too-low').validity.rangeUnderflow);
+  testing.expectEqual(true, $('#too-high').validity.rangeOverflow);
+  testing.expectEqual(false, $('#ok-number').validity.rangeUnderflow);
+  testing.expectEqual(false, $('#ok-number').validity.rangeOverflow);
+  testing.expectEqual(true, $('#ok-number').validity.valid);
+}
+</script>
+
+<script id="too_long">
+{
+  const el = $('#too-long');
+  // Pristine value (default) does not trigger tooLong per spec
+  testing.expectEqual(false, el.validity.tooLong);
+  el.value = 'abcdef';
+  testing.expectEqual(true, el.validity.tooLong);
+  el.value = 'ab';
+  testing.expectEqual(false, el.validity.tooLong);
+}
+</script>
+
+<script id="will_validate">
+{
+  testing.expectEqual(true, $('#filled-required').willValidate);
+  testing.expectEqual(false, $('#hidden-required').willValidate);
+  testing.expectEqual(false, $('#disabled-required').willValidate);
+  // Disabled element doesn't suffer valueMissing
+  testing.expectEqual(false, $('#disabled-required').validity.valueMissing);
+  testing.expectEqual(true, $('#disabled-required').validity.valid);
+}
+</script>
+
+<script id="custom_validity">
+{
+  const i = $('#filled-required');
+  testing.expectEqual(false, i.validity.customError);
+  testing.expectEqual(true, i.validity.valid);
+
+  i.setCustomValidity('my custom error');
+  testing.expectEqual(true, i.validity.customError);
+  testing.expectEqual(false, i.validity.valid);
+  testing.expectEqual('my custom error', i.validationMessage);
+
+  i.setCustomValidity('');
+  testing.expectEqual(false, i.validity.customError);
+  testing.expectEqual(true, i.validity.valid);
+}
+</script>
+
+<script id="check_validity_returns">
+{
+  testing.expectEqual(false, $('#empty-required').checkValidity());
+  testing.expectEqual(true, $('#filled-required').checkValidity());
+  testing.expectEqual(false, $('#bad-email').checkValidity());
+  // Disabled element passes regardless of state
+  testing.expectEqual(true, $('#disabled-required').checkValidity());
+}
+</script>
+
+<script id="invalid_event">
+{
+  let fired = 0;
+  const el = $('#empty-required');
+  el.addEventListener('invalid', () => { fired++; });
+  el.checkValidity();
+  testing.expectEqual(1, fired);
+  // Event does not fire when valid
+  $('#filled-required').checkValidity();
+  testing.expectEqual(1, fired);
+}
+</script>
+
+<script id="report_validity">
+{
+  // reportValidity behaves identically to checkValidity in headless.
+  testing.expectEqual(false, $('#empty-required').reportValidity());
+  testing.expectEqual(true, $('#filled-required').reportValidity());
+}
+</script>
+
+<script id="validation_message">
+{
+  testing.expectEqual('Please fill out this field.', $('#empty-required').validationMessage);
+  testing.expectEqual('Please enter an email address.', $('#bad-email').validationMessage);
+  testing.expectEqual('Value is too small.', $('#too-low').validationMessage);
+  testing.expectEqual('', $('#filled-required').validationMessage);
+  // Disabled returns empty
+  testing.expectEqual('', $('#disabled-required').validationMessage);
+}
+</script>
+
+<script id="validity_state_identity">
+{
+  // Each access returns a ValidityState; both must reflect current flags.
+  const a = $('#empty-required').validity;
+  testing.expectEqual(true, a instanceof ValidityState);
+  testing.expectEqual(true, a.valueMissing);
+  // Repeated access returns the same instance (cached on the element).
+  testing.expectEqual(a, $('#empty-required').validity);
+}
+</script>
+
+<script id="minmax_length">
+{
+  testing.expectEqual(3, $('#too-long').maxLength);
+  testing.expectEqual(-1, $('#filled-required').maxLength);
+  testing.expectEqual(3, $('#too-short').minLength);
+  testing.expectEqual(-1, $('#filled-required').minLength);
+  testing.expectEqual(true, $('#too-short').validity.tooShort);
+
+  const el = $('#filled-required');
+  el.minLength = 2;
+  testing.expectEqual('2', el.getAttribute('minlength'));
+  el.maxLength = 7;
+  testing.expectEqual('7', el.getAttribute('maxlength'));
+}
+</script>
+
+<script id="invalid_event_is_trusted">
+{
+  let captured = null;
+  const el = $('#empty-required');
+  el.addEventListener('invalid', (e) => { captured = e; });
+  el.checkValidity();
+  testing.expectEqual(true, captured.isTrusted);
+}
+</script>
+
+<script id="pattern_idl_reflects_attribute">
+{
+  // Per HTML §4.10.5.3.5, HTMLInputElement.pattern reflects the content attribute.
+  testing.expectEqual('[0-9]{5,9}', $('#zip-bad').pattern);
+  testing.expectEqual('[0-9]{5,9}', $('#zip-good').pattern);
+  testing.expectEqual('', $('#filled-required').pattern);
+
+  // Setter writes the content attribute.
+  const el = $('#filled-required');
+  el.pattern = 'foo';
+  testing.expectEqual('foo', el.getAttribute('pattern'));
+  testing.expectEqual('foo', el.pattern);
+  el.pattern = '';
+  testing.expectEqual('', el.getAttribute('pattern'));
+}
+</script>
+
+<script id="pattern_mismatch_basic">
+{
+  // "1234" does not match [0-9]{5,9} — patternMismatch fires.
+  testing.expectEqual(true, $('#zip-bad').validity.patternMismatch);
+  testing.expectEqual(false, $('#zip-bad').validity.valid);
+  // "12345" does match.
+  testing.expectEqual(false, $('#zip-good').validity.patternMismatch);
+  testing.expectEqual(true, $('#zip-good').validity.valid);
+}
+</script>
+
+<script id="pattern_empty_value_does_not_mismatch">
+{
+  // Empty value never triggers patternMismatch (per spec).
+  testing.expectEqual(false, $('#zip-empty').validity.patternMismatch);
+  testing.expectEqual(true, $('#zip-empty').validity.valid);
+}
+</script>
+
+<script id="pattern_anchored_implicitly">
+{
+  // The pattern is implicitly wrapped with ^(?:...)$ — substring "abc" inside
+  // "xabcy" must NOT match the whole value, so patternMismatch fires.
+  testing.expectEqual(true, $('#pat-anchored').validity.patternMismatch);
+}
+</script>
+
+<script id="pattern_v_flag_unicode">
+{
+  // \p{L} requires Unicode-aware matching (v or u flag).
+  testing.expectEqual(false, $('#pat-unicode').validity.patternMismatch);
+}
+</script>
+
+<script id="pattern_invalid_regex_ignored">
+{
+  // An unparseable pattern is ignored per spec — element stays valid.
+  testing.expectEqual(false, $('#pat-bad-regex').validity.patternMismatch);
+}
+</script>
+
+<script id="pattern_only_text_like_types">
+{
+  // pattern only applies to text-like types; type=number ignores the attribute.
+  testing.expectEqual(false, $('#pat-num').validity.patternMismatch);
+}
+</script>
+
+<script id="pattern_validation_message">
+{
+  testing.expectEqual('Please match the requested format.', $('#zip-bad').validationMessage);
+  testing.expectEqual('', $('#zip-good').validationMessage);
+}
+</script>
+
+<script id="pattern_setter_recomputes_validity">
+{
+  const el = $('#filled-required');
+  testing.expectEqual(false, el.validity.patternMismatch);
+  el.pattern = '[0-9]+';
+  testing.expectEqual(true, el.validity.patternMismatch);
+  el.value = '42';
+  testing.expectEqual(false, el.validity.patternMismatch);
+}
+</script>

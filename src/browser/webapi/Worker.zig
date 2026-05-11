@@ -68,7 +68,7 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
     const arena = try session.getArena(.large, "Worker");
     errdefer session.releaseArena(arena);
 
-    const resolved_url = try URL.resolve(arena, exec.url.*, url, .{});
+    const resolved_url = try URL.resolve(arena, exec.url.*, url, .{ .encoding = frame.charset });
     const self = try frame._page.factory.eventTargetWithAllocator(arena, Worker{
         ._arena = arena,
         ._proto = undefined,
@@ -92,18 +92,20 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
         return self;
     }
 
-    const http_client = session.browser.http_client;
+    const http_client = &session.browser.http_client;
     http_client.request(.{
         .ctx = self,
-        .url = resolved_url,
-        .method = .GET,
-        .headers = try http_client.newHeaders(),
-        .frame_id = self._frame_id,
-        .loader_id = self._loader_id,
-        .resource_type = .script,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = resolved_url,
-        .notification = session.notification,
+        .params = .{
+            .url = resolved_url,
+            .method = .GET,
+            .headers = try http_client.newHeaders(),
+            .frame_id = self._frame_id,
+            .loader_id = self._loader_id,
+            .resource_type = .script,
+            .cookie_jar = &session.cookie_jar,
+            .cookie_origin = resolved_url,
+            .notification = session.notification,
+        },
         .header_callback = httpHeaderCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
@@ -119,6 +121,8 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
 // Called from Frame.deinit when the frame is destroyed, so we don't need to
 // remove from the frame's worker list.
 pub fn deinit(self: *Worker) void {
+    // No pending frame for workers, so we can abort all frames.
+    self._frame._session.browser.http_client.abortFrame(self._frame_id, .{ .scope = .full });
     if (self._http_response) |res| {
         res.abort(error.Abort);
         self._http_response = null;
@@ -182,6 +186,21 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
     var try_catch: js.TryCatch = undefined;
     try_catch.init(&ls.local);
     defer try_catch.deinit();
+
+    // Mark this worker's ScriptManager as evaluating for the lifetime of
+    // the eval. Worker scripts can call importScripts() which performs a
+    // synchronous HTTP request that pumps the CDP socket while waiting
+    // (HttpClient.syncRequest -> cdp.blocking_read). A CDP message such
+    // as Target.closeTarget arriving on that socket would otherwise tear
+    // down the page (Session.removePage -> Page.deinit -> Frame.deinit ->
+    // Worker.deinit) while this eval is mid-flight, freeing the worker's
+    // arena and identity_map underneath us. Session.removePage walks
+    // every frame's workers and bails out when any is_evaluating, so the
+    // teardown is deferred until the eval unwinds.
+    const sm = &self._worker_scope._script_manager;
+    const was_evaluating = sm.is_evaluating;
+    sm.is_evaluating = true;
+    defer sm.is_evaluating = was_evaluating;
 
     _ = ls.local.eval(script, self._url) catch |err| {
         const caught = try_catch.caughtOrError(self._arena, err);
@@ -397,5 +416,8 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Worker" {
-    try testing.htmlRunner("worker", .{});
+    // Worker tests chain a worker-script fetch with a dynamic-import fetch
+    // and a cross-context postMessage. The default 2 s assertion budget can
+    // blow up on TSAN CI; give it more room.
+    try testing.htmlRunner("worker", .{ .timeout_ms = 8000 });
 }

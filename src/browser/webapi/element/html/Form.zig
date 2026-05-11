@@ -148,7 +148,7 @@ pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
 /// Returns true if the element is a submit button per the HTML spec:
 /// - <input type="submit"> or <input type="image">
 /// - <button type="submit"> (including default, since button's default type is "submit")
-fn isSubmitButton(element: *Element) bool {
+pub fn isSubmitButton(element: *Element) bool {
     if (element.is(Input)) |input| {
         return input._input_type == .submit or input._input_type == .image;
     }
@@ -169,6 +169,33 @@ fn getFormOwner(element: *Element, frame: *Frame) ?*Form {
     return null;
 }
 
+/// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-form-checkvalidity
+/// Returns true if every submittable element in the form is valid. Fires an
+/// `invalid` event on each failing element.
+pub fn checkValidity(self: *Form, frame: *Frame) !bool {
+    var iter = self.iterator(frame);
+    var all_valid = true;
+    while (iter.next()) |element| {
+        const ok = try checkElementValidity(element, frame);
+        if (!ok) all_valid = false;
+    }
+    return all_valid;
+}
+
+/// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-form-reportvalidity
+/// Headless: identical to checkValidity (no UI to draw).
+pub fn reportValidity(self: *Form, frame: *Frame) !bool {
+    return self.checkValidity(frame);
+}
+
+fn checkElementValidity(element: *Element, frame: *Frame) !bool {
+    if (element.is(Input)) |input| return input.checkValidity(frame);
+    if (element.is(Select)) |select| return select.checkValidity(frame);
+    if (element.is(TextArea)) |textarea| return textarea.checkValidity(frame);
+    if (element.is(Button)) |button| return button.checkValidity(frame);
+    return true;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Form);
     pub const Meta = struct {
@@ -186,9 +213,12 @@ pub const JsApi = struct {
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});
     pub const requestSubmit = bridge.function(Form.requestSubmit, .{ .dom_exception = true });
+    pub const checkValidity = bridge.function(Form.checkValidity, .{});
+    pub const reportValidity = bridge.function(Form.reportValidity, .{});
 };
 
 const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Form" {
     try testing.htmlRunner("element/html/form.html", .{});
+    try testing.htmlRunner("element/html/form-validity.html", .{});
 }

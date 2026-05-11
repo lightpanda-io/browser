@@ -22,6 +22,8 @@ const posix = std.posix;
 
 const CDP = @import("CDP.zig");
 const Server = @import("../Server.zig");
+const Net = @import("../network/WsConnection.zig");
+const HttpClient = @import("../browser/HttpClient.zig");
 
 const base = @import("../testing.zig");
 pub const allocator = base.allocator;
@@ -37,26 +39,25 @@ pub const LogFilter = base.LogFilter;
 const TestContext = struct {
     read_at: usize = 0,
     read_buf: [1024 * 32]u8 = undefined,
-    cdp_: ?CDP = null,
-    client: Server.Client,
+    cdp_: CDP = undefined,
+    cdp_initialized: bool = false,
+    cdp_socket: posix.socket_t,
     socket: posix.socket_t,
     received: std.ArrayList(json.Value) = .empty,
     received_raw: std.ArrayList([]const u8) = .empty,
 
     pub fn deinit(self: *TestContext) void {
-        if (self.cdp_) |*c| {
-            c.deinit();
-        }
-        self.client.deinit();
+        if (self.cdp_initialized) self.cdp_.deinit();
         posix.close(self.socket);
         base.reset();
     }
 
     pub fn cdp(self: *TestContext) *CDP {
-        if (self.cdp_ == null) {
-            self.cdp_ = CDP.init(&self.client) catch |err| @panic(@errorName(err));
+        if (!self.cdp_initialized) {
+            self.cdp_.init(base.test_app, self.cdp_socket, "json-version") catch |err| @panic(@errorName(err));
+            self.cdp_initialized = true;
         }
-        return &self.cdp_.?;
+        return &self.cdp_;
     }
 
     const BrowserContextOpts = struct {
@@ -202,12 +203,10 @@ const TestContext = struct {
                 return;
             }
 
-            if (self.cdp_) |*cdp__| {
-                if (cdp__.browser_context) |*bc| {
-                    if (bc.session.page != null) {
-                        var runner = try bc.session.runner(.{});
-                        _ = try runner.tick(.{ .ms = 1000 });
-                    }
+            if (self.cdp_.browser_context) |*bc| {
+                if (bc.session.hasPage()) {
+                    var runner = try bc.session.runner(.{});
+                    _ = try runner.tick(.{ .ms = 1000 });
                 }
             }
             std.Thread.sleep(5 * std.time.ns_per_ms);
@@ -315,10 +314,8 @@ pub fn context() !TestContext {
     try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.RCVBUF, &std.mem.toBytes(@as(c_int, 32_768)));
     try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.SNDBUF, &std.mem.toBytes(@as(c_int, 32_768)));
 
-    const client = try Server.Client.init(pair[1], base.arena_allocator, base.test_app, "json-version");
-
     return .{
-        .client = client,
+        .cdp_socket = pair[1],
         .socket = pair[0],
     };
 }

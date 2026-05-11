@@ -18,9 +18,10 @@
 
 const js = @import("../../js/js.zig");
 
-const Frame = @import("../../Frame.zig");
 const EventTarget = @import("../EventTarget.zig");
 const ProgressEvent = @import("../event/ProgressEvent.zig");
+
+const Execution = js.Execution;
 
 const XMLHttpRequestEventTarget = @This();
 
@@ -43,7 +44,7 @@ pub fn asEventTarget(self: *XMLHttpRequestEventTarget) *EventTarget {
     return self._proto;
 }
 
-pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchType, progress_: ?Progress, frame: *Frame) !void {
+pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchType, progress_: ?Progress, exec: *const Execution) !void {
     const field, const typ = comptime blk: {
         break :blk switch (event_type) {
             .abort => .{ "_on_abort", "abort" },
@@ -60,10 +61,10 @@ pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchT
     const event = (try ProgressEvent.initTrusted(
         comptime .wrap(typ),
         .{ .total = progress.total, .loaded = progress.loaded },
-        frame,
+        exec.context.page,
     )).asEvent();
 
-    return frame._event_manager.dispatchDirect(
+    return exec.dispatch(
         self.asEventTarget(),
         event,
         @field(self, field),

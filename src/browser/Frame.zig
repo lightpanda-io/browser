@@ -243,9 +243,6 @@ child_frames: std.ArrayList(*Frame) = .{},
 // Workers created by this frame. Cleaned up when frame is destroyed.
 workers: std.ArrayList(*Worker) = .{},
 
-// DOM version used to invalidate cached state of "live" collections
-version: usize = 0,
-
 // This is maybe not great. It's a counter on the number of events that we're
 // waiting on before triggering the "load" event. Essentially, we need all
 // synchronous scripts and all iframes to be loaded. Scripts are handled by the
@@ -325,7 +322,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
     errdefer self._style_manager.deinit();
 
     const browser = session.browser;
-    self._script_manager = ScriptManager.init(browser.allocator, browser.http_client, self);
+    self._script_manager = ScriptManager.init(browser.allocator, &browser.http_client, self);
     errdefer self._script_manager.deinit();
 
     self.js = try browser.env.createContext(self, .{
@@ -351,13 +348,9 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
     }
 }
 
-pub fn deinit(self: *Frame, abort_http: bool) void {
+pub fn deinit(self: *Frame) void {
     for (self.child_frames.items) |frame| {
-        frame.deinit(abort_http);
-    }
-
-    for (self.workers.items) |worker| {
-        worker.deinit();
+        frame.deinit();
     }
 
     if (comptime IS_DEBUG) {
@@ -409,18 +402,19 @@ pub fn deinit(self: *Frame, abort_http: bool) void {
     }
 
     const browser = page.session.browser;
+
+    // don't abort pending frames.
+    browser.http_client.abortFrame(self._frame_id, .{});
+
     browser.env.destroyContext(self.js);
 
-    self._script_manager.shutdown = true;
-
-    if (self.parent == null) {
-        browser.http_client.abort();
-    } else if (abort_http) {
-        // a small optimization, it's faster to abort _everything_ on the root
-        // frame, so we prefer that. But if it's just the frame that's going
-        // away (a frame navigation) then we'll abort the frame-related requests
-        browser.http_client.abortFrame(self._frame_id);
+    // Must be after context is destroyed. A finalizer can reach into the *Worker
+    // (e.g. Worker.ReceiveMessageCallback) so the worker must still be valid.
+    for (self.workers.items) |worker| {
+        worker.deinit();
     }
+
+    self._script_manager.base.shutdown = true;
 
     self._script_manager.deinit();
     self._style_manager.deinit();
@@ -534,6 +528,8 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             self.origin = try URL.getOrigin(self.arena, request_url[5.. :0]);
         } else if (self.parent) |parent| {
             self.origin = parent.origin;
+        } else if (self.window._opener) |opener| {
+            self.origin = opener._frame.origin;
         } else {
             self.origin = null;
         }
@@ -600,11 +596,16 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         // force next request id manually b/c we won't create a real req.
         _ = session.browser.http_client.incrReqId();
 
+        if (self.parent == null) {
+            session.navigation._current_navigation_kind = opts.kind;
+            try session.navigation.commitNavigation(self);
+        }
+
         self.documentIsComplete();
         return;
     }
 
-    var http_client = session.browser.http_client;
+    const http_client = &session.browser.http_client;
 
     self.url = try self.arena.dupeZ(u8, request_url);
     self.origin = try URL.getOrigin(self.arena, self.url);
@@ -614,12 +615,27 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .cdp_id = opts.cdp_id,
         .reason = opts.reason,
         .method = opts.method,
+        .body = if (opts.body) |b| try self.arena.dupe(u8, b) else null,
+        .header = if (opts.header) |h| try self.arena.dupeZ(u8, h) else null,
     };
 
     var headers = try http_client.newHeaders();
     if (opts.header) |hdr| {
         try headers.add(hdr);
     }
+    if (opts.referer) |ref| {
+        const ref_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", ref }, 0);
+        try headers.add(ref_header);
+    }
+
+    // A root navigation issued against a pending Page (i.e. one allocated by
+    // Session.initiateRootNavigation) flags both the notification and the
+    // HTTP request itself: CDP skips its node-registry reset until commit,
+    // and the in-flight transfer survives the OLD page's frame.deinit which
+    // calls http_client.abortFrame(frame_id) on the shared frame_id during
+    // commitPendingPage.
+    const is_pending_root = self._page._state == .pending;
+
     // We dispatch frame_navigate event before sending the request.
     // It ensures the event frame_navigated is not dispatched before this one.
     session.notification.dispatch(.frame_navigate, &.{
@@ -629,6 +645,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
         .timestamp = timestamp(.monotonic),
+        .is_pending_root = is_pending_root,
     });
 
     // Record telemetry for navigation
@@ -641,16 +658,19 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     http_client.request(.{
         .ctx = self,
-        .url = self.url,
-        .frame_id = self._frame_id,
-        .loader_id = self._loader_id,
-        .method = opts.method,
-        .headers = headers,
-        .body = opts.body,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = self.url,
-        .resource_type = .document,
-        .notification = self._session.notification,
+        .params = .{
+            .url = self.url,
+            .frame_id = self._frame_id,
+            .loader_id = self._loader_id,
+            .method = opts.method,
+            .headers = headers,
+            .body = opts.body,
+            .cookie_jar = &session.cookie_jar,
+            .cookie_origin = self.url,
+            .resource_type = .document,
+            .notification = self._session.notification,
+            .protect_from_abort = is_pending_root,
+        },
         .header_callback = frameHeaderDoneCallback,
         .data_callback = frameDataCallback,
         .done_callback = frameDoneCallback,
@@ -720,7 +740,10 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     };
 
     const session = target._session;
-    if (!opts.force and URL.eqlDocument(target.url, resolved_url)) {
+    // Short-circuit only true fragment-only navigations (same path/query, different
+    // fragment). Identical URLs fall through and trigger a real reload.
+    const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
+    if (!opts.force and is_fragment_navigation) {
         target.url = try target.arena.dupeZ(u8, resolved_url);
         target.window._location = try Location.init(target.url, target);
         if (target.parent == null) {
@@ -737,21 +760,20 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         .type = target._type,
     });
 
-    // This is a micro-optimization. Terminate any inflight request as early
-    // as we can. This will be more properly shutdown when we process the
-    // scheduled navigation.
-    if (target.parent == null) {
-        session.browser.http_client.abort();
-    } else {
-        // This doesn't terminate any inflight requests for nested frames, but
-        // again, this is just an optimization. We'll correctly shut down all
-        // nested inflight requests when we process the navigation.
-        session.browser.http_client.abortFrame(target._frame_id);
+    session.browser.http_client.abortFrame(target._frame_id, .{});
+
+    // Capture the originating frame's URL as the Referer for this
+    // navigation. The originator's frame may be torn down before navigate()
+    // runs (processRootQueuedNavigation rebuilds the Page in-place), so dup
+    // into the QueuedNavigation arena which outlives that tear-down.
+    var nav_opts = opts;
+    if (nav_opts.referer == null and std.mem.startsWith(u8, originator.url, "http")) {
+        nav_opts.referer = try arena.dupe(u8, originator.url);
     }
 
     const qn = try arena.create(QueuedNavigation);
     qn.* = .{
-        .opts = opts,
+        .opts = nav_opts,
         .arena = arena,
         .url = resolved_url,
         .is_about_blank = is_about_blank,
@@ -943,6 +965,28 @@ fn notifyParentLoadComplete(self: *Frame) void {
 fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
     var self: *Frame = @ptrCast(@alignCast(response.ctx));
 
+    // Commit point for a pending root navigation. The session has been
+    // holding the OLD page alive during the round-trip; now that response
+    // headers have arrived, swap pending → active. This dispatches
+    // frame_remove (clears OLD V8 context group + CDP node_registry),
+    // tears down the OLD page, flips the pointer, and dispatches
+    // frame_created against the new (now active) frame.
+    //
+    // The OLD page's frame.deinit calls http_client.abortFrame(frame_id) on
+    // the frame_id it shares with the (now-active) pending page; our transfer
+    // survives because Session.initiateRootNavigation flagged the request
+    // protect_from_abort, which abortFrame's default .normal scope honors.
+    // Once we are past commit, that protection is no longer needed and may
+    // interfere with subsequent aborts (e.g. another navigation while we are
+    // still streaming the body), so clear it.
+    if (self._page._state == .pending) {
+        try self._session.commitPendingPage();
+        switch (response.inner) {
+            .transfer => |t| t.req.params.protect_from_abort = false,
+            .fulfilled, .cached => {},
+        }
+    }
+
     const response_url = response.url();
     if (std.mem.eql(u8, response_url, self.url) == false) {
         // would be different than self.url in the case of a redirect
@@ -950,6 +994,18 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
         self.origin = try URL.getOrigin(self.arena, self.url);
     }
     try self.js.setOrigin(self.origin);
+
+    // After any redirect, drop the original method/body/header so a later
+    // Page.reload doesn't re-POST form data to the redirect target. Conservative
+    // default — 307/308 technically preserve the method per RFC 7231, but
+    // resubmitting form data is the more dangerous failure mode.
+    if ((response.redirectCount() orelse 0) > 0) {
+        if (self._navigated_options) |*no| {
+            no.method = .GET;
+            no.body = null;
+            no.header = null;
+        }
+    }
 
     self.window._location = try Location.init(self.url, self);
     self.document._location = self.window._location;
@@ -1160,6 +1216,16 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
     var self: *Frame = @ptrCast(@alignCast(ctx));
 
     log.err(.frame, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
+
+    // A pending root navigation that failed before commit: discard the
+    // pending Page; the OLD active Page (and its V8 context) is untouched.
+    // We do NOT run frameDoneCallback against the pending frame — the frame
+    // is about to be freed.
+    if (self._page._state == .pending) {
+        self._session.discardPendingPage();
+        return;
+    }
+
     self._parse_state.deinit(self);
     self._parse_state = .{ .err = err };
 
@@ -1176,6 +1242,24 @@ pub fn isGoingAway(self: *const Frame) bool {
     }
     const parent = self.parent orelse return false;
     return parent.isGoingAway();
+}
+
+// True if this frame, any descendant frame, or any worker owned by any
+// of those frames is currently inside script evaluation. Used as a
+// reentrancy guard before tearing down a page from a CDP message that
+// may have been drained while a Zig->JS->Zig stack (e.g. Worker
+// importScripts -> syncRequest -> blocking_read) is mid-flight.
+// Recursive over child frames so an evaluating subframe also defers
+// parent teardown.
+pub fn anyScriptEvaluating(self: *const Frame) bool {
+    if (self._script_manager.base.is_evaluating) return true;
+    for (self.workers.items) |worker| {
+        if (worker._worker_scope._script_manager.is_evaluating) return true;
+    }
+    for (self.child_frames.items) |child| {
+        if (child.anyScriptEvaluating()) return true;
+    }
+    return false;
 }
 
 pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *Element.Html.Script) !void {
@@ -1235,7 +1319,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     const frame_id = session.nextFrameId();
 
     try Frame.init(new_frame, frame_id, self._page, self);
-    errdefer new_frame.deinit(true);
+    errdefer new_frame.deinit();
 
     self._pending_loads += 1;
     new_frame.iframe = iframe;
@@ -1262,7 +1346,12 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         );
     };
 
-    new_frame.navigate(url, .{ .reason = .initialFrameNavigation }) catch |err| {
+    new_frame.navigate(url, .{
+        .reason = .initialFrameNavigation,
+        // Iframe's initial src request carries the parent's URL as Referer.
+        // Parent frame outlives this navigate() call, so the slice is safe.
+        .referer = if (std.mem.startsWith(u8, self.url, "http")) self.url else null,
+    }) catch |err| {
         log.warn(.frame, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
         iframe._window = null;
@@ -1301,8 +1390,71 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     }
 }
 
+const OpenPopupOpts = struct {
+    url: []const u8,
+    name: []const u8,
+    opener: ?*Window,
+};
+
+// Create a new top-level browsing context as a sibling of the root frame.
+// The popup shares the Page's arena, factory, and identity map, but has no
+// parent and is not attached to the frame tree — it lives in page.popups.
+pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
+    const page = self._page;
+    const session = self._session;
+
+    const resolved_url: [:0]const u8 = blk: {
+        if (opts.url.len == 0) {
+            break :blk "about:blank";
+        }
+        if (std.mem.eql(u8, opts.url, "about:blank")) {
+            break :blk "about:blank";
+        }
+        const frame_base = base_blk: {
+            var frame = self;
+            while (true) {
+                const maybe_base = frame.base();
+                if (!std.mem.eql(u8, maybe_base, "about:blank")) {
+                    break :base_blk maybe_base;
+                }
+                frame = frame.parent orelse break :base_blk "";
+            }
+        };
+        break :blk try URL.resolve(self.call_arena, frame_base, opts.url, .{ .always_dupe = true, .encoding = self.charset });
+    };
+
+    const popup = try page.frame_arena.create(Frame);
+    errdefer page.frame_arena.destroy(popup);
+
+    const frame_id = session.nextFrameId();
+    try Frame.init(popup, frame_id, page, null);
+    errdefer popup.deinit();
+
+    popup.window._opener = opts.opener;
+    if (opts.name.len > 0 and
+        !std.ascii.eqlIgnoreCase(opts.name, "_blank") and
+        !std.ascii.eqlIgnoreCase(opts.name, "_self") and
+        !std.ascii.eqlIgnoreCase(opts.name, "_parent") and
+        !std.ascii.eqlIgnoreCase(opts.name, "_top"))
+    {
+        popup.window._name = try page.frame_arena.dupe(u8, opts.name);
+    }
+
+    const popup_index = page.popups.items.len;
+    try page.popups.append(page.frame_arena, popup);
+    // not impossible that navigate adds popups, so remove by index
+    errdefer _ = page.popups.swapRemove(popup_index);
+
+    popup.navigate(resolved_url, .{ .reason = .script }) catch |err| {
+        log.warn(.frame, "popup navigate failure", .{ .url = resolved_url, .err = err });
+        return err;
+    };
+
+    return popup;
+}
+
 pub fn domChanged(self: *Frame) void {
-    self.version += 1;
+    self._page.dom_version += 1;
 
     if (self._intersection_check_scheduled) {
         return;
@@ -1379,8 +1531,22 @@ pub fn removeElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, id: []const
 
 pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Element {
     if (node.isConnected() or node.isInShadowTree()) {
-        const lookup = self.getElementIdMap(node).lookup;
-        return lookup.get(id);
+        var current = node;
+        while (true) {
+            if (current.is(ShadowRoot)) |shadow_root| {
+                return shadow_root.getElementById(id, self);
+            }
+            const parent = current._parent orelse {
+                if (current._type == .document) {
+                    return current._type.document.getElementById(id, self);
+                }
+                if (IS_DEBUG) {
+                    std.debug.assert(false);
+                }
+                return null;
+            };
+            current = parent;
+        }
     }
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
     while (tw.next()) |el| {
@@ -1480,7 +1646,20 @@ pub fn checkIntersections(self: *Frame) !void {
     }
 }
 
-pub fn dispatchLoad(self: *Frame) !void {
+pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
+    try self._to_load.append(self.arena, html);
+    if (self._to_load.items.len == 1) {
+        try self.js.scheduler.add(self, struct {
+            fn cleanup(ctx: *anyopaque) !?u32 {
+                const f: *Frame = @ptrCast(@alignCast(ctx));
+                try f.dispatchLoad();
+                return null;
+            }
+        }.cleanup, 0, .{ .name = "frame.dispatchLoad" });
+    }
+}
+
+fn dispatchLoad(self: *Frame) !void {
     const has_dom_load_listener = self._event_manager.has_dom_load_listener;
 
     // Swap buffers - new additions during dispatch go to the other buffer
@@ -1634,26 +1813,12 @@ pub fn notifyNetworkAlmostIdle(self: *Frame) void {
     });
 }
 
-// called from the parser
-pub fn appendNew(self: *Frame, parent: *Node, child: Node.NodeOrText) !void {
-    const node = switch (child) {
-        .node => |n| n,
-        .text => |txt| blk: {
-            // If we're appending this adjacently to a text node, we should merge
-            if (parent.lastChild()) |sibling| {
-                if (sibling.is(CData.Text)) |tn| {
-                    const cdata = tn._proto;
-                    const existing = cdata.getData().str();
-                    cdata._data = try String.concat(self.arena, &.{ existing, txt });
-                    return;
-                }
-            }
-            break :blk try self.createTextNode(txt);
-        },
-    };
-
-    lp.assert(node._parent == null, "Frame.appendNew", .{});
-    try self._insertNodeRelative(true, parent, node, .append, .{
+// called from the parser. Text-node merging is the parser's responsibility
+// (see Parser.appendTextChunk in src/browser/parser/Parser.zig); this is the
+// "insert this fully-formed node as a new last child of parent" entry point.
+pub fn appendNew(self: *Frame, parent: *Node, child: *Node) !void {
+    lp.assert(child._parent == null, "Frame.appendNew", .{});
+    try self._insertNodeRelative(true, parent, child, .append, .{
         // this opts has no meaning since we're passing `true` as the first
         // parameter, which indicates this comes from the parser, and has its
         // own special processing. Still, set it to be clear.
@@ -1958,12 +2123,35 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         attribute_iterator,
                         .{ ._proto = undefined },
                     ),
-                    asUint("head") => return self.createHtmlElementT(
-                        Element.Html.Head,
-                        namespace,
-                        attribute_iterator,
-                        .{ ._proto = undefined },
-                    ),
+                    asUint("head") => {
+                        // Inject user-provided scripts.
+                        const inject_scripts = self._session.inject_scripts;
+                        const should_inject_scripts = from_parser and self._parse_mode == .document and inject_scripts.len > 0;
+
+                        if (should_inject_scripts) {
+                            var ls: JS.Local.Scope = undefined;
+                            self.js.localScope(&ls);
+                            defer ls.deinit();
+
+                            for (inject_scripts) |inject_script| {
+                                var try_catch: JS.TryCatch = undefined;
+                                try_catch.init(&ls.local);
+                                defer try_catch.deinit();
+
+                                ls.local.eval(inject_script, "inject_script") catch |err| {
+                                    const caught = try_catch.caughtOrError(self.call_arena, err);
+                                    log.err(.app, "inject script error", .{ .err = caught });
+                                };
+                            }
+                        }
+
+                        return self.createHtmlElementT(
+                            Element.Html.Head,
+                            namespace,
+                            attribute_iterator,
+                            .{ ._proto = undefined },
+                        );
+                    },
                     asUint("body") => return self.createHtmlElementT(
                         Element.Html.Body,
                         namespace,
@@ -2304,6 +2492,17 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         attribute_iterator,
                         .{ ._proto = undefined },
                     ),
+                    asUint("frameset") => {
+                        if (comptime from_parser) {
+                            log.warn(.not_implemented, "framset", .{ .note = "<framset>...</frameset> in html is not handled properly" });
+                        }
+                        return self.createHtmlElementT(
+                            Element.Html.FrameSet,
+                            namespace,
+                            attribute_iterator,
+                            .{ ._proto = undefined },
+                        );
+                    },
                     asUint("optgroup") => return self.createHtmlElementT(
                         Element.Html.OptGroup,
                         namespace,
@@ -2678,6 +2877,10 @@ pub fn dispatch(
     return self._event_manager.dispatchDirect(target, event, handler, opts);
 }
 
+pub fn hasDirectListeners(self: *Frame, target: *EventTarget, typ: []const u8, handler: anytype) bool {
+    return self._event_manager.hasDirectListeners(target, typ, handler);
+}
+
 pub fn dupeSSO(self: *Frame, value: []const u8) !String {
     return String.init(self.arena, value, .{ .dupe = true });
 }
@@ -2823,12 +3026,24 @@ pub fn insertAllChildrenBefore(self: *Frame, fragment: *Node, parent: *Node, ref
         // Check if child was connected BEFORE removing it from fragment
         const child_was_connected = child.isConnected();
         self.removeNode(fragment, child, .{ .will_be_reconnected = dest_connected });
-        try self.insertNodeRelative(
-            parent,
-            child,
-            .{ .before = ref_node },
-            .{ .child_already_connected = child_was_connected },
-        );
+        // A callback fired by a previous iteration's insert (e.g. a custom
+        // element's connectedCallback) may have detached ref_node from
+        // parent. In that case, fall back to append so the remaining
+        // children still land in `parent` in source order.
+        if (ref_node._parent == parent) {
+            try self.insertNodeRelative(
+                parent,
+                child,
+                .{ .before = ref_node },
+                .{ .child_already_connected = child_was_connected },
+            );
+        } else {
+            try self.appendNode(
+                parent,
+                child,
+                .{ .child_already_connected = child_was_connected },
+            );
+        }
     }
 }
 
@@ -3421,6 +3636,10 @@ pub const NavigateOpts = struct {
     method: HttpClient.Method = .GET,
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
+    // Set by scheduleNavigationWithArena from the originating frame's URL so
+    // anchor click / form submit / location.href navigations carry a Referer.
+    // null on CDP Page.navigate (address-bar) and Page.reload — matches Chrome.
+    referer: ?[]const u8 = null,
     force: bool = false,
     kind: NavigationKind = .{ .push = null },
 };
@@ -3429,6 +3648,10 @@ pub const NavigatedOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
     method: HttpClient.Method = .GET,
+    // Retained on the frame's arena so Page.reload can replay the prior
+    // navigation's HTTP method — matches Chrome's F5 behavior on POST pages.
+    body: ?[]const u8 = null,
+    header: ?[:0]const u8 = null,
 };
 
 const NavigationType = enum {
@@ -3457,7 +3680,7 @@ pub const QueuedNavigation = struct {
 /// to the appropriateFrame to navigate.
 /// Returns null if the target is "_blank" (which would open a new window/tab).
 /// Note: Callers should handle empty target separately (for owner document resolution).
-fn resolveTargetFrame(self: *Frame, target_name: []const u8) ?*Frame {
+pub fn resolveTargetFrame(self: *Frame, target_name: []const u8) ?*Frame {
     if (std.ascii.eqlIgnoreCase(target_name, "_self")) {
         return self;
     }
@@ -3578,7 +3801,11 @@ pub fn handleClick(self: *Frame, target: *Node) !void {
         },
         .input => |input| {
             try element.focus(self);
-            if (input._input_type == .submit) {
+            // Per HTML §4.10.18.6.4 "Image Button state (type=image)", clicking an
+            // image button submits its form. The form-data set already gets the
+            // submitter's coordinate fields appended via FormData.collectForm
+            // (see src/browser/webapi/net/FormData.zig).
+            if (input._input_type == .submit or input._input_type == .image) {
                 return self.submitForm(element, input.getForm(self), .{});
             }
         },
@@ -3589,6 +3816,32 @@ pub fn handleClick(self: *Frame, target: *Node) !void {
             }
         },
         .select, .textarea => try element.focus(self),
+        .label => |label| {
+            // Per HTML §4.10.4 "The label element", a label's activation
+            // behavior is to run the synthetic click activation steps on the
+            // labeled control. Mirrors Chrome's HTMLLabelElement::DefaultEventHandler.
+            const control = label.getControl(self) orelse return;
+            const control_html = control.is(Element.Html) orelse return;
+            try control_html.click(self);
+        },
+        .generic => |generic| {
+            switch (generic._tag) {
+                .summary => {
+                    const parent_el = target.parentElement() orelse return;
+                    const details = parent_el.is(Element.Html.Details) orelse return;
+                    var maybe_prev = element.previousElementSibling();
+                    while (maybe_prev) |prev| {
+                        if (prev.getTag() == .summary) {
+                            // we found a summary element before the clicked one
+                            return;
+                        }
+                        maybe_prev = prev.previousElementSibling();
+                    }
+                    try details.setOpen(!details.getOpen(), self);
+                },
+                else => {},
+            }
+        },
         else => {},
     }
 }
@@ -3667,9 +3920,14 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 
     const form_element = form.asElement();
 
+    const submit_button: ?*Element = blk: {
+        const s = submitter_ orelse break :blk null;
+        break :blk if (Element.Html.Form.isSubmitButton(s)) s else null;
+    };
+
     const target_name_: ?[]const u8 = blk: {
-        if (submitter_) |submitter| {
-            if (submitter.getAttributeSafe(comptime .wrap("formtarget"))) |ft| {
+        if (submit_button) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formtarget"))) |ft| {
                 break :blk ft;
             }
         }
@@ -3687,7 +3945,15 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     };
 
     if (submit_opts.fire_event) {
-        const submitter_html: ?*HtmlElement = if (submitter_) |s| s.is(HtmlElement) else null;
+        // Per HTML spec "submit a form element" algorithm: SubmitEvent.submitter
+        // must be null when the submitter is the form itself, which is what
+        // Form.requestSubmit() passes when called with no submitter argument.
+        // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
+        const submitter_html: ?*HtmlElement = blk: {
+            const s = submitter_ orelse break :blk null;
+            if (s == form_element) break :blk null;
+            break :blk s.is(HtmlElement);
+        };
         const submit_event = (try SubmitEvent.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true, .submitter = submitter_html }, self)).asEvent();
 
         // so submit_event is still valid when we check _prevent_default
@@ -3710,7 +3976,23 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     const arena = try self._session.getArena(.medium, "submitForm");
     errdefer self._session.releaseArena(arena);
 
-    const enctype = form_element.getAttributeSafe(comptime .wrap("enctype"));
+    // Per HTML spec form-submission algorithm, when the submitter is a submit
+    // button, its formaction/formmethod/formenctype attributes override the
+    // form's corresponding attributes (matching how formtarget is honored above).
+    // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
+    const enctype_attr = blk: {
+        if (submit_button) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formenctype"))) |fe| break :blk fe;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("enctype"));
+    };
+    const method = blk: {
+        if (submit_button) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formmethod"))) |fm| break :blk fm;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
+    };
+    const is_post = std.ascii.eqlIgnoreCase(method, "post");
 
     // Get charset from accept-charset attribute or fall back to document charset
     const charset: []const u8 = blk: {
@@ -3724,21 +4006,44 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         break :blk self.charset;
     };
 
-    var buf = std.Io.Writer.Allocating.init(arena);
-    try form_data.write(.{ .enctype = enctype, .charset = charset, .allocator = arena }, &buf.writer);
+    var boundary_buf: [36]u8 = undefined;
+    // GET ignores enctype per HTML spec; only resolve the union for POST.
+    const encoding: FormData.EncType = blk: {
+        if (is_post) {
+            if (enctype_attr) |attr| {
+                if (std.ascii.eqlIgnoreCase(attr, "multipart/form-data")) {
+                    @import("../id.zig").uuidv4(&boundary_buf);
+                    break :blk .{ .formdata = &boundary_buf };
+                }
+                if (!std.ascii.eqlIgnoreCase(attr, "application/x-www-form-urlencoded")) {
+                    log.warn(.not_implemented, "FormData.encoding", .{ .encoding = attr });
+                }
+            }
+        }
+        break :blk .urlencode;
+    };
 
-    const method = form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
-    var action = form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
+    var buf = std.Io.Writer.Allocating.init(arena);
+    try form_data.write(.{ .encoding = encoding, .charset = charset, .allocator = arena }, &buf.writer);
+
+    var action = blk: {
+        if (submit_button) |s| {
+            if (s.getAttributeSafe(comptime .wrap("formaction"))) |fa| break :blk fa;
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
+    };
 
     var opts = NavigateOpts{
         .reason = .form,
         .kind = .{ .push = null },
     };
-    if (std.ascii.eqlIgnoreCase(method, "post")) {
+    if (is_post) {
         opts.method = .POST;
         opts.body = buf.written();
-        // form_data.write currently only supports this encoding, so we know this has to be the content type
-        opts.header = "Content-Type: application/x-www-form-urlencoded";
+        opts.header = switch (encoding) {
+            .urlencode => "Content-Type: application/x-www-form-urlencoded",
+            .formdata => |b| try std.fmt.allocPrintSentinel(arena, "Content-Type: multipart/form-data; boundary={s}", .{b}, 0),
+        };
     } else {
         action = try URL.concatQueryString(arena, action, buf.written());
     }
@@ -3790,6 +4095,12 @@ test "WebApi: Frames" {
 
 test "WebApi: Integration" {
     try testing.htmlRunner("integration", .{});
+}
+
+test "WebApi: inject_script" {
+    try testing.htmlRunner("inject_script.html", .{
+        .inject_script = "window.__injected = true; window.__injectValue = 42;",
+    });
 }
 
 test "Page: isSameOrigin" {

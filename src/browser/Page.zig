@@ -45,6 +45,19 @@ const Page = @This();
 
 session: *Session,
 
+// DOM version used to invalidate cached state of "live" collections. Ideally
+// this would be on the Frame (and that's where it used to be). But getting the
+// frame from a DOM mutation call is [relatively] expensive. You can't use
+// the bridge-injected *Frame, because that's the frame where the JS is being
+// executed, which might not be the *Frame that owns the node. We don't store
+// *Frame in node (think of the memory!), so we have to iterate through its
+// parents, find the Document, which has the frame.
+// So the choice is between making every DOM mutation (which has to increase
+// the dom_version) + every read (which has to check the version) slow, or
+// putting this on the Page, and having an DOM mutation in Frame 1 invalidate
+// a cached lookup on Frame 2. We picked the latter.
+dom_version: usize = 0,
+
 // DOM object factory scoped to this Page's documents.
 factory: Factory,
 
@@ -88,6 +101,30 @@ queued_queued_navigation: std.ArrayList(*Frame) = .empty,
 // The root Frame of this Page. Non-optional — a Page always has a root frame.
 frame: Frame,
 
+// Popup Frames opened by window.open. They are top-level browsing contexts
+// (parent == null, no iframe element) but share this Page's factory, arena,
+// and identity map.
+// Their lifetime is bound to the Page: on Page.deinit they
+// are torn down. TODO: this is far from correct. An new window shouldn't be tied
+// to the original page like this.
+popups: std.ArrayList(*Frame) = .empty,
+
+// Popups that have called window.close() but whose teardown is deferred to
+// Page.deinit. We can't deinit synchronously from window.close() because
+// that's invoked from JS still running on top of the Frame's V8 context (or
+// from a script eval whose parser still holds the Frame).
+queued_close: std.ArrayList(*Frame) = .empty,
+
+// Lifecycle state. A Page is `.pending` while we hold it as the in-flight
+// destination of a root navigation — its V8 context exists but is not yet the
+// session's active context. Flipped to `.active` by Session.commitPendingPage
+// when response headers arrive. Frame.navigate / frameHeaderDoneCallback
+// branch on this to: (a) stamp `is_pending_root` on the frame_navigate
+// notification (so CDP doesn't reset its node registry yet) and
+// (b) flag the HTTP request `protect_from_abort` (so the old page's deinit
+// can't kill the transfer we're sitting inside).
+_state: enum { active, pending } = .active,
+
 // Initialize a Page and its root Frame.
 pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
     const frame_arena = try session.arena_pool.acquire(.large, "Page.frame_arena");
@@ -106,8 +143,15 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
 
 // Tear down the Page and its root Frame. Equivalent to the old
 // Session.removePage + Session.resetFrameResources.
-pub fn deinit(self: *Page, abort_http: bool) void {
-    self.frame.deinit(abort_http);
+pub fn deinit(self: *Page) void {
+    self.cleanupClosedPopups();
+
+    for (self.popups.items) |popup| {
+        popup.deinit();
+    }
+    self.popups = .empty;
+
+    self.frame.deinit();
 
     const session = self.session;
     defer session.browser.env.memoryPressureNotification(.moderate);
@@ -153,6 +197,13 @@ pub fn deinit(self: *Page, abort_http: bool) void {
     }
 
     session.arena_pool.release(self.frame_arena);
+}
+
+pub fn cleanupClosedPopups(self: *Page) void {
+    for (self.queued_close.items) |popup| {
+        popup.deinit();
+    }
+    self.queued_close = .empty;
 }
 
 pub fn getArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !Allocator {
@@ -215,6 +266,16 @@ pub fn scheduleNavigation(self: *Page, frame: *Frame) !void {
 
 pub fn findFrameByFrameId(self: *Page, frame_id: u32) ?*Frame {
     return findFrameBy(&self.frame, "_frame_id", frame_id);
+}
+
+// Returns the popup Frame registered under `name`, or null.
+pub fn findPopupByName(self: *Page, name: []const u8) ?*Frame {
+    for (self.popups.items) |popup| {
+        if (std.mem.eql(u8, popup.window._name, name)) {
+            return popup;
+        }
+    }
+    return null;
 }
 
 pub fn findFrameByLoaderId(self: *Page, loader_id: u32) ?*Frame {

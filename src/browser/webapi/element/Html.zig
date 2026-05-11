@@ -47,6 +47,7 @@ pub const Embed = @import("html/Embed.zig");
 pub const FieldSet = @import("html/FieldSet.zig");
 pub const Font = @import("html/Font.zig");
 pub const Form = @import("html/Form.zig");
+pub const FrameSet = @import("html/FrameSet.zig");
 pub const Generic = @import("html/Generic.zig");
 pub const Head = @import("html/Head.zig");
 pub const Heading = @import("html/Heading.zig");
@@ -136,6 +137,7 @@ pub const Type = union(enum) {
     fieldset: *FieldSet,
     font: *Font,
     form: *Form,
+    frameset: *FrameSet,
     generic: *Generic,
     heading: *Heading,
     head: *Head,
@@ -378,6 +380,31 @@ pub fn getTitle(self: *HtmlElement) []const u8 {
 
 pub fn setTitle(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("title"), .wrap(value), frame);
+}
+
+// HTML §7.7.5.2 specifies the IDL attribute as true iff the element's effective
+// content editable state is "true" or "plaintext-only". Lightpanda has no
+// caret/keyboard editing pipeline, so a true answer cannot be honored
+// end-to-end — downstream CDP tools (notably Puppeteer's dispatchKeyEvent
+// path) would route into an input pipeline that silently no-ops. Always
+// return false, and log .not_implemented when the spec would have said true
+// so usage surfaces in telemetry rather than silently depending on an
+// unsupported value. Spec walk per HTML §7.7.5.2 still applies — the nearest
+// ancestor with `contenteditable` wins; "false" disables. See PR #2310 for
+// the routing-vs-fail-loud discussion.
+//
+// "contenteditable" is 15 bytes — past the comptime SSO limit — so the
+// String wrap runs at runtime, mirroring the pattern in interactive.zig.
+pub fn getIsContentEditable(self: *HtmlElement) bool {
+    var current: ?*Element = self.asElement();
+    while (current) |el| : (current = el.parentElement()) {
+        const raw = el.getAttributeSafe(.wrap("contenteditable")) orelse continue;
+        if (!std.ascii.eqlIgnoreCase(raw, "false")) {
+            log.info(.not_implemented, "IsContentEditable", .{});
+        }
+        break;
+    }
+    return false;
 }
 
 pub fn getAttributeFunction(
@@ -1218,6 +1245,7 @@ pub const JsApi = struct {
 
     pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{});
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{});
+    pub const isContentEditable = bridge.accessor(HtmlElement.getIsContentEditable, null, .{});
     pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{});
     pub const tabIndex = bridge.accessor(HtmlElement.getTabIndex, HtmlElement.setTabIndex, .{});
     pub const title = bridge.accessor(HtmlElement.getTitle, HtmlElement.setTitle, .{});
@@ -1354,4 +1382,7 @@ test "WebApi: HTML.event_listeners" {
 }
 test "WebApi: HTMLElement.props" {
     try testing.htmlRunner("element/html/htmlelement-props.html", .{});
+}
+test "WebApi: HTMLElement.contenteditable" {
+    try testing.htmlRunner("element/html/contenteditable.html", .{});
 }

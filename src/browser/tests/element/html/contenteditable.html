@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<!--
+  Lightpanda has no caret/keyboard editing pipeline, so isContentEditable
+  always returns false regardless of the element's effective contenteditable
+  state. The spec walk still runs internally to log .not_implemented when the
+  spec would have said true; only the return value is asserted here. See
+  Html.zig:getIsContentEditable and PR #2310 for context.
+-->
+
+<div id="own-true" contenteditable="true">own true</div>
+<div id="own-empty" contenteditable="">own empty</div>
+<div id="own-false" contenteditable="false">own false</div>
+<div id="own-plaintext" contenteditable="plaintext-only">own plaintext-only</div>
+
+<div id="ancestor-true" contenteditable="true">
+  <span id="child-of-true">child</span>
+</div>
+
+<div id="ancestor-false" contenteditable="false">
+  <div contenteditable="true">
+    <span id="grandchild-rehosted">re-hosted</span>
+  </div>
+</div>
+
+<div id="plain"><span id="child-of-plain">no editing context</span></div>
+
+<script id="always-false">
+  {
+    testing.expectEqual(false, document.getElementById('own-true').isContentEditable);
+    testing.expectEqual(false, document.getElementById('own-empty').isContentEditable);
+    testing.expectEqual(false, document.getElementById('own-false').isContentEditable);
+    testing.expectEqual(false, document.getElementById('own-plaintext').isContentEditable);
+    testing.expectEqual(false, document.getElementById('ancestor-true').isContentEditable);
+    testing.expectEqual(false, document.getElementById('child-of-true').isContentEditable);
+    testing.expectEqual(false, document.getElementById('ancestor-false').isContentEditable);
+    testing.expectEqual(false, document.getElementById('grandchild-rehosted').isContentEditable);
+    testing.expectEqual(false, document.getElementById('plain').isContentEditable);
+    testing.expectEqual(false, document.getElementById('child-of-plain').isContentEditable);
+    testing.expectEqual(false, document.body.isContentEditable);
+    testing.expectEqual(false, document.documentElement.isContentEditable);
+  }
+</script>
+
+<script id="dynamic-attribute">
+  {
+    const el = document.createElement('div');
+    testing.expectEqual(false, el.isContentEditable);
+
+    el.setAttribute('contenteditable', 'true');
+    testing.expectEqual(false, el.isContentEditable);
+
+    el.setAttribute('contenteditable', 'false');
+    testing.expectEqual(false, el.isContentEditable);
+
+    el.removeAttribute('contenteditable');
+    testing.expectEqual(false, el.isContentEditable);
+  }
+</script>

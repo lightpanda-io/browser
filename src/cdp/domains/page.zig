@@ -39,11 +39,13 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
         getFrameTree,
+        getNavigationHistory,
         setLifecycleEventsEnabled,
         addScriptToEvaluateOnNewDocument,
         removeScriptToEvaluateOnNewDocument,
         createIsolatedWorld,
         navigate,
+        navigateToHistoryEntry,
         reload,
         stopLoading,
         close,
@@ -56,11 +58,13 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     switch (action) {
         .enable => return cmd.sendResult(null, .{}),
         .getFrameTree => return getFrameTree(cmd),
+        .getNavigationHistory => return getNavigationHistory(cmd),
         .setLifecycleEventsEnabled => return setLifecycleEventsEnabled(cmd),
         .addScriptToEvaluateOnNewDocument => return addScriptToEvaluateOnNewDocument(cmd),
         .removeScriptToEvaluateOnNewDocument => return removeScriptToEvaluateOnNewDocument(cmd),
         .createIsolatedWorld => return createIsolatedWorld(cmd),
         .navigate => return navigate(cmd),
+        .navigateToHistoryEntry => return navigateToHistoryEntry(cmd),
         .reload => return doReload(cmd),
         .stopLoading => return cmd.sendResult(null, .{}),
         .close => return close(cmd),
@@ -145,7 +149,7 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
 
         const http_client = frame._session.browser.http_client;
         const http_active = http_client.http_active;
-        const total_network_activity = http_active + http_client.intercepted;
+        const total_network_activity = http_active + http_client.interception_layer.intercepted;
         if (frame._notified_network_almost_idle.check(total_network_activity <= 2)) {
             try sendPageLifecycle(bc, "networkAlmostIdle", now, frame_id, loader_id);
         }
@@ -212,7 +216,7 @@ fn close(cmd: *CDP.Command) !void {
     const target_id = bc.target_id orelse return error.TargetNotLoaded;
 
     // can't be null if we have a target_id
-    lp.assert(bc.session.page != null, "CDP.frame.close null frame", .{});
+    lp.assert(bc.session.hasPage(), "CDP.frame.close null frame", .{});
 
     try cmd.sendResult(.{}, .{});
 
@@ -298,20 +302,24 @@ fn navigate(cmd: *CDP.Command) !void {
     }
 
     const session = bc.session;
-    var frame = session.currentFrame() orelse return error.FrameNotLoaded;
-
-    if (frame._load_state != .waiting) {
-        // Reset isolated world identities to disable V8 weak callbacks before
-        // resetPageResources releases refs. Prevents double-release crashes.
-        for (bc.isolated_worlds.items) |isolated_world| {
-            isolated_world.identity.deinit();
-            isolated_world.identity = .{};
-        }
-        frame = try session.replacePage();
-    }
+    const frame = session.currentFrame() orelse return error.FrameNotLoaded;
 
     const encoded_url = try URL.ensureEncoded(frame.call_arena, params.url, "UTF-8");
-    try frame.navigate(encoded_url, .{
+
+    // Fast path: a freshly-created target whose root frame hasn't navigated
+    // yet has nothing to preserve across the HTTP round-trip. Skip the
+    // pending-Page allocation (which would create a V8 context just to
+    // throw the OLD blank one away at commit) and navigate the active
+    // frame in place.
+    if (frame._load_state == .waiting) {
+        return frame.navigate(encoded_url, .{
+            .reason = .address_bar,
+            .cdp_id = cmd.input.id,
+            .kind = .{ .push = null },
+        });
+    }
+
+    try session.initiateRootNavigation(frame._frame_id, encoded_url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
         .kind = .{ .push = null },
@@ -331,34 +339,125 @@ fn doReload(cmd: *CDP.Command) !void {
     }
 
     const session = bc.session;
-    var frame = session.currentFrame() orelse return error.FrameNotLoaded;
+    const frame = session.currentFrame() orelse return error.FrameNotLoaded;
 
-    // Dupe URL before replacePage() frees the old frame's arena.
+    // Capture URL plus the prior navigation's method/body/header before
+    // we free the old frame's arena. Replaying the same HTTP
+    // method on reload matches Chrome's F5 behavior — POST navigations
+    // re-submit, GET navigations re-fetch.
     const reload_url = try cmd.arena.dupeZ(u8, frame.url);
+    const prev_nav = frame._navigated_options;
+    const prev_body: ?[]const u8, const prev_header: ?[:0]const u8 = blk: {
+        const p = prev_nav orelse break :blk .{ null, null };
+        break :blk .{
+            if (p.body) |b| try cmd.arena.dupe(u8, b) else null,
+            if (p.header) |h| try cmd.arena.dupeZ(u8, h) else null,
+        };
+    };
 
-    if (frame._load_state != .waiting) {
-        // Reset isolated world identities to disable V8 weak callbacks before
-        // resetPageResources releases refs. Prevents double-release crashes.
-        for (bc.isolated_worlds.items) |isolated_world| {
-            isolated_world.identity.deinit();
-            isolated_world.identity = .{};
-        }
-        frame = try session.replacePage();
-    }
-
-    try frame.navigate(reload_url, .{
+    try session.initiateRootNavigation(frame._frame_id, reload_url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
         .kind = .reload,
         .force = if (params) |p| p.ignoreCache orelse false else false,
+        .method = if (prev_nav) |p| p.method else .GET,
+        .body = prev_body,
+        .header = prev_header,
     });
+}
+
+const NavigationEntry = struct {
+    id: i64,
+    url: []const u8,
+    userTypedURL: []const u8,
+    title: []const u8,
+    transitionType: []const u8,
+};
+
+fn getNavigationHistory(cmd: *CDP.Command) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    if (bc.session_id == null) {
+        return error.SessionIdNotLoaded;
+    }
+
+    const nav = &bc.session.navigation;
+    const entries_in = nav._entries.items;
+
+    const entries_out = try cmd.arena.alloc(NavigationEntry, entries_in.len);
+    for (entries_in, 0..) |entry, i| {
+        // Navigation.pushEntry always formats _id as a decimal usize counter,
+        // so parse failure here is an internal invariant violation, not a
+        // recoverable runtime error.
+        const eid = std.fmt.parseInt(i64, entry._id, 10) catch @panic("Navigation entry _id is not a base-10 integer");
+        entries_out[i] = .{
+            .id = eid,
+            .url = entry._url orelse "",
+            .userTypedURL = entry._url orelse "",
+            .title = "",
+            .transitionType = "other",
+        };
+    }
+
+    return cmd.sendResult(.{
+        .currentIndex = @as(i64, @intCast(nav._index)),
+        .entries = entries_out,
+    }, .{});
+}
+
+fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        entryId: i64,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    if (bc.session_id == null) {
+        return error.SessionIdNotLoaded;
+    }
+
+    const session = bc.session;
+    const nav = &session.navigation;
+
+    var target_index: ?usize = null;
+    var target_url: ?[:0]const u8 = null;
+    for (nav._entries.items, 0..) |entry, i| {
+        const eid = std.fmt.parseInt(i64, entry._id, 10) catch @panic("Navigation entry _id is not a base-10 integer");
+        if (eid == params.entryId) {
+            target_index = i;
+            target_url = entry._url;
+            break;
+        }
+    }
+
+    const idx = target_index orelse return error.InvalidParams;
+    const url = target_url orelse return error.InvalidParams;
+
+    const frame = session.currentFrame() orelse return error.FrameNotLoaded;
+
+    const opts = Frame.NavigateOpts{
+        .reason = .history,
+        .cdp_id = cmd.input.id,
+        .kind = .{ .traverse = idx },
+    };
+
+    if (frame._load_state == .waiting) {
+        return frame.navigate(url, opts);
+    }
+
+    try session.initiateRootNavigation(frame._frame_id, url, opts);
 }
 
 pub fn frameNavigate(bc: *CDP.BrowserContext, event: *const Notification.FrameNavigate) !void {
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
-    bc.reset();
+
+    // is_pending_root means this navigation is in flight against a pending
+    // Page while the OLD page is still alive and addressable. Don't blow
+    // away the node_registry — the OLD page's nodes are still referenced
+    // by client-held objectIds. The reset moves to frameRemove (commit).
+    if (!event.is_pending_root) {
+        bc.reset();
+    }
 
     const frame_id = &id.toFrameId(event.frame_id);
     const loader_id = &id.toLoaderId(event.loader_id);
@@ -415,18 +514,40 @@ pub fn frameRemove(bc: *CDP.BrowserContext) void {
     for (bc.isolated_worlds.items) |isolated_world| {
         isolated_world.removeContext();
     }
+
+    // node_registry / node_search_list reference Nodes from the page being
+    // torn down — clear them before the page's memory is freed. For pending
+    // root commits this is the only reset, because frameNavigate set
+    // is_pending_root=true and deliberately skipped its own reset so the
+    // OLD page's nodes stayed addressable during the in-flight HTTP. For
+    // synthetic / non-pending navs frameNavigate also calls bc.reset()
+    // (via the !is_pending_root branch); the two are redundant but harmless.
+    bc.reset();
 }
 
 pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
-    _ = bc.cdp.frame_arena.reset(.{ .retain_with_limit = 1024 * 512 });
+    // Detect "in commit" mode: Session.commitPendingPage dispatches frame_
+    // created BEFORE clearing pending_page (deliberate ordering — see
+    // Session.commitPendingPage). The captured_response for the request we
+    // just committed was inserted by onHttpResponseHeadersDone moments ago
+    // and lives in cdp.frame_arena; resetting either would lose it.
+    const in_commit = bc.session.pendingPage() != null;
+
+    if (!in_commit) {
+        _ = bc.cdp.frame_arena.reset(.{ .retain_with_limit = 1024 * 512 });
+    }
 
     for (bc.isolated_worlds.items) |isolated_world| {
         _ = try isolated_world.createContext(frame);
     }
-    // Only retain captured responses until a navigation event. In CDP term,
-    // this is called a "renderer" and the cache-duration can be controlled via
-    // the Network.configureDurableMessages message (which we don't support)
-    bc.captured_responses = .empty;
+
+    if (!in_commit) {
+        // Only retain captured responses until a navigation event. In CDP
+        // terms, this is called a "renderer" and the cache-duration can be
+        // controlled via Network.configureDurableMessages (which we don't
+        // support).
+        bc.captured_responses = .empty;
+    }
 }
 
 pub fn frameChildFrameCreated(bc: *CDP.BrowserContext, event: *const Notification.FrameChildFrameCreated) !void {
@@ -679,6 +800,10 @@ fn handleJavaScriptDialog(cmd: *CDP.Command) !void {
     // Dialogs auto-dismiss in headless mode. By the time the CDP client
     // sends this command, the dialog has already returned and there is
     // no pending dialog to accept or dismiss.
+    //
+    // Lightpanda-aware clients that want to control confirm/prompt return
+    // values can pre-arm a response via LP.handleJavaScriptDialog instead
+    // (see src/cdp/domains/lp.zig).
     _ = try cmd.params(struct {
         accept: bool,
         promptText: ?[]const u8 = null,
@@ -688,6 +813,15 @@ fn handleJavaScriptDialog(cmd: *CDP.Command) !void {
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Page/#event-javascriptDialogOpening
 pub fn javascriptDialogOpening(bc: anytype, event: *const Notification.JavascriptDialogOpening) !void {
+    // Pop any response pre-armed via LP.handleJavaScriptDialog onto the
+    // dispatch's output param so the calling alert/confirm/prompt returns
+    // the CDP client's choice. Cleared unconditionally — a stash applies
+    // to exactly one dialog.
+    if (bc.pending_dialog_response) |pending| {
+        event.response.* = pending;
+        bc.pending_dialog_response = null;
+    }
+
     const session_id = bc.session_id orelse return;
     var cdp = bc.cdp;
 
@@ -989,17 +1123,269 @@ test "cdp.frame: reload" {
         try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 30 });
     }
 
-    _ = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
 
     {
         // reload with no params — should not error (navigation is async,
         // so no result is sent synchronously; we just verify no error)
         try ctx.processMessage(.{ .id = 31, .method = "Page.reload" });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
     }
 
     {
         // reload with ignoreCache param
         try ctx.processMessage(.{ .id = 32, .method = "Page.reload", .params = .{ .ignoreCache = true } });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+}
+
+test "cdp.frame: reload replays POST navigation" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // Manually wire up the browser context: loadBrowserContext only does GET
+    // navigations, but we need the first navigation to be POST.
+    const cdp_inst = ctx.cdp();
+    _ = try cdp_inst.createBrowserContext();
+    var bc = &cdp_inst.browser_context.?;
+    bc.id = "BID-A6";
+    bc.session_id = "SID-X";
+    bc.target_id = "TID-A6-0000000".*;
+
+    // First navigation: POST a form-style payload to /echo_method.
+    {
+        const f = try bc.session.createPage();
+        try f.navigate("http://127.0.0.1:9582/echo_method", .{
+            .method = .POST,
+            .body = "key=value",
+            .header = "Content-Type: application/x-www-form-urlencoded",
+        });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    // Sanity: the body confirms a POST round-tripped.
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("document.body.innerText.includes('method=POST')", null);
+        try testing.expect(v.toBool());
+    }
+
+    // Trigger a CDP reload. With the fix in place, doReload captures the
+    // prior POST method/body/header and replays them. Without it (regression
+    // guard), the second request would silently fall back to GET.
+    try ctx.processMessage(.{ .id = 50, .method = "Page.reload" });
+
+    {
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("document.body.innerText.includes('method=POST')", null);
+        try testing.expect(v.toBool());
+    }
+}
+
+test "cdp.frame: reload after POST→redirect drops the POST" {
+    // RFC 7231 §6.4.3 / §6.4.4: 302 and 303 responses to a POST cause the
+    // user agent to convert the followup request to GET. The page that
+    // actually loaded did so via GET, so a later Page.reload must NOT replay
+    // the original POST body to the redirect target.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const cdp_inst = ctx.cdp();
+    _ = try cdp_inst.createBrowserContext();
+    var bc = &cdp_inst.browser_context.?;
+    bc.id = "BID-A6R";
+    bc.session_id = "SID-XR";
+    bc.target_id = "TID-A6R-000000".*;
+
+    // First navigation: POST /redirect_to_echo → 302 → GET /echo_method.
+    {
+        const f = try bc.session.createPage();
+        try f.navigate("http://127.0.0.1:9582/redirect_to_echo", .{
+            .method = .POST,
+            .body = "key=value",
+            .header = "Content-Type: application/x-www-form-urlencoded",
+        });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    // Sanity: after the redirect, the loaded page is /echo_method via GET.
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("document.body.innerText.includes('method=GET')", null);
+        try testing.expect(v.toBool());
+    }
+
+    // Reload. The request that produced the current page was GET, so the
+    // reload must also be GET — not a re-POST of the original form data.
+    try ctx.processMessage(.{ .id = 60, .method = "Page.reload" });
+
+    {
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("document.body.innerText.includes('method=GET')", null);
+        try testing.expect(v.toBool());
+    }
+}
+
+test "cdp.frame: navigate inherits original fragment across redirect" {
+    // RFC 7231 §7.1.2: when a 3xx Location header has no fragment, the redirect
+    // inherits the fragment of the request URL.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    {
+        // Location: /redirect-target  (no fragment) — must inherit #myfrag.
+        try ctx.processMessage(.{
+            .id = 40,
+            .method = "Page.navigate",
+            .params = .{ .url = "http://127.0.0.1:9582/redirect-no-fragment#myfrag" },
+        });
+
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+
+        const frame = bc.session.currentFrame() orelse unreachable;
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/redirect-target#myfrag", frame.url);
+    }
+
+    {
+        // Location: /redirect-target#target_fragment — target's fragment wins.
+        try ctx.processMessage(.{
+            .id = 41,
+            .method = "Page.navigate",
+            .params = .{ .url = "http://127.0.0.1:9582/redirect-with-fragment#requested" },
+        });
+
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+
+        const frame = bc.session.currentFrame() orelse unreachable;
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/redirect-target#target_fragment", frame.url);
+    }
+
+    {
+        // No fragment on either side — final URL has no fragment.
+        try ctx.processMessage(.{
+            .id = 42,
+            .method = "Page.navigate",
+            .params = .{ .url = "http://127.0.0.1:9582/redirect-no-fragment" },
+        });
+
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+
+        const frame = bc.session.currentFrame() orelse unreachable;
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/redirect-target", frame.url);
+    }
+}
+
+test "cdp.frame: anchor click sends Referer matching the originating page" {
+    // HTML Living Standard "navigate" algorithm + Fetch §4.5 "request's referrer":
+    // when a navigation is initiated by a hyperlink click (or form submit, or
+    // location.href assignment), the resulting request carries a Referer
+    // header equal to the originating document's URL.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const cdp_inst = ctx.cdp();
+    _ = try cdp_inst.createBrowserContext();
+    var bc = &cdp_inst.browser_context.?;
+    bc.id = "BID-A18";
+    bc.session_id = "SID-A18";
+    bc.target_id = "TID-A18-000000".*;
+
+    // Initial navigation to the page hosting the anchor — driven directly via
+    // Frame.navigate(.address_bar), so this request itself has no Referer.
+    {
+        const f = try bc.session.createPage();
+        try f.navigate("http://127.0.0.1:9582/referer_link.html", .{});
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    // Click the anchor via JS. The click goes through Frame.scheduleNavigation
+    // (.reason = .script), which must capture the originating frame's URL as
+    // the Referer for the queued navigation.
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("document.getElementById('link').click()", null);
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    // After the click navigation completes, the loaded page is /echo_referer
+    // and its body echoes the Referer header the server actually saw.
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec(
+            "document.body.innerText.includes('referer=http://127.0.0.1:9582/referer_link.html')",
+            null,
+        );
+        try testing.expect(v.toBool());
+    }
+}
+
+test "cdp.frame: address-bar Page.navigate sends no Referer" {
+    // Regression guard: navigations initiated by the user agent itself (CDP
+    // Page.navigate, address-bar typed URLs, Page.reload) must not leak the
+    // previous page's URL as Referer. Matches Chrome.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const cdp_inst = ctx.cdp();
+    _ = try cdp_inst.createBrowserContext();
+    var bc = &cdp_inst.browser_context.?;
+    bc.id = "BID-A18B";
+    bc.session_id = "SID-A18B";
+    bc.target_id = "TID-A18B-00000".*;
+
+    {
+        const f = try bc.session.createPage();
+        try f.navigate("http://127.0.0.1:9582/echo_referer", .{});
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    {
+        const f = bc.session.currentFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("document.body.innerText.includes('referer=NONE')", null);
+        try testing.expect(v.toBool());
     }
 }
 
@@ -1052,5 +1438,111 @@ test "cdp.frame: addScriptToEvaluateOnNewDocument" {
 
         const test_val = try ls.local.exec("window.__test2", null);
         try testing.expectEqual(2, try test_val.toI32());
+    }
+}
+
+test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    {
+        // No browser context — should error.
+        try ctx.processMessage(.{ .id = 10, .method = "Page.getNavigationHistory" });
+        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 10 });
+    }
+    {
+        try ctx.processMessage(.{ .id = 11, .method = "Page.navigateToHistoryEntry", .params = .{ .entryId = 0 } });
+        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 11 });
+    }
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-B2", .url = "cdp/dom1.html", .target_id = "TID-B2-0000000".* });
+
+    // Build up history: dom1.html (from loadBrowserContext) → dom2.html → dom3.html.
+    {
+        try ctx.processMessage(.{
+            .id = 20,
+            .method = "Page.navigate",
+            .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html" },
+        });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+    {
+        try ctx.processMessage(.{
+            .id = 21,
+            .method = "Page.navigate",
+            .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom3.html" },
+        });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    // Three entries (ids 0, 1, 2), currentIndex points at the most-recent.
+    {
+        try ctx.processMessage(.{ .id = 30, .method = "Page.getNavigationHistory" });
+        try ctx.expectSentResult(.{
+            .currentIndex = 2,
+            .entries = &[_]NavigationEntry{
+                .{
+                    .id = 0,
+                    .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html",
+                    .userTypedURL = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html",
+                    .title = "",
+                    .transitionType = "other",
+                },
+                .{
+                    .id = 1,
+                    .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html",
+                    .userTypedURL = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html",
+                    .title = "",
+                    .transitionType = "other",
+                },
+                .{
+                    .id = 2,
+                    .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom3.html",
+                    .userTypedURL = "http://127.0.0.1:9582/src/browser/tests/cdp/dom3.html",
+                    .title = "",
+                    .transitionType = "other",
+                },
+            },
+        }, .{ .id = 30 });
+    }
+
+    // Traverse back to the first entry.
+    {
+        try ctx.processMessage(.{
+            .id = 40,
+            .method = "Page.navigateToHistoryEntry",
+            .params = .{ .entryId = 0 },
+        });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+
+        const f = bc.session.currentFrame() orelse unreachable;
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html", f.url);
+    }
+
+    // Traverse forward to the middle entry.
+    {
+        try ctx.processMessage(.{
+            .id = 41,
+            .method = "Page.navigateToHistoryEntry",
+            .params = .{ .entryId = 1 },
+        });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+
+        const f = bc.session.currentFrame() orelse unreachable;
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html", f.url);
+    }
+
+    // Unknown entryId — InvalidParams.
+    {
+        try ctx.processMessage(.{
+            .id = 42,
+            .method = "Page.navigateToHistoryEntry",
+            .params = .{ .entryId = 9999 },
+        });
+        try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 42 });
     }
 }

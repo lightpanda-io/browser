@@ -24,12 +24,16 @@ const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 const collections = @import("../../collections.zig");
 const Form = @import("Form.zig");
+const Event = @import("../../Event.zig");
+const ValidityState = @import("ValidityState.zig");
 pub const Option = @import("Option.zig");
 
 const Select = @This();
 
 _proto: *HtmlElement,
 _selected_index_set: bool = false,
+_custom_validity: ?[]const u8 = null,
+_validity: ?*ValidityState = null,
 
 pub fn asElement(self: *Select) *Element {
     return self._proto._proto;
@@ -44,25 +48,26 @@ pub fn asConstNode(self: *const Select) *const Node {
     return self.asConstElement().asConstNode();
 }
 
-pub fn getValue(self: *Select, frame: *Frame) []const u8 {
-    // Return value of first selected option, or first option if none selected
+// Resolves the option whose selectedness contributes to the select's value
+// per HTML §form-elements§selectedness-setting-algorithm: an explicitly
+// selected non-disabled option, falling back to the first non-disabled
+// option in tree order. Returns null if there is no candidate (zero options
+// or every option disabled), in which case the select has no selectedness
+// and contributes no entry to a FormData set.
+pub fn effectiveOption(self: *const Select) ?*Option {
     var first_option: ?*Option = null;
-    var iter = self.asNode().childrenIterator();
-    while (iter.next()) |child| {
+    var maybe_child = self.asConstNode().firstChild();
+    while (maybe_child) |child| : (maybe_child = child.nextSibling()) {
         const option = child.is(Option) orelse continue;
-        if (option.getDisabled()) {
-            continue;
-        }
-
-        if (option.getSelected()) {
-            return option.getValue(frame);
-        }
-        if (first_option == null) {
-            first_option = option;
-        }
+        if (option.getDisabled()) continue;
+        if (option.getSelected()) return option;
+        if (first_option == null) first_option = option;
     }
-    // No explicitly selected option, return first option's value
-    if (first_option) |opt| {
+    return first_option;
+}
+
+pub fn getValue(self: *Select, frame: *Frame) []const u8 {
+    if (self.effectiveOption()) |opt| {
         return opt.getValue(frame);
     }
     return "";
@@ -242,6 +247,67 @@ pub fn getLabels(self: *Select, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
+// Constraint validation
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#the-constraint-validation-api
+
+pub fn getWillValidate(self: *const Select) bool {
+    return !self.getDisabled();
+}
+
+pub fn getValidity(self: *Select, frame: *Frame) !*ValidityState {
+    if (self._validity) |v| return v;
+    const v = try frame._factory.create(ValidityState{ ._owner = self.asElement() });
+    self._validity = v;
+    return v;
+}
+
+pub fn getValidationMessage(self: *const Select) []const u8 {
+    if (!self.getWillValidate()) return "";
+    if (self._custom_validity) |msg| return msg;
+    if (self.suffersValueMissing()) return "Please select an item in the list.";
+    return "";
+}
+
+pub fn checkValidity(self: *Select, frame: *Frame) !bool {
+    if (!self.getWillValidate()) return true;
+    const v = ValidityState{ ._owner = self.asElement() };
+    if (v.getValid(frame)) return true;
+
+    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
+    return false;
+}
+
+pub fn reportValidity(self: *Select, frame: *Frame) !bool {
+    return self.checkValidity(frame);
+}
+
+pub fn setCustomValidity(self: *Select, message: []const u8, frame: *Frame) !void {
+    if (message.len == 0) {
+        self._custom_validity = null;
+    } else {
+        self._custom_validity = try frame.dupeString(message);
+    }
+}
+
+pub fn hasCustomValidity(self: *const Select) bool {
+    return self._custom_validity != null;
+}
+
+pub fn suffersValueMissing(self: *const Select) bool {
+    if (!self.getWillValidate()) return false;
+    if (!self.getRequired()) return false;
+    // No selectable option ⇒ no value to submit.
+    const opt = self.effectiveOption() orelse return true;
+    // The selected option's `value` attribute (`opt._value`) is what matters
+    // for the missing-value check; an explicit `value=""` is the canonical
+    // placeholder pattern. When `value=` is absent the option's text would
+    // be submitted, so it is not "missing" in the constraint-validation
+    // sense.
+    if (opt._value) |v| return v.len == 0;
+    return false;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Select);
 
@@ -263,6 +329,12 @@ pub const JsApi = struct {
     pub const size = bridge.accessor(Select.getSize, Select.setSize, .{});
     pub const length = bridge.accessor(Select.getLength, null, .{});
     pub const labels = bridge.accessor(Select.getLabels, null, .{});
+    pub const willValidate = bridge.accessor(Select.getWillValidate, null, .{});
+    pub const validity = bridge.accessor(Select.getValidity, null, .{});
+    pub const validationMessage = bridge.accessor(Select.getValidationMessage, null, .{});
+    pub const checkValidity = bridge.function(Select.checkValidity, .{});
+    pub const reportValidity = bridge.function(Select.reportValidity, .{});
+    pub const setCustomValidity = bridge.function(Select.setCustomValidity, .{});
 };
 
 pub const Build = struct {
@@ -275,4 +347,5 @@ const std = @import("std");
 const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Select" {
     try testing.htmlRunner("element/html/select.html", .{});
+    try testing.htmlRunner("element/html/select-validity.html", .{});
 }
