@@ -886,23 +886,11 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *CD
 
     const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
 
-    const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch
-        return ToolError.InternalError;
+    const matched = lp.interactive.findInteractiveElements(page.document.asNode(), arena, page, .{
+        .role = args.role,
+        .name = args.name,
+    }) catch return ToolError.InternalError;
 
-    var matches: std.ArrayList(lp.interactive.InteractiveElement) = .empty;
-    for (elements) |el| {
-        if (args.role) |role| {
-            const el_role = el.role orelse continue;
-            if (!std.ascii.eqlIgnoreCase(el_role, role)) continue;
-        }
-        if (args.name) |name| {
-            const el_name = el.name orelse continue;
-            if (std.ascii.indexOfIgnoreCase(el_name, name) == null) continue;
-        }
-        matches.append(arena, el) catch return ToolError.InternalError;
-    }
-
-    const matched = matches.toOwnedSlice(arena) catch return ToolError.InternalError;
     lp.interactive.registerNodes(matched, registry) catch
         return ToolError.InternalError;
 
@@ -1023,6 +1011,9 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session) ToolError![]co
 
 fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) ToolError!*lp.Frame {
     if (url) |u| {
+        if (session.currentFrame()) |frame| {
+            if (std.mem.eql(u8, frame.url, u)) return frame;
+        }
         try performGoto(session, registry, u, timeout, waitUntil);
     }
     return session.currentFrame() orelse ToolError.FrameNotLoaded;

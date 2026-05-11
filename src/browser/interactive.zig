@@ -145,6 +145,36 @@ pub fn collectInteractiveElements(
     arena: Allocator,
     frame: *Frame,
 ) ![]InteractiveElement {
+    return walkInteractive(root, arena, frame, .{});
+}
+
+pub const FindFilter = struct {
+    /// Exact role match (case-insensitive). When null, role is not filtered.
+    role: ?[]const u8 = null,
+    /// Accessible-name substring match (case-insensitive). When null, name is not filtered.
+    name: ?[]const u8 = null,
+    /// Stop walking once this many matches accumulate. When null, walks the full subtree.
+    max: ?usize = null,
+};
+
+/// Like `collectInteractiveElements` but filters by role and/or accessible
+/// name during the walk and can stop early at `filter.max`. Skips the expensive
+/// accessible-name resolution for elements that already fail the role filter.
+pub fn findInteractiveElements(
+    root: *Node,
+    arena: Allocator,
+    frame: *Frame,
+    filter: FindFilter,
+) ![]InteractiveElement {
+    return walkInteractive(root, arena, frame, filter);
+}
+
+fn walkInteractive(
+    root: *Node,
+    arena: Allocator,
+    frame: *Frame,
+    filter: FindFilter,
+) ![]InteractiveElement {
     // Pre-build a map of event_target pointer → event type names,
     // so classify and getListenerTypes are both O(1) per element.
     const listener_targets = try buildListenerTargetMap(frame, arena);
@@ -166,16 +196,27 @@ pub fn collectInteractiveElements(
 
         const itype = classifyInteractivity(frame, el, html_el, listener_targets, &css_cache) orelse continue;
 
-        const listener_types = getListenerTypes(
-            el.asEventTarget(),
-            listener_targets,
-        );
+        const role = getRole(el);
+        if (filter.role) |rf| {
+            const r = role orelse continue;
+            if (!std.ascii.eqlIgnoreCase(r, rf)) continue;
+        }
+
+        // Resolve accessible name only after the cheap role filter passes,
+        // since getAccessibleName walks the element's text subtree.
+        const name = try getAccessibleName(el, arena);
+        if (filter.name) |nf| {
+            const n = name orelse continue;
+            if (std.ascii.indexOfIgnoreCase(n, nf) == null) continue;
+        }
+
+        const listener_types = getListenerTypes(el.asEventTarget(), listener_targets);
 
         try results.append(arena, .{
             .node = node,
             .tag_name = el.getTagNameLower(),
-            .role = getRole(el),
-            .name = try getAccessibleName(el, arena),
+            .role = role,
+            .name = name,
             .interactivity_type = itype,
             .listener_types = listener_types,
             .disabled = el.isDisabled(),
@@ -191,6 +232,10 @@ pub fn collectInteractiveElements(
             .element_name = el.getAttributeSafe(comptime .wrap("name")),
             .placeholder = el.getAttributeSafe(comptime .wrap("placeholder")),
         });
+
+        if (filter.max) |m| {
+            if (results.items.len >= m) break;
+        }
     }
 
     return results.items;
