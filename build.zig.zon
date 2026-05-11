@@ -43,8 +43,8 @@
             .hash = "zenai-0.0.0-iOY_VOebAwA19L7IyQKx8CJRDbNwf75jN_nJ_F3OFD8m",
         },
         .isocline = .{
-            .url = "https://github.com/daanx/isocline/archive/refs/tags/v1.1.0.tar.gz",
-            .hash = "N-V-__8AAAO9EgA-gjVR9Uf87fpOT--TBHVEvafXa3yRa0HY",
+            .url = "git+https://github.com/arrufat/isocline.git#c3cb438b475c0c2cb8eceef0f7ffd0fbf41bfbb3",
+            .hash = "N-V-__8AAM8zEwBkQl7O6YrCWvBsnRiOKcdRi_6UoimWlDO3",
         },
     },
     .paths = .{""},

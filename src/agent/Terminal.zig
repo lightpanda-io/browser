@@ -57,12 +57,13 @@ const all_slash_names: [browser_tools.tool_defs.len + SlashCommand.meta_names.le
     break :blk names;
 };
 
-/// Wires the isocline completer to `self` so the C callback can reach
-/// `slash_schemas` via `ic_completion_arg`. Must run after the Terminal is
-/// in its final memory location.
+/// Wires the isocline completer and hinter to `self` so the C callbacks can
+/// reach `slash_schemas`. Must run after the Terminal is in its final memory
+/// location.
 pub fn attachCompleter(self: *Self, schemas: []const SlashCommand.SchemaInfo) void {
     self.slash_schemas = schemas;
     c.ic_set_default_completer(&completionCallback, self);
+    c.ic_set_default_hinter(&hintsCallback, self);
 }
 
 pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity: Verbosity, is_repl: bool) Self {
@@ -356,6 +357,70 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
     }
 
     self.addEnvVarCompletions(cenv, &buf, input);
+}
+
+// File-scope buffer used by `hintsCallback`. Isocline copies the returned
+// string into its own stringbuf, so we can safely overwrite this between calls.
+var hint_buf: [completion_buf_len:0]u8 = undefined;
+
+fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const u8 {
+    const self_ptr = arg orelse return null;
+    const self: *Self = @ptrCast(@alignCast(self_ptr));
+    const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input_c)), 0);
+    if (input.len == 0) return null;
+
+    // `/help <partial>`: leave the inline hint to the completion-derived path.
+    if (parseHelpArgPrefix(input)) |_| return null;
+
+    if (parseSlashCommand(input)) |parts| {
+        const ends_ws = input[input.len - 1] == ' ';
+        if (SlashCommand.findSchema(self.slash_schemas, parts.name)) |schema| {
+            return renderSchemaHint(schema, parts.rest, ends_ws) orelse null;
+        }
+        return null;
+    }
+
+    if (std.mem.indexOfScalar(u8, input, ' ') != null) return null;
+    if (input[0] == '/') return null;
+
+    // PandaScript keyword: show its args template on exact match.
+    for (Command.keywords) |kw| {
+        if (!std.ascii.eqlIgnoreCase(kw.name, input)) continue;
+        const args = kw.args orelse return null;
+        const text = std.fmt.bufPrintZ(&hint_buf, " {s}", .{args}) catch return null;
+        return text.ptr;
+    }
+    return null;
+}
+
+// Renders `<required>` and `[optional=…]` for each unused field, or
+// `<keyname>=…` when the user is typing a key prefix.
+fn renderSchemaHint(schema: *const SlashCommand.SchemaInfo, body: []const u8, ends_ws: bool) ?[*c]const u8 {
+    const a = analyzeBody(schema, body, ends_ws);
+
+    if (a.partial_key) |pk| {
+        for (schema.hints) |slot| {
+            if (a.isUsed(slot.name)) continue;
+            if (!std.ascii.startsWithIgnoreCase(slot.name, pk)) continue;
+            const text = std.fmt.bufPrintZ(&hint_buf, "{s}=…", .{slot.name[pk.len..]}) catch return null;
+            return text.ptr;
+        }
+        return null;
+    }
+
+    var pos: usize = 0;
+    for (schema.hints) |slot| {
+        if (a.isUsed(slot.name)) continue;
+        const lead: []const u8 = if (pos > 0 or !ends_ws) " " else "";
+        const written = if (slot.required)
+            std.fmt.bufPrint(hint_buf[pos..], "{s}<{s}>", .{ lead, slot.name }) catch return null
+        else
+            std.fmt.bufPrint(hint_buf[pos..], "{s}[{s}=…]", .{ lead, slot.name }) catch return null;
+        pos += written.len;
+    }
+    if (pos == 0) return null;
+    hint_buf[pos] = 0;
+    return @ptrCast(&hint_buf);
 }
 
 // Advances `i` past whitespace; returns true if more text remains.
