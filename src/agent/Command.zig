@@ -219,34 +219,42 @@ pub fn parse(line: []const u8) Command {
 
 pub const KeywordSyntax = struct {
     name: []const u8,
-    args: []const u8,
+    /// Null for argless commands (TREE, MARKDOWN, LOGIN, ACCEPT_COOKIES).
+    args: ?[]const u8,
+};
+
+/// Single source of truth for PandaScript keyword names — consumed by the
+/// parser, the REPL highlighter, and Tab completion. Order is REPL-facing
+/// (action verbs first), so completions feel natural.
+pub const keywords = [_]KeywordSyntax{
+    .{ .name = "GOTO", .args = "<url>" },
+    .{ .name = "CLICK", .args = "'<selector>'" },
+    .{ .name = "TYPE", .args = "'<selector>' '<value>'" },
+    .{ .name = "WAIT", .args = "'<selector>'" },
+    .{ .name = "SCROLL", .args = "[x] [y]" },
+    .{ .name = "HOVER", .args = "'<selector>'" },
+    .{ .name = "SELECT", .args = "'<selector>' '<value>'" },
+    .{ .name = "CHECK", .args = "'<selector>' [true|false]" },
+    .{ .name = "TREE", .args = null },
+    .{ .name = "MARKDOWN", .args = null },
+    .{ .name = "EXTRACT", .args = "'<selector>'" },
+    .{ .name = "EVAL", .args = "'<script>'" },
+    .{ .name = "LOGIN", .args = null },
+    .{ .name = "ACCEPT_COOKIES", .args = null },
 };
 
 /// If the first word of `line` matches a recognized PandaScript keyword that
 /// takes arguments, returns its expected shape. Lets the REPL distinguish
 /// "you mistyped args for a known command" from "this is natural language" —
 /// the latter goes to the LLM, the former gets a syntax error. Argless
-/// commands (TREE, MARKDOWN, LOGIN, ACCEPT_COOKIES) are intentionally absent
-/// because they always parse successfully when typed alone, so they never
-/// fall through to natural_language.
+/// commands return null because they always parse successfully when typed
+/// alone, so they never fall through to natural_language.
 pub fn keywordSyntax(line: []const u8) ?KeywordSyntax {
     const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
     const end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
     const word = trimmed[0..end];
-    const table = [_]KeywordSyntax{
-        .{ .name = "GOTO", .args = "<url>" },
-        .{ .name = "CLICK", .args = "'<selector>'" },
-        .{ .name = "TYPE", .args = "'<selector>' '<value>'" },
-        .{ .name = "WAIT", .args = "'<selector>'" },
-        .{ .name = "SCROLL", .args = "[x] [y]" },
-        .{ .name = "HOVER", .args = "'<selector>'" },
-        .{ .name = "SELECT", .args = "'<selector>' '<value>'" },
-        .{ .name = "CHECK", .args = "'<selector>' [true|false]" },
-        .{ .name = "EXTRACT", .args = "'<selector>'" },
-        .{ .name = "EVAL", .args = "'<script>'" },
-    };
-    for (table) |kc| {
-        if (std.mem.eql(u8, word, kc.name)) return kc;
+    for (keywords) |kc| {
+        if (kc.args != null and std.mem.eql(u8, word, kc.name)) return kc;
     }
     return null;
 }
