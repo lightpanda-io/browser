@@ -416,5 +416,8 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Worker" {
-    try testing.htmlRunner("worker", .{});
+    // Worker tests chain a worker-script fetch with a dynamic-import fetch
+    // and a cross-context postMessage. The default 2 s assertion budget can
+    // blow up on TSAN CI; give it more room.
+    try testing.htmlRunner("worker", .{ .timeout_ms = 8000 });
 }

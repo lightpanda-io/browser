@@ -339,6 +339,7 @@ pub var test_session: *Session = undefined;
 
 const WEB_API_TEST_ROOT = "src/browser/tests/";
 const HtmlRunnerOpts = struct {
+    timeout_ms: u32 = 2000,
     inject_script: ?[]const u8 = null,
 };
 
@@ -364,7 +365,7 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
                 return;
             }
             try @import("root").subtest(root);
-            try runWebApiTest(root);
+            try runWebApiTest(root, opts.timeout_ms);
         },
         .directory => {
             var dir = try std.fs.cwd().openDir(root, .{
@@ -390,7 +391,7 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
 
                 const full_path = try std.fs.path.joinZ(arena_allocator, &.{ root, entry.name });
                 try @import("root").subtest(entry.name);
-                try runWebApiTest(full_path);
+                try runWebApiTest(full_path, opts.timeout_ms);
             }
         },
         else => |kind| {
@@ -400,7 +401,7 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
     }
 }
 
-fn runWebApiTest(test_file: [:0]const u8) !void {
+fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
     const frame = try test_session.createPage();
     defer test_session.removePage();
 
@@ -426,7 +427,7 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     var runner = try test_session.runner(.{});
     try runner.wait(.{ .ms = 2000, .until = .load });
 
-    var wait_ms: u32 = 2000;
+    var wait_ms: u32 = timeout_ms;
     var timer = try std.time.Timer.start();
     while (true) {
         var try_catch: js.TryCatch = undefined;
