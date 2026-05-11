@@ -472,8 +472,6 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
         };
     }
 
-    self._response_url = try self._arena.dupeZ(u8, response.url());
-
     var allow_origin: ?[]const u8 = null;
     var allow_credentials = false;
 
@@ -497,8 +495,8 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
 
     self._response_url = try self._arena.dupeZ(u8, response.url());
 
-    const frame = self._frame;
-    const request_origin = URL.getOrigin(self._arena, frame.url) catch null;
+    const exec = self._exec;
+    const request_origin = URL.getOrigin(self._arena, exec.url.*) catch null;
     const response_origin = URL.getOrigin(self._arena, self._response_url) catch null;
     const cross_origin = if (request_origin != null and response_origin != null)
         !std.mem.eql(u8, request_origin.?, response_origin.?)

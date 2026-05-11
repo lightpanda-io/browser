@@ -187,8 +187,8 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
     const exec = self._exec;
     const requesting_origin = URL.getOrigin(arena, exec.url.*) catch null;
     const response_origin = URL.getOrigin(arena, res._url) catch null;
-    const cross_origin = if (request_origin != null and response_origin != null)
-        !std.mem.eql(u8, request_origin.?, response_origin.?)
+    const cross_origin = if (requesting_origin != null and response_origin != null)
+        !std.mem.eql(u8, requesting_origin.?, response_origin.?)
     else
         false;
 
@@ -203,21 +203,11 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
             std.ascii.eqlIgnoreCase(hdr.value, "true")) {
             allow_credentials = true;
         }
-        try res._headers.append(hdr.name, hdr.value, &self._frame.js.execution);
+        try res._headers.append(hdr.name, hdr.value, exec);
     }
 
     if (cross_origin) {
-        if (!Cors.isResponseAllowed(allow_origin, allow_credentials, request_origin.?, self._allow_credentials)) {
-            response.abort(error.CorsBlocked);
-            return false;
-        }
-        res._type = .cors;
-    } else {
-        res._type = .basic;
-    }
-
-    if (cross_origin) {
-        if (!Cors.isResponseAllowed(allow_origin, allow_credentials, request_origin.?, self._allow_credentials)) {
+        if (!Cors.isResponseAllowed(allow_origin, allow_credentials, requesting_origin.?, self._allow_credentials)) {
             response.abort(error.CorsBlocked);
             return false;
         }
