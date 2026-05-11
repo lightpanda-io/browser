@@ -5,11 +5,21 @@ const Config = lp.Config;
 const Command = @import("Command.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const Spinner = @import("Spinner.zig");
+const string = @import("../string.zig");
 const c = @cImport({
     @cInclude("isocline.h");
 });
 
 const Self = @This();
+
+const style_cmd = "ps-cmd";
+const style_slash = "ps-slash";
+const style_string = "ps-string";
+const style_var = "ps-var";
+const style_url = "ps-url";
+const style_key = "ps-key";
+const style_num = "ps-num";
+const style_err = "ps-err";
 
 pub const ansi = struct {
     pub const reset = "\x1b[0m";
@@ -27,6 +37,7 @@ fn atLeast(level: Verbosity, min: Verbosity) bool {
     return @intFromEnum(level) >= @intFromEnum(min);
 }
 
+allocator: std.mem.Allocator,
 history_path: ?[:0]const u8,
 verbosity: Verbosity,
 /// Non-null in REPL mode. Doubles as scratch arena for the pretty-printer
@@ -39,17 +50,14 @@ spinner: Spinner,
 /// Schemas the completer uses to render `/slash` arg hints. Empty until
 /// `setSlashSchemas` is called.
 slash_schemas: []const SlashCommand.SchemaInfo = &.{},
-
-// Meta slash commands handled directly by the agent (not by ToolExecutor).
-// Kept in sync with `handleSlash` in `Agent.zig`. Only the names matter for
-// completion; arg hints are not surfaced separately (the menu is enough).
-const meta_slash_commands = [_][:0]const u8{ "help", "quit" };
+/// Cached LP_* environment variable names for completion.
+env_names: ?[]const []const u8 = null,
 
 // Flat name list for the "match any slash command" search/completion paths.
-const all_slash_names: [browser_tools.tool_defs.len + meta_slash_commands.len][]const u8 = blk: {
-    var names: [browser_tools.tool_defs.len + meta_slash_commands.len][]const u8 = undefined;
+const all_slash_names: [browser_tools.tool_defs.len + SlashCommand.meta_names.len][]const u8 = blk: {
+    var names: [browser_tools.tool_defs.len + SlashCommand.meta_names.len][]const u8 = undefined;
     for (browser_tools.tool_defs, 0..) |td, i| names[i] = td.name;
-    for (meta_slash_commands, 0..) |m, i| names[browser_tools.tool_defs.len + i] = m;
+    for (SlashCommand.meta_names, 0..) |m, i| names[browser_tools.tool_defs.len + i] = m;
     break :blk names;
 };
 
@@ -59,6 +67,7 @@ const all_slash_names: [browser_tools.tool_defs.len + meta_slash_commands.len][]
 pub fn setSlashSchemas(self: *Self, schemas: []const SlashCommand.SchemaInfo) void {
     self.slash_schemas = schemas;
     c.ic_set_default_completer(&completionCallback, self);
+    c.ic_set_default_highlighter(&highlighterCallback, null);
 }
 
 pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity: Verbosity, is_repl: bool) Self {
@@ -69,21 +78,21 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
     _ = c.ic_set_hint_delay(0);
     _ = c.ic_enable_brace_insertion(true);
     // `ps-*` namespace avoids colliding with isocline's built-in `ic-*` styles.
-    c.ic_style_def("ps-cmd", "ansi-cyan bold");
-    c.ic_style_def("ps-slash", "ansi-magenta bold");
-    c.ic_style_def("ps-string", "ansi-green");
-    c.ic_style_def("ps-var", "ansi-yellow bold");
-    c.ic_style_def("ps-url", "ansi-blue underline");
-    c.ic_style_def("ps-key", "ansi-cyan");
-    c.ic_style_def("ps-num", "ansi-yellow");
-    c.ic_style_def("ps-err", "ansi-red");
+    c.ic_style_def(style_cmd, "ansi-cyan bold");
+    c.ic_style_def(style_slash, "ansi-magenta bold");
+    c.ic_style_def(style_string, "ansi-green");
+    c.ic_style_def(style_var, "ansi-yellow bold");
+    c.ic_style_def(style_url, "ansi-blue underline");
+    c.ic_style_def(style_key, "ansi-cyan");
+    c.ic_style_def(style_num, "ansi-yellow");
+    c.ic_style_def(style_err, "ansi-red");
     _ = c.ic_enable_highlight(true);
-    c.ic_set_default_highlighter(&highlighterCallback, null);
     if (history_path) |path| {
         c.ic_set_history(path.ptr, -1); // -1 → 200-entry default cap
     }
     const stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO);
     return .{
+        .allocator = allocator,
         .history_path = history_path,
         .verbosity = verbosity,
         .repl_arena = if (is_repl) std.heap.ArenaAllocator.init(allocator) else null,
@@ -99,6 +108,7 @@ fn isRepl(self: *const Self) bool {
 pub fn deinit(self: *Self) void {
     self.spinner.deinit();
     if (self.repl_arena) |*a| a.deinit();
+    if (self.env_names) |names| self.allocator.free(names);
 }
 
 const bullet_line_fmt = "{s}●{s} {s}[tool: {s}]{s} {s}\n";
@@ -251,6 +261,7 @@ fn addPartialKeyCompletions(
 
 // Completes `$LP_*` against the live process environment.
 fn addEnvVarCompletions(
+    self: *Self,
     cenv: ?*c.ic_completion_env_t,
     buf: *[completion_buf_len:0]u8,
     input: []const u8,
@@ -261,10 +272,10 @@ fn addEnvVarCompletions(
         if (!std.ascii.isAlphanumeric(ch) and ch != '_') return;
     }
 
-    // Names are slices into std.os.environ; only pointer metadata is allocated.
-    var stack: [16 * 1024]u8 = undefined;
-    var fba: std.heap.FixedBufferAllocator = .init(&stack);
-    const names = browser_tools.lpEnvNames(fba.allocator()) catch return;
+    if (self.env_names == null) {
+        self.env_names = browser_tools.lpEnvNames(self.allocator) catch null;
+    }
+    const names = self.env_names orelse return;
 
     const head = input[0 .. dollar + 1];
     for (names) |name| {
@@ -314,7 +325,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
         }
     }
 
-    addEnvVarCompletions(cenv, &buf, input);
+    self.addEnvVarCompletions(cenv, &buf, input);
 }
 
 // Byte offsets to ic_highlight are not UTF-8 code points; safe because we
@@ -331,28 +342,20 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*a
     while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
     const cmd = text[cmd_start..i];
     if (cmd.len > 0 and cmd[0] == '/') {
-        const style = if (isKnownSlashName(cmd[1..])) "ps-slash" else "ps-err";
+        const style = if (isKnownSlashName(cmd[1..])) style_slash else style_err;
         c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), style.ptr);
         highlightSlashArgs(henv, text, i);
     } else {
         // ALL CAPS but unknown → typo (red); lowercase/mixed → natural language (unstyled).
         const style: ?[*:0]const u8 = if (isKnownCommand(cmd))
-            "ps-cmd"
-        else if (isAllUpper(cmd))
-            "ps-err"
+            style_cmd
+        else if (string.isAllUpper(cmd))
+            style_err
         else
             null;
         if (style) |s| c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), s);
         highlightPandaArgs(henv, text, i);
     }
-}
-
-fn isAllUpper(s: []const u8) bool {
-    if (s.len == 0) return false;
-    for (s) |ch| {
-        if (!std.ascii.isUpper(ch) and !std.ascii.isDigit(ch) and ch != '_') return false;
-    }
-    return true;
 }
 
 fn isKnownCommand(name: []const u8) bool {
@@ -373,11 +376,11 @@ fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     if (start >= end) return;
     const tok = text[start..end];
     if (tok[0] == '$') {
-        c.ic_highlight(henv, @intCast(start), @intCast(end - start), "ps-var".ptr);
+        c.ic_highlight(henv, @intCast(start), @intCast(end - start), style_var.ptr);
         return;
     }
-    if (std.mem.startsWith(u8, tok, "http://") or std.mem.startsWith(u8, tok, "https://")) {
-        c.ic_highlight(henv, @intCast(start), @intCast(end - start), "ps-url".ptr);
+    if (lp.URL.isCompleteHTTPUrl(tok)) {
+        c.ic_highlight(henv, @intCast(start), @intCast(end - start), style_url.ptr);
         return;
     }
     if (std.ascii.isDigit(tok[0])) {
@@ -386,18 +389,16 @@ fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
             all_num = false;
             break;
         };
-        if (all_num) c.ic_highlight(henv, @intCast(start), @intCast(end - start), "ps-num".ptr);
+        if (all_num) c.ic_highlight(henv, @intCast(start), @intCast(end - start), style_num.ptr);
     }
 }
 
-// Backslash escapes are recognized just enough to skip `\'` inside a quoted string.
+// Note: Does not handle backslash escapes (matches SlashCommand.zig parser).
 fn scanQuoted(text: []const u8, start: usize) usize {
     if (start >= text.len) return start;
     const quote = text[start];
     var i = start + 1;
-    while (i < text.len and text[i] != quote) : (i += 1) {
-        if (text[i] == '\\' and i + 1 < text.len) i += 1;
-    }
+    while (i < text.len and text[i] != quote) : (i += 1) {}
     return if (i < text.len) i + 1 else i;
 }
 
@@ -410,7 +411,7 @@ fn highlightPandaArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
         if (text[i] == '\'' or text[i] == '"') {
             const tok_start = i;
             i = scanQuoted(text, i);
-            c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), "ps-string".ptr);
+            c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_string.ptr);
             continue;
         }
         const tok_start = i;
@@ -429,12 +430,12 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
         while (i < text.len and !std.ascii.isWhitespace(text[i]) and text[i] != '=') i += 1;
         const key_end = i;
         if (i < text.len and text[i] == '=') {
-            c.ic_highlight(henv, @intCast(tok_start), @intCast(key_end - tok_start), "ps-key".ptr);
+            c.ic_highlight(henv, @intCast(tok_start), @intCast(key_end - tok_start), style_key.ptr);
             i += 1;
             const val_start = i;
             if (i < text.len and (text[i] == '\'' or text[i] == '"')) {
                 i = scanQuoted(text, i);
-                c.ic_highlight(henv, @intCast(val_start), @intCast(i - val_start), "ps-string".ptr);
+                c.ic_highlight(henv, @intCast(val_start), @intCast(i - val_start), style_string.ptr);
             } else {
                 while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
                 highlightBareToken(henv, text, val_start, i);

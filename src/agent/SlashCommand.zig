@@ -28,6 +28,11 @@ pub const SchemaInfo = struct {
     hints: []const HintSlot,
 };
 
+/// Meta slash commands handled directly by the agent (not by ToolExecutor).
+/// Only the names matter for completion; arg hints are not surfaced
+/// separately (the menu is enough).
+pub const meta_names = [_][:0]const u8{ "help", "quit" };
+
 pub const ParseError = error{
     MissingName,
     UnknownTool,
