@@ -1,0 +1,987 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+//! XPath 1.0 evaluator — runs an `ast.Expr` against a context node and
+//! produces a `Result`. The evaluator allocates intermediate values
+//! (node-set slices, formatted numbers, materialized attribute nodes)
+//! into the caller's arena. The context `Frame` is needed for
+//! `getElementById` and to materialize attributes (the attribute axis
+//! returns full `Attribute` nodes so the result is `*Node`-uniform).
+//!
+//! Document-order sort happens once at the public boundary
+//! (`evaluate()`); intermediate step results stay in axis order so
+//! reverse-axis positional predicates evaluate against proximity.
+
+const std = @import("std");
+const lp = @import("lightpanda");
+
+const Node = @import("../webapi/Node.zig");
+
+const ast = @import("ast.zig");
+const Parser = @import("Parser.zig");
+const result = @import("result.zig");
+const functions = @import("functions.zig");
+
+const Frame = lp.Frame;
+const Element = Node.Element;
+const Document = Node.Document;
+const Allocator = std.mem.Allocator;
+
+const Evaluator = @This();
+
+pub const Error = error{
+    OutOfMemory,
+    WriteFailed,
+    // Surfaces from Attribute materialization (`Entry.toAttribute` →
+    // `String.dupe` enforces a length limit). The polyfill never hits
+    // this since JS strings are unbounded, but Lightpanda's `String`
+    // type caps at u32::MAX bytes — propagate so callers can surface
+    // a DOM exception.
+    StringTooLarge,
+    UnknownFunction,
+    UnionRequiresNodeSets,
+};
+
+arena: Allocator,
+frame: *Frame,
+
+/// Public entry. Returns the AST's value; node-sets are sorted into
+/// document order before return per XPath spec §3.3.
+pub fn evaluate(arena: Allocator, expr: *const ast.Expr, context_node: *Node, frame: *Frame) Error!result.Result {
+    var ev = Evaluator{ .arena = arena, .frame = frame };
+    const res = try ev.evalExpr(expr, context_node, 1, 1);
+    if (res == .node_set) {
+        sortDocOrder(@constCast(res.node_set));
+    }
+    return res;
+}
+
+pub const SearchError = Error || Parser.Error;
+
+/// Convenience for `DOM.performSearch`: parse + evaluate and unwrap the
+/// node-set. Top-level scalar expressions yield an empty slice
+/// (decision #3 — these APIs are for finding nodes, not arbitrary
+/// computation).
+pub fn searchAll(arena: Allocator, root: *Node, expression: []const u8, frame: *Frame) SearchError![]const *Node {
+    const expr = try Parser.parse(arena, expression);
+    return switch (try evaluate(arena, expr, root, frame)) {
+        .node_set => |ns| ns,
+        else => &.{},
+    };
+}
+
+// ----- AST evaluation -----
+
+fn evalExpr(self: *Evaluator, expr: *const ast.Expr, ctx: *Node, pos: usize, size: usize) Error!result.Result {
+    return switch (expr.*) {
+        .number => |n| .{ .number = n },
+        .literal => |s| .{ .string = s },
+        .var_ref => .{ .string = "" }, // decision #3 stub
+        .neg => |inner| blk: {
+            const v = try self.evalExpr(inner, ctx, pos, size);
+            const n = try result.toNumber(self.arena, v);
+            break :blk .{ .number = -n };
+        },
+        .binop => |bo| try self.evalBinop(bo, ctx, pos, size),
+        .path => |p| try self.evalPath(p, ctx),
+        .filter_path => |fp| try self.evalFilterPath(fp, ctx, pos, size),
+        .filter => |f| try self.evalFilter(f, ctx, pos, size),
+        .fn_call => |fc| try self.evalFnCall(fc, ctx, pos, size),
+    };
+}
+
+fn evalPath(self: *Evaluator, path: ast.Path, ctx: *Node) Error!result.Result {
+    if (try self.tryIdLookupFastPath(path, ctx)) |res| return res;
+    if (try self.tryFusedDescendantFastPath(path, ctx)) |res| return res;
+
+    const start: *Node = if (path.absolute) blk: {
+        if (ctx._type == .document) break :blk ctx;
+        const owner = ctx.ownerDocument(self.frame) orelse break :blk ctx;
+        break :blk owner.asNode();
+    } else ctx;
+
+    var current = try self.arena.alloc(*Node, 1);
+    current[0] = start;
+    var current_set: []const *Node = current;
+
+    for (path.steps) |step| {
+        const r = try self.evalStep(current_set, step);
+        current_set = r.node_set;
+    }
+    return .{ .node_set = current_set };
+}
+
+// Recognize the very common `//tag[@id='x']` and `.//tag[@id='x']`
+// shapes (and their wildcard `//*[@id='x']` variants) and serve them
+// directly from `frame.getElementByIdFromNode`. Accepts the literal on
+// either side of `=`.
+//
+// Mirrors the same tradeoff `webapi/selector/List.zig:optimizeSelector`
+// already makes for `querySelector(All)`: the id-map only stores the
+// first element per ID in document order, so duplicate IDs (invalid
+// HTML, but possible) yield one match here where a strict tree walk
+// would find all. Acceptable because Capybara/Selenium hot paths
+// assume unique IDs and CSS has shipped this compromise for years.
+//
+// Falls through to the general path for any deviation: extra steps,
+// extra predicates, non-eq predicate, non-literal RHS, or the
+// inability to resolve a search root.
+fn tryIdLookupFastPath(self: *Evaluator, path: ast.Path, ctx: *Node) Error!?result.Result {
+    // Two acceptable AST shapes:
+    //   //tag[@id='x']   parses to:  ds::node() / child::tag[pred]
+    //   .//tag[@id='x']  parses to:  self::node() / ds::node() / child::tag[pred]
+    const target = matchDescendantPathShape(path) orelse return null;
+
+    if (target.axis != .child) return null;
+    if (target.predicates.len != 1) return null;
+
+    // Tag name (null = wildcard "*"). type_test (e.g. `node()`,
+    // `text()`) doesn't qualify because getElementByIdFromNode only
+    // returns elements.
+    const tag_name: ?[]const u8 = switch (target.node_test) {
+        .name => |n| if (std.mem.eql(u8, n, "*")) null else n,
+        .type_test => return null,
+    };
+
+    const id_value = matchAttrEqLiteral(target.predicates[0], "id") orelse return null;
+
+    // Resolve search root the same way the general path does.
+    const search_root: *Node = if (path.absolute) blk: {
+        if (ctx._type == .document) break :blk ctx;
+        const owner = ctx.ownerDocument(self.frame) orelse return null;
+        break :blk owner.asNode();
+    } else ctx;
+
+    const id_element = self.frame.getElementByIdFromNode(search_root, id_value) orelse {
+        return .{ .node_set = &.{} };
+    };
+    const id_node = id_element.asNode();
+
+    // Relative paths must filter to descendants of the context.
+    // getElementByIdFromNode is doc-wide.
+    if (search_root != id_node and !search_root.contains(id_node)) {
+        return .{ .node_set = &.{} };
+    }
+
+    // Tag check (case-insensitive per decision #2). Element tag names
+    // are stored lowercase via `getTagNameLower`; lowercase the AST
+    // name once and compare.
+    if (tag_name) |tag| {
+        const lowered = try std.ascii.allocLowerString(self.arena, tag);
+        if (!std.mem.eql(u8, lowered, id_element.getTagNameLower())) {
+            return .{ .node_set = &.{} };
+        }
+    }
+
+    const out = try self.arena.alloc(*Node, 1);
+    out[0] = id_node;
+    return .{ .node_set = out };
+}
+
+// Generalization of `tryIdLookupFastPath` to non-ID predicates. Same
+// AST shape (`//<test>[preds]` / `.//<test>[preds]`), but instead of
+// dispatching to `getElementByIdFromNode`, walks the descendants of
+// the search root once in document order, applying the node test and
+// any "safe" non-positional predicates inline. Skips the general path's
+// per-step axis materialization, the per-step `filtered`/`current`
+// ArrayLists, and the dedup hash map (single-context forward walk
+// already preserves doc order).
+//
+// Hits the bulk of the benchmark's remaining cost: `//div`, `//*`,
+// `//*[@class='x']`, `//div[@class='x']`, `//div[contains(@class,'x')]`.
+//
+// "Safe" predicates: not numeric at the top level (number, neg,
+// arithmetic binop, or a fn-call returning a number), and free of
+// `position()`/`last()` anywhere in the predicate AST. Numeric predicates
+// would need `position()` context which the fused walk doesn't track,
+// and a `position()`/`last()` reference inside a sub-path's own step is
+// rejected conservatively even though it's local to that sub-axis.
+fn tryFusedDescendantFastPath(self: *Evaluator, path: ast.Path, ctx: *Node) Error!?result.Result {
+    const target = matchDescendantPathShape(path) orelse return null;
+    if (target.axis != .child) return null;
+
+    for (target.predicates) |p| {
+        if (!isSafeNonPositionalPredicate(p)) return null;
+    }
+
+    const lowered_name: ?[]const u8 = switch (target.node_test) {
+        .name => |n| if (std.mem.eql(u8, n, "*")) null else try std.ascii.allocLowerString(self.arena, n),
+        .type_test => null,
+    };
+
+    const search_root: *Node = if (path.absolute) blk: {
+        if (ctx._type == .document) break :blk ctx;
+        const owner = ctx.ownerDocument(self.frame) orelse return null;
+        break :blk owner.asNode();
+    } else ctx;
+
+    var out: std.ArrayList(*Node) = .empty;
+    try self.fusedDescend(search_root, target, lowered_name, &out);
+    return .{ .node_set = out.items };
+}
+
+fn fusedDescend(
+    self: *Evaluator,
+    parent: *Node,
+    target: ast.Step,
+    lowered_name: ?[]const u8,
+    out: *std.ArrayList(*Node),
+) Error!void {
+    var it = parent.childrenIterator();
+    while (it.next()) |c| {
+        if (matchTest(c, target.node_test, target.axis, lowered_name)) {
+            var ok = true;
+            for (target.predicates) |pred| {
+                // Position / size are synthetic. Safe because the
+                // predicate-safety gate already rejected any expression
+                // that depends on either.
+                const val = try self.evalExpr(pred, c, 1, 1);
+                if (!result.toBoolean(val)) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) try out.append(self.arena, c);
+        }
+        try self.fusedDescend(c, target, lowered_name, out);
+    }
+}
+
+fn matchDescendantPathShape(path: ast.Path) ?ast.Step {
+    return switch (path.steps.len) {
+        2 => blk: {
+            if (!isDescendantOrSelfNode(path.steps[0])) break :blk null;
+            break :blk path.steps[1];
+        },
+        3 => blk: {
+            if (!isSelfNode(path.steps[0])) break :blk null;
+            if (!isDescendantOrSelfNode(path.steps[1])) break :blk null;
+            break :blk path.steps[2];
+        },
+        else => null,
+    };
+}
+
+fn isSafeNonPositionalPredicate(expr: *const ast.Expr) bool {
+    if (isNumericTopLevel(expr)) return false;
+    if (containsPositionOrLast(expr)) return false;
+    return true;
+}
+
+fn isNumericTopLevel(expr: *const ast.Expr) bool {
+    return switch (expr.*) {
+        .number, .neg => true,
+        .binop => |bo| switch (bo.op) {
+            .add, .sub, .mul, .div, .mod => true,
+            else => false,
+        },
+        .fn_call => |fc| isNumericFnName(fc.name),
+        else => false,
+    };
+}
+
+fn isNumericFnName(name: []const u8) bool {
+    const numeric = [_][]const u8{
+        "position",      "last",    "count", "sum",
+        "floor",         "ceiling", "round", "number",
+        "string-length",
+    };
+    for (numeric) |n| {
+        if (std.mem.eql(u8, name, n)) return true;
+    }
+    return false;
+}
+
+fn containsPositionOrLast(expr: *const ast.Expr) bool {
+    return switch (expr.*) {
+        .number, .literal, .var_ref => false,
+        .neg => |inner| containsPositionOrLast(inner),
+        .binop => |bo| containsPositionOrLast(bo.left) or containsPositionOrLast(bo.right),
+        .filter => |f| containsPositionOrLast(f.expr) or containsPositionOrLast(f.predicate),
+        .filter_path => |fp| containsPositionOrLast(fp.filter) or stepsContainPositionOrLast(fp.steps),
+        .path => |p| stepsContainPositionOrLast(p.steps),
+        .fn_call => |fc| std.mem.eql(u8, fc.name, "position") or
+            std.mem.eql(u8, fc.name, "last") or
+            argsContainPositionOrLast(fc.args),
+    };
+}
+
+fn stepsContainPositionOrLast(steps: []const ast.Step) bool {
+    for (steps) |s| {
+        for (s.predicates) |p| {
+            if (containsPositionOrLast(p)) return true;
+        }
+    }
+    return false;
+}
+
+fn argsContainPositionOrLast(args: []const *ast.Expr) bool {
+    for (args) |a| {
+        if (containsPositionOrLast(a)) return true;
+    }
+    return false;
+}
+
+fn isDescendantOrSelfNode(s: ast.Step) bool {
+    if (s.axis != .descendant_or_self) return false;
+    if (s.predicates.len != 0) return false;
+    return switch (s.node_test) {
+        .type_test => |k| k == .node,
+        .name => false,
+    };
+}
+
+fn isSelfNode(s: ast.Step) bool {
+    if (s.axis != .self) return false;
+    if (s.predicates.len != 0) return false;
+    return switch (s.node_test) {
+        .type_test => |k| k == .node,
+        .name => false,
+    };
+}
+
+fn matchAttrEqLiteral(expr: *const ast.Expr, attr_name: []const u8) ?[]const u8 {
+    if (expr.* != .binop) return null;
+    const bo = expr.binop;
+    if (bo.op != .eq) return null;
+    if (isAttrPath(bo.left, attr_name) and bo.right.* == .literal) return bo.right.literal;
+    if (isAttrPath(bo.right, attr_name) and bo.left.* == .literal) return bo.left.literal;
+    return null;
+}
+
+fn isAttrPath(expr: *const ast.Expr, attr_name: []const u8) bool {
+    if (expr.* != .path) return false;
+    const p = expr.path;
+    if (p.absolute) return false;
+    if (p.steps.len != 1) return false;
+    const s = p.steps[0];
+    if (s.axis != .attribute) return false;
+    if (s.predicates.len != 0) return false;
+    return switch (s.node_test) {
+        .name => |n| std.mem.eql(u8, n, attr_name),
+        .type_test => false,
+    };
+}
+
+fn evalFilterPath(self: *Evaluator, fp: ast.FilterPath, ctx: *Node, pos: usize, size: usize) Error!result.Result {
+    const base = try self.evalExpr(fp.filter, ctx, pos, size);
+    if (base != .node_set) return base;
+
+    var current: []const *Node = base.node_set;
+    for (fp.steps) |step| {
+        const r = try self.evalStep(current, step);
+        current = r.node_set;
+    }
+    return .{ .node_set = current };
+}
+
+fn evalFilter(self: *Evaluator, f: ast.Filter, ctx: *Node, pos: usize, size: usize) Error!result.Result {
+    const base = try self.evalExpr(f.expr, ctx, pos, size);
+    if (base != .node_set) return base;
+
+    var out: std.ArrayList(*Node) = .empty;
+    const sz = base.node_set.len;
+    for (base.node_set, 0..) |n, idx| {
+        const k = idx + 1;
+        const val = try self.evalExpr(f.predicate, n, k, sz);
+        if (predicateMatches(val, k)) try out.append(self.arena, n);
+    }
+    return .{ .node_set = out.items };
+}
+
+// ----- step + axis -----
+
+fn evalStep(self: *Evaluator, ctx_nodes: []const *Node, step: ast.Step) Error!result.Result {
+    var dedup: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
+
+    // Pre-lowercase the name test once per step. matchNameTest does
+    // case-insensitive matching (decision #2); without this hoist, every
+    // axis node would pay the per-byte case-fold inside `eqlIgnoreCase`.
+    const lowered_name: ?[]const u8 = switch (step.node_test) {
+        .name => |n| if (std.mem.eql(u8, n, "*")) null else try std.ascii.allocLowerString(self.arena, n),
+        .type_test => null,
+    };
+
+    for (ctx_nodes) |ctx| {
+        const axis_nodes = try self.axisNodes(ctx, step.axis);
+
+        var filtered: std.ArrayList(*Node) = .empty;
+        for (axis_nodes) |n| {
+            if (matchTest(n, step.node_test, step.axis, lowered_name)) {
+                try filtered.append(self.arena, n);
+            }
+        }
+
+        var current: []const *Node = filtered.items;
+        for (step.predicates) |pred| {
+            var next: std.ArrayList(*Node) = .empty;
+            const sz = current.len;
+            for (current, 0..) |n, idx| {
+                const k = idx + 1;
+                const val = try self.evalExpr(pred, n, k, sz);
+                if (predicateMatches(val, k)) try next.append(self.arena, n);
+            }
+            current = next.items;
+        }
+
+        for (current) |n| try dedup.put(self.arena, n, {});
+    }
+
+    return .{ .node_set = dedup.keys() };
+}
+
+fn axisNodes(self: *Evaluator, node: *Node, axis: ast.Axis) Error![]const *Node {
+    var out: std.ArrayList(*Node) = .empty;
+    switch (axis) {
+        .child => {
+            var it = node.childrenIterator();
+            while (it.next()) |c| try out.append(self.arena, c);
+        },
+        .descendant => try self.appendDescendants(node, &out),
+        .descendant_or_self => {
+            try out.append(self.arena, node);
+            try self.appendDescendants(node, &out);
+        },
+        .self => try out.append(self.arena, node),
+        .parent => {
+            if (node.parentNode()) |p| try out.append(self.arena, p);
+        },
+        // Reverse axes — proximity order (nearest first). Final node-set
+        // is sorted to document order at the public boundary.
+        .ancestor => {
+            var p = node.parentNode();
+            while (p) |n| : (p = n.parentNode()) try out.append(self.arena, n);
+        },
+        .ancestor_or_self => {
+            try out.append(self.arena, node);
+            var p = node.parentNode();
+            while (p) |n| : (p = n.parentNode()) try out.append(self.arena, n);
+        },
+        .following_sibling => {
+            var s = node.nextSibling();
+            while (s) |n| : (s = n.nextSibling()) try out.append(self.arena, n);
+        },
+        .preceding_sibling => {
+            var s = node.previousSibling();
+            while (s) |n| : (s = n.previousSibling()) try out.append(self.arena, n);
+        },
+        .following => try self.appendFollowing(node, &out),
+        .preceding => try self.appendPreceding(node, &out),
+        .attribute => try self.appendAttributes(node, &out),
+        .namespace, .unknown => {}, // decision #3 stubs
+    }
+    return out.items;
+}
+
+fn appendDescendants(self: *Evaluator, node: *Node, out: *std.ArrayList(*Node)) Error!void {
+    var it = node.childrenIterator();
+    while (it.next()) |c| {
+        try out.append(self.arena, c);
+        try self.appendDescendants(c, out);
+    }
+}
+
+fn appendFollowing(self: *Evaluator, start: *Node, out: *std.ArrayList(*Node)) Error!void {
+    var n: ?*Node = start;
+    while (n) |cur| : (n = cur.parentNode()) {
+        var s = cur.nextSibling();
+        while (s) |sn| : (s = sn.nextSibling()) {
+            try out.append(self.arena, sn);
+            try self.appendDescendants(sn, out);
+        }
+    }
+}
+
+fn appendPrecedingSubtree(self: *Evaluator, n: *Node, out: *std.ArrayList(*Node)) Error!void {
+    // Reverse document order: deepest-last children first, then self.
+    var c = n.lastChild();
+    while (c) |child| : (c = child.previousSibling()) {
+        try self.appendPrecedingSubtree(child, out);
+    }
+    try out.append(self.arena, n);
+}
+
+fn appendPreceding(self: *Evaluator, start: *Node, out: *std.ArrayList(*Node)) Error!void {
+    var n: ?*Node = start;
+    while (n) |cur| {
+        const parent = cur.parentNode() orelse break;
+        var s = cur.previousSibling();
+        while (s) |sn| : (s = sn.previousSibling()) {
+            try self.appendPrecedingSubtree(sn, out);
+        }
+        n = parent;
+    }
+}
+
+fn appendAttributes(self: *Evaluator, node: *Node, out: *std.ArrayList(*Node)) Error!void {
+    const el = node.is(Element) orelse return;
+    var it = el.attributeIterator();
+    while (it.next()) |entry| {
+        // Memoize via frame._attribute_lookup so repeated XPath queries
+        // (Capybara/Selenium polling) reuse the same *Attribute instead
+        // of leaking fresh ones into page-lifetime storage on every call.
+        // Same pattern as Attribute.List.getAttribute / NamedNodeMap.getAtIndex.
+        const gop = try self.frame._attribute_lookup.getOrPut(self.frame.arena, @intFromPtr(entry));
+        if (!gop.found_existing) {
+            gop.value_ptr.* = try entry.toAttribute(el, self.frame);
+        }
+        try out.append(self.arena, gop.value_ptr.*._proto);
+    }
+}
+
+// ----- node test matching -----
+
+fn matchTest(node: *Node, test_: ast.NodeTest, axis: ast.Axis, lowered_name: ?[]const u8) bool {
+    return switch (test_) {
+        .type_test => |kind| switch (kind) {
+            .node => true,
+            // XPath 1.0 §5.7: the data model has no CDATASection node —
+            // CDATA content is part of the text node value. Match both
+            // Text (3) and CDATASection (4) DOM node types.
+            .text => node.getNodeType() == 3 or node.getNodeType() == 4,
+            .comment => node.getNodeType() == 8,
+            .processing_instruction => node.getNodeType() == 7,
+        },
+        .name => |name| matchNameTest(node, name, axis, lowered_name),
+    };
+}
+
+fn matchNameTest(node: *Node, name: []const u8, axis: ast.Axis, lowered_name: ?[]const u8) bool {
+    // `lowered_name` is non-null iff `name != "*"`. Element tag names
+    // (`getTagNameLower`) and html5ever-stored attribute names are already
+    // lowercase, so a plain `mem.eql` against the pre-lowered test name
+    // replaces the per-call `eqlIgnoreCase`.
+    if (axis == .attribute) {
+        if (std.mem.eql(u8, name, "*")) return node._type == .attribute;
+        const attr = switch (node._type) {
+            .attribute => |a| a,
+            else => return false,
+        };
+        return std.mem.eql(u8, attr._name.str(), lowered_name.?);
+    }
+    const el = node.is(Element) orelse return false;
+    if (std.mem.eql(u8, name, "*")) return true;
+    return std.mem.eql(u8, el.getTagNameLower(), lowered_name.?);
+}
+
+// ----- binop -----
+
+fn evalBinop(self: *Evaluator, bo: ast.BinOp, ctx: *Node, pos: usize, size: usize) Error!result.Result {
+    switch (bo.op) {
+        .or_ => {
+            const l = try self.evalExpr(bo.left, ctx, pos, size);
+            if (result.toBoolean(l)) return .{ .boolean = true };
+            const r = try self.evalExpr(bo.right, ctx, pos, size);
+            return .{ .boolean = result.toBoolean(r) };
+        },
+        .and_ => {
+            const l = try self.evalExpr(bo.left, ctx, pos, size);
+            if (!result.toBoolean(l)) return .{ .boolean = false };
+            const r = try self.evalExpr(bo.right, ctx, pos, size);
+            return .{ .boolean = result.toBoolean(r) };
+        },
+        .eq, .neq, .lt, .gt, .lte, .gte => {
+            const l = try self.evalExpr(bo.left, ctx, pos, size);
+            const r = try self.evalExpr(bo.right, ctx, pos, size);
+            return .{ .boolean = try self.xCmp(l, r, bo.op) };
+        },
+        .add, .sub, .mul, .div, .mod => {
+            const l = try self.evalExpr(bo.left, ctx, pos, size);
+            const r = try self.evalExpr(bo.right, ctx, pos, size);
+            const ln = try result.toNumber(self.arena, l);
+            const rn = try result.toNumber(self.arena, r);
+            const v: f64 = switch (bo.op) {
+                .add => ln + rn,
+                .sub => ln - rn,
+                .mul => ln * rn,
+                .div => ln / rn,
+                // JS `%` and Zig `@rem` agree on sign for finite values
+                // and propagate NaN (XPath §3.5).
+                .mod => @rem(ln, rn),
+                else => unreachable,
+            };
+            return .{ .number = v };
+        },
+        .union_ => {
+            const l = try self.evalExpr(bo.left, ctx, pos, size);
+            const r = try self.evalExpr(bo.right, ctx, pos, size);
+            if (l != .node_set or r != .node_set) return error.UnionRequiresNodeSets;
+            var seen: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
+            for (l.node_set) |n| try seen.put(self.arena, n, {});
+            for (r.node_set) |n| try seen.put(self.arena, n, {});
+            const nodes = seen.keys();
+            sortDocOrder(@constCast(nodes));
+            return .{ .node_set = nodes };
+        },
+    }
+}
+
+// ----- comparison (XPath spec §3.4) -----
+
+fn xCmp(self: *Evaluator, left: result.Result, right: result.Result, op: ast.BinOpKind) Error!bool {
+    const is_eq = (op == .eq or op == .neq);
+    const l_is_set = (left == .node_set);
+    const r_is_set = (right == .node_set);
+
+    if (l_is_set and r_is_set) {
+        // Cache right-side string-values once. Without this, each left node
+        // would pay |right| allocations — O(N×M) for a set×set comparison
+        // (e.g. `//foo = //bar` on a large page).
+        const right_strings = try self.arena.alloc([]const u8, right.node_set.len);
+        for (right.node_set, 0..) |r, i| {
+            right_strings[i] = try result.stringValueOf(self.arena, r);
+        }
+        for (left.node_set) |l| {
+            const lv = try result.stringValueOf(self.arena, l);
+            for (right_strings) |rv| {
+                const matched = if (is_eq)
+                    cmpString(lv, rv, op)
+                else
+                    cmpNumber(result.stringToNumber(lv), result.stringToNumber(rv), op);
+                if (matched) return true;
+            }
+        }
+        return false;
+    }
+
+    if (l_is_set or r_is_set) {
+        const ns = if (l_is_set) left.node_set else right.node_set;
+        const other = if (l_is_set) right else left;
+        const ns_left = l_is_set;
+
+        if (other == .boolean) {
+            const ns_b = ns.len > 0;
+            const a, const b = if (ns_left) .{ ns_b, other.boolean } else .{ other.boolean, ns_b };
+            return cmpBool(a, b, op);
+        }
+
+        for (ns) |n| {
+            const sv = try result.stringValueOf(self.arena, n);
+            const matched = switch (other) {
+                .number => |num| blk: {
+                    const sv_num = result.stringToNumber(sv);
+                    const a, const b = if (ns_left) .{ sv_num, num } else .{ num, sv_num };
+                    break :blk cmpNumber(a, b, op);
+                },
+                .string => |s| blk: {
+                    if (is_eq) {
+                        const a, const b = if (ns_left) .{ sv, s } else .{ s, sv };
+                        break :blk cmpString(a, b, op);
+                    }
+                    const sv_num = result.stringToNumber(sv);
+                    const s_num = result.stringToNumber(s);
+                    const a, const b = if (ns_left) .{ sv_num, s_num } else .{ s_num, sv_num };
+                    break :blk cmpNumber(a, b, op);
+                },
+                .boolean, .node_set => unreachable, // handled above
+            };
+            if (matched) return true;
+        }
+        return false;
+    }
+
+    // Neither is a node-set.
+    if (is_eq) {
+        if (left == .boolean or right == .boolean) {
+            return cmpBool(result.toBoolean(left), result.toBoolean(right), op);
+        }
+        if (left == .number or right == .number) {
+            const ln = try result.toNumber(self.arena, left);
+            const rn = try result.toNumber(self.arena, right);
+            return cmpNumber(ln, rn, op);
+        }
+        const ls = try result.toString(self.arena, left);
+        const rs = try result.toString(self.arena, right);
+        return cmpString(ls, rs, op);
+    }
+    // Non-eq with no node-set: both → number.
+    const ln = try result.toNumber(self.arena, left);
+    const rn = try result.toNumber(self.arena, right);
+    return cmpNumber(ln, rn, op);
+}
+
+fn cmpString(a: []const u8, b: []const u8, op: ast.BinOpKind) bool {
+    const equal = std.mem.eql(u8, a, b);
+    return switch (op) {
+        .eq => equal,
+        .neq => !equal,
+        else => unreachable, // <, > etc. always coerce to number first
+    };
+}
+
+fn cmpNumber(a: f64, b: f64, op: ast.BinOpKind) bool {
+    // Native f64 comparison gives correct NaN semantics:
+    // NaN == X is false, NaN != X is true, NaN < X (etc.) is false.
+    return switch (op) {
+        .eq => a == b,
+        .neq => a != b,
+        .lt => a < b,
+        .gt => a > b,
+        .lte => a <= b,
+        .gte => a >= b,
+        else => unreachable,
+    };
+}
+
+fn cmpBool(a: bool, b: bool, op: ast.BinOpKind) bool {
+    return switch (op) {
+        .eq => a == b,
+        .neq => a != b,
+        else => unreachable,
+    };
+}
+
+// ----- function calls -----
+
+fn evalFnCall(self: *Evaluator, fc: ast.FnCall, ctx: *Node, pos: usize, size: usize) Error!result.Result {
+    // position()/last() stay here — they need the (pos, size) closure
+    // that functions.call doesn't see. Keeping them inline avoids
+    // pushing per-call context through Functions' signature.
+    if (std.mem.eql(u8, fc.name, "position")) return .{ .number = @floatFromInt(pos) };
+    if (std.mem.eql(u8, fc.name, "last")) return .{ .number = @floatFromInt(size) };
+
+    // Eagerly evaluate args. Matches the polyfill's `evaluate(args[i], ...)`
+    // pattern; lazy short-circuit isn't needed because `or`/`and` are
+    // binops handled in evalBinop, not function calls.
+    const eval_args = try self.arena.alloc(result.Result, fc.args.len);
+    for (fc.args, 0..) |a, i| eval_args[i] = try self.evalExpr(a, ctx, pos, size);
+
+    return functions.call(self.arena, fc.name, eval_args, ctx, self.frame);
+}
+
+// ----- helpers -----
+
+fn predicateMatches(val: result.Result, position: usize) bool {
+    return switch (val) {
+        // Numeric predicate value selects only the node at that position
+        // (1-based). Non-integer numbers never match.
+        .number => |n| n == @as(f64, @floatFromInt(position)),
+        else => result.toBoolean(val),
+    };
+}
+
+pub fn sortDocOrder(nodes: []*Node) void {
+    if (nodes.len <= 1) return;
+    std.mem.sort(*Node, nodes, {}, lessThanDocOrder);
+}
+
+fn lessThanDocOrder(_: void, a: *Node, b: *Node) bool {
+    if (a == b) return false;
+    const pos = a.compareDocumentPosition(b);
+    // FOLLOWING (0x04) — b comes after a in document order.
+    return (pos & 0x04) != 0;
+}
+
+// ---------------------------------------------------------------------
+// Tests — pure-logic only. DOM-dependent evaluation lands as HTML
+// fixtures in Phase 9 (tests/xpath/*.html); Lightpanda has no in-Zig
+// way to construct a Frame + Document tree without the JS runtime.
+// ---------------------------------------------------------------------
+
+const testing = std.testing;
+const Tokenizer = @import("Tokenizer.zig");
+
+test "Evaluator: cmpNumber NaN semantics" {
+    const nan = std.math.nan(f64);
+    try testing.expect(!cmpNumber(nan, nan, .eq));
+    try testing.expect(cmpNumber(nan, nan, .neq));
+    try testing.expect(!cmpNumber(nan, 0, .lt));
+    try testing.expect(!cmpNumber(nan, 0, .gt));
+    try testing.expect(!cmpNumber(nan, 0, .lte));
+    try testing.expect(!cmpNumber(nan, 0, .gte));
+    try testing.expect(cmpNumber(0, 0, .eq));
+    try testing.expect(cmpNumber(1, 2, .lt));
+    try testing.expect(cmpNumber(2, 1, .gt));
+    try testing.expect(cmpNumber(1, 1, .lte));
+    try testing.expect(cmpNumber(1, 1, .gte));
+}
+
+test "Evaluator: cmpString" {
+    try testing.expect(cmpString("a", "a", .eq));
+    try testing.expect(!cmpString("a", "b", .eq));
+    try testing.expect(cmpString("a", "b", .neq));
+    try testing.expect(!cmpString("a", "a", .neq));
+}
+
+test "Evaluator: cmpBool" {
+    try testing.expect(cmpBool(true, true, .eq));
+    try testing.expect(!cmpBool(true, false, .eq));
+    try testing.expect(cmpBool(true, false, .neq));
+}
+
+test "Evaluator: predicateMatches numeric vs boolean" {
+    try testing.expect(predicateMatches(.{ .number = 1 }, 1));
+    try testing.expect(!predicateMatches(.{ .number = 2 }, 1));
+    // Non-integer never matches.
+    try testing.expect(!predicateMatches(.{ .number = 1.5 }, 1));
+    // Boolean: any truthy value passes regardless of position.
+    try testing.expect(predicateMatches(.{ .boolean = true }, 7));
+    try testing.expect(!predicateMatches(.{ .boolean = false }, 1));
+    // String: nonempty truthy.
+    try testing.expect(predicateMatches(.{ .string = "x" }, 99));
+    try testing.expect(!predicateMatches(.{ .string = "" }, 1));
+    // Empty node-set: falsy.
+    try testing.expect(!predicateMatches(.{ .node_set = &.{} }, 1));
+}
+
+test "Evaluator: scalar arithmetic via parsed expressions" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    inline for (.{
+        .{ "1 + 2", 3 },
+        .{ "5 - 3", 2 },
+        .{ "4 * 2", 8 },
+        .{ "10 div 4", 2.5 },
+        .{ "10 mod 3", 1 },
+        .{ "-5", -5 },
+        .{ "1 + 2 * 3", 7 },
+    }) |case| {
+        const expr = try Parser.parse(a, case[0]);
+        // Frame is unused for pure-arithmetic AST. The unsafe cast lets
+        // us exercise binop / number paths without a real DOM. Any path
+        // accessing the Frame would crash; the inputs above never do.
+        var ev = Evaluator{ .arena = a, .frame = @ptrFromInt(0x1000) };
+        const ctx_dummy: *Node = @ptrFromInt(0x2000);
+        const r = try ev.evalExpr(expr, ctx_dummy, 1, 1);
+        try testing.expect(r == .number);
+        try testing.expectEqual(@as(f64, case[1]), r.number);
+    }
+}
+
+test "Evaluator: scalar comparison via parsed expressions" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    inline for (.{
+        .{ "1 = 1", true },
+        .{ "1 = 2", false },
+        .{ "1 != 2", true },
+        .{ "1 < 2", true },
+        .{ "2 < 1", false },
+        .{ "1 <= 1", true },
+        .{ "2 >= 2", true },
+        .{ "'abc' = 'abc'", true },
+        .{ "'abc' != 'abd'", true },
+    }) |case| {
+        const expr = try Parser.parse(a, case[0]);
+        var ev = Evaluator{ .arena = a, .frame = @ptrFromInt(0x1000) };
+        const ctx_dummy: *Node = @ptrFromInt(0x2000);
+        const r = try ev.evalExpr(expr, ctx_dummy, 1, 1);
+        try testing.expect(r == .boolean);
+        try testing.expectEqual(case[1], r.boolean);
+    }
+}
+
+test "Evaluator: position() and last() reflect context" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const ctx_dummy: *Node = @ptrFromInt(0x2000);
+
+    {
+        const expr = try Parser.parse(a, "position()");
+        var ev = Evaluator{ .arena = a, .frame = @ptrFromInt(0x1000) };
+        const r = try ev.evalExpr(expr, ctx_dummy, 3, 5);
+        try testing.expectEqual(@as(f64, 3), r.number);
+    }
+    {
+        const expr = try Parser.parse(a, "last()");
+        var ev = Evaluator{ .arena = a, .frame = @ptrFromInt(0x1000) };
+        const r = try ev.evalExpr(expr, ctx_dummy, 3, 5);
+        try testing.expectEqual(@as(f64, 5), r.number);
+    }
+    {
+        // Logical short-circuit: last() never evaluates if first
+        // operand is true.
+        const expr = try Parser.parse(a, "1 = 1 or last() > 0");
+        var ev = Evaluator{ .arena = a, .frame = @ptrFromInt(0x1000) };
+        const r = try ev.evalExpr(expr, ctx_dummy, 1, 1);
+        try testing.expect(r.boolean);
+    }
+}
+
+test "Evaluator: short-circuit and/or" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const ctx_dummy: *Node = @ptrFromInt(0x2000);
+
+    inline for (.{
+        .{ "1 = 2 or 1 = 1", true },
+        .{ "1 = 1 and 1 = 2", false },
+        .{ "1 = 1 and 2 = 2", true },
+        .{ "1 = 2 and 1 = 1", false },
+        .{ "1 = 2 or 2 = 1", false },
+    }) |case| {
+        const expr = try Parser.parse(a, case[0]);
+        var ev = Evaluator{ .arena = a, .frame = @ptrFromInt(0x1000) };
+        const r = try ev.evalExpr(expr, ctx_dummy, 1, 1);
+        try testing.expect(r == .boolean);
+        try testing.expectEqual(case[1], r.boolean);
+    }
+}
+
+test "Evaluator: unary minus" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const ctx_dummy: *Node = @ptrFromInt(0x2000);
+
+    const expr = try Parser.parse(a, "-(3 + 2)");
+    var ev = Evaluator{ .arena = a, .frame = @ptrFromInt(0x1000) };
+    const r = try ev.evalExpr(expr, ctx_dummy, 1, 1);
+    try testing.expectEqual(@as(f64, -5), r.number);
+}
+
+test "Evaluator: division by zero produces infinity / NaN per IEEE" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const ctx_dummy: *Node = @ptrFromInt(0x2000);
+
+    {
+        const expr = try Parser.parse(a, "1 div 0");
+        var ev = Evaluator{ .arena = a, .frame = @ptrFromInt(0x1000) };
+        const r = try ev.evalExpr(expr, ctx_dummy, 1, 1);
+        try testing.expect(std.math.isPositiveInf(r.number));
+    }
+    {
+        const expr = try Parser.parse(a, "0 div 0");
+        var ev = Evaluator{ .arena = a, .frame = @ptrFromInt(0x1000) };
+        const r = try ev.evalExpr(expr, ctx_dummy, 1, 1);
+        try testing.expect(std.math.isNan(r.number));
+    }
+}
+
+test "Evaluator: searchAll on scalar expression returns empty (decision #3)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Synthetic frame/root pointers are safe here because pure-scalar
+    // expressions (binop, literal, true(), comparison) never reach into
+    // the Frame or the context node. Adding a DOM-touching expression
+    // (e.g. `id('x')`) to this list would crash on dereference.
+    inline for (.{ "1 + 2", "'hello'", "true()", "1 = 1" }) |expr| {
+        const nodes = try searchAll(a, @ptrFromInt(0x2000), expr, @ptrFromInt(0x1000));
+        try testing.expectEqual(@as(usize, 0), nodes.len);
+    }
+}
