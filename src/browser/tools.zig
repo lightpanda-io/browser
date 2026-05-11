@@ -18,12 +18,14 @@ pub const ToolDef = struct {
 pub fn minify(comptime json: []const u8) []const u8 {
     @setEvalBranchQuota(100000);
     return comptime blk: {
-        var res: []const u8 = "";
+        var buf: [json.len]u8 = undefined;
+        var len: usize = 0;
         var in_string = false;
         var escaped = false;
         for (json) |c| {
             if (in_string) {
-                res = res ++ [1]u8{c};
+                buf[len] = c;
+                len += 1;
                 if (escaped) {
                     escaped = false;
                 } else if (c == '\\') {
@@ -36,13 +38,18 @@ pub fn minify(comptime json: []const u8) []const u8 {
                     ' ', '\n', '\r', '\t' => continue,
                     '"' => {
                         in_string = true;
-                        res = res ++ [1]u8{c};
+                        buf[len] = c;
+                        len += 1;
                     },
-                    else => res = res ++ [1]u8{c},
+                    else => {
+                        buf[len] = c;
+                        len += 1;
+                    },
                 }
             }
         }
-        break :blk res;
+        const final = buf[0..len].*;
+        break :blk &final;
     };
 }
 
@@ -442,12 +449,14 @@ pub fn extractText(
     registry: *CDPNode.Registry,
     selector: []const u8,
 ) EvalResult {
-    const eval_script = std.fmt.allocPrint(
+    const eval_script = std.fmt.allocPrintSentinel(
         arena,
         "JSON.stringify(Array.from(document.querySelectorAll({s})).map(el => el.textContent.trim()))",
         .{lp.script.stringifyJson(arena, selector)},
+        0,
     ) catch return .{ .text = "Error: out of memory", .is_error = true };
-    return evalScript(arena, session, registry, eval_script);
+    const page = ensurePage(session, registry, null, null, null) catch return .{ .text = "Error: page not loaded", .is_error = true };
+    return runEval(arena, page, eval_script);
 }
 
 fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -927,7 +936,10 @@ fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]
 fn lookupLpEnv(name: []const u8) ?[:0]const u8 {
     if (!std.ascii.startsWithIgnoreCase(name, "LP_")) return null;
     var name_buf: [256]u8 = undefined;
-    if (name.len >= name_buf.len) return null;
+    if (name.len >= name_buf.len) {
+        log.warn(.browser, "getEnv name too long", .{ .name_len = name.len, .limit = name_buf.len - 1 });
+        return null;
+    }
     @memcpy(name_buf[0..name.len], name);
     name_buf[name.len] = 0;
     return std.posix.getenv(name_buf[0..name.len :0]);

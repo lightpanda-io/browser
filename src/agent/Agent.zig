@@ -701,8 +701,10 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
 }
 
 fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []const u8, verify_context: ?[]const u8, context_comment: ?[]const u8) ?[]Command.Command {
-    const ma = self.message_arena.allocator();
-    var aw: std.Io.Writer.Allocating = .init(ma);
+    // Build the prompt in `arena` (the caller's per-replay arena), not in
+    // `message_arena`. The prompt is re-used across attempts, so it must
+    // survive arena rebuilds done between failed attempts.
+    var aw: std.Io.Writer.Allocating = .init(arena);
     aw.writer.print("{s}{s}{s}{s}", .{
         self_heal_prompt_prefix,
         failed_command,
@@ -729,6 +731,7 @@ fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []cons
                 @errorName(err),
             });
             self.messages.shrinkRetainingCapacity(msg_baseline);
+            self.rebuildMessageArena();
             continue;
         };
         if (cmds.len > 0) {
@@ -736,9 +739,33 @@ fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []cons
             return cmds;
         }
         self.messages.shrinkRetainingCapacity(msg_baseline);
+        self.rebuildMessageArena();
         break;
     }
     return null;
+}
+
+/// Rebuild `message_arena` keeping only the messages currently in
+/// `self.messages`. Used between failed self-heal attempts so the arena
+/// doesn't accumulate prompt/tool-output bytes from doomed turns.
+fn rebuildMessageArena(self: *Self) void {
+    const msgs = self.messages.items;
+    if (msgs.len <= 1) {
+        // Only the system prompt (or nothing) remains — the system prompt
+        // lives outside the arena, so we can reset freely.
+        _ = self.message_arena.reset(.retain_capacity);
+        return;
+    }
+
+    var new_arena: std.heap.ArenaAllocator = .init(self.allocator);
+    // System prompt at index 0 lives outside the arena and is preserved.
+    const duped = zenai.provider.dupeMessages(new_arena.allocator(), msgs[1..]) catch {
+        new_arena.deinit();
+        return;
+    };
+    @memcpy(self.messages.items[1..][0..duped.len], duped);
+    self.message_arena.deinit();
+    self.message_arena = new_arena;
 }
 
 /// Returned text lives in `message_arena`, so it's only valid until the
