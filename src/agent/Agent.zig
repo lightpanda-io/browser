@@ -413,6 +413,14 @@ fn printSlashHelp(self: *Self, target: []const u8) void {
         return;
     }
     const lookup = if (target[0] == '/') target[1..] else target;
+    if (std.ascii.eqlIgnoreCase(lookup, "help")) {
+        self.terminal.printInfo("/help [name] — show help for a slash command, or list all when [name] is omitted");
+        return;
+    }
+    if (std.ascii.eqlIgnoreCase(lookup, "quit")) {
+        self.terminal.printInfo("/quit — exit the REPL");
+        return;
+    }
     const schema = SlashCommand.findSchema(self.slash_schemas, lookup) orelse {
         self.terminal.printErrorFmt("unknown tool: {s}", .{lookup});
         return;
