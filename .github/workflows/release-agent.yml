@@ -5,6 +5,7 @@ env:
   AWS_SECRET_ACCESS_KEY: ${{ secrets.NIGHTLY_BUILD_AWS_SECRET_ACCESS_KEY }}
   AWS_BUCKET: ${{ vars.NIGHTLY_BUILD_AWS_BUCKET }}
   AWS_REGION: ${{ vars.NIGHTLY_BUILD_AWS_REGION }}
+  AWS_CLOUDFRONT_DISTRIBUTION_ID: 'E2LP2HUMLR5GQD'
 
   VERSION_FLAG: '-Dversion=agent-nightly'
 
@@ -101,3 +102,12 @@ jobs:
       - name: upload on s3
         run: |
           aws s3 cp --storage-class=GLACIER_IR lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/agent-nightly/lightpanda-agent-${{ env.ARCH }}-${{ env.OS }}
+
+  invalidate-cloudfront:
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: cloudfront cache invalidation
+        run: |
+          aws cloudfront create-invalidation --distribution-id ${{ env.AWS_CLOUDFRONT_DISTRIBUTION_ID }} --paths "/agent-nightly/*"
