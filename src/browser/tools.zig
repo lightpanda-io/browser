@@ -16,7 +16,7 @@ pub const ToolDef = struct {
 };
 
 pub fn minify(comptime json: []const u8) []const u8 {
-    @setEvalBranchQuota(100000);
+    @setEvalBranchQuota(10000);
     return comptime blk: {
         var buf: [json.len]u8 = undefined;
         var len: usize = 0;
