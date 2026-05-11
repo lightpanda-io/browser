@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <script src="./testing.js"></script>
+</head>
+<body>
+  <script id=inject-script-runs>
+    testing.expectEqual(true, window.__injected);
+    testing.expectEqual(42, window.__injectValue);
+  </script>
+</body>
+</html>

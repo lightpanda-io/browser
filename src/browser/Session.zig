@@ -57,6 +57,8 @@ navigation: Navigation,
 storage_shed: storage.Shed,
 notification: *Notification,
 cookie_jar: storage.Cookie.Jar,
+/// User-provided scripts to inject into header.
+inject_scripts: []const []const u8 = &.{},
 
 // Shared allocator. Used by Session itself and borrowed by Pages.
 arena_pool: *ArenaPool,

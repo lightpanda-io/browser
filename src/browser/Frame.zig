@@ -2123,12 +2123,35 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                         attribute_iterator,
                         .{ ._proto = undefined },
                     ),
-                    asUint("head") => return self.createHtmlElementT(
-                        Element.Html.Head,
-                        namespace,
-                        attribute_iterator,
-                        .{ ._proto = undefined },
-                    ),
+                    asUint("head") => {
+                        // Inject user-provided scripts.
+                        const inject_scripts = self._session.inject_scripts;
+                        const should_inject_scripts = from_parser and self._parse_mode == .document and inject_scripts.len > 0;
+
+                        if (should_inject_scripts) {
+                            var ls: JS.Local.Scope = undefined;
+                            self.js.localScope(&ls);
+                            defer ls.deinit();
+
+                            for (inject_scripts) |inject_script| {
+                                var try_catch: JS.TryCatch = undefined;
+                                try_catch.init(&ls.local);
+                                defer try_catch.deinit();
+
+                                ls.local.eval(inject_script, "inject_script") catch |err| {
+                                    const caught = try_catch.caughtOrError(self.call_arena, err);
+                                    log.err(.app, "inject script error", .{ .err = caught });
+                                };
+                            }
+                        }
+
+                        return self.createHtmlElementT(
+                            Element.Html.Head,
+                            namespace,
+                            attribute_iterator,
+                            .{ ._proto = undefined },
+                        );
+                    },
                     asUint("body") => return self.createHtmlElementT(
                         Element.Html.Body,
                         namespace,
@@ -4072,6 +4095,12 @@ test "WebApi: Frames" {
 
 test "WebApi: Integration" {
     try testing.htmlRunner("integration", .{});
+}
+
+test "WebApi: inject_script" {
+    try testing.htmlRunner("inject_script.html", .{
+        .inject_script = "window.__injected = true; window.__injectValue = 42;",
+    });
 }
 
 test "Page: isSameOrigin" {

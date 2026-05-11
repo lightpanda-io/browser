@@ -338,11 +338,19 @@ pub var test_notification: *Notification = undefined;
 pub var test_session: *Session = undefined;
 
 const WEB_API_TEST_ROOT = "src/browser/tests/";
-const HtmlRunnerOpts = struct {};
+const HtmlRunnerOpts = struct {
+    inject_script: ?[]const u8 = null,
+};
 
 pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
-    _ = opts;
     defer reset();
+
+    var inject_scripts: [1][]const u8 = undefined;
+    if (opts.inject_script) |script| {
+        inject_scripts[0] = script;
+        test_session.inject_scripts = inject_scripts[0..1];
+    }
+    defer test_session.inject_scripts = &.{};
 
     const root = try std.fs.path.joinZ(arena_allocator, &.{ WEB_API_TEST_ROOT, path });
     const stat = std.fs.cwd().statFile(root) catch |err| {
