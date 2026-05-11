@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <script src="../../testing.js"></script>
 
-<link id="lh1" rel="stylesheet" href="/styles/main.css" media="screen" as="style">
+<link id="lh1" rel="stylesheet" href="/styles/main.css" media="screen" as="style" crossorigin="anonymous">
 <link id="lh2">
 
 <script id="link-from-html">
@@ -12,6 +12,7 @@
     testing.expectEqual(testing.ORIGIN + '/styles/main.css', lh1.href);
     testing.expectEqual('screen', lh1.media);
     testing.expectEqual('style', lh1.as);
+    testing.expectEqual('anonymous', lh1.crossOrigin);
 
     lh1.rel = 'preload';
     testing.expectEqual('preload', lh1.rel);
