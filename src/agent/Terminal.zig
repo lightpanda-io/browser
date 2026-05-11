@@ -216,32 +216,13 @@ fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, ends_ws
             a.markUsed(tok[0..eq]);
             continue;
         }
-        // Single-required schemas accept the first arg positionally
-        // (`/goto https://...`). But while the user is still typing the
-        // *first* in-progress token and it looks like a bare identifier,
-        // assume they may be typing the key name (`/goto u` → `url=`) and
-        // let the partial-key path drive completion. As soon as they type
-        // a non-identifier character (`:`, `/`, …) we fall through to the
-        // positional shortcut.
         if (i == 0 and schema.required.len == 1) {
-            if (i == last and !ends_ws and looksLikeIdent(tok)) {
-                a.partial_key = tok;
-                continue;
-            }
             a.markUsed(schema.required[0]);
             continue;
         }
         if (i == last and !ends_ws) a.partial_key = tok;
     }
     return a;
-}
-
-fn looksLikeIdent(s: []const u8) bool {
-    if (s.len == 0) return false;
-    for (s) |ch| {
-        if (!std.ascii.isAlphanumeric(ch) and ch != '_') return false;
-    }
-    return true;
 }
 
 const help_arg_prefix = "/help ";
