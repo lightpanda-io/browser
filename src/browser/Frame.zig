@@ -1246,6 +1246,24 @@ pub fn isGoingAway(self: *const Frame) bool {
     return parent.isGoingAway();
 }
 
+// True if this frame, any descendant frame, or any worker owned by any
+// of those frames is currently inside script evaluation. Used as a
+// reentrancy guard before tearing down a page from a CDP message that
+// may have been drained while a Zig->JS->Zig stack (e.g. Worker
+// importScripts -> syncRequest -> blocking_read) is mid-flight.
+// Recursive over child frames so an evaluating subframe also defers
+// parent teardown.
+pub fn anyScriptEvaluating(self: *const Frame) bool {
+    if (self._script_manager.base.is_evaluating) return true;
+    for (self.workers.items) |worker| {
+        if (worker._worker_scope._script_manager.is_evaluating) return true;
+    }
+    for (self.child_frames.items) |child| {
+        if (child.anyScriptEvaluating()) return true;
+    }
+    return false;
+}
+
 pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *Element.Html.Script) !void {
     if (self.isGoingAway()) {
         // if we're planning on navigating to another frame, don't run this script

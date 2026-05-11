@@ -187,6 +187,21 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
+    // Mark this worker's ScriptManager as evaluating for the lifetime of
+    // the eval. Worker scripts can call importScripts() which performs a
+    // synchronous HTTP request that pumps the CDP socket while waiting
+    // (HttpClient.syncRequest -> cdp.blocking_read). A CDP message such
+    // as Target.closeTarget arriving on that socket would otherwise tear
+    // down the page (Session.removePage -> Page.deinit -> Frame.deinit ->
+    // Worker.deinit) while this eval is mid-flight, freeing the worker's
+    // arena and identity_map underneath us. Session.removePage walks
+    // every frame's workers and bails out when any is_evaluating, so the
+    // teardown is deferred until the eval unwinds.
+    const sm = &self._worker_scope._script_manager;
+    const was_evaluating = sm.is_evaluating;
+    sm.is_evaluating = true;
+    defer sm.is_evaluating = was_evaluating;
+
     _ = ls.local.eval(script, self._url) catch |err| {
         const caught = try_catch.caughtOrError(self._arena, err);
         log.err(.browser, "worker script error", .{ .url = self._url, .caught = caught });
