@@ -80,7 +80,7 @@ pub fn setMedia(self: *Link, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getCrossOrigin(self: *const Link) ?[]const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("crossOrigin"));
+    return self.asConstElement().getAttributeSafe(comptime .wrap("crossorigin"));
 }
 
 pub fn setCrossOrigin(self: *Link, value: []const u8, frame: *Frame) !void {
@@ -88,7 +88,7 @@ pub fn setCrossOrigin(self: *Link, value: []const u8, frame: *Frame) !void {
     if (std.ascii.eqlIgnoreCase(value, "use-credentials")) {
         normalized = "use-credentials";
     }
-    return self.asElement().setAttributeSafe(comptime .wrap("crossOrigin"), .wrap(normalized), frame);
+    return self.asElement().setAttributeSafe(comptime .wrap("crossorigin"), .wrap(normalized), frame);
 }
 
 pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
