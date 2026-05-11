@@ -311,6 +311,14 @@ pub fn isAllWhitespace(text: []const u8) bool {
     } else true;
 }
 
+pub fn isAllUpper(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |ch| {
+        if (!std.ascii.isUpper(ch) and !std.ascii.isDigit(ch) and ch != '_') return false;
+    }
+    return true;
+}
+
 // Discriminatory type that signals the bridge to use arena instead of call_arena
 // Use this for strings that need to persist beyond the current call
 // The caller can unwrap and store just the underlying .str field

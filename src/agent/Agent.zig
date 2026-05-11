@@ -355,9 +355,7 @@ fn handleSlash(self: *Self, body: []const u8) bool {
     const name = split.name;
     const rest = split.rest;
 
-    if (std.mem.eql(u8, name, "quit")) {
-        return true;
-    }
+    if (std.mem.eql(u8, name, "quit")) return true;
     if (std.mem.eql(u8, name, "help")) {
         self.printSlashHelp(rest);
         return false;
