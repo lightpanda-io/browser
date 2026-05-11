@@ -196,15 +196,6 @@ pub fn getCurrentScript(self: *const HTMLDocument) ?*Element.Html.Script {
     return self._proto._current_script;
 }
 
-pub fn getLocation(self: *const HTMLDocument) ?*@import("Location.zig") {
-    const frame = self._proto._frame orelse return null;
-    return frame.window._location;
-}
-
-pub fn setLocation(self: *HTMLDocument, url: [:0]const u8, frame: *Frame) !void {
-    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._proto._frame });
-}
-
 pub fn getDir(self: *HTMLDocument) []const u8 {
     const el = self._proto.getDocumentElement() orelse return "";
     const html = el.is(Element.Html) orelse return "";
@@ -311,7 +302,6 @@ pub const JsApi = struct {
     pub const applets = bridge.accessor(HTMLDocument.getApplets, null, .{});
     pub const plugins = bridge.accessor(HTMLDocument.getEmbeds, null, .{});
     pub const currentScript = bridge.accessor(HTMLDocument.getCurrentScript, null, .{});
-    pub const location = bridge.accessor(HTMLDocument.getLocation, HTMLDocument.setLocation, .{});
     pub const all = bridge.accessor(HTMLDocument.getAll, null, .{});
     pub const cookie = bridge.accessor(HTMLDocument.getCookie, HTMLDocument.setCookie, .{});
     pub const doctype = bridge.accessor(HTMLDocument.getDocType, null, .{});
