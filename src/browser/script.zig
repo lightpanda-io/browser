@@ -1,15 +1,22 @@
-//! Deterministic helpers shared between the standalone agent's self-heal
-//! path and the MCP `script_heal` tool. Everything here is pure: file I/O
-//! is restricted to atomically rewriting a script with a `.bak` backup,
-//! and the line-splicing logic operates on caller-owned content buffers.
+//! PandaScript: a tiny DSL for recording and replaying browser sessions.
 //!
-//! The LLM-driven part of self-heal (prompt construction, model call,
-//! command filtering) lives in `agent/Agent.zig` because it requires an
-//! `ai_client`. MCP callers (e.g. Claude Code) bring their own LLM and
-//! drive the heal roundtrip themselves.
+//! Lives under `browser/` because it sits below both `agent/` (the LLM
+//! REPL) and `mcp/` (the external-agent server), both of which consume it
+//! to translate between recorded `.lp` files and the shared `tools.zig`
+//! action surface.
+//!
+//! This file owns the deterministic helpers (line splicing, atomic file
+//! rewrite, path validation, the shared `mcp_driver_guidance` system
+//! prompt) and re-exports the three submodules (`Command`, `Recorder`,
+//! `Verifier`). The LLM-driven part of self-heal lives in
+//! `agent/Agent.zig`; MCP callers bring their own LLM and drive the
+//! heal roundtrip themselves.
 
 const std = @import("std");
-const Command = @import("agent/Command.zig");
+
+pub const Command = @import("script/Command.zig");
+pub const Recorder = @import("script/Recorder.zig");
+pub const Verifier = @import("script/Verifier.zig");
 
 /// Conventions any LLM driving Lightpanda should follow. The standalone
 /// agent prepends this to its own system prompt; the MCP server returns
@@ -101,9 +108,14 @@ pub fn applyReplacements(
     const content_base = @intFromPtr(content.ptr);
     // Subtract before adding so intermediate arithmetic on usize cannot
     // underflow when individual replacements shrink even though the net
-    // delta is positive.
+    // delta is positive. The non-overlapping-aliased-spans invariant means
+    // each span fits within `total`; assert it so the underflow precondition
+    // is testable.
     var total = content.len;
-    for (replacements) |r| total = total - r.original_span.len + r.new_text.len;
+    for (replacements) |r| {
+        std.debug.assert(r.original_span.len <= total);
+        total = total - r.original_span.len + r.new_text.len;
+    }
 
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
@@ -217,6 +229,12 @@ pub fn isPathSafe(path: []const u8) bool {
         if (std.mem.eql(u8, seg, "..")) return false;
     }
     return true;
+}
+
+test {
+    _ = Command;
+    _ = Recorder;
+    _ = Verifier;
 }
 
 // --- Tests ---

@@ -7,10 +7,10 @@ const Config = lp.Config;
 const App = @import("../App.zig");
 const ToolExecutor = @import("ToolExecutor.zig");
 const Terminal = @import("Terminal.zig");
-const Command = @import("Command.zig");
+const Command = lp.script.Command;
+const Recorder = lp.script.Recorder;
+const Verifier = lp.script.Verifier;
 const CommandExecutor = @import("CommandExecutor.zig");
-const Recorder = @import("Recorder.zig");
-const Verifier = @import("Verifier.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const script = lp.script;
 
@@ -772,19 +772,26 @@ fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []cons
                 self_heal_max_attempts,
                 @errorName(err),
             });
-            self.messages.shrinkRetainingCapacity(msg_baseline);
-            self.rebuildMessageArena();
+            self.rollbackMessages(msg_baseline);
             continue;
         };
         if (cmds.len > 0) {
             self.pruneMessages();
             return cmds;
         }
-        self.messages.shrinkRetainingCapacity(msg_baseline);
-        self.rebuildMessageArena();
+        self.rollbackMessages(msg_baseline);
         break;
     }
     return null;
+}
+
+/// Shrink `self.messages` back to `baseline` and rebuild the arena. Used
+/// after a failed turn (API error, self-heal attempt, synthesis) so the
+/// next turn doesn't replay the dropped messages and the arena doesn't
+/// accumulate their bytes.
+fn rollbackMessages(self: *Self, baseline: usize) void {
+    self.messages.shrinkRetainingCapacity(baseline);
+    self.rebuildMessageArena();
 }
 
 /// Rebuild `message_arena` keeping only the messages currently in
@@ -823,6 +830,10 @@ fn processUserMessage(self: *Self, input: TurnInput) !?[]const u8 {
     const turn_attachments: ?[]const []const u8 =
         if (self.messages.items.len == 1) input.attachments else null;
 
+    // Save message count so we can roll back on API failure — otherwise the
+    // failed user turn stays in history and replays on the next attempt.
+    const msg_baseline = self.messages.items.len;
+
     if (turn_attachments) |paths| {
         const parts = try buildUserMessageParts(self, ma, input.prompt, paths);
         try self.messages.append(self.allocator, .{
@@ -859,6 +870,7 @@ fn processUserMessage(self: *Self, input: TurnInput) !?[]const u8 {
     ) catch |err| {
         self.terminal.spinner.cancel();
         log.err(.app, "AI API error", .{ .err = err });
+        self.rollbackMessages(msg_baseline);
         return error.ApiError;
     };
     self.terminal.spinner.stop();
@@ -875,6 +887,11 @@ fn processUserMessage(self: *Self, input: TurnInput) !?[]const u8 {
             }
             self.recorder.record(cmd);
         }
+        // Recorder self-disables on write failure (disk full, fd closed). Tell
+        // the user the recording stopped instead of silently dropping appends.
+        if (!self.recorder.isActive()) {
+            self.terminal.printError("recording disabled (write failed); see logs");
+        }
     }
 
     // `result.text` and `synth.text` are owned by their RunToolsResult arenas,
@@ -887,6 +904,7 @@ fn processUserMessage(self: *Self, input: TurnInput) !?[]const u8 {
         // forbids tools and pretraining fallback. Without this, models
         // confabulate answers when the page was blocked or empty.
         log.info(.app, "synthesizing final answer", .{});
+        const synth_baseline = self.messages.items.len;
         try self.messages.append(self.allocator, .{
             .role = .user,
             .content = try ma.dupe(u8, synthesis_prompt),
@@ -912,6 +930,7 @@ fn processUserMessage(self: *Self, input: TurnInput) !?[]const u8 {
             },
         ) catch |err| {
             log.err(.app, "AI synthesis error", .{ .err = err });
+            self.rollbackMessages(synth_baseline);
             break :blk null;
         };
         defer synth.deinit();

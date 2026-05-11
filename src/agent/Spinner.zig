@@ -191,8 +191,10 @@ fn workerLoop(self: *Self) void {
         switch (self.state) {
             .tool => {
                 if (self.state.tool.dwell_pending) {
-                    const elapsed_ns: u64 = @intCast(std.time.nanoTimestamp() - self.state.tool.set_ns);
-                    if (elapsed_ns >= min_tool_display_ns) {
+                    // Compare signed: a backward clock jump (NTP slew, suspend/resume)
+                    // can make the delta negative; `@intCast` to u64 would panic.
+                    const delta: i128 = std.time.nanoTimestamp() - self.state.tool.set_ns;
+                    if (delta >= @as(i128, min_tool_display_ns)) {
                         self.state = .thinking;
                         self.frame = 0;
                     }

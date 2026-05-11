@@ -10,8 +10,8 @@ const router = @import("router.zig");
 const tools = @import("tools.zig");
 const Transport = @import("Transport.zig");
 const CDPNode = @import("../cdp/Node.zig");
-const Recorder = @import("../agent/Recorder.zig");
-const Verifier = @import("../agent/Verifier.zig");
+const Recorder = lp.script.Recorder;
+const Verifier = lp.script.Verifier;
 
 const Self = @This();
 

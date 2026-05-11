@@ -2,7 +2,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const browser_tools = lp.tools;
 const Config = lp.Config;
-const Command = @import("Command.zig");
+const Command = lp.script.Command;
 const SlashCommand = @import("SlashCommand.zig");
 const Spinner = @import("Spinner.zig");
 const string = @import("../string.zig");
@@ -47,7 +47,6 @@ repl_arena: ?std.heap.ArenaAllocator,
 stderr_is_tty: bool,
 spinner: Spinner,
 slash_schemas: []const SlashCommand.SchemaInfo = &.{},
-env_names: ?[]const []const u8 = null,
 
 // Flat name list for the "match any slash command" search/completion paths.
 const all_slash_names: [browser_tools.tool_defs.len + SlashCommand.meta_names.len][]const u8 = blk: {
@@ -104,7 +103,6 @@ fn isRepl(self: *const Self) bool {
 pub fn deinit(self: *Self) void {
     self.spinner.deinit();
     if (self.repl_arena) |*a| a.deinit();
-    if (self.env_names) |names| self.allocator.free(names);
 }
 
 const bullet_line_fmt = "{s}●{s} {s}[tool: {s}]{s} {s}\n";
@@ -261,7 +259,6 @@ fn addPartialKeyCompletions(
 
 // Completes `$LP_*` against the live process environment.
 fn addEnvVarCompletions(
-    self: *Self,
     cenv: ?*c.ic_completion_env_t,
     buf: *[completion_buf_len:0]u8,
     input: []const u8,
@@ -272,11 +269,9 @@ fn addEnvVarCompletions(
         if (!std.ascii.isAlphanumeric(ch) and ch != '_') return;
     }
 
-    if (self.env_names == null) {
-        // On OOM, cache an empty slice so we don't retry every keystroke.
-        self.env_names = browser_tools.lpEnvNames(self.allocator) catch &.{};
-    }
-    const names = self.env_names.?;
+    // `lpEnvNames` caches the result process-wide, so calling per keystroke
+    // costs one mutex acquire + pointer read after the first hit.
+    const names = browser_tools.lpEnvNames() catch return;
     if (names.len == 0) return;
 
     const head = input[0 .. dollar + 1];
@@ -340,7 +335,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
         }
     }
 
-    self.addEnvVarCompletions(cenv, &buf, input);
+    addEnvVarCompletions(cenv, &buf, input);
 }
 
 // File-scope so the buffer outlives the callback's stack frame. Isocline's

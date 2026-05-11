@@ -920,7 +920,7 @@ fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]
         return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{name}) catch ToolError.InternalError;
     }
 
-    const names = lpEnvNames(arena) catch return ToolError.InternalError;
+    const names = lpEnvNames() catch return ToolError.InternalError;
     return formatLpEnvNames(arena, names);
 }
 
@@ -936,12 +936,19 @@ fn formatLpEnvNames(arena: std.mem.Allocator, names: []const []const u8) ToolErr
 
 /// Sorted `LP_*`-prefixed environment-variable names from the current
 /// process. Returned slices point into `std.os.environ`, which is stable for
-/// the process lifetime; the outer slice is allocated from `arena`. Used by
-/// the agent REPL completer to offer `$LP_*` Tab completions and by
+/// the process lifetime; the outer slice is allocated once into a static
+/// cache (environ doesn't change at runtime) and shared across callers. Used
+/// by the agent REPL completer to offer `$LP_*` Tab completions and by
 /// `execGetEnv` for the no-name variant.
-pub fn lpEnvNames(arena: std.mem.Allocator) error{OutOfMemory}![]const []const u8 {
+pub fn lpEnvNames() error{OutOfMemory}![]const []const u8 {
+    lp_env_names_mu.lock();
+    defer lp_env_names_mu.unlock();
+    if (lp_env_names_cache) |cached| return cached;
+
+    const gpa = std.heap.page_allocator;
     var names: std.ArrayList([]const u8) = .empty;
-    try names.ensureTotalCapacity(arena, std.os.environ.len);
+    errdefer names.deinit(gpa);
+    try names.ensureTotalCapacity(gpa, std.os.environ.len);
     for (std.os.environ) |entry| {
         const line = std.mem.span(entry);
         const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
@@ -954,8 +961,13 @@ pub fn lpEnvNames(arena: std.mem.Allocator) error{OutOfMemory}![]const []const u
             return std.mem.lessThan(u8, a, b);
         }
     }.lt);
-    return names.items;
+    const owned = try names.toOwnedSlice(gpa);
+    lp_env_names_cache = owned;
+    return owned;
 }
+
+var lp_env_names_mu: std.Thread.Mutex = .{};
+var lp_env_names_cache: ?[]const []const u8 = null;
 
 /// Resolve an LP_-prefixed environment variable, or `null` for any other name.
 /// Only the LP_ namespace is readable from the model; everything else

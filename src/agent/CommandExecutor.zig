@@ -1,6 +1,7 @@
 const std = @import("std");
-const browser_tools = @import("lightpanda").tools;
-const Command = @import("Command.zig");
+const lp = @import("lightpanda");
+const browser_tools = lp.tools;
+const Command = lp.script.Command;
 const ToolExecutor = @import("ToolExecutor.zig");
 const Terminal = @import("Terminal.zig");
 
@@ -30,10 +31,7 @@ pub const ExecResult = struct {
 pub fn executeWithResult(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) ExecResult {
     if (cmd == .extract) return self.execExtract(arena, cmd.extract);
 
-    const tcv = Command.toToolCallValue(arena, cmd, browser_tools.substituteEnvVars) orelse switch (cmd) {
-        .natural_language, .comment, .login, .accept_cookies => unreachable,
-        else => return .{ .output = "command has no tool mapping", .failed = true },
-    };
+    const tcv = Command.toToolCallValue(arena, cmd, browser_tools.substituteEnvVars) orelse unreachable;
     if (self.tool_executor.callValue(arena, tcv.name, tcv.args)) |output|
         return .{ .output = output, .failed = false }
     else |err|

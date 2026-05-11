@@ -177,7 +177,10 @@ from selector drift, not to redesign the script.
 
 `--task` runs a single user turn, prints the final answer on stdout, and
 exits. Combine with `--task-attachment <path>` (repeatable) to feed local
-files to providers that accept attachments.
+files to providers that accept attachments. Text files are inlined into
+the prompt (max 512 KiB each); binary files (`image/*`, `audio/*`, `pdf`)
+are base64-encoded inline (max 20 MiB each). Unsupported MIME types
+error out before any browser work runs.
 
 ## Driving Lightpanda from an external LLM agent
 
@@ -274,3 +277,13 @@ for the LLM.
 - `--obey-robots`, `--http-proxy`, `--user-agent`, and the rest of the
   browser-level CLI flags apply to `agent` the same way they apply to
   `serve`, `fetch`, and `mcp`.
+- REPL prompts are persisted to `.lp-history` in the current working
+  directory in plaintext (no encryption). Anything you type at the prompt
+  — including natural-language context that accompanies a `LOGIN` —
+  lands in that file. Delete it or move out of sensitive directories if
+  you don't want it retained.
+- `record_start` and `script_heal` reject empty, absolute, and `..`
+  paths, but do **not** follow-up on symlinks. On a shared filesystem,
+  a pre-existing symlink at the recording target would be written
+  through to whatever it points at. Prefer a fresh directory you own
+  when recording in untrusted environments.

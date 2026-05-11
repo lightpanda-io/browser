@@ -42,9 +42,8 @@ pub const Command = union(enum) {
 
     pub fn isRecorded(self: Command) bool {
         return switch (self) {
-            .tree, .markdown, .comment => false,
+            .tree, .markdown, .comment, .natural_language => false,
             .goto, .click, .type_cmd, .wait, .scroll, .hover, .select, .check, .extract, .eval_js, .login, .accept_cookies => true,
-            .natural_language => |text| text.len > 0,
         };
     }
 

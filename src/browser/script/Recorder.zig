@@ -72,24 +72,45 @@ pub fn isActive(self: *const Self) bool {
 }
 
 pub fn record(self: *Self, cmd: Command.Command) void {
-    const f = self.file orelse return;
+    if (self.file == null) return;
     if (!cmd.isRecorded()) return;
 
     self.buf.clearRetainingCapacity();
     cmd.format(&self.buf.writer) catch return;
     self.buf.writer.writeByte('\n') catch return;
-    f.writeAll(self.buf.written()) catch return;
+    self.writeOrDisable(self.buf.written()) catch return;
     self.lines += 1;
 }
 
 pub fn recordComment(self: *Self, comment: []const u8) void {
-    const f = self.file orelse return;
+    if (self.file == null) return;
     self.buf.clearRetainingCapacity();
-    self.buf.writer.writeAll("# ") catch return;
-    self.buf.writer.writeAll(comment) catch return;
-    self.buf.writer.writeByte('\n') catch return;
-    f.writeAll(self.buf.written()) catch return;
+    // Embedded newlines would smuggle an executable line into the script on
+    // replay (e.g. `# foo\nGOTO https://attacker`). Emit each line of the
+    // comment as its own `# ` line; strip lone CRs.
+    var it = std.mem.splitScalar(u8, comment, '\n');
+    while (it.next()) |line| {
+        const trimmed = std.mem.trimRight(u8, line, "\r");
+        self.buf.writer.writeAll("# ") catch return;
+        self.buf.writer.writeAll(trimmed) catch return;
+        self.buf.writer.writeByte('\n') catch return;
+    }
+    self.writeOrDisable(self.buf.written()) catch return;
     self.lines += 1;
+}
+
+/// Write the buffered line to the recording file. On failure, close the
+/// file and null out `self.file` so `isActive()` flips to false and the
+/// caller can surface that the recording stopped — rather than silently
+/// dropping subsequent appends.
+fn writeOrDisable(self: *Self, bytes: []const u8) !void {
+    const f = self.file.?;
+    f.writeAll(bytes) catch |err| {
+        log.warn(.app, "recording disabled", .{ .err = @errorName(err) });
+        f.close();
+        self.file = null;
+        return err;
+    };
 }
 
 test "record writes state-mutating commands" {
@@ -240,6 +261,63 @@ test "init appends to an existing file without truncating" {
     const prior = std.mem.indexOf(u8, content, "GOTO").?;
     const appended = std.mem.indexOf(u8, content, "CLICK").?;
     try std.testing.expect(prior < appended);
+}
+
+test "recordComment splits embedded newlines into separate comment lines" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = tmp.dir.createFile("multi.lp", .{ .read = true }) catch unreachable;
+    var recorder: Self = .{
+        .allocator = std.testing.allocator,
+        .file = file,
+        .path = null,
+        .lines = 0,
+        .buf = .init(std.testing.allocator),
+    };
+    defer recorder.deinit();
+
+    // An attacker-controlled comment trying to smuggle a command must not
+    // produce an executable line on replay.
+    recorder.recordComment("note\nGOTO https://attacker\r\nmore");
+
+    file.seekTo(0) catch unreachable;
+    var buf: [256]u8 = undefined;
+    const n = file.readAll(&buf) catch unreachable;
+    try std.testing.expectEqualStrings(
+        "# note\n# GOTO https://attacker\n# more\n",
+        buf[0..n],
+    );
+}
+
+test "record disables recorder on write failure" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Open the file read-only so writeAll fails with `error.NotOpenForWriting`.
+    const file = blk: {
+        _ = tmp.dir.createFile("ro.lp", .{}) catch unreachable;
+        break :blk tmp.dir.openFile("ro.lp", .{ .mode = .read_only }) catch unreachable;
+    };
+
+    var recorder: Self = .{
+        .allocator = std.testing.allocator,
+        .file = file,
+        .path = null,
+        .lines = 0,
+        .buf = .init(std.testing.allocator),
+    };
+    defer recorder.deinit();
+
+    try std.testing.expect(recorder.isActive());
+    recorder.record(Command.parse("GOTO https://example.com"));
+    try std.testing.expect(!recorder.isActive());
+    try std.testing.expectEqual(@as(u32, 0), recorder.lines);
+
+    // Subsequent calls are silent no-ops, not silent successes.
+    recorder.record(Command.parse("CLICK 'Login'"));
+    recorder.recordComment("note");
+    try std.testing.expectEqual(@as(u32, 0), recorder.lines);
 }
 
 test "init creates the file if missing" {

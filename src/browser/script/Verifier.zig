@@ -2,7 +2,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const browser_tools = lp.tools;
 const Command = @import("Command.zig");
-const CDPNode = @import("../cdp/Node.zig");
+const CDPNode = @import("../../cdp/Node.zig");
 
 const Self = @This();
 

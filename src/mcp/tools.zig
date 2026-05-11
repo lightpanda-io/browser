@@ -4,11 +4,11 @@ const lp = @import("lightpanda");
 const js = lp.js;
 const browser_tools = lp.tools;
 const script = lp.script;
+const Command = lp.script.Command;
+const Recorder = lp.script.Recorder;
 
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
-const Command = @import("../agent/Command.zig");
-const Recorder = @import("../agent/Recorder.zig");
 
 /// Convert browser tool_defs to MCP protocol.Tool format (comptime).
 const browser_tool_list = blk: {
