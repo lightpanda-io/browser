@@ -71,10 +71,9 @@ const all_slash_names: [browser_tools.tool_defs.len + meta_slash_commands.len][]
     break :blk names;
 };
 
-/// Stores the schemas on the Terminal and (re-)registers isocline's
-/// completer with `self` as user-data so the callback can reach them via
-/// `ic_completion_arg`. Called from Agent.zig after the Terminal is in its
-/// final memory location.
+/// Registers isocline's completer with `self` as user-data, so the C
+/// callback can reach `slash_schemas` via `ic_completion_arg`. Must run
+/// after the Terminal is in its final memory location.
 pub fn setSlashSchemas(self: *Self, schemas: []const SlashCommand.SchemaInfo) void {
     self.slash_schemas = schemas;
     c.ic_set_default_completer(&completionCallback, self);
@@ -84,21 +83,10 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
     _ = c.ic_enable_multiline(true);
     _ = c.ic_enable_hint(true);
     _ = c.ic_enable_inline_help(true);
-    // Default is 400ms; match linenoise's instant ghost-suffix behavior so
-    // users see the inline preview as they type without a noticeable pause.
+    // Match linenoise's instant ghost behavior; default is 400 ms.
     _ = c.ic_set_hint_delay(0);
-    // Disable automatic brace/quote insertion — selectors quoted with ' or "
-    // are common in PandaScript and auto-inserting closers gets in the user's
-    // way more than it helps.
-    _ = c.ic_enable_brace_insertion(false);
-    // Clear isocline's default `> ` prompt marker so the prompt text we pass
-    // to ic_readline renders verbatim; the agent already supplies its own
-    // `> ` prefix.
-    c.ic_set_prompt_marker("", "");
-    // PandaScript syntax highlighting. Names are namespaced `ps-*` so users
-    // (or a future theme system) can override via `ic_style_def` without
-    // colliding with isocline's built-in `ic-*` styles. Bold/underline are
-    // intentionally restrained — the prompt is meant to read, not glow.
+    _ = c.ic_enable_brace_insertion(true);
+    // `ps-*` namespace avoids colliding with isocline's built-in `ic-*` styles.
     c.ic_style_def("ps-cmd", "ansi-cyan bold");
     c.ic_style_def("ps-slash", "ansi-magenta bold");
     c.ic_style_def("ps-string", "ansi-green");
@@ -110,9 +98,7 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
     _ = c.ic_enable_highlight(true);
     c.ic_set_default_highlighter(&highlighterCallback, null);
     if (history_path) |path| {
-        // -1 → default cap (200 entries). Passing a filename makes isocline
-        // load existing entries and auto-persist additions.
-        c.ic_set_history(path.ptr, -1);
+        c.ic_set_history(path.ptr, -1); // -1 → 200-entry default cap
     }
     const stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO);
     return .{
@@ -176,13 +162,8 @@ fn formatBulletLine(arena: std.mem.Allocator, name: []const u8, args: []const u8
     return aw.written();
 }
 
-// Bound on the largest single completion text we synthesize. The longest
-// real case is a multi-slot schema hint glued onto a 64-char input.
 const completion_buf_len = 512;
 
-// Synthesizes a completion that, when accepted, replaces the user's entire
-// current input (`input`) with `prefix ++ name ++ suffix`. The inline hint
-// shown before Tab is just the trailing portion past `input.len`.
 fn addPrefixedCompletion(
     cenv: ?*c.ic_completion_env_t,
     buf: *[completion_buf_len:0]u8,
@@ -260,8 +241,6 @@ fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, ends_ws
 
 const help_arg_prefix = "/help ";
 
-// Returns the trailing argument when `input` is `/help <arg>` with no
-// further whitespace; null otherwise (e.g. `/help foo bar`).
 fn parseHelpArgPrefix(input: []const u8) ?[]const u8 {
     if (!std.ascii.startsWithIgnoreCase(input, help_arg_prefix)) return null;
     const arg = std.mem.trimLeft(u8, input[help_arg_prefix.len..], " ");
@@ -290,11 +269,7 @@ fn addPartialKeyCompletions(
     }
 }
 
-// Offers `$LP_*` completions when the user is mid-typing a `$VAR` token.
-// Triggers wherever a `$` appears with only name characters following it, so
-// it works in PandaScript args (`TYPE '#u' $LP_`), slash values
-// (`/click value=$L`), and bare prefixes (`$L`). Names come from the same
-// source as the `getEnv` tool — `std.os.environ` filtered to LP_*.
+// Completes `$LP_*` against the live process environment.
 fn addEnvVarCompletions(
     cenv: ?*c.ic_completion_env_t,
     buf: *[completion_buf_len:0]u8,
@@ -306,9 +281,7 @@ fn addEnvVarCompletions(
         if (!std.ascii.isAlphanumeric(ch) and ch != '_') return;
     }
 
-    // Stack-only scratch for the env-name list. 16 KiB holds ~1000 names'
-    // worth of pointer metadata (names themselves point into std.os.environ
-    // and aren't copied) — far more than any realistic environment.
+    // Names are slices into std.os.environ; only pointer metadata is allocated.
     var stack: [16 * 1024]u8 = undefined;
     var fba: std.heap.FixedBufferAllocator = .init(&stack);
     const names = browser_tools.lpEnvNames(fba.allocator()) catch return;
@@ -326,12 +299,9 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
     const self_ptr = c.ic_completion_arg(cenv) orelse return;
     const self: *Self = @ptrCast(@alignCast(self_ptr));
 
-    // Per-call scratch buffer for synthesized completion strings. Isocline
-    // copies the string internally so reuse across candidates is fine.
     var buf: [completion_buf_len:0]u8 = undefined;
 
-    // `/help <name>` — the arg is itself a tool name, not a value, so env-var
-    // completion would be confusing here. Short-circuit.
+    // `/help <name>`: arg is a tool name, not a value — skip env-var fallthrough.
     if (parseHelpArgPrefix(input)) |partial| {
         for (all_slash_names) |name| addPrefixedCompletion(cenv, &buf, input, help_arg_prefix, name, "", partial);
         return;
@@ -347,17 +317,15 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
                     addPartialKeyCompletions(cenv, input, parts.rest, schema, &buf);
                 }
             }
-            // Fall through so `value=$LP_` etc. picks up env completions.
+            // Fall through so `value=$LP_` picks up env completions.
         } else {
             const partial = input[1..];
             for (all_slash_names) |name| addPrefixedCompletion(cenv, &buf, input, "/", name, "", partial);
             return;
         }
     } else if (!has_space) {
-        // Case-insensitive on the completion side so Tab also rewrites
-        // mistyped lowercase (`goto` → `GOTO`). The highlighter stays
-        // case-sensitive, so a lowercase-typed line reads as natural
-        // language until the user accepts the completion.
+        // Case-insensitive here so Tab also rewrites mistyped lowercase
+        // (`goto` → `GOTO`); the highlighter stays case-sensitive.
         for (commands) |cmd| {
             if (std.ascii.startsWithIgnoreCase(cmd.name, input)) {
                 const text = std.fmt.bufPrintZ(&buf, "{s}", .{cmd.name}) catch continue;
@@ -369,9 +337,7 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
     addEnvVarCompletions(cenv, &buf, input);
 }
 
-// PandaScript syntax highlighter. Invoked by isocline on every input change;
-// keep it cheap. The `pos` and `count` passed to `ic_highlight` are byte
-// offsets/lengths into `input`, not UTF-8 code points — fine here because we
+// Byte offsets to ic_highlight are not UTF-8 code points; safe because we
 // only tokenize on ASCII boundaries (whitespace, quotes, `=`, `$`).
 fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*anyopaque) callconv(.c) void {
     const text = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input)), 0);
@@ -381,21 +347,15 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*a
     while (i < text.len and std.ascii.isWhitespace(text[i])) i += 1;
     if (i >= text.len) return;
 
-    // First word: either `/slash` form or a bare PandaScript command name.
-    // Unknown leading tokens get highlighted as errors so typos are visible
-    // before the user hits Enter.
     const cmd_start = i;
     while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
     const cmd = text[cmd_start..i];
     if (cmd.len > 0 and cmd[0] == '/') {
-        const name = cmd[1..];
-        const style = if (isKnownSlashName(name)) "ps-slash" else "ps-err";
+        const style = if (isKnownSlashName(cmd[1..])) "ps-slash" else "ps-err";
         c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), style.ptr);
         highlightSlashArgs(henv, text, i);
     } else {
-        // PandaScript commands are ALL CAPS. Known → keyword color. ALL CAPS
-        // but unknown → red (likely typo). Anything else → no highlight,
-        // it's a natural-language query for the LLM.
+        // ALL CAPS but unknown → typo (red); lowercase/mixed → natural language (unstyled).
         const style: ?[*:0]const u8 = if (isKnownCommand(cmd))
             "ps-cmd"
         else if (isAllUpper(cmd))
@@ -429,9 +389,6 @@ fn isKnownSlashName(name: []const u8) bool {
     return false;
 }
 
-// Color a non-quoted token based on its leading character: `$` → variable,
-// `http(s)://` → URL, digits → number. Anything else falls through with no
-// highlight (lets the terminal's default foreground show through).
 fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize, end: usize) void {
     if (start >= end) return;
     const tok = text[start..end];
@@ -453,9 +410,7 @@ fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     }
 }
 
-// Consume a quoted token (single or double) at `start`, returning the index
-// just past the closing quote. Handles backslash escapes minimally — enough
-// not to confuse `\'` inside a single-quoted string.
+// Backslash escapes are recognized just enough to skip `\'` inside a quoted string.
 fn scanQuoted(text: []const u8, start: usize) usize {
     if (start >= text.len) return start;
     const quote = text[start];
@@ -495,7 +450,7 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
         const key_end = i;
         if (i < text.len and text[i] == '=') {
             c.ic_highlight(henv, @intCast(tok_start), @intCast(key_end - tok_start), "ps-key".ptr);
-            i += 1; // consume '='
+            i += 1;
             const val_start = i;
             if (i < text.len and (text[i] == '\'' or text[i] == '"')) {
                 i = scanQuoted(text, i);
@@ -505,13 +460,11 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
                 highlightBareToken(henv, text, val_start, i);
             }
         }
-        // bare positional (no `=`) — leave unstyled.
     }
 }
 
 pub fn readLine(_: *Self, prompt: [*:0]const u8) ?[]const u8 {
-    // Isocline auto-adds the returned line to history and auto-persists when
-    // a history file was set via `ic_set_history`.
+    // Isocline auto-appends the line to its (optionally-persisted) history.
     const line = c.ic_readline(prompt) orelse return null;
     return std.mem.sliceTo(line, 0);
 }

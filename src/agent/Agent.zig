@@ -300,7 +300,7 @@ fn runRepl(self: *Self) void {
     }
 
     repl: while (true) {
-        const line = self.terminal.readLine("> ") orelse break;
+        const line = self.terminal.readLine("") orelse break;
         defer self.terminal.freeLine(line);
 
         if (line.len == 0) continue;
