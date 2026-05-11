@@ -28,6 +28,10 @@ pub const SchemaInfo = struct {
     hints: []const HintSlot,
 };
 
+/// Meta slash commands handled directly by the agent (not by ToolExecutor).
+/// Kept in sync with `handleSlash` in Agent.zig.
+pub const meta_names = [_][:0]const u8{ "help", "quit" };
+
 pub const ParseError = error{
     MissingName,
     UnknownTool,

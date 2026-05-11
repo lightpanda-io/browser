@@ -228,7 +228,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
 
     self.cmd_executor = CommandExecutor.init(allocator, tool_executor, &self.terminal);
 
-    Terminal.setSlashSchemas(slash_schemas);
+    self.terminal.attachCompleter(slash_schemas);
 
     return self;
 }
@@ -300,8 +300,8 @@ fn runRepl(self: *Self) void {
     }
 
     repl: while (true) {
-        const line = self.terminal.readLine("> ") orelse break;
-        defer self.terminal.freeLine(line);
+        const line = Terminal.readLine("") orelse break;
+        defer Terminal.freeLine(line);
 
         if (line.len == 0) continue;
 
@@ -311,6 +311,21 @@ fn runRepl(self: *Self) void {
         }
 
         const cmd = Command.parse(line);
+
+        // Distinguish "you mistyped a PandaScript command" from "this is
+        // natural language for the LLM". Both fall through to
+        // `.natural_language` in Command.parse, but the first should never
+        // hit the LLM-needed error path.
+        if (std.meta.activeTag(cmd) == .natural_language) {
+            if (Command.keywordSyntax(line)) |kc| {
+                if (kc.args) |args| {
+                    self.terminal.printErrorFmt("Usage: {s} {s}", .{ kc.name, args });
+                } else {
+                    self.terminal.printErrorFmt("{s} takes no arguments", .{kc.name});
+                }
+                continue;
+            }
+        }
 
         if (cmd.needsLlm() and self.ai_client == null) {
             self.terminal.printError("This command needs an LLM. Set an API key or pass --provider (and drop --no-llm if you set it). PandaScript commands (GOTO, CLICK, EXTRACT, ...) work without one.");
@@ -343,9 +358,7 @@ fn handleSlash(self: *Self, body: []const u8) bool {
     const name = split.name;
     const rest = split.rest;
 
-    if (std.mem.eql(u8, name, "quit")) {
-        return true;
-    }
+    if (std.mem.eql(u8, name, "quit")) return true;
     if (std.mem.eql(u8, name, "help")) {
         self.printSlashHelp(rest);
         return false;
@@ -400,6 +413,14 @@ fn printSlashHelp(self: *Self, target: []const u8) void {
         return;
     }
     const lookup = if (target[0] == '/') target[1..] else target;
+    if (std.ascii.eqlIgnoreCase(lookup, "help")) {
+        self.terminal.printInfo("/help [name] — show help for a slash command, or list all when [name] is omitted");
+        return;
+    }
+    if (std.ascii.eqlIgnoreCase(lookup, "quit")) {
+        self.terminal.printInfo("/quit — exit the REPL");
+        return;
+    }
     const schema = SlashCommand.findSchema(self.slash_schemas, lookup) orelse {
         self.terminal.printErrorFmt("unknown tool: {s}", .{lookup});
         return;

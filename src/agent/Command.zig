@@ -189,10 +189,12 @@ pub fn parse(line: []const u8) Command {
     }
 
     if (std.mem.eql(u8, cmd_word, "TREE")) {
+        if (rest.len > 0) return .{ .natural_language = trimmed };
         return .{ .tree = {} };
     }
 
     if (std.mem.eql(u8, cmd_word, "MARKDOWN")) {
+        if (rest.len > 0) return .{ .natural_language = trimmed };
         return .{ .markdown = {} };
     }
 
@@ -207,14 +209,60 @@ pub fn parse(line: []const u8) Command {
     }
 
     if (std.mem.eql(u8, cmd_word, "LOGIN")) {
+        if (rest.len > 0) return .{ .natural_language = trimmed };
         return .{ .login = {} };
     }
 
     if (std.mem.eql(u8, cmd_word, "ACCEPT_COOKIES")) {
+        if (rest.len > 0) return .{ .natural_language = trimmed };
         return .{ .accept_cookies = {} };
     }
 
     return .{ .natural_language = trimmed };
+}
+
+pub const KeywordSyntax = struct {
+    name: []const u8,
+    /// Null for argless commands; the agent renders a different error.
+    args: ?[]const u8,
+    /// Tab-completion suffix shown after a fully-typed keyword. Designed so
+    /// Tab does something useful (open the quote, insert a URL scheme) rather
+    /// than inserting an angle-bracket template. Null when no good starter
+    /// exists (numeric args, argless commands).
+    starter: ?[]const u8 = null,
+};
+
+/// Single source of truth for PandaScript keyword names — consumed by the
+/// parser, the REPL highlighter, and Tab completion.
+pub const keywords = [_]KeywordSyntax{
+    .{ .name = "GOTO", .args = "<url>", .starter = " https://www." },
+    .{ .name = "CLICK", .args = "'<selector>'", .starter = " '" },
+    .{ .name = "TYPE", .args = "'<selector>' '<value>'", .starter = " '" },
+    .{ .name = "WAIT", .args = "'<selector>'", .starter = " '" },
+    .{ .name = "SCROLL", .args = "[x] [y]" },
+    .{ .name = "HOVER", .args = "'<selector>'", .starter = " '" },
+    .{ .name = "SELECT", .args = "'<selector>' '<value>'", .starter = " '" },
+    .{ .name = "CHECK", .args = "'<selector>' [true|false]", .starter = " '" },
+    .{ .name = "TREE", .args = null },
+    .{ .name = "MARKDOWN", .args = null },
+    .{ .name = "EXTRACT", .args = "'<selector>'", .starter = " '" },
+    .{ .name = "EVAL", .args = "'<script>'", .starter = " '" },
+    .{ .name = "LOGIN", .args = null },
+    .{ .name = "ACCEPT_COOKIES", .args = null },
+};
+
+/// If the first word of `line` is a recognized PandaScript keyword, returns
+/// its entry. Used by the REPL to surface a syntax error when `Command.parse`
+/// rejects a line whose first word *looked* like a command — either an argful
+/// keyword missing its args, or an argless keyword followed by junk.
+pub fn keywordSyntax(line: []const u8) ?KeywordSyntax {
+    const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
+    const end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
+    const word = trimmed[0..end];
+    for (keywords) |kc| {
+        if (std.mem.eql(u8, word, kc.name)) return kc;
+    }
+    return null;
 }
 
 /// Iterator for parsing a script file, handling multi-line EVAL """ ... """ blocks.
@@ -580,6 +628,34 @@ test "parse natural language starting with command verb" {
 test "parse GOTO missing url" {
     const cmd = parse("GOTO");
     try std.testing.expect(cmd == .natural_language);
+}
+
+test "keywordSyntax: argful keyword without args returns its shape" {
+    const k = keywordSyntax("CLICK").?;
+    try std.testing.expectEqualStrings("CLICK", k.name);
+    try std.testing.expectEqualStrings("'<selector>'", k.args.?);
+}
+
+test "keywordSyntax: trailing whitespace tolerated" {
+    try std.testing.expect(keywordSyntax("  GOTO   ") != null);
+}
+
+test "keywordSyntax: argless keyword returns entry with null args" {
+    const k = keywordSyntax("LOGIN").?;
+    try std.testing.expectEqualStrings("LOGIN", k.name);
+    try std.testing.expect(k.args == null);
+}
+
+test "keywordSyntax: unknown word returns null" {
+    try std.testing.expect(keywordSyntax("FOOBAR") == null);
+    try std.testing.expect(keywordSyntax("click the button") == null);
+}
+
+test "parse argless keyword with trailing junk falls through to natural_language" {
+    try std.testing.expect(parse("LOGIN abc") == .natural_language);
+    try std.testing.expect(parse("TREE foo") == .natural_language);
+    try std.testing.expect(parse("MARKDOWN x") == .natural_language);
+    try std.testing.expect(parse("ACCEPT_COOKIES y") == .natural_language);
 }
 
 test "parse CLICK quoted" {

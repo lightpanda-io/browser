@@ -34,17 +34,17 @@
             .url = "https://github.com/allyourcodebase/sqlite3/archive/8f840560eae88ab66668c6827c64ffbd0d74ef37.tar.gz",
             .hash = "sqlite3-3.51.0-DMxLWssOAABZ8cAvU_LfBIbp0kZjm824PU8sSLXpEDdr",
         },
-        .linenoise = .{
-            .url = "https://github.com/antirez/linenoise/archive/refs/tags/2.0.tar.gz",
-            .hash = "N-V-__8AAJ4HAgCX79UDBfNwhqAqUVoGC44ib6UYa18q6oa_",
+        .libidn2 = .{
+            .url = "https://ftp.gnu.org/gnu/libidn/libidn2-2.3.8.tar.gz",
+            .hash = "N-V-__8AABGOuAC_dhAN07kfoP4dycCFi8Bka4O-tuhriNH8",
         },
         .zenai = .{
             .url = "git+https://github.com/lightpanda-io/zenai.git#fb7d356617dcf7559c2d47d56b73d9b082f81b9b",
             .hash = "zenai-0.0.0-iOY_VOebAwA19L7IyQKx8CJRDbNwf75jN_nJ_F3OFD8m",
         },
-        .libidn2 = .{
-            .url = "https://ftp.gnu.org/gnu/libidn/libidn2-2.3.8.tar.gz",
-            .hash = "N-V-__8AABGOuAC_dhAN07kfoP4dycCFi8Bka4O-tuhriNH8",
+        .isocline = .{
+            .url = "git+https://github.com/arrufat/isocline.git#c3cb438b475c0c2cb8eceef0f7ffd0fbf41bfbb3",
+            .hash = "N-V-__8AAM8zEwBkQl7O6YrCWvBsnRiOKcdRi_6UoimWlDO3",
         },
     },
     .paths = .{""},

@@ -2,13 +2,24 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const browser_tools = lp.tools;
 const Config = lp.Config;
+const Command = @import("Command.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const Spinner = @import("Spinner.zig");
+const string = @import("../string.zig");
 const c = @cImport({
-    @cInclude("linenoise.h");
+    @cInclude("isocline.h");
 });
 
 const Self = @This();
+
+const style_cmd = "ps-cmd";
+const style_slash = "ps-slash";
+const style_string = "ps-string";
+const style_var = "ps-var";
+const style_url = "ps-url";
+const style_key = "ps-key";
+const style_num = "ps-num";
+const style_err = "ps-err";
 
 pub const ansi = struct {
     pub const reset = "\x1b[0m";
@@ -26,7 +37,7 @@ fn atLeast(level: Verbosity, min: Verbosity) bool {
     return @intFromEnum(level) >= @intFromEnum(min);
 }
 
-history_path: ?[:0]const u8,
+allocator: std.mem.Allocator,
 verbosity: Verbosity,
 /// Non-null in REPL mode. Doubles as scratch arena for the pretty-printer
 /// (reset per `printToolResult`, so memory is bounded by the largest single
@@ -35,66 +46,50 @@ verbosity: Verbosity,
 repl_arena: ?std.heap.ArenaAllocator,
 stderr_is_tty: bool,
 spinner: Spinner,
-
-const CommandInfo = struct { name: [:0]const u8, hint: [:0]const u8 };
-
-const commands = [_]CommandInfo{
-    .{ .name = "GOTO", .hint = " <url>" },
-    .{ .name = "CLICK", .hint = " '<selector>'" },
-    .{ .name = "TYPE", .hint = " '<selector>' '<value>'" },
-    .{ .name = "WAIT", .hint = " '<selector>'" },
-    .{ .name = "SCROLL", .hint = " [x] [y]" },
-    .{ .name = "HOVER", .hint = " '<selector>'" },
-    .{ .name = "SELECT", .hint = " '<selector>' '<value>'" },
-    .{ .name = "CHECK", .hint = " '<selector>' [true|false]" },
-    .{ .name = "TREE", .hint = "" },
-    .{ .name = "MARKDOWN", .hint = "" },
-    .{ .name = "EXTRACT", .hint = " '<selector>'" },
-    .{ .name = "EVAL", .hint = " '<script>'" },
-    .{ .name = "LOGIN", .hint = "" },
-    .{ .name = "ACCEPT_COOKIES", .hint = "" },
-};
-
-// Meta slash commands handled directly by the agent (not by ToolExecutor).
-// Kept in sync with `handleSlash` in `Agent.zig`. Meta args are positional
-// (no `key=value`), so the slot strings are pre-bracketed and can't reuse
-// `SchemaInfo.hints` which renders `[name=…]`.
-const MetaCommand = struct {
-    name: [:0]const u8,
-    hint_slots: []const []const u8,
-};
-
-const meta_slash_commands = [_]MetaCommand{
-    .{ .name = "help", .hint_slots = &.{"[tool_name]"} },
-    .{ .name = "quit", .hint_slots = &.{} },
-};
+slash_schemas: []const SlashCommand.SchemaInfo = &.{},
+env_names: ?[]const []const u8 = null,
 
 // Flat name list for the "match any slash command" search/completion paths.
-const all_slash_names: [browser_tools.tool_defs.len + meta_slash_commands.len][]const u8 = blk: {
-    var names: [browser_tools.tool_defs.len + meta_slash_commands.len][]const u8 = undefined;
+const all_slash_names: [browser_tools.tool_defs.len + SlashCommand.meta_names.len][]const u8 = blk: {
+    var names: [browser_tools.tool_defs.len + SlashCommand.meta_names.len][]const u8 = undefined;
     for (browser_tools.tool_defs, 0..) |td, i| names[i] = td.name;
-    for (meta_slash_commands, 0..) |m, i| names[browser_tools.tool_defs.len + i] = m.name;
+    for (SlashCommand.meta_names, 0..) |m, i| names[browser_tools.tool_defs.len + i] = m;
     break :blk names;
 };
 
-// File-scope because the linenoise hint callback is a C function pointer with
-// no user-data slot. Empty in non-REPL paths, which is harmless.
-var slash_schemas: []const SlashCommand.SchemaInfo = &.{};
-
-pub fn setSlashSchemas(schemas: []const SlashCommand.SchemaInfo) void {
-    slash_schemas = schemas;
+/// Wires the isocline completer and hinter to `self` so the C callbacks can
+/// reach `slash_schemas`. Must run after the Terminal is in its final memory
+/// location.
+pub fn attachCompleter(self: *Self, schemas: []const SlashCommand.SchemaInfo) void {
+    self.slash_schemas = schemas;
+    c.ic_set_default_completer(&completionCallback, self);
+    c.ic_set_default_hinter(&hintsCallback, self);
 }
 
 pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity: Verbosity, is_repl: bool) Self {
-    c.linenoiseSetMultiLine(1);
-    c.linenoiseSetCompletionCallback(&completionCallback);
-    c.linenoiseSetHintsCallback(&hintsCallback);
+    _ = c.ic_enable_multiline(true);
+    _ = c.ic_enable_hint(true);
+    _ = c.ic_enable_inline_help(true);
+    // Show ghost completions instantly; isocline's default is 400 ms.
+    _ = c.ic_set_hint_delay(0);
+    _ = c.ic_enable_brace_insertion(true);
+    // `ps-*` namespace avoids colliding with isocline's built-in `ic-*` styles.
+    c.ic_style_def(style_cmd, "ansi-cyan bold");
+    c.ic_style_def(style_slash, "ansi-magenta bold");
+    c.ic_style_def(style_string, "ansi-green");
+    c.ic_style_def(style_var, "ansi-yellow bold");
+    c.ic_style_def(style_url, "ansi-blue underline");
+    c.ic_style_def(style_key, "ansi-cyan");
+    c.ic_style_def(style_num, "ansi-yellow");
+    c.ic_style_def(style_err, "ansi-red");
+    c.ic_set_default_highlighter(&highlighterCallback, null);
+    _ = c.ic_enable_highlight(true);
     if (history_path) |path| {
-        _ = c.linenoiseHistoryLoad(path.ptr);
+        c.ic_set_history(path.ptr, -1); // -1 → 200-entry default cap
     }
     const stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO);
     return .{
-        .history_path = history_path,
+        .allocator = allocator,
         .verbosity = verbosity,
         .repl_arena = if (is_repl) std.heap.ArenaAllocator.init(allocator) else null,
         .stderr_is_tty = stderr_is_tty,
@@ -109,10 +104,9 @@ fn isRepl(self: *const Self) bool {
 pub fn deinit(self: *Self) void {
     self.spinner.deinit();
     if (self.repl_arena) |*a| a.deinit();
+    if (self.env_names) |names| self.allocator.free(names);
 }
 
-// Shared between the spinner-emit path (writes to an arena buffer) and the
-// non-spinner TTY path (writes to stderr via std.debug.print).
 const bullet_line_fmt = "{s}●{s} {s}[tool: {s}]{s} {s}\n";
 
 /// Called after the tool returns.
@@ -154,35 +148,20 @@ fn formatBulletLine(arena: std.mem.Allocator, name: []const u8, args: []const u8
     return aw.written();
 }
 
-const completion_buf_len = 256;
+const completion_buf_len = 512;
 
 fn addPrefixedCompletion(
-    lc: [*c]c.linenoiseCompletions,
-    name_buf: *[completion_buf_len:0]u8,
+    cenv: ?*c.ic_completion_env_t,
+    buf: *[completion_buf_len:0]u8,
+    input: []const u8,
     prefix: []const u8,
     name: []const u8,
     suffix: []const u8,
     partial: []const u8,
 ) void {
     if (!std.ascii.startsWithIgnoreCase(name, partial)) return;
-    _ = std.fmt.bufPrintZ(name_buf, "{s}{s}{s}", .{ prefix, name, suffix }) catch return;
-    c.linenoiseAddCompletion(lc, name_buf);
-}
-
-fn slashHint(name: []const u8, partial: []const u8) ?[]const u8 {
-    if (name.len <= partial.len) return null;
-    if (!std.ascii.startsWithIgnoreCase(name, partial)) return null;
-    return name[partial.len..];
-}
-
-fn renderNameSuffixHint(partial: []const u8) [*c]u8 {
-    for (all_slash_names) |name| {
-        if (slashHint(name, partial)) |s| {
-            _ = std.fmt.bufPrintZ(&hint_buf, "{s}", .{s}) catch return null;
-            return @ptrCast(&hint_buf);
-        }
-    }
-    return null;
+    const text = std.fmt.bufPrintZ(buf, "{s}{s}{s}", .{ prefix, name, suffix }) catch return;
+    _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
 }
 
 fn parseSlashCommand(input: []const u8) ?SlashCommand.Split {
@@ -190,23 +169,6 @@ fn parseSlashCommand(input: []const u8) ?SlashCommand.Split {
     // accept "foo" as the name after trimming.
     if (input.len < 2 or input[0] != '/' or std.ascii.isWhitespace(input[1])) return null;
     return SlashCommand.splitNameRest(input[1..]);
-}
-
-fn findMetaSlots(name: []const u8) ?[]const []const u8 {
-    for (meta_slash_commands) |meta| {
-        if (std.ascii.eqlIgnoreCase(meta.name, name)) return meta.hint_slots;
-    }
-    return null;
-}
-
-// Appends `lead + formatted` to `hint_buf` at `pos`, advancing `pos`. Lead is
-// a single space except on the very first slot when the user's input already
-// ends in whitespace. Returns false if the buffer is full.
-fn appendHint(pos: *usize, ends_ws: bool, comptime fmt: []const u8, args: anytype) bool {
-    const lead: []const u8 = if (pos.* > 0 or !ends_ws) " " else "";
-    const written = std.fmt.bufPrint(hint_buf[pos.*..], "{s}" ++ fmt, .{lead} ++ args) catch return false;
-    pos.* += written.len;
-    return true;
 }
 
 // Cap on tokens we read out of the body. Real schemas and CLI inputs have far
@@ -263,62 +225,8 @@ fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, ends_ws
     return a;
 }
 
-// Two modes:
-//   1. Trailing in-progress key prefix → render the matching field's name
-//      suffix + "=…" (e.g. `/click sel` → `ector=…`).
-//   2. Otherwise → render `<required>` and `[optional=…]` for each unused field.
-fn renderSchemaArgHint(
-    schema: *const SlashCommand.SchemaInfo,
-    body: []const u8,
-    ends_ws: bool,
-) ?[*c]u8 {
-    const a = analyzeBody(schema, body, ends_ws);
-
-    if (a.partial_key) |pk| {
-        for (schema.hints) |slot| {
-            if (a.isUsed(slot.name)) continue;
-            if (!std.ascii.startsWithIgnoreCase(slot.name, pk)) continue;
-            _ = std.fmt.bufPrintZ(&hint_buf, "{s}=…", .{slot.name[pk.len..]}) catch return null;
-            return @ptrCast(&hint_buf);
-        }
-    }
-
-    var pos: usize = 0;
-    for (schema.hints) |slot| {
-        if (a.isUsed(slot.name)) continue;
-        const ok = if (slot.required)
-            appendHint(&pos, ends_ws, "<{s}>", .{slot.name})
-        else
-            appendHint(&pos, ends_ws, "[{s}=…]", .{slot.name});
-        if (!ok) return null;
-    }
-
-    if (pos == 0) return null;
-    hint_buf[pos] = 0;
-    return @ptrCast(&hint_buf);
-}
-
-// Meta-command variant: positional slots, no `key=` form. Slot strings come
-// pre-bracketed (e.g. "[tool_name]") and are written verbatim.
-fn renderMetaArgHint(slots: []const []const u8, body: []const u8, ends_ws: bool) ?[*c]u8 {
-    var committed: usize = 0;
-    var it = std.mem.tokenizeAny(u8, body, &std.ascii.whitespace);
-    while (it.next()) |_| committed += 1;
-    if (committed >= slots.len) return null;
-
-    var pos: usize = 0;
-    for (slots[committed..]) |slot| {
-        if (!appendHint(&pos, ends_ws, "{s}", .{slot})) return null;
-    }
-    if (pos == 0) return null;
-    hint_buf[pos] = 0;
-    return @ptrCast(&hint_buf);
-}
-
 const help_arg_prefix = "/help ";
 
-// Returns the trailing argument when `input` is `/help <arg>` with no
-// further whitespace; null otherwise (e.g. `/help foo bar`).
 fn parseHelpArgPrefix(input: []const u8) ?[]const u8 {
     if (!std.ascii.startsWithIgnoreCase(input, help_arg_prefix)) return null;
     const arg = std.mem.trimLeft(u8, input[help_arg_prefix.len..], " ");
@@ -327,12 +235,13 @@ fn parseHelpArgPrefix(input: []const u8) ?[]const u8 {
 }
 
 fn addPartialKeyCompletions(
+    cenv: ?*c.ic_completion_env_t,
     input: []const u8,
     body: []const u8,
     schema: *const SlashCommand.SchemaInfo,
-    lc: [*c]c.linenoiseCompletions,
-    name_buf: *[completion_buf_len:0]u8,
+    buf: *[completion_buf_len:0]u8,
 ) void {
+    std.debug.assert(input.len > 0);
     const ends_ws = input[input.len - 1] == ' ';
     const a = analyzeBody(schema, body, ends_ws);
     // Without a partial AND without trailing whitespace, the user is mid-typing
@@ -343,25 +252,44 @@ fn addPartialKeyCompletions(
     const prefix = input[0 .. input.len - partial.len];
     for (schema.hints) |slot| {
         if (a.isUsed(slot.name)) continue;
-        addPrefixedCompletion(lc, name_buf, prefix, slot.name, "=", partial);
+        addPrefixedCompletion(cenv, buf, input, prefix, slot.name, "=", partial);
     }
 }
 
-fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callconv(.c) void {
-    const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(buf)), 0);
+// Completes `$LP_*` against the live process environment.
+fn addEnvVarCompletions(
+    self: *Self,
+    cenv: ?*c.ic_completion_env_t,
+    buf: *[completion_buf_len:0]u8,
+    input: []const u8,
+) void {
+    const dollar = std.mem.lastIndexOfScalar(u8, input, '$') orelse return;
+    const partial = input[dollar + 1 ..];
+    for (partial) |ch| {
+        if (!std.ascii.isAlphanumeric(ch) and ch != '_') return;
+    }
 
-    // linenoise strdup's the string, so a stack buffer reused per match is
-    // fine. 256 leaves room for partial-key completions where the prefix is
-    // the whole input minus the trailing partial token.
-    var name_buf: [completion_buf_len:0]u8 = undefined;
+    if (self.env_names == null) {
+        // On OOM, cache an empty slice so we don't retry every keystroke.
+        self.env_names = browser_tools.lpEnvNames(self.allocator) catch &.{};
+    }
+    const names = self.env_names.?;
+    if (names.len == 0) return;
 
-    // If nothing matches, register the input itself so linenoise still enters
-    // completion mode. Otherwise it returns the Tab keypress to its edit loop,
-    // which inserts '\t' into the buffer and corrupts the line.
-    defer if (lc.*.len == 0) c.linenoiseAddCompletion(lc, buf);
+    const head = input[0 .. dollar + 1];
+    for (names) |name| addPrefixedCompletion(cenv, buf, input, head, name, "", partial);
+}
 
+fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callconv(.c) void {
+    const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(prefix)), 0);
+    const self_ptr = c.ic_completion_arg(cenv) orelse return;
+    const self: *Self = @ptrCast(@alignCast(self_ptr));
+
+    var buf: [completion_buf_len:0]u8 = undefined;
+
+    // `/help <name>`: arg is a tool name, not a value — skip env-var fallthrough.
     if (parseHelpArgPrefix(input)) |partial| {
-        for (all_slash_names) |name| addPrefixedCompletion(lc, &name_buf, help_arg_prefix, name, "", partial);
+        for (all_slash_names) |name| addPrefixedCompletion(cenv, &buf, input, help_arg_prefix, name, "", partial);
         return;
     }
 
@@ -371,86 +299,233 @@ fn completionCallback(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callcon
     if (input[0] == '/') {
         if (has_space) {
             if (parseSlashCommand(input)) |parts| {
-                if (SlashCommand.findSchema(slash_schemas, parts.name)) |schema| {
-                    addPartialKeyCompletions(input, parts.rest, schema, lc, &name_buf);
+                if (SlashCommand.findSchema(self.slash_schemas, parts.name)) |schema| {
+                    addPartialKeyCompletions(cenv, input, parts.rest, schema, &buf);
                 }
             }
+            // Fall through so `value=$LP_` picks up env completions.
+        } else {
+            const partial = input[1..];
+            // Fully-typed slash command → emit `/name <first_required>=` as a
+            // single completion so isocline shows the first arg as the inline
+            // ghost hint. Tab opens the key-value pair; user types the value.
+            if (SlashCommand.findSchema(self.slash_schemas, partial)) |schema| {
+                if (schema.required.len > 0) {
+                    const text = std.fmt.bufPrintZ(&buf, "{s} {s}=", .{ input, schema.required[0] }) catch return;
+                    _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
+                    return;
+                }
+            }
+            for (all_slash_names) |name| addPrefixedCompletion(cenv, &buf, input, "/", name, "", partial);
             return;
         }
-        const partial = input[1..];
-        for (all_slash_names) |name| addPrefixedCompletion(lc, &name_buf, "/", name, "", partial);
-        return;
-    }
-
-    if (has_space) return;
-    for (commands) |cmd| {
-        if (std.ascii.startsWithIgnoreCase(cmd.name, input)) {
-            c.linenoiseAddCompletion(lc, cmd.name.ptr);
+    } else if (!has_space) {
+        // Case-insensitive so Tab rewrites mistyped lowercase (`goto` → `GOTO`);
+        // the highlighter stays case-sensitive.
+        if (exactKeywordMatch(input)) |kw| {
+            // Full keyword typed — emit a single completion `<name><starter>`
+            // so isocline renders the starter as the inline ghost hint
+            // (isocline shows hints only when there's exactly one candidate).
+            // The starter is designed so Tab does something useful: open the
+            // quote for selector commands, insert `https://www.` for GOTO.
+            if (kw.starter) |starter| {
+                const text = std.fmt.bufPrintZ(&buf, "{s}{s}", .{ kw.name, starter }) catch return;
+                _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
+            }
+        } else {
+            for (Command.keywords) |kw| addPrefixedCompletion(cenv, &buf, input, "", kw.name, "", input);
         }
     }
+
+    self.addEnvVarCompletions(cenv, &buf, input);
 }
 
-// File-scope so the pointer survives the callback's stack frame; linenoise
-// reads the returned hint in refreshShowHints() *after* this function has
-// already returned, so a stack-local buffer would be UB. Sized for multi-slot
-// schema hints like `<sel> [timeout=…] [text=…] [waitFor=…]`.
+// File-scope buffer used by `hintsCallback`. Isocline copies the returned
+// string into its own stringbuf, so we can safely overwrite this between calls.
 var hint_buf: [completion_buf_len:0]u8 = undefined;
 
-fn hintsCallback(buf: [*c]const u8, color: [*c]c_int, bold: [*c]c_int) callconv(.c) [*c]u8 {
-    const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(buf)), 0);
+fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const u8 {
+    const self_ptr = arg orelse return null;
+    const self: *Self = @ptrCast(@alignCast(self_ptr));
+    const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input_c)), 0);
     if (input.len == 0) return null;
 
-    color.* = 90;
-    bold.* = 0;
-
-    // /help <partial> — suggest a tool name (more useful than the slot hint
-    // because we can show concrete completions).
-    if (parseHelpArgPrefix(input)) |partial| {
-        return renderNameSuffixHint(partial);
-    }
+    // `/help <partial>`: leave the inline hint to the completion-derived path.
+    if (parseHelpArgPrefix(input)) |_| return null;
 
     if (parseSlashCommand(input)) |parts| {
         const ends_ws = input[input.len - 1] == ' ';
-        if (SlashCommand.findSchema(slash_schemas, parts.name)) |schema| {
-            return renderSchemaArgHint(schema, parts.rest, ends_ws) orelse null;
+        if (SlashCommand.findSchema(self.slash_schemas, parts.name)) |schema| {
+            return renderSchemaHint(schema, parts.rest, ends_ws) orelse null;
         }
-        if (findMetaSlots(parts.name)) |slots| {
-            return renderMetaArgHint(slots, parts.rest, ends_ws) orelse null;
-        }
+        return null;
     }
 
     if (std.mem.indexOfScalar(u8, input, ' ') != null) return null;
+    if (input[0] == '/') return null;
 
-    if (input[0] == '/') {
-        return renderNameSuffixHint(input[1..]);
-    }
-
-    for (commands) |cmd| {
-        if (std.ascii.eqlIgnoreCase(cmd.name, input)) {
-            if (cmd.hint.len == 0) return null;
-            return @ptrCast(@constCast(cmd.hint.ptr));
-        }
-        if (cmd.name.len > input.len and std.ascii.startsWithIgnoreCase(cmd.name, input)) {
-            return @ptrCast(@constCast(cmd.name.ptr + input.len));
-        }
+    // PandaScript keyword: show its args template on exact match.
+    for (Command.keywords) |kw| {
+        if (!std.ascii.eqlIgnoreCase(kw.name, input)) continue;
+        const args = kw.args orelse return null;
+        const text = std.fmt.bufPrintZ(&hint_buf, " {s}", .{args}) catch return null;
+        return text.ptr;
     }
     return null;
 }
 
-pub fn readLine(self: *Self, prompt: [*:0]const u8) ?[]const u8 {
-    const line = c.linenoise(prompt) orelse return null;
-    const slice = std.mem.sliceTo(line, 0);
-    if (slice.len > 0) {
-        _ = c.linenoiseHistoryAdd(line);
-        if (self.history_path) |path| {
-            _ = c.linenoiseHistorySave(path.ptr);
+// Renders `<required>` and `[optional=…]` for each unused field, or
+// `<keyname>=…` when the user is typing a key prefix.
+fn renderSchemaHint(schema: *const SlashCommand.SchemaInfo, body: []const u8, ends_ws: bool) ?[*c]const u8 {
+    const a = analyzeBody(schema, body, ends_ws);
+
+    if (a.partial_key) |pk| {
+        for (schema.hints) |slot| {
+            if (a.isUsed(slot.name)) continue;
+            if (!std.ascii.startsWithIgnoreCase(slot.name, pk)) continue;
+            const text = std.fmt.bufPrintZ(&hint_buf, "{s}=…", .{slot.name[pk.len..]}) catch return null;
+            return text.ptr;
         }
+        return null;
     }
-    return slice;
+
+    var pos: usize = 0;
+    for (schema.hints) |slot| {
+        if (a.isUsed(slot.name)) continue;
+        const lead: []const u8 = if (pos > 0 or !ends_ws) " " else "";
+        const written = if (slot.required)
+            std.fmt.bufPrint(hint_buf[pos..], "{s}<{s}>", .{ lead, slot.name }) catch return null
+        else
+            std.fmt.bufPrint(hint_buf[pos..], "{s}[{s}=…]", .{ lead, slot.name }) catch return null;
+        pos += written.len;
+    }
+    if (pos == 0) return null;
+    hint_buf[pos] = 0;
+    return @ptrCast(&hint_buf);
 }
 
-pub fn freeLine(_: *Self, line: []const u8) void {
-    c.linenoiseFree(@ptrCast(@constCast(line.ptr)));
+// Advances `i` past whitespace; returns true if more text remains.
+fn skipWs(text: []const u8, i: *usize) bool {
+    while (i.* < text.len and std.ascii.isWhitespace(text[i.*])) i.* += 1;
+    return i.* < text.len;
+}
+
+// Byte offsets to ic_highlight are not UTF-8 code points; safe because we
+// only tokenize on ASCII boundaries (whitespace, quotes, `=`, `$`).
+fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*anyopaque) callconv(.c) void {
+    const text = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input)), 0);
+    var i: usize = 0;
+    if (!skipWs(text, &i)) return;
+
+    const cmd_start = i;
+    while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
+    const cmd = text[cmd_start..i];
+    if (cmd.len > 0 and cmd[0] == '/') {
+        const style = if (isKnownSlashName(cmd[1..])) style_slash else style_err;
+        c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), style.ptr);
+        highlightSlashArgs(henv, text, i);
+    } else {
+        // ALL CAPS but unknown → typo (red); lowercase/mixed → natural language (unstyled).
+        const style: ?[*:0]const u8 = if (isKnownCommand(cmd))
+            style_cmd
+        else if (string.isAllUpper(cmd))
+            style_err
+        else
+            null;
+        if (style) |s| c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), s);
+        highlightPandaArgs(henv, text, i);
+    }
+}
+
+fn isKnownCommand(name: []const u8) bool {
+    for (Command.keywords) |kw| {
+        if (std.mem.eql(u8, kw.name, name)) return true;
+    }
+    return false;
+}
+
+fn exactKeywordMatch(input: []const u8) ?Command.KeywordSyntax {
+    for (Command.keywords) |kw| {
+        if (std.ascii.eqlIgnoreCase(kw.name, input)) return kw;
+    }
+    return null;
+}
+
+fn isKnownSlashName(name: []const u8) bool {
+    for (all_slash_names) |n| {
+        if (std.ascii.eqlIgnoreCase(n, name)) return true;
+    }
+    return false;
+}
+
+fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize, end: usize) void {
+    if (start >= end) return;
+    const tok = text[start..end];
+    if (tok[0] == '$') {
+        c.ic_highlight(henv, @intCast(start), @intCast(end - start), style_var.ptr);
+        return;
+    }
+    if (lp.URL.isCompleteHTTPUrl(tok)) {
+        c.ic_highlight(henv, @intCast(start), @intCast(end - start), style_url.ptr);
+        return;
+    }
+    if (std.fmt.parseFloat(f64, tok)) |_| {
+        c.ic_highlight(henv, @intCast(start), @intCast(end - start), style_num.ptr);
+    } else |_| {}
+}
+
+// Returns the index just past the matching closing quote, or `text.len` if
+// unterminated. Does not handle backslash escapes (matches SlashCommand.zig parser).
+fn scanQuoted(text: []const u8, start: usize) usize {
+    if (start >= text.len) return start;
+    const close = std.mem.indexOfScalarPos(u8, text, start + 1, text[start]) orelse return text.len;
+    return close + 1;
+}
+
+fn highlightPandaArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
+    var i = start;
+    while (skipWs(text, &i)) {
+        if (text[i] == '\'' or text[i] == '"') {
+            const tok_start = i;
+            i = scanQuoted(text, i);
+            c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_string.ptr);
+            continue;
+        }
+        const tok_start = i;
+        while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
+        highlightBareToken(henv, text, tok_start, i);
+    }
+}
+
+fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
+    var i = start;
+    while (skipWs(text, &i)) {
+        const tok_start = i;
+        while (i < text.len and !std.ascii.isWhitespace(text[i]) and text[i] != '=') i += 1;
+        const key_end = i;
+        if (i < text.len and text[i] == '=') {
+            c.ic_highlight(henv, @intCast(tok_start), @intCast(key_end - tok_start), style_key.ptr);
+            i += 1;
+            const val_start = i;
+            if (i < text.len and (text[i] == '\'' or text[i] == '"')) {
+                i = scanQuoted(text, i);
+                c.ic_highlight(henv, @intCast(val_start), @intCast(i - val_start), style_string.ptr);
+            } else {
+                while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
+                highlightBareToken(henv, text, val_start, i);
+            }
+        }
+    }
+}
+
+pub fn readLine(prompt: [*:0]const u8) ?[]const u8 {
+    // Isocline auto-appends the line to its (optionally-persisted) history.
+    const line = c.ic_readline(prompt) orelse return null;
+    return std.mem.sliceTo(line, 0);
+}
+
+pub fn freeLine(line: []const u8) void {
+    c.ic_free(@ptrCast(@constCast(line.ptr)));
 }
 
 pub fn printAssistant(_: *Self, text: []const u8) void {
