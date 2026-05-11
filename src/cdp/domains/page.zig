@@ -39,11 +39,13 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
         getFrameTree,
+        getNavigationHistory,
         setLifecycleEventsEnabled,
         addScriptToEvaluateOnNewDocument,
         removeScriptToEvaluateOnNewDocument,
         createIsolatedWorld,
         navigate,
+        navigateToHistoryEntry,
         reload,
         stopLoading,
         close,
@@ -56,11 +58,13 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     switch (action) {
         .enable => return cmd.sendResult(null, .{}),
         .getFrameTree => return getFrameTree(cmd),
+        .getNavigationHistory => return getNavigationHistory(cmd),
         .setLifecycleEventsEnabled => return setLifecycleEventsEnabled(cmd),
         .addScriptToEvaluateOnNewDocument => return addScriptToEvaluateOnNewDocument(cmd),
         .removeScriptToEvaluateOnNewDocument => return removeScriptToEvaluateOnNewDocument(cmd),
         .createIsolatedWorld => return createIsolatedWorld(cmd),
         .navigate => return navigate(cmd),
+        .navigateToHistoryEntry => return navigateToHistoryEntry(cmd),
         .reload => return doReload(cmd),
         .stopLoading => return cmd.sendResult(null, .{}),
         .close => return close(cmd),
@@ -359,6 +363,93 @@ fn doReload(cmd: *CDP.Command) !void {
         .method = if (prev_nav) |p| p.method else .GET,
         .body = prev_body,
         .header = prev_header,
+    });
+}
+
+const NavigationEntry = struct {
+    id: i64,
+    url: []const u8,
+    userTypedURL: []const u8,
+    title: []const u8,
+    transitionType: []const u8,
+};
+
+fn getNavigationHistory(cmd: *CDP.Command) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    if (bc.session_id == null) {
+        return error.SessionIdNotLoaded;
+    }
+
+    const nav = &bc.session.navigation;
+    const entries_in = nav._entries.items;
+
+    const entries_out = try cmd.arena.alloc(NavigationEntry, entries_in.len);
+    for (entries_in, 0..) |entry, i| {
+        // Navigation.pushEntry always formats _id as a decimal usize counter,
+        // so parse failure here is an internal invariant violation, not a
+        // recoverable runtime error.
+        const eid = std.fmt.parseInt(i64, entry._id, 10) catch @panic("Navigation entry _id is not a base-10 integer");
+        entries_out[i] = .{
+            .id = eid,
+            .url = entry._url orelse "",
+            .userTypedURL = entry._url orelse "",
+            .title = "",
+            .transitionType = "other",
+        };
+    }
+
+    return cmd.sendResult(.{
+        .currentIndex = @as(i64, @intCast(nav._index)),
+        .entries = entries_out,
+    }, .{});
+}
+
+fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        entryId: i64,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    if (bc.session_id == null) {
+        return error.SessionIdNotLoaded;
+    }
+
+    const session = bc.session;
+    const nav = &session.navigation;
+
+    var target_index: ?usize = null;
+    var target_url: ?[:0]const u8 = null;
+    for (nav._entries.items, 0..) |entry, i| {
+        const eid = std.fmt.parseInt(i64, entry._id, 10) catch @panic("Navigation entry _id is not a base-10 integer");
+        if (eid == params.entryId) {
+            target_index = i;
+            target_url = entry._url;
+            break;
+        }
+    }
+
+    const idx = target_index orelse return error.InvalidParams;
+    const url = target_url orelse return error.InvalidParams;
+
+    var frame = session.currentFrame() orelse return error.FrameNotLoaded;
+    if (frame._load_state != .waiting) {
+        // Reset isolated world identities to disable V8 weak callbacks before
+        // resetPageResources releases refs. Mirrors the navigate / doReload path.
+        for (bc.isolated_worlds.items) |isolated_world| {
+            isolated_world.identity.deinit();
+            isolated_world.identity = .{};
+        }
+        frame = try session.replacePage();
+    }
+
+    // Duplicate the URL into the new frame's arena: replacePage above released
+    // the previous arena that backed the entry's _url string.
+    const dup_url = try frame.arena.dupeZ(u8, url);
+
+    try frame.navigate(dup_url, .{
+        .reason = .history,
+        .cdp_id = cmd.input.id,
+        .kind = .{ .traverse = idx },
     });
 }
 
@@ -1354,5 +1445,111 @@ test "cdp.frame: addScriptToEvaluateOnNewDocument" {
 
         const test_val = try ls.local.exec("window.__test2", null);
         try testing.expectEqual(2, try test_val.toI32());
+    }
+}
+
+test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    {
+        // No browser context — should error.
+        try ctx.processMessage(.{ .id = 10, .method = "Page.getNavigationHistory" });
+        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 10 });
+    }
+    {
+        try ctx.processMessage(.{ .id = 11, .method = "Page.navigateToHistoryEntry", .params = .{ .entryId = 0 } });
+        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 11 });
+    }
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-B2", .url = "cdp/dom1.html", .target_id = "TID-B2-0000000".* });
+
+    // Build up history: dom1.html (from loadBrowserContext) → dom2.html → dom3.html.
+    {
+        try ctx.processMessage(.{
+            .id = 20,
+            .method = "Page.navigate",
+            .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html" },
+        });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+    {
+        try ctx.processMessage(.{
+            .id = 21,
+            .method = "Page.navigate",
+            .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom3.html" },
+        });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+    }
+
+    // Three entries (ids 0, 1, 2), currentIndex points at the most-recent.
+    {
+        try ctx.processMessage(.{ .id = 30, .method = "Page.getNavigationHistory" });
+        try ctx.expectSentResult(.{
+            .currentIndex = 2,
+            .entries = &[_]NavigationEntry{
+                .{
+                    .id = 0,
+                    .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html",
+                    .userTypedURL = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html",
+                    .title = "",
+                    .transitionType = "other",
+                },
+                .{
+                    .id = 1,
+                    .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html",
+                    .userTypedURL = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html",
+                    .title = "",
+                    .transitionType = "other",
+                },
+                .{
+                    .id = 2,
+                    .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom3.html",
+                    .userTypedURL = "http://127.0.0.1:9582/src/browser/tests/cdp/dom3.html",
+                    .title = "",
+                    .transitionType = "other",
+                },
+            },
+        }, .{ .id = 30 });
+    }
+
+    // Traverse back to the first entry.
+    {
+        try ctx.processMessage(.{
+            .id = 40,
+            .method = "Page.navigateToHistoryEntry",
+            .params = .{ .entryId = 0 },
+        });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+
+        const f = bc.session.currentFrame() orelse unreachable;
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html", f.url);
+    }
+
+    // Traverse forward to the middle entry.
+    {
+        try ctx.processMessage(.{
+            .id = 41,
+            .method = "Page.navigateToHistoryEntry",
+            .params = .{ .entryId = 1 },
+        });
+        var runner = try bc.session.runner(.{});
+        try runner.wait(.{ .ms = 2000 });
+
+        const f = bc.session.currentFrame() orelse unreachable;
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html", f.url);
+    }
+
+    // Unknown entryId — InvalidParams.
+    {
+        try ctx.processMessage(.{
+            .id = 42,
+            .method = "Page.navigateToHistoryEntry",
+            .params = .{ .entryId = 9999 },
+        });
+        try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 42 });
     }
 }
