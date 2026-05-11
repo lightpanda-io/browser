@@ -95,6 +95,20 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
     // to ic_readline renders verbatim; the agent already supplies its own
     // `> ` prefix.
     c.ic_set_prompt_marker("", "");
+    // PandaScript syntax highlighting. Names are namespaced `ps-*` so users
+    // (or a future theme system) can override via `ic_style_def` without
+    // colliding with isocline's built-in `ic-*` styles. Bold/underline are
+    // intentionally restrained — the prompt is meant to read, not glow.
+    c.ic_style_def("ps-cmd", "ansi-cyan bold");
+    c.ic_style_def("ps-slash", "ansi-magenta bold");
+    c.ic_style_def("ps-string", "ansi-green");
+    c.ic_style_def("ps-var", "ansi-yellow bold");
+    c.ic_style_def("ps-url", "ansi-blue underline");
+    c.ic_style_def("ps-key", "ansi-cyan");
+    c.ic_style_def("ps-num", "ansi-yellow");
+    c.ic_style_def("ps-err", "ansi-red");
+    _ = c.ic_enable_highlight(true);
+    c.ic_set_default_highlighter(&highlighterCallback, null);
     if (history_path) |path| {
         // -1 → default cap (200 entries). Passing a filename makes isocline
         // load existing entries and auto-persist additions.
@@ -276,6 +290,37 @@ fn addPartialKeyCompletions(
     }
 }
 
+// Offers `$LP_*` completions when the user is mid-typing a `$VAR` token.
+// Triggers wherever a `$` appears with only name characters following it, so
+// it works in PandaScript args (`TYPE '#u' $LP_`), slash values
+// (`/click value=$L`), and bare prefixes (`$L`). Names come from the same
+// source as the `getEnv` tool — `std.os.environ` filtered to LP_*.
+fn addEnvVarCompletions(
+    cenv: ?*c.ic_completion_env_t,
+    buf: *[completion_buf_len:0]u8,
+    input: []const u8,
+) void {
+    const dollar = std.mem.lastIndexOfScalar(u8, input, '$') orelse return;
+    const partial = input[dollar + 1 ..];
+    for (partial) |ch| {
+        if (!std.ascii.isAlphanumeric(ch) and ch != '_') return;
+    }
+
+    // Stack-only scratch for the env-name list. 16 KiB holds ~1000 names'
+    // worth of pointer metadata (names themselves point into std.os.environ
+    // and aren't copied) — far more than any realistic environment.
+    var stack: [16 * 1024]u8 = undefined;
+    var fba: std.heap.FixedBufferAllocator = .init(&stack);
+    const names = browser_tools.lpEnvNames(fba.allocator()) catch return;
+
+    const head = input[0 .. dollar + 1];
+    for (names) |name| {
+        if (!std.ascii.startsWithIgnoreCase(name, partial)) continue;
+        const text = std.fmt.bufPrintZ(buf, "{s}{s}", .{ head, name }) catch continue;
+        _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
+    }
+}
+
 fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callconv(.c) void {
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(prefix)), 0);
     const self_ptr = c.ic_completion_arg(cenv) orelse return;
@@ -285,6 +330,8 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
     // copies the string internally so reuse across candidates is fine.
     var buf: [completion_buf_len:0]u8 = undefined;
 
+    // `/help <name>` — the arg is itself a tool name, not a value, so env-var
+    // completion would be confusing here. Short-circuit.
     if (parseHelpArgPrefix(input)) |partial| {
         for (all_slash_names) |name| addPrefixedCompletion(cenv, &buf, input, help_arg_prefix, name, "", partial);
         return;
@@ -300,19 +347,165 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
                     addPartialKeyCompletions(cenv, input, parts.rest, schema, &buf);
                 }
             }
+            // Fall through so `value=$LP_` etc. picks up env completions.
+        } else {
+            const partial = input[1..];
+            for (all_slash_names) |name| addPrefixedCompletion(cenv, &buf, input, "/", name, "", partial);
             return;
         }
-        const partial = input[1..];
-        for (all_slash_names) |name| addPrefixedCompletion(cenv, &buf, input, "/", name, "", partial);
-        return;
+    } else if (!has_space) {
+        // Case-insensitive on the completion side so Tab also rewrites
+        // mistyped lowercase (`goto` → `GOTO`). The highlighter stays
+        // case-sensitive, so a lowercase-typed line reads as natural
+        // language until the user accepts the completion.
+        for (commands) |cmd| {
+            if (std.ascii.startsWithIgnoreCase(cmd.name, input)) {
+                const text = std.fmt.bufPrintZ(&buf, "{s}", .{cmd.name}) catch continue;
+                _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
+            }
+        }
     }
 
-    if (has_space) return;
+    addEnvVarCompletions(cenv, &buf, input);
+}
+
+// PandaScript syntax highlighter. Invoked by isocline on every input change;
+// keep it cheap. The `pos` and `count` passed to `ic_highlight` are byte
+// offsets/lengths into `input`, not UTF-8 code points — fine here because we
+// only tokenize on ASCII boundaries (whitespace, quotes, `=`, `$`).
+fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*anyopaque) callconv(.c) void {
+    const text = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input)), 0);
+    if (text.len == 0) return;
+
+    var i: usize = 0;
+    while (i < text.len and std.ascii.isWhitespace(text[i])) i += 1;
+    if (i >= text.len) return;
+
+    // First word: either `/slash` form or a bare PandaScript command name.
+    // Unknown leading tokens get highlighted as errors so typos are visible
+    // before the user hits Enter.
+    const cmd_start = i;
+    while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
+    const cmd = text[cmd_start..i];
+    if (cmd.len > 0 and cmd[0] == '/') {
+        const name = cmd[1..];
+        const style = if (isKnownSlashName(name)) "ps-slash" else "ps-err";
+        c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), style.ptr);
+        highlightSlashArgs(henv, text, i);
+    } else {
+        // PandaScript commands are ALL CAPS. Known → keyword color. ALL CAPS
+        // but unknown → red (likely typo). Anything else → no highlight,
+        // it's a natural-language query for the LLM.
+        const style: ?[*:0]const u8 = if (isKnownCommand(cmd))
+            "ps-cmd"
+        else if (isAllUpper(cmd))
+            "ps-err"
+        else
+            null;
+        if (style) |s| c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), s);
+        highlightPandaArgs(henv, text, i);
+    }
+}
+
+fn isAllUpper(s: []const u8) bool {
+    for (s) |ch| switch (ch) {
+        'A'...'Z', '_', '0'...'9' => {},
+        else => return false,
+    };
+    return s.len > 0;
+}
+
+fn isKnownCommand(name: []const u8) bool {
     for (commands) |cmd| {
-        if (std.ascii.startsWithIgnoreCase(cmd.name, input)) {
-            const text = std.fmt.bufPrintZ(&buf, "{s}", .{cmd.name}) catch continue;
-            _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
+        if (std.mem.eql(u8, cmd.name, name)) return true;
+    }
+    return false;
+}
+
+fn isKnownSlashName(name: []const u8) bool {
+    for (all_slash_names) |n| {
+        if (std.ascii.eqlIgnoreCase(n, name)) return true;
+    }
+    return false;
+}
+
+// Color a non-quoted token based on its leading character: `$` → variable,
+// `http(s)://` → URL, digits → number. Anything else falls through with no
+// highlight (lets the terminal's default foreground show through).
+fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize, end: usize) void {
+    if (start >= end) return;
+    const tok = text[start..end];
+    if (tok[0] == '$') {
+        c.ic_highlight(henv, @intCast(start), @intCast(end - start), "ps-var".ptr);
+        return;
+    }
+    if (std.mem.startsWith(u8, tok, "http://") or std.mem.startsWith(u8, tok, "https://")) {
+        c.ic_highlight(henv, @intCast(start), @intCast(end - start), "ps-url".ptr);
+        return;
+    }
+    if (std.ascii.isDigit(tok[0])) {
+        var all_num = true;
+        for (tok) |ch| if (!std.ascii.isDigit(ch) and ch != '.') {
+            all_num = false;
+            break;
+        };
+        if (all_num) c.ic_highlight(henv, @intCast(start), @intCast(end - start), "ps-num".ptr);
+    }
+}
+
+// Consume a quoted token (single or double) at `start`, returning the index
+// just past the closing quote. Handles backslash escapes minimally — enough
+// not to confuse `\'` inside a single-quoted string.
+fn scanQuoted(text: []const u8, start: usize) usize {
+    if (start >= text.len) return start;
+    const quote = text[start];
+    var i = start + 1;
+    while (i < text.len and text[i] != quote) : (i += 1) {
+        if (text[i] == '\\' and i + 1 < text.len) i += 1;
+    }
+    return if (i < text.len) i + 1 else i;
+}
+
+fn highlightPandaArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
+    var i = start;
+    while (i < text.len) {
+        while (i < text.len and std.ascii.isWhitespace(text[i])) i += 1;
+        if (i >= text.len) break;
+
+        if (text[i] == '\'' or text[i] == '"') {
+            const tok_start = i;
+            i = scanQuoted(text, i);
+            c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), "ps-string".ptr);
+            continue;
         }
+        const tok_start = i;
+        while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
+        highlightBareToken(henv, text, tok_start, i);
+    }
+}
+
+fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
+    var i = start;
+    while (i < text.len) {
+        while (i < text.len and std.ascii.isWhitespace(text[i])) i += 1;
+        if (i >= text.len) break;
+
+        const tok_start = i;
+        while (i < text.len and !std.ascii.isWhitespace(text[i]) and text[i] != '=') i += 1;
+        const key_end = i;
+        if (i < text.len and text[i] == '=') {
+            c.ic_highlight(henv, @intCast(tok_start), @intCast(key_end - tok_start), "ps-key".ptr);
+            i += 1; // consume '='
+            const val_start = i;
+            if (i < text.len and (text[i] == '\'' or text[i] == '"')) {
+                i = scanQuoted(text, i);
+                c.ic_highlight(henv, @intCast(val_start), @intCast(i - val_start), "ps-string".ptr);
+            } else {
+                while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
+                highlightBareToken(henv, text, val_start, i);
+            }
+        }
+        // bare positional (no `=`) — leave unstyled.
     }
 }
 
