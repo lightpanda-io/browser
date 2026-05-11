@@ -74,6 +74,11 @@ command. Comments start with `#`. Strings are quoted with `'`, `"`, or `'''…''
 for values that mix both quote styles. Quoting rules are content-aware so that
 recorded scripts round-trip through the parser.
 
+Commands are matched **ALL CAPS only** (`CLICK`, `GOTO`, `TYPE`, …). Lowercase
+or mixed-case input is forwarded to the LLM as natural language, so prompts
+like `click the login button` flow through without being misread as a `CLICK`
+command. In the REPL, TAB completion fills in the canonical caps form for you.
+
 | Command          | Form                                  | Notes                                                |
 |------------------|---------------------------------------|------------------------------------------------------|
 | `GOTO`           | `GOTO <url>`                          | Navigate. URL is unquoted.                           |

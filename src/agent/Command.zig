@@ -119,29 +119,29 @@ pub fn parse(line: []const u8) Command {
     const cmd_word = trimmed[0..cmd_end];
     const rest = std.mem.trim(u8, trimmed[cmd_end..], &std.ascii.whitespace);
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "GOTO")) {
+    if (std.mem.eql(u8, cmd_word, "GOTO")) {
         if (rest.len == 0) return .{ .natural_language = trimmed };
         return .{ .goto = rest };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "CLICK")) {
+    if (std.mem.eql(u8, cmd_word, "CLICK")) {
         const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
         return .{ .click = arg };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "TYPE")) {
+    if (std.mem.eql(u8, cmd_word, "TYPE")) {
         const first = extractQuotedWithRemainder(rest) orelse return .{ .natural_language = trimmed };
         const second_arg = std.mem.trim(u8, first.remainder, &std.ascii.whitespace);
         const second = trimMatchingQuotes(second_arg) orelse return .{ .natural_language = trimmed };
         return .{ .type_cmd = .{ .selector = first.value, .value = second } };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "WAIT")) {
+    if (std.mem.eql(u8, cmd_word, "WAIT")) {
         const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
         return .{ .wait = arg };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "SCROLL")) {
+    if (std.mem.eql(u8, cmd_word, "SCROLL")) {
         // SCROLL          → scroll to (0, 0)
         // SCROLL 100      → scroll y=100
         // SCROLL 50 200   → scroll x=50, y=200
@@ -158,19 +158,19 @@ pub fn parse(line: []const u8) Command {
         return .{ .scroll = .{ .x = 0, .y = y } };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "HOVER")) {
+    if (std.mem.eql(u8, cmd_word, "HOVER")) {
         const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
         return .{ .hover = arg };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "SELECT")) {
+    if (std.mem.eql(u8, cmd_word, "SELECT")) {
         const first = extractQuotedWithRemainder(rest) orelse return .{ .natural_language = trimmed };
         const second_arg = std.mem.trim(u8, first.remainder, &std.ascii.whitespace);
         const second = trimMatchingQuotes(second_arg) orelse return .{ .natural_language = trimmed };
         return .{ .select = .{ .selector = first.value, .value = second } };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "CHECK")) {
+    if (std.mem.eql(u8, cmd_word, "CHECK")) {
         // CHECK '<sel>'         → checked = true
         // CHECK '<sel>' true    → checked = true
         // CHECK '<sel>' false   → checked = false
@@ -188,29 +188,29 @@ pub fn parse(line: []const u8) Command {
         return .{ .natural_language = trimmed };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "TREE")) {
+    if (std.mem.eql(u8, cmd_word, "TREE")) {
         return .{ .tree = {} };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "MARKDOWN")) {
+    if (std.mem.eql(u8, cmd_word, "MARKDOWN")) {
         return .{ .markdown = {} };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "EXTRACT")) {
+    if (std.mem.eql(u8, cmd_word, "EXTRACT")) {
         const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
         return .{ .extract = arg };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "EVAL")) {
+    if (std.mem.eql(u8, cmd_word, "EVAL")) {
         const arg = trimMatchingQuotes(rest) orelse return .{ .natural_language = trimmed };
         return .{ .eval_js = arg };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "LOGIN")) {
+    if (std.mem.eql(u8, cmd_word, "LOGIN")) {
         return .{ .login = {} };
     }
 
-    if (std.ascii.eqlIgnoreCase(cmd_word, "ACCEPT_COOKIES")) {
+    if (std.mem.eql(u8, cmd_word, "ACCEPT_COOKIES")) {
         return .{ .accept_cookies = {} };
     }
 
@@ -280,7 +280,7 @@ pub const ScriptIterator = struct {
     fn isEvalTripleQuote(line: []const u8) ?[]const u8 {
         const cmd_end = std.mem.indexOfAny(u8, line, &std.ascii.whitespace) orelse line.len;
         const cmd_word = line[0..cmd_end];
-        if (!std.ascii.eqlIgnoreCase(cmd_word, "EVAL")) return null;
+        if (!std.mem.eql(u8, cmd_word, "EVAL")) return null;
         const rest = std.mem.trim(u8, line[cmd_end..], &std.ascii.whitespace);
         // Multi-line mode requires the opening triple-quote to stand alone —
         // inline forms like `EVAL '''a"b'c'''` fall through to single-line parse().
@@ -557,9 +557,24 @@ test "parse GOTO" {
     try std.testing.expectEqualStrings("https://example.com", cmd.goto);
 }
 
-test "parse GOTO case insensitive" {
-    const cmd = parse("goto https://example.com");
-    try std.testing.expectEqualStrings("https://example.com", cmd.goto);
+test "parse lowercase keyword falls through to natural_language" {
+    // Commands must be ALL CAPS so that prose like "click the login button"
+    // can flow through to the LLM without being misread as a CLICK command.
+    try std.testing.expect(parse("goto https://example.com") == .natural_language);
+    try std.testing.expect(parse("click '#submit'") == .natural_language);
+    try std.testing.expect(parse("type '#email' 'a@b.c'") == .natural_language);
+}
+
+test "parse mixed-case keyword falls through to natural_language" {
+    try std.testing.expect(parse("Click '#foo'") == .natural_language);
+    try std.testing.expect(parse("Goto https://x") == .natural_language);
+    try std.testing.expect(parse("Markdown") == .natural_language);
+}
+
+test "parse natural language starting with command verb" {
+    try std.testing.expect(parse("click on the login button") == .natural_language);
+    try std.testing.expect(parse("type the username into the form") == .natural_language);
+    try std.testing.expect(parse("wait for the page to load") == .natural_language);
 }
 
 test "parse GOTO missing url" {
@@ -723,7 +738,7 @@ test "parse TREE" {
 
 test "parse MARKDOWN" {
     try std.testing.expect(parse("MARKDOWN") == .markdown);
-    try std.testing.expect(parse("markdown") == .markdown);
+    try std.testing.expect(parse("markdown") == .natural_language);
 }
 
 test "parse EXTRACT" {
@@ -738,12 +753,17 @@ test "parse EVAL single line" {
 
 test "parse LOGIN" {
     try std.testing.expect(parse("LOGIN") == .login);
-    try std.testing.expect(parse("login") == .login);
+    try std.testing.expect(parse("login") == .natural_language);
 }
 
 test "parse ACCEPT_COOKIES" {
     try std.testing.expect(parse("ACCEPT_COOKIES") == .accept_cookies);
-    try std.testing.expect(parse("accept_cookies") == .accept_cookies);
+    try std.testing.expect(parse("accept_cookies") == .natural_language);
+}
+
+test "parse EVAL triple-quote opener requires uppercase" {
+    try std.testing.expect(parse("eval '''") == .natural_language);
+    try std.testing.expect(parse("eval \"\"\"") == .natural_language);
 }
 
 test "parse comment" {
