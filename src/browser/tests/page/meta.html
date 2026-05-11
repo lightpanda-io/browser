@@ -30,7 +30,8 @@
   testing.expectEqual('undefined', typeof plainDoc.scripts);
   testing.expectEqual('undefined', typeof plainDoc.links);
   testing.expectEqual('undefined', typeof plainDoc.forms);
-  testing.expectEqual('undefined', typeof plainDoc.location);
+  // location lives on Document (returns null for non-HTMLDocument).
+  testing.expectEqual(null, plainDoc.location);
 
   // Both should have common Document properties
   testing.expectEqual('string', typeof document.URL);

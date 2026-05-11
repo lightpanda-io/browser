@@ -28,6 +28,22 @@ pub const List = @import("List.zig");
 const String = lp.String;
 const Allocator = std.mem.Allocator;
 
+// translate a Selector error to a DOMException known type.
+pub fn mapErrorToDOM(err: anyerror) anyerror {
+    return switch (err) {
+        error.InvalidSelector,
+        error.InvalidAttributeSelector,
+        error.InvalidIDSelector,
+        error.InvalidClassSelector,
+        error.UnknownPseudoClass,
+        error.InvalidTagSelector,
+        error.InvalidPseudoClass,
+        error.InvalidNthPattern,
+        => error.SyntaxError,
+        else => err,
+    };
+}
+
 pub fn parseLeaky(arena: Allocator, input: []const u8) !Parsed {
     if (input.len == 0) {
         return error.SyntaxError;

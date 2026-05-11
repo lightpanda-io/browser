@@ -23,6 +23,7 @@ const h5e = @import("html5ever.zig");
 const Frame = @import("../Frame.zig");
 const Node = @import("../webapi/Node.zig");
 const Element = @import("../webapi/Element.zig");
+const CData = @import("../webapi/CData.zig");
 
 pub const AttributeIterator = h5e.AttributeIterator;
 
@@ -39,6 +40,18 @@ pub const ParsedNode = struct {
     data: ?*anyopaque,
 };
 
+// html5ever's tokenizer flushes the script-data character buffer on every '<'
+// (script-data-less-than-sign-state transition), which produces a separate
+// AppendText callback per chunk. Merging via String.concat in the previous
+// implementation was O(N^2/chunk_size) on the page-lifetime arena, blowing
+// memory on inline JS that contains embedded HTML strings (issue #2397).
+// Instead, we keep a single Parser-level buf and accumulate same-parent
+// chunks into it, committing once on flush.
+const PendingText = struct {
+    parent: *Node,
+    text_node: *CData,
+};
+
 const Parser = @This();
 
 frame: *Frame,
@@ -46,6 +59,17 @@ err: ?Error,
 container: ParsedNode,
 arena: Allocator,
 strings: std.StringHashMapUnmanaged(void),
+pending_text: ?PendingText,
+// One buffer reused across every text run in this parser. clearRetainingCapacity
+// on flush keeps the largest capacity ever needed, so total dead memory on the
+// parser arena is bounded to one peak-run-sized allocation regardless of how
+// many text runs the parse contains. Matters for Streaming, whose arena is the
+// page-lifetime frame.arena (individual frees are no-ops there).
+//
+// Single-chunk text runs leave this buf empty: the chunk lives only in
+// CData._data via createTextNode. The buf is seeded from _data.str() on the
+// second chunk of a run, so the common case stays at one copy.
+buf: std.ArrayList(u8),
 
 pub fn init(arena: Allocator, node: *Node, frame: *Frame) Parser {
     return .{
@@ -57,6 +81,62 @@ pub fn init(arena: Allocator, node: *Node, frame: *Frame) Parser {
             .data = null,
             .node = node,
         },
+        .pending_text = null,
+        .buf = .empty,
+    };
+}
+
+pub fn flushPendingText(self: *Parser) !void {
+    const pt = self.pending_text orelse return;
+    self.pending_text = null;
+    // Single-chunk run: data already lives on _data via createTextNode.
+    if (self.buf.items.len == 0) return;
+    defer self.buf.clearRetainingCapacity();
+    pt.text_node._data = try lp.String.init(
+        self.frame.arena,
+        self.buf.items,
+        .{ .dupe = true },
+    );
+}
+
+fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
+    if (self.pending_text) |pt| {
+        if (pt.parent == parent and parent.lastChild() == pt.text_node.asNode()) {
+            // Second+ chunk of the same run. If buf is still empty, promote
+            // from the single-chunk fast path by seeding from _data first.
+            if (self.buf.items.len == 0) {
+                const existing = pt.text_node.getData().str();
+                try self.buf.ensureTotalCapacity(self.arena, existing.len + txt.len);
+                self.buf.appendSliceAssumeCapacity(existing);
+            }
+            try self.buf.appendSlice(self.arena, txt);
+            return;
+        }
+        try self.flushPendingText();
+    }
+
+    if (parent.lastChild()) |sibling| {
+        if (sibling.is(CData.Text)) |tn| {
+            // Existing text sibling without a matching pending_text. Seed the
+            // buf from its _data and register pending so subsequent chunks
+            // accumulate cheaply.
+            const cdata = tn._proto;
+            const existing = cdata.getData().str();
+            try self.buf.ensureTotalCapacity(self.arena, existing.len + txt.len);
+            self.buf.appendSliceAssumeCapacity(existing);
+            self.buf.appendSliceAssumeCapacity(txt);
+            self.pending_text = .{ .parent = parent, .text_node = cdata };
+            return;
+        }
+    }
+
+    // Fresh text run: the first chunk lives on _data only. buf stays empty
+    // until (and unless) a second chunk arrives.
+    const new_text = try self.frame.createTextNode(txt);
+    try self.frame.appendNew(parent, new_text);
+    self.pending_text = .{
+        .parent = parent,
+        .text_node = new_text.is(CData.Text).?._proto,
     };
 }
 
@@ -101,6 +181,9 @@ pub fn parse(self: *Parser, html: []const u8) void {
         appendBeforeSiblingCallback,
         appendBasedOnParentNodeCallback,
     );
+    self.flushPendingText() catch |err| {
+        if (self.err == null) self.err = .{ .err = err, .source = .append };
+    };
 }
 
 /// Parse HTML with encoding conversion. Converts from charset to UTF-8 before parsing.
@@ -127,6 +210,9 @@ pub fn parseWithEncoding(self: *Parser, html: []const u8, charset: []const u8) v
         appendBeforeSiblingCallback,
         appendBasedOnParentNodeCallback,
     );
+    self.flushPendingText() catch |err| {
+        if (self.err == null) self.err = .{ .err = err, .source = .append };
+    };
 }
 
 pub fn parseXML(self: *Parser, xml: []const u8) void {
@@ -150,6 +236,9 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
         appendBeforeSiblingCallback,
         appendBasedOnParentNodeCallback,
     );
+    self.flushPendingText() catch |err| {
+        if (self.err == null) self.err = .{ .err = err, .source = .append };
+    };
 }
 
 pub fn parseFragment(self: *Parser, html: []const u8) void {
@@ -173,6 +262,9 @@ pub fn parseFragment(self: *Parser, html: []const u8) void {
         appendBeforeSiblingCallback,
         appendBasedOnParentNodeCallback,
     );
+    self.flushPendingText() catch |err| {
+        if (self.err == null) self.err = .{ .err = err, .source = .append };
+    };
 }
 
 pub const Streaming = struct {
@@ -233,8 +325,16 @@ pub const Streaming = struct {
         }
     }
 
-    pub fn done(self: *Streaming) void {
-        h5e.html5ever_streaming_parser_finish(self.handle.?);
+    pub fn done(self: *Streaming) !void {
+        // Null the handle before finish() so a flushPendingText failure can't
+        // leave a finished-but-still-referenced handle behind for deinit to
+        // double-free. flushPendingText doesn't touch the html5ever handle —
+        // it only reads pending_text and writes to a text node's _data — so
+        // running it after finish is safe.
+        const handle = self.handle.?;
+        self.handle = null;
+        h5e.html5ever_streaming_parser_finish(handle);
+        try self.parser.flushPendingText();
     }
 };
 
@@ -252,6 +352,9 @@ fn popCallback(ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void {
 }
 
 fn _popCallback(self: *Parser, node: *Node) !void {
+    // Flush before any nodeComplete so Build.complete (and any custom-element
+    // callbacks reachable from it) observe the final text data.
+    try self.flushPendingText();
     try self.frame.nodeComplete(node);
 }
 
@@ -340,7 +443,7 @@ fn _appendDoctypeToDocument(self: *Parser, name: []const u8, public_id: []const 
     });
 
     // Append it to the document
-    try frame.appendNew(self.container.node, .{ .node = doctype.asNode() });
+    try frame.appendNew(self.container.node, doctype.asNode());
 }
 
 fn addAttrsIfMissingCallback(ctx: *anyopaque, target_ref: *anyopaque, attributes: h5e.AttributeIterator) callconv(.c) void {
@@ -402,6 +505,10 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
     // child node is guaranteed not to belong to another parent
     switch (node_or_text.toUnion()) {
         .node => |cpn| {
+            // Inserting a non-text child terminates any pending text run; flush
+            // before the insertion so that connectedCallback (etc.) sees the
+            // final data on the preceding text sibling.
+            try self.flushPendingText();
             const child = getNode(cpn);
             if (child._parent) |previous_parent| {
                 // html5ever says this can't happen, but we might be screwing up
@@ -414,9 +521,9 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
                 }
                 self.frame.removeNode(previous_parent, child, .{ .will_be_reconnected = parent.isConnected() });
             }
-            try self.frame.appendNew(parent, .{ .node = child });
+            try self.frame.appendNew(parent, child);
         },
-        .text => |txt| try self.frame.appendNew(parent, .{ .text = txt }),
+        .text => |txt| try self.appendTextChunk(parent, txt),
     }
 }
 
@@ -427,6 +534,11 @@ fn removeFromParentCallback(ctx: *anyopaque, target_ref: *anyopaque) callconv(.c
     };
 }
 fn _removeFromParentCallback(self: *Parser, node: *Node) !void {
+    // Removing a node mid-parse can detach the pending text node or its
+    // parent; either way the pending invariant breaks. Flush first so the
+    // accumulated bytes land on a still-attached text node (and pending_text
+    // is cleared before any subsequent chunk targets a fresh node).
+    try self.flushPendingText();
     const parent = node.parentNode() orelse return;
     _ = try parent.removeChild(node, self.frame);
 }
@@ -438,6 +550,10 @@ fn reparentChildrenCallback(ctx: *anyopaque, node_ref: *anyopaque, new_parent_re
     };
 }
 fn _reparentChildrenCallback(self: *Parser, node: *Node, new_parent: *Node) !void {
+    // Reparenting can move the pending text node out from under us — the
+    // node's _parent changes but pending_text.parent does not. Flush so the
+    // accumulator commits before the tree is rearranged.
+    try self.flushPendingText();
     try self.frame.appendAllChildren(node, new_parent);
 }
 
@@ -448,6 +564,10 @@ fn appendBeforeSiblingCallback(ctx: *anyopaque, sibling_ref: *anyopaque, node_or
     };
 }
 fn _appendBeforeSiblingCallback(self: *Parser, sibling: *Node, node_or_text: h5e.NodeOrText) !void {
+    // Foster parenting / before-sibling insertions interrupt any pending text
+    // run (the new node lands at a different position from the pending text's
+    // tail). Flush before reading the parent's structure.
+    try self.flushPendingText();
     const parent = sibling.parentNode() orelse return error.NoParent;
     const node: *Node = switch (node_or_text.toUnion()) {
         .node => |cpn| blk: {

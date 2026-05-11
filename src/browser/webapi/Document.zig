@@ -35,6 +35,8 @@ const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
 const FontFaceSet = @import("css/FontFaceSet.zig");
 const Selection = @import("Selection.zig");
+const XPathResult = @import("XPathResult.zig");
+const XPathExpression = @import("XPathExpression.zig");
 
 pub const XMLDocument = @import("XMLDocument.zig");
 pub const HTMLDocument = @import("HTMLDocument.zig");
@@ -119,7 +121,18 @@ pub fn asEventTarget(self: *Document) *@import("EventTarget.zig") {
 }
 
 pub fn getURL(self: *const Document, frame: *const Frame) [:0]const u8 {
-    return self._url orelse frame.url;
+    return self._url orelse (self._frame orelse frame).url;
+}
+
+pub fn getLocation(self: *const Document) ?*Location {
+    if (self._type != .html) return null;
+    const doc_frame = self._frame orelse return null;
+    return doc_frame.window._location;
+}
+
+pub fn setLocation(self: *Document, url: [:0]const u8, frame: *Frame) !void {
+    if (self._type != .html) return;
+    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._frame });
 }
 
 pub fn getContentType(self: *const Document) []const u8 {
@@ -277,11 +290,11 @@ pub fn getSelection(self: *Document) *Selection {
 }
 
 pub fn querySelector(self: *Document, input: String, frame: *Frame) !?*Element {
-    return Selector.querySelector(self.asNode(), input.str(), frame);
+    return Selector.querySelector(self.asNode(), input.str(), frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
 pub fn querySelectorAll(self: *Document, input: String, frame: *Frame) !*Selector.List {
-    return Selector.querySelectorAll(self.asNode(), input.str(), frame);
+    return Selector.querySelectorAll(self.asNode(), input.str(), frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
 pub fn getImplementation(self: *Document, frame: *Frame) !*DOMImplementation {
@@ -412,6 +425,44 @@ pub fn createNodeIterator(_: *const Document, root: *Node, what_to_show: ?js.Val
     return DOMNodeIterator.init(root, try whatToShow(what_to_show), filter, frame);
 }
 
+pub fn evaluate(
+    self: *Document,
+    expression: []const u8,
+    context_node: ?*Node,
+    resolver: ?js.Function,
+    result_type: ?u16,
+    result: ?*XPathResult,
+    frame: *Frame,
+) !*XPathResult {
+    // resolver/result are no-ops in HTML mode (decision #2).
+    // Null/missing context_node falls back to the document — matches the
+    // polyfill (decision #2). Firefox throws TypeError on a *missing*
+    // arg, but the bridge can't distinguish "missing" from "explicit
+    // null" here, so polyfill parity wins for the ambiguity.
+    _ = resolver;
+    _ = result;
+    return XPathResult.fromExpression(
+        expression,
+        context_node orelse self.asNode(),
+        result_type orelse XPathResult.ANY_TYPE,
+        frame,
+    );
+}
+
+pub fn createExpression(
+    _: *const Document,
+    expression: []const u8,
+    resolver: ?js.Function,
+    frame: *Frame,
+) !*XPathExpression {
+    _ = resolver;
+    return XPathExpression.init(expression, frame);
+}
+
+pub fn createNSResolver(_: *const Document, node: *Node) ?*Node {
+    return node;
+}
+
 fn whatToShow(value_: ?js.Value) !u32 {
     const value = value_ orelse return 4294967295; // show all when undefined
     if (value.isUndefined()) {
@@ -465,13 +516,19 @@ pub fn getFonts(self: *Document, frame: *Frame) !*FontFaceSet {
     return fonts;
 }
 
-pub fn adoptNode(_: *const Document, node: *Node, frame: *Frame) !*Node {
+pub fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
     if (node._type == .document) {
         return error.NotSupported;
     }
 
+    const old_owner = node.ownerDocument(frame) orelse frame.document;
+
     if (node._parent) |parent| {
         frame.removeNode(parent, node, .{ .will_be_reconnected = false });
+    }
+
+    if (old_owner != self) {
+        try frame.adoptNodeTree(node, old_owner, self);
     }
 
     return node;
@@ -666,7 +723,13 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
             if (self._script_created_parser) |*parser| {
                 parser.read(html) catch |err| {
                     log.warn(.dom, "document.write parser error", .{ .err = err });
-                    // was already closed
+                    // html5ever's handle was destroyed inside read(), but the
+                    // pending text buffer (if any) still wants to land on its
+                    // text node's _data — flushPendingText doesn't depend on
+                    // the handle, so attempt a final flush before dropping.
+                    parser.parser.flushPendingText() catch |flush_err| {
+                        log.warn(.dom, "flush after parser panic", .{ .err = flush_err });
+                    };
                     self._script_created_parser = null;
                 };
             }
@@ -795,12 +858,12 @@ pub fn close(self: *Document, frame: *Frame) !void {
         return;
     }
 
-    // done() calls html5ever_streaming_parser_finish which frees the parser
-    // We must NOT call deinit() after done() as that would be a double-free
-    self._script_created_parser.?.done();
-    // Just null out the handle since done() already freed it
-    self._script_created_parser.?.handle = null;
-    self._script_created_parser = null;
+    // done() finishes html5ever's handle and runs the final flushPendingText.
+    // Even if flushPendingText errors, the handle is already finished and we
+    // must not retain the Streaming — defer so the error path also drops it.
+    // (Streaming.done nulls its own handle, so dropping the struct is safe.)
+    defer self._script_created_parser = null;
+    try self._script_created_parser.?.done();
 
     frame.documentIsComplete();
 }
@@ -1027,6 +1090,7 @@ pub const JsApi = struct {
 
     pub const onselectionchange = bridge.accessor(Document.getOnSelectionChange, Document.setOnSelectionChange, .{});
     pub const URL = bridge.accessor(Document.getURL, null, .{});
+    pub const location = bridge.accessor(Document.getLocation, Document.setLocation, .{});
     pub const documentURI = bridge.accessor(Document.getURL, null, .{});
     pub const documentElement = bridge.accessor(Document.getDocumentElement, null, .{});
     pub const scrollingElement = bridge.accessor(Document.getDocumentElement, null, .{});
@@ -1051,6 +1115,9 @@ pub const JsApi = struct {
     pub const createEvent = bridge.function(Document.createEvent, .{ .dom_exception = true });
     pub const createTreeWalker = bridge.function(Document.createTreeWalker, .{});
     pub const createNodeIterator = bridge.function(Document.createNodeIterator, .{});
+    pub const evaluate = bridge.function(Document.evaluate, .{ .dom_exception = true });
+    pub const createExpression = bridge.function(Document.createExpression, .{ .dom_exception = true });
+    pub const createNSResolver = bridge.function(Document.createNSResolver, .{});
     pub const getElementById = bridge.function(_getElementById, .{});
     fn _getElementById(self: *Document, value_: ?js.Value, frame: *Frame) !?*Element {
         const value = value_ orelse return null;
@@ -1110,4 +1177,8 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Document" {
     try testing.htmlRunner("document", .{});
+}
+
+test "WebApi: Document.evaluate" {
+    try testing.htmlRunner("xpath/document_evaluate.html", .{});
 }

@@ -380,6 +380,53 @@
   testing.expectEqual(0, nd.childElementCount);
 </script>
 
+<script id=adoptNode>
+{
+  // Adopting a Document throws NotSupportedError
+  testing.withError((err) => {
+    testing.expectEqual(9, err.code);
+    testing.expectEqual("NotSupportedError", err.name);
+  }, () => document.adoptNode(document));
+
+  // Same-document adopt: returns the node, clears parent, owner unchanged
+  const el = document.createElement('div');
+  const child = document.createElement('span');
+  el.appendChild(child);
+  document.body.appendChild(el);
+  testing.expectEqual(document.body, el.parentNode);
+  testing.expectEqual(document, el.ownerDocument);
+  testing.expectEqual(document, child.ownerDocument);
+
+  testing.expectEqual(el, document.adoptNode(el));
+  testing.expectEqual(null, el.parentNode);
+  testing.expectEqual(child, el.firstChild);
+  testing.expectEqual(document, el.ownerDocument);
+  testing.expectEqual(document, child.ownerDocument);
+
+  // Cross-document adopt: node + descendants retarget to the new document
+  const otherDoc = new Document();
+  testing.expectEqual(el, otherDoc.adoptNode(el));
+  testing.expectEqual(null, el.parentNode);
+  testing.expectEqual(child, el.firstChild);
+  testing.expectEqual(otherDoc, el.ownerDocument);
+  testing.expectEqual(otherDoc, child.ownerDocument);
+
+  // Round-trip back to the main document
+  testing.expectEqual(el, document.adoptNode(el));
+  testing.expectEqual(document, el.ownerDocument);
+  testing.expectEqual(document, child.ownerDocument);
+
+  // Adopt across documents removes the node from its old parent
+  const orphan = document.createElement('p');
+  document.body.appendChild(orphan);
+  testing.expectEqual(document.body, orphan.parentNode);
+  const otherDoc2 = new Document();
+  testing.expectEqual(orphan, otherDoc2.adoptNode(orphan));
+  testing.expectEqual(null, orphan.parentNode);
+  testing.expectEqual(otherDoc2, orphan.ownerDocument);
+}
+</script>
+
 <script id=adoptedStyleSheets>
   {
     const acss = document.adoptedStyleSheets;

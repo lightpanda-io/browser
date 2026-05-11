@@ -2,7 +2,7 @@
   description = "headless browser designed for AI and automation";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/release-25.05";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
 
     zigPkgs.url = "github:mitchellh/zig-overlay";
     zigPkgs.inputs.nixpkgs.follows = "nixpkgs";

@@ -84,11 +84,11 @@ pub fn getElementById(self: *DocumentFragment, id: []const u8) ?*Element {
 }
 
 pub fn querySelector(self: *DocumentFragment, selector: []const u8, frame: *Frame) !?*Element {
-    return Selector.querySelector(self.asNode(), selector, frame);
+    return Selector.querySelector(self.asNode(), selector, frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
 pub fn querySelectorAll(self: *DocumentFragment, input: []const u8, frame: *Frame) !*Selector.List {
-    return Selector.querySelectorAll(self.asNode(), input, frame);
+    return Selector.querySelectorAll(self.asNode(), input, frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
 pub fn getChildren(self: *DocumentFragment, frame: *Frame) !collections.NodeLive(.child_elements) {

@@ -25,7 +25,7 @@
     document.querySelector('p[data-random="abc\\5C def"]').textContent);
 
   // A bare newline inside a string token is a parse error.
-  testing.expectError("Error: InvalidAttributeSelector",
+  testing.expectError("SyntaxError",
     () => document.querySelector('p[data-random="line one\nline two"]'));
 }
 </script>
