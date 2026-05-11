@@ -20,14 +20,16 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const URL = @import("URL.zig");
+const ArenaPool = @import("../ArenaPool.zig");
 const Notification = @import("../Notification.zig");
+const timestamp = @import("../datetime.zig").timestamp;
+
+const URL = @import("URL.zig");
 const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
 
 const http = @import("../network/http.zig");
-const Network = @import("../network/Network.zig");
 const Robots = @import("../network/Robots.zig");
-const timestamp = @import("../datetime.zig").timestamp;
+const Network = @import("../network/Network.zig");
 
 const log = lp.log;
 const posix = std.posix;
@@ -80,6 +82,13 @@ performing: bool = false,
 // Use to generate the next request ID
 next_request_id: u32 = 0,
 
+// Every currently-alive Transfer indexed by its id. Maintained so cross-
+// component code (CDP intercept state, future scheduling/debugging) can
+// look up a transfer by id without holding a *Transfer that might dangle.
+// Inserted in Client.request, removed in Transfer.deinit. The pointer is
+// only valid for the lifetime of the entry.
+transfers: std.AutoHashMapUnmanaged(u32, *Transfer) = .empty,
+
 // When handles has no more available easys, requests get queued.
 queue: std.DoublyLinkedList = .{},
 
@@ -95,10 +104,7 @@ allocator: Allocator,
 
 network: *Network,
 
-// Once we have a handle/easy to process a request with, we create a Transfer
-// which contains the Request as well as any state we need to process the
-// request. These will come and go with each request.
-transfer_pool: std.heap.MemoryPool(Transfer),
+arena_pool: *ArenaPool,
 
 // The current proxy. CDP can change it, changeProxy(null) restores
 // from config.
@@ -135,11 +141,11 @@ pub const Layer = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
-        request: *const fn (*anyopaque, *Client, Request) anyerror!void,
+        request: *const fn (*anyopaque, *Transfer) anyerror!void,
     };
 
-    pub fn request(self: Layer, client: *Client, req: Request) !void {
-        return self.vtable.request(self.ptr, client, req);
+    pub fn request(self: Layer, transfer: *Transfer) !void {
+        return self.vtable.request(self.ptr, transfer);
     }
 };
 
@@ -167,9 +173,6 @@ pub const CDPClient = struct {
 };
 
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: ?CDPClient) !void {
-    var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
-    errdefer transfer_pool.deinit();
-
     var handles = try http.Handles.init(network.config);
     errdefer handles.deinit();
 
@@ -179,7 +182,6 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: 
         .handles = handles,
         .network = network,
         .allocator = allocator,
-        .transfer_pool = transfer_pool,
         .cdp_client = cdp_client,
 
         .use_proxy = http_proxy != null,
@@ -189,10 +191,11 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: 
         .max_response_size = network.config.httpMaxResponseSize() orelse std.math.maxInt(u32),
 
         .cache_layer = .{},
-        .robots_layer = .{ .allocator = allocator },
+        .robots_layer = .{ .allocator = allocator, .network = network },
         .web_bot_auth_layer = .{},
         .interception_layer = .{},
         .entry_layer = undefined,
+        .arena_pool = &network.app.arena_pool,
     };
 
     var next = self.layer();
@@ -220,10 +223,18 @@ pub fn deinit(self: *Client) void {
     self.abort();
     self.handles.deinit();
 
-    self.transfer_pool.deinit();
     self.clearUserAgentOverride();
 
     self.robots_layer.deinit(self.allocator);
+    self.transfers.deinit(self.allocator);
+}
+
+// Look up a live transfer by its id. Returns null if the transfer has been
+// destroyed. Use this — rather than holding *Transfer across yields — for
+// any code path that's interleaved with the request lifecycle (CDP
+// continueRequest/fulfill/abort, async cleanups).
+pub fn findTransfer(self: *Client, id: u32) ?*Transfer {
+    return self.transfers.get(id);
 }
 
 pub fn layer(self: *Client) Layer {
@@ -398,23 +409,54 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
     return self.perform(@intCast(timeout_ms));
 }
 
-pub fn _request(ptr: *anyopaque, _: *Client, req: Request) !void {
-    const self: *Client = @ptrCast(@alignCast(ptr));
-    const transfer = try self.makeTransfer(req);
-    return self.process(transfer);
+// last layer
+pub fn _request(_: *anyopaque, transfer: *Transfer) !void {
+    return transfer.client.process(transfer);
 }
 
-pub fn request(self: *Client, req: Request) !void {
-    // Assign Request Id.
-    var our_req = req;
-    our_req.params.request_id = self.incrReqId();
+pub fn request(self: *Client, req: Request, owner: ?*std.DoublyLinkedList) !void {
+    const arena = try self.arena_pool.acquire(.small, "Request.arena");
 
-    const arena = try self.network.app.arena_pool.acquire(.small, "Request.arena");
-    our_req.params.arena = arena;
+    const transfer = arena.create(Transfer) catch |err| {
+        self.arena_pool.release(arena);
+        return err;
+    };
 
-    return self.entry_layer.request(self, our_req) catch |err| {
-        our_req.error_callback(our_req.ctx, err);
-        self.deinitRequest(our_req);
+    transfer.* = .{
+        .req = req,
+        .url = req.params.url,
+        .client = self,
+        .owner = owner,
+        .arena = arena,
+        .id = self.incrReqId(),
+        .start_time = timestamp(.monotonic),
+        .owner_node = .{},
+    };
+
+    // Register for id-based lookup. putNoClobber would fail if request_id
+    // collides (i.e. we've wrapped through 2^32 requests and the old
+    // transfer is still alive — practically never).
+    self.transfers.putNoClobber(self.allocator, transfer.id, transfer) catch |err| {
+        self.arena_pool.release(arena);
+        return err;
+    };
+
+    if (owner) |o| {
+        o.append(&transfer.owner_node);
+    }
+
+    // From this point forward, the transfer owns `req` and `arena`. If the
+    // layer chain fails before any layer commits the transfer to an external
+    // owner (queue / multi handle / pending interception), we clean up here.
+    // `loop_owned` is set by the commit points; if it stays false on failure,
+    // no one else will deinit the transfer, so we do it. requestFailed goes
+    // through transfer.req — so any layer wrappers see the failure too — and
+    // latches _notified_fail to keep the notification single-fire.
+    self.entry_layer.request(transfer) catch |err| {
+        if (!transfer.loop_owned) {
+            transfer.requestFailed(err, true);
+            transfer.deinit();
+        }
         return err;
     };
 }
@@ -474,7 +516,7 @@ pub fn syncRequest(self: *Client, allocator: Allocator, params: RequestParams) !
         .done_callback = SyncContext.doneCallback,
         .error_callback = SyncContext.errorCallback,
         .shutdown_callback = SyncContext.shutdownCallback,
-    });
+    }, null);
 
     while (sync_ctx.completion == .in_progress) {
         const status = try self.tick(200);
@@ -511,6 +553,7 @@ fn process(self: *Client, transfer: *Transfer) !void {
     }
 
     self.queue.append(&transfer._node);
+    transfer.loop_owned = true;
 }
 
 pub fn nextReqId(self: *Client) u32 {
@@ -521,37 +564,6 @@ pub fn incrReqId(self: *Client) u32 {
     const id = self.next_request_id +% 1;
     self.next_request_id = id;
     return id;
-}
-
-fn makeTransfer(self: *Client, req: Request) !*Transfer {
-    const transfer = try self.transfer_pool.create();
-    errdefer self.transfer_pool.destroy(transfer);
-
-    transfer.* = .{
-        .start_time = timestamp(.monotonic),
-        .id = req.params.request_id,
-        .url = req.params.url,
-        .req = req,
-        .client = self,
-    };
-    return transfer;
-}
-
-fn requestFailed(transfer: *Transfer, err: anyerror, comptime execute_callback: bool) void {
-    if (transfer._notified_fail) {
-        // we can force a failed request within a callback, which will eventually
-        // result in this being called again in the more general loop. We do this
-        // because we can raise a more specific error inside a callback in some cases
-        return;
-    }
-
-    transfer._notified_fail = true;
-
-    if (execute_callback) {
-        transfer.req.error_callback(transfer.req.ctx, err);
-    } else if (transfer.req.shutdown_callback) |cb| {
-        cb(transfer.req.ctx);
-    }
 }
 
 // Same restriction as changeProxy. Should be ok since this is only called on
@@ -573,26 +585,27 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
         transfer._conn = conn;
         errdefer {
             transfer._conn = null;
-            transfer.deinit();
             self.releaseConn(conn);
         }
 
         try transfer.configureConn(conn);
     }
 
-    // As soon as this is called, our "perform" loop is responsible for
-    // cleaning things up. That's why the above code is in a block. If anything
-    // fails BEFORE `curl_multi_add_handle` succeeds, the we still need to do
-    // cleanup. But if things fail after `curl_multi_add_handle`, we expect
-    // perform to pickup the failure and cleanup.
+    // As soon as trackConn succeeds, the multi handle owns the transfer's
+    // lifecycle. perform/processMessages will eventually invoke completion
+    // callbacks and call transfer.deinit. We flag loop_owned so Client.request
+    // (or anyone else holding the transfer pointer) knows not to deinit it.
     self.trackConn(conn) catch |err| {
         transfer._conn = null;
-        transfer.deinit();
         return err;
     };
+    transfer.loop_owned = true;
 
     if (transfer.req.start_callback) |cb| {
         cb(Response.fromTransfer(transfer)) catch |err| {
+            // We're now committed to the multi. Tear down explicitly: deinit
+            // (which removeConn's from the multi) and notify the caller.
+            transfer.requestFailed(err, true);
             transfer.deinit();
             return err;
         };
@@ -868,11 +881,6 @@ fn ensureNoActiveConnection(self: *const Client) !void {
 }
 
 pub const RequestParams = struct {
-    /// This is unsafe to access until you pass it to `Client.request()` where it gets assigned.
-    arena: Allocator = undefined,
-    /// This is unsafe to access until you pass it to `Client.request()` where it gets assigned.
-    request_id: u32 = undefined,
-
     frame_id: u32,
     loader_id: u32,
     method: Method,
@@ -885,6 +893,7 @@ pub const RequestParams = struct {
     credentials: ?[:0]const u8 = null,
     notification: *Notification,
     timeout_ms: u32 = 0,
+    skip_robots: bool = false,
 
     // Set on an in-flight root-navigation transfer that was issued against a
     // pending Page. The old Page's frame.deinit (called from Session.commit
@@ -939,9 +948,9 @@ pub const Request = struct {
     error_callback: ErrorCallback,
     shutdown_callback: ?ShutdownCallback = null,
 
-    pub fn getCookieString(self: *Request) !?[:0]const u8 {
+    pub fn getCookieString(self: *Request, arena: Allocator) !?[:0]const u8 {
         const jar = self.params.cookie_jar orelse return null;
-        var aw: std.Io.Writer.Allocating = .init(self.params.arena);
+        var aw: std.Io.Writer.Allocating = .init(arena);
         try jar.forRequest(self.params.url, &aw.writer, .{
             .is_http = true,
             .origin_url = self.params.cookie_origin,
@@ -1069,6 +1078,17 @@ pub const SyncResponse = struct {
 
 pub const Transfer = struct {
     id: u32 = 0,
+    arena: Allocator,
+
+    owner: ?*std.DoublyLinkedList,
+    owner_node: std.DoublyLinkedList.Node = .{},
+
+    // Latched true by the first commit point that hands the transfer off to
+    // an external owner: client.queue.append, successful trackConn, or
+    // InterceptionLayer pausing for a CDP response. Once set, Client.request's
+    // errdefer skips cleanup — whoever now owns the transfer will deinit it.
+    loop_owned: bool = false,
+
     req: Request,
     url: [:0]const u8,
     client: *Client,
@@ -1119,14 +1139,25 @@ pub const Transfer = struct {
         }
     }
 
-    fn deinit(self: *Transfer) void {
+    pub fn deinit(self: *Transfer) void {
         if (self._conn) |conn| {
             self.client.removeConn(conn);
             self._conn = null;
         }
 
-        self.client.deinitRequest(self.req);
-        self.client.transfer_pool.destroy(self);
+        // Drop the id→*Transfer index entry before freeing the memory.
+        // Any concurrent CDP lookup by id will now see this transfer as gone.
+        _ = self.client.transfers.remove(self.id);
+
+        self.req.deinit();
+        if (self.owner) |o| {
+            o.remove(&self.owner_node);
+        }
+        // The Transfer itself lives on this arena, so this must be last —
+        // `self` is invalid memory after release.
+        const arena_pool = self.client.arena_pool;
+        const arena = self.arena;
+        arena_pool.release(arena);
     }
 
     pub fn abort(self: *Transfer, err: anyerror) void {
@@ -1175,10 +1206,16 @@ pub const Transfer = struct {
         self.deinit();
     }
 
-    // We can force a failed request within a callback, which will eventually
-    // result in this being called again in the more general loop. We do this
-    // because we can raise a more specific error inside a callback in some cases.
-    fn requestFailed(self: *Transfer, err: anyerror, comptime execute_callback: bool) void {
+    // The single failure-notification point. Latches via _notified_fail so
+    // multiple paths racing to report the same failure (e.g. an error inside
+    // a callback that's already being handled by the loop) only fire one
+    // notification. Goes through transfer.req — so layer wrappers
+    // (InterceptContext, CacheContext) see the failure and can propagate it
+    // up the chain.
+    //
+    // execute_callback=true → fires error_callback. false → fires
+    // shutdown_callback (used by Frame shutdown / WGS teardown).
+    pub fn requestFailed(self: *Transfer, err: anyerror, comptime execute_callback: bool) void {
         if (self._notified_fail) return;
         self._notified_fail = true;
 
@@ -1212,7 +1249,7 @@ pub const Transfer = struct {
         try conn.setHeaders(&header_list);
 
         // Add cookies from cookie jar.
-        if (try self.req.getCookieString()) |cookies| {
+        if (try self.req.getCookieString(self.arena)) |cookies| {
             try conn.setCookies(@ptrCast(cookies.ptr));
         }
 
@@ -1289,7 +1326,7 @@ pub const Transfer = struct {
     fn handleRedirect(transfer: *Transfer) !void {
         const req = &transfer.req;
         const conn = transfer._conn.?;
-        const arena = transfer.req.params.arena;
+        const arena = transfer.arena;
 
         transfer._redirect_count += 1;
         if (transfer._redirect_count > transfer.client.network.config.httpMaxRedirects()) {
@@ -1466,7 +1503,7 @@ pub const Transfer = struct {
                     transfer._callback_error = error.ResponseTooLarge;
                     return http.writefunc_error;
                 }
-                transfer._stream_buffer.ensureTotalCapacity(transfer.req.params.arena, cl) catch {};
+                transfer._stream_buffer.ensureTotalCapacity(transfer.arena, cl) catch {};
             }
         }
 
@@ -1479,7 +1516,7 @@ pub const Transfer = struct {
         }
 
         const chunk = buffer[0..chunk_len];
-        transfer._stream_buffer.appendSlice(transfer.req.params.arena, chunk) catch |err| {
+        transfer._stream_buffer.appendSlice(transfer.arena, chunk) catch |err| {
             transfer._callback_error = err;
             return http.writefunc_error;
         };
@@ -1539,11 +1576,6 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
 
     self.interception_layer.intercepted -= 1;
     return self.process(transfer);
-}
-
-pub fn deinitRequest(self: *Client, req: Request) void {
-    req.deinit();
-    self.network.app.arena_pool.release(req.params.arena);
 }
 
 const Noop = struct {

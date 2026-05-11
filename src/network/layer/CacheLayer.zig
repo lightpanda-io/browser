@@ -18,19 +18,20 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const log = lp.log;
 
-const http = @import("../http.zig");
-const Client = @import("../../browser/HttpClient.zig").Client;
-const Transfer = @import("../../browser/HttpClient.zig").Transfer;
-const Request = @import("../../browser/HttpClient.zig").Request;
-const Response = @import("../../browser/HttpClient.zig").Response;
 const Layer = @import("../../browser/HttpClient.zig").Layer;
+const Client = @import("../../browser/HttpClient.zig").Client;
+const Request = @import("../../browser/HttpClient.zig").Request;
+const Transfer = @import("../../browser/HttpClient.zig").Transfer;
+const Response = @import("../../browser/HttpClient.zig").Response;
 
 const Cache = @import("../cache/Cache.zig");
 const CachedMetadata = @import("../cache/Cache.zig").CachedMetadata;
 const CachedResponse = @import("../cache/Cache.zig").CachedResponse;
+
 const Forward = @import("Forward.zig");
+
+const log = lp.log;
 
 const CacheLayer = @This();
 
@@ -45,54 +46,57 @@ pub fn layer(self: *CacheLayer) Layer {
     };
 }
 
-fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
+fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     const self: *CacheLayer = @ptrCast(@alignCast(ptr));
-    const network = client.network;
+    const req = &transfer.req;
 
     if (req.params.method != .GET) {
-        return self.next.request(client, req);
+        return self.next.request(transfer);
     }
 
-    const arena = req.params.arena;
+    const arena = transfer.arena;
 
     var iter = req.params.headers.iterator();
     const req_header_list = try iter.collect(arena);
 
-    if (network.cache.?.get(arena, .{
-        .url = req.params.url,
+    if (transfer.client.network.cache.?.get(arena, .{
+        .url = transfer.url,
         .timestamp = std.time.timestamp(),
         .request_headers = req_header_list.items,
     })) |cached| {
+        // Cache hit: serve synchronously from the original callbacks, then
+        // tear down. On error, the transfer is still alive and Client.request's
+        // errdefer will handle cleanup (loop_owned is still false).
         try serveFromCache(req, &cached);
-        client.deinitRequest(req);
+        transfer.deinit();
         return;
     }
 
-    const cache_ctx = try arena.create(CacheContext);
-    cache_ctx.* = .{
+    // Cache miss: install wrappers so we can inspect the response and decide
+    // whether to write the body into the cache when it's done.
+    const ctx = try arena.create(CacheContext);
+    ctx.* = .{
         .arena = arena,
-        .client = client,
-        .forward = Forward.fromRequest(req),
-        .req_url = req.params.url,
+        .transfer = transfer,
+        .forward = Forward.capture(req),
+        .req_url = transfer.url,
         .req_headers = req.params.headers,
     };
 
-    const wrapped = cache_ctx.forward.wrapRequest(
-        req,
-        cache_ctx,
-        .{
-            .start = CacheContext.startCallback,
-            .header = CacheContext.headerCallback,
-            .done = CacheContext.doneCallback,
-            .shutdown = CacheContext.shutdownCallback,
-            .err = CacheContext.errorCallback,
-        },
-    );
+    req.ctx = ctx;
+    req.header_callback = CacheContext.headerCallback;
+    req.done_callback = CacheContext.doneCallback;
+    req.error_callback = CacheContext.errorCallback;
+    if (ctx.forward.shutdown != null) {
+        req.shutdown_callback = CacheContext.shutdownCallback;
+    }
+    // data_callback and start_callback don't need cache-side hooks: the body
+    // is replayed from transfer._stream_buffer at done time.
 
-    return self.next.request(client, wrapped);
+    return self.next.request(transfer);
 }
 
-fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
+fn serveFromCache(req: *Request, cached: *const CachedResponse) !void {
     const response = Response.fromCached(req.ctx, cached);
     defer switch (cached.data) {
         .buffer => |_| {},
@@ -137,32 +141,31 @@ fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
 
 const CacheContext = struct {
     arena: std.mem.Allocator,
-    client: *Client,
-    transfer: ?*Transfer = null,
+    transfer: *Transfer,
     forward: Forward,
     req_url: [:0]const u8,
-    req_headers: http.Headers,
+    req_headers: @import("../http.zig").Headers,
     pending_metadata: ?*CachedMetadata = null,
-
-    fn startCallback(response: Response) anyerror!void {
-        const self: *CacheContext = @ptrCast(@alignCast(response.ctx));
-        self.transfer = response.inner.transfer;
-        return self.forward.forwardStart(response);
-    }
 
     fn headerCallback(response: Response) anyerror!bool {
         const self: *CacheContext = @ptrCast(@alignCast(response.ctx));
-        const allocator = self.arena;
 
-        const transfer = response.inner.transfer;
-        var rh = &transfer.response_header.?;
+        // For non-transfer responses (fulfilled by interception, or future
+        // cached-while-cached cases), there's nothing to inspect for caching
+        // decisions — just forward.
+        const transfer = switch (response.inner) {
+            .transfer => |t| t,
+            else => return self.forward.forwardHeader(response),
+        };
+
+        const arena = self.arena;
 
         const conn = transfer._conn.?;
-
         const vary = if (conn.getResponseHeader("vary", 0)) |h| h.value else null;
 
+        var rh = &transfer.response_header.?;
         const maybe_cm = try Cache.tryCache(
-            allocator,
+            arena,
             std.time.timestamp(),
             transfer.url,
             rh.status,
@@ -176,7 +179,7 @@ const CacheContext = struct {
 
         if (maybe_cm) |cm| {
             var iter = transfer.responseHeaderIterator();
-            var header_list = try iter.collect(allocator);
+            var header_list = try iter.collect(arena);
             const end_of_response = header_list.items.len;
 
             if (vary) |vary_str| {
@@ -186,16 +189,16 @@ const CacheContext = struct {
                     while (vary_iter.next()) |part| {
                         const name = std.mem.trim(u8, part, &std.ascii.whitespace);
                         if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
-                            try header_list.append(allocator, .{
-                                .name = try allocator.dupe(u8, hdr.name),
-                                .value = try allocator.dupe(u8, hdr.value),
+                            try header_list.append(arena, .{
+                                .name = try arena.dupe(u8, hdr.name),
+                                .value = try arena.dupe(u8, hdr.value),
                             });
                         }
                     }
                 }
             }
 
-            const metadata = try allocator.create(CachedMetadata);
+            const metadata = try arena.create(CachedMetadata);
             metadata.* = cm;
             metadata.headers = header_list.items[0..end_of_response];
             metadata.vary_headers = header_list.items[end_of_response..];
@@ -207,10 +210,10 @@ const CacheContext = struct {
 
     fn doneCallback(ctx: *anyopaque) anyerror!void {
         const self: *CacheContext = @ptrCast(@alignCast(ctx));
-        const transfer = self.transfer orelse @panic("Start Callback didn't set CacheLayer.transfer");
+        const transfer = self.transfer;
 
         if (self.pending_metadata) |metadata| {
-            const cache = &self.client.network.cache.?;
+            const cache = &transfer.client.network.cache.?;
 
             log.debug(.browser, "http cache", .{ .key = self.req_url, .metadata = metadata });
             cache.put(metadata.*, transfer._stream_buffer.items) catch |err| {

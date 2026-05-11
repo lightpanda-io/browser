@@ -27,7 +27,6 @@ const Mime = @import("../../browser/Mime.zig");
 const Notification = @import("../../Notification.zig");
 const timestamp = @import("../../datetime.zig").timestamp;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
-const Request = @import("../../browser/HttpClient.zig").Request;
 const Response = @import("../../browser/HttpClient.zig").Response;
 
 const CdpStorage = @import("storage.zig");
@@ -262,7 +261,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
-        .requestId = &id.toRequestId(msg.request),
+        .requestId = &id.toRequestId(msg.transfer),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
         .errorText = msg.err,
@@ -275,7 +274,8 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
-    const req = msg.request;
+    const transfer = msg.transfer;
+    const req = &transfer.req;
     const frame_id = req.params.frame_id;
     const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
 
@@ -287,11 +287,11 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
     // We're missing a bunch of fields, but, for now, this eems like enough
     try bc.cdp.sendEvent("Network.requestWillBeSent", .{
         .frameId = &id.toFrameId(frame_id),
-        .requestId = &id.toRequestId(req),
+        .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.params.loader_id),
         .type = req.params.resource_type.string(),
         .documentURL = frame.url,
-        .request = RequestWriter.init(req),
+        .request = RequestWriter.init(transfer),
         .initiator = .{ .type = "other" },
         .redirectHasExtraInfo = false, // TODO change after adding Network.requestWillBeSentExtraInfo
         .hasUserGesture = false,
@@ -305,12 +305,13 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
-    const req = msg.request;
+    const transfer = msg.transfer;
+    const req = &transfer.req;
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
         .frameId = &id.toFrameId(req.params.frame_id),
-        .requestId = &id.toRequestId(req),
+        .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.params.loader_id),
         .response = ResponseWriter.init(arena, msg.response),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
@@ -321,19 +322,18 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
-    const req = msg.request;
     try bc.cdp.sendEvent("Network.loadingFinished", .{
-        .requestId = &id.toRequestId(req),
+        .requestId = &id.toRequestId(msg.transfer),
         .encodedDataLength = msg.content_length,
     }, .{ .session_id = session_id });
 }
 
 pub const RequestWriter = struct {
-    request: *Request,
+    transfer: *Transfer,
 
-    pub fn init(request: *Request) RequestWriter {
+    pub fn init(transfer: *Transfer) RequestWriter {
         return .{
-            .request = request,
+            .transfer = transfer,
         };
     }
 
@@ -342,7 +342,8 @@ pub const RequestWriter = struct {
     }
 
     fn _jsonStringify(self: *const RequestWriter, jws: anytype) !void {
-        const request = self.request;
+        const transfer = self.transfer;
+        const request = &transfer.req;
 
         try jws.beginObject();
         {
@@ -376,7 +377,7 @@ pub const RequestWriter = struct {
                 try jws.objectField(hdr.name);
                 try jws.write(hdr.value);
             }
-            if (try request.getCookieString()) |cookies| {
+            if (try request.getCookieString(transfer.arena)) |cookies| {
                 try jws.objectField("Cookie");
                 try jws.write(cookies[0 .. cookies.len - 1]);
             }

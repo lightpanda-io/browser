@@ -18,21 +18,27 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const log = lp.log;
 
 const URL = @import("../../browser/URL.zig");
-const Robots = @import("../Robots.zig");
-const Client = @import("../../browser/HttpClient.zig").Client;
-const Request = @import("../../browser/HttpClient.zig").Request;
-const Response = @import("../../browser/HttpClient.zig").Response;
 const Layer = @import("../../browser/HttpClient.zig").Layer;
+const Client = @import("../../browser/HttpClient.zig").Client;
+const Transfer = @import("../../browser/HttpClient.zig").Transfer;
+const Response = @import("../../browser/HttpClient.zig").Response;
+
+const Robots = @import("../Robots.zig");
+const Network = @import("../Network.zig");
+
 const Forward = @import("Forward.zig");
+
+const log = lp.log;
+const Allocator = std.mem.Allocator;
 
 const RobotsLayer = @This();
 
 next: Layer = undefined,
-allocator: std.mem.Allocator,
-pending: std.StringHashMapUnmanaged(std.ArrayList(Request)) = .empty,
+network: *Network,
+allocator: Allocator,
+pending: std.StringHashMapUnmanaged(std.ArrayList(*Transfer)) = .empty,
 
 pub fn layer(self: *RobotsLayer) Layer {
     return .{
@@ -43,7 +49,7 @@ pub fn layer(self: *RobotsLayer) Layer {
     };
 }
 
-pub fn deinit(self: *RobotsLayer, allocator: std.mem.Allocator) void {
+pub fn deinit(self: *RobotsLayer, allocator: Allocator) void {
     var it = self.pending.iterator();
     while (it.next()) |entry| {
         entry.value_ptr.deinit(allocator);
@@ -51,35 +57,38 @@ pub fn deinit(self: *RobotsLayer, allocator: std.mem.Allocator) void {
     self.pending.deinit(allocator);
 }
 
-fn request(ptr: *anyopaque, client: *Client, req: Request) anyerror!void {
+fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     const self: *RobotsLayer = @ptrCast(@alignCast(ptr));
 
-    const arena = req.params.arena;
-    const robots_url = try URL.getRobotsUrl(arena, req.params.url);
+    if (transfer.req.params.skip_robots) {
+        return self.next.request(transfer);
+    }
 
-    if (client.network.robot_store.get(robots_url)) |robot_entry| {
+    const url = transfer.url;
+    const robots_url = try URL.getRobotsUrl(transfer.arena, url);
+
+    if (self.network.robot_store.get(robots_url)) |robot_entry| {
         switch (robot_entry) {
             .present => |robots| {
-                const path = URL.getPathname(req.params.url);
+                const path = URL.getPathname(url);
 
                 if (!robots.isAllowed(path)) {
-                    log.warn(.http, "blocked by robots", .{ .url = req.params.url });
+                    log.warn(.http, "blocked by robots", .{ .url = url });
                     return error.RobotsBlocked;
                 }
             },
             .absent => {},
         }
-        return self.next.request(client, req);
+        return self.next.request(transfer);
     }
 
-    return self.fetchRobotsThenRequest(client, robots_url, req);
+    return self.fetchRobotsThenRequest(robots_url, transfer);
 }
 
 fn fetchRobotsThenRequest(
     self: *RobotsLayer,
-    client: *Client,
     robots_url: [:0]const u8,
-    req: Request,
+    transfer: *Transfer,
 ) !void {
     const entry = try self.pending.getOrPut(self.allocator, robots_url);
 
@@ -87,84 +96,84 @@ fn fetchRobotsThenRequest(
         errdefer std.debug.assert(self.pending.remove(robots_url));
         entry.value_ptr.* = .empty;
 
-        // This arena is later owned by the Request. It does not need to be cleaned up by us because
-        // it will be cleaned up by the `Transfer.deinit()` or any `Request.deinit()` called on any sublayers.
-        const new_arena = try client.network.app.arena_pool.acquire(.small, "RobotsLayer.RobotsContext");
-        errdefer client.network.app.arena_pool.release(new_arena);
-
-        const robots_ctx = try new_arena.create(RobotsContext);
+        const robots_ctx = try transfer.arena.create(RobotsContext);
         robots_ctx.* = .{
             .layer = self,
-            .client = client,
-            .arena = new_arena,
-            .robots_url = robots_url,
             .buffer = .empty,
+            .arena = transfer.arena,
+            .robots_url = robots_url,
         };
 
-        const headers = try client.newHeaders();
-        log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
+        var params = transfer.req.params;
+        if (@typeInfo(@TypeOf(params)) != .@"struct") {
+            // protect against mutating the original request
+            @compileError("expected request.params to be a struct");
+        }
 
-        try self.next.request(client, .{
+        params.method = .GET;
+        params.url = robots_url;
+        params.skip_robots = true;
+        params.resource_type = .fetch;
+
+        log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
+        try transfer.client.request(.{
             .ctx = robots_ctx,
-            .params = .{
-                // We have to do this ourselves because we are not going through the top level `request`.
-                .arena = new_arena,
-                .request_id = client.incrReqId(),
-                .url = robots_url,
-                .method = .GET,
-                .headers = headers,
-                .frame_id = req.params.frame_id,
-                .loader_id = req.params.loader_id,
-                .cookie_jar = req.params.cookie_jar,
-                .cookie_origin = req.params.cookie_origin,
-                .notification = req.params.notification,
-                .resource_type = .fetch,
-            },
+            .params = params,
             .header_callback = RobotsContext.headerCallback,
             .data_callback = RobotsContext.dataCallback,
             .done_callback = RobotsContext.doneCallback,
             .error_callback = RobotsContext.errorCallback,
             .shutdown_callback = RobotsContext.shutdownCallback,
-        });
+        }, transfer.owner);
     }
 
-    try entry.value_ptr.append(self.allocator, req);
+    try entry.value_ptr.append(self.allocator, transfer);
+    // Parked: RobotsLayer owns destruction via flushPending / flushPendingShutdown
+    // until robots.txt resolves. Without this, Client.request's errdefer (or
+    // any caller's cleanup) would deinit a transfer that's still on the
+    // pending list, leaving flushPending with a dangling pointer.
+    transfer.loop_owned = true;
 }
 
-fn flushPending(self: *RobotsLayer, client: *Client, robots_url: [:0]const u8, allowed: bool) void {
-    var queued = self.pending.fetchRemove(robots_url) orelse
-        @panic("RobotsLayer.flushPending: missing queue");
+fn flushPending(self: *RobotsLayer, robots_url: [:0]const u8, allowed: bool) void {
+    var queued = self.pending.fetchRemove(robots_url) orelse @panic("RobotsLayer.flushPending: missing queue");
     defer queued.value.deinit(self.allocator);
 
-    for (queued.value.items) |queued_req| {
+    for (queued.value.items) |transfer| {
         if (!allowed) {
-            log.warn(.http, "blocked by robots", .{ .url = queued_req.params.url });
-            defer client.deinitRequest(queued_req);
-            queued_req.error_callback(queued_req.ctx, error.RobotsBlocked);
+            log.warn(.http, "blocked by robots", .{ .url = transfer.url });
+            transfer.requestFailed(error.RobotsBlocked, true);
+            transfer.deinit();
         } else {
-            self.next.request(client, queued_req) catch |e| {
-                defer client.deinitRequest(queued_req);
-                queued_req.error_callback(queued_req.ctx, e);
+            // Reset ownership: handing back to the layer chain. If a downstream
+            // layer commits (multi / queue / pause), it'll flip loop_owned back
+            // to true. If it fails before committing, we clean up here.
+            transfer.loop_owned = false;
+            self.next.request(transfer) catch |e| {
+                if (!transfer.loop_owned) {
+                    transfer.requestFailed(e, true);
+                    transfer.deinit();
+                }
             };
         }
     }
 }
 
-fn flushPendingShutdown(self: *RobotsLayer, robots_url: [:0]const u8, client: *Client) void {
-    var queued = self.pending.fetchRemove(robots_url) orelse
+fn flushPendingShutdown(self: *RobotsLayer, robots_url: [:0]const u8) void {
+    var pending = self.pending.fetchRemove(robots_url) orelse
         @panic("RobotsLayer.flushPendingShutdown: missing queue");
-    defer queued.value.deinit(self.allocator);
+    defer pending.value.deinit(self.allocator);
 
-    for (queued.value.items) |queued_req| {
-        defer client.deinitRequest(queued_req);
-        if (queued_req.shutdown_callback) |cb| cb(queued_req.ctx);
+    for (pending.value.items) |transfer| {
+        // execute_callback=false → fires shutdown_callback (not error_callback).
+        transfer.requestFailed(error.Shutdown, false);
+        transfer.deinit();
     }
 }
 
 const RobotsContext = struct {
     layer: *RobotsLayer,
-    arena: std.mem.Allocator,
-    client: *Client,
+    arena: Allocator,
     robots_url: [:0]const u8,
     buffer: std.ArrayList(u8),
     status: u16 = 0,
@@ -199,11 +208,10 @@ const RobotsContext = struct {
     fn doneCallback(ctx_ptr: *anyopaque) anyerror!void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
         const l = self.layer;
-        const client = self.client;
         const robots_url = self.robots_url;
 
         var allowed = true;
-        const network = client.network;
+        const network = l.network;
 
         switch (self.status) {
             200 => {
@@ -218,7 +226,7 @@ const RobotsContext = struct {
                     };
                     if (robots) |r| {
                         try network.robot_store.put(robots_url, r);
-                        const path = URL.getPathname(l.pending.get(robots_url).?.items[0].params.url);
+                        const path = URL.getPathname(l.pending.get(robots_url).?.items[0].req.params.url);
                         allowed = r.isAllowed(path);
                     }
                 }
@@ -236,26 +244,24 @@ const RobotsContext = struct {
             },
         }
 
-        l.flushPending(client, robots_url, allowed);
+        l.flushPending(robots_url, allowed);
     }
 
     fn errorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
         const l = self.layer;
-        const client = self.client;
         const robots_url = self.robots_url;
 
         log.warn(.http, "robots fetch failed", .{ .err = err });
-        l.flushPending(client, robots_url, true);
+        l.flushPending(robots_url, true);
     }
 
     fn shutdownCallback(ctx_ptr: *anyopaque) void {
         const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
         const l = self.layer;
-        const client = self.client;
         const robots_url = self.robots_url;
 
         log.debug(.http, "robots fetch shutdown", .{});
-        l.flushPendingShutdown(robots_url, client);
+        l.flushPendingShutdown(robots_url);
     }
 };

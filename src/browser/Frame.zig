@@ -154,6 +154,8 @@ _to_load: *std.ArrayList(*Element.Html) = undefined,
 _style_manager: StyleManager,
 _script_manager: ScriptManager,
 
+_requests: std.DoublyLinkedList = .{},
+
 // List of active live ranges (for mutation updates per DOM spec)
 _live_ranges: std.DoublyLinkedList = .{},
 
@@ -656,7 +658,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     session.navigation._current_navigation_kind = opts.kind;
 
-    http_client.request(.{
+    self.makeRequest(.{
         .ctx = self,
         .params = .{
             .url = self.url,
@@ -819,6 +821,10 @@ fn canScheduleNavigation(self: *Frame, new_target_type: NavigationType) bool {
         .form => false, // nothing is higher priority than a form
         .script => new_target_type == .form, // a form is higher priority than a script
     };
+}
+
+pub fn makeRequest(self: *Frame, req: HttpClient.Request) !void {
+    return self._session.browser.http_client.request(req, &self._requests);
 }
 
 pub fn documentIsLoaded(self: *Frame) void {

@@ -96,6 +96,12 @@ pub fn lookupBlobUrl(self: *const Execution, url: []const u8) ?*Blob {
     };
 }
 
+pub fn makeRequest(self: *const Execution, req: HttpClient.Request) !void {
+    return switch (self.context.global) {
+        inline else => |g| g.makeRequest(req),
+    };
+}
+
 pub fn dispatch(
     self: *const Execution,
     target: *EventTarget,

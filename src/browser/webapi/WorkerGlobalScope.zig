@@ -59,6 +59,8 @@ _page: *Page,
 _session: *Session,
 _factory: *Factory,
 _identity: JS.Identity = .{},
+_requests: std.DoublyLinkedList = .{},
+
 arena: Allocator,
 call_arena: Allocator,
 url: [:0]const u8,
@@ -208,6 +210,10 @@ pub fn isSameOrigin(self: *const WorkerGlobalScope, url: [:0]const u8) bool {
 
 pub fn lookupBlobUrl(self: *WorkerGlobalScope, url: []const u8) ?*Blob {
     return self._blob_urls.get(url);
+}
+
+pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
+    return self._session.browser.http_client.request(req, &self._requests);
 }
 
 pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {

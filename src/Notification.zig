@@ -21,9 +21,7 @@ const lp = @import("lightpanda");
 
 const Frame = @import("browser/Frame.zig");
 const Transfer = @import("browser/HttpClient.zig").Transfer;
-const Request = @import("browser/HttpClient.zig").Request;
 const Response = @import("browser/HttpClient.zig").Response;
-const InterceptContext = @import("network/layer/InterceptionLayer.zig").InterceptContext;
 
 const log = lp.log;
 const List = std.DoublyLinkedList;
@@ -170,11 +168,11 @@ pub const FrameLoaded = struct {
 };
 
 pub const RequestStart = struct {
-    request: *Request,
+    transfer: *Transfer,
 };
 
 pub const RequestIntercept = struct {
-    request: *Request,
+    transfer: *Transfer,
     wait_for_interception: *bool,
 };
 
@@ -185,21 +183,21 @@ pub const RequestAuthRequired = struct {
 
 pub const ResponseData = struct {
     data: []const u8,
-    request: *Request,
+    transfer: *Transfer,
 };
 
 pub const ResponseHeaderDone = struct {
-    request: *Request,
+    transfer: *Transfer,
     response: *const Response,
 };
 
 pub const RequestDone = struct {
-    request: *Request,
+    transfer: *Transfer,
     content_length: usize,
 };
 
 pub const RequestFail = struct {
-    request: *Request,
+    transfer: *Transfer,
     err: anyerror,
 };
 
