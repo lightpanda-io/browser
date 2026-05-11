@@ -312,6 +312,18 @@ fn runRepl(self: *Self) void {
 
         const cmd = Command.parse(line);
 
+        // Distinguish "you typed `TYPE` but forgot the args" from "this is
+        // natural language for the LLM". Both fall through to
+        // `.natural_language` in Command.parse, but the first should never
+        // hit the LLM-needed error path — it's a syntax mistake on a
+        // PandaScript command.
+        if (std.meta.activeTag(cmd) == .natural_language) {
+            if (Command.keywordSyntax(line)) |kc| {
+                self.terminal.printErrorFmt("Usage: {s} {s}", .{ kc.name, kc.args });
+                continue;
+            }
+        }
+
         if (cmd.needsLlm() and self.ai_client == null) {
             self.terminal.printError("This command needs an LLM. Set an API key or pass --provider (and drop --no-llm if you set it). PandaScript commands (GOTO, CLICK, EXTRACT, ...) work without one.");
             continue;

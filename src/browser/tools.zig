@@ -935,6 +935,24 @@ fn listLpEnvNames(arena: std.mem.Allocator) ToolError![]const u8 {
     return formatLpEnvNames(arena, lines.items);
 }
 
+/// Sorted `LP_*`-prefixed environment-variable names from the current
+/// process. Returned slices point into `std.os.environ`, which is stable for
+/// the process lifetime; the outer slice is allocated from `arena`. Used by
+/// the agent REPL completer to offer `$LP_*` Tab completions — same data
+/// source as the `getEnv` tool (no-name variant), just unformatted.
+pub fn lpEnvNames(arena: std.mem.Allocator) error{OutOfMemory}![]const []const u8 {
+    var names: std.ArrayList([]const u8) = .empty;
+    for (std.os.environ) |entry| {
+        const line = std.mem.span(entry);
+        const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const name = line[0..eq_idx];
+        if (!std.ascii.startsWithIgnoreCase(name, "LP_")) continue;
+        try names.append(arena, name);
+    }
+    std.mem.sort([]const u8, names.items, {}, lpNameLessThan);
+    return names.items;
+}
+
 fn formatLpEnvNames(arena: std.mem.Allocator, env_lines: []const []const u8) ToolError![]const u8 {
     var names: std.ArrayList([]const u8) = .empty;
     for (env_lines) |line| {
