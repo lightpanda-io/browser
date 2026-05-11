@@ -1,9 +1,8 @@
 //! PandaScript: a tiny DSL for recording and replaying browser sessions.
 //!
-//! Lives under `browser/` because it sits below both `agent/` (the LLM
-//! REPL) and `mcp/` (the external-agent server), both of which consume it
-//! to translate between recorded `.lp` files and the shared `tools.zig`
-//! action surface.
+//! Sits above `browser/` (alongside `agent/` and `mcp/`) — both the LLM
+//! REPL and the external-agent server consume it to translate between
+//! recorded `.lp` files and the shared `browser/tools.zig` action surface.
 //!
 //! This file owns the deterministic helpers (line splicing, atomic file
 //! rewrite, path validation, the shared `mcp_driver_guidance` system
