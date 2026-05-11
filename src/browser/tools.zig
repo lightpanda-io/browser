@@ -24,8 +24,6 @@ pub fn minify(comptime json: []const u8) []const u8 {
         var escaped = false;
         for (json) |c| {
             if (in_string) {
-                buf[len] = c;
-                len += 1;
                 if (escaped) {
                     escaped = false;
                 } else if (c == '\\') {
@@ -33,20 +31,13 @@ pub fn minify(comptime json: []const u8) []const u8 {
                 } else if (c == '"') {
                     in_string = false;
                 }
-            } else {
-                switch (c) {
-                    ' ', '\n', '\r', '\t' => continue,
-                    '"' => {
-                        in_string = true;
-                        buf[len] = c;
-                        len += 1;
-                    },
-                    else => {
-                        buf[len] = c;
-                        len += 1;
-                    },
-                }
+            } else switch (c) {
+                ' ', '\n', '\r', '\t' => continue,
+                '"' => in_string = true,
+                else => {},
             }
+            buf[len] = c;
+            len += 1;
         }
         const final = buf[0..len].*;
         break :blk &final;
