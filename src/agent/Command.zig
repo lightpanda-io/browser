@@ -219,13 +219,12 @@ pub fn parse(line: []const u8) Command {
 
 pub const KeywordSyntax = struct {
     name: []const u8,
-    /// Null for argless commands (TREE, MARKDOWN, LOGIN, ACCEPT_COOKIES).
+    /// Null for argless commands.
     args: ?[]const u8,
 };
 
 /// Single source of truth for PandaScript keyword names — consumed by the
-/// parser, the REPL highlighter, and Tab completion. Order is REPL-facing
-/// (action verbs first), so completions feel natural.
+/// parser, the REPL highlighter, and Tab completion.
 pub const keywords = [_]KeywordSyntax{
     .{ .name = "GOTO", .args = "<url>" },
     .{ .name = "CLICK", .args = "'<selector>'" },
@@ -243,12 +242,9 @@ pub const keywords = [_]KeywordSyntax{
     .{ .name = "ACCEPT_COOKIES", .args = null },
 };
 
-/// If the first word of `line` matches a recognized PandaScript keyword that
-/// takes arguments, returns its expected shape. Lets the REPL distinguish
-/// "you mistyped args for a known command" from "this is natural language" —
-/// the latter goes to the LLM, the former gets a syntax error. Argless
-/// commands return null because they always parse successfully when typed
-/// alone, so they never fall through to natural_language.
+/// If the first word of `line` is a PandaScript keyword that takes arguments,
+/// returns its expected shape. Argless keywords return null — they always
+/// parse successfully when typed alone, so they never need the syntax-error path.
 pub fn keywordSyntax(line: []const u8) ?KeywordSyntax {
     const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
     const end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;

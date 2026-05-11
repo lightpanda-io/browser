@@ -47,10 +47,7 @@ verbosity: Verbosity,
 repl_arena: ?std.heap.ArenaAllocator,
 stderr_is_tty: bool,
 spinner: Spinner,
-/// Schemas the completer uses to render `/slash` arg hints. Empty until
-/// `setSlashSchemas` is called.
 slash_schemas: []const SlashCommand.SchemaInfo = &.{},
-/// Cached LP_* environment variable names for completion.
 env_names: ?[]const []const u8 = null,
 
 // Flat name list for the "match any slash command" search/completion paths.
@@ -61,13 +58,12 @@ const all_slash_names: [browser_tools.tool_defs.len + SlashCommand.meta_names.le
     break :blk names;
 };
 
-/// Registers isocline's completer with `self` as user-data, so the C
-/// callback can reach `slash_schemas` via `ic_completion_arg`. Must run
-/// after the Terminal is in its final memory location.
-pub fn setSlashSchemas(self: *Self, schemas: []const SlashCommand.SchemaInfo) void {
+/// Wires the isocline completer to `self` so the C callback can reach
+/// `slash_schemas` via `ic_completion_arg`. Must run after the Terminal is
+/// in its final memory location.
+pub fn attachCompleter(self: *Self, schemas: []const SlashCommand.SchemaInfo) void {
     self.slash_schemas = schemas;
     c.ic_set_default_completer(&completionCallback, self);
-    c.ic_set_default_highlighter(&highlighterCallback, null);
 }
 
 pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity: Verbosity, is_repl: bool) Self {
@@ -86,6 +82,7 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
     c.ic_style_def(style_key, "ansi-cyan");
     c.ic_style_def(style_num, "ansi-yellow");
     c.ic_style_def(style_err, "ansi-red");
+    c.ic_set_default_highlighter(&highlighterCallback, null);
     _ = c.ic_enable_highlight(true);
     if (history_path) |path| {
         c.ic_set_history(path.ptr, -1); // -1 → 200-entry default cap
@@ -273,16 +270,14 @@ fn addEnvVarCompletions(
     }
 
     if (self.env_names == null) {
-        self.env_names = browser_tools.lpEnvNames(self.allocator) catch null;
+        // On OOM, cache an empty slice so we don't retry every keystroke.
+        self.env_names = browser_tools.lpEnvNames(self.allocator) catch &.{};
     }
-    const names = self.env_names orelse return;
+    const names = self.env_names.?;
+    if (names.len == 0) return;
 
     const head = input[0 .. dollar + 1];
-    for (names) |name| {
-        if (!std.ascii.startsWithIgnoreCase(name, partial)) continue;
-        const text = std.fmt.bufPrintZ(buf, "{s}{s}", .{ head, name }) catch continue;
-        _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
-    }
+    for (names) |name| addPrefixedCompletion(cenv, buf, input, head, name, "", partial);
 }
 
 fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callconv(.c) void {
@@ -315,28 +310,26 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
             return;
         }
     } else if (!has_space) {
-        // Case-insensitive here so Tab also rewrites mistyped lowercase
-        // (`goto` → `GOTO`); the highlighter stays case-sensitive.
-        for (Command.keywords) |kw| {
-            if (std.ascii.startsWithIgnoreCase(kw.name, input)) {
-                const text = std.fmt.bufPrintZ(&buf, "{s}", .{kw.name}) catch continue;
-                _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
-            }
-        }
+        // Case-insensitive so Tab rewrites mistyped lowercase (`goto` → `GOTO`);
+        // the highlighter stays case-sensitive.
+        for (Command.keywords) |kw| addPrefixedCompletion(cenv, &buf, input, "", kw.name, "", input);
     }
 
     self.addEnvVarCompletions(cenv, &buf, input);
+}
+
+// Advances `i` past whitespace; returns true if more text remains.
+fn skipWs(text: []const u8, i: *usize) bool {
+    while (i.* < text.len and std.ascii.isWhitespace(text[i.*])) i.* += 1;
+    return i.* < text.len;
 }
 
 // Byte offsets to ic_highlight are not UTF-8 code points; safe because we
 // only tokenize on ASCII boundaries (whitespace, quotes, `=`, `$`).
 fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*anyopaque) callconv(.c) void {
     const text = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input)), 0);
-    if (text.len == 0) return;
-
     var i: usize = 0;
-    while (i < text.len and std.ascii.isWhitespace(text[i])) i += 1;
-    if (i >= text.len) return;
+    if (!skipWs(text, &i)) return;
 
     const cmd_start = i;
     while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
@@ -383,31 +376,22 @@ fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
         c.ic_highlight(henv, @intCast(start), @intCast(end - start), style_url.ptr);
         return;
     }
-    if (std.ascii.isDigit(tok[0])) {
-        var all_num = true;
-        for (tok) |ch| if (!std.ascii.isDigit(ch) and ch != '.') {
-            all_num = false;
-            break;
-        };
-        if (all_num) c.ic_highlight(henv, @intCast(start), @intCast(end - start), style_num.ptr);
-    }
+    if (std.fmt.parseFloat(f64, tok)) |_| {
+        c.ic_highlight(henv, @intCast(start), @intCast(end - start), style_num.ptr);
+    } else |_| {}
 }
 
-// Note: Does not handle backslash escapes (matches SlashCommand.zig parser).
+// Returns the index just past the matching closing quote, or `text.len` if
+// unterminated. Does not handle backslash escapes (matches SlashCommand.zig parser).
 fn scanQuoted(text: []const u8, start: usize) usize {
     if (start >= text.len) return start;
-    const quote = text[start];
-    var i = start + 1;
-    while (i < text.len and text[i] != quote) : (i += 1) {}
-    return if (i < text.len) i + 1 else i;
+    const close = std.mem.indexOfScalarPos(u8, text, start + 1, text[start]) orelse return text.len;
+    return close + 1;
 }
 
 fn highlightPandaArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
     var i = start;
-    while (i < text.len) {
-        while (i < text.len and std.ascii.isWhitespace(text[i])) i += 1;
-        if (i >= text.len) break;
-
+    while (skipWs(text, &i)) {
         if (text[i] == '\'' or text[i] == '"') {
             const tok_start = i;
             i = scanQuoted(text, i);
@@ -422,10 +406,7 @@ fn highlightPandaArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
 
 fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
     var i = start;
-    while (i < text.len) {
-        while (i < text.len and std.ascii.isWhitespace(text[i])) i += 1;
-        if (i >= text.len) break;
-
+    while (skipWs(text, &i)) {
         const tok_start = i;
         while (i < text.len and !std.ascii.isWhitespace(text[i]) and text[i] != '=') i += 1;
         const key_end = i;
@@ -444,13 +425,13 @@ fn highlightSlashArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usi
     }
 }
 
-pub fn readLine(_: *Self, prompt: [*:0]const u8) ?[]const u8 {
+pub fn readLine(prompt: [*:0]const u8) ?[]const u8 {
     // Isocline auto-appends the line to its (optionally-persisted) history.
     const line = c.ic_readline(prompt) orelse return null;
     return std.mem.sliceTo(line, 0);
 }
 
-pub fn freeLine(_: *Self, line: []const u8) void {
+pub fn freeLine(line: []const u8) void {
     c.ic_free(@ptrCast(@constCast(line.ptr)));
 }
 

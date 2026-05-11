@@ -228,7 +228,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
 
     self.cmd_executor = CommandExecutor.init(allocator, tool_executor, &self.terminal);
 
-    self.terminal.setSlashSchemas(slash_schemas);
+    self.terminal.attachCompleter(slash_schemas);
 
     return self;
 }
@@ -300,8 +300,8 @@ fn runRepl(self: *Self) void {
     }
 
     repl: while (true) {
-        const line = self.terminal.readLine("") orelse break;
-        defer self.terminal.freeLine(line);
+        const line = Terminal.readLine("") orelse break;
+        defer Terminal.freeLine(line);
 
         if (line.len == 0) continue;
 
