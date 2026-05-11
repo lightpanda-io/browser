@@ -228,7 +228,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
 
     self.cmd_executor = CommandExecutor.init(allocator, tool_executor, &self.terminal);
 
-    Terminal.setSlashSchemas(slash_schemas);
+    self.terminal.setSlashSchemas(slash_schemas);
 
     return self;
 }

@@ -88,7 +88,7 @@ pub fn build(b: *Build) !void {
         try linkCurl(b, mod, enable_tsan);
         try linkHtml5Ever(b, mod);
         linkZenai(b, mod);
-        linkLinenoise(b, mod);
+        linkIsocline(b, mod);
 
         break :blk mod;
     };
@@ -1005,11 +1005,11 @@ fn linkZenai(b: *Build, mod: *Build.Module) void {
     mod.addImport("zenai", dep.module("zenai"));
 }
 
-fn linkLinenoise(b: *Build, mod: *Build.Module) void {
-    const dep = b.dependency("linenoise", .{});
-    mod.addIncludePath(dep.path(""));
+fn linkIsocline(b: *Build, mod: *Build.Module) void {
+    const dep = b.dependency("isocline", .{});
+    mod.addIncludePath(dep.path("include"));
     mod.addCSourceFile(.{
-        .file = dep.path("linenoise.c"),
+        .file = dep.path("src/isocline.c"),
     });
 }
 
