@@ -216,6 +216,9 @@ fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, ends_ws
             a.markUsed(tok[0..eq]);
             continue;
         }
+        // Single-required schemas accept the first arg positionally
+        // (`/goto https://example.com`); the schema's only required field
+        // is implicitly bound.
         if (i == 0 and schema.required.len == 1) {
             a.markUsed(schema.required[0]);
             continue;
@@ -340,8 +343,10 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
     self.addEnvVarCompletions(cenv, &buf, input);
 }
 
-// File-scope buffer used by `hintsCallback`. Isocline copies the returned
-// string into its own stringbuf, so we can safely overwrite this between calls.
+// File-scope so the buffer outlives the callback's stack frame. Isocline's
+// `sbuf_replace` copies the returned string into its own stringbuf, so it's
+// safe to overwrite this on the next invocation. Single-threaded — isocline's
+// edit loop runs on the main thread, and we have one Terminal instance.
 var hint_buf: [completion_buf_len:0]u8 = undefined;
 
 fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const u8 {

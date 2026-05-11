@@ -9,6 +9,9 @@ allocator: std.mem.Allocator,
 file: ?std.fs.File,
 /// Path of the active recording, owned by the Recorder. null when disabled.
 path: ?[]const u8,
+/// Set when the user requested recording but init failed. Lets callers
+/// surface the reason in the UI instead of burying it in logs.
+init_error: ?[]const u8 = null,
 /// Number of lines successfully appended since init. Bumped only on success
 /// so callers see the actual file line count, not the attempt count.
 lines: u32,
@@ -23,6 +26,7 @@ pub fn init(allocator: std.mem.Allocator, path: ?[]const u8) Self {
         .allocator = allocator,
         .file = opened.file,
         .path = opened.path,
+        .init_error = opened.err,
         .lines = 0,
         .buf = .init(allocator),
     };
@@ -31,29 +35,30 @@ pub fn init(allocator: std.mem.Allocator, path: ?[]const u8) Self {
 const OpenedRecording = struct {
     file: ?std.fs.File,
     path: ?[]const u8,
+    err: ?[]const u8,
 };
 
 fn openRecording(allocator: std.mem.Allocator, path: ?[]const u8) OpenedRecording {
-    const p = path orelse return .{ .file = null, .path = null };
+    const p = path orelse return .{ .file = null, .path = null, .err = null };
     const owned_path = allocator.dupe(u8, p) catch {
         log.warn(.app, "recording path alloc failed", .{});
-        return .{ .file = null, .path = null };
+        return .{ .file = null, .path = null, .err = @errorName(error.OutOfMemory) };
     };
 
     const f = std.fs.cwd().createFile(p, .{ .truncate = false }) catch |err| {
         log.warn(.app, "could not open recording file", .{ .err = @errorName(err) });
         allocator.free(owned_path);
-        return .{ .file = null, .path = null };
+        return .{ .file = null, .path = null, .err = @errorName(err) };
     };
     f.seekFromEnd(0) catch |err| {
         log.warn(.app, "could not seek recording file", .{ .err = @errorName(err) });
         f.close();
         allocator.free(owned_path);
-        return .{ .file = null, .path = null };
+        return .{ .file = null, .path = null, .err = @errorName(err) };
     };
     const pos = f.getPos() catch 0;
     if (pos > 0) f.writeAll("\n") catch {};
-    return .{ .file = f, .path = owned_path };
+    return .{ .file = f, .path = owned_path, .err = null };
 }
 
 pub fn deinit(self: *Self) void {

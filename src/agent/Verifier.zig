@@ -23,12 +23,14 @@ pub const VerifyResult = struct {
 /// Verify that a command achieved its intent after execution and return
 /// both the verdict and a human-readable failure reason (if applicable).
 /// Only called when the command did not hard-fail (ExecResult.failed == false).
+/// Commands without a dedicated verifier return `.inconclusive` so callers
+/// can distinguish "no verification available" from "explicitly verified".
 pub fn verify(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) VerifyResult {
     return switch (cmd) {
         .type_cmd => |args| self.verifyFill(arena, args.selector, args.value),
         .check => |args| self.verifyCheck(arena, args.selector, args.checked),
         .select => |args| self.verifySelect(arena, args.selector, args.value),
-        else => .{ .result = .passed },
+        else => .{ .result = .inconclusive },
     };
 }
 

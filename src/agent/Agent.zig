@@ -230,6 +230,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
 
     self.terminal.attachCompleter(slash_schemas);
 
+    if (self.recorder.path) |p| {
+        self.terminal.printInfoFmt("recording to {s}", .{p});
+    } else if (self.recorder.init_error) |reason| {
+        self.terminal.printErrorFmt("recording disabled: {s}", .{reason});
+    }
+
     return self;
 }
 
@@ -559,7 +565,7 @@ fn runActionEntry(self: *Self, sa: std.mem.Allocator, entry: Command.ScriptItera
     const verification = if (!result.failed and self.self_heal)
         self.verifier.verify(ca, entry.command)
     else
-        Verifier.VerifyResult{ .result = .passed };
+        Verifier.VerifyResult{ .result = .inconclusive };
 
     if (!result.failed and verification.result != .failed) return .ok;
 
