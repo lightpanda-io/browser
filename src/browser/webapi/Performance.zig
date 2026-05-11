@@ -184,6 +184,11 @@ pub fn clearMeasures(self: *Performance, measure_name: ?[]const u8) void {
     }
 }
 
+pub fn setResourceTimingBufferSize(self: *Performance, max_size: u32) void {
+    _ = self;
+    _ = max_size;
+}
+
 pub fn getEntries(self: *const Performance) []*Entry {
     return self._entries.items;
 }
@@ -281,6 +286,7 @@ pub const JsApi = struct {
     pub const measure = bridge.function(Performance.measure, .{ .dom_exception = true });
     pub const clearMarks = bridge.function(Performance.clearMarks, .{});
     pub const clearMeasures = bridge.function(Performance.clearMeasures, .{});
+    pub const setResourceTimingBufferSize = bridge.function(Performance.setResourceTimingBufferSize, .{});
     pub const getEntries = bridge.function(Performance.getEntries, .{});
     pub const getEntriesByType = bridge.function(Performance.getEntriesByType, .{});
     pub const getEntriesByName = bridge.function(Performance.getEntriesByName, .{});
