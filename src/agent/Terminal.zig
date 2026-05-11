@@ -5,7 +5,6 @@ const Config = lp.Config;
 const Command = lp.script.Command;
 const SlashCommand = @import("SlashCommand.zig");
 const Spinner = @import("Spinner.zig");
-const string = @import("../string.zig");
 const c = @cImport({
     @cInclude("isocline.h");
 });
@@ -428,13 +427,21 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*a
         // ALL CAPS but unknown → typo (red); lowercase/mixed → natural language (unstyled).
         const style: ?[*:0]const u8 = if (isKnownCommand(cmd))
             style_cmd
-        else if (string.isAllUpper(cmd))
+        else if (looksLikeKeyword(cmd))
             style_err
         else
             null;
         if (style) |s| c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), s);
         highlightPandaArgs(henv, text, i);
     }
+}
+
+fn looksLikeKeyword(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |ch| {
+        if (!std.ascii.isUpper(ch) and !std.ascii.isDigit(ch) and ch != '_') return false;
+    }
+    return true;
 }
 
 fn isKnownCommand(name: []const u8) bool {

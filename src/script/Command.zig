@@ -599,6 +599,11 @@ fn getJsonI32(o: std.json.ObjectMap, key: []const u8, default: i32) i32 {
 
 // --- Tests ---
 
+fn testUpcase(ar: std.mem.Allocator, input: []const u8) []const u8 {
+    const out = ar.alloc(u8, input.len) catch return input;
+    return std.ascii.upperString(out, input);
+}
+
 test "parse GOTO" {
     const cmd = parse("GOTO https://example.com");
     try std.testing.expectEqualStrings("https://example.com", cmd.goto);
@@ -1188,15 +1193,7 @@ test "toToolCall: substitute callback applied to selector fields" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    const upcase = struct {
-        fn f(ar: std.mem.Allocator, input: []const u8) []const u8 {
-            const out = ar.alloc(u8, input.len) catch return input;
-            for (input, 0..) |c, i| out[i] = std.ascii.toUpper(c);
-            return out;
-        }
-    }.f;
-
-    const tc = toToolCall(a, .{ .click = "abc" }, upcase).?;
+    const tc = toToolCall(a, .{ .click = "abc" }, testUpcase).?;
     try std.testing.expectEqualStrings("click", tc.name);
     try std.testing.expectEqualStrings("{\"selector\":\"ABC\"}", tc.args_json);
 }
@@ -1206,15 +1203,7 @@ test "toToolCall: type_cmd value is NOT substituted" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    const upcase = struct {
-        fn f(ar: std.mem.Allocator, input: []const u8) []const u8 {
-            const out = ar.alloc(u8, input.len) catch return input;
-            for (input, 0..) |c, i| out[i] = std.ascii.toUpper(c);
-            return out;
-        }
-    }.f;
-
-    const tc = toToolCall(a, .{ .type_cmd = .{ .selector = "abc", .value = "$LP_PASSWORD" } }, upcase).?;
+    const tc = toToolCall(a, .{ .type_cmd = .{ .selector = "abc", .value = "$LP_PASSWORD" } }, testUpcase).?;
     try std.testing.expectEqualStrings("fill", tc.name);
     // selector substituted, value preserved as $LP_* reference
     try std.testing.expectEqualStrings("{\"selector\":\"ABC\",\"value\":\"$LP_PASSWORD\"}", tc.args_json);

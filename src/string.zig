@@ -311,14 +311,6 @@ pub fn isAllWhitespace(text: []const u8) bool {
     } else true;
 }
 
-pub fn isAllUpper(s: []const u8) bool {
-    if (s.len == 0) return false;
-    for (s) |ch| {
-        if (!std.ascii.isUpper(ch) and !std.ascii.isDigit(ch) and ch != '_') return false;
-    }
-    return true;
-}
-
 // Discriminatory type that signals the bridge to use arena instead of call_arena
 // Use this for strings that need to persist beyond the current call
 // The caller can unwrap and store just the underlying .str field
@@ -340,17 +332,6 @@ fn asUint(comptime string: anytype) std.meta.Int(
 }
 
 const testing = @import("testing.zig");
-
-test "isAllUpper" {
-    try testing.expectEqual(false, isAllUpper(""));
-    try testing.expectEqual(true, isAllUpper("GOTO"));
-    try testing.expectEqual(true, isAllUpper("ACCEPT_COOKIES"));
-    try testing.expectEqual(true, isAllUpper("X1"));
-    try testing.expectEqual(true, isAllUpper("_"));
-    try testing.expectEqual(false, isAllUpper("Goto"));
-    try testing.expectEqual(false, isAllUpper("goto"));
-    try testing.expectEqual(false, isAllUpper("GO TO"));
-}
 
 test "String" {
     const other_short = try String.init(undefined, "other_short", .{});
