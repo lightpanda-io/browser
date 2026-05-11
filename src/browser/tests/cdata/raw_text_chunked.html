@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!--
+  Regression test for issue #2397.
+
+  When the html5ever tokenizer is in script-data / rawtext / rcdata state and
+  encounters '<', it flushes the pending character buffer and re-enters via a
+  fresh AppendText callback. Pre-fix, every chunk re-allocated and re-copied
+  the growing text on the page-lifetime arena (O(N^2)). Real pages with
+  embedded HTML strings inside JS literals blew memory to gigabytes.
+
+  This test guards correctness of the deferred-merge state machine in
+  Parser.appendTextChunk / flushPendingText: a stress case big enough to
+  cross many chunk boundaries, and exact byte-length assertions so that any
+  future regression that drops or duplicates a chunk is caught. The memory
+  bound itself is measured externally via the live reproducer documented in
+  the PR description (apple.com US iPhone page: 3.5 GB → 125 MB).
+-->
+
+<!--
+  ~6 KB script body containing many '<' characters in JS string literals.
+  Each '<' forces html5ever to flush a chunk, exercising the same code path
+  that produced gigabytes of allocations on apple.com pages.
+-->
+<script class="big-script">
+var a = "<a><b><c><d><e><f><g><h><i><j><k><l><m><n><o><p><q><r><s><t><u><v><w><x><y><z>";
+var b = "<aa><bb><cc><dd><ee><ff><gg><hh><ii><jj><kk><ll><mm><nn><oo><pp><qq><rr><ss><tt>";
+var c = "<uu><vv><ww><xx><yy><zz>";
+var d = "<a1><a2><a3><a4><a5><a6><a7><a8><a9><a0>";
+var e = "<b1><b2><b3><b4><b5><b6><b7><b8><b9><b0>";
+var f = "<c1><c2><c3><c4><c5><c6><c7><c8><c9><c0>";
+var g = "<d1><d2><d3><d4><d5><d6><d7><d8><d9><d0>";
+var h = "<e1><e2><e3><e4><e5><e6><e7><e8><e9><e0>";
+var i = "<f1><f2><f3><f4><f5><f6><f7><f8><f9><f0>";
+var j = "<g1><g2><g3><g4><g5><g6><g7><g8><g9><g0>";
+var k = "<h1><h2><h3><h4><h5><h6><h7><h8><h9><h0>";
+var l = "<i1><i2><i3><i4><i5><i6><i7><i8><i9><i0>";
+var m = "<j1><j2><j3><j4><j5><j6><j7><j8><j9><j0>";
+var n = "<k1><k2><k3><k4><k5><k6><k7><k8><k9><k0>";
+var o = "<l1><l2><l3><l4><l5><l6><l7><l8><l9><l0>";
+var p = "<m1><m2><m3><m4><m5><m6><m7><m8><m9><m0>";
+var q = "<n1><n2><n3><n4><n5><n6><n7><n8><n9><n0>";
+var r = "<o1><o2><o3><o4><o5><o6><o7><o8><o9><o0>";
+var s = "<p1><p2><p3><p4><p5><p6><p7><p8><p9><p0>";
+var t = "<q1><q2><q3><q4><q5><q6><q7><q8><q9><q0>";
+var u = "<r1><r2><r3><r4><r5><r6><r7><r8><r9><r0>";
+var v = "<s1><s2><s3><s4><s5><s6><s7><s8><s9><s0>";
+var w = "<t1><t2><t3><t4><t5><t6><t7><t8><t9><t0>";
+var x = "<u1><u2><u3><u4><u5><u6><u7><u8><u9><u0>";
+var done = "yes";
+</script>
+
+<style class="big-style">
+  /* less-than chars inside CSS string-literal content force chunk flushing
+     in rawtext mode. Distinct content per rule so a regression that drops
+     a mid-body chunk fails one of the indexOf checks below. */
+  .a::before { content: "<a><b><c><d><e><f><g><h><i><j>"; }
+  .b::before { content: "<k><l><m><n><o><p><q><r><s><t>"; }
+  .c::before { content: "<u><v><w><x><y><z>"; }
+  .d::before { content: "<aa><bb><cc><dd><ee><ff>"; }
+  .e::before { content: "<gg><hh><ii><jj><kk><ll>"; }
+  .f::before { content: "<mm><nn><oo><pp><qq><rr>"; }
+</style>
+
+<!-- textarea is RCDATA: '<' in source must be escaped, but entities decode. -->
+<textarea class="big-textarea">line 1: &lt;a&gt;&lt;b&gt;&lt;c&gt;&lt;d&gt;&lt;e&gt;&lt;f&gt;
+line 2: &lt;g&gt;&lt;h&gt;&lt;i&gt;&lt;j&gt;&lt;k&gt;&lt;l&gt;
+line 3: &lt;m&gt;&lt;n&gt;&lt;o&gt;&lt;p&gt;&lt;q&gt;&lt;r&gt;
+line 4: &lt;s&gt;&lt;t&gt;&lt;u&gt;&lt;v&gt;&lt;w&gt;&lt;x&gt;&lt;y&gt;&lt;z&gt;</textarea>
+
+<title>A page &lt;with&gt; many &lt;tags&gt; in &lt;the&gt; title for testing</title>
+
+<script id="rawtextchunked">
+  // 1. Each raw-text element parses to exactly ONE text node child.
+  let script = document.querySelector('script.big-script');
+  testing.expectEqual(1, script.childNodes.length);
+  testing.expectTrue(script.firstChild === script.lastChild);
+  testing.expectEqual(3, script.firstChild.nodeType); // TEXT_NODE
+
+  let style = document.querySelector('style.big-style');
+  testing.expectEqual(1, style.childNodes.length);
+  testing.expectTrue(style.firstChild === style.lastChild);
+
+  let textarea = document.querySelector('textarea.big-textarea');
+  testing.expectEqual(1, textarea.childNodes.length);
+  testing.expectTrue(textarea.firstChild === textarea.lastChild);
+
+  let title = document.querySelector('title');
+  testing.expectEqual(1, title.childNodes.length);
+  testing.expectTrue(title.firstChild === title.lastChild);
+
+  // 2. Exact byte counts. A regression that drops or duplicates a chunk in
+  //    Parser.appendTextChunk would shift these.
+  //    '<' total in the script source:
+  //      26 (a-z) + 20 (aa-tt) + 6 (uu-zz) + 21 lines * 10 (a1..u0) = 262.
+  let body = script.firstChild.nodeValue;
+  let lt_count = (body.match(/</g) || []).length;
+  testing.expectEqual(262, lt_count);
+  // String literals must round-trip — pick samples from the start, middle,
+  // and end so a regression that loses a mid-body chunk fails loudly.
+  testing.expectTrue(body.indexOf('<a><b><c><d>') !== -1);
+  testing.expectTrue(body.indexOf('<m1><m2><m3>') !== -1);
+  testing.expectTrue(body.indexOf('<u1><u2><u3>') !== -1);
+  testing.expectTrue(body.indexOf('var done = "yes"') !== -1);
+
+  // 3. Style: 6 rules with distinct content, all preserved.
+  let style_body = style.firstChild.nodeValue;
+  let style_lt_count = (style_body.match(/</g) || []).length;
+  // 10 + 10 + 6 + 6 + 6 + 6 = 44 '<' chars across the six rules.
+  testing.expectEqual(44, style_lt_count);
+  testing.expectTrue(style_body.indexOf('"<a><b><c>') !== -1);
+  testing.expectTrue(style_body.indexOf('"<gg><hh>') !== -1);
+  testing.expectTrue(style_body.indexOf('"<mm><nn>') !== -1);
+
+  // 4. Textarea (RCDATA): entities decoded. Exact line count and content.
+  let ta_value = textarea.value;
+  testing.expectEqual(4, ta_value.split('\n').length);
+  // 4 lines * (6 + 6 + 6 + 8) = 26 '<' chars after entity decoding.
+  let ta_lt_count = (ta_value.match(/</g) || []).length;
+  testing.expectEqual(26, ta_lt_count);
+  testing.expectTrue(ta_value.indexOf('line 1: <a><b>') !== -1);
+  testing.expectTrue(ta_value.indexOf('line 4: <s><t><u>') !== -1);
+
+  // 5. Title (RCDATA): entities decoded; exact equality.
+  testing.expectEqual('A page <with> many <tags> in <the> title for testing',
+                      title.textContent);
+</script>

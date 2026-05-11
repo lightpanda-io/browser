@@ -1813,26 +1813,12 @@ pub fn notifyNetworkAlmostIdle(self: *Frame) void {
     });
 }
 
-// called from the parser
-pub fn appendNew(self: *Frame, parent: *Node, child: Node.NodeOrText) !void {
-    const node = switch (child) {
-        .node => |n| n,
-        .text => |txt| blk: {
-            // If we're appending this adjacently to a text node, we should merge
-            if (parent.lastChild()) |sibling| {
-                if (sibling.is(CData.Text)) |tn| {
-                    const cdata = tn._proto;
-                    const existing = cdata.getData().str();
-                    cdata._data = try String.concat(self.arena, &.{ existing, txt });
-                    return;
-                }
-            }
-            break :blk try self.createTextNode(txt);
-        },
-    };
-
-    lp.assert(node._parent == null, "Frame.appendNew", .{});
-    try self._insertNodeRelative(true, parent, node, .append, .{
+// called from the parser. Text-node merging is the parser's responsibility
+// (see Parser.appendTextChunk in src/browser/parser/Parser.zig); this is the
+// "insert this fully-formed node as a new last child of parent" entry point.
+pub fn appendNew(self: *Frame, parent: *Node, child: *Node) !void {
+    lp.assert(child._parent == null, "Frame.appendNew", .{});
+    try self._insertNodeRelative(true, parent, child, .append, .{
         // this opts has no meaning since we're passing `true` as the first
         // parameter, which indicates this comes from the parser, and has its
         // own special processing. Still, set it to be clear.

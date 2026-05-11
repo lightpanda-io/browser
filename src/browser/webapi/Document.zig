@@ -706,7 +706,13 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
             if (self._script_created_parser) |*parser| {
                 parser.read(html) catch |err| {
                     log.warn(.dom, "document.write parser error", .{ .err = err });
-                    // was already closed
+                    // html5ever's handle was destroyed inside read(), but the
+                    // pending text buffer (if any) still wants to land on its
+                    // text node's _data — flushPendingText doesn't depend on
+                    // the handle, so attempt a final flush before dropping.
+                    parser.parser.flushPendingText() catch |flush_err| {
+                        log.warn(.dom, "flush after parser panic", .{ .err = flush_err });
+                    };
                     self._script_created_parser = null;
                 };
             }
@@ -835,12 +841,12 @@ pub fn close(self: *Document, frame: *Frame) !void {
         return;
     }
 
-    // done() calls html5ever_streaming_parser_finish which frees the parser
-    // We must NOT call deinit() after done() as that would be a double-free
-    self._script_created_parser.?.done();
-    // Just null out the handle since done() already freed it
-    self._script_created_parser.?.handle = null;
-    self._script_created_parser = null;
+    // done() finishes html5ever's handle and runs the final flushPendingText.
+    // Even if flushPendingText errors, the handle is already finished and we
+    // must not retain the Streaming — defer so the error path also drops it.
+    // (Streaming.done nulls its own handle, so dropping the struct is safe.)
+    defer self._script_created_parser = null;
+    try self._script_created_parser.?.done();
 
     frame.documentIsComplete();
 }
