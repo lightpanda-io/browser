@@ -59,8 +59,16 @@ pub const Headers = struct {
         const value_copy = try allocator.dupe(u8, value);
         errdefer allocator.free(value_copy);
 
-        self.keys = try allocator.realloc(self.keys, self.keys.len + 1);
-        self.values = try allocator.realloc(self.values, self.values.len + 1);
+        if (self.keys.len == 0) {
+            const new_keys = try allocator.alloc([]u8, 1);
+            errdefer allocator.free(new_keys);
+            const new_values = try allocator.alloc([]u8, 1);
+            self.keys = new_keys;
+            self.values = new_values;
+        } else {
+            self.keys = try allocator.realloc(self.keys, self.keys.len + 1);
+            self.values = try allocator.realloc(self.values, self.values.len + 1);
+        }
         self.keys[self.keys.len - 1] = key_copy;
         self.values[self.values.len - 1] = value_copy;
     }
@@ -182,7 +190,13 @@ pub fn parseHeaders(allocator: Allocator, raw: []const u8) !RequestHeaders {
 
     var line_start: usize = 0;
     while (line_start < raw.len) {
-        const line_end = std.mem.indexOfScalarPos(u8, raw, line_start, '\r') orelse raw.len;
+        const cr = std.mem.indexOfScalarPos(u8, raw, line_start, '\r');
+        const lf = std.mem.indexOfScalarPos(u8, raw, line_start, '\n');
+        var line_end: usize = raw.len;
+        if (cr) |c| line_end = c;
+        if (lf) |l| {
+            if (l < line_end) line_end = l;
+        }
         const line = raw[line_start..line_end];
         if (line.len == 0) break;
 
@@ -191,8 +205,8 @@ pub fn parseHeaders(allocator: Allocator, raw: []const u8) !RequestHeaders {
         const value = std.mem.trim(u8, line[colon + 1 ..], " \t");
         try headers.put(name, value);
 
-        line_start = line_end + 1;
-        if (line_start < raw.len and raw[line_start] == '\n') {
+        line_start = line_end;
+        while (line_start < raw.len and (raw[line_start] == '\r' or raw[line_start] == '\n')) {
             line_start += 1;
         }
     }
@@ -268,8 +282,11 @@ pub fn processCors(
     const origin_match = checkOriginMatch(origin, &options.origins);
     if (origin_match == .no) return result;
 
-    if (origin_match == .yes) {
-        const new_vary = try allocator.realloc(result.vary, result.vary.len + 1);
+    if (origin_match != .no) {
+        const new_vary = if (result.vary.len == 0)
+            try allocator.alloc([]u8, 1)
+        else
+            try allocator.realloc(result.vary, result.vary.len + 1);
         new_vary[new_vary.len - 1] = try allocator.dupe(u8, "Origin");
         result.vary = new_vary;
     }
@@ -295,7 +312,10 @@ pub fn processCors(
                 const comma = std.mem.indexOfScalarPos(u8, raw, start, ',') orelse raw.len;
                 const request_header = std.mem.trim(u8, raw[start..comma], " \t");
 
-                if (request_header.len > 0 and !std.ascii.eqlIgnoreCase(request_header, "origin")) {
+                if (request_header.len > 0 and
+                    !std.ascii.eqlIgnoreCase(request_header, "origin") and
+                    !isSimpleRequestHeader(request_header))
+                {
                     var header_allowed = false;
                     for (options.request_headers) |allowed| {
                         if (std.ascii.eqlIgnoreCase(request_header, allowed)) {
