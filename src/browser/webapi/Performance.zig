@@ -286,7 +286,7 @@ pub const JsApi = struct {
     pub const measure = bridge.function(Performance.measure, .{ .dom_exception = true });
     pub const clearMarks = bridge.function(Performance.clearMarks, .{});
     pub const clearMeasures = bridge.function(Performance.clearMeasures, .{});
-    pub const setResourceTimingBufferSize = bridge.function(Performance.setResourceTimingBufferSize, .{.noop = true});
+    pub const setResourceTimingBufferSize = bridge.function(Performance.setResourceTimingBufferSize, .{ .noop = true });
     pub const getEntries = bridge.function(Performance.getEntries, .{});
     pub const getEntriesByType = bridge.function(Performance.getEntriesByType, .{});
     pub const getEntriesByName = bridge.function(Performance.getEntriesByName, .{});
