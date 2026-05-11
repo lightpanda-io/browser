@@ -69,7 +69,7 @@ pending_text: ?PendingText,
 // Single-chunk text runs leave this buf empty: the chunk lives only in
 // CData._data via createTextNode. The buf is seeded from _data.str() on the
 // second chunk of a run, so the common case stays at one copy.
-buf: std.ArrayListUnmanaged(u8),
+buf: std.ArrayList(u8),
 
 pub fn init(arena: Allocator, node: *Node, frame: *Frame) Parser {
     return .{
