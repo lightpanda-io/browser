@@ -312,14 +312,17 @@ fn runRepl(self: *Self) void {
 
         const cmd = Command.parse(line);
 
-        // Distinguish "you typed `TYPE` but forgot the args" from "this is
+        // Distinguish "you mistyped a PandaScript command" from "this is
         // natural language for the LLM". Both fall through to
         // `.natural_language` in Command.parse, but the first should never
-        // hit the LLM-needed error path — it's a syntax mistake on a
-        // PandaScript command.
+        // hit the LLM-needed error path.
         if (std.meta.activeTag(cmd) == .natural_language) {
             if (Command.keywordSyntax(line)) |kc| {
-                self.terminal.printErrorFmt("Usage: {s} {s}", .{ kc.name, kc.args.? });
+                if (kc.args) |args| {
+                    self.terminal.printErrorFmt("Usage: {s} {s}", .{ kc.name, args });
+                } else {
+                    self.terminal.printErrorFmt("{s} takes no arguments", .{kc.name});
+                }
                 continue;
             }
         }

@@ -240,6 +240,7 @@ fn addPartialKeyCompletions(
     schema: *const SlashCommand.SchemaInfo,
     buf: *[completion_buf_len:0]u8,
 ) void {
+    std.debug.assert(input.len > 0);
     const ends_ws = input[input.len - 1] == ' ';
     const a = analyzeBody(schema, body, ends_ws);
     // Without a partial AND without trailing whitespace, the user is mid-typing

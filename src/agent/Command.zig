@@ -189,10 +189,12 @@ pub fn parse(line: []const u8) Command {
     }
 
     if (std.mem.eql(u8, cmd_word, "TREE")) {
+        if (rest.len > 0) return .{ .natural_language = trimmed };
         return .{ .tree = {} };
     }
 
     if (std.mem.eql(u8, cmd_word, "MARKDOWN")) {
+        if (rest.len > 0) return .{ .natural_language = trimmed };
         return .{ .markdown = {} };
     }
 
@@ -207,10 +209,12 @@ pub fn parse(line: []const u8) Command {
     }
 
     if (std.mem.eql(u8, cmd_word, "LOGIN")) {
+        if (rest.len > 0) return .{ .natural_language = trimmed };
         return .{ .login = {} };
     }
 
     if (std.mem.eql(u8, cmd_word, "ACCEPT_COOKIES")) {
+        if (rest.len > 0) return .{ .natural_language = trimmed };
         return .{ .accept_cookies = {} };
     }
 
@@ -219,7 +223,7 @@ pub fn parse(line: []const u8) Command {
 
 pub const KeywordSyntax = struct {
     name: []const u8,
-    /// Null for argless commands.
+    /// Null for argless commands; the agent renders a different error.
     args: ?[]const u8,
 };
 
@@ -242,15 +246,16 @@ pub const keywords = [_]KeywordSyntax{
     .{ .name = "ACCEPT_COOKIES", .args = null },
 };
 
-/// If the first word of `line` is a PandaScript keyword that takes arguments,
-/// returns its expected shape. Argless keywords return null — they always
-/// parse successfully when typed alone, so they never need the syntax-error path.
+/// If the first word of `line` is a recognized PandaScript keyword, returns
+/// its entry. Used by the REPL to surface a syntax error when `Command.parse`
+/// rejects a line whose first word *looked* like a command — either an argful
+/// keyword missing its args, or an argless keyword followed by junk.
 pub fn keywordSyntax(line: []const u8) ?KeywordSyntax {
     const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
     const end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
     const word = trimmed[0..end];
     for (keywords) |kc| {
-        if (kc.args != null and std.mem.eql(u8, word, kc.name)) return kc;
+        if (std.mem.eql(u8, word, kc.name)) return kc;
     }
     return null;
 }
@@ -630,14 +635,22 @@ test "keywordSyntax: trailing whitespace tolerated" {
     try std.testing.expect(keywordSyntax("  GOTO   ") != null);
 }
 
-test "keywordSyntax: argless keyword returns null" {
-    try std.testing.expect(keywordSyntax("LOGIN") == null);
-    try std.testing.expect(keywordSyntax("TREE") == null);
+test "keywordSyntax: argless keyword returns entry with null args" {
+    const k = keywordSyntax("LOGIN").?;
+    try std.testing.expectEqualStrings("LOGIN", k.name);
+    try std.testing.expect(k.args == null);
 }
 
 test "keywordSyntax: unknown word returns null" {
     try std.testing.expect(keywordSyntax("FOOBAR") == null);
     try std.testing.expect(keywordSyntax("click the button") == null);
+}
+
+test "parse argless keyword with trailing junk falls through to natural_language" {
+    try std.testing.expect(parse("LOGIN abc") == .natural_language);
+    try std.testing.expect(parse("TREE foo") == .natural_language);
+    try std.testing.expect(parse("MARKDOWN x") == .natural_language);
+    try std.testing.expect(parse("ACCEPT_COOKIES y") == .natural_language);
 }
 
 test "parse CLICK quoted" {
