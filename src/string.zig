@@ -340,6 +340,18 @@ fn asUint(comptime string: anytype) std.meta.Int(
 }
 
 const testing = @import("testing.zig");
+
+test "isAllUpper" {
+    try testing.expectEqual(false, isAllUpper(""));
+    try testing.expectEqual(true, isAllUpper("GOTO"));
+    try testing.expectEqual(true, isAllUpper("ACCEPT_COOKIES"));
+    try testing.expectEqual(true, isAllUpper("X1"));
+    try testing.expectEqual(true, isAllUpper("_"));
+    try testing.expectEqual(false, isAllUpper("Goto"));
+    try testing.expectEqual(false, isAllUpper("goto"));
+    try testing.expectEqual(false, isAllUpper("GO TO"));
+}
+
 test "String" {
     const other_short = try String.init(undefined, "other_short", .{});
     const other_long = try String.init(testing.allocator, "other_long" ** 100, .{});

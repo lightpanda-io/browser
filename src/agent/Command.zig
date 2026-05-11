@@ -620,6 +620,26 @@ test "parse GOTO missing url" {
     try std.testing.expect(cmd == .natural_language);
 }
 
+test "keywordSyntax: argful keyword without args returns its shape" {
+    const k = keywordSyntax("CLICK").?;
+    try std.testing.expectEqualStrings("CLICK", k.name);
+    try std.testing.expectEqualStrings("'<selector>'", k.args.?);
+}
+
+test "keywordSyntax: trailing whitespace tolerated" {
+    try std.testing.expect(keywordSyntax("  GOTO   ") != null);
+}
+
+test "keywordSyntax: argless keyword returns null" {
+    try std.testing.expect(keywordSyntax("LOGIN") == null);
+    try std.testing.expect(keywordSyntax("TREE") == null);
+}
+
+test "keywordSyntax: unknown word returns null" {
+    try std.testing.expect(keywordSyntax("FOOBAR") == null);
+    try std.testing.expect(keywordSyntax("click the button") == null);
+}
+
 test "parse CLICK quoted" {
     const cmd = parse("CLICK \"Login\"");
     try std.testing.expectEqualStrings("Login", cmd.click);

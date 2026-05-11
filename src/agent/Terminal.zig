@@ -38,7 +38,6 @@ fn atLeast(level: Verbosity, min: Verbosity) bool {
 }
 
 allocator: std.mem.Allocator,
-history_path: ?[:0]const u8,
 verbosity: Verbosity,
 /// Non-null in REPL mode. Doubles as scratch arena for the pretty-printer
 /// (reset per `printToolResult`, so memory is bounded by the largest single
@@ -90,7 +89,6 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
     const stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO);
     return .{
         .allocator = allocator,
-        .history_path = history_path,
         .verbosity = verbosity,
         .repl_arena = if (is_repl) std.heap.ArenaAllocator.init(allocator) else null,
         .stderr_is_tty = stderr_is_tty,
