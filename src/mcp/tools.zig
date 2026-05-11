@@ -332,17 +332,19 @@ fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
 
     var splices = arena.alloc(script.Replacement, args.replacements.len) catch return sendErrorContent(server, id, "out of memory");
 
+    const index = indexLines(arena, content) catch return sendErrorContent(server, id, "out of memory");
+
     for (args.replacements, 0..) |spec, i| {
-        const span = findLineSpan(content, spec.original_line) catch |err| {
-            const reason: []const u8 = switch (err) {
-                error.NotFound => "original_line not found verbatim",
-                error.Ambiguous => "original_line matches more than one line; make it unique to disambiguate",
-            };
-            const msg = std.fmt.allocPrint(arena, "{s}: `{s}`", .{ reason, spec.original_line }) catch reason;
+        const entry = index.get(spec.original_line) orelse {
+            const msg = std.fmt.allocPrint(arena, "original_line not found verbatim: `{s}`", .{spec.original_line}) catch "original_line not found verbatim";
             return sendErrorContent(server, id, msg);
         };
+        if (entry.dup) {
+            const msg = std.fmt.allocPrint(arena, "original_line matches more than one line; make it unique to disambiguate: `{s}`", .{spec.original_line}) catch "original_line matches more than one line; make it unique to disambiguate";
+            return sendErrorContent(server, id, msg);
+        }
 
-        splices[i] = script.formatHealReplacementLines(arena, span, spec.original_line, spec.replacement_lines) catch |err|
+        splices[i] = script.formatHealReplacementLines(arena, entry.span, spec.original_line, spec.replacement_lines) catch |err|
             return sendErrorContent(server, id, @errorName(err));
     }
 
@@ -355,27 +357,30 @@ fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     try sendToolResultText(server, id, msg, false);
 }
 
-/// Find a line in `content` that exactly equals `line` (after trimming the
-/// trailing newline). Returns the slice covering the line plus its
-/// terminating `\n` if present, ready for `script.applyReplacements`.
-/// Errors if the line is missing or matches more than once — a duplicate
-/// match would silently rewrite the wrong line and break
-/// applyReplacements' non-overlapping invariant.
-fn findLineSpan(content: []const u8, line: []const u8) error{ NotFound, Ambiguous }![]const u8 {
+const LineEntry = struct { span: []const u8, dup: bool };
+
+/// Walk `content` once and map each unique line to the slice covering that
+/// line plus its terminating `\n`. Duplicate lines are flagged via `dup` so
+/// the caller can reject ambiguous matches — `applyReplacements`'
+/// non-overlapping invariant would break if two specs resolved to the same
+/// span.
+fn indexLines(arena: std.mem.Allocator, content: []const u8) !std.StringHashMapUnmanaged(LineEntry) {
+    var index: std.StringHashMapUnmanaged(LineEntry) = .empty;
     var pos: usize = 0;
-    var found: ?[]const u8 = null;
     while (pos <= content.len) {
         const nl = std.mem.indexOfScalarPos(u8, content, pos, '\n') orelse content.len;
         const this_line = content[pos..nl];
-        if (std.mem.eql(u8, this_line, line)) {
-            if (found != null) return error.Ambiguous;
-            const end = if (nl < content.len) nl + 1 else nl;
-            found = content[pos..end];
+        const end = if (nl < content.len) nl + 1 else nl;
+        const gop = try index.getOrPut(arena, this_line);
+        if (gop.found_existing) {
+            gop.value_ptr.dup = true;
+        } else {
+            gop.value_ptr.* = .{ .span = content[pos..end], .dup = false };
         }
         if (nl == content.len) break;
         pos = nl + 1;
     }
-    return found orelse error.NotFound;
+    return index;
 }
 
 fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
@@ -419,26 +424,38 @@ test "MCP - eval error reporting" {
     } }, out.written());
 }
 
-test "MCP - findLineSpan: exact match returns line + trailing newline" {
+test "MCP - indexLines: exact match returns line + trailing newline" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
     const content = "GOTO https://x\nCLICK 'old'\nWAIT '.thanks'\n";
-    const span = try findLineSpan(content, "CLICK 'old'");
-    try std.testing.expectEqualStrings("CLICK 'old'\n", span);
+    const index = try indexLines(arena.allocator(), content);
+    const entry = index.get("CLICK 'old'").?;
+    try std.testing.expect(!entry.dup);
+    try std.testing.expectEqualStrings("CLICK 'old'\n", entry.span);
 }
 
-test "MCP - findLineSpan: no match returns NotFound" {
+test "MCP - indexLines: missing line absent from index" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
     const content = "GOTO https://x\nCLICK 'a'\n";
-    try std.testing.expectError(error.NotFound, findLineSpan(content, "CLICK 'b'"));
+    const index = try indexLines(arena.allocator(), content);
+    try std.testing.expect(index.get("CLICK 'b'") == null);
 }
 
-test "MCP - findLineSpan: last line without trailing newline" {
+test "MCP - indexLines: last line without trailing newline" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
     const content = "GOTO https://x\nCLICK 'last'";
-    const span = try findLineSpan(content, "CLICK 'last'");
-    try std.testing.expectEqualStrings("CLICK 'last'", span);
+    const index = try indexLines(arena.allocator(), content);
+    try std.testing.expectEqualStrings("CLICK 'last'", index.get("CLICK 'last'").?.span);
 }
 
-test "MCP - findLineSpan: duplicate line returns Ambiguous" {
+test "MCP - indexLines: duplicate line flagged dup" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
     const content = "CLICK 'go'\nWAIT '.x'\nCLICK 'go'\n";
-    try std.testing.expectError(error.Ambiguous, findLineSpan(content, "CLICK 'go'"));
+    const index = try indexLines(arena.allocator(), content);
+    try std.testing.expect(index.get("CLICK 'go'").?.dup);
 }
 
 test "MCP - record_start rejects unsafe path" {
