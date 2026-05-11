@@ -2147,15 +2147,14 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                             self.js.localScope(&ls);
                             defer ls.deinit();
 
-                            var try_catch: JS.TryCatch = undefined;
-                            try_catch.init(&ls.local);
-                            defer try_catch.deinit();
-
                             for (inject_scripts) |inject_script| {
+                                var try_catch: JS.TryCatch = undefined;
+                                try_catch.init(&ls.local);
+                                defer try_catch.deinit();
+
                                 ls.local.eval(inject_script, "inject_script") catch |err| {
                                     const caught = try_catch.caughtOrError(self.call_arena, err);
                                     log.err(.app, "inject script error", .{ .err = caught });
-                                    return error.InjectScriptError;
                                 };
                             }
                         }
@@ -4110,6 +4109,12 @@ test "WebApi: Frames" {
 
 test "WebApi: Integration" {
     try testing.htmlRunner("integration", .{});
+}
+
+test "WebApi: inject_script" {
+    try testing.htmlRunner("inject_script.html", .{
+        .inject_script = "window.__injected = true; window.__injectValue = 42;",
+    });
 }
 
 test "Page: isSameOrigin" {
