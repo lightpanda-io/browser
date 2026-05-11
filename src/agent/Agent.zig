@@ -724,7 +724,8 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
     var cmds: std.ArrayList(Command.Command) = .empty;
     for (result.tool_calls_made) |tc| {
         if (tc.is_error) continue;
-        const cmd = Command.fromToolCall(ma, tc.name, tc.arguments) orelse continue;
+        const args = tc.arguments orelse continue;
+        const cmd = Command.fromToolCallValue(tc.name, args) orelse continue;
         if (!isHealAllowed(cmd)) {
             self.terminal.printInfoFmt(
                 "self-heal: ignoring {s} (navigation and eval are not allowed during heal)",
@@ -880,7 +881,8 @@ fn processUserMessage(self: *Self, input: TurnInput) !?[]const u8 {
         var recorded_any = false;
         for (result.tool_calls_made) |tc| {
             if (tc.is_error) continue;
-            const cmd = Command.fromToolCall(ma, tc.name, tc.arguments) orelse continue;
+            const args = tc.arguments orelse continue;
+            const cmd = Command.fromToolCallValue(tc.name, args) orelse continue;
             if (!recorded_any) {
                 if (input.record_comment) |c| self.recorder.recordComment(c);
                 recorded_any = true;
@@ -1006,13 +1008,17 @@ fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
     return std.fmt.allocPrint(allocator, "{s}\n...[truncated, original {d} bytes]", .{ prefix, output.len }) catch prefix;
 }
 
-fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) zenai.provider.Client.ToolHandler.Result {
+fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
     const self: *Self = @ptrCast(@alignCast(ctx));
-    self.terminal.spinner.setTool(tool_name, arguments);
+    const args_str: []const u8 = if (arguments) |v|
+        std.json.Stringify.valueAlloc(allocator, v, .{}) catch ""
+    else
+        "";
+    self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
-    if (self.tool_executor.call(allocator, tool_name, arguments)) |output| {
+    if (self.tool_executor.callValue(allocator, tool_name, arguments)) |output| {
         const capped = capToolOutput(allocator, output);
-        self.terminal.agentToolDone(tool_name, arguments, true);
+        self.terminal.agentToolDone(tool_name, args_str, true);
         // Only `high` keeps the per-call body line — benchmark harness parses it.
         if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, capped);
         return .{ .content = capped };
@@ -1021,7 +1027,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
         // Errors go back to the model so it can self-correct. The red
         // bullet (per-line) or red spinner label is the user-facing
         // failure signal; we only print the body at `high` (harness).
-        self.terminal.agentToolDone(tool_name, arguments, false);
+        self.terminal.agentToolDone(tool_name, args_str, false);
         if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, msg);
         return .{ .content = msg, .is_error = true };
     }
