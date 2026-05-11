@@ -1,5 +1,7 @@
 # AGENTS.md
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to open a pull request (CLA, dev setup, pre-PR checks).
+
 ## Tests
 
 ```bash
