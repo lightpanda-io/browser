@@ -225,23 +225,28 @@ pub const KeywordSyntax = struct {
     name: []const u8,
     /// Null for argless commands; the agent renders a different error.
     args: ?[]const u8,
+    /// Tab-completion suffix shown after a fully-typed keyword. Designed so
+    /// Tab does something useful (open the quote, insert a URL scheme) rather
+    /// than inserting an angle-bracket template. Null when no good starter
+    /// exists (numeric args, argless commands).
+    starter: ?[]const u8 = null,
 };
 
 /// Single source of truth for PandaScript keyword names — consumed by the
 /// parser, the REPL highlighter, and Tab completion.
 pub const keywords = [_]KeywordSyntax{
-    .{ .name = "GOTO", .args = "<url>" },
-    .{ .name = "CLICK", .args = "'<selector>'" },
-    .{ .name = "TYPE", .args = "'<selector>' '<value>'" },
-    .{ .name = "WAIT", .args = "'<selector>'" },
+    .{ .name = "GOTO", .args = "<url>", .starter = " https://www." },
+    .{ .name = "CLICK", .args = "'<selector>'", .starter = " '" },
+    .{ .name = "TYPE", .args = "'<selector>' '<value>'", .starter = " '" },
+    .{ .name = "WAIT", .args = "'<selector>'", .starter = " '" },
     .{ .name = "SCROLL", .args = "[x] [y]" },
-    .{ .name = "HOVER", .args = "'<selector>'" },
-    .{ .name = "SELECT", .args = "'<selector>' '<value>'" },
-    .{ .name = "CHECK", .args = "'<selector>' [true|false]" },
+    .{ .name = "HOVER", .args = "'<selector>'", .starter = " '" },
+    .{ .name = "SELECT", .args = "'<selector>' '<value>'", .starter = " '" },
+    .{ .name = "CHECK", .args = "'<selector>' [true|false]", .starter = " '" },
     .{ .name = "TREE", .args = null },
     .{ .name = "MARKDOWN", .args = null },
-    .{ .name = "EXTRACT", .args = "'<selector>'" },
-    .{ .name = "EVAL", .args = "'<script>'" },
+    .{ .name = "EXTRACT", .args = "'<selector>'", .starter = " '" },
+    .{ .name = "EVAL", .args = "'<script>'", .starter = " '" },
     .{ .name = "LOGIN", .args = null },
     .{ .name = "ACCEPT_COOKIES", .args = null },
 };

@@ -215,13 +215,32 @@ fn analyzeBody(schema: *const SlashCommand.SchemaInfo, body: []const u8, ends_ws
             a.markUsed(tok[0..eq]);
             continue;
         }
+        // Single-required schemas accept the first arg positionally
+        // (`/goto https://...`). But while the user is still typing the
+        // *first* in-progress token and it looks like a bare identifier,
+        // assume they may be typing the key name (`/goto u` → `url=`) and
+        // let the partial-key path drive completion. As soon as they type
+        // a non-identifier character (`:`, `/`, …) we fall through to the
+        // positional shortcut.
         if (i == 0 and schema.required.len == 1) {
+            if (i == last and !ends_ws and looksLikeIdent(tok)) {
+                a.partial_key = tok;
+                continue;
+            }
             a.markUsed(schema.required[0]);
             continue;
         }
         if (i == last and !ends_ws) a.partial_key = tok;
     }
     return a;
+}
+
+fn looksLikeIdent(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |ch| {
+        if (!std.ascii.isAlphanumeric(ch) and ch != '_') return false;
+    }
+    return true;
 }
 
 const help_arg_prefix = "/help ";
@@ -305,13 +324,35 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
             // Fall through so `value=$LP_` picks up env completions.
         } else {
             const partial = input[1..];
+            // Fully-typed slash command → emit `/name <first_required>=` as a
+            // single completion so isocline shows the first arg as the inline
+            // ghost hint. Tab opens the key-value pair; user types the value.
+            if (SlashCommand.findSchema(self.slash_schemas, partial)) |schema| {
+                if (schema.required.len > 0) {
+                    const text = std.fmt.bufPrintZ(&buf, "{s} {s}=", .{ input, schema.required[0] }) catch return;
+                    _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
+                    return;
+                }
+            }
             for (all_slash_names) |name| addPrefixedCompletion(cenv, &buf, input, "/", name, "", partial);
             return;
         }
     } else if (!has_space) {
         // Case-insensitive so Tab rewrites mistyped lowercase (`goto` → `GOTO`);
         // the highlighter stays case-sensitive.
-        for (Command.keywords) |kw| addPrefixedCompletion(cenv, &buf, input, "", kw.name, "", input);
+        if (exactKeywordMatch(input)) |kw| {
+            // Full keyword typed — emit a single completion `<name><starter>`
+            // so isocline renders the starter as the inline ghost hint
+            // (isocline shows hints only when there's exactly one candidate).
+            // The starter is designed so Tab does something useful: open the
+            // quote for selector commands, insert `https://www.` for GOTO.
+            if (kw.starter) |starter| {
+                const text = std.fmt.bufPrintZ(&buf, "{s}{s}", .{ kw.name, starter }) catch return;
+                _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
+            }
+        } else {
+            for (Command.keywords) |kw| addPrefixedCompletion(cenv, &buf, input, "", kw.name, "", input);
+        }
     }
 
     self.addEnvVarCompletions(cenv, &buf, input);
@@ -355,6 +396,13 @@ fn isKnownCommand(name: []const u8) bool {
         if (std.mem.eql(u8, kw.name, name)) return true;
     }
     return false;
+}
+
+fn exactKeywordMatch(input: []const u8) ?Command.KeywordSyntax {
+    for (Command.keywords) |kw| {
+        if (std.ascii.eqlIgnoreCase(kw.name, input)) return kw;
+    }
+    return null;
 }
 
 fn isKnownSlashName(name: []const u8) bool {
