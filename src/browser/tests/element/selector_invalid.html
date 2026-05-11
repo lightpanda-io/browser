@@ -10,9 +10,9 @@
     const container = $('#container');
 
     // Empty functional pseudo-classes should error
-    testing.expectError("Error: InvalidPseudoClass", () => container.querySelector(':has()'));
-    testing.expectError("Error: InvalidPseudoClass", () => container.querySelector(':not()'));
-    testing.expectError("Error: InvalidPseudoClass", () => container.querySelector(':lang()'));
+    testing.expectError("SyntaxError", () => container.querySelector(':has()'));
+    testing.expectError("SyntaxError", () => container.querySelector(':not()'));
+    testing.expectError("SyntaxError", () => container.querySelector(':lang()'));
 }
 </script>
 
@@ -21,9 +21,9 @@
     const container = $('#container');
 
     // Invalid nth patterns
-    testing.expectError("Error: InvalidNthPattern", () => container.querySelector(':nth-child(foo)'));
-    testing.expectError("Error: InvalidNthPattern", () => container.querySelector(':nth-child(-)'));
-    testing.expectError("Error: InvalidNthPattern", () => container.querySelector(':nth-child(+)'));
+    testing.expectError("SyntaxError", () => container.querySelector(':nth-child(foo)'));
+    testing.expectError("SyntaxError", () => container.querySelector(':nth-child(-)'));
+    testing.expectError("SyntaxError", () => container.querySelector(':nth-child(+)'));
 }
 </script>
 
@@ -32,9 +32,9 @@
     const container = $('#container');
 
     // Unknown pseudo-classes
-    testing.expectError("Error: UnknownPseudoClass", () => container.querySelector(':unknown'));
-    testing.expectError("Error: UnknownPseudoClass", () => container.querySelector(':not-a-real-pseudo'));
-    testing.expectError("Error: UnknownPseudoClass", () => container.querySelector(':fake(test)'));
+    testing.expectError("SyntaxError", () => container.querySelector(':unknown'));
+    testing.expectError("SyntaxError", () => container.querySelector(':not-a-real-pseudo'));
+    testing.expectError("SyntaxError", () => container.querySelector(':fake(test)'));
 }
 </script>
 
@@ -53,8 +53,8 @@
     const container = $('#container');
 
     // Combinators with nothing after
-    testing.expectError("Error: InvalidSelector", () => container.querySelector('p >'));
-    testing.expectError("Error: InvalidSelector", () => container.querySelector('p +'));
-    testing.expectError("Error: InvalidSelector", () => container.querySelector('p ~'));
+    testing.expectError("SyntaxError", () => container.querySelector('p >'));
+    testing.expectError("SyntaxError", () => container.querySelector('p +'));
+    testing.expectError("SyntaxError", () => container.querySelector('p ~'));
 }
 </script>

@@ -1071,15 +1071,15 @@ pub fn getChildElementCount(self: *Element) usize {
 }
 
 pub fn matches(self: *Element, selector: []const u8, frame: *Frame) !bool {
-    return Selector.matches(self, selector, frame);
+    return Selector.matches(self, selector, frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
 pub fn querySelector(self: *Element, selector: []const u8, frame: *Frame) !?*Element {
-    return Selector.querySelector(self.asNode(), selector, frame);
+    return Selector.querySelector(self.asNode(), selector, frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
 pub fn querySelectorAll(self: *Element, input: []const u8, frame: *Frame) !*Selector.List {
-    return Selector.querySelectorAll(self.asNode(), input, frame);
+    return Selector.querySelectorAll(self.asNode(), input, frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
 pub fn getAnimations(_: *const Element) []*Animation {

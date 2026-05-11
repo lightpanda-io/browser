@@ -166,7 +166,7 @@ pub fn findAdjacentNodes(self: *Node, position: []const u8) !struct { *Node, ?*N
     // Returned if:
     // * position is not one of the four listed values.
     // * The input is XML that is not well-formed.
-    return error.Syntax;
+    return error.SyntaxError;
 }
 
 pub fn firstChild(self: *const Node) ?*Node {

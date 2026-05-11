@@ -121,7 +121,18 @@ pub fn asEventTarget(self: *Document) *@import("EventTarget.zig") {
 }
 
 pub fn getURL(self: *const Document, frame: *const Frame) [:0]const u8 {
-    return self._url orelse frame.url;
+    return self._url orelse (self._frame orelse frame).url;
+}
+
+pub fn getLocation(self: *const Document) ?*Location {
+    if (self._type != .html) return null;
+    const doc_frame = self._frame orelse return null;
+    return doc_frame.window._location;
+}
+
+pub fn setLocation(self: *Document, url: [:0]const u8, frame: *Frame) !void {
+    if (self._type != .html) return;
+    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._frame });
 }
 
 pub fn getContentType(self: *const Document) []const u8 {
@@ -279,11 +290,11 @@ pub fn getSelection(self: *Document) *Selection {
 }
 
 pub fn querySelector(self: *Document, input: String, frame: *Frame) !?*Element {
-    return Selector.querySelector(self.asNode(), input.str(), frame);
+    return Selector.querySelector(self.asNode(), input.str(), frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
 pub fn querySelectorAll(self: *Document, input: String, frame: *Frame) !*Selector.List {
-    return Selector.querySelectorAll(self.asNode(), input.str(), frame);
+    return Selector.querySelectorAll(self.asNode(), input.str(), frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
 pub fn getImplementation(self: *Document, frame: *Frame) !*DOMImplementation {
@@ -505,13 +516,19 @@ pub fn getFonts(self: *Document, frame: *Frame) !*FontFaceSet {
     return fonts;
 }
 
-pub fn adoptNode(_: *const Document, node: *Node, frame: *Frame) !*Node {
+pub fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
     if (node._type == .document) {
         return error.NotSupported;
     }
 
+    const old_owner = node.ownerDocument(frame) orelse frame.document;
+
     if (node._parent) |parent| {
         frame.removeNode(parent, node, .{ .will_be_reconnected = false });
+    }
+
+    if (old_owner != self) {
+        try frame.adoptNodeTree(node, old_owner, self);
     }
 
     return node;
@@ -1075,6 +1092,7 @@ pub const JsApi = struct {
 
     pub const onselectionchange = bridge.accessor(Document.getOnSelectionChange, Document.setOnSelectionChange, .{});
     pub const URL = bridge.accessor(Document.getURL, null, .{});
+    pub const location = bridge.accessor(Document.getLocation, Document.setLocation, .{});
     pub const documentURI = bridge.accessor(Document.getURL, null, .{});
     pub const documentElement = bridge.accessor(Document.getDocumentElement, null, .{});
     pub const scrollingElement = bridge.accessor(Document.getDocumentElement, null, .{});

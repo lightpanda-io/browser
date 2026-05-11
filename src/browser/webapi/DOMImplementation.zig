@@ -78,7 +78,7 @@ pub fn createDocument(_: *const DOMImplementation, namespace_: ?[]const u8, qual
     // Create and append root element if qualified_name provided
     if (qualified_name) |qname| {
         if (qname.len > 0) {
-            const namespace = if (namespace_) |ns| Node.Element.Namespace.parse(ns) else .xml;
+            const namespace = Node.Element.Namespace.parse(namespace_);
             const root = try frame.createElementNS(namespace, qname, null);
             _ = try document.asNode().appendChild(root, frame);
         }
