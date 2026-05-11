@@ -431,26 +431,19 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
     const idx = target_index orelse return error.InvalidParams;
     const url = target_url orelse return error.InvalidParams;
 
-    var frame = session.currentFrame() orelse return error.FrameNotLoaded;
-    if (frame._load_state != .waiting) {
-        // Reset isolated world identities to disable V8 weak callbacks before
-        // resetPageResources releases refs. Mirrors the navigate / doReload path.
-        for (bc.isolated_worlds.items) |isolated_world| {
-            isolated_world.identity.deinit();
-            isolated_world.identity = .{};
-        }
-        frame = try session.replacePage();
-    }
+    const frame = session.currentFrame() orelse return error.FrameNotLoaded;
 
-    // Duplicate the URL into the new frame's arena: replacePage above released
-    // the previous arena that backed the entry's _url string.
-    const dup_url = try frame.arena.dupeZ(u8, url);
-
-    try frame.navigate(dup_url, .{
+    const opts = Frame.NavigateOpts{
         .reason = .history,
         .cdp_id = cmd.input.id,
         .kind = .{ .traverse = idx },
-    });
+    };
+
+    if (frame._load_state == .waiting) {
+        return frame.navigate(url, opts);
+    }
+
+    try session.initiateRootNavigation(frame._frame_id, url, opts);
 }
 
 pub fn frameNavigate(bc: *CDP.BrowserContext, event: *const Notification.FrameNavigate) !void {
