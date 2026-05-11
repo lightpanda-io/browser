@@ -2,6 +2,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const browser_tools = lp.tools;
 const Config = lp.Config;
+const Command = @import("Command.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const Spinner = @import("Spinner.zig");
 const c = @cImport({
@@ -39,25 +40,6 @@ spinner: Spinner,
 /// `setSlashSchemas` is called.
 slash_schemas: []const SlashCommand.SchemaInfo = &.{},
 
-const CommandInfo = struct { name: [:0]const u8 };
-
-const commands = [_]CommandInfo{
-    .{ .name = "GOTO" },
-    .{ .name = "CLICK" },
-    .{ .name = "TYPE" },
-    .{ .name = "WAIT" },
-    .{ .name = "SCROLL" },
-    .{ .name = "HOVER" },
-    .{ .name = "SELECT" },
-    .{ .name = "CHECK" },
-    .{ .name = "TREE" },
-    .{ .name = "MARKDOWN" },
-    .{ .name = "EXTRACT" },
-    .{ .name = "EVAL" },
-    .{ .name = "LOGIN" },
-    .{ .name = "ACCEPT_COOKIES" },
-};
-
 // Meta slash commands handled directly by the agent (not by ToolExecutor).
 // Kept in sync with `handleSlash` in `Agent.zig`. Only the names matter for
 // completion; arg hints are not surfaced separately (the menu is enough).
@@ -83,7 +65,7 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
     _ = c.ic_enable_multiline(true);
     _ = c.ic_enable_hint(true);
     _ = c.ic_enable_inline_help(true);
-    // Match linenoise's instant ghost behavior; default is 400 ms.
+    // Show ghost completions instantly; isocline's default is 400 ms.
     _ = c.ic_set_hint_delay(0);
     _ = c.ic_enable_brace_insertion(true);
     // `ps-*` namespace avoids colliding with isocline's built-in `ic-*` styles.
@@ -119,8 +101,6 @@ pub fn deinit(self: *Self) void {
     if (self.repl_arena) |*a| a.deinit();
 }
 
-// Shared between the spinner-emit path (writes to an arena buffer) and the
-// non-spinner TTY path (writes to stderr via std.debug.print).
 const bullet_line_fmt = "{s}●{s} {s}[tool: {s}]{s} {s}\n";
 
 /// Called after the tool returns.
@@ -326,9 +306,9 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
     } else if (!has_space) {
         // Case-insensitive here so Tab also rewrites mistyped lowercase
         // (`goto` → `GOTO`); the highlighter stays case-sensitive.
-        for (commands) |cmd| {
-            if (std.ascii.startsWithIgnoreCase(cmd.name, input)) {
-                const text = std.fmt.bufPrintZ(&buf, "{s}", .{cmd.name}) catch continue;
+        for (Command.keywords) |kw| {
+            if (std.ascii.startsWithIgnoreCase(kw.name, input)) {
+                const text = std.fmt.bufPrintZ(&buf, "{s}", .{kw.name}) catch continue;
                 _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
             }
         }
@@ -368,16 +348,16 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*a
 }
 
 fn isAllUpper(s: []const u8) bool {
-    for (s) |ch| switch (ch) {
-        'A'...'Z', '_', '0'...'9' => {},
-        else => return false,
-    };
-    return s.len > 0;
+    if (s.len == 0) return false;
+    for (s) |ch| {
+        if (!std.ascii.isUpper(ch) and !std.ascii.isDigit(ch) and ch != '_') return false;
+    }
+    return true;
 }
 
 fn isKnownCommand(name: []const u8) bool {
-    for (commands) |cmd| {
-        if (std.mem.eql(u8, cmd.name, name)) return true;
+    for (Command.keywords) |kw| {
+        if (std.mem.eql(u8, kw.name, name)) return true;
     }
     return false;
 }

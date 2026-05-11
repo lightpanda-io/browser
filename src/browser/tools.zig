@@ -919,27 +919,26 @@ fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]
         if (lookupLpEnv(name)) |value| return value;
         return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{name}) catch ToolError.InternalError;
     }
-    return listLpEnvNames(arena);
+
+    const names = lpEnvNames(arena) catch return ToolError.InternalError;
+    return formatLpEnvNames(arena, names);
 }
 
-fn lpNameLessThan(_: void, a: []const u8, b: []const u8) bool {
-    return std.mem.lessThan(u8, a, b);
-}
-
-fn listLpEnvNames(arena: std.mem.Allocator) ToolError![]const u8 {
-    var lines: std.ArrayList([]const u8) = .empty;
-    lines.ensureTotalCapacity(arena, std.os.environ.len) catch return ToolError.InternalError;
-    for (std.os.environ) |entry| {
-        lines.appendAssumeCapacity(std.mem.span(entry));
+fn formatLpEnvNames(arena: std.mem.Allocator, names: []const []const u8) ToolError![]const u8 {
+    if (names.len == 0) return "No LP_* environment variables are set.";
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    aw.writer.print("LP_* environment variables ({d}):\n", .{names.len}) catch return ToolError.InternalError;
+    for (names) |n| {
+        aw.writer.print("  {s}\n", .{n}) catch return ToolError.InternalError;
     }
-    return formatLpEnvNames(arena, lines.items);
+    return aw.written();
 }
 
 /// Sorted `LP_*`-prefixed environment-variable names from the current
 /// process. Returned slices point into `std.os.environ`, which is stable for
 /// the process lifetime; the outer slice is allocated from `arena`. Used by
-/// the agent REPL completer to offer `$LP_*` Tab completions — same data
-/// source as the `getEnv` tool (no-name variant), just unformatted.
+/// the agent REPL completer to offer `$LP_*` Tab completions and by
+/// `execGetEnv` for the no-name variant.
 pub fn lpEnvNames(arena: std.mem.Allocator) error{OutOfMemory}![]const []const u8 {
     var names: std.ArrayList([]const u8) = .empty;
     try names.ensureTotalCapacity(arena, std.os.environ.len);
@@ -950,27 +949,12 @@ pub fn lpEnvNames(arena: std.mem.Allocator) error{OutOfMemory}![]const []const u
         if (!std.ascii.startsWithIgnoreCase(name, "LP_")) continue;
         names.appendAssumeCapacity(name);
     }
-    std.mem.sort([]const u8, names.items, {}, lpNameLessThan);
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lt);
     return names.items;
-}
-
-fn formatLpEnvNames(arena: std.mem.Allocator, env_lines: []const []const u8) ToolError![]const u8 {
-    var names: std.ArrayList([]const u8) = .empty;
-    for (env_lines) |line| {
-        const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
-        const name = line[0..eq_idx];
-        if (!std.ascii.startsWithIgnoreCase(name, "LP_")) continue;
-        names.append(arena, name) catch return ToolError.InternalError;
-    }
-    if (names.items.len == 0) return "No LP_* environment variables are set.";
-    std.mem.sort([]const u8, names.items, {}, lpNameLessThan);
-
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    aw.writer.print("LP_* environment variables ({d}):\n", .{names.items.len}) catch return ToolError.InternalError;
-    for (names.items) |n| {
-        aw.writer.print("  {s}\n", .{n}) catch return ToolError.InternalError;
-    }
-    return aw.written();
 }
 
 /// Resolve an LP_-prefixed environment variable, or `null` for any other name.
@@ -1210,31 +1194,25 @@ test "execGetEnv hides non-LP_ values even when set" {
     );
 }
 
-test "formatLpEnvNames lists names without values" {
+test "formatLpEnvNames renders names without values" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const lines = [_][]const u8{
-        "LP_FOO=secret",
-        "HOME=/home/x",
-        "LP_BAR=other-secret",
-    };
-    const r = try formatLpEnvNames(aa, &lines);
+    const names = [_][]const u8{ "LP_BAR", "LP_FOO" };
+    const r = try formatLpEnvNames(aa, &names);
 
     try std.testing.expect(std.mem.indexOf(u8, r, "LP_FOO") != null);
     try std.testing.expect(std.mem.indexOf(u8, r, "LP_BAR") != null);
-    try std.testing.expect(std.mem.indexOf(u8, r, "HOME") == null);
     try std.testing.expect(std.mem.indexOf(u8, r, "secret") == null);
 }
 
-test "formatLpEnvNames reports empty when no LP_* entries" {
+test "formatLpEnvNames reports empty when no names" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const lines = [_][]const u8{"HOME=/home/x"};
-    const r = try formatLpEnvNames(aa, &lines);
+    const r = try formatLpEnvNames(aa, &.{});
     try std.testing.expectEqualStrings("No LP_* environment variables are set.", r);
 }
 

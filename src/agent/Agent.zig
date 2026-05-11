@@ -319,7 +319,7 @@ fn runRepl(self: *Self) void {
         // PandaScript command.
         if (std.meta.activeTag(cmd) == .natural_language) {
             if (Command.keywordSyntax(line)) |kc| {
-                self.terminal.printErrorFmt("Usage: {s} {s}", .{ kc.name, kc.args });
+                self.terminal.printErrorFmt("Usage: {s} {s}", .{ kc.name, kc.args.? });
                 continue;
             }
         }
