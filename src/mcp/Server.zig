@@ -77,9 +77,17 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self);
 }
 
+pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {
+    return self.transport.sendError(id, code, message);
+}
+
+pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
+    return self.transport.sendResult(id, result);
+}
+
 pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
     const id = req.id orelse return;
-    try self.transport.sendResult(id, protocol.InitializeResult{
+    try self.sendResult(id, protocol.InitializeResult{
         .protocolVersion = @tagName(protocol.Version.default),
         .capabilities = .{
             .resources = .{},

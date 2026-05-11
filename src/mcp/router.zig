@@ -22,7 +22,7 @@ pub fn processRequests(server: anytype, reader: *std.io.Reader) !void {
         const buffered_line = reader.takeDelimiter('\n') catch |err| switch (err) {
             error.StreamTooLong => {
                 log.err(.mcp, "Message too long", .{});
-                try server.transport.sendError(.null, .InvalidRequest, "Message too long");
+                try server.sendError(.null, .InvalidRequest, "Message too long");
                 continue;
             },
             else => return err,
@@ -62,13 +62,13 @@ pub fn handleMessage(server: anytype, arena: std.mem.Allocator, msg: []const u8)
         .ignore_unknown_fields = true,
     }) catch |err| {
         log.warn(.mcp, "JSON Parse Error", .{ .err = err, .msg = msg });
-        try server.transport.sendError(.null, .ParseError, "Parse error");
+        try server.sendError(.null, .ParseError, "Parse error");
         return;
     };
 
     const method = method_map.get(req.method) orelse {
         if (req.id != null) {
-            try server.transport.sendError(req.id.?, .MethodNotFound, "Method not found");
+            try server.sendError(req.id.?, .MethodNotFound, "Method not found");
         }
         return;
     };
@@ -88,13 +88,13 @@ fn handleOptional(server: anytype, req: protocol.Request, comptime method: []con
     if (@hasDecl(@TypeOf(server.*), method)) {
         try @call(.auto, @field(@TypeOf(server.*), method), .{server} ++ args);
     } else if (req.id) |id| {
-        try server.transport.sendError(id, .MethodNotFound, "Method not supported");
+        try server.sendError(id, .MethodNotFound, "Method not supported");
     }
 }
 
 fn handlePing(server: anytype, req: protocol.Request) !void {
     const id = req.id orelse return;
-    try server.transport.sendResult(id, .{});
+    try server.sendResult(id, .{});
 }
 
 const Server = @import("Server.zig");

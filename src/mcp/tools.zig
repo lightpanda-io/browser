@@ -112,25 +112,38 @@ const extra_tools = [_]protocol.Tool{
 
 const all_tools = browser_tool_list ++ extra_tools;
 
+/// Tools that bypass the browser-tool dispatch and have their own handlers.
+const ExtraTool = enum {
+    record_start,
+    record_stop,
+    record_comment,
+    script_step,
+    script_heal,
+};
+
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     _ = arena;
     const id = req.id orelse return;
-    try server.transport.sendResult(id, .{ .tools = &all_tools });
+    try server.sendResult(id, .{ .tools = &all_tools });
 }
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     const id = req.id orelse return;
-    const params = req.params orelse return server.transport.sendError(id, .InvalidParams, "Missing params");
+    const params = req.params orelse return server.sendError(id, .InvalidParams, "Missing params");
 
     const call_params = browser_tools.parseValue(protocol.CallParams, arena, params) catch {
-        return server.transport.sendError(id, .InvalidParams, "Invalid params");
+        return server.sendError(id, .InvalidParams, "Invalid params");
     };
 
-    if (std.mem.eql(u8, call_params.name, "record_start")) return handleRecordStart(server, arena, id, call_params.arguments);
-    if (std.mem.eql(u8, call_params.name, "record_stop")) return handleRecordStop(server, arena, id);
-    if (std.mem.eql(u8, call_params.name, "record_comment")) return handleRecordComment(server, arena, id, call_params.arguments);
-    if (std.mem.eql(u8, call_params.name, "script_step")) return handleScriptStep(server, arena, id, call_params.arguments);
-    if (std.mem.eql(u8, call_params.name, "script_heal")) return handleScriptHeal(server, arena, id, call_params.arguments);
+    if (std.meta.stringToEnum(ExtraTool, call_params.name)) |tool| {
+        return switch (tool) {
+            .record_start => handleRecordStart(server, arena, id, call_params.arguments),
+            .record_stop => handleRecordStop(server, arena, id),
+            .record_comment => handleRecordComment(server, arena, id, call_params.arguments),
+            .script_step => handleScriptStep(server, arena, id, call_params.arguments),
+            .script_heal => handleScriptHeal(server, arena, id, call_params.arguments),
+        };
+    }
 
     return dispatchBrowserTool(server, arena, id, call_params.name, call_params.arguments);
 }
@@ -146,7 +159,7 @@ fn dispatchBrowserTool(
     arguments: ?std.json.Value,
 ) !void {
     const action = std.meta.stringToEnum(browser_tools.Action, name) orelse {
-        return server.transport.sendError(id, .MethodNotFound, "Tool not found");
+        return server.sendError(id, .MethodNotFound, "Tool not found");
     };
 
     // JS errors are returned as isError tool results, not protocol errors
@@ -162,7 +175,7 @@ fn dispatchBrowserTool(
             error.NodeNotFound, error.InvalidParams => .InvalidParams,
             error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
         };
-        return server.transport.sendError(id, code, @errorName(err));
+        return server.sendError(id, code, @errorName(err));
     };
 
     recordIfActive(server, name, arguments);
@@ -186,7 +199,7 @@ fn handleRecordStart(server: *Server, arena: std.mem.Allocator, id: std.json.Val
     }
     const Args = struct { path: []const u8 };
     const args = browser_tools.parseArgs(Args, arena, arguments) catch {
-        return server.transport.sendError(id, .InvalidParams, "expected { path: string }");
+        return server.sendError(id, .InvalidParams, "expected { path: string }");
     };
 
     if (!script.isPathSafe(args.path)) {
@@ -228,7 +241,7 @@ fn handleRecordComment(server: *Server, arena: std.mem.Allocator, id: std.json.V
     }
     const Args = struct { text: []const u8 };
     const args = browser_tools.parseArgs(Args, arena, arguments) catch {
-        return server.transport.sendError(id, .InvalidParams, "expected { text: string }");
+        return server.sendError(id, .InvalidParams, "expected { text: string }");
     };
 
     server.recorder.?.recordComment(args.text);
@@ -239,7 +252,7 @@ fn handleRecordComment(server: *Server, arena: std.mem.Allocator, id: std.json.V
 fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const Args = struct { line: []const u8 };
     const args = browser_tools.parseArgs(Args, arena, arguments) catch {
-        return server.transport.sendError(id, .InvalidParams, "expected { line: string }");
+        return server.sendError(id, .InvalidParams, "expected { line: string }");
     };
 
     const cmd = Command.parse(args.line);
@@ -305,7 +318,7 @@ fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         replacements: []const ReplacementSpec,
     };
     const args = browser_tools.parseArgs(Args, arena, arguments) catch {
-        return server.transport.sendError(id, .InvalidParams, "expected { path: string, replacements: [{ original_line, replacement_lines }] }");
+        return server.sendError(id, .InvalidParams, "expected { path: string, replacements: [{ original_line, replacement_lines }] }");
     };
 
     if (!script.isPathSafe(args.path)) {
@@ -367,7 +380,7 @@ fn findLineSpan(content: []const u8, line: []const u8) error{ NotFound, Ambiguou
 
 fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
-    try server.transport.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = is_error });
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = is_error });
 }
 
 fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void {

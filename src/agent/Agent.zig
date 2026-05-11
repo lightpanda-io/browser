@@ -736,6 +736,7 @@ fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []cons
             return cmds;
         }
         self.messages.shrinkRetainingCapacity(msg_baseline);
+        break;
     }
     return null;
 }

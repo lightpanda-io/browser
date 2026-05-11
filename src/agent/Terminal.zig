@@ -525,8 +525,7 @@ pub fn printErrorFmt(_: *Self, comptime fmt: []const u8, args: anytype) void {
 }
 
 pub fn printInfo(self: *Self, msg: []const u8) void {
-    if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
-    std.debug.print("{s}{s}{s}\n", .{ ansi.dim, msg, ansi.reset });
+    self.printInfoFmt("{s}", .{msg});
 }
 
 pub fn printInfoFmt(self: *Self, comptime fmt: []const u8, args: anytype) void {
