@@ -344,10 +344,8 @@ fn runRepl(self: *Self) void {
             .accept_cookies => _ = self.runTurn(.{ .prompt = accept_cookies_prompt, .record_comment = line, .label = "ACCEPT_COOKIES" }),
             .natural_language => _ = self.runTurn(.{ .prompt = line, .record_comment = line }),
             else => {
-                const space_idx = std.mem.indexOfScalar(u8, line, ' ');
-                const cmd_name = if (space_idx) |i| line[0..i] else line;
-                const cmd_args: []const u8 = if (space_idx) |i| std.mem.trimLeft(u8, line[i..], &std.ascii.whitespace) else "";
-                self.terminal.spinner.setTool(cmd_name, cmd_args);
+                const split = SlashCommand.splitNameRest(line) orelse continue :repl;
+                self.terminal.spinner.setTool(split.name, split.rest);
                 var arena: std.heap.ArenaAllocator = .init(self.allocator);
                 defer arena.deinit();
                 const result = self.cmd_executor.executeWithResult(arena.allocator(), cmd);

@@ -77,10 +77,14 @@ pub fn start(self: *Self) void {
     self.frame = 0;
     self.tool_calls = 0;
     self.turn_started_ns = std.time.nanoTimestamp();
+    self.ensureWorkerLocked();
+    self.cv.signal();
+}
+
+fn ensureWorkerLocked(self: *Self) void {
     if (self.thread == null) {
         self.thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch null;
     }
-    self.cv.signal();
 }
 
 /// End an agent turn cleanly: clear the indicator, commit a one-line summary,
@@ -154,9 +158,7 @@ pub fn setTool(self: *Self, name: []const u8, args: []const u8) void {
     self.state = .{ .tool = tool };
     // Manual paths skip `start()`, so spawn the worker on demand to drive
     // the braille animation.
-    if (manual and self.thread == null) {
-        self.thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch null;
-    }
+    if (manual) self.ensureWorkerLocked();
     self.renderLocked();
     self.cv.signal();
 }
@@ -254,17 +256,16 @@ fn renderLocked(self: *Self) void {
             "\r" ++ ansi.yellow ++ "●" ++ ansi.reset ++ " " ++ ansi.dim ++ "[agent: thinking{s}]" ++ ansi.reset ++ clear_eol,
             .{dots[self.frame % dots.len]},
         ) catch return,
-        .tool => |tool| std.fmt.bufPrint(
-            &buf,
-            "\r{s}{s}" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s}{s} {s}]" ++ ansi.reset ++ clear_eol,
-            .{
-                if (tool.failed) ansi.red else if (tool.manual) ansi.yellow else ansi.green,
-                if (tool.manual) braille[self.frame % braille.len] else "●",
-                if (tool.manual) "" else "agent: ",
-                tool.name_buf[0..tool.name_len],
-                tool.args_buf[0..tool.args_len],
-            },
-        ) catch return,
+        .tool => |tool| blk: {
+            const color: []const u8 = if (tool.failed) ansi.red else if (tool.manual) ansi.yellow else ansi.green;
+            const glyph: []const u8 = if (tool.manual) braille[self.frame % braille.len] else "●";
+            const prefix: []const u8 = if (tool.manual) "" else "agent: ";
+            break :blk std.fmt.bufPrint(
+                &buf,
+                "\r{s}{s}" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s}{s} {s}]" ++ ansi.reset ++ clear_eol,
+                .{ color, glyph, prefix, tool.name_buf[0..tool.name_len], tool.args_buf[0..tool.args_len] },
+            ) catch return;
+        },
     };
     if (written.len == self.last_render_len and std.mem.eql(u8, written, self.last_render_buf[0..self.last_render_len])) return;
     @memcpy(self.last_render_buf[0..written.len], written);

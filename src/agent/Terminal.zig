@@ -403,12 +403,10 @@ fn renderSchemaHint(schema: *const SlashCommand.SchemaInfo, body: []const u8, en
         return null;
     }
 
-    const max_slots = 16;
-    var frags: [max_slots][]const u8 = undefined;
+    var frags: [SlashCommand.max_hint_slots][]const u8 = undefined;
     var n: usize = 0;
     for (schema.hints) |slot| {
         if (a.isUsed(slot.name)) continue;
-        if (n == max_slots) break;
         frags[n] = slot.fragment;
         n += 1;
     }

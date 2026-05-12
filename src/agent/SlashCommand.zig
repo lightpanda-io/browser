@@ -20,6 +20,10 @@ pub const HintSlot = struct {
     fragment: []const u8,
 };
 
+/// Upper bound on per-schema hint slots; lets the renderer use a stack array.
+/// Asserted at schema build time so adding a tool with more fields fails loud.
+pub const max_hint_slots: usize = 16;
+
 /// Cached, schema-extracted view of a single browser tool.
 pub const SchemaInfo = struct {
     tool_name: []const u8,
@@ -98,6 +102,7 @@ fn buildOne(arena: std.mem.Allocator, td: browser_tools.ToolDef, parsed: std.jso
     }
 
     info.hints = try buildHints(arena, info.required, info.fields);
+    std.debug.assert(info.hints.len <= max_hint_slots);
 
     return info;
 }
