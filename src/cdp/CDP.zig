@@ -62,6 +62,17 @@ browser: Browser,
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
 
+// Set when setAutoAttach has emitted the synthetic Target.attachedToTarget
+// event for the placeholder STARTUP session (no real BrowserContext yet).
+// The next doAttachtoTarget that would otherwise generate a fresh
+// session_id reuses the literal string "STARTUP" instead, so drivers that
+// already saw the synthetic attach (Puppeteer-style: setAutoAttach ->
+// silent STARTUP -> createBrowserContext + createTarget) end up driving
+// the real target via the same sessionId they already learned about,
+// rather than receiving a second attachedToTarget event for the same
+// targetId with a different sessionId. Cleared on first reuse.
+startup_session_advertised: bool = false,
+
 target_id_gen: TargetIdGen = .{},
 session_id_gen: SessionIdGen = .{},
 browser_context_id_gen: BrowserContextIdGen = .{},
@@ -264,16 +275,81 @@ pub fn dispatch(self: *CDP, arena: Allocator, sender: Command.Sender, str: []con
 // When messages are received with the "STARTUP" sessionId, we do
 // "special" handling - the bare minimum we need to do until the driver
 // switches to a real BrowserContext.
-// (I can imagine this logic will become driver-specific)
+//
+// Two driver styles reach this code:
+//
+//  * Puppeteer-style: setAutoAttach -> createBrowserContext ->
+//    createTarget. Subsequent commands carry a real session_id assigned
+//    by doAttachtoTarget. They never arrive here, since their
+//    sessionId isn't "STARTUP".
+//
+//  * Playwright-style (chromium.connectOverCDP): setAutoAttach ->
+//    immediately drives the synthetic STARTUP target with Page.enable,
+//    Page.navigate, etc. on sessionId="STARTUP". It never calls
+//    createBrowserContext / createTarget itself, so without help here
+//    every command but Page.getFrameTree would be silently {}-acked
+//    and Page.navigate would never fire any frame events. We lazily
+//    promote the synthetic STARTUP session into a real BrowserContext +
+//    Target + Session whose session_id is the literal string "STARTUP",
+//    then route the command through the normal dispatcher.
 fn dispatchStartupCommand(command: *Command, method: []const u8) !void {
-    // Stagehand parses the response and error if we don't return a
-    // correct one for Page.getFrameTree on startup call.
+    // Page.getFrameTree's handler already returns a synthetic placeholder
+    // when no real BrowserContext exists yet (Stagehand depends on this),
+    // so route it without forcing a promotion. If a previous STARTUP
+    // command already promoted, the handler returns the real frame tree.
     if (std.mem.eql(u8, method, "Page.getFrameTree")) {
-        // The Page.getFrameTree handles startup response gracefully.
         return dispatchCommand(command, method);
     }
 
-    return command.sendResult(null, .{});
+    // Some commands are safe to silently {}-ack on the synthetic STARTUP
+    // session without promoting it into a real BrowserContext. Notably:
+    //
+    //   * Target.* on STARTUP is session/target management that drivers
+    //     send opportunistically between connect() and their own
+    //     Target.createBrowserContext / Target.createTarget. Promoting
+    //     here would steal the bc from under them and make their
+    //     subsequent createBrowserContext error with "Cannot have more
+    //     than one browser context at a time" (puppeteer-core 24.x sends
+    //     Target.setAutoAttach with sessionId=STARTUP before its own
+    //     createBrowserContext).
+    //
+    //   * Runtime.runIfWaitingForDebugger is unconditionally sent during
+    //     connect by both Puppeteer and Playwright; it's a no-op for us.
+    //
+    // Anything else (Page.enable, Page.navigate, Network.enable,
+    // Runtime.enable, Log.enable, Emulation.*, etc.) is real work that
+    // requires a backing page, so promote and dispatch normally.
+    if (isStartupSilentNoop(method)) {
+        return command.sendResult(null, .{});
+    }
+
+    const cdp = command.cdp;
+    if (cdp.browser_context == null) {
+        // Lazy promote: create a real BrowserContext + Target whose
+        // session_id is the literal string "STARTUP". Subsequent STARTUP
+        // commands match via isValidSessionId and dispatch normally.
+        try @import("domains/target.zig").promoteStartupSession(command);
+        return dispatchCommand(command, method);
+    }
+
+    // bc exists. STARTUP is only meaningful as a sessionId if the bc was
+    // promoted into one (session_id == "STARTUP"). Otherwise the driver
+    // is sending the placeholder sessionId at the wrong time (e.g. after
+    // its own createBrowserContext + doAttachtoTarget assigned a real
+    // session_id) and we should reject it like any other stale id.
+    const bc_session_id = cdp.browser_context.?.session_id orelse {
+        return command.sendError(-32001, "Unknown sessionId", .{});
+    };
+    if (!std.mem.eql(u8, bc_session_id, "STARTUP")) {
+        return command.sendError(-32001, "Unknown sessionId", .{});
+    }
+    return dispatchCommand(command, method);
+}
+
+fn isStartupSilentNoop(method: []const u8) bool {
+    if (std.mem.startsWith(u8, method, "Target.")) return true;
+    if (std.mem.eql(u8, method, "Runtime.runIfWaitingForDebugger")) return true;
+    return false;
 }
 
 fn dispatchCommand(command: *Command, method: []const u8) !void {
@@ -1183,22 +1259,51 @@ test "cdp: STARTUP sessionId" {
     defer ctx.deinit();
 
     {
-        // we have no browser context
-        try ctx.processMessage(.{ .id = 2, .method = "Hi", .sessionId = "STARTUP" });
-        try ctx.expectSentResult(null, .{ .id = 2, .index = 0, .session_id = "STARTUP" });
+        // No browser_context: a STARTUP-tagged command lazily promotes
+        // into a real BrowserContext + Target whose session_id is the
+        // literal string "STARTUP", then dispatches normally. We use
+        // Page.getFrameTree because its handler is the one method that's
+        // routed without forcing promotion (Stagehand depends on this);
+        // it falls back to the synthetic placeholder when there's no bc,
+        // and after subsequent STARTUP-tagged commands promote it returns
+        // the real frame tree.
+        try testing.expectEqual(null, ctx.cdp().browser_context);
+        try ctx.processMessage(.{ .id = 1, .method = "Browser.getVersion", .sessionId = "STARTUP" });
+        const bc = &ctx.cdp().browser_context.?;
+        try testing.expectEqualSlices(u8, "STARTUP", bc.session_id.?);
+        try testing.expect(bc.target_id != null);
     }
 
     {
-        // we have a browser context but no session_id
-        _ = try ctx.loadBrowserContext(.{});
-        try ctx.processMessage(.{ .id = 3, .method = "Hi", .sessionId = "STARTUP" });
-        try ctx.expectSentResult(null, .{ .id = 3, .index = 1, .session_id = "STARTUP" });
+        // bc already promoted with session_id="STARTUP": subsequent
+        // STARTUP-tagged commands match isValidSessionId and dispatch
+        // through the normal command path.
+        try ctx.processMessage(.{ .id = 2, .method = "Browser.getVersion", .sessionId = "STARTUP" });
     }
+}
 
-    {
-        // we have a browser context with a different session_id
-        _ = try ctx.loadBrowserContext(.{ .session_id = "SESS-2" });
-        try ctx.processMessage(.{ .id = 4, .method = "Hi", .sessionId = "STARTUP" });
-        try ctx.expectSentResult(null, .{ .id = 4, .index = 2, .session_id = "STARTUP" });
-    }
+test "cdp: STARTUP sessionId rejected after non-STARTUP attach" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // bc exists with a real session_id assigned by createTarget /
+    // doAttachtoTarget. The driver should be using that session_id, not
+    // the synthetic STARTUP placeholder. Reject so a stale STARTUP
+    // message can't smuggle commands into a real session.
+    _ = try ctx.loadBrowserContext(.{ .session_id = "SESS-2" });
+    try ctx.processMessage(.{ .id = 1, .method = "Browser.getVersion", .sessionId = "STARTUP" });
+    try ctx.expectSentError(-32001, "Unknown sessionId", .{ .id = 1 });
+}
+
+test "cdp: STARTUP sessionId rejected when bc has no session_id" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // bc exists but no doAttachtoTarget has run yet (session_id == null).
+    // STARTUP is the placeholder sessionId from setAutoAttach; it's only
+    // valid when there's no bc at all (lazy promote) or when a previous
+    // promote bound it. Reject otherwise.
+    _ = try ctx.loadBrowserContext(.{});
+    try ctx.processMessage(.{ .id = 1, .method = "Browser.getVersion", .sessionId = "STARTUP" });
+    try ctx.expectSentError(-32001, "Unknown sessionId", .{ .id = 1 });
 }
