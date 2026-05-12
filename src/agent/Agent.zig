@@ -228,7 +228,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
 
     self.cmd_executor = CommandExecutor.init(allocator, tool_executor, &self.terminal);
 
-    self.terminal.attachCompleter(slash_schemas);
+    if (will_repl) self.terminal.attachCompleter(slash_schemas);
 
     if (self.recorder.path) |p| {
         self.terminal.printInfoFmt("recording to {s}", .{p});
