@@ -11,11 +11,13 @@ pub const FieldEntry = struct {
 };
 
 /// One slot of the REPL's argument-syntax hint, in display order: required
-/// fields first, then optionals. Renderer wraps required as `<name>` and
-/// optionals as `[name=…]`.
+/// fields first, then optionals. `fragment` is pre-rendered as `<name>` for
+/// required and `[name=…]` for optional so the renderer can hand it directly
+/// to the shared writer.
 pub const HintSlot = struct {
     name: []const u8,
     required: bool,
+    fragment: []const u8,
 };
 
 /// Cached, schema-extracted view of a single browser tool.
@@ -105,12 +107,20 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
     const out = try arena.alloc(HintSlot, fields.len);
     var idx: usize = 0;
     for (required) |name| {
-        out[idx] = .{ .name = name, .required = true };
+        out[idx] = .{
+            .name = name,
+            .required = true,
+            .fragment = try std.fmt.allocPrint(arena, "<{s}>", .{name}),
+        };
         idx += 1;
     }
     for (fields) |f| {
         if (containsName(required, f.name)) continue;
-        out[idx] = .{ .name = f.name, .required = false };
+        out[idx] = .{
+            .name = f.name,
+            .required = false,
+            .fragment = try std.fmt.allocPrint(arena, "[{s}=…]", .{f.name}),
+        };
         idx += 1;
     }
     return out[0..idx];

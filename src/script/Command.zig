@@ -229,26 +229,77 @@ pub const KeywordSyntax = struct {
     /// than inserting an angle-bracket template. Null when no good starter
     /// exists (numeric args, argless commands).
     starter: ?[]const u8 = null,
+    /// Pre-rendered positional-arg fragments shown progressively in the inline
+    /// hint as the user fills them in. Empty for argless commands. The visual
+    /// notation matches `args` (e.g. `'<selector>'` for quoted, `[x]` for
+    /// optional bare). Drives `analyzePandaBody`-based hint narrowing.
+    params: []const []const u8 = &.{},
 };
+
+// Shared positional-arg fragments used in the keyword table below.
+const selector_arg = "'<selector>'";
+const value_arg = "'<value>'";
 
 /// Single source of truth for PandaScript keyword names — consumed by the
 /// parser, the REPL highlighter, and Tab completion.
 pub const keywords = [_]KeywordSyntax{
-    .{ .name = "GOTO", .args = "<url>", .starter = " https://www." },
-    .{ .name = "CLICK", .args = "'<selector>'", .starter = " '" },
-    .{ .name = "TYPE", .args = "'<selector>' '<value>'", .starter = " '" },
-    .{ .name = "WAIT", .args = "'<selector>'", .starter = " '" },
-    .{ .name = "SCROLL", .args = "[x] [y]" },
-    .{ .name = "HOVER", .args = "'<selector>'", .starter = " '" },
-    .{ .name = "SELECT", .args = "'<selector>' '<value>'", .starter = " '" },
-    .{ .name = "CHECK", .args = "'<selector>' [true|false]", .starter = " '" },
+    .{ .name = "GOTO", .args = "<url>", .starter = " https://www.", .params = &.{"<url>"} },
+    .{ .name = "CLICK", .args = selector_arg, .starter = " '", .params = &.{selector_arg} },
+    .{ .name = "TYPE", .args = selector_arg ++ " " ++ value_arg, .starter = " '", .params = &.{ selector_arg, value_arg } },
+    .{ .name = "WAIT", .args = selector_arg, .starter = " '", .params = &.{selector_arg} },
+    .{ .name = "SCROLL", .args = "[x] [y]", .params = &.{ "[x]", "[y]" } },
+    .{ .name = "HOVER", .args = selector_arg, .starter = " '", .params = &.{selector_arg} },
+    .{ .name = "SELECT", .args = selector_arg ++ " " ++ value_arg, .starter = " '", .params = &.{ selector_arg, value_arg } },
+    .{ .name = "CHECK", .args = selector_arg ++ " [true|false]", .starter = " '", .params = &.{ selector_arg, "[true|false]" } },
     .{ .name = "TREE", .args = null },
     .{ .name = "MARKDOWN", .args = null },
-    .{ .name = "EXTRACT", .args = "'<selector>'", .starter = " '" },
-    .{ .name = "EVAL", .args = "'<script>'", .starter = " '" },
+    .{ .name = "EXTRACT", .args = selector_arg, .starter = " '", .params = &.{selector_arg} },
+    .{ .name = "EVAL", .args = "'<script>'", .starter = " '", .params = &.{"'<script>'"} },
     .{ .name = "LOGIN", .args = null },
     .{ .name = "ACCEPT_COOKIES", .args = null },
 };
+
+/// Result of `analyzePandaBody`: how many positional args the user has already
+/// fully entered, and whether the cursor is at a token boundary (ready to
+/// accept the next arg). Used by the REPL inline-hint renderer to narrow the
+/// shown params as the user types.
+pub const BodyCursor = struct {
+    complete_args: usize,
+    at_boundary: bool,
+};
+
+/// Walks a PandaScript command body (the text after the keyword and its
+/// separating space) and reports how many positional args have been
+/// completed. Quote-aware: handles single, double, and triple-quoted strings.
+/// An unterminated quote sets `at_boundary = false` so the hint suppresses
+/// while the user is still inside the string. A bare token without trailing
+/// whitespace likewise suppresses (cursor is mid-token).
+pub fn analyzePandaBody(body: []const u8) BodyCursor {
+    var i: usize = 0;
+    var complete: usize = 0;
+    while (i < body.len) {
+        while (i < body.len and std.ascii.isWhitespace(body[i])) : (i += 1) {}
+        if (i >= body.len) break;
+        const ch = body[i];
+        if (ch == '\'' or ch == '"') {
+            if (tripleQuotePrefix(body[i..])) |tq| {
+                const end_idx = std.mem.indexOfPos(u8, body, i + tq.len, tq) orelse
+                    return .{ .complete_args = complete, .at_boundary = false };
+                i = end_idx + tq.len;
+            } else {
+                const end_idx = std.mem.indexOfScalarPos(u8, body, i + 1, ch) orelse
+                    return .{ .complete_args = complete, .at_boundary = false };
+                i = end_idx + 1;
+            }
+            complete += 1;
+        } else {
+            while (i < body.len and !std.ascii.isWhitespace(body[i])) : (i += 1) {}
+            complete += 1;
+        }
+    }
+    const boundary = body.len == 0 or std.ascii.isWhitespace(body[body.len - 1]);
+    return .{ .complete_args = complete, .at_boundary = boundary };
+}
 
 /// If the first word of `line` is a recognized PandaScript keyword, returns
 /// its entry. Used by the REPL to surface a syntax error when `Command.parse`
@@ -1207,4 +1258,51 @@ test "toToolCall: type_cmd value is NOT substituted" {
     try std.testing.expectEqualStrings("fill", tc.name);
     // selector substituted, value preserved as $LP_* reference
     try std.testing.expectEqualStrings("{\"selector\":\"ABC\",\"value\":\"$LP_PASSWORD\"}", tc.args_json);
+}
+
+fn expectBody(body: []const u8, complete_args: usize, at_boundary: bool) !void {
+    const cur = analyzePandaBody(body);
+    try std.testing.expectEqual(complete_args, cur.complete_args);
+    try std.testing.expectEqual(at_boundary, cur.at_boundary);
+}
+
+test "analyzePandaBody: empty and whitespace-only" {
+    try expectBody("", 0, true);
+    try expectBody(" ", 0, true);
+    try expectBody("   ", 0, true);
+}
+
+test "analyzePandaBody: bare token" {
+    try expectBody("foo", 1, false);
+    try expectBody("foo ", 1, true);
+    try expectBody("100", 1, false);
+    try expectBody("100 ", 1, true);
+}
+
+test "analyzePandaBody: single-quoted token" {
+    try expectBody("'#x'", 1, false);
+    try expectBody("'#x' ", 1, true);
+    try expectBody("'#x' 'y'", 2, false);
+    try expectBody("'#x' 'y' ", 2, true);
+}
+
+test "analyzePandaBody: unterminated quote suppresses boundary" {
+    try expectBody("'#unterm", 0, false);
+    try expectBody("'#x' 'unterm", 1, false);
+}
+
+test "analyzePandaBody: triple-quoted token" {
+    try expectBody("'''abc'''", 1, false);
+    try expectBody("'''abc''' ", 1, true);
+    try expectBody("\"\"\"x\"\"\"", 1, false);
+}
+
+test "analyzePandaBody: unterminated triple quote" {
+    try expectBody("'''abc", 0, false);
+    try expectBody("'''abc''", 0, false);
+}
+
+test "analyzePandaBody: mixed quoted and bare" {
+    try expectBody("'#x' false", 2, false);
+    try expectBody("'#x' false ", 2, true);
 }

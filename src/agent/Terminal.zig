@@ -355,27 +355,53 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
     if (parseSlashCommand(input)) |parts| {
         const ends_ws = input[input.len - 1] == ' ';
         if (SlashCommand.findSchema(self.slash_schemas, parts.name)) |schema| {
-            return renderSchemaHint(schema, parts.rest, ends_ws) orelse null;
+            return renderSchemaHint(schema, parts.rest, ends_ws);
         }
         return null;
     }
 
-    if (std.mem.indexOfScalar(u8, input, ' ') != null) return null;
     if (input[0] == '/') return null;
 
-    // PandaScript keyword: show its args template on exact match.
-    for (Command.keywords) |kw| {
-        if (!std.ascii.eqlIgnoreCase(kw.name, input)) continue;
-        const args = kw.args orelse return null;
-        const text = std.fmt.bufPrintZ(&hint_buf, " {s}", .{args}) catch return null;
-        return text.ptr;
+    const space = std.mem.indexOfScalar(u8, input, ' ');
+    const kw_end = space orelse input.len;
+    const kw = exactKeywordMatch(input[0..kw_end]) orelse return null;
+    if (kw.params.len == 0) return null;
+
+    if (space == null) return writeHints(" ", kw.params);
+    const body = input[kw_end + 1 ..];
+    const cur = Command.analyzePandaBody(body);
+    if (!cur.at_boundary or cur.complete_args >= kw.params.len) return null;
+    const lead: []const u8 = if (input[input.len - 1] == ' ') "" else " ";
+    return writeHints(lead, kw.params[cur.complete_args..]);
+}
+
+/// Join `fragments` into `hint_buf` with single-space separators, prefixed by
+/// `lead` (typically `""` or `" "`). Null-terminates and returns the isocline
+/// C pointer, or null when there's nothing to render or the buffer would
+/// overflow. Shared by the slash and PandaScript hint renderers.
+fn writeHints(lead: []const u8, fragments: []const []const u8) [*c]const u8 {
+    if (fragments.len == 0) return null;
+    const cap = hint_buf.len - 1;
+    if (lead.len > cap) return null;
+    @memcpy(hint_buf[0..lead.len], lead);
+    var pos: usize = lead.len;
+    for (fragments, 0..) |frag, i| {
+        if (i > 0) {
+            if (pos + 1 > cap) return null;
+            hint_buf[pos] = ' ';
+            pos += 1;
+        }
+        if (pos + frag.len > cap) return null;
+        @memcpy(hint_buf[pos..][0..frag.len], frag);
+        pos += frag.len;
     }
-    return null;
+    hint_buf[pos] = 0;
+    return @ptrCast(&hint_buf);
 }
 
 // Renders `<required>` and `[optional=…]` for each unused field, or
 // `<keyname>=…` when the user is typing a key prefix.
-fn renderSchemaHint(schema: *const SlashCommand.SchemaInfo, body: []const u8, ends_ws: bool) ?[*c]const u8 {
+fn renderSchemaHint(schema: *const SlashCommand.SchemaInfo, body: []const u8, ends_ws: bool) [*c]const u8 {
     const a = analyzeBody(schema, body, ends_ws);
 
     if (a.partial_key) |pk| {
@@ -388,19 +414,16 @@ fn renderSchemaHint(schema: *const SlashCommand.SchemaInfo, body: []const u8, en
         return null;
     }
 
-    var pos: usize = 0;
+    const max_slots = 16;
+    var frags: [max_slots][]const u8 = undefined;
+    var n: usize = 0;
     for (schema.hints) |slot| {
         if (a.isUsed(slot.name)) continue;
-        const lead: []const u8 = if (pos > 0 or !ends_ws) " " else "";
-        const written = if (slot.required)
-            std.fmt.bufPrint(hint_buf[pos..], "{s}<{s}>", .{ lead, slot.name }) catch return null
-        else
-            std.fmt.bufPrint(hint_buf[pos..], "{s}[{s}=…]", .{ lead, slot.name }) catch return null;
-        pos += written.len;
+        if (n == max_slots) break;
+        frags[n] = slot.fragment;
+        n += 1;
     }
-    if (pos == 0) return null;
-    hint_buf[pos] = 0;
-    return @ptrCast(&hint_buf);
+    return writeHints(if (ends_ws) "" else " ", frags[0..n]);
 }
 
 // Advances `i` past whitespace; returns true if more text remains.
