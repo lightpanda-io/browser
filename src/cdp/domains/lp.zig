@@ -42,7 +42,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         scrollNode,
         waitForSelector,
         handleJavaScriptDialog,
-        setSubframeLoading,
+        configureLoading,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -57,32 +57,17 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .scrollNode => return scrollNode(cmd),
         .waitForSelector => return waitForSelector(cmd),
         .handleJavaScriptDialog => return handleJavaScriptDialog(cmd),
-        .setSubframeLoading => return setSubframeLoading(cmd),
+        .configureLoading => return configureLoading(cmd),
     }
 }
 
-// LP.setSubframeLoading { enabled: bool }
-//
-// When called with enabled=false, the HTML parser silently skips loading
-// <iframe> elements: no child Frame is created, no document fetch, and
-// no Page.frameAttached / Page.frameNavigated / Runtime.executionContextCreated
-// events are emitted for the would-be subframe. Useful as an opt-in
-// workaround for pages that load large numbers of analytics / pixel
-// iframes (e.g. shopify storefronts) where each subframe navigation
-// re-registers the main frame's V8 contexts under the child's frameId
-// and invalidates the driver's cached executionContextIds (#2400).
-//
-// Default: enabled=true (current behaviour). Setting enabled=true again
-// re-enables loading for any iframes added to the DOM after the call;
-// already-skipped iframes stay skipped (the parser marks them as
-// _executed when bypassed).
-fn setSubframeLoading(cmd: *CDP.Command) !void {
+fn configureLoading(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
-        enabled: bool,
+        subFrame: bool = true,
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    bc.session.subframe_loading_enabled = params.enabled;
+    bc.session.subframe_loading_enabled = params.subFrame;
     return cmd.sendResult(null, .{});
 }
 

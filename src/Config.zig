@@ -214,17 +214,10 @@ pub fn obeyRobots(self: *const Config) bool {
     };
 }
 
-// When true, the HTML parser silently skips loading <iframe> elements:
-// no child frame is created, no document fetch, no Page.frameAttached /
-// Page.frameNavigated / Runtime.executionContextCreated events emitted.
-// Useful for pages that load large numbers of analytics / pixel iframes
-// where each subframe navigation invalidates the driver's cached
-// executionContextIds (#2400). The CDP method LP.setSubframeLoading
-// can override this at runtime per-session.
 pub fn disableSubframes(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp => |opts| opts.disable_subframes,
-        else => false,
+        else => unreachable,
     };
 }
 
@@ -523,7 +516,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                iframes where each subframe navigation invalidates driver-side
         \\                executionContextIds (lightpanda-io/browser#2400). On the CDP
         \\                serve path, drivers can also toggle this per-session via the
-        \\                LP.setSubframeLoading method.
+        \\                LP.configureLoading method.
         \\                Defaults to false.
         \\
         \\--block-private-networks
