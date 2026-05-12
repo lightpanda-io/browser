@@ -314,7 +314,7 @@ pub fn getUserAgent(self: *const Client) [:0]const u8 {
 pub fn abort(self: *Client) void {
     // Snapshot before killing: kill() -> deinit removes entries from
     // self.transfers, which would invalidate a live iterator.
-    var snapshot: std.ArrayList(*Transfer) = .initCapacity(self.allocator, self.transfers.count()) catch @panic("OOM");
+    var snapshot = std.ArrayList(*Transfer).initCapacity(self.allocator, self.transfers.count()) catch @panic("OOM");
     var it = self.transfers.valueIterator();
     while (it.next()) |t| {
         snapshot.appendAssumeCapacity(t.*);
