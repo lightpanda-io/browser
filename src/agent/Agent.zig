@@ -446,7 +446,17 @@ fn printSlashHelp(self: *Self, target: []const u8) void {
         return;
     };
     self.terminal.printInfoFmt("/{s} — {s}", .{ schema.tool_name, schema.description });
-    self.terminal.printInfoFmt("schema: {s}", .{schema.input_schema_raw});
+
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    const pretty: []const u8 = blk: {
+        const v = std.json.parseFromSliceLeaky(std.json.Value, aa, schema.input_schema_raw, .{}) catch break :blk schema.input_schema_raw;
+        var aw: std.Io.Writer.Allocating = .init(aa);
+        std.json.Stringify.value(v, .{ .whitespace = .indent_2 }, &aw.writer) catch break :blk schema.input_schema_raw;
+        break :blk aw.written();
+    };
+    self.terminal.printInfoFmt("schema:\n{s}", .{pretty});
 }
 
 fn printSlashParseError(self: *Self, err: SlashCommand.ParseError, name: []const u8) void {
