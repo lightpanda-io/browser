@@ -480,7 +480,8 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
         if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-origin")) {
             allow_origin = hdr.value;
         } else if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-credentials") and
-            std.ascii.eqlIgnoreCase(hdr.value, "true")) {
+            std.ascii.eqlIgnoreCase(hdr.value, "true"))
+        {
             allow_credentials = true;
         }
         const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ hdr.name, hdr.value });
