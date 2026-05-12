@@ -312,15 +312,33 @@ pub fn getUserAgent(self: *const Client) [:0]const u8 {
 }
 
 pub fn abort(self: *Client) void {
+    // Snapshot before killing: kill() -> deinit removes entries from
+    // self.transfers, which would invalidate a live iterator.
+    var snapshot: std.ArrayList(*Transfer) = .initCapacity(self.allocator, self.transfers.count()) catch @panic("OOM");
     var it = self.transfers.valueIterator();
     while (it.next()) |t| {
-        t.*.kill();
+        snapshot.appendAssumeCapacity(t.*);
     }
+
+    for (snapshot.items) |t| {
+        t.kill();
+    }
+
+    // TODO: Give transfer a state so it can track this.
+    // Transfer.deinit unlinks from owner.transfers + in_use/ready_queue
+    // (via removeConn), but it doesn't know how to unlink from
+    // self.queue — process() puts _node on this list when no connection
+    // is available, and we have no per-transfer flag to detect that
+    // membership. The kill loop above has freed every queued transfer's
+    // memory; the nodes those entries pointed to are now invalid, so
+    // we reset the list heads. Same for ready_queue: the conns it held
+    // were released via removeConn during deinit, but the queue head
+    // wasn't touched.
+    self.queue = .{};
+    self.ready_queue = .{};
 
     if (comptime IS_DEBUG) {
         std.debug.assert(self.transfers.size == 0);
-        std.debug.assert(self.queue.first == null);
-        std.debug.assert(self.ready_queue.first == null);
     }
 }
 
