@@ -317,6 +317,14 @@ pub const tool_defs = [_]ToolDef{
     },
 };
 
+/// Comptime-built flat array of tool names, in `tool_defs` order. Use this
+/// when callers only need the names (slash-command lookup, MCP `tools/list`).
+pub const names: [tool_defs.len][]const u8 = blk: {
+    var arr: [tool_defs.len][]const u8 = undefined;
+    for (tool_defs, 0..) |td, i| arr[i] = td.name;
+    break :blk arr;
+};
+
 pub const ToolError = error{
     FrameNotLoaded,
     InvalidParams,
@@ -484,7 +492,7 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
         0,
     ) catch return ToolError.OutOfMemory;
     try performGoto(session, registry, ddg_url, args.timeout, args.waitUntil);
-    const ddg_frame = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    const ddg_frame = try requireFrame(session);
     return renderFrameMarkdown(arena, ddg_frame);
 }
 
@@ -589,16 +597,13 @@ fn execNodeDetails(arena: std.mem.Allocator, session: *lp.Session, registry: *CD
     const Params = struct { backendNodeId: CDPNode.Id };
     const args = try parseArgs(Params, arena, arguments);
 
-    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    const page = try requireFrame(session);
 
     const node = registry.lookup_by_id.get(args.backendNodeId) orelse
         return ToolError.NodeNotFound;
     const details = lp.SemanticTree.getNodeDetails(arena, node.dom, registry, page) catch
         return ToolError.InternalError;
-
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    std.json.Stringify.value(&details, .{}, &aw.writer) catch return ToolError.InternalError;
-    return aw.written();
+    return renderJson(arena, &details);
 }
 
 fn execInteractiveElements(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -609,10 +614,7 @@ fn execInteractiveElements(arena: std.mem.Allocator, session: *lp.Session, regis
         return ToolError.InternalError;
     lp.interactive.registerNodes(elements, registry) catch
         return ToolError.InternalError;
-
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    std.json.Stringify.value(elements, .{}, &aw.writer) catch return ToolError.InternalError;
-    return aw.written();
+    return renderJson(arena, elements);
 }
 
 fn execStructuredData(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -621,9 +623,7 @@ fn execStructuredData(arena: std.mem.Allocator, session: *lp.Session, registry: 
 
     const data = lp.structured_data.collectStructuredData(page.document.asNode(), arena, page) catch
         return ToolError.InternalError;
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    std.json.Stringify.value(data, .{}, &aw.writer) catch return ToolError.InternalError;
-    return aw.written();
+    return renderJson(arena, data);
 }
 
 fn execDetectForms(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -634,10 +634,7 @@ fn execDetectForms(arena: std.mem.Allocator, session: *lp.Session, registry: *CD
         return ToolError.InternalError;
     lp.forms.registerNodes(forms_data, registry) catch
         return ToolError.InternalError;
-
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    std.json.Stringify.value(forms_data, .{}, &aw.writer) catch return ToolError.InternalError;
-    return aw.written();
+    return renderJson(arena, forms_data);
 }
 
 fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) EvalResult {
@@ -742,7 +739,7 @@ fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
 
     try awaitQueuedNavigation(session);
 
-    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    const page = try requireFrame(session);
     return formatActionResult(arena, "Clicked element", args.selector, args.backendNodeId, "", page);
 }
 
@@ -773,7 +770,7 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
         y: ?i32 = null,
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
-    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    const page = try requireFrame(session);
     const target_node = try resolveOptionalNode(registry, args.backendNodeId);
 
     lp.actions.scroll(target_node, args.x, args.y, page) catch |err| return mapActionError(err);
@@ -794,7 +791,7 @@ fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry:
     };
     const args = try parseArgs(Params, arena, arguments);
 
-    _ = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    _ = try requireFrame(session);
 
     const timeout_ms = args.timeout orelse 5000;
 
@@ -827,7 +824,7 @@ fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
     };
     const args = try parseArgs(Params, arena, arguments);
 
-    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    const page = try requireFrame(session);
     const target_node = try resolveOptionalNode(registry, args.backendNodeId);
 
     lp.actions.press(target_node, args.key, page) catch |err| return mapActionError(err);
@@ -835,7 +832,7 @@ fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
     // Pressing Enter on a form input triggers implicit form submission.
     try awaitQueuedNavigation(session);
 
-    const current_page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    const current_page = try requireFrame(session);
     const page_title = current_page.getTitle() catch null;
     return std.fmt.allocPrint(arena, "Pressed key '{s}'. Page url: {s}, title: {s}", .{
         args.key,
@@ -884,7 +881,7 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *CD
 
     if (args.role == null and args.name == null) return ToolError.InvalidParams;
 
-    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    const page = try requireFrame(session);
 
     const matched = lp.interactive.findInteractiveElements(page.document.asNode(), arena, page, .{
         .role = args.role,
@@ -893,10 +890,7 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *CD
 
     lp.interactive.registerNodes(matched, registry) catch
         return ToolError.InternalError;
-
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    std.json.Stringify.value(matched, .{}, &aw.writer) catch return ToolError.InternalError;
-    return aw.written();
+    return renderJson(arena, matched);
 }
 
 fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -908,15 +902,15 @@ fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]
         return std.fmt.allocPrint(arena, "Environment variable '{s}' is not set", .{name}) catch ToolError.InternalError;
     }
 
-    const names = lpEnvNames() catch return ToolError.InternalError;
-    return formatLpEnvNames(arena, names);
+    const env_names = lpEnvNames() catch return ToolError.InternalError;
+    return formatLpEnvNames(arena, env_names);
 }
 
-fn formatLpEnvNames(arena: std.mem.Allocator, names: []const []const u8) ToolError![]const u8 {
-    if (names.len == 0) return "No LP_* environment variables are set.";
+fn formatLpEnvNames(arena: std.mem.Allocator, env_names: []const []const u8) ToolError![]const u8 {
+    if (env_names.len == 0) return "No LP_* environment variables are set.";
     var aw: std.Io.Writer.Allocating = .init(arena);
-    aw.writer.print("LP_* environment variables ({d}):\n", .{names.len}) catch return ToolError.InternalError;
-    for (names) |n| {
+    aw.writer.print("LP_* environment variables ({d}):\n", .{env_names.len}) catch return ToolError.InternalError;
+    for (env_names) |n| {
         aw.writer.print("  {s}\n", .{n}) catch return ToolError.InternalError;
     }
     return aw.written();
@@ -934,22 +928,22 @@ pub fn lpEnvNames() error{OutOfMemory}![]const []const u8 {
     if (lp_env_names_cache) |cached| return cached;
 
     const gpa = std.heap.page_allocator;
-    var names: std.ArrayList([]const u8) = .empty;
-    errdefer names.deinit(gpa);
-    try names.ensureTotalCapacity(gpa, std.os.environ.len);
+    var env_names: std.ArrayList([]const u8) = .empty;
+    errdefer env_names.deinit(gpa);
+    try env_names.ensureTotalCapacity(gpa, std.os.environ.len);
     for (std.os.environ) |entry| {
         const line = std.mem.span(entry);
         const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
         const name = line[0..eq_idx];
         if (!std.ascii.startsWithIgnoreCase(name, "LP_")) continue;
-        names.appendAssumeCapacity(name);
+        env_names.appendAssumeCapacity(name);
     }
-    std.mem.sort([]const u8, names.items, {}, struct {
+    std.mem.sort([]const u8, env_names.items, {}, struct {
         fn lt(_: void, a: []const u8, b: []const u8) bool {
             return std.mem.lessThan(u8, a, b);
         }
     }.lt);
-    const owned = try names.toOwnedSlice(gpa);
+    const owned = try env_names.toOwnedSlice(gpa);
     lp_env_names_cache = owned;
     return owned;
 }
@@ -974,14 +968,14 @@ fn lookupLpEnv(name: []const u8) ?[:0]const u8 {
 }
 
 fn execConsoleLogs(arena: std.mem.Allocator, session: *lp.Session) ToolError![]const u8 {
-    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    const page = try requireFrame(session);
     const text = page.drainConsoleMessages();
     if (text.len == 0) return "No console messages.";
     return arena.dupe(u8, text) catch ToolError.InternalError;
 }
 
 fn execGetUrl(session: *lp.Session) ToolError![]const u8 {
-    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    const page = try requireFrame(session);
     return page.url;
 }
 
@@ -1006,6 +1000,16 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session) ToolError![]co
         if (cookie.http_only) writer.writeAll("; HttpOnly") catch return ToolError.InternalError;
         writer.writeAll("\n") catch return ToolError.InternalError;
     }
+    return aw.written();
+}
+
+fn requireFrame(session: *lp.Session) ToolError!*lp.Frame {
+    return session.currentFrame() orelse ToolError.FrameNotLoaded;
+}
+
+fn renderJson(arena: std.mem.Allocator, value: anytype) ToolError![]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    std.json.Stringify.value(value, .{}, &aw.writer) catch return ToolError.InternalError;
     return aw.written();
 }
 
@@ -1038,13 +1042,13 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
 }
 
 fn resolveNodeAndPage(session: *lp.Session, registry: *CDPNode.Registry, node_id: CDPNode.Id) ToolError!NodeAndPage {
-    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    const page = try requireFrame(session);
     const node = registry.lookup_by_id.get(node_id) orelse return ToolError.NodeNotFound;
     return .{ .node = node.dom, .page = page };
 }
 
 fn resolveBySelector(session: *lp.Session, selector: []const u8) ToolError!NodeAndPage {
-    const page = session.currentFrame() orelse return ToolError.FrameNotLoaded;
+    const page = try requireFrame(session);
     const element = Selector.querySelector(page.document.asNode(), selector, page) catch return ToolError.InvalidParams;
     const node = (element orelse return ToolError.NodeNotFound).asNode();
     return .{ .node = node, .page = page };
@@ -1202,8 +1206,8 @@ test "formatLpEnvNames renders names without values" {
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const names = [_][]const u8{ "LP_BAR", "LP_FOO" };
-    const r = try formatLpEnvNames(aa, &names);
+    const env_names = [_][]const u8{ "LP_BAR", "LP_FOO" };
+    const r = try formatLpEnvNames(aa, &env_names);
 
     try std.testing.expect(std.mem.indexOf(u8, r, "LP_FOO") != null);
     try std.testing.expect(std.mem.indexOf(u8, r, "LP_BAR") != null);

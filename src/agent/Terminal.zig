@@ -28,6 +28,7 @@ pub const ansi = struct {
     pub const green = "\x1b[32m";
     pub const yellow = "\x1b[33m";
     pub const red = "\x1b[31m";
+    pub const clear_eol = "\x1b[K";
 };
 
 const Verbosity = Config.AgentVerbosity;
@@ -48,11 +49,11 @@ spinner: Spinner,
 slash_schemas: []const SlashCommand.SchemaInfo = &.{},
 
 // Flat name list for the "match any slash command" search/completion paths.
-const all_slash_names: [browser_tools.tool_defs.len + SlashCommand.meta_names.len][]const u8 = blk: {
-    var names: [browser_tools.tool_defs.len + SlashCommand.meta_names.len][]const u8 = undefined;
-    for (browser_tools.tool_defs, 0..) |td, i| names[i] = td.name;
-    for (SlashCommand.meta_names, 0..) |m, i| names[browser_tools.tool_defs.len + i] = m;
-    break :blk names;
+const all_slash_names: [browser_tools.names.len + SlashCommand.meta_names.len][]const u8 = blk: {
+    var arr: [browser_tools.names.len + SlashCommand.meta_names.len][]const u8 = undefined;
+    for (browser_tools.names, 0..) |n, i| arr[i] = n;
+    for (SlashCommand.meta_names, 0..) |m, i| arr[browser_tools.names.len + i] = m;
+    break :blk arr;
 };
 
 /// Wires the isocline completer and hinter to `self` so the C callbacks can
@@ -115,17 +116,16 @@ const bullet_line_fmt = "{s}●{s} {s}[tool: {s}]{s} {s}\n";
 ///   gated on `medium`+. In non-TTY contexts ANSI is still emitted —
 ///   pipes that strip color see plain text via the bullet character.
 pub fn agentToolDone(self: *Self, name: []const u8, args: []const u8, ok: bool) void {
+    if (self.spinner.enabled and !ok) self.spinner.markToolFailed();
+    if (!atLeast(self.verbosity, .medium)) return;
+
     if (self.spinner.enabled) {
-        if (!ok) self.spinner.markToolFailed();
-        if (!atLeast(self.verbosity, .medium)) return;
-        if (self.repl_arena) |*a| {
-            defer _ = a.reset(.retain_capacity);
-            const bytes = formatBulletLine(a.allocator(), name, args, ok) catch return;
-            _ = self.spinner.emitAbove(bytes);
-        }
+        const a = if (self.repl_arena) |*ra| ra else return;
+        defer _ = a.reset(.retain_capacity);
+        const bytes = formatBulletLine(a.allocator(), name, args, ok) catch return;
+        _ = self.spinner.emitAbove(bytes);
         return;
     }
-    if (!atLeast(self.verbosity, .medium)) return;
     if (self.stderr_is_tty) {
         const bullet_color = if (ok) ansi.green else ansi.red;
         std.debug.print(bullet_line_fmt, .{ bullet_color, ansi.reset, ansi.dim, name, ansi.reset, args });

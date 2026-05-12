@@ -8,7 +8,7 @@ const interval_ns: u64 = 350 * std.time.ns_per_ms;
 /// Minimum dwell on a tool label so the user can read it. Slow tools exceed
 /// this naturally; fast ones (getUrl, getCookies) get padded.
 const min_tool_display_ns: u64 = 1500 * std.time.ns_per_ms;
-const clear_eol = "\x1b[K";
+const clear_eol = ansi.clear_eol;
 
 const max_args_bytes: usize = 100;
 const frame_buf_bytes: usize = 256;

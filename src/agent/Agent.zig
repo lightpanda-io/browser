@@ -919,7 +919,9 @@ fn processUserMessage(self: *Self, input: TurnInput) !?[]const u8 {
             ma,
             .{ .context = @ptrCast(self), .callFn = &handleToolCall },
             .{
-                .tools = self.tool_executor.tools,
+                // tool_choice = .none forbids tools; serializing the full
+                // catalog anyway just pads the request body.
+                .tools = &.{},
                 .max_turns = 1,
                 .max_tokens = 4096,
                 .tool_choice = .none,
@@ -1005,15 +1007,23 @@ const tool_output_max_bytes: usize = 1 * 1024 * 1024;
 fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
     if (output.len <= tool_output_max_bytes) return output;
     const prefix = output[0..tool_output_max_bytes];
-    return std.fmt.allocPrint(allocator, "{s}\n...[truncated, original {d} bytes]", .{ prefix, output.len }) catch prefix;
+    // Format the suffix into a tiny scratch buffer then concat — avoids
+    // duplicating the 1 MiB prefix through `allocPrint`'s format machinery.
+    var suffix_buf: [64]u8 = undefined;
+    const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes]", .{output.len}) catch return prefix;
+    return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
 }
 
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
     const self: *Self = @ptrCast(@alignCast(ctx));
-    const args_str: []const u8 = if (arguments) |v|
+    // Stringifying tool args is wasted work for non-interactive low-verbosity
+    // runs: the spinner doesn't render it and `agentToolDone` skips the bullet
+    // line. Skip the alloc when no consumer will read it.
+    const needs_args = self.terminal.spinner.enabled or self.terminal.verbosity != .low;
+    const args_str: []const u8 = if (needs_args) (if (arguments) |v|
         std.json.Stringify.valueAlloc(allocator, v, .{}) catch ""
     else
-        "";
+        "") else "";
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
     if (self.tool_executor.callValue(allocator, tool_name, arguments)) |output| {
