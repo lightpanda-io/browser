@@ -28,6 +28,7 @@ const Navigation = @import("navigation/Navigation.zig");
 const Crypto = @import("Crypto.zig");
 const CSS = @import("CSS.zig");
 const Navigator = @import("Navigator.zig");
+const ModelContext = @import("ModelContext.zig");
 const Screen = @import("Screen.zig");
 const VisualViewport = @import("VisualViewport.zig");
 const Performance = @import("Performance.zig");
@@ -65,6 +66,7 @@ _css: CSS = .init,
 _crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
+_model_context: ModelContext = ModelContext.init,
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: Performance,
