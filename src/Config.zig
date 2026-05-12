@@ -98,6 +98,7 @@ const CommonOptions = .{
     .{ .name = "cookie_jar", .type = ?[]const u8 },
     .{ .name = "storage_engine", .type = ?Storage.EngineType },
     .{ .name = "storage_sqlite_path", .type = ?[:0]const u8 },
+    .{ .name = "disable_subframes", .type = bool },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -235,6 +236,13 @@ pub fn tlsVerifyHost(self: *const Config) bool {
 pub fn obeyRobots(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp => |opts| opts.obey_robots,
+        else => unreachable,
+    };
+}
+
+pub fn disableSubframes(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.disable_subframes,
         else => unreachable,
     };
 }
@@ -524,6 +532,17 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--obey-robots
         \\                Fetches and obeys the robots.txt (if available) of the web pages
         \\                we make requests towards.
+        \\                Defaults to false.
+        \\
+        \\--disable-subframes
+        \\                Skip loading <iframe> elements. The HTML parser registers them
+        \\                in the DOM but no child frame, document fetch, or
+        \\                Page.frameAttached / Runtime.executionContextCreated events are
+        \\                produced. Useful for pages that load many analytics / pixel
+        \\                iframes where each subframe navigation invalidates driver-side
+        \\                executionContextIds (lightpanda-io/browser#2400). On the CDP
+        \\                serve path, drivers can also toggle this per-session via the
+        \\                LP.configureLoading method.
         \\                Defaults to false.
         \\
         \\--block-private-networks

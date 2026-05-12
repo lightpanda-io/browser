@@ -1303,6 +1303,11 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     if (iframe._executed) {
         return;
     }
+    if (!self._session.subframe_loading_enabled) {
+        // configured not to load frames
+        iframe._executed = true;
+        return;
+    }
 
     var src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse "";
     if (src.len == 0) {
