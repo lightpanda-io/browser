@@ -48,7 +48,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const open = bridge.accessor(Dialog.getOpen, Dialog.setOpen, .{});
+    pub const open = bridge.accessor(Dialog.getOpen, Dialog.setOpen, .{ .ce_reactions = true });
     pub const returnValue = bridge.accessor(Dialog.getReturnValue, Dialog.setReturnValue, .{});
 };
 

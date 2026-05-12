@@ -126,11 +126,11 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const as = bridge.accessor(Link.getAs, Link.setAs, .{});
-    pub const rel = bridge.accessor(Link.getRel, Link.setRel, .{});
-    pub const media = bridge.accessor(Link.getMedia, Link.setMedia, .{});
-    pub const href = bridge.accessor(Link.getHref, Link.setHref, .{});
-    pub const crossOrigin = bridge.accessor(Link.getCrossOrigin, Link.setCrossOrigin, .{});
+    pub const as = bridge.accessor(Link.getAs, Link.setAs, .{ .ce_reactions = true });
+    pub const rel = bridge.accessor(Link.getRel, Link.setRel, .{ .ce_reactions = true });
+    pub const media = bridge.accessor(Link.getMedia, Link.setMedia, .{ .ce_reactions = true });
+    pub const href = bridge.accessor(Link.getHref, Link.setHref, .{ .ce_reactions = true });
+    pub const crossOrigin = bridge.accessor(Link.getCrossOrigin, Link.setCrossOrigin, .{ .ce_reactions = true });
     pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
 
     fn _getRelList(self: *Link, frame: *Frame) !?*@import("../../collections.zig").DOMTokenList {

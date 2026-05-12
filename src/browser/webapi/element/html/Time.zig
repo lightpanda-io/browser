@@ -32,7 +32,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const dateTime = bridge.accessor(Time.getDateTime, Time.setDateTime, .{});
+    pub const dateTime = bridge.accessor(Time.getDateTime, Time.setDateTime, .{ .ce_reactions = true });
 };
 
 const testing = @import("../../../../testing.zig");

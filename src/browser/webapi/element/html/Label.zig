@@ -138,7 +138,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const htmlFor = bridge.accessor(Label.getHtmlFor, Label.setHtmlFor, .{});
+    pub const htmlFor = bridge.accessor(Label.getHtmlFor, Label.setHtmlFor, .{ .ce_reactions = true });
     pub const control = bridge.accessor(Label.getControl, null, .{});
 };
 

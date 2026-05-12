@@ -178,12 +178,12 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const disabled = bridge.accessor(Button.getDisabled, Button.setDisabled, .{});
-    pub const name = bridge.accessor(Button.getName, Button.setName, .{});
-    pub const required = bridge.accessor(Button.getRequired, Button.setRequired, .{});
+    pub const disabled = bridge.accessor(Button.getDisabled, Button.setDisabled, .{ .ce_reactions = true });
+    pub const name = bridge.accessor(Button.getName, Button.setName, .{ .ce_reactions = true });
+    pub const required = bridge.accessor(Button.getRequired, Button.setRequired, .{ .ce_reactions = true });
     pub const form = bridge.accessor(Button.getForm, null, .{});
-    pub const value = bridge.accessor(Button.getValue, Button.setValue, .{});
-    pub const @"type" = bridge.accessor(Button.getType, Button.setType, .{});
+    pub const value = bridge.accessor(Button.getValue, Button.setValue, .{ .ce_reactions = true });
+    pub const @"type" = bridge.accessor(Button.getType, Button.setType, .{ .ce_reactions = true });
     pub const labels = bridge.accessor(Button.getLabels, null, .{});
     pub const willValidate = bridge.accessor(Button.getWillValidate, null, .{});
     pub const validity = bridge.accessor(Button.getValidity, null, .{});

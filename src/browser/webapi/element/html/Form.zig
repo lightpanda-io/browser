@@ -204,11 +204,11 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const name = bridge.accessor(Form.getName, Form.setName, .{});
-    pub const method = bridge.accessor(Form.getMethod, Form.setMethod, .{});
-    pub const action = bridge.accessor(Form.getAction, Form.setAction, .{});
-    pub const target = bridge.accessor(Form.getTarget, Form.setTarget, .{});
-    pub const acceptCharset = bridge.accessor(Form.getAcceptCharset, Form.setAcceptCharset, .{});
+    pub const name = bridge.accessor(Form.getName, Form.setName, .{ .ce_reactions = true });
+    pub const method = bridge.accessor(Form.getMethod, Form.setMethod, .{ .ce_reactions = true });
+    pub const action = bridge.accessor(Form.getAction, Form.setAction, .{ .ce_reactions = true });
+    pub const target = bridge.accessor(Form.getTarget, Form.setTarget, .{ .ce_reactions = true });
+    pub const acceptCharset = bridge.accessor(Form.getAcceptCharset, Form.setAcceptCharset, .{ .ce_reactions = true });
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});

@@ -1171,8 +1171,8 @@ pub const JsApi = struct {
     pub const elementsFromPoint = bridge.function(Document.elementsFromPoint, .{});
     pub const write = bridge.function(Document.write, .{ .dom_exception = true, .ce_reactions = true });
     pub const writeln = bridge.function(Document.writeln, .{ .dom_exception = true, .ce_reactions = true });
-    pub const open = bridge.function(Document.open, .{ .dom_exception = true });
-    pub const close = bridge.function(Document.close, .{ .dom_exception = true });
+    pub const open = bridge.function(Document.open, .{ .dom_exception = true, .ce_reactions = true });
+    pub const close = bridge.function(Document.close, .{ .dom_exception = true, .ce_reactions = true });
     pub const doctype = bridge.accessor(Document.getDocType, null, .{});
     pub const firstElementChild = bridge.accessor(Document.getFirstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(Document.getLastElementChild, null, .{});

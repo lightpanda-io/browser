@@ -54,8 +54,8 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const colSpan = bridge.accessor(TableCell.getColSpan, TableCell.setColSpan, .{});
-    pub const rowSpan = bridge.accessor(TableCell.getRowSpan, TableCell.setRowSpan, .{});
+    pub const colSpan = bridge.accessor(TableCell.getColSpan, TableCell.setColSpan, .{ .ce_reactions = true });
+    pub const rowSpan = bridge.accessor(TableCell.getRowSpan, TableCell.setRowSpan, .{ .ce_reactions = true });
 };
 
 const testing = @import("../../../../testing.zig");

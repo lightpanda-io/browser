@@ -288,11 +288,11 @@ pub const JsApi = struct {
         });
     }
 
-    pub const dir = bridge.accessor(HTMLDocument.getDir, HTMLDocument.setDir, .{});
+    pub const dir = bridge.accessor(HTMLDocument.getDir, HTMLDocument.setDir, .{ .ce_reactions = true });
     pub const head = bridge.accessor(HTMLDocument.getHead, null, .{});
-    pub const body = bridge.accessor(HTMLDocument.getBody, HTMLDocument.setBody, .{ .dom_exception = true });
+    pub const body = bridge.accessor(HTMLDocument.getBody, HTMLDocument.setBody, .{ .dom_exception = true, .ce_reactions = true });
     pub const lang = bridge.accessor(HTMLDocument.getLang, HTMLDocument.setLang, .{});
-    pub const title = bridge.accessor(HTMLDocument.getTitle, HTMLDocument.setTitle, .{});
+    pub const title = bridge.accessor(HTMLDocument.getTitle, HTMLDocument.setTitle, .{ .ce_reactions = true });
     pub const images = bridge.accessor(HTMLDocument.getImages, null, .{});
     pub const scripts = bridge.accessor(HTMLDocument.getScripts, null, .{});
     pub const links = bridge.accessor(HTMLDocument.getLinks, null, .{});

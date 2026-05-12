@@ -59,8 +59,12 @@ pub fn push(self: *Self) usize {
 /// enqueued within a nested scope drain at that scope's pop, before this loop
 /// sees them.
 pub fn popAndInvoke(self: *Self, checkpoint: usize, frame: *Frame) void {
-    for (self.queue.items[checkpoint..]) |reaction| {
-        Custom.fireReaction(reaction, frame);
+    // Index, not slice: firing a reaction can recursively enqueue (via JS
+    // callbacks doing DOM mutations), which may realloc queue.items and
+    // invalidate any captured slice.
+    var i = checkpoint;
+    while (i < self.queue.items.len) : (i += 1) {
+        Custom.fireReaction(self.queue.items[i], frame);
     }
     self.queue.items.len = checkpoint;
     self.active_scopes -= 1;
