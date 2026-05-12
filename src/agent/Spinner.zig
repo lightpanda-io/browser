@@ -109,32 +109,14 @@ pub fn stop(self: *Self) void {
     self.last_render_len = 0;
 }
 
-/// End a turn with no commit (used on hard API errors, where the caller will
-/// surface the error itself).
+/// End a turn with no commit. The caller is responsible for surfacing the
+/// outcome — tool results, error messages, or summaries.
 pub fn cancel(self: *Self) void {
     if (!self.enabled) return;
     self.mu.lock();
     defer self.mu.unlock();
     if (self.state == .idle) return;
-    // Manual command success → commit a green `●` line so the user sees a
-    // permanent "done" confirmation. Errors and agent-side cancels just clear.
-    if (std.meta.activeTag(self.state) == .tool and self.state.tool.manual and !self.state.tool.failed) {
-        const tool = self.state.tool;
-        var buf: [frame_buf_bytes]u8 = undefined;
-        const line = std.fmt.bufPrint(
-            &buf,
-            "\r" ++ ansi.green ++ "●" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s} {s}]" ++ ansi.reset ++ clear_eol ++ "\n",
-            .{ tool.name_buf[0..tool.name_len], tool.args_buf[0..tool.args_len] },
-        ) catch {
-            _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
-            self.state = .idle;
-            self.last_render_len = 0;
-            return;
-        };
-        _ = std.posix.write(std.posix.STDERR_FILENO, line) catch {};
-    } else {
-        _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
-    }
+    _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
     self.state = .idle;
     self.last_render_len = 0;
 }

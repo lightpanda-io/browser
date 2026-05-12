@@ -599,7 +599,7 @@ pub fn printToolResult(self: *Self, name: []const u8, result: []const u8) void {
     if (!self.isRepl() and !atLeast(self.verbosity, .high)) return;
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
-        const bytes = formatReplResult(a.allocator(), name, result) catch return;
+        const bytes = formatReplResult(a.allocator(), result) catch return;
         if (self.spinner.emitAbove(bytes)) return;
         _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
         return;
@@ -609,10 +609,10 @@ pub fn printToolResult(self: *Self, name: []const u8, result: []const u8) void {
     std.debug.print("{s}{s}[result: {s}]{s} {s}{s}\n", .{ ansi.dim, ansi.green, name, ansi.reset, truncated, ellipsis });
 }
 
-/// REPL output: header + body, pretty-print JSON if parseable, raw otherwise.
+/// REPL output: green-dot marker followed by the body, pretty-printed if JSON.
 /// Builds the entire payload in the arena so callers can route it past the
 /// spinner (`emitAbove`) without interleaving with frame writes.
-fn formatReplResult(arena: std.mem.Allocator, name: []const u8, result: []const u8) ![]const u8 {
+fn formatReplResult(arena: std.mem.Allocator, result: []const u8) ![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     const w = &aw.writer;
 
@@ -626,7 +626,7 @@ fn formatReplResult(arena: std.mem.Allocator, name: []const u8, result: []const 
     else
         null;
     const sep: []const u8 = if (parsed != null) "\n" else " ";
-    try w.print("{s}{s}[result: {s}]{s}{s}", .{ ansi.dim, ansi.green, name, ansi.reset, sep });
+    try w.print("{s}●{s}{s}", .{ ansi.green, ansi.reset, sep });
     if (parsed) |v| {
         std.json.Stringify.value(v, .{ .whitespace = .indent_2 }, w) catch {
             try w.writeAll(result);
@@ -642,7 +642,16 @@ pub fn printError(self: *Self, msg: []const u8) void {
     self.printErrorFmt("{s}", .{msg});
 }
 
-pub fn printErrorFmt(_: *Self, comptime fmt: []const u8, args: anytype) void {
+pub fn printErrorFmt(self: *Self, comptime fmt: []const u8, args: anytype) void {
+    if (self.repl_arena) |*a| {
+        defer _ = a.reset(.retain_capacity);
+        var aw: std.Io.Writer.Allocating = .init(a.allocator());
+        aw.writer.print("{s}●{s} " ++ fmt ++ "\n", .{ ansi.red, ansi.reset } ++ args) catch return;
+        const bytes = aw.written();
+        if (self.spinner.emitAbove(bytes)) return;
+        _ = std.posix.write(std.posix.STDERR_FILENO, bytes) catch {};
+        return;
+    }
     std.debug.print("{s}{s}Error: " ++ fmt ++ "{s}\n", .{ ansi.bold, ansi.red } ++ args ++ .{ansi.reset});
 }
 
