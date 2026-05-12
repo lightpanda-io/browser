@@ -118,7 +118,7 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(DOMParser.init, .{});
-    pub const parseFromString = bridge.function(DOMParser.parseFromString, .{});
+    pub const parseFromString = bridge.function(DOMParser.parseFromString, .{ .ce_reactions = true });
 };
 
 const testing = @import("../../testing.zig");
