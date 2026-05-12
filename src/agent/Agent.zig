@@ -344,7 +344,16 @@ fn runRepl(self: *Self) void {
             .accept_cookies => _ = self.runTurn(.{ .prompt = accept_cookies_prompt, .record_comment = line, .label = "ACCEPT_COOKIES" }),
             .natural_language => _ = self.runTurn(.{ .prompt = line, .record_comment = line }),
             else => {
-                self.cmd_executor.execute(cmd);
+                const space_idx = std.mem.indexOfScalar(u8, line, ' ');
+                const cmd_name = if (space_idx) |i| line[0..i] else line;
+                const cmd_args: []const u8 = if (space_idx) |i| std.mem.trimLeft(u8, line[i..], &std.ascii.whitespace) else "";
+                self.terminal.spinner.setTool(cmd_name, cmd_args);
+                var arena: std.heap.ArenaAllocator = .init(self.allocator);
+                defer arena.deinit();
+                const result = self.cmd_executor.executeWithResult(arena.allocator(), cmd);
+                if (result.failed) self.terminal.spinner.markToolFailed();
+                self.terminal.spinner.cancel();
+                self.cmd_executor.printResult(cmd, result);
                 self.recorder.record(cmd);
             },
         }
@@ -391,7 +400,10 @@ fn handleSlash(self: *Self, body: []const u8) bool {
             self.terminal.printError("eval requires a `script` argument.");
             return false;
         };
+        self.terminal.spinner.setTool(schema.tool_name, rest);
         const result = self.tool_executor.callEval(aa, eval_script);
+        if (result.is_error) self.terminal.spinner.markToolFailed();
+        self.terminal.spinner.cancel();
         if (result.is_error) {
             self.terminal.printErrorFmt("eval: {s}", .{result.text});
         } else {
@@ -400,11 +412,15 @@ fn handleSlash(self: *Self, body: []const u8) bool {
         return false;
     }
 
-    const result = self.tool_executor.call(aa, schema.tool_name, args_json) catch |err| {
+    self.terminal.spinner.setTool(schema.tool_name, rest);
+    if (self.tool_executor.call(aa, schema.tool_name, args_json)) |result| {
+        self.terminal.spinner.cancel();
+        self.terminal.printToolResult(schema.tool_name, result);
+    } else |err| {
+        self.terminal.spinner.markToolFailed();
+        self.terminal.spinner.cancel();
         self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, @errorName(err) });
-        return false;
-    };
-    self.terminal.printToolResult(schema.tool_name, result);
+    }
     return false;
 }
 

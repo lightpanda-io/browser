@@ -4,7 +4,8 @@ const ansi = @import("Terminal.zig").ansi;
 const Self = @This();
 
 const dots = [_][]const u8{ "   ", ".  ", ".. ", "..." };
-const interval_ns: u64 = 350 * std.time.ns_per_ms;
+const braille = [_][]const u8{ "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
+const interval_ns: u64 = 100 * std.time.ns_per_ms;
 /// Minimum dwell on a tool label so the user can read it. Slow tools exceed
 /// this naturally; fast ones (getUrl, getCookies) get padded.
 const min_tool_display_ns: u64 = 1500 * std.time.ns_per_ms;
@@ -25,6 +26,9 @@ const ToolState = struct {
     dwell_pending: bool = false,
     /// Render the label in red — set by `markToolFailed`, cleared by next setTool.
     failed: bool = false,
+    /// User-typed REPL commands drop the `agent:` framing since no agent
+    /// is involved — it's lightpanda running the command directly.
+    manual: bool = false,
 };
 
 const State = union(enum) {
@@ -108,24 +112,51 @@ pub fn cancel(self: *Self) void {
     self.mu.lock();
     defer self.mu.unlock();
     if (self.state == .idle) return;
-    _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
+    // Manual command success → commit a green `●` line so the user sees a
+    // permanent "done" confirmation. Errors and agent-side cancels just clear.
+    if (std.meta.activeTag(self.state) == .tool and self.state.tool.manual and !self.state.tool.failed) {
+        const tool = self.state.tool;
+        var buf: [frame_buf_bytes]u8 = undefined;
+        const line = std.fmt.bufPrint(
+            &buf,
+            "\r" ++ ansi.green ++ "●" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s} {s}]" ++ ansi.reset ++ clear_eol ++ "\n",
+            .{ tool.name_buf[0..tool.name_len], tool.args_buf[0..tool.args_len] },
+        ) catch {
+            _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
+            self.state = .idle;
+            self.last_render_len = 0;
+            return;
+        };
+        _ = std.posix.write(std.posix.STDERR_FILENO, line) catch {};
+    } else {
+        _ = std.posix.write(std.posix.STDERR_FILENO, "\r" ++ clear_eol) catch {};
+    }
     self.state = .idle;
     self.last_render_len = 0;
 }
 
 /// Switch the indicator to "running tool <name> <args>". Counts toward the
-/// turn's tool-call total. Args are truncated to `max_args_bytes`.
+/// turn's tool-call total. Args are truncated to `max_args_bytes`. Called
+/// without a preceding `start()` (state `.idle`) the label drops the `agent:`
+/// prefix — that path is for user-typed REPL commands, not LLM tool calls.
 pub fn setTool(self: *Self, name: []const u8, args: []const u8) void {
     if (!self.enabled) return;
     self.mu.lock();
     defer self.mu.unlock();
+    const manual = self.state == .idle;
     self.tool_calls += 1;
-    var tool: ToolState = .{ .set_ns = std.time.nanoTimestamp() };
+    var tool: ToolState = .{ .set_ns = std.time.nanoTimestamp(), .manual = manual };
     tool.name_len = @min(name.len, tool.name_buf.len);
     @memcpy(tool.name_buf[0..tool.name_len], name[0..tool.name_len]);
     tool.args_len = @min(args.len, tool.args_buf.len);
     @memcpy(tool.args_buf[0..tool.args_len], args[0..tool.args_len]);
+    self.frame = 0;
     self.state = .{ .tool = tool };
+    // Manual paths skip `start()`, so spawn the worker on demand to drive
+    // the braille animation.
+    if (manual and self.thread == null) {
+        self.thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch null;
+    }
     self.renderLocked();
     self.cv.signal();
 }
@@ -207,6 +238,8 @@ fn workerLoop(self: *Self) void {
 
         if (self.state == .thinking) {
             self.frame = (self.frame + 1) % @as(u8, @intCast(dots.len));
+        } else if (std.meta.activeTag(self.state) == .tool and self.state.tool.manual) {
+            self.frame = (self.frame + 1) % @as(u8, @intCast(braille.len));
         }
         self.cv.timedWait(&self.mu, interval_ns) catch {};
     }
@@ -223,9 +256,11 @@ fn renderLocked(self: *Self) void {
         ) catch return,
         .tool => |tool| std.fmt.bufPrint(
             &buf,
-            "\r{s}●" ++ ansi.reset ++ " " ++ ansi.dim ++ "[agent: {s} {s}]" ++ ansi.reset ++ clear_eol,
+            "\r{s}{s}" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s}{s} {s}]" ++ ansi.reset ++ clear_eol,
             .{
-                if (tool.failed) ansi.red else ansi.green,
+                if (tool.failed) ansi.red else if (tool.manual) ansi.yellow else ansi.green,
+                if (tool.manual) braille[self.frame % braille.len] else "●",
+                if (tool.manual) "" else "agent: ",
                 tool.name_buf[0..tool.name_len],
                 tool.args_buf[0..tool.args_len],
             },
