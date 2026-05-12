@@ -118,7 +118,6 @@ pub fn init(url: []const u8, frame: *Frame) !*Worker {
 // remove from the frame's worker list.
 pub fn deinit(self: *Worker) void {
     // No pending frame for workers, so we can abort all frames.
-    self._frame._session.browser.http_client.abortFrame(self._frame_id, .{ .scope = .full });
     if (self._http_response) |res| {
         res.abort(error.Abort);
         self._http_response = null;

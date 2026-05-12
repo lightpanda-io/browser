@@ -102,6 +102,12 @@ pub fn makeRequest(self: *const Execution, req: HttpClient.Request) !void {
     };
 }
 
+pub fn websockets(self: *const Execution) *std.DoublyLinkedList {
+    return switch (self.context.global) {
+        inline else => |g| &g._websockets,
+    };
+}
+
 pub fn dispatch(
     self: *const Execution,
     target: *EventTarget,

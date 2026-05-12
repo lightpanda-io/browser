@@ -57,7 +57,7 @@ pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
 // The app has other secondary http needs, like telemetry. While we want to
 // share some things (namely the ca blob, and maybe some configuration
 // (TODO: ??? should proxy settings be global ???)), we're able to call
-// client.abortFrame() to abort the transfers being made by a frame, without
+// client.abortList() to abort the transfers being made by a frame, without
 // impacting those other http requests.
 pub const Client = @This();
 
@@ -311,88 +311,45 @@ pub fn getUserAgent(self: *const Client) [:0]const u8 {
     return self.user_agent_override orelse self.network.config.http_headers.user_agent;
 }
 
-const AbortOpts = struct {
-    scope: enum { normal, full } = .normal,
-};
-
 pub fn abort(self: *Client) void {
-    self._abort(true, 0, .{ .scope = .full });
-}
-
-// abortFrame with .normal doesn't abort protect_from_abort requests.
-// .full abort all relqtive requests.
-pub fn abortFrame(self: *Client, frame_id: u32, opts: AbortOpts) void {
-    self._abort(false, frame_id, opts);
-}
-
-// Written this way so that both abort and abortFrame can share the same code
-// but abort can avoid the frame_id check at comptime.
-fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32, opts: AbortOpts) void {
-    abortConnections(self.in_use, abort_all, frame_id, opts);
-    abortConnections(self.ready_queue, abort_all, frame_id, opts);
-
-    {
-        var q = &self.queue;
-        var n = q.first;
-        while (n) |node| {
-            n = node.next;
-            const transfer: *Transfer = @fieldParentPtr("_node", node);
-            const params = transfer.req.params;
-            if (comptime abort_all) {
-                transfer.kill();
-            } else if (params.frame_id == frame_id) {
-                if (opts.scope == .full or !params.protect_from_abort) {
-                    q.remove(node);
-                    transfer.kill();
-                }
-            }
-        }
+    var it = self.transfers.valueIterator();
+    while (it.next()) |t| {
+        t.*.kill();
     }
 
-    if (comptime abort_all) {
-        self.queue = .{};
-        self.ready_queue = .{};
-    }
-
-    if (comptime IS_DEBUG and abort_all) {
-        var it = self.in_use.first;
-        var leftover: usize = 0;
-        while (it) |node| : (it = node.next) {
-            const conn: *http.Connection = @fieldParentPtr("node", node);
-            switch (conn.transport) {
-                .http => |transfer| std.debug.assert(transfer.aborted),
-                .websocket => {},
-                .none => {},
-            }
-            leftover += 1;
-        }
-        std.debug.assert(self.http_active == leftover);
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.transfers.size == 0);
+        std.debug.assert(self.queue.first == null);
+        std.debug.assert(self.ready_queue.first == null);
     }
 }
 
-fn abortConnections(list: std.DoublyLinkedList, comptime abort_all: bool, frame_id: u32, opts: AbortOpts) void {
+// abort a list of connections "owned" by something (a Frame or WSG).
+// Note: the list may still have entries after the walk — Transfer.kill()
+// defers (flags `aborted` + noops callbacks) when called mid-perform, and
+// only fully deinits later in the normal processOneMessage flow. So we
+// can't assert `list.first == null` here.
+pub fn abortList(_: *Client, list: std.DoublyLinkedList) void {
     var n = list.first;
     while (n) |node| {
         n = node.next;
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        switch (conn.transport) {
-            .http => |transfer| {
-                const params = transfer.req.params;
-                if (comptime abort_all) {
-                    transfer.kill();
-                } else if (params.frame_id == frame_id) {
-                    if (opts.scope == .full or !params.protect_from_abort) {
-                        transfer.kill();
-                    }
-                }
-            },
-            .websocket => |ws| {
-                if ((comptime abort_all) or ws._frame._frame_id == frame_id) {
-                    ws.kill();
-                }
-            },
-            .none => unreachable,
-        }
+        const t: *Transfer = @fieldParentPtr("owner_node", node);
+        t.kill();
+    }
+}
+
+// Mirror of abortList for WebSockets. Walks the owner list, killing each.
+// Frame.deinit / WGS.deinit call this so a still-open WS doesn't outlive
+// the global it's pointing at (UAF on _frame deref in callbacks otherwise).
+pub fn abortWsList(_: *Client, list: std.DoublyLinkedList) void {
+    var n = list.first;
+    while (n) |node| {
+        n = node.next;
+        const ws: *@import("webapi/net/WebSocket.zig") = @fieldParentPtr("_owner_node", node);
+        ws.kill();
+    }
+    if (comptime IS_DEBUG) {
+        std.debug.assert(list.first == null);
     }
 }
 
@@ -894,15 +851,6 @@ pub const RequestParams = struct {
     notification: *Notification,
     timeout_ms: u32 = 0,
     skip_robots: bool = false,
-
-    // Set on an in-flight root-navigation transfer that was issued against a
-    // pending Page. The old Page's frame.deinit (called from Session.commit
-    // PendingPage when response headers arrive) calls abortFrame() on the
-    // shared frame_id; abortFrame's default .normal scope skips transfers
-    // with this flag so the callback chain we are sitting inside isn't killed
-    // mid-flight. Session.discardPendingPage uses .full scope to override
-    // the flag in failure paths.
-    protect_from_abort: bool = false,
 
     const ResourceType = enum {
         document,

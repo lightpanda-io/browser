@@ -60,6 +60,7 @@ _session: *Session,
 _factory: *Factory,
 _identity: JS.Identity = .{},
 _requests: std.DoublyLinkedList = .{},
+_websockets: std.DoublyLinkedList = .{},
 
 arena: Allocator,
 call_arena: Allocator,
@@ -150,16 +151,22 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
 }
 
 pub fn deinit(self: *WorkerGlobalScope) void {
+    const page = self._page;
+    const session = page.session;
+    const browser = session.browser;
+
+    browser.http_client.abortList(self._requests);
+    browser.http_client.abortWsList(self._websockets);
+
     self._identity.deinit();
     self._script_manager.deinit();
 
-    const page = self._page;
     var it = self._blob_urls.valueIterator();
     while (it.next()) |blob| {
         blob.*.releaseRef(page);
     }
-    page.session.browser.env.destroyContext(self.js);
-    page.releaseArena(self.call_arena);
+    browser.env.destroyContext(self.js);
+    session.releaseArena(self.call_arena);
 }
 
 pub fn base(self: *const WorkerGlobalScope) [:0]const u8 {
