@@ -306,6 +306,7 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
         6 => switch (@as(u48, @bitCast(domain[0..6].*))) {
             asUint(u48, "Target") => return @import("domains/target.zig").processMessage(command),
             asUint(u48, "Audits") => return @import("domains/audits.zig").processMessage(command),
+            asUint(u48, "WebMCP") => return @import("domains/webmcp.zig").processMessage(command),
             else => {},
         },
         7 => switch (@as(u56, @bitCast(domain[0..7].*))) {
@@ -488,6 +489,10 @@ pub const BrowserContext = struct {
     // are duplicated into self.arena so they outlive the CDP command's
     // own message arena.
     pending_dialog_response: ?Notification.DialogResponse = null,
+
+    // WebMCP domain state. Populated when `WebMCP.enable` is received.
+    webmcp_next_invocation_id: u32 = 0,
+    webmcp_invocations: std.AutoHashMapUnmanaged(u32, *@import("domains/webmcp.zig").Invocation) = .empty,
 
     fn init(self: *BrowserContext, id: []const u8, cdp: *CDP) !void {
         const allocator = cdp.allocator;
@@ -727,6 +732,28 @@ pub const BrowserContext = struct {
 
     pub fn runtimeDisable(self: *BrowserContext) void {
         self.notification.unregister(.runtime_console_message, self);
+    }
+
+    pub fn webmcpEnable(self: *BrowserContext) !void {
+        try self.notification.register(.model_context_tool_added, self, onModelContextToolAdded);
+        try self.notification.register(.model_context_tool_removed, self, onModelContextToolRemoved);
+    }
+
+    pub fn webmcpDisable(self: *BrowserContext) void {
+        self.notification.unregister(.model_context_tool_added, self);
+        self.notification.unregister(.model_context_tool_removed, self);
+    }
+
+    pub fn onModelContextToolAdded(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        defer self.resetNotificationArena();
+        return @import("domains/webmcp.zig").onToolAdded(self.notification_arena, self, event);
+    }
+
+    pub fn onModelContextToolRemoved(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        defer self.resetNotificationArena();
+        return @import("domains/webmcp.zig").onToolRemoved(self.notification_arena, self, event);
     }
 
     pub fn onFrameRemove(ctx: *anyopaque, _: Notification.FrameRemove) !void {

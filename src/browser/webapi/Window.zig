@@ -66,7 +66,7 @@ _css: CSS = .init,
 _crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
-_model_context: ModelContext = ModelContext.init,
+_model_context: ModelContext = .init,
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: Performance,
@@ -170,6 +170,10 @@ pub fn getConsole(self: *Window) *Console {
 
 pub fn getNavigator(self: *Window) *Navigator {
     return &self._navigator;
+}
+
+pub fn getModelContext(self: *Window) *ModelContext {
+    return &self._model_context;
 }
 
 pub fn getScreen(self: *Window) *Screen {

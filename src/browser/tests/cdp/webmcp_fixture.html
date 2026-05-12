@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head><title>WebMCP CDP fixture</title></head>
+<body>
+<script>
+  globalThis.__webmcp_calls = [];
+
+  navigator.modelContext.registerTool({
+    name: 'greet',
+    description: 'Returns a greeting for the given person',
+    inputSchema: {
+      type: 'object',
+      properties: { who: { type: 'string' } },
+      required: ['who'],
+    },
+    annotations: { readOnlyHint: true },
+    execute: async (input) => {
+      globalThis.__webmcp_calls.push(input);
+      return { greeting: 'hello ' + input.who };
+    },
+  });
+</script>
+</body>
+</html>

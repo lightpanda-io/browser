@@ -32,6 +32,7 @@ const std = @import("std");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const Notification = @import("../../Notification.zig");
 
 const AbortSignal = @import("AbortSignal.zig");
 
@@ -103,7 +104,7 @@ pub fn registerTool(
     // Reject duplicate names. The spec says `InvalidStateError`. We compact
     // the list lazily here so a tool whose signal already aborted doesn't
     // block re-registering under the same name.
-    self.compactAborted();
+    self.compactAborted(frame);
     for (self._tools.items) |existing| {
         if (std.mem.eql(u8, existing.name, tool.name)) {
             return error.InvalidStateError;
@@ -123,33 +124,42 @@ pub fn registerTool(
     };
 
     try self._tools.append(arena, entry);
+
+    // Fire `model_context_tool_added` so observers (CDP `WebMCP` domain,
+    // native MCP forwarder) can surface the new tool.
+    const event: Notification.ModelContextToolEvent = .{ .frame = frame, .tool = entry };
+    frame._session.notification.dispatch(.model_context_tool_added, &event);
 }
 
 /// Snapshot of currently-registered tools, with aborted entries filtered.
-/// Used by the (not-yet-implemented) CDP `WebMCP.enable` replay and the
-/// native MCP forwarder.
-pub fn tools(self: *ModelContext) []const *Tool {
-    self.compactAborted();
+/// Used by the CDP `WebMCP.enable` replay and the native MCP forwarder.
+pub fn tools(self: *ModelContext, frame: *Frame) []const *Tool {
+    self.compactAborted(frame);
     return self._tools.items;
 }
 
 /// Look up a tool by name. Returns null if not found or if its signal has
-/// fired. Used by the (not-yet-implemented) CDP `WebMCP.invokeTool`.
-pub fn findTool(self: *ModelContext, name: []const u8) ?*Tool {
-    self.compactAborted();
+/// fired. Used by CDP `WebMCP.invokeTool`.
+pub fn findTool(self: *ModelContext, frame: *Frame, name: []const u8) ?*Tool {
+    self.compactAborted(frame);
     for (self._tools.items) |t| {
         if (std.mem.eql(u8, t.name, name)) return t;
     }
     return null;
 }
 
-fn compactAborted(self: *ModelContext) void {
+/// Walk the tool list and remove any whose `AbortSignal` has fired,
+/// dispatching `model_context_tool_removed` for each. Cheap when no
+/// signals fired (which is the common case).
+fn compactAborted(self: *ModelContext, frame: *Frame) void {
     var i: usize = 0;
     while (i < self._tools.items.len) {
         const t = self._tools.items[i];
         if (t.signal) |signal| {
             if (signal._aborted) {
                 _ = self._tools.swapRemove(i);
+                const event: Notification.ModelContextToolEvent = .{ .frame = frame, .tool = t };
+                frame._session.notification.dispatch(.model_context_tool_removed, &event);
                 continue;
             }
         }

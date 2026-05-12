@@ -54,6 +54,8 @@ const Allocator = std.mem.Allocator;
 // that is shared across all Sessions (tabs) within that connection. This ensures
 // proper isolation between different CDP clients while allowing a single client
 // to receive events from all its tabs.
+const ModelContextTool = @import("browser/webapi/ModelContext.zig").Tool;
+
 const Notification = @This();
 // Every event type (which are hard-coded), has a list of Listeners.
 // When the event happens, we dispatch to those listener.
@@ -88,6 +90,8 @@ const EventListeners = struct {
     javascript_dialog_opening: List = .{},
     console_message: List = .{},
     runtime_console_message: List = .{},
+    model_context_tool_added: List = .{},
+    model_context_tool_removed: List = .{},
 };
 
 const Events = union(enum) {
@@ -111,6 +115,8 @@ const Events = union(enum) {
     javascript_dialog_opening: *const JavascriptDialogOpening,
     console_message: *const ConsoleMessage,
     runtime_console_message: *const ConsoleMessage,
+    model_context_tool_added: *const ModelContextToolEvent,
+    model_context_tool_removed: *const ModelContextToolEvent,
 };
 const EventType = std.meta.FieldEnum(Events);
 
@@ -222,6 +228,11 @@ pub const JavascriptDialogOpening = struct {
     // Headless mode auto-dismisses if no listener fills it in: confirm→false,
     // prompt→null, alert→void (default-zero DialogResponse).
     response: *DialogResponse,
+};
+
+pub const ModelContextToolEvent = struct {
+    frame: *Frame,
+    tool: *const ModelContextTool,
 };
 
 pub const DialogResponse = struct {
