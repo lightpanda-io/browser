@@ -303,34 +303,23 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
             // Fall through so `value=$LP_` picks up env completions.
         } else {
             const partial = input[1..];
-            // Fully-typed slash command → emit `/name <first_required>=` as a
-            // single completion so isocline shows the first arg as the inline
-            // ghost hint. Tab opens the key-value pair; user types the value.
-            if (SlashCommand.findSchema(self.slash_schemas, partial)) |schema| {
-                if (schema.required.len > 0) {
-                    const text = std.fmt.bufPrintZ(&buf, "{s} {s}=", .{ input, schema.required[0] }) catch return;
-                    _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
-                    return;
-                }
+            // Trailing space on commands with params hands off to the hinter,
+            // which renders the full ` <url> [timeout=…]` template uniformly
+            // whether the user typed the name or Tab-completed it.
+            for (all_slash_names) |name| {
+                const suffix: []const u8 = if (slashHasParams(self.slash_schemas, name)) " " else "";
+                addPrefixedCompletion(cenv, &buf, input, "/", name, suffix, partial);
             }
-            for (all_slash_names) |name| addPrefixedCompletion(cenv, &buf, input, "/", name, "", partial);
             return;
         }
     } else if (!has_space) {
-        // Case-insensitive so Tab rewrites mistyped lowercase (`goto` → `GOTO`);
-        // the highlighter stays case-sensitive.
-        if (exactKeywordMatch(input)) |kw| {
-            // Full keyword typed — emit a single completion `<name><starter>`
-            // so isocline renders the starter as the inline ghost hint
-            // (isocline shows hints only when there's exactly one candidate).
-            // The starter is designed so Tab does something useful: open the
-            // quote for selector commands, insert `https://www.` for GOTO.
-            if (kw.starter) |starter| {
-                const text = std.fmt.bufPrintZ(&buf, "{s}{s}", .{ kw.name, starter }) catch return;
-                _ = c.ic_add_completion_prim(cenv, text.ptr, null, null, @intCast(input.len), 0);
-            }
-        } else {
-            for (Command.keywords) |kw| addPrefixedCompletion(cenv, &buf, input, "", kw.name, "", input);
+        // Trailing space on argful keywords hands off to the hinter, which
+        // renders ` '<selector>'` etc. uniformly whether typed or Tab-completed.
+        // Case-insensitive Tab so `goto<TAB>` rewrites to `GOTO `; the
+        // highlighter stays case-sensitive.
+        for (Command.keywords) |kw| {
+            const suffix: []const u8 = if (kw.params.len > 0) " " else "";
+            addPrefixedCompletion(cenv, &buf, input, "", kw.name, suffix, input);
         }
     }
 
@@ -486,6 +475,11 @@ fn isKnownSlashName(name: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(n, name)) return true;
     }
     return false;
+}
+
+fn slashHasParams(schemas: []const SlashCommand.SchemaInfo, name: []const u8) bool {
+    const s = SlashCommand.findSchema(schemas, name) orelse return false;
+    return s.hints.len > 0;
 }
 
 fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize, end: usize) void {

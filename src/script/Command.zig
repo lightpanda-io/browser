@@ -224,11 +224,6 @@ pub const KeywordSyntax = struct {
     name: []const u8,
     /// Null for argless commands; the agent renders a different error.
     args: ?[]const u8,
-    /// Tab-completion suffix shown after a fully-typed keyword. Designed so
-    /// Tab does something useful (open the quote, insert a URL scheme) rather
-    /// than inserting an angle-bracket template. Null when no good starter
-    /// exists (numeric args, argless commands).
-    starter: ?[]const u8 = null,
     /// Pre-rendered positional-arg fragments shown progressively in the inline
     /// hint as the user fills them in. Empty for argless commands. The visual
     /// notation matches `args` (e.g. `'<selector>'` for quoted, `[x]` for
@@ -243,18 +238,18 @@ const value_arg = "'<value>'";
 /// Single source of truth for PandaScript keyword names — consumed by the
 /// parser, the REPL highlighter, and Tab completion.
 pub const keywords = [_]KeywordSyntax{
-    .{ .name = "GOTO", .args = "<url>", .starter = " https://www.", .params = &.{"<url>"} },
-    .{ .name = "CLICK", .args = selector_arg, .starter = " '", .params = &.{selector_arg} },
-    .{ .name = "TYPE", .args = selector_arg ++ " " ++ value_arg, .starter = " '", .params = &.{ selector_arg, value_arg } },
-    .{ .name = "WAIT", .args = selector_arg, .starter = " '", .params = &.{selector_arg} },
+    .{ .name = "GOTO", .args = "<url>", .params = &.{"<url>"} },
+    .{ .name = "CLICK", .args = selector_arg, .params = &.{selector_arg} },
+    .{ .name = "TYPE", .args = selector_arg ++ " " ++ value_arg, .params = &.{ selector_arg, value_arg } },
+    .{ .name = "WAIT", .args = selector_arg, .params = &.{selector_arg} },
     .{ .name = "SCROLL", .args = "[x] [y]", .params = &.{ "[x]", "[y]" } },
-    .{ .name = "HOVER", .args = selector_arg, .starter = " '", .params = &.{selector_arg} },
-    .{ .name = "SELECT", .args = selector_arg ++ " " ++ value_arg, .starter = " '", .params = &.{ selector_arg, value_arg } },
-    .{ .name = "CHECK", .args = selector_arg ++ " [true|false]", .starter = " '", .params = &.{ selector_arg, "[true|false]" } },
+    .{ .name = "HOVER", .args = selector_arg, .params = &.{selector_arg} },
+    .{ .name = "SELECT", .args = selector_arg ++ " " ++ value_arg, .params = &.{ selector_arg, value_arg } },
+    .{ .name = "CHECK", .args = selector_arg ++ " [true|false]", .params = &.{ selector_arg, "[true|false]" } },
     .{ .name = "TREE", .args = null },
     .{ .name = "MARKDOWN", .args = null },
-    .{ .name = "EXTRACT", .args = selector_arg, .starter = " '", .params = &.{selector_arg} },
-    .{ .name = "EVAL", .args = "'<script>'", .starter = " '", .params = &.{"'<script>'"} },
+    .{ .name = "EXTRACT", .args = selector_arg, .params = &.{selector_arg} },
+    .{ .name = "EVAL", .args = "'<script>'", .params = &.{"'<script>'"} },
     .{ .name = "LOGIN", .args = null },
     .{ .name = "ACCEPT_COOKIES", .args = null },
 };
