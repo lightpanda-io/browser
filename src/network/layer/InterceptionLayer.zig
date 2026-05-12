@@ -205,8 +205,7 @@ pub fn continueRequest(self: *InterceptionLayer, transfer: *Transfer) anyerror!v
     transfer.loop_owned = false;
     self.next.request(transfer) catch |err| {
         if (!transfer.loop_owned) {
-            transfer.requestFailed(err, true);
-            transfer.deinit();
+            transfer.abort(err);
         }
         return err;
     };
@@ -218,9 +217,7 @@ pub fn abortRequest(self: *InterceptionLayer, transfer: *Transfer) void {
         log.debug(.http, "abort transfer", .{ .intercepted = self.intercepted });
     }
     self.intercepted -= 1;
-
-    transfer.requestFailed(error.Abort, true);
-    transfer.deinit();
+    transfer.abort(error.Abort);
 }
 
 pub fn fulfillRequest(
@@ -235,7 +232,6 @@ pub fn fulfillRequest(
         log.debug(.http, "fulfill transfer", .{ .intercepted = self.intercepted });
     }
     self.intercepted -= 1;
-    defer transfer.deinit();
 
     // `done` flips true once we've called the user's done_callback. If
     // done_callback itself throws, the user already saw their end-of-flow
@@ -243,10 +239,13 @@ pub fn fulfillRequest(
     var done: bool = false;
     fulfillInner(&transfer.req, status, headers, body, &done) catch |err| {
         if (!done) {
-            transfer.requestFailed(err, true);
+            transfer.abort(err);
+        } else {
+            transfer.deinit();
         }
         return err;
     };
+    transfer.deinit();
 }
 
 fn fulfillInner(

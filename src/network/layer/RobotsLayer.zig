@@ -110,10 +110,20 @@ fn fetchRobotsThenRequest(
             @compileError("expected request.params to be a struct");
         }
 
+        // CRITICAL: build a fresh Headers for the inner robots fetch.
+        // params is value-copied from the parent's req.params, but
+        // Headers is a struct wrapping a *curl_slist — value copy shares
+        // the pointer. Letting Client.request take ownership of a shared
+        // headers list means both transfers will free it at deinit time
+        // -> double-free. The robots.txt fetch is a system-level GET
+        // anyway, no need to inherit the parent's user headers.
+        params.headers = try transfer.client.newHeaders();
+        errdefer params.headers.deinit();
         params.method = .GET;
         params.url = robots_url;
         params.skip_robots = true;
         params.resource_type = .fetch;
+        params.body = null;
 
         log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
         try transfer.client.request(.{
@@ -142,8 +152,7 @@ fn flushPending(self: *RobotsLayer, robots_url: [:0]const u8, allowed: bool) voi
     for (queued.value.items) |transfer| {
         if (!allowed) {
             log.warn(.http, "blocked by robots", .{ .url = transfer.url });
-            transfer.requestFailed(error.RobotsBlocked, true);
-            transfer.deinit();
+            transfer.abort(error.RobotsBlocked);
         } else {
             // Reset ownership: handing back to the layer chain. If a downstream
             // layer commits (multi / queue / pause), it'll flip loop_owned back
@@ -151,24 +160,26 @@ fn flushPending(self: *RobotsLayer, robots_url: [:0]const u8, allowed: bool) voi
             transfer.loop_owned = false;
             self.next.request(transfer) catch |e| {
                 if (!transfer.loop_owned) {
-                    transfer.requestFailed(e, true);
-                    transfer.deinit();
+                    transfer.abort(e);
                 }
             };
         }
     }
 }
 
+// Invariant: shutdown_callback fires on a Transfer only via Transfer.kill,
+// and the only callers of kill are Client.abortOwner / .abortRequests
+// (owner-driven teardown). So if THIS robots fetch's shutdown_callback
+// fired, the owner is being torn down — every parked transfer in this
+// pending queue is on the same owner list and is already being killed by
+// the same walk. We just need to drop the pending entry; the owner walk
+// handles the rest. (If a future code path adds per-transfer kill
+// without owner teardown, this assumption breaks — see comment above
+// detachOrDeinit in HttpClient.zig.)
 fn flushPendingShutdown(self: *RobotsLayer, robots_url: [:0]const u8) void {
     var pending = self.pending.fetchRemove(robots_url) orelse
         @panic("RobotsLayer.flushPendingShutdown: missing queue");
-    defer pending.value.deinit(self.allocator);
-
-    for (pending.value.items) |transfer| {
-        // execute_callback=false → fires shutdown_callback (not error_callback).
-        transfer.requestFailed(error.Shutdown, false);
-        transfer.deinit();
-    }
+    pending.value.deinit(self.allocator);
 }
 
 const RobotsContext = struct {

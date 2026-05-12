@@ -378,10 +378,20 @@ pub fn _request(_: *anyopaque, transfer: *Transfer) !void {
     return transfer.client.process(transfer);
 }
 
+// Ownership contract: from the moment this function is entered, the
+// HttpClient owns `req` — specifically `req.params.headers` (a curl_slist).
+// On success, transfer.deinit eventually frees it. On any failure path
+// inside this function, we free it before returning the error. Callers
+// must NOT pair `request()` with their own `errdefer headers.deinit()`
+// — that's a double-free.
 pub fn request(self: *Client, req: Request, owner: ?*Owner) !void {
-    const arena = try self.arena_pool.acquire(.small, "Request.arena");
+    const arena = self.arena_pool.acquire(.small, "Request.arena") catch |err| {
+        req.params.headers.deinit();
+        return err;
+    };
 
     const transfer = arena.create(Transfer) catch |err| {
+        req.params.headers.deinit();
         self.arena_pool.release(arena);
         return err;
     };
@@ -390,36 +400,41 @@ pub fn request(self: *Client, req: Request, owner: ?*Owner) !void {
         .req = req,
         .url = req.params.url,
         .client = self,
-        .owner = owner,
+        // owner is set AFTER we've actually appended to the owner list,
+        // so transfer.deinit's `if (self.owner)` branch only fires when
+        // we're truly linked. Otherwise we'd try to remove a node from
+        // a list it was never in.
+        .owner = null,
         .arena = arena,
         .id = self.incrReqId(),
         .start_time = timestamp(.monotonic),
         .owner_node = .{},
     };
 
+    // From here, transfer owns req+arena. Any subsequent failure flows
+    // through transfer.deinit (or transfer.abort), which handles headers
+    // via req.deinit. Do NOT free headers directly past this point.
+
     // Register for id-based lookup. putNoClobber would fail if request_id
     // collides (i.e. we've wrapped through 2^32 requests and the old
     // transfer is still alive — practically never).
     self.transfers.putNoClobber(self.allocator, transfer.id, transfer) catch |err| {
-        self.arena_pool.release(arena);
+        transfer.deinit();
         return err;
     };
 
     if (owner) |o| {
         o.addTransfer(transfer);
+        transfer.owner = o;
     }
 
     // From this point forward, the transfer owns `req` and `arena`. If the
     // layer chain fails before any layer commits the transfer to an external
-    // owner (queue / multi handle / pending interception), we clean up here.
-    // `loop_owned` is set by the commit points; if it stays false on failure,
-    // no one else will deinit the transfer, so we do it. requestFailed goes
-    // through transfer.req — so any layer wrappers see the failure too — and
-    // latches _notified_fail to keep the notification single-fire.
+    // owner (queue / multi handle / pending interception), we clean up here
+    // via transfer.abort which fires error_callback and deinits.
     self.entry_layer.request(transfer) catch |err| {
         if (!transfer.loop_owned) {
-            transfer.requestFailed(err, true);
-            transfer.deinit();
+            transfer.abort(err);
         }
         return err;
     };
@@ -567,10 +582,10 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
 
     if (transfer.req.start_callback) |cb| {
         cb(Response.fromTransfer(transfer)) catch |err| {
-            // We're now committed to the multi. Tear down explicitly: deinit
-            // (which removeConn's from the multi) and notify the caller.
-            transfer.requestFailed(err, true);
-            transfer.deinit();
+            // We're now committed to the multi. transfer.abort fires the
+            // error_callback and tears down (removeConn handles the
+            // already-in-multi case via the dirty queue).
+            transfer.abort(err);
             return err;
         };
     }
@@ -1115,73 +1130,97 @@ pub const Transfer = struct {
         arena_pool.release(arena);
     }
 
+    // Cancel this transfer with `err`. Fires error_callback once (latched
+    // via _notified_fail), then either deinits synchronously or, if we're
+    // mid-perform with a libcurl handle still in the multi, detaches and
+    // lets the natural processOneMessage flow deinit later.
+    //
+    // This is the ONE entry point external callers should use to cancel
+    // a transfer. Don't reach for kill() or requestFailed() directly —
+    // they're internal helpers.
     pub fn abort(self: *Transfer, err: anyerror) void {
         self.requestFailed(err, true);
-
-        if (self._performing or self.client.performing) {
-            // We're currently in a curl_multi_perform. We cannot call
-            // curl_multi_remove_handle from a curl callback. Instead, we flag
-            // this transfer and our callbacks will check for this flag.
-            self.aborted = true;
-            return;
-        }
-
-        self.deinit();
+        self.detachOrDeinit();
     }
 
-    pub fn terminate(self: *Transfer) void {
-        self.requestFailed(error.Shutdown, false);
-        self.deinit();
-    }
-
-    // internal, when the frame is shutting down. Doesn't have the same ceremony
-    // as abort (doesn't send a notification, doesn't invoke an error callback)
+    // Owner-driven teardown: fires shutdown_callback (not error_callback)
+    // and otherwise behaves like abort. Called by Client.abortOwner /
+    // abortRequests when a Frame / WGS is being torn down.
     fn kill(self: *Transfer) void {
         if (self.req.shutdown_callback) |cb| {
             cb(self.req.ctx);
         }
-
-        if (self._performing or self.client.performing) {
-            // We're currently inside of a callback. This client, and libcurl
-            // generally don't expect a transfer to become deinitialized during
-            // a callback. We can flag the transfer as aborted (which is what
-            // we do when transfer.abort() is called in this condition) AND,
-            // since this "kill()"should prevent any future callbacks, the best
-            // we can do is null/noop them.
-            self.aborted = true;
-            self.req.start_callback = null;
-            self.req.shutdown_callback = null;
-            self.req.header_callback = Noop.headerCallback;
-            self.req.data_callback = Noop.dataCallback;
-            self.req.done_callback = Noop.doneCallback;
-            self.req.error_callback = Noop.errorCallback;
-            // Detach from the owner list NOW. The transfer will finish its
-            // curl lifecycle and be deinit'd later from processOneMessage,
-            // but by then the owner (Frame / WGS) may have been freed —
-            // attempting o.transfers.remove(&owner_node) against a dangling
-            // list would UAF. Leaving the transfer linked also breaks the
-            // invariant that an owner can be torn down once its list walks
-            // clean. Clear `owner` so transfer.deinit doesn't try again.
-            if (self.owner) |o| {
-                o.removeTransfer(self);
-                self.owner = null;
-            }
-            return;
-        }
-
-        self.deinit();
+        self.detachOrDeinit();
     }
 
-    // The single failure-notification point. Latches via _notified_fail so
-    // multiple paths racing to report the same failure (e.g. an error inside
-    // a callback that's already being handled by the loop) only fire one
+    // Decide whether to tear down now or defer until processOneMessage
+    // eventually drains the in-flight curl handle.
+    //
+    // Two cases force deferral:
+    //   * `_performing` — processOneMessage is currently processing THIS
+    //     transfer (set/cleared around the callback chain). It will call
+    //     `transfer.deinit` itself after the chain returns; deiniting
+    //     here would double-free. Note that `_conn` is cleared partway
+    //     through this window (the "release conn ASAP" step before
+    //     done_callback fires), so we cannot rely on `_conn != null`.
+    //   * `client.performing` + we have a libcurl handle — libcurl could
+    //     still fire callbacks for us. Releasing the arena now would UAF
+    //     from inside curl.
+    //
+    // Otherwise (parked / queued / never-trackConn'd / fully drained),
+    // there is nothing left referencing this transfer and we can safely
+    // deinit inline even from inside a perform callback.
+    fn detachOrDeinit(self: *Transfer) void {
+        const must_defer = self._performing or
+            (self.client.performing and self._conn != null);
+        if (must_defer) {
+            self.detachInPerform();
+        } else {
+            self.deinit();
+        }
+    }
+
+    // Deferred-cleanup path when we can't synchronously deinit.
+    //
+    // We:
+    //   - flag `aborted` so processOneMessage's normal-completion paths
+    //     short-circuit when they next see this transfer,
+    //   - noop every user callback so libcurl naturally draining the
+    //     in-flight response can't re-enter user code,
+    //   - unlink from owner.transfers and clear `owner` so the owning
+    //     Frame/WGS can be freed while this transfer is still draining.
+    //     transfer.deinit (called later by processOneMessage) sees
+    //     `owner == null` and skips the list-remove that would otherwise
+    //     UAF against a freed list.
+    fn detachInPerform(self: *Transfer) void {
+        self.aborted = true;
+        self.req.start_callback = null;
+        self.req.shutdown_callback = null;
+        self.req.header_callback = Noop.headerCallback;
+        self.req.data_callback = Noop.dataCallback;
+        self.req.done_callback = Noop.doneCallback;
+        self.req.error_callback = Noop.errorCallback;
+        if (self.owner) |o| {
+            o.removeTransfer(self);
+            self.owner = null;
+        }
+    }
+
+    // Internal failure-notification helper. Latches via _notified_fail so
+    // multiple paths racing to report the same failure only fire one
     // notification. Goes through transfer.req — so layer wrappers
-    // (InterceptContext, CacheContext) see the failure and can propagate it
-    // up the chain.
+    // (InterceptContext, CacheContext) see the failure and can propagate
+    // it up the chain.
+    //
+    // Not part of the external API: callers cancelling a transfer should
+    // use transfer.abort(err) instead, which goes through this and also
+    // handles the deinit / detach side. The internal HttpClient flow uses
+    // this directly (from processOneMessage) because it's already paired
+    // with the natural processMessages → transfer.deinit handoff.
     //
     // execute_callback=true → fires error_callback. false → fires
     // shutdown_callback (used by Frame shutdown / WGS teardown).
-    pub fn requestFailed(self: *Transfer, err: anyerror, comptime execute_callback: bool) void {
+    fn requestFailed(self: *Transfer, err: anyerror, comptime execute_callback: bool) void {
         if (self._notified_fail) return;
         self._notified_fail = true;
 
