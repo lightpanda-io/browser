@@ -315,6 +315,7 @@ pub fn abort(self: *Client) void {
     // Snapshot before killing: kill() -> deinit removes entries from
     // self.transfers, which would invalidate a live iterator.
     var snapshot = std.ArrayList(*Transfer).initCapacity(self.allocator, self.transfers.count()) catch @panic("OOM");
+    defer snapshot.deinit(self.allocator);
     var it = self.transfers.valueIterator();
     while (it.next()) |t| {
         snapshot.appendAssumeCapacity(t.*);
@@ -324,21 +325,20 @@ pub fn abort(self: *Client) void {
         t.kill();
     }
 
-    // TODO: Give transfer a state so it can track this.
-    // Transfer.deinit unlinks from owner.transfers + in_use/ready_queue
-    // (via removeConn), but it doesn't know how to unlink from
-    // self.queue — process() puts _node on this list when no connection
-    // is available, and we have no per-transfer flag to detect that
-    // membership. The kill loop above has freed every queued transfer's
-    // memory; the nodes those entries pointed to are now invalid, so
-    // we reset the list heads. Same for ready_queue: the conns it held
-    // were released via removeConn during deinit, but the queue head
-    // wasn't touched.
-    self.queue = .{};
-    self.ready_queue = .{};
-
+    // After the kill loop, every internal list should drain itself via
+    // each transfer's deinit:
+    //   - self.transfers : transfers.remove(self.id)
+    //   - self.queue     : unlinked if _queued is set
+    //   - self.in_use / self.ready_queue : via removeConn
+    //   - self.dirty     : drained at end of each perform; nothing left here
+    // Any non-empty list means a transfer escaped cleanup — assert so we
+    // catch the regression rather than silently leaking on next use.
     if (comptime IS_DEBUG) {
         std.debug.assert(self.transfers.size == 0);
+        std.debug.assert(self.queue.first == null);
+        std.debug.assert(self.in_use.first == null);
+        std.debug.assert(self.ready_queue.first == null);
+        std.debug.assert(self.dirty.first == null);
     }
 }
 
@@ -380,12 +380,15 @@ pub fn abortRequests(_: *Client, owner: *Owner) void {
 
 pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
     while (self.queue.popFirst()) |queue_node| {
+        const transfer: *Transfer = @fieldParentPtr("_node", queue_node);
         const conn = self.network.getConnection() orelse {
             self.queue.prepend(queue_node);
             break;
         };
-
-        try self.makeRequest(conn, @fieldParentPtr("_node", queue_node));
+        // Cleared only after we've successfully obtained a connection;
+        // if we put the node back, _queued stays true.
+        transfer._queued = false;
+        try self.makeRequest(conn, transfer);
     }
 
     return self.perform(@intCast(timeout_ms));
@@ -550,6 +553,7 @@ fn process(self: *Client, transfer: *Transfer) !void {
     }
 
     self.queue.append(&transfer._node);
+    transfer._queued = true;
     transfer.loop_owned = true;
 }
 
@@ -1077,6 +1081,15 @@ pub const Transfer = struct {
     // errdefer skips cleanup — whoever now owns the transfer will deinit it.
     loop_owned: bool = false,
 
+    // True iff `_node` is currently linked in `client.queue` (waiting for a
+    // libcurl handle). Set in `Client.process` on enqueue, cleared in
+    // `Client.tick` on popFirst, and used by `Transfer.deinit` to safely
+    // unlink — `deinit` has no other way to detect queue membership, and
+    // a transfer aborted while queued (e.g. via owner-list abort) would
+    // otherwise leave a dangling `_node` in `client.queue` that the next
+    // `tick` would dereference and hand to libcurl.
+    _queued: bool = false,
+
     req: Request,
     url: [:0]const u8,
     client: *Client,
@@ -1131,6 +1144,15 @@ pub const Transfer = struct {
         if (self._conn) |conn| {
             self.client.removeConn(conn);
             self._conn = null;
+        }
+
+        // Unlink from client.queue if we were waiting for a handle.
+        // Without this, deinit'ing a queued transfer (e.g. via owner-list
+        // abort during navigation) leaves a dangling _node in the queue
+        // that the next tick would pop and hand to libcurl → UAF.
+        if (self._queued) {
+            self.client.queue.remove(&self._node);
+            self._queued = false;
         }
 
         // Drop the id→*Transfer index entry before freeing the memory.
