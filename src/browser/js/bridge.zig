@@ -978,9 +978,11 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/AbortController.zig"),
     @import("../webapi/URL.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
+    @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
     @import("../webapi/net/XMLHttpRequest.zig"),
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
     @import("../webapi/FileReader.zig"),
+    @import("../webapi/ImageData.zig"),
     // @import("../webapi/Performance.zig"),
 });
 
