@@ -31,19 +31,18 @@
 
 <div id=d3></div>
 <script id=appendChild_fragment_mutation>
-  // Custom-element reactions are queued during the appendChild algorithm
-  // and fire after it completes. The connectedCallback below sees the
-  // post-move DOM state — both fragment children are already in d3 — so
-  // its check `b.parentNode === fragment` is false and it leaves b alone.
+  // Test that appendChild with DocumentFragment handles synchronous callbacks
+  // (like custom element connectedCallback) that modify the fragment during iteration.
+  // This reproduces a bug where the iterator captures "next" node pointers
+  // before processing, but callbacks can remove those nodes from the fragment.
   const d3 = $('#d3');
   const fragment = document.createDocumentFragment();
 
+  // Create custom element whose connectedCallback modifies the fragment
   let bElement = null;
-  let parentSeenAtCallback = null;
   class ModifyingElement extends HTMLElement {
     connectedCallback() {
-      // Callback fires after the move; record what we observe.
-      parentSeenAtCallback = bElement && bElement.parentNode;
+      // When this element is connected, remove 'b' from the fragment
       if (bElement && bElement.parentNode === fragment) {
         fragment.removeChild(bElement);
       }
@@ -59,37 +58,39 @@
   fragment.appendChild(a);
   fragment.appendChild(b);
 
+  // This should not crash - appendChild should handle the modification gracefully
   d3.appendChild(fragment);
 
-  // Both moved atomically. Callback observed b already in d3.
-  assertChildren(['a', 'b'], d3);
-  testing.expectEqual(d3, parentSeenAtCallback);
+  // 'a' should be in d3, 'b' was removed by connectedCallback and is now detached
+  assertChildren(['a'], d3);
+  testing.expectEqual(null, b.parentNode);
 </script>
 
 <div id=d4></div>
 <div id=d4_stash></div>
-<script id=appendChild_disconnect_callback_observes_post_move>
-  // Custom-element reactions queue and drain at the algorithm boundary, so
-  // disconnectedCallback fires after the whole move completes. By then the
-  // element is already in its new (disconnected) parent — the callback
-  // observes the post-move state, never a parentless intermediate.
+<script id=appendChild_disconnect_callback_reparents>
+  // Moving a connected child into a disconnected target makes
+  // will_be_reconnected=false, so disconnectedCallback fires synchronously
+  // inside removeNode. The callback re-parents the child; appendChild
+  // respects that placement instead of overriding it.
   const d4 = $('#d4');
+  const stash = $('#d4_stash');
 
-  let parentSeenAtDisconnect = undefined;
-  class ObserveOnDisconnect extends HTMLElement {
+  class ReparentOnDisconnect extends HTMLElement {
     disconnectedCallback() {
-      parentSeenAtDisconnect = this.parentNode;
+      if (this.parentNode === null) {
+        stash.appendChild(this);
+      }
     }
   }
-  customElements.define('observe-on-disconnect', ObserveOnDisconnect);
+  customElements.define('reparent-on-disconnect', ReparentOnDisconnect);
 
-  const ood = document.createElement('observe-on-disconnect');
-  ood.id = 'ood';
-  d4.appendChild(ood);
+  const rpd = document.createElement('reparent-on-disconnect');
+  rpd.id = 'rpd';
+  d4.appendChild(rpd);
 
   const detached = document.createElement('div');
-  detached.appendChild(ood);
+  detached.appendChild(rpd);
 
-  testing.expectEqual(detached, ood.parentNode);
-  testing.expectEqual(detached, parentSeenAtDisconnect);
+  testing.expectEqual(stash, rpd.parentNode);
 </script>

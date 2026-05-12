@@ -2,19 +2,19 @@
 <body>
 <script src="../testing.js"></script>
 
-<!-- Custom-element reactions queue during outerHTML's algorithm and fire
-     at the boundary, not mid-loop. By the time connectedCallback runs,
-     insertAllChildrenBefore has already inserted every fragment child
-     and setOuterHTML has detached the original `target`, so the callback
-     sees the post-state — its check observes target already detached and
-     leaves the DOM untouched. -->
-<script id="outerHTML_callback_observes_post_state">
+<!-- Regression: Frame.insertAllChildrenBefore (used by Element.outerHTML
+     setter) loops over fragment children and inserts each one .before
+     ref_node. _insertNodeRelative invokes connectedCallback for custom
+     elements, and that callback can detach ref_node from parent. The
+     next iteration must not panic on `ref_node._parent.? == parent`. -->
+<script id="outerHTML_callback_detaches_ref_node">
 {
-    let targetParentAtCallback = undefined;
     class DetachTarget extends HTMLElement {
         connectedCallback() {
             const target = document.getElementById('outer_target');
-            targetParentAtCallback = target && target.parentNode;
+            if (target && target.parentNode) {
+                target.parentNode.removeChild(target);
+            }
         }
     }
     customElements.define('detach-target-1', DetachTarget);
@@ -26,48 +26,60 @@
     target.id = 'outer_target';
     wrap.appendChild(target);
 
+    // Two siblings: the first one's connectedCallback removes `target`
+    // (which is the ref_node passed to insertAllChildrenBefore). The
+    // second one then tries to insert before a parentless ref_node.
     target.outerHTML = '<detach-target-1></detach-target-1><b id="second">x</b>';
 
-    // Both replacement children landed; the original target was removed
-    // before the queued connectedCallback ran.
+    // We don't strictly care about the final shape, just that we got
+    // here without crashing. Sanity-check the first child landed.
     testing.expectTrue(wrap.querySelector('detach-target-1') !== null);
-    testing.expectTrue(wrap.querySelector('#second') !== null);
-    testing.expectEqual(null, targetParentAtCallback);
 }
 </script>
 
-<!-- innerHTML removes existing children, then parses and inserts the
-     new content. With queued reactions, the disconnectedCallbacks for
-     the removed elements fire after the whole algorithm completes — so
-     they observe `host` already populated with the new content. -->
-<script id="innerHTML_disconnected_observes_post_state">
+<!-- Regression: Element.setInnerHTML removes existing children using
+     `childrenIterator()`. removeNode fires disconnectedCallback for
+     custom elements, and that callback can mutate the host's child
+     list, leaving the iterator advancing through a node that no longer
+     belongs to the parent. -->
+<script id="innerHTML_disconnected_mutates_siblings">
 {
     let host;
-    let lastSeenChildCount = -1;
-    let lastSeenFirstTag = null;
-    class SiblingObserver extends HTMLElement {
+    let removeNextOnDisconnect = false;
+    class SiblingZapper extends HTMLElement {
         disconnectedCallback() {
-            lastSeenChildCount = host.children.length;
-            lastSeenFirstTag = host.children.length > 0 ? host.children[0].tagName : null;
+            if (!removeNextOnDisconnect) return;
+            removeNextOnDisconnect = false;
+            // Reach into the parent (captured via closure) to remove a
+            // sibling that the outer setInnerHTML loop is about to visit.
+            // The element being removed here is what the iterator's
+            // current node still points its `next` pointer at.
+            if (host.children.length > 0) {
+                host.removeChild(host.children[0]);
+            }
         }
     }
-    customElements.define('sibling-zapper-2', SiblingObserver);
+    customElements.define('sibling-zapper-2', SiblingZapper);
 
     host = document.createElement('div');
     document.body.appendChild(host);
 
-    host.appendChild(document.createElement('sibling-zapper-2'));
-    host.appendChild(document.createElement('sibling-zapper-2'));
-    host.appendChild(document.createElement('span'));
+    const a = document.createElement('sibling-zapper-2');
+    const b = document.createElement('sibling-zapper-2');
+    const c = document.createElement('span');
+    host.appendChild(a);
+    host.appendChild(b);
+    host.appendChild(c);
 
+    removeNextOnDisconnect = true;
+
+    // Triggers the removal loop in setInnerHTML. Removing `a` fires its
+    // disconnectedCallback, which removes `b` (the iterator's next
+    // target). The loop must not visit a node whose `_parent` is null.
     host.innerHTML = '<i>after</i>';
 
-    // The disconnectedCallback fires after innerHTML completes; by then
-    // the new <i> is already in place.
     testing.expectEqual(1, host.children.length);
     testing.expectEqual('I', host.children[0].tagName);
-    testing.expectEqual(1, lastSeenChildCount);
-    testing.expectEqual('I', lastSeenFirstTag);
 }
 </script>
 </body>

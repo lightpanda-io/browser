@@ -311,11 +311,11 @@ pub const JsApi = struct {
     }
 
     pub const contains = bridge.function(DOMTokenList.contains, .{ .dom_exception = true });
-    pub const add = bridge.function(DOMTokenList.add, .{ .dom_exception = true, .ce_reactions = true });
-    pub const remove = bridge.function(DOMTokenList.remove, .{ .dom_exception = true, .ce_reactions = true });
-    pub const toggle = bridge.function(DOMTokenList.toggle, .{ .dom_exception = true, .ce_reactions = true });
-    pub const replace = bridge.function(DOMTokenList.replace, .{ .dom_exception = true, .ce_reactions = true });
-    pub const value = bridge.accessor(DOMTokenList.getValue, DOMTokenList.setValue, .{ .ce_reactions = true });
+    pub const add = bridge.function(DOMTokenList.add, .{ .dom_exception = true });
+    pub const remove = bridge.function(DOMTokenList.remove, .{ .dom_exception = true });
+    pub const toggle = bridge.function(DOMTokenList.toggle, .{ .dom_exception = true });
+    pub const replace = bridge.function(DOMTokenList.replace, .{ .dom_exception = true });
+    pub const value = bridge.accessor(DOMTokenList.getValue, DOMTokenList.setValue, .{});
     pub const toString = bridge.function(DOMTokenList.getValue, .{});
     pub const keys = bridge.function(DOMTokenList.keys, .{});
     pub const values = bridge.function(DOMTokenList.values, .{});
