@@ -283,7 +283,7 @@ pub fn obeyRobots(self: *const Config) bool {
 
 pub fn disableSubframes(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.disable_subframes,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_subframes,
         else => unreachable,
     };
 }
