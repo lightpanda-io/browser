@@ -102,14 +102,20 @@ pub const Command = union(enum) {
     }
 };
 
-/// Emit `KEYWORD '<body>'` for single-line bodies, or the triple-quote block
-/// form for bodies that contain newlines. Used by EVAL and EXTRACT.
 fn writeBlockOrInline(writer: *std.Io.Writer, keyword: []const u8, body: []const u8) std.Io.Writer.Error!void {
     if (std.mem.indexOfScalar(u8, body, '\n') != null) {
         try writer.print("{s} '''\n{s}\n'''", .{ keyword, body });
     } else {
         try writer.print("{s} {f}", .{ keyword, quote(body) });
     }
+}
+
+fn splitHead(line: []const u8) struct { head: []const u8, rest: []const u8 } {
+    const end = std.mem.indexOfAny(u8, line, &std.ascii.whitespace) orelse line.len;
+    return .{
+        .head = line[0..end],
+        .rest = std.mem.trim(u8, line[end..], &std.ascii.whitespace),
+    };
 }
 
 /// Parse a line of REPL input into a PandaScript command.
@@ -121,9 +127,9 @@ pub fn parse(line: []const u8) Command {
 
     if (trimmed[0] == '#') return .{ .comment = {} };
 
-    const cmd_end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
-    const cmd_word = trimmed[0..cmd_end];
-    const rest = std.mem.trim(u8, trimmed[cmd_end..], &std.ascii.whitespace);
+    const split = splitHead(trimmed);
+    const cmd_word = split.head;
+    const rest = split.rest;
 
     if (std.mem.eql(u8, cmd_word, "GOTO")) {
         if (rest.len == 0) return .{ .natural_language = trimmed };
@@ -285,10 +291,11 @@ pub fn analyzePandaBody(body: []const u8) BodyCursor {
         if (i >= body.len) break;
         const ch = body[i];
         if (ch == '\'' or ch == '"') {
-            if (tripleQuotePrefix(body[i..])) |tq| {
-                const end_idx = std.mem.indexOfPos(u8, body, i + tq.len, tq) orelse
+            if (QuoteType.fromPrefix(body[i..])) |tq| {
+                const lit = tq.toLiteral();
+                const end_idx = std.mem.indexOfPos(u8, body, i + lit.len, lit) orelse
                     return .{ .complete_args = complete, .at_boundary = false };
-                i = end_idx + tq.len;
+                i = end_idx + lit.len;
             } else {
                 const end_idx = std.mem.indexOfScalarPos(u8, body, i + 1, ch) orelse
                     return .{ .complete_args = complete, .at_boundary = false };
@@ -309,9 +316,7 @@ pub fn analyzePandaBody(body: []const u8) BodyCursor {
 /// rejects a line whose first word *looked* like a command — either an argful
 /// keyword missing its args, or an argless keyword followed by junk.
 pub fn keywordSyntax(line: []const u8) ?KeywordSyntax {
-    const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-    const end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
-    const word = trimmed[0..end];
+    const word = splitHead(std.mem.trim(u8, line, &std.ascii.whitespace)).head;
     for (keywords) |kc| {
         if (std.mem.eql(u8, word, kc.name)) return kc;
     }
@@ -355,12 +360,9 @@ pub const ScriptIterator = struct {
                 const start_line = self.line_num;
                 const body_or_null = self.collectMultiLineBlock(opener.quote_type);
                 const span_end = self.lines.index orelse self.lines.buffer.len;
-                const cmd: Command = if (body_or_null) |body| switch (opener.kind) {
-                    .eval => .{ .eval_js = body },
-                    .extract => .{ .extract = body },
-                } else switch (opener.kind) {
-                    .eval => .{ .natural_language = "unterminated EVAL block" },
-                    .extract => .{ .natural_language = "unterminated EXTRACT block" },
+                const cmd: Command = switch (opener.kind) {
+                    .eval => if (body_or_null) |body| .{ .eval_js = body } else .{ .natural_language = "unterminated EVAL block" },
+                    .extract => if (body_or_null) |body| .{ .extract = body } else .{ .natural_language = "unterminated EXTRACT block" },
                 };
                 return .{
                     .line_num = start_line,
@@ -385,30 +387,24 @@ pub const ScriptIterator = struct {
     /// `EVAL '''a'''` fall through to single-line `parse()`.
     const BlockKeyword = struct {
         kind: enum { eval, extract },
-        quote_type: []const u8,
+        quote_type: QuoteType,
 
         fn fromOpener(line: []const u8) ?BlockKeyword {
-            const cmd_end = std.mem.indexOfAny(u8, line, &std.ascii.whitespace) orelse return null;
-            const cmd_word = line[0..cmd_end];
-            const rest = std.mem.trim(u8, line[cmd_end..], &std.ascii.whitespace);
-            const quote_type: []const u8 = if (std.mem.eql(u8, rest, "\"\"\""))
-                "\"\"\""
-            else if (std.mem.eql(u8, rest, "'''"))
-                "'''"
-            else
-                return null;
-            if (std.mem.eql(u8, cmd_word, "EVAL")) return .{ .kind = .eval, .quote_type = quote_type };
-            if (std.mem.eql(u8, cmd_word, "EXTRACT")) return .{ .kind = .extract, .quote_type = quote_type };
+            const split = splitHead(line);
+            const quote_type = QuoteType.fromLiteral(split.rest) orelse return null;
+            if (std.mem.eql(u8, split.head, "EVAL")) return .{ .kind = .eval, .quote_type = quote_type };
+            if (std.mem.eql(u8, split.head, "EXTRACT")) return .{ .kind = .extract, .quote_type = quote_type };
             return null;
         }
     };
 
-    fn collectMultiLineBlock(self: *ScriptIterator, quote_type: []const u8) ?[]const u8 {
+    fn collectMultiLineBlock(self: *ScriptIterator, quote_type: QuoteType) ?[]const u8 {
+        const closer = quote_type.toLiteral();
         var parts: std.ArrayList(u8) = .empty;
         while (self.lines.next()) |line| {
             self.line_num += 1;
             const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-            if (std.mem.eql(u8, trimmed, quote_type)) {
+            if (std.mem.eql(u8, trimmed, closer)) {
                 return parts.toOwnedSlice(self.allocator) catch null;
             }
             if (parts.items.len > 0) {
@@ -426,18 +422,33 @@ const QuotedResult = struct {
     remainder: []const u8,
 };
 
-/// Returns the opening `'''` or `"""` delimiter if `s` starts with one, else null.
-fn tripleQuotePrefix(s: []const u8) ?[]const u8 {
-    if (std.mem.startsWith(u8, s, "'''")) return "'''";
-    if (std.mem.startsWith(u8, s, "\"\"\"")) return "\"\"\"";
-    return null;
-}
+const QuoteType = enum {
+    triple_double,
+    triple_single,
+
+    fn fromLiteral(s: []const u8) ?QuoteType {
+        return if (s.len == 3) fromPrefix(s) else null;
+    }
+
+    fn fromPrefix(s: []const u8) ?QuoteType {
+        if (std.mem.startsWith(u8, s, "\"\"\"")) return .triple_double;
+        if (std.mem.startsWith(u8, s, "'''")) return .triple_single;
+        return null;
+    }
+
+    fn toLiteral(self: QuoteType) []const u8 {
+        return switch (self) {
+            .triple_double => "\"\"\"",
+            .triple_single => "'''",
+        };
+    }
+};
 
 fn extractQuotedWithRemainder(s: []const u8) ?QuotedResult {
     if (s.len < 2) return null;
 
-    if (tripleQuotePrefix(s)) |tq| {
-        const end = std.mem.indexOf(u8, s[3..], tq) orelse return null;
+    if (QuoteType.fromPrefix(s)) |tq| {
+        const end = std.mem.indexOf(u8, s[3..], tq.toLiteral()) orelse return null;
         return .{
             .value = s[3 .. 3 + end],
             .remainder = s[3 + end + 3 ..],
@@ -461,8 +472,8 @@ fn extractQuotedWithRemainder(s: []const u8) ?QuotedResult {
 fn trimMatchingQuotes(s: []const u8) ?[]const u8 {
     if (s.len == 0) return null;
 
-    if (tripleQuotePrefix(s)) |tq| {
-        if (s.len < 6 or !std.mem.endsWith(u8, s, tq)) return null;
+    if (QuoteType.fromPrefix(s)) |tq| {
+        if (s.len < 6 or !std.mem.endsWith(u8, s, tq.toLiteral())) return null;
         const inner = s[3 .. s.len - 3];
         return if (inner.len == 0) null else inner;
     }

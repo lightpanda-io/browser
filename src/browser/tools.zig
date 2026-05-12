@@ -457,47 +457,40 @@ pub fn extractText(
     return runEval(arena, page, eval_script);
 }
 
-/// Schema-driven extraction. The schema is parsed in Zig so syntax errors
-/// point at the user's schema instead of dumping the walker JS into a V8
-/// SyntaxError; the parsed value is discarded and the raw text is spliced
-/// into the walker for a single atomic eval. See `schema_walker_prefix` for
-/// the supported schema shape.
+/// Schema-driven extraction. The schema is parsed in Zig so a syntax error
+/// surfaces here instead of as a confusing V8 SyntaxError on the spliced
+/// walker. Each value in the schema object is one of:
+///   "sel"                → first match's textContent.trim() (string|null)
+///   ""                   → matched element's own textContent.trim()
+///   ["sel"]              → all matches' textContent (string[])
+///   {selector, attr}     → first match's attribute (string|null)
+///   [{selector, attr}]   → all matches' attributes (string[])
+///   [{selector, fields}] → all matches, with `fields` relative to each (object[])
 pub fn extractSchema(
     arena: std.mem.Allocator,
     session: *lp.Session,
     registry: *CDPNode.Registry,
     schema_json: []const u8,
 ) EvalResult {
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, schema_json, .{}) catch |err| {
-        const msg = std.fmt.allocPrint(arena, "Error: invalid EXTRACT schema JSON: {s}", .{@errorName(err)}) catch
-            return .{ .text = "Error: invalid EXTRACT schema JSON", .is_error = true };
-        return .{ .text = msg, .is_error = true };
-    };
-    if (parsed != .object) {
+    const trimmed = std.mem.trim(u8, schema_json, &std.ascii.whitespace);
+    if (trimmed.len == 0 or trimmed[0] != '{') {
         return .{ .text = "Error: EXTRACT schema must be a JSON object", .is_error = true };
     }
-
-    const buf = arena.allocSentinel(u8, schema_walker_prefix.len + schema_json.len + schema_walker_suffix.len, 0) catch
+    const valid = std.json.validate(arena, schema_json) catch
         return .{ .text = "Error: out of memory", .is_error = true };
-    @memcpy(buf[0..schema_walker_prefix.len], schema_walker_prefix);
-    @memcpy(buf[schema_walker_prefix.len..][0..schema_json.len], schema_json);
-    @memcpy(buf[schema_walker_prefix.len + schema_json.len ..][0..schema_walker_suffix.len], schema_walker_suffix);
+    if (!valid) {
+        return .{ .text = "Error: invalid EXTRACT schema JSON", .is_error = true };
+    }
 
+    const script = std.mem.concatWithSentinel(arena, u8, &.{ schema_walker_prefix, schema_json, schema_walker_suffix }, 0) catch
+        return .{ .text = "Error: out of memory", .is_error = true };
     const page = ensurePage(session, registry, null, null, null) catch
         return .{ .text = "Error: page not loaded", .is_error = true };
-    return runEval(arena, page, buf);
+    return runEval(arena, page, script);
 }
 
-// Schema shape — each value in the user's JSON object is one of:
-//   "sel"                   → first match's textContent.trim() (string|null)
-//   ""                      → matched element's own textContent.trim()
-//   ["sel"]                 → all matches' textContent (string[])
-//   {selector, attr}        → first match's attribute (string|null)
-//   [{selector, attr}]      → all matches' attributes (string[])
-//   [{selector, fields}]    → all matches, with `fields` evaluated relative
-//                             to each match (object[])
-// The schema literal is spliced between prefix and suffix verbatim — using a
-// format string here would collide with the many `{`/`}` in the walker body.
+// The schema literal is spliced between prefix and suffix verbatim — a format
+// string here would collide with the `{`/`}` throughout the walker body.
 const schema_walker_prefix =
     \\JSON.stringify((function(schema){
     \\  function valueOf(m, inner){
