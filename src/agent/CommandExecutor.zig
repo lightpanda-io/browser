@@ -56,8 +56,8 @@ pub fn printResult(self: *Self, cmd: Command.Command, result: ExecResult) void {
     }
 }
 
-fn execExtract(self: *Self, arena: std.mem.Allocator, raw_selector: []const u8) ExecResult {
-    const selector = browser_tools.substituteEnvVars(arena, raw_selector);
-    const result = self.tool_executor.extractText(arena, selector);
+fn execExtract(self: *Self, arena: std.mem.Allocator, raw_schema: []const u8) ExecResult {
+    const schema = browser_tools.substituteEnvVars(arena, raw_schema);
+    const result = self.tool_executor.extractSchema(arena, schema);
     return .{ .output = result.text, .failed = result.is_error };
 }

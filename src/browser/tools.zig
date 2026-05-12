@@ -457,6 +457,82 @@ pub fn extractText(
     return runEval(arena, page, eval_script);
 }
 
+/// Schema-driven extraction. The schema is parsed in Zig so syntax errors
+/// point at the user's schema instead of dumping the walker JS into a V8
+/// SyntaxError; the parsed value is discarded and the raw text is spliced
+/// into the walker for a single atomic eval. See `schema_walker_prefix` for
+/// the supported schema shape.
+pub fn extractSchema(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *CDPNode.Registry,
+    schema_json: []const u8,
+) EvalResult {
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, schema_json, .{}) catch |err| {
+        const msg = std.fmt.allocPrint(arena, "Error: invalid EXTRACT schema JSON: {s}", .{@errorName(err)}) catch
+            return .{ .text = "Error: invalid EXTRACT schema JSON", .is_error = true };
+        return .{ .text = msg, .is_error = true };
+    };
+    if (parsed != .object) {
+        return .{ .text = "Error: EXTRACT schema must be a JSON object", .is_error = true };
+    }
+
+    const buf = arena.allocSentinel(u8, schema_walker_prefix.len + schema_json.len + schema_walker_suffix.len, 0) catch
+        return .{ .text = "Error: out of memory", .is_error = true };
+    @memcpy(buf[0..schema_walker_prefix.len], schema_walker_prefix);
+    @memcpy(buf[schema_walker_prefix.len..][0..schema_json.len], schema_json);
+    @memcpy(buf[schema_walker_prefix.len + schema_json.len ..][0..schema_walker_suffix.len], schema_walker_suffix);
+
+    const page = ensurePage(session, registry, null, null, null) catch
+        return .{ .text = "Error: page not loaded", .is_error = true };
+    return runEval(arena, page, buf);
+}
+
+// Schema shape — each value in the user's JSON object is one of:
+//   "sel"                   → first match's textContent.trim() (string|null)
+//   ""                      → matched element's own textContent.trim()
+//   ["sel"]                 → all matches' textContent (string[])
+//   {selector, attr}        → first match's attribute (string|null)
+//   [{selector, attr}]      → all matches' attributes (string[])
+//   [{selector, fields}]    → all matches, with `fields` evaluated relative
+//                             to each match (object[])
+// The schema literal is spliced between prefix and suffix verbatim — using a
+// format string here would collide with the many `{`/`}` in the walker body.
+const schema_walker_prefix =
+    \\JSON.stringify((function(schema){
+    \\  function valueOf(m, inner){
+    \\    if (inner.fields) {
+    \\      const r = {};
+    \\      for (const k in inner.fields) r[k] = ext(m, inner.fields[k]);
+    \\      return r;
+    \\    }
+    \\    if (inner.attr) return m.getAttribute(inner.attr);
+    \\    return m.textContent.trim();
+    \\  }
+    \\  function ext(el, v){
+    \\    if (typeof v === 'string') {
+    \\      if (v === '') return el.textContent.trim();
+    \\      const m = el.querySelector(v);
+    \\      return m ? m.textContent.trim() : null;
+    \\    }
+    \\    if (Array.isArray(v)) {
+    \\      const inner = v[0];
+    \\      if (typeof inner === 'string') {
+    \\        return Array.from(el.querySelectorAll(inner)).map(function(m){ return m.textContent.trim(); });
+    \\      }
+    \\      return Array.from(el.querySelectorAll(inner.selector)).map(function(m){ return valueOf(m, inner); });
+    \\    }
+    \\    const t = v.selector ? el.querySelector(v.selector) : el;
+    \\    if (!t) return null;
+    \\    return valueOf(t, v);
+    \\  }
+    \\  const out = {};
+    \\  for (const k in schema) out[k] = ext(document, schema[k]);
+    \\  return out;
+    \\})(
+;
+const schema_walker_suffix = "))";
+
 fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgs(GotoParams, arena, arguments);
     try performGoto(session, registry, args.url, args.timeout, args.waitUntil);

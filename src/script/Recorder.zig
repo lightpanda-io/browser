@@ -138,7 +138,7 @@ test "record writes state-mutating commands" {
     recorder.record(Command.parse("SELECT '#country' 'France'"));
     recorder.record(Command.parse("CHECK '#agree'"));
     recorder.record(Command.parse("CHECK '#newsletter' false"));
-    recorder.record(Command.parse("EXTRACT \".title\""));
+    recorder.record(Command.parse("EXTRACT '{\"title\":\".title\"}'"));
     recorder.recordComment("LOGIN");
 
     // Read back and verify
@@ -155,7 +155,7 @@ test "record writes state-mutating commands" {
     try std.testing.expect(std.mem.indexOf(u8, content, "SELECT '#country' 'France'\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "CHECK '#agree'\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "CHECK '#newsletter' false\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "EXTRACT '.title'\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "EXTRACT '{\"title\":\".title\"}'\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "\n# LOGIN\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "TREE") == null);
     try std.testing.expect(std.mem.indexOf(u8, content, "MARKDOWN") == null);

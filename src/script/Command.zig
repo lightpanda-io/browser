@@ -92,11 +92,8 @@ pub const Command = union(enum) {
                 try writer.print("CHECK {f} false", .{quote(args.selector)}),
             .tree => try writer.writeAll("TREE"),
             .markdown => try writer.writeAll("MARKDOWN"),
-            .extract => |sel| try writer.print("EXTRACT {f}", .{quote(sel)}),
-            .eval_js => |script| if (std.mem.indexOfScalar(u8, script, '\n') != null)
-                try writer.print("EVAL '''\n{s}\n'''", .{script})
-            else
-                try writer.print("EVAL {f}", .{quote(script)}),
+            .extract => |schema| try writeBlockOrInline(writer, "EXTRACT", schema),
+            .eval_js => |script| try writeBlockOrInline(writer, "EVAL", script),
             .login => try writer.writeAll("LOGIN"),
             .accept_cookies => try writer.writeAll("ACCEPT_COOKIES"),
             .comment => try writer.writeAll("#"),
@@ -104,6 +101,16 @@ pub const Command = union(enum) {
         }
     }
 };
+
+/// Emit `KEYWORD '<body>'` for single-line bodies, or the triple-quote block
+/// form for bodies that contain newlines. Used by EVAL and EXTRACT.
+fn writeBlockOrInline(writer: *std.Io.Writer, keyword: []const u8, body: []const u8) std.Io.Writer.Error!void {
+    if (std.mem.indexOfScalar(u8, body, '\n') != null) {
+        try writer.print("{s} '''\n{s}\n'''", .{ keyword, body });
+    } else {
+        try writer.print("{s} {f}", .{ keyword, quote(body) });
+    }
+}
 
 /// Parse a line of REPL input into a PandaScript command.
 /// Unrecognized input is returned as `.natural_language`.
@@ -234,6 +241,7 @@ pub const KeywordSyntax = struct {
 // Shared positional-arg fragments used in the keyword table below.
 const selector_arg = "'<selector>'";
 const value_arg = "'<value>'";
+const schema_arg = "'<schema-json>'";
 
 /// Single source of truth for PandaScript keyword names — consumed by the
 /// parser, the REPL highlighter, and Tab completion.
@@ -248,7 +256,7 @@ pub const keywords = [_]KeywordSyntax{
     .{ .name = "CHECK", .args = selector_arg ++ " [true|false]", .params = &.{ selector_arg, "[true|false]" } },
     .{ .name = "TREE", .args = null },
     .{ .name = "MARKDOWN", .args = null },
-    .{ .name = "EXTRACT", .args = selector_arg, .params = &.{selector_arg} },
+    .{ .name = "EXTRACT", .args = schema_arg, .params = &.{schema_arg} },
     .{ .name = "EVAL", .args = "'<script>'", .params = &.{"'<script>'"} },
     .{ .name = "LOGIN", .args = null },
     .{ .name = "ACCEPT_COOKIES", .args = null },
@@ -334,7 +342,7 @@ pub const ScriptIterator = struct {
         command: Command,
     };
 
-    /// Multi-line EVAL blocks are assembled into a single eval_js command.
+    /// Multi-line EVAL / EXTRACT blocks are assembled into a single command.
     pub fn next(self: *ScriptIterator) ?Entry {
         while (self.lines.next()) |line| {
             self.line_num += 1;
@@ -343,14 +351,17 @@ pub const ScriptIterator = struct {
 
             const line_start = @intFromPtr(line.ptr) - @intFromPtr(self.lines.buffer.ptr);
 
-            if (isEvalTripleQuote(trimmed)) |quote_type| {
+            if (BlockKeyword.fromOpener(trimmed)) |opener| {
                 const start_line = self.line_num;
-                const js_or_null = self.collectEvalBlock(quote_type);
+                const body_or_null = self.collectMultiLineBlock(opener.quote_type);
                 const span_end = self.lines.index orelse self.lines.buffer.len;
-                const cmd: Command = if (js_or_null) |js|
-                    .{ .eval_js = js }
-                else
-                    .{ .natural_language = "unterminated EVAL block" };
+                const cmd: Command = if (body_or_null) |body| switch (opener.kind) {
+                    .eval => .{ .eval_js = body },
+                    .extract => .{ .extract = body },
+                } else switch (opener.kind) {
+                    .eval => .{ .natural_language = "unterminated EVAL block" },
+                    .extract => .{ .natural_language = "unterminated EXTRACT block" },
+                };
                 return .{
                     .line_num = start_line,
                     .raw_line = trimmed,
@@ -370,21 +381,29 @@ pub const ScriptIterator = struct {
         return null;
     }
 
-    fn isEvalTripleQuote(line: []const u8) ?[]const u8 {
-        const cmd_end = std.mem.indexOfAny(u8, line, &std.ascii.whitespace) orelse line.len;
-        const cmd_word = line[0..cmd_end];
-        if (!std.mem.eql(u8, cmd_word, "EVAL")) return null;
-        const rest = std.mem.trim(u8, line[cmd_end..], &std.ascii.whitespace);
-        // Multi-line mode requires the opening triple-quote to stand alone —
-        // inline forms like `EVAL '''a"b'c'''` fall through to single-line parse().
-        if (rest.len != 3) return null;
-        if (std.mem.eql(u8, rest, "\"\"\"")) return "\"\"\"";
-        if (std.mem.eql(u8, rest, "'''")) return "'''";
-        return null;
-    }
+    /// The triple-quote must stand alone on the line — inline forms like
+    /// `EVAL '''a'''` fall through to single-line `parse()`.
+    const BlockKeyword = struct {
+        kind: enum { eval, extract },
+        quote_type: []const u8,
 
-    /// Collect lines until matching closing triple quote, return the JS content.
-    fn collectEvalBlock(self: *ScriptIterator, quote_type: []const u8) ?[]const u8 {
+        fn fromOpener(line: []const u8) ?BlockKeyword {
+            const cmd_end = std.mem.indexOfAny(u8, line, &std.ascii.whitespace) orelse return null;
+            const cmd_word = line[0..cmd_end];
+            const rest = std.mem.trim(u8, line[cmd_end..], &std.ascii.whitespace);
+            const quote_type: []const u8 = if (std.mem.eql(u8, rest, "\"\"\""))
+                "\"\"\""
+            else if (std.mem.eql(u8, rest, "'''"))
+                "'''"
+            else
+                return null;
+            if (std.mem.eql(u8, cmd_word, "EVAL")) return .{ .kind = .eval, .quote_type = quote_type };
+            if (std.mem.eql(u8, cmd_word, "EXTRACT")) return .{ .kind = .extract, .quote_type = quote_type };
+            return null;
+        }
+    };
+
+    fn collectMultiLineBlock(self: *ScriptIterator, quote_type: []const u8) ?[]const u8 {
         var parts: std.ArrayList(u8) = .empty;
         while (self.lines.next()) |line| {
             self.line_num += 1;
@@ -397,7 +416,6 @@ pub const ScriptIterator = struct {
             }
             parts.appendSlice(self.allocator, line) catch return null;
         }
-        // Unterminated
         parts.deinit(self.allocator);
         return null;
     }
@@ -513,8 +531,8 @@ pub const ToolCallValue = struct {
 
 /// Map a Command to its (tool_name, JSON args) representation. Returns
 /// null for variants without a 1:1 tool mapping (login, accept_cookies,
-/// natural_language, comment, extract — extract is rendered as a
-/// custom `eval` script by the caller).
+/// natural_language, comment, extract — extract is handled by the caller
+/// via `extractSchema`, which compiles the schema into a single eval).
 ///
 /// `substitute` is applied to selector-like fields. The `value` field of
 /// `type_cmd` is intentionally NOT substituted: `execFill` in
@@ -753,9 +771,9 @@ test "parse CLICK malformed quotes falls through to natural_language" {
     try std.testing.expect(parse("HOVER '#x\"") == .natural_language);
 }
 
-test "parse EXTRACT with nested quotes" {
-    const cmd = parse("EXTRACT 'a[href*='news']'");
-    try std.testing.expectEqualStrings("a[href*='news']", cmd.extract);
+test "parse EXTRACT with nested quotes in schema" {
+    const cmd = parse("EXTRACT '{\"link\": \"a[href*='news']\"}'");
+    try std.testing.expectEqualStrings("{\"link\": \"a[href*='news']\"}", cmd.extract);
 }
 
 test "parse EVAL with single-quoted inner string" {
@@ -868,8 +886,31 @@ test "parse MARKDOWN" {
 }
 
 test "parse EXTRACT" {
-    const cmd = parse("EXTRACT \".title\"");
-    try std.testing.expectEqualStrings(".title", cmd.extract);
+    const cmd = parse("EXTRACT '{\"titles\": [\".title\"]}'");
+    try std.testing.expectEqualStrings("{\"titles\": [\".title\"]}", cmd.extract);
+}
+
+test "format EXTRACT single-line schema round-trip" {
+    const schema = "{\"title\":\"h1\",\"items\":[\".item\"]}";
+    const cmd = Command{ .extract = schema };
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try cmd.format(&aw.writer);
+    try std.testing.expectEqualStrings("EXTRACT '{\"title\":\"h1\",\"items\":[\".item\"]}'", aw.written());
+
+    const round = parse(aw.written());
+    try std.testing.expectEqualStrings(schema, round.extract);
+}
+
+test "format EXTRACT multi-line schema uses triple quotes" {
+    const schema = "{\n  \"title\": \"h1\"\n}";
+    const cmd = Command{ .extract = schema };
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try cmd.format(&aw.writer);
+    try std.testing.expectEqualStrings("EXTRACT '''\n{\n  \"title\": \"h1\"\n}\n'''", aw.written());
 }
 
 test "parse EVAL single line" {
@@ -922,7 +963,7 @@ test "isRecorded" {
     try std.testing.expect(parse("SELECT '#sel' 'a'").isRecorded());
     try std.testing.expect(parse("CHECK '#chk'").isRecorded());
     try std.testing.expect(parse("CHECK '#chk' false").isRecorded());
-    try std.testing.expect(parse("EXTRACT \".title\"").isRecorded());
+    try std.testing.expect(parse("EXTRACT '{\"t\":\".title\"}'").isRecorded());
     try std.testing.expect(parse("EVAL \"1+1\"").isRecorded());
     try std.testing.expect(!parse("TREE").isRecorded());
     try std.testing.expect(!parse("MARKDOWN").isRecorded());
@@ -1031,6 +1072,46 @@ test "ScriptIterator inline triple-quoted EVAL stays single-line" {
     try std.testing.expectEqualStrings(".btn", e2.command.click);
 
     try std.testing.expect(iter.next() == null);
+}
+
+test "ScriptIterator multi-line EXTRACT" {
+    const script =
+        \\GOTO https://example.com
+        \\EXTRACT '''
+        \\{
+        \\  "title": "h1",
+        \\  "items": [".item"]
+        \\}
+        \\'''
+        \\TREE
+    ;
+    var iter: ScriptIterator = .init(std.testing.allocator, script);
+
+    const e1 = iter.next().?;
+    try std.testing.expect(e1.command == .goto);
+
+    const e2 = iter.next().?;
+    try std.testing.expect(e2.command == .extract);
+    try std.testing.expect(std.mem.indexOf(u8, e2.command.extract, "\"title\": \"h1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, e2.command.extract, "\"items\": [\".item\"]") != null);
+    defer std.testing.allocator.free(e2.command.extract);
+
+    const e3 = iter.next().?;
+    try std.testing.expect(e3.command == .tree);
+
+    try std.testing.expect(iter.next() == null);
+}
+
+test "ScriptIterator unterminated EXTRACT" {
+    const script =
+        \\EXTRACT """
+        \\{"t":"h1"
+    ;
+    var iter: ScriptIterator = .init(std.testing.allocator, script);
+
+    const e1 = iter.next().?;
+    try std.testing.expect(e1.command == .natural_language);
+    try std.testing.expectEqualStrings("unterminated EXTRACT block", e1.command.natural_language);
 }
 
 test "ScriptIterator multi-line EVAL mismatched triple quote" {
@@ -1215,7 +1296,7 @@ test "toToolCall: variants without tool mapping return null" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    try std.testing.expect(toToolCall(a, .{ .extract = ".x" }, noSubstitute) == null);
+    try std.testing.expect(toToolCall(a, .{ .extract = "{\"x\":\".x\"}" }, noSubstitute) == null);
     try std.testing.expect(toToolCall(a, .login, noSubstitute) == null);
     try std.testing.expect(toToolCall(a, .accept_cookies, noSubstitute) == null);
     try std.testing.expect(toToolCall(a, .comment, noSubstitute) == null);
