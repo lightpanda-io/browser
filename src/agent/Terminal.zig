@@ -431,21 +431,29 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*a
     const cmd_start = i;
     while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
     const cmd = text[cmd_start..i];
-    // Don't flag mid-typed prefixes as wrong — only commit to red once the
-    // user has moved past the token.
+    // Commit to red once the user has moved past the token, OR as soon as the
+    // prefix cannot complete to any known name.
     const closed = i < text.len;
     if (cmd.len > 0 and cmd[0] == '/') {
-        const known = isKnownSlashName(cmd[1..]);
-        const style: ?[*:0]const u8 = if (known) style_slash else if (closed) style_err else null;
-        if (style) |s| c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), s);
+        c.ic_highlight(henv, @intCast(cmd_start), 1, style_slash.ptr);
+        if (cmd.len > 1) {
+            const name = cmd[1..];
+            const style: ?[*:0]const u8 = if (isKnownSlashName(name))
+                style_slash
+            else if (closed or !slashHasPrefix(name))
+                style_err
+            else
+                null;
+            if (style) |s| c.ic_highlight(henv, @intCast(cmd_start + 1), @intCast(cmd.len - 1), s);
+        }
         highlightSlashArgs(henv, text, i);
     } else {
-        const style: ?[*:0]const u8 = if (isKnownCommand(cmd))
-            style_cmd
-        else if (closed and looksLikeKeyword(cmd))
-            style_err
-        else
-            null;
+        const style: ?[*:0]const u8 = blk: {
+            if (isKnownCommand(cmd)) break :blk style_cmd;
+            if (!looksLikeKeyword(cmd)) break :blk null;
+            if (closed or !keywordHasPrefix(cmd)) break :blk style_err;
+            break :blk null;
+        };
         if (style) |s| c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), s);
         highlightPandaArgs(henv, text, i);
     }
@@ -476,6 +484,20 @@ fn exactKeywordMatch(input: []const u8) ?Command.KeywordSyntax {
 fn isKnownSlashName(name: []const u8) bool {
     for (all_slash_names) |n| {
         if (std.ascii.eqlIgnoreCase(n, name)) return true;
+    }
+    return false;
+}
+
+fn slashHasPrefix(name: []const u8) bool {
+    for (all_slash_names) |n| {
+        if (std.ascii.startsWithIgnoreCase(n, name)) return true;
+    }
+    return false;
+}
+
+fn keywordHasPrefix(name: []const u8) bool {
+    for (Command.keywords) |kw| {
+        if (std.mem.startsWith(u8, kw.name, name)) return true;
     }
     return false;
 }
