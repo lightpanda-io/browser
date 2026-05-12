@@ -431,15 +431,18 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*a
     const cmd_start = i;
     while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
     const cmd = text[cmd_start..i];
+    // Don't flag mid-typed prefixes as wrong — only commit to red once the
+    // user has moved past the token.
+    const closed = i < text.len;
     if (cmd.len > 0 and cmd[0] == '/') {
-        const style = if (isKnownSlashName(cmd[1..])) style_slash else style_err;
-        c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), style.ptr);
+        const known = isKnownSlashName(cmd[1..]);
+        const style: ?[*:0]const u8 = if (known) style_slash else if (closed) style_err else null;
+        if (style) |s| c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), s);
         highlightSlashArgs(henv, text, i);
     } else {
-        // ALL CAPS but unknown → typo (red); lowercase/mixed → natural language (unstyled).
         const style: ?[*:0]const u8 = if (isKnownCommand(cmd))
             style_cmd
-        else if (looksLikeKeyword(cmd))
+        else if (closed and looksLikeKeyword(cmd))
             style_err
         else
             null;
