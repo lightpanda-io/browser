@@ -102,9 +102,13 @@ pub fn makeRequest(self: *const Execution, req: HttpClient.Request) !void {
     };
 }
 
-pub fn websockets(self: *const Execution) *std.DoublyLinkedList {
+// HttpClient.Owner of the current global (Frame or WGS). Used by code
+// that needs to register an in-flight network operation against the
+// owning scope without caring whether it's a Frame or a Worker — e.g.
+// WebSocket.init appending to `.websockets`.
+pub fn httpOwner(self: *const Execution) *HttpClient.Owner {
     return switch (self.context.global) {
-        inline else => |g| &g._websockets,
+        inline else => |g| &g._http_owner,
     };
 }
 

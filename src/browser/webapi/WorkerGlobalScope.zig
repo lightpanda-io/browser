@@ -59,8 +59,7 @@ _page: *Page,
 _session: *Session,
 _factory: *Factory,
 _identity: JS.Identity = .{},
-_requests: std.DoublyLinkedList = .{},
-_websockets: std.DoublyLinkedList = .{},
+_http_owner: HttpClient.Owner = .{},
 
 arena: Allocator,
 call_arena: Allocator,
@@ -155,8 +154,7 @@ pub fn deinit(self: *WorkerGlobalScope) void {
     const session = page.session;
     const browser = session.browser;
 
-    browser.http_client.abortList(self._requests);
-    browser.http_client.abortWsList(self._websockets);
+    browser.http_client.abortOwner(&self._http_owner);
 
     self._identity.deinit();
     self._script_manager.deinit();
@@ -220,7 +218,7 @@ pub fn lookupBlobUrl(self: *WorkerGlobalScope, url: []const u8) ?*Blob {
 }
 
 pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
-    return self._session.browser.http_client.request(req, &self._requests);
+    return self._session.browser.http_client.request(req, &self._http_owner);
 }
 
 pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {

@@ -74,6 +74,8 @@ _active: ?*Page = null,
 // In-flight root navigation
 _pending: ?*Page = null,
 
+_queued_destroy: std.ArrayList(*Page) = .{},
+
 // IDs. Kept at Session level so IDs can remain unique across Page replacements.
 frame_id_gen: u32 = 0,
 loader_id_gen: u32 = 0,
@@ -111,6 +113,8 @@ pub fn deinit(self: *Session) void {
     if (self._active != null) {
         self.removePage();
     }
+    self.processQueuedDestroyed();
+
     self.cookie_jar.deinit();
 
     // Force V8 to flush any remaining weak callbacks while
@@ -122,6 +126,14 @@ pub fn deinit(self: *Session) void {
 
     self.storage_shed.deinit(self.browser.app.allocator);
     self.arena_pool.release(self.arena);
+}
+
+pub fn processQueuedDestroyed(self: *Session) void {
+    for (self._queued_destroy.items) |page| {
+        page.deinit();
+        self.browser.page_pool.destroy(page);
+    }
+    self._queued_destroy.clearRetainingCapacity();
 }
 
 // True iff there is an active Page. CDP / external callers should use this
@@ -141,8 +153,7 @@ fn allocatePage(self: *Session, frame_id: u32) !*Page {
 
 // Tear down and free a Page allocated via allocatePage.
 fn destroyPage(self: *Session, page: *Page) void {
-    page.deinit();
-    self.browser.page_pool.destroy(page);
+    self._queued_destroy.append(self.arena, page) catch @panic("OOM");
 }
 
 // Tear down the currently-active Page. Dispatches `frame_remove` first
@@ -163,6 +174,8 @@ fn tearDownActivePage(self: *Session) void {
         }
         return;
     };
+
+    page.frame.abortTransfers();
     self.destroyPage(page);
     self._active = null;
     self.navigation.onRemoveFrame();
@@ -568,7 +581,12 @@ pub fn commitPendingPage(self: *Session) !void {
 
     // Step 5: tear down the OLD page LAST. Anything in steps 1-4 that
     // needed to walk the OLD page's state (CDP node_registry, inspector
-    // context group, isolated worlds) has already done so.
+    // context group, isolated worlds) has already done so. Kill any
+    // remaining transfers/websockets synchronously before queuing for
+    // deferred destroy — otherwise a still-inflight transfer firing its
+    // done_callback after this point would re-enter against the new
+    // _active and trip the half-torn-down session.
+    old_active.frame.abortTransfers();
     self.destroyPage(old_active);
 }
 
@@ -582,8 +600,9 @@ pub fn discardPendingPage(self: *Session) void {
         log.debug(.browser, "discard pending page", .{});
     }
 
-    // Force abort all inflight queries.
-    self.browser.http_client.abortList(page.frame._requests);
+    // Force abort all inflight queries (HTTP + WS) before queuing for
+    // deferred destroy.
+    page.frame.abortTransfers();
 
     self._pending = null;
     self.destroyPage(page);

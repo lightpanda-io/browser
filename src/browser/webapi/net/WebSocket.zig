@@ -150,7 +150,7 @@ pub fn init(url: []const u8, protocols: [][]const u8, frame: *Frame) !*WebSocket
     });
     conn.transport = .{ .websocket = self };
     try http_client.trackConn(conn);
-    frame._websockets.append(&self._owner_node);
+    frame._http_owner.addWS(self);
 
     if (comptime IS_DEBUG) {
         log.info(.websocket, "connecting", .{ .url = url });
@@ -236,7 +236,7 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
 
 fn cleanup(self: *WebSocket) void {
     if (self._conn) |conn| {
-        self._frame._websockets.remove(&self._owner_node);
+        self._frame._http_owner.removeWS(self);
         self._http_client.removeConn(conn);
         self._req_headers.deinit();
         self._conn = null;

@@ -48,7 +48,7 @@ pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
 pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
 pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
 
-// This is loosely tied to a browser Page. Loading all the <scripts>, doing
+// This is loosely tied to a browser Frame. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
 // currently supports 1 browser and 1 frame at-a-time, we only have 1 Client and
 // re-use it from frame to frame. This allows us better re-use of the various
@@ -324,33 +324,40 @@ pub fn abort(self: *Client) void {
     }
 }
 
-// abort a list of connections "owned" by something (a Frame or WSG).
-// Note: the list may still have entries after the walk — Transfer.kill()
-// defers (flags `aborted` + noops callbacks) when called mid-perform, and
-// only fully deinits later in the normal processOneMessage flow. So we
-// can't assert `list.first == null` here.
-pub fn abortList(_: *Client, list: std.DoublyLinkedList) void {
-    var n = list.first;
-    while (n) |node| {
-        n = node.next;
-        const t: *Transfer = @fieldParentPtr("owner_node", node);
-        t.kill();
-    }
-}
-
-// Mirror of abortList for WebSockets. Walks the owner list, killing each.
-// Frame.deinit / WGS.deinit call this so a still-open WS doesn't outlive
-// the global it's pointing at (UAF on _frame deref in callbacks otherwise).
-pub fn abortWsList(_: *Client, list: std.DoublyLinkedList) void {
-    var n = list.first;
+// Kill every transfer + websocket owned by `owner`. Used when the owner
+// (Frame / WorkerGlobalScope) is being torn down. After this returns,
+// every WebSocket is fully gone; HTTP transfers that were mid-perform may
+// still be on `owner.transfers` (Transfer.kill defers their deinit), but
+// they've been unlinked from the owner list via kill()'s deferred branch
+// so the owner is free to die.
+pub fn abortOwner(self: *Client, owner: *Owner) void {
+    self.abortRequests(owner);
+    var n = owner.websockets.first;
     while (n) |node| {
         n = node.next;
         const ws: *@import("webapi/net/WebSocket.zig") = @fieldParentPtr("_owner_node", node);
         ws.kill();
     }
     if (comptime IS_DEBUG) {
-        std.debug.assert(list.first == null);
+        std.debug.assert(owner.websockets.first == null);
     }
+}
+
+// HTTP-only variant. WebSockets survive (they're cross-document by
+// design). Used by the navigation path that aborts in-flight resource
+// loads for a frame but lets its WebSockets keep running.
+pub fn abortRequests(_: *Client, owner: *Owner) void {
+    var n = owner.transfers.first;
+    while (n) |node| {
+        n = node.next;
+        const t: *Transfer = @fieldParentPtr("owner_node", node);
+        t.kill();
+    }
+    // owner.transfers may still have entries: Transfer.kill defers
+    // (flags `aborted` + noops callbacks) when called mid-perform and
+    // only fully deinits later via processOneMessage. The deferred-branch
+    // unlinks the node and clears Transfer.owner, so by the time the
+    // owner itself is freed, no orphan transfer points at it.
 }
 
 pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
@@ -371,7 +378,7 @@ pub fn _request(_: *anyopaque, transfer: *Transfer) !void {
     return transfer.client.process(transfer);
 }
 
-pub fn request(self: *Client, req: Request, owner: ?*std.DoublyLinkedList) !void {
+pub fn request(self: *Client, req: Request, owner: ?*Owner) !void {
     const arena = try self.arena_pool.acquire(.small, "Request.arena");
 
     const transfer = arena.create(Transfer) catch |err| {
@@ -399,7 +406,7 @@ pub fn request(self: *Client, req: Request, owner: ?*std.DoublyLinkedList) !void
     };
 
     if (owner) |o| {
-        o.append(&transfer.owner_node);
+        o.addTransfer(transfer);
     }
 
     // From this point forward, the transfer owns `req` and `arena`. If the
@@ -1028,7 +1035,7 @@ pub const Transfer = struct {
     id: u32 = 0,
     arena: Allocator,
 
-    owner: ?*std.DoublyLinkedList,
+    owner: ?*Owner,
     owner_node: std.DoublyLinkedList.Node = .{},
 
     // Latched true by the first commit point that hands the transfer off to
@@ -1099,7 +1106,7 @@ pub const Transfer = struct {
 
         self.req.deinit();
         if (self.owner) |o| {
-            o.remove(&self.owner_node);
+            o.removeTransfer(self);
         }
         // The Transfer itself lives on this arena, so this must be last —
         // `self` is invalid memory after release.
@@ -1148,6 +1155,17 @@ pub const Transfer = struct {
             self.req.data_callback = Noop.dataCallback;
             self.req.done_callback = Noop.doneCallback;
             self.req.error_callback = Noop.errorCallback;
+            // Detach from the owner list NOW. The transfer will finish its
+            // curl lifecycle and be deinit'd later from processOneMessage,
+            // but by then the owner (Frame / WGS) may have been freed —
+            // attempting o.transfers.remove(&owner_node) against a dangling
+            // list would UAF. Leaving the transfer linked also breaks the
+            // invariant that an owner can be torn down once its list walks
+            // clean. Clear `owner` so transfer.deinit doesn't try again.
+            if (self.owner) |o| {
+                o.removeTransfer(self);
+                self.owner = null;
+            }
             return;
         }
 
@@ -1533,4 +1551,29 @@ const Noop = struct {
     fn dataCallback(_: Response, _: []const u8) !void {}
     fn doneCallback(_: *anyopaque) !void {}
     fn errorCallback(_: *anyopaque, _: anyerror) void {}
+};
+
+// An opaque-from-the-outside handle that Frame / WorkerGlobalScope embed
+// to track the HTTP transfers + WebSockets they own.
+pub const Owner = struct {
+    transfers: std.DoublyLinkedList = .{},
+    websockets: std.DoublyLinkedList = .{},
+
+    const WebSocket = @import("webapi/net/WebSocket.zig");
+
+    pub fn addTransfer(self: *Owner, t: *Transfer) void {
+        self.transfers.append(&t.owner_node);
+    }
+
+    pub fn removeTransfer(self: *Owner, t: *Transfer) void {
+        self.transfers.remove(&t.owner_node);
+    }
+
+    pub fn addWS(self: *Owner, ws: *WebSocket) void {
+        self.websockets.append(&ws._owner_node);
+    }
+
+    pub fn removeWS(self: *Owner, ws: *WebSocket) void {
+        self.websockets.remove(&ws._owner_node);
+    }
 };
