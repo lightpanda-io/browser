@@ -130,18 +130,6 @@ pub const Constructor = struct {
                     }
                     defer caller.deinit();
 
-                    // Constructors are a JS-execution boundary, just like
-                    // [CEReactions] methods. Open a reactions scope so any
-                    // callbacks queued by the user's constructor body (or
-                    // by attribute_changed reactions queued before invocation)
-                    // drain at the constructor's exit, not later.
-                    const ce_frame: ?*Frame = switch (caller.local.ctx.global) {
-                        .frame => |frame| frame,
-                        .worker => null,
-                    };
-                    const ce_checkpoint: usize = if (ce_frame) |frame| frame._ce_reactions.push() else 0;
-                    defer if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
-
                     caller.constructor(T, func, handle.?, .{
                         .dom_exception = opts.dom_exception,
                         .new_target = opts.new_target,
@@ -990,9 +978,11 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/AbortController.zig"),
     @import("../webapi/URL.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
+    @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
     @import("../webapi/net/XMLHttpRequest.zig"),
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
     @import("../webapi/FileReader.zig"),
+    @import("../webapi/ImageData.zig"),
     // @import("../webapi/Performance.zig"),
 });
 

@@ -190,20 +190,17 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
         return error.CustomElementUpgradeFailed;
     };
 
-    // Enqueue attributeChangedCallback for existing observed attributes
-    const element = custom.asElement();
-    var attr_it = element.attributeIterator();
+    // Invoke attributeChangedCallback for existing observed attributes
+    var attr_it = custom.asElement().attributeIterator();
     while (attr_it.next()) |attr| {
         const name = attr._name;
         if (definition.isAttributeObserved(name)) {
-            Custom.enqueueAttributeChangedCallbackOnElement(element, name, null, attr._value, null, frame);
+            custom.invokeAttributeChangedCallback(name, null, attr._value, null, frame);
         }
     }
 
     if (node.isConnected()) {
-        Custom.enqueueConnectedCallbackOnElement(false, element, frame) catch |err| {
-            log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
-        };
+        custom.invokeConnectedCallback(frame);
     }
 }
 

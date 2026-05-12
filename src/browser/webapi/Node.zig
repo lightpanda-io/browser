@@ -253,6 +253,11 @@ pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
         try frame.adoptNodeTree(child, child_owner.?, parent_owner);
     }
 
+    // A custom element callback can re-parent the node. If it does, we're done
+    if (child._parent != null) {
+        return child;
+    }
+
     try frame.appendNode(self, child, .{
         .child_already_connected = child_connected,
         .adopting_to_new_document = adopting_to_new_document,
@@ -615,6 +620,22 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fra
         try frame.adoptNodeTree(new_node, child_owner.?, parent_owner);
     }
 
+    // See Node.appendChild: a callback above (disconnectedCallback or
+    // adoptedCallback) can re-parent new_node. Let that placement stand.
+    if (new_node._parent != null) {
+        return new_node;
+    }
+
+    // The same callback could also have detached ref_node from self. Fall
+    // back to append so new_node still lands in self.
+    if (ref_node._parent != self) {
+        try frame.appendNode(self, new_node, .{
+            .child_already_connected = child_already_connected,
+            .adopting_to_new_document = adopting_to_new_document,
+        });
+        return new_node;
+    }
+
     try frame.insertNodeRelative(
         self,
         new_node,
@@ -637,8 +658,11 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Fra
 
     _ = try self.insertBefore(new_child, old_child, frame);
 
-    // Special case: if we replace a node by itself, insertBefore was a noop.
-    if (new_child != old_child) {
+    // Special case: if we replace a node by itself, we don't remove it.
+    // insertBefore is an noop in this case.
+    // Re-check parent after insertBefore since callbacks (e.g. connectedCallback)
+    // could have already removed old_child from self.
+    if (new_child != old_child and old_child._parent == self) {
         frame.removeNode(self, old_child, .{ .will_be_reconnected = false });
     }
 
@@ -1139,7 +1163,7 @@ pub const JsApi = struct {
     }.wrap, null, .{});
     pub const nodeType = bridge.accessor(Node.getNodeType, null, .{});
 
-    pub const textContent = bridge.accessor(_textContext, Node.setTextContent, .{ .ce_reactions = true });
+    pub const textContent = bridge.accessor(_textContext, Node.setTextContent, .{});
     fn _textContext(self: *Node, frame: *const Frame) !?[]const u8 {
         // cdata and attributes can return value directly, avoiding the copy
         switch (self._type) {
@@ -1161,19 +1185,19 @@ pub const JsApi = struct {
     pub const previousSibling = bridge.accessor(Node.previousSibling, null, .{});
     pub const parentNode = bridge.accessor(Node.parentNode, null, .{});
     pub const parentElement = bridge.accessor(Node.parentElement, null, .{});
-    pub const appendChild = bridge.function(Node.appendChild, .{ .dom_exception = true, .ce_reactions = true });
+    pub const appendChild = bridge.function(Node.appendChild, .{ .dom_exception = true });
     pub const childNodes = bridge.accessor(Node.childNodes, null, .{ .cache = .{ .private = "child_nodes" } });
     pub const isConnected = bridge.accessor(Node.isConnected, null, .{});
     pub const ownerDocument = bridge.accessor(Node.ownerDocument, null, .{});
     pub const hasChildNodes = bridge.function(Node.hasChildNodes, .{});
     pub const isSameNode = bridge.function(Node.isSameNode, .{});
     pub const contains = bridge.function(Node.contains, .{});
-    pub const removeChild = bridge.function(Node.removeChild, .{ .dom_exception = true, .ce_reactions = true });
-    pub const nodeValue = bridge.accessor(Node.getNodeValue, Node.setNodeValue, .{ .ce_reactions = true });
-    pub const insertBefore = bridge.function(Node.insertBefore, .{ .dom_exception = true, .ce_reactions = true });
-    pub const replaceChild = bridge.function(Node.replaceChild, .{ .dom_exception = true, .ce_reactions = true });
-    pub const normalize = bridge.function(Node.normalize, .{ .ce_reactions = true });
-    pub const cloneNode = bridge.function(Node.cloneNode, .{ .dom_exception = true, .ce_reactions = true });
+    pub const removeChild = bridge.function(Node.removeChild, .{ .dom_exception = true });
+    pub const nodeValue = bridge.accessor(Node.getNodeValue, Node.setNodeValue, .{});
+    pub const insertBefore = bridge.function(Node.insertBefore, .{ .dom_exception = true });
+    pub const replaceChild = bridge.function(Node.replaceChild, .{ .dom_exception = true });
+    pub const normalize = bridge.function(Node.normalize, .{});
+    pub const cloneNode = bridge.function(Node.cloneNode, .{ .dom_exception = true });
     pub const compareDocumentPosition = bridge.function(Node.compareDocumentPosition, .{});
     pub const getRootNode = bridge.function(Node.getRootNode, .{});
     pub const isEqualNode = bridge.function(Node.isEqualNode, .{});

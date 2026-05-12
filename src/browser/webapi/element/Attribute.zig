@@ -104,7 +104,7 @@ pub const JsApi = struct {
 
     pub const name = bridge.accessor(Attribute.getName, null, .{});
     pub const localName = bridge.accessor(Attribute.getName, null, .{});
-    pub const value = bridge.accessor(Attribute.getValue, Attribute.setValue, .{ .ce_reactions = true });
+    pub const value = bridge.accessor(Attribute.getValue, Attribute.setValue, .{});
     pub const namespaceURI = bridge.accessor(Attribute.getNamespaceURI, null, .{});
     pub const ownerElement = bridge.accessor(Attribute.getOwnerElement, null, .{});
 };
@@ -536,8 +536,8 @@ pub const NamedNodeMap = struct {
         pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, null, .{ .null_as_undefined = true });
         pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, .{ .null_as_undefined = true });
         pub const getNamedItem = bridge.function(NamedNodeMap.getByName, .{});
-        pub const setNamedItem = bridge.function(NamedNodeMap.set, .{ .ce_reactions = true });
-        pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{ .ce_reactions = true });
+        pub const setNamedItem = bridge.function(NamedNodeMap.set, .{});
+        pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{});
         pub const item = bridge.function(_item, .{});
         fn _item(self: *const NamedNodeMap, index: i32, frame: *Frame) !?*Attribute {
             // the bridge.indexed handles this, so if we want
