@@ -613,6 +613,52 @@
   }
 </script>
 
+<div id=once_readd_test></div>
+<script id=onceListenerReaddedDuringNestedDispatch>
+  // Regression: a `once: true` listener that re-adds itself inside its
+  // callback and triggers a nested dispatch must see the *new* registration
+  // fire. The original `once` instance is `removed=true` but still parked
+  // in the listener list until the outer dispatch flushes deferred
+  // removals, so `register`'s duplicate check has to skip removed entries
+  // — otherwise the re-add is silently swallowed as a "duplicate".
+  {
+    const el = $('#once_readd_test');
+    let invoked = 0;
+    function h() {
+      invoked++;
+      if (invoked == 1) el.addEventListener('reonce', h, {once: true});
+      if (invoked <= 2) el.dispatchEvent(new Event('reonce'));
+    }
+    el.addEventListener('reonce', h, {once: true});
+    el.dispatchEvent(new Event('reonce'));
+    testing.expectEqual(2, invoked);
+
+    // Third dispatch shouldn't fire anything: every prior registration was
+    // `once` and has been consumed.
+    el.dispatchEvent(new Event('reonce'));
+    testing.expectEqual(2, invoked);
+  }
+</script>
+
+<div id=once_self_remove_test></div>
+<script id=onceListenerExplicitlyRemovesItself>
+  // Regression: a `once: true` listener that also calls removeEventListener
+  // on itself must not double-defer the same node (which would double-free
+  // on outer-dispatch cleanup).
+  {
+    const el = $('#once_self_remove_test');
+    let calls = 0;
+    const fn = () => {
+      calls++;
+      el.removeEventListener('osr', fn);
+    };
+    el.addEventListener('osr', fn, {once: true});
+    el.dispatchEvent(new Event('osr'));
+    el.dispatchEvent(new Event('osr'));
+    testing.expectEqual(1, calls);
+  }
+</script>
+
 <script id=isTrusted>
   // Test isTrusted property on generic Event
   let untrustedEvent = new Event('test');
