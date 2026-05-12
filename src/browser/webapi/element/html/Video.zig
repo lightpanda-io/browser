@@ -73,7 +73,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const poster = bridge.accessor(Video.getPoster, Video.setPoster, .{});
+    pub const poster = bridge.accessor(Video.getPoster, Video.setPoster, .{ .ce_reactions = true });
     pub const videoWidth = bridge.accessor(Video.getVideoWidth, null, .{});
     pub const videoHeight = bridge.accessor(Video.getVideoHeight, null, .{});
 };

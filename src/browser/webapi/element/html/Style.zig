@@ -125,10 +125,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const blocking = bridge.accessor(Style.getBlocking, Style.setBlocking, .{});
-    pub const media = bridge.accessor(Style.getMedia, Style.setMedia, .{});
-    pub const @"type" = bridge.accessor(Style.getType, Style.setType, .{});
-    pub const disabled = bridge.accessor(Style.getDisabled, Style.setDisabled, .{});
+    pub const blocking = bridge.accessor(Style.getBlocking, Style.setBlocking, .{ .ce_reactions = true });
+    pub const media = bridge.accessor(Style.getMedia, Style.setMedia, .{ .ce_reactions = true });
+    pub const @"type" = bridge.accessor(Style.getType, Style.setType, .{ .ce_reactions = true });
+    pub const disabled = bridge.accessor(Style.getDisabled, Style.setDisabled, .{ .ce_reactions = true });
     pub const sheet = bridge.accessor(Style.getSheet, null, .{});
 };
 

@@ -120,8 +120,8 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const width = bridge.accessor(Canvas.getWidth, Canvas.setWidth, .{});
-    pub const height = bridge.accessor(Canvas.getHeight, Canvas.setHeight, .{});
+    pub const width = bridge.accessor(Canvas.getWidth, Canvas.setWidth, .{ .ce_reactions = true });
+    pub const height = bridge.accessor(Canvas.getHeight, Canvas.setHeight, .{ .ce_reactions = true });
     pub const getContext = bridge.function(Canvas.getContext, .{});
     pub const transferControlToOffscreen = bridge.function(Canvas.transferControlToOffscreen, .{});
 };

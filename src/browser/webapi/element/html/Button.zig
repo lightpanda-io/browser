@@ -237,17 +237,17 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const disabled = bridge.accessor(Button.getDisabled, Button.setDisabled, .{});
-    pub const name = bridge.accessor(Button.getName, Button.setName, .{});
-    pub const required = bridge.accessor(Button.getRequired, Button.setRequired, .{});
+    pub const disabled = bridge.accessor(Button.getDisabled, Button.setDisabled, .{ .ce_reactions = true });
+    pub const name = bridge.accessor(Button.getName, Button.setName, .{ .ce_reactions = true });
+    pub const required = bridge.accessor(Button.getRequired, Button.setRequired, .{ .ce_reactions = true });
     pub const form = bridge.accessor(Button.getForm, null, .{});
-    pub const formAction = bridge.accessor(Button.getFormAction, Button.setFormAction, .{});
-    pub const formEnctype = bridge.accessor(Button.getFormEnctype, Button.setFormEnctype, .{});
-    pub const formMethod = bridge.accessor(Button.getFormMethod, Button.setFormMethod, .{});
-    pub const formNoValidate = bridge.accessor(Button.getFormNoValidate, Button.setFormNoValidate, .{});
-    pub const formTarget = bridge.accessor(Button.getFormTarget, Button.setFormTarget, .{});
-    pub const value = bridge.accessor(Button.getValue, Button.setValue, .{});
-    pub const @"type" = bridge.accessor(Button.getType, Button.setType, .{});
+    pub const formAction = bridge.accessor(Button.getFormAction, Button.setFormAction, .{.ce_reactions = true});
+    pub const formEnctype = bridge.accessor(Button.getFormEnctype, Button.setFormEnctype, .{.ce_reactions = true});
+    pub const formMethod = bridge.accessor(Button.getFormMethod, Button.setFormMethod, .{.ce_reactions = true});
+    pub const formNoValidate = bridge.accessor(Button.getFormNoValidate, Button.setFormNoValidate, .{.ce_reactions = true});
+    pub const formTarget = bridge.accessor(Button.getFormTarget, Button.setFormTarget, .{.ce_reactions = true});
+    pub const value = bridge.accessor(Button.getValue, Button.setValue, .{.ce_reactions = true});
+    pub const @"type" = bridge.accessor(Button.getType, Button.setType, .{.ce_reactions = true});
     pub const labels = bridge.accessor(Button.getLabels, null, .{});
     pub const willValidate = bridge.accessor(Button.getWillValidate, null, .{});
     pub const validity = bridge.accessor(Button.getValidity, null, .{});

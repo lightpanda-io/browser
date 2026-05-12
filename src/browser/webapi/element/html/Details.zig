@@ -48,8 +48,8 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const open = bridge.accessor(Details.getOpen, Details.setOpen, .{});
-    pub const name = bridge.accessor(Details.getName, Details.setName, .{});
+    pub const open = bridge.accessor(Details.getOpen, Details.setOpen, .{ .ce_reactions = true });
+    pub const name = bridge.accessor(Details.getName, Details.setName, .{ .ce_reactions = true });
 };
 
 const testing = @import("../../../../testing.zig");

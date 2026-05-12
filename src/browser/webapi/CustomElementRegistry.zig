@@ -260,9 +260,9 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
     };
 
-    pub const define = bridge.function(CustomElementRegistry.define, .{ .dom_exception = true });
+    pub const define = bridge.function(CustomElementRegistry.define, .{ .dom_exception = true, .ce_reactions = true });
     pub const get = bridge.function(CustomElementRegistry.get, .{ .null_as_undefined = true });
-    pub const upgrade = bridge.function(CustomElementRegistry.upgrade, .{});
+    pub const upgrade = bridge.function(CustomElementRegistry.upgrade, .{ .ce_reactions = true });
     pub const whenDefined = bridge.function(CustomElementRegistry.whenDefined, .{ .dom_exception = true });
 };
 

@@ -1234,21 +1234,21 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(HtmlElement.construct, .{ .new_target = true });
 
-    pub const innerText = bridge.accessor(_innerText, HtmlElement.setInnerText, .{});
+    pub const innerText = bridge.accessor(_innerText, HtmlElement.setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *HtmlElement, frame: *const Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.call_arena);
         try self.getInnerText(&buf.writer);
         return buf.written();
     }
-    pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .dom_exception = true });
+    pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .dom_exception = true, .ce_reactions = true });
     pub const click = bridge.function(HtmlElement.click, .{});
 
-    pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{});
-    pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{});
+    pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{ .ce_reactions = true });
+    pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
     pub const isContentEditable = bridge.accessor(HtmlElement.getIsContentEditable, null, .{});
-    pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{});
-    pub const tabIndex = bridge.accessor(HtmlElement.getTabIndex, HtmlElement.setTabIndex, .{});
-    pub const title = bridge.accessor(HtmlElement.getTitle, HtmlElement.setTitle, .{});
+    pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{ .ce_reactions = true });
+    pub const tabIndex = bridge.accessor(HtmlElement.getTabIndex, HtmlElement.setTabIndex, .{ .ce_reactions = true });
+    pub const title = bridge.accessor(HtmlElement.getTitle, HtmlElement.setTitle, .{ .ce_reactions = true });
 
     pub const onabort = bridge.accessor(HtmlElement.getOnAbort, HtmlElement.setOnAbort, .{});
     pub const onanimationcancel = bridge.accessor(HtmlElement.getOnAnimationCancel, HtmlElement.setOnAnimationCancel, .{});

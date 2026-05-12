@@ -83,7 +83,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const kind = bridge.accessor(Track.getKind, Track.setKind, .{});
+    pub const kind = bridge.accessor(Track.getKind, Track.setKind, .{ .ce_reactions = true });
 
     pub const NONE = bridge.property(@as(u16, @intFromEnum(ReadyState.none)), .{ .template = true });
     pub const LOADING = bridge.property(@as(u16, @intFromEnum(ReadyState.loading)), .{ .template = true });

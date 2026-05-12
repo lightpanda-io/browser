@@ -718,12 +718,12 @@ pub const JsApi = struct {
     pub const isPointInRange = bridge.function(Range.isPointInRange, .{ .dom_exception = true });
     pub const intersectsNode = bridge.function(Range.intersectsNode, .{});
     pub const cloneRange = bridge.function(Range.cloneRange, .{ .dom_exception = true });
-    pub const insertNode = bridge.function(Range.insertNode, .{ .dom_exception = true });
-    pub const deleteContents = bridge.function(Range.deleteContents, .{ .dom_exception = true });
+    pub const insertNode = bridge.function(Range.insertNode, .{ .dom_exception = true, .ce_reactions = true });
+    pub const deleteContents = bridge.function(Range.deleteContents, .{ .dom_exception = true, .ce_reactions = true });
     pub const cloneContents = bridge.function(Range.cloneContents, .{ .dom_exception = true });
-    pub const extractContents = bridge.function(Range.extractContents, .{ .dom_exception = true });
-    pub const surroundContents = bridge.function(Range.surroundContents, .{ .dom_exception = true });
-    pub const createContextualFragment = bridge.function(Range.createContextualFragment, .{ .dom_exception = true });
+    pub const extractContents = bridge.function(Range.extractContents, .{ .dom_exception = true, .ce_reactions = true });
+    pub const surroundContents = bridge.function(Range.surroundContents, .{ .dom_exception = true, .ce_reactions = true });
+    pub const createContextualFragment = bridge.function(Range.createContextualFragment, .{ .dom_exception = true, .ce_reactions = true });
     pub const toString = bridge.function(Range.toString, .{ .dom_exception = true });
     pub const getBoundingClientRect = bridge.function(Range.getBoundingClientRect, .{});
     pub const getClientRects = bridge.function(Range.getClientRects, .{});

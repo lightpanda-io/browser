@@ -136,5 +136,5 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const @"[]" = bridge.namedIndexed(getProperty, setProperty, deleteProperty, .{ .null_as_undefined = true });
+    pub const @"[]" = bridge.namedIndexed(getProperty, setProperty, deleteProperty, .{ .null_as_undefined = true, .ce_reactions = true });
 };

@@ -44,8 +44,8 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const disabled = bridge.accessor(FieldSet.getDisabled, FieldSet.setDisabled, .{});
-    pub const name = bridge.accessor(FieldSet.getName, FieldSet.setName, .{});
+    pub const disabled = bridge.accessor(FieldSet.getDisabled, FieldSet.setDisabled, .{ .ce_reactions = true });
+    pub const name = bridge.accessor(FieldSet.getName, FieldSet.setName, .{ .ce_reactions = true });
 };
 
 const testing = @import("../../../../testing.zig");
