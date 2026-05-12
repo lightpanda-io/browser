@@ -76,3 +76,125 @@
     testing.expectTrue(dialog instanceof HTMLDialogElement)
   }
 </script>
+
+<script id="show_sets_open">
+  {
+    const dialog = document.createElement('dialog')
+    testing.expectEqual(false, dialog.open)
+
+    dialog.show()
+    testing.expectEqual(true, dialog.open)
+    testing.expectEqual('', dialog.getAttribute('open'))
+  }
+</script>
+
+<script id="show_noop_when_already_open">
+  {
+    const dialog = document.createElement('dialog')
+    dialog.setAttribute('open', '')
+    testing.expectEqual(true, dialog.open)
+
+    dialog.show()
+    testing.expectEqual(true, dialog.open)
+  }
+</script>
+
+<script id="showModal_sets_open">
+  {
+    const dialog = document.createElement('dialog')
+    testing.expectEqual(false, dialog.open)
+
+    dialog.showModal()
+    testing.expectEqual(true, dialog.open)
+    testing.expectEqual('', dialog.getAttribute('open'))
+  }
+</script>
+
+<script id="showModal_throws_when_already_open">
+  {
+    const dialog = document.createElement('dialog')
+    dialog.setAttribute('open', '')
+
+    testing.expectError('InvalidStateError', () => dialog.showModal())
+    testing.expectEqual(true, dialog.open)
+  }
+</script>
+
+<script id="close_removes_open">
+  {
+    const dialog = document.createElement('dialog')
+    dialog.show()
+    testing.expectEqual(true, dialog.open)
+
+    dialog.close()
+    testing.expectEqual(false, dialog.open)
+    testing.expectEqual(null, dialog.getAttribute('open'))
+  }
+</script>
+
+<script id="close_noop_when_not_open">
+  {
+    const dialog = document.createElement('dialog')
+    testing.expectEqual(false, dialog.open)
+
+    dialog.close()
+    testing.expectEqual(false, dialog.open)
+  }
+</script>
+
+<script id="close_sets_returnValue_when_arg_given">
+  {
+    const dialog = document.createElement('dialog')
+    dialog.show()
+
+    dialog.close('confirmed')
+    testing.expectEqual('confirmed', dialog.returnValue)
+    testing.expectEqual('confirmed', dialog.getAttribute('returnvalue'))
+  }
+</script>
+
+<script id="close_preserves_returnValue_when_no_arg">
+  {
+    const dialog = document.createElement('dialog')
+    dialog.returnValue = 'preset'
+    dialog.show()
+
+    dialog.close()
+    testing.expectEqual('preset', dialog.returnValue)
+  }
+</script>
+
+<script id="close_fires_close_event">
+  {
+    const dialog = document.createElement('dialog')
+    document.body.appendChild(dialog)
+    dialog.show()
+
+    let fired = 0
+    let bubbled = false
+    let cancelable = null
+    dialog.addEventListener('close', (e) => {
+      fired++
+      cancelable = e.cancelable
+    })
+    document.addEventListener('close', () => { bubbled = true })
+
+    dialog.close('done')
+    testing.expectEqual(1, fired)
+    testing.expectEqual(false, bubbled)
+    testing.expectEqual(false, cancelable)
+  }
+</script>
+
+<script id="close_does_not_fire_event_when_not_open">
+  {
+    const dialog = document.createElement('dialog')
+    document.body.appendChild(dialog)
+
+    let fired = 0
+    dialog.addEventListener('close', () => fired++)
+
+    dialog.close()
+    testing.expectEqual(0, fired)
+  }
+</script>
