@@ -1488,11 +1488,14 @@ pub fn parseJSON(self: *const Local, json: []const u8) !js.Value {
     };
 }
 
-pub fn throw(self: *const Local, err: []const u8) js.Exception {
-    const handle = self.isolate.createError(err);
+pub fn newException(self: *const Local, ex: anytype) js.Exception {
+    const js_val = self.zigValueToJs(ex, .{}) catch {
+        return .{ .local = self, .handle = self.isolate.createError("internal error") };
+    };
+
     return .{
         .local = self,
-        .handle = handle,
+        .handle = js_val.handle,
     };
 }
 
