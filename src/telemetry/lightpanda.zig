@@ -105,7 +105,7 @@ fn postEvent(self: *LightPanda) !void {
     try conn.setBody(self.writer.written());
 
     self.head.store(h + sent, .release);
-    self.network.submitRequest(conn);
+    self.network.request(conn);
 }
 
 fn writeEvent(self: *LightPanda, event: telemetry.Event) !bool {
