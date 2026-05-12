@@ -66,25 +66,30 @@ pub fn attachCompleter(self: *Self, schemas: []const SlashCommand.SchemaInfo) vo
 }
 
 pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity: Verbosity, is_repl: bool) Self {
-    _ = c.ic_enable_multiline(true);
-    _ = c.ic_enable_hint(true);
-    _ = c.ic_enable_inline_help(true);
-    // Show ghost completions instantly; isocline's default is 400 ms.
-    _ = c.ic_set_hint_delay(0);
-    _ = c.ic_enable_brace_insertion(true);
-    // `ps-*` namespace avoids colliding with isocline's built-in `ic-*` styles.
-    c.ic_style_def(style_cmd, "ansi-cyan bold");
-    c.ic_style_def(style_slash, "ansi-magenta bold");
-    c.ic_style_def(style_string, "ansi-green");
-    c.ic_style_def(style_var, "ansi-yellow bold");
-    c.ic_style_def(style_url, "ansi-blue underline");
-    c.ic_style_def(style_key, "ansi-cyan");
-    c.ic_style_def(style_num, "ansi-yellow");
-    c.ic_style_def(style_err, "ansi-red");
-    c.ic_set_default_highlighter(&highlighterCallback, null);
-    _ = c.ic_enable_highlight(true);
-    if (history_path) |path| {
-        c.ic_set_history(path.ptr, -1); // -1 → 200-entry default cap
+    // Isocline probes the terminal on init (writes ESC[6n cursor-report on
+    // stdout), so skip the whole setup in script-only mode — `ic_readline` is
+    // never reached there anyway.
+    if (is_repl) {
+        _ = c.ic_enable_multiline(true);
+        _ = c.ic_enable_hint(true);
+        _ = c.ic_enable_inline_help(true);
+        // Show ghost completions instantly; isocline's default is 400 ms.
+        _ = c.ic_set_hint_delay(0);
+        _ = c.ic_enable_brace_insertion(true);
+        // `ps-*` namespace avoids colliding with isocline's built-in `ic-*` styles.
+        c.ic_style_def(style_cmd, "ansi-cyan bold");
+        c.ic_style_def(style_slash, "ansi-magenta bold");
+        c.ic_style_def(style_string, "ansi-green");
+        c.ic_style_def(style_var, "ansi-yellow bold");
+        c.ic_style_def(style_url, "ansi-blue underline");
+        c.ic_style_def(style_key, "ansi-cyan");
+        c.ic_style_def(style_num, "ansi-yellow");
+        c.ic_style_def(style_err, "ansi-red");
+        c.ic_set_default_highlighter(&highlighterCallback, null);
+        _ = c.ic_enable_highlight(true);
+        if (history_path) |path| {
+            c.ic_set_history(path.ptr, -1); // -1 → 200-entry default cap
+        }
     }
     const stderr_is_tty = std.posix.isatty(std.posix.STDERR_FILENO);
     return .{
