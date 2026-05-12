@@ -89,7 +89,13 @@ pub const Callback = union(enum) {
     object: js.Object,
 };
 
-pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, callback: Callback, opts: RegisterOptions) !*Listener {
+// Returns null when the listener is a no-op per spec: signal already
+// aborted, or a duplicate (same type + callback + capture) of an
+// already-registered listener. Real errors (OOM, StringTooLarge) still
+// propagate. Callers don't have to distinguish "skipped" from "registered"
+// unless they need the resulting *Listener (e.g. Frame's load-listener
+// tracking).
+pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, callback: Callback, opts: RegisterOptions) !?*Listener {
     if (comptime IS_DEBUG) {
         log.debug(.event, "EventManager.register", .{
             .type = typ,
@@ -102,7 +108,7 @@ pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, 
     // If a signal is provided and already aborted, don't register the listener
     if (opts.signal) |signal| {
         if (signal.getAborted()) {
-            return error.SignalAborted;
+            return null;
         }
     }
 
@@ -114,18 +120,22 @@ pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, 
         .event_target = @intFromPtr(target),
     });
     if (gop.found_existing) {
-        // check for duplicate callbacks already registered
+        // check for duplicate callbacks already registered. Listeners that
+        // have been removed (e.g. a `once` listener that fired mid-dispatch
+        // and is awaiting destruction in deferred_removals) are not "in"
+        // the listener list per spec — skip them.
         var node = gop.value_ptr.*.first;
         while (node) |n| {
             const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
+            node = n.next;
+            if (listener.removed) continue;
             const is_duplicate = switch (callback) {
                 .object => |obj| listener.function.eqlObject(obj),
                 .function => |func| listener.function.eqlFunction(func),
             };
             if (is_duplicate and listener.capture == opts.capture) {
-                return error.DuplicateListener;
+                return null;
             }
-            node = n.next;
         }
     } else {
         gop.value_ptr.* = try self.list_pool.create();
@@ -164,6 +174,11 @@ pub fn remove(self: *EventManagerBase, target: *EventTarget, typ: []const u8, ca
 }
 
 pub fn removeListener(self: *EventManagerBase, list: *std.DoublyLinkedList, listener: *Listener) void {
+    // Already removed (or queued for removal). Avoids double-pushing the
+    // same listener into deferred_removals — which would double-free at
+    // the outer-dispatch cleanup — if e.g. a `once` listener also calls
+    // removeEventListener on itself.
+    if (listener.removed) return;
     // If we're in a dispatch, defer removal to avoid invalidating iteration
     if (self.dispatch_depth > 0) {
         listener.removed = true;
@@ -256,16 +271,14 @@ pub fn dispatchDirect(
     // Track dispatch depth for deferred removal
     self.dispatch_depth += 1;
     defer {
-        const dispatch_depth = self.dispatch_depth;
+        self.dispatch_depth -= 1;
         // Only destroy deferred listeners when we exit the outermost dispatch
-        if (dispatch_depth == 1) {
+        if (self.dispatch_depth == 0) {
             for (self.deferred_removals.items) |removal| {
                 removal.list.remove(&removal.listener.node);
                 self.listener_pool.destroy(removal.listener);
             }
             self.deferred_removals.clearRetainingCapacity();
-        } else {
-            self.dispatch_depth = dispatch_depth - 1;
         }
     }
 
@@ -304,8 +317,11 @@ pub fn dispatchDirect(
         }
 
         event._current_target = target;
+        event._in_passive_listener = listener.passive;
 
         try listener.run(arena, &ls.local, event, opts.context);
+
+        event._in_passive_listener = false;
 
         if (event._stop_immediate_propagation) {
             return;
@@ -356,6 +372,10 @@ fn findListener(list: *const std.DoublyLinkedList, callback: Callback, capture: 
     while (node) |n| {
         node = n.next;
         const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
+        // Per spec, a removed listener isn't "in" the list anymore; skip
+        // entries still present only because their deferred removal hasn't
+        // been flushed yet.
+        if (listener.removed) continue;
         const matches = switch (callback) {
             .object => |obj| listener.function.eqlObject(obj),
             .function => |func| listener.function.eqlFunction(func),

@@ -78,6 +78,9 @@ _pending: ?*Page = null,
 frame_id_gen: u32 = 0,
 loader_id_gen: u32 = 0,
 
+// configuration (or CDP command) to disable iframe loading
+subframe_loading_enabled: bool = true,
+
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
     const arena_pool = browser.arena_pool;
@@ -96,6 +99,8 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .notification = notification,
         .fc_identity_pool = .init(allocator),
         .cookie_jar = storage.Cookie.Jar.init(allocator),
+        // CLI default; LP.configureLoading can flip this per-session.
+        .subframe_loading_enabled = !browser.app.config.disableSubframes(),
     };
 }
 

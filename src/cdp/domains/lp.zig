@@ -42,6 +42,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         scrollNode,
         waitForSelector,
         handleJavaScriptDialog,
+        configureLoading,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -56,7 +57,18 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .scrollNode => return scrollNode(cmd),
         .waitForSelector => return waitForSelector(cmd),
         .handleJavaScriptDialog => return handleJavaScriptDialog(cmd),
+        .configureLoading => return configureLoading(cmd),
     }
+}
+
+fn configureLoading(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        subFrame: bool = true,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    bc.session.subframe_loading_enabled = params.subFrame;
+    return cmd.sendResult(null, .{});
 }
 
 fn getSemanticTree(cmd: anytype) !void {

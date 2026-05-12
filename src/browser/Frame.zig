@@ -32,6 +32,8 @@ const StyleManager = @import("StyleManager.zig");
 const Parser = @import("parser/Parser.zig");
 const h5e = @import("parser/html5ever.zig");
 
+const CustomElementReactions = @import("CustomElementReactions.zig");
+
 const URL = @import("URL.zig");
 const Blob = @import("webapi/Blob.zig");
 const Node = @import("webapi/Node.zig");
@@ -188,6 +190,12 @@ _upgrading_element: ?*Node = null,
 // List of custom elements that were created before their definition was registered
 _undefined_custom_elements: std.ArrayList(*Element.Html.Custom) = .{},
 
+// Pending custom-element reactions (connected/disconnected/adopted/attribute
+// changed). Reactions are enqueued during DOM mutation and drained at the
+// outer algorithm boundary — set up by the JS bridge for [CEReactions]
+// methods and by the parser pump on each yield.
+_ce_reactions: CustomElementReactions,
+
 // for heap allocations and managing WebAPI objects
 _factory: *Factory,
 
@@ -288,6 +296,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
         ._type = if (parent == null) .root else .frame,
         ._style_manager = undefined,
         ._script_manager = undefined,
+        ._ce_reactions = .{ .allocator = arena },
         ._event_manager = EventManager.init(arena, self),
         ._console_messages = .init(arena),
     };
@@ -1296,6 +1305,11 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     if (iframe._executed) {
         return;
     }
+    if (!self._session.subframe_loading_enabled) {
+        // configured not to load frames
+        iframe._executed = true;
+        return;
+    }
 
     var src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse "";
     if (src.len == 0) {
@@ -1854,7 +1868,7 @@ pub fn adoptNodeTree(self: *Frame, node: *Node, old_owner: *Document, new_owner:
 
     // Per spec, adopted steps run on each element after its document is set.
     if (node.is(Element)) |el| {
-        Element.Html.Custom.invokeAdoptedCallbackOnElement(el, old_owner, new_owner, self);
+        Element.Html.Custom.enqueueAdoptedCallbackOnElement(el, old_owner, new_owner, self);
     }
 
     var it = node.childrenIterator();
@@ -2590,7 +2604,7 @@ pub fn createElementNS(self: *Frame, namespace: Element.Namespace, name: []const
                 if (element._attributes) |attributes| {
                     var it = attributes.iterator();
                     while (it.next()) |attr| {
-                        Element.Html.Custom.invokeAttributeChangedCallbackOnElement(
+                        Element.Html.Custom.enqueueAttributeChangedCallbackOnElement(
                             element,
                             attr._name,
                             null, // old_value is null for initial attributes
@@ -3012,7 +3026,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
             self.removeElementIdWithMaps(id_maps.?, id);
         }
 
-        Element.Html.Custom.invokeDisconnectedCallbackOnElement(el, self);
+        Element.Html.Custom.enqueueDisconnectedCallbackOnElement(el, self);
 
         // If a <style> element is being removed, remove its sheet from the list
         if (el.is(Element.Html.Style)) |style| {
@@ -3035,11 +3049,8 @@ pub fn appendAllChildren(self: *Frame, parent: *Node, target: *Node) !void {
     self.domChanged();
     const dest_connected = target.isConnected();
 
-    // Use firstChild() instead of iterator to handle cases where callbacks
-    // (like custom element connectedCallback) modify the parent during iteration.
-    // The iterator captures "next" pointers that can become stale.
-    while (parent.firstChild()) |child| {
-        // Check if child was connected BEFORE removing it from parent
+    var it = parent.childrenIterator();
+    while (it.next()) |child| {
         const child_was_connected = child.isConnected();
         self.removeNode(parent, child, .{ .will_be_reconnected = dest_connected });
         try self.appendNode(target, child, .{ .child_already_connected = child_was_connected });
@@ -3050,31 +3061,16 @@ pub fn insertAllChildrenBefore(self: *Frame, fragment: *Node, parent: *Node, ref
     self.domChanged();
     const dest_connected = parent.isConnected();
 
-    // Use firstChild() instead of iterator to handle cases where callbacks
-    // (like custom element connectedCallback) modify the fragment during iteration.
-    // The iterator captures "next" pointers that can become stale.
-    while (fragment.firstChild()) |child| {
-        // Check if child was connected BEFORE removing it from fragment
+    var it = fragment.childrenIterator();
+    while (it.next()) |child| {
         const child_was_connected = child.isConnected();
         self.removeNode(fragment, child, .{ .will_be_reconnected = dest_connected });
-        // A callback fired by a previous iteration's insert (e.g. a custom
-        // element's connectedCallback) may have detached ref_node from
-        // parent. In that case, fall back to append so the remaining
-        // children still land in `parent` in source order.
-        if (ref_node._parent == parent) {
-            try self.insertNodeRelative(
-                parent,
-                child,
-                .{ .before = ref_node },
-                .{ .child_already_connected = child_was_connected },
-            );
-        } else {
-            try self.appendNode(
-                parent,
-                child,
-                .{ .child_already_connected = child_was_connected },
-            );
-        }
+        try self.insertNodeRelative(
+            parent,
+            child,
+            .{ .before = ref_node },
+            .{ .child_already_connected = child_was_connected },
+        );
     }
 }
 
@@ -3198,7 +3194,7 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
                 if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
                     try self.addElementId(parent, el, id);
                 }
-                try Element.Html.Custom.invokeConnectedCallbackOnElement(true, el, self);
+                try Element.Html.Custom.enqueueConnectedCallbackOnElement(true, el, self);
             }
         }
         return;
@@ -3244,7 +3240,7 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         }
 
         if (should_invoke_connected) {
-            try Element.Html.Custom.invokeConnectedCallbackOnElement(false, el, self);
+            try Element.Html.Custom.enqueueConnectedCallbackOnElement(false, el, self);
         }
     }
 }
@@ -3254,7 +3250,7 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
         log.err(.bug, "build.attributeChange", .{ .tag = element.getTag(), .name = name, .value = value, .err = err, .type = self._type, .url = self.url });
     };
 
-    Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, value, null, self);
+    Element.Html.Custom.enqueueAttributeChangedCallbackOnElement(element, name, old_value, value, null, self);
 
     var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
     while (it) |node| : (it = node.next) {
@@ -3280,7 +3276,7 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
         log.err(.bug, "build.attributeRemove", .{ .tag = element.getTag(), .name = name, .err = err, .type = self._type, .url = self.url });
     };
 
-    Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, null, null, self);
+    Element.Html.Custom.enqueueAttributeChangedCallbackOnElement(element, name, old_value, null, null, self);
 
     var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
     while (it) |node| : (it = node.next) {

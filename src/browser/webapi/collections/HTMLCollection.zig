@@ -156,7 +156,7 @@ pub const JsApi = struct {
                 return error.NotHandled;
             }
 
-            return self.getByName(name, frame);
+            return self.getByName(name, frame) orelse error.NotHandled;
         }
     }.wrap, null, null, .{ .null_as_undefined = true });
 
