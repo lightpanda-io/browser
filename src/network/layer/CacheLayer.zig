@@ -85,13 +85,18 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
 
     req.ctx = ctx;
     req.header_callback = CacheContext.headerCallback;
+    req.data_callback = CacheContext.dataCallback;
     req.done_callback = CacheContext.doneCallback;
     req.error_callback = CacheContext.errorCallback;
+
+    if (ctx.forward.start != null) {
+        // req.ctx was changed, need to ovewrite this
+        req.start_callback = CacheContext.startCallback;
+    }
     if (ctx.forward.shutdown != null) {
+        // req.ctx was changed, need to ovewrite this
         req.shutdown_callback = CacheContext.shutdownCallback;
     }
-    // data_callback and start_callback don't need cache-side hooks: the body
-    // is replayed from transfer._stream_buffer at done time.
 
     return self.next.request(transfer);
 }
@@ -146,6 +151,16 @@ const CacheContext = struct {
     req_url: [:0]const u8,
     req_headers: @import("../http.zig").Headers,
     pending_metadata: ?*CachedMetadata = null,
+
+    fn startCallback(response: Response) anyerror!void {
+        const self: *CacheContext = @ptrCast(@alignCast(response.ctx));
+        return self.forward.forwardStart(response);
+    }
+
+    fn dataCallback(response: Response, chunk: []const u8) anyerror!void {
+        const self: *CacheContext = @ptrCast(@alignCast(response.ctx));
+        return self.forward.forwardData(response, chunk);
+    }
 
     fn headerCallback(response: Response) anyerror!bool {
         const self: *CacheContext = @ptrCast(@alignCast(response.ctx));
