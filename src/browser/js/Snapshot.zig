@@ -670,11 +670,12 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
                 if (value.static) {
                     v8.v8__Template__SetAccessorProperty(@ptrCast(template), js_name, getter_callback, setter_callback, attribute);
                 } else {
+                    const accessor_attr = if (own_properties) attribute else attribute | v8.DontEnum;
                     v8.v8__ObjectTemplate__SetAccessorProperty__Config(prototype, &.{
                         .key = js_name,
                         .getter = getter_callback,
                         .setter = setter_callback,
-                        .attribute = attribute,
+                        .attribute = accessor_attr,
                     });
                 }
             },
@@ -695,10 +696,8 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *const v8.F
                 if (value.static and !own_properties) {
                     v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
                 } else {
-                    // For own_properties namespaces, static methods still belong
-                    // on the instance — `CSS` is exposed as an instance via
-                    // `window.CSS`, not as a constructor.
-                    v8.v8__Template__Set(@ptrCast(member_template), js_name, @ptrCast(function_template), v8.None);
+                    const fn_attr: v8.PropertyAttribute = if (own_properties) v8.None else v8.DontEnum;
+                    v8.v8__Template__Set(@ptrCast(member_template), js_name, @ptrCast(function_template), fn_attr);
                 }
             },
             bridge.Indexed => {

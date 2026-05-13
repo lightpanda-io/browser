@@ -206,6 +206,10 @@ pub fn getSelection(self: *const Window) *Selection {
     return &self._document._selection;
 }
 
+pub fn getFrameElement(self: *const Window) ?*Element.Html.IFrame {
+    return self._frame.iframe;
+}
+
 pub fn getLocation(self: *const Window) *Location {
     return self._location;
 }
@@ -898,6 +902,7 @@ pub const JsApi = struct {
     pub const structuredClone = bridge.function(Window.structuredClone, .{});
     pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
     pub const getSelection = bridge.function(Window.getSelection, .{});
+    pub const frameElement = bridge.accessor(Window.getFrameElement, null, .{});
 
     pub const frames = bridge.accessor(Window.getWindow, null, .{});
     pub const index = bridge.indexed(Window.getFrame, null, .{ .null_as_undefined = true });

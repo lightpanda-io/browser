@@ -96,6 +96,13 @@ fn fetchRobotsThenRequest(
         errdefer std.debug.assert(self.pending.remove(robots_url));
         entry.value_ptr.* = .empty;
 
+        try entry.value_ptr.append(self.allocator, transfer);
+        transfer.loop_owned = true;
+        errdefer {
+            entry.value_ptr.deinit(self.allocator);
+            transfer.loop_owned = false;
+        }
+
         const robots_ctx = try transfer.arena.create(RobotsContext);
         robots_ctx.* = .{
             .layer = self,
@@ -135,14 +142,16 @@ fn fetchRobotsThenRequest(
             .error_callback = RobotsContext.errorCallback,
             .shutdown_callback = RobotsContext.shutdownCallback,
         }, transfer.owner);
-    }
+    } else {
+        // Already one in flight, just queue behind.
+        try entry.value_ptr.append(self.allocator, transfer);
 
-    try entry.value_ptr.append(self.allocator, transfer);
-    // Parked: RobotsLayer owns destruction via flushPending / flushPendingShutdown
-    // until robots.txt resolves. Without this, Client.request's errdefer (or
-    // any caller's cleanup) would deinit a transfer that's still on the
-    // pending list, leaving flushPending with a dangling pointer.
-    transfer.loop_owned = true;
+        // Parked: RobotsLayer owns destruction via flushPending / flushPendingShutdown
+        // until robots.txt resolves. Without this, Client.request's errdefer (or
+        // any caller's cleanup) would deinit a transfer that's still on the
+        // pending list, leaving flushPending with a dangling pointer.
+        transfer.loop_owned = true;
+    }
 }
 
 fn flushPending(self: *RobotsLayer, robots_url: [:0]const u8, allowed: bool) void {
