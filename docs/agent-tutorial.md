@@ -228,15 +228,57 @@ Waiting on the URL (`location.pathname === "/news"`) or a generic
 element that exists on both pages is weaker — both can be true before
 the navigation finishes.
 
-Confirm by extracting the username from the header:
+Confirm by pulling structured data off the page. `EXTRACT` takes a
+JSON schema object — each value describes what to lift out, and the
+whole result is printed to stdout as one JSON object. The simplest
+form is a flat selector lookup:
 
 ```
-> EXTRACT '#me'
+> EXTRACT '{"karma": "#karma"}'
+{"karma":"42"}
 ```
 
-`EXTRACT` prints the element's text to stdout — your handle. After a
-page-changing action (click, navigation, form submit), the previous
-`TREE` snapshot is stale; re-inspect before the next interaction.
+The schema grammar is small but covers the cases you'd reach for:
+
+- `"<sel>"` — `textContent.trim()` of the first match (string, or
+  `null` if no match).
+- `""` — the matched element's own text (only meaningful inside a
+  `fields` block, where there's an outer element to refer to).
+- `["<sel>"]` — text of every match (string array).
+- `{"selector": "<sel>", "attr": "<name>"}` — the first match's
+  attribute value.
+- `[{"selector": "<sel>", "fields": {…}}]` — array of objects, where
+  each `fields` entry is resolved relative to the matched element.
+
+After a page-changing action (click, navigation, form submit) the
+previous `TREE` snapshot is stale; re-inspect before the next
+interaction. Hop back to the front page and pull the story list to
+exercise the structured form:
+
+```
+> GOTO https://news.ycombinator.com
+> EXTRACT '''
+{
+  "topStories": [{
+    "selector": ".athing",
+    "fields": {
+      "rank": ".rank",
+      "title": ".titleline > a",
+      "url": {"selector": ".titleline > a", "attr": "href"}
+    }
+  }]
+}
+'''
+```
+
+Triple-quoted (`'''` or `"""`) values let a schema span multiple lines
+— the REPL keeps reading until it sees the matching closing quote.
+The result is a single JSON object printed to stdout:
+`{"topStories":[{"rank":"1","title":"…","url":"…"}, …]}`.
+
+The schema is parsed in Zig before the page-side walker runs, so a
+typo like a stray comma surfaces here as `Error: invalid EXTRACT
+schema JSON` instead of a confusing V8 stack trace.
 
 ## 4. Recording the session
 
@@ -247,8 +289,9 @@ The same flow, but recorded to a file. Quit the REPL, then:
 ```
 
 `-i <path>` opens an interactive REPL that appends state-mutating
-commands to `<path>`. Retype the same login sequence (`GOTO`, two
-`TYPE`s, `CLICK`, `WAIT`, then `/quit`).
+commands to `<path>`. Retype the same sequence — login (`GOTO`, two
+`TYPE`s, `CLICK`, `WAIT`), then the front-page hop and structured
+pull (`GOTO`, multi-line `EXTRACT`) — then `/quit`.
 
 Inspect the result:
 
@@ -256,10 +299,12 @@ Inspect the result:
 cat hn.lp
 ```
 
-You should see the five mutating commands and nothing else — no
+You should see the seven mutating commands and nothing else — no
 `TREE`, no `MARKDOWN`, no slash-command lookups. The recorder filters
 on a per-command flag (`Command.isRecorded()`) so read-only inspection
-never pollutes the script.
+never pollutes the script; `EXTRACT` *is* recorded (it changes what
+the script will output on replay even though it doesn't mutate the
+page).
 
 Diff it against the checked-in fixture:
 
