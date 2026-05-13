@@ -821,14 +821,13 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     const args = try parseArgs(Params, arena, arguments);
     if (args.value.len == 0) return ToolError.InvalidParams;
     const raw_text = args.value;
-    const text = substituteEnvVars(arena, raw_text);
+    const text = try substituteEnvVars(arena, raw_text);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
     lp.actions.fill(resolved.node, text, resolved.page) catch |err| return mapActionError(err);
 
     // Show the original reference (e.g. $LP_PASSWORD) in the result, not the resolved value
-    const display_text = if (text.ptr != raw_text.ptr) raw_text else text;
-    const suffix = std.fmt.allocPrint(arena, " with \"{s}\"", .{display_text}) catch return ToolError.InternalError;
+    const suffix = std.fmt.allocPrint(arena, " with \"{s}\"", .{raw_text}) catch return ToolError.InternalError;
     return formatActionResult(arena, "Filled element", args.selector, args.backendNodeId, suffix, resolved.page);
 }
 
@@ -1142,7 +1141,7 @@ pub fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.jso
     return parseValue(T, arena, arguments orelse return error.InvalidParams);
 }
 
-pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8 {
+pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
     // No `$LP_` prefix → no substitution possible, skip the rebuild entirely.
     // Pages routinely contain `$5.99`-style content where `$` is incidental.
     // Lowercase `$lp_…` falls through here too — `std.posix.getenv` is
@@ -1150,7 +1149,7 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8
     const first_lp = std.mem.indexOf(u8, input, "$LP_") orelse return input;
 
     var result: std.ArrayList(u8) = .empty;
-    result.ensureTotalCapacity(arena, input.len) catch return input;
+    try result.ensureTotalCapacity(arena, input.len);
     var i: usize = first_lp;
     var last_copy: usize = 0;
     while (std.mem.indexOfScalarPos(u8, input, i, '$')) |dollar| {
@@ -1165,19 +1164,19 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) []const u8
         }
         const name = input[var_start..var_end];
         if (lookupLpEnv(name)) |val| {
-            result.appendSlice(arena, input[last_copy..dollar]) catch return input;
-            result.appendSlice(arena, val) catch return input;
+            try result.appendSlice(arena, input[last_copy..dollar]);
+            try result.appendSlice(arena, val);
             last_copy = var_end;
         }
         i = var_end;
     }
     if (last_copy == 0) return input;
-    result.appendSlice(arena, input[last_copy..]) catch return input;
-    return result.toOwnedSlice(arena) catch input;
+    try result.appendSlice(arena, input[last_copy..]);
+    return result.toOwnedSlice(arena);
 }
 
 test "substituteEnvVars no vars" {
-    const r = substituteEnvVars(std.testing.allocator, "hello world");
+    const r = try substituteEnvVars(std.testing.allocator, "hello world");
     try std.testing.expectEqualStrings("hello world", r);
 }
 
@@ -1190,7 +1189,7 @@ test "substituteEnvVars resolves LP_* vars" {
     _ = setenv(@constCast(var_name), @constCast(var_value), 1);
     defer _ = unsetenv(@constCast(var_name));
 
-    const r = substituteEnvVars(arena.allocator(), "user=$LP_SUBST_TEST/end");
+    const r = try substituteEnvVars(arena.allocator(), "user=$LP_SUBST_TEST/end");
     try std.testing.expectEqualStrings("user=secret/end", r);
 }
 
@@ -1206,7 +1205,7 @@ test "substituteEnvVars keeps non-LP_ refs literal even when set" {
     _ = setenv(@constCast(var_name), @constCast(var_value), 1);
     defer _ = unsetenv(@constCast(var_name));
 
-    const r = substituteEnvVars(arena.allocator(), "$LIGHTPANDA_SUBST_TEST_OUTSIDE");
+    const r = try substituteEnvVars(arena.allocator(), "$LIGHTPANDA_SUBST_TEST_OUTSIDE");
     try std.testing.expectEqualStrings("$LIGHTPANDA_SUBST_TEST_OUTSIDE", r);
 }
 
@@ -1214,7 +1213,7 @@ test "substituteEnvVars missing LP_ var kept literal" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
-    const r = substituteEnvVars(arena.allocator(), "$LP_UNLIKELY_VAR_12345");
+    const r = try substituteEnvVars(arena.allocator(), "$LP_UNLIKELY_VAR_12345");
     try std.testing.expectEqualStrings("$LP_UNLIKELY_VAR_12345", r);
 }
 
@@ -1222,7 +1221,7 @@ test "substituteEnvVars bare dollar" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 
-    const r = substituteEnvVars(arena.allocator(), "price is $ 5");
+    const r = try substituteEnvVars(arena.allocator(), "price is $ 5");
     try std.testing.expectEqualStrings("price is $ 5", r);
 }
 

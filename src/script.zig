@@ -168,7 +168,7 @@ pub fn formatHealReplacement(
     std.debug.assert(cmds.len > 0);
     var aw: std.Io.Writer.Allocating = .init(arena);
 
-    try writeHealHeader(&aw.writer, raw_line);
+    try aw.writer.print("# [Auto-healed] Original: {s}\n", .{raw_line});
     for (cmds) |cmd| {
         try cmd.format(&aw.writer);
         try aw.writer.writeAll("\n");
@@ -191,7 +191,7 @@ pub fn formatHealReplacementLines(
 ) !Replacement {
     var aw: std.Io.Writer.Allocating = .init(arena);
 
-    try writeHealHeader(&aw.writer, raw_line);
+    try aw.writer.print("# [Auto-healed] Original: {s}\n", .{raw_line});
     for (replacement_lines) |line| {
         try aw.writer.writeAll(line);
         try aw.writer.writeByte('\n');
@@ -201,10 +201,6 @@ pub fn formatHealReplacementLines(
         .original_span = original_span,
         .new_text = aw.written(),
     };
-}
-
-fn writeHealHeader(writer: anytype, raw_line: []const u8) !void {
-    try writer.print("# [Auto-healed] Original: {s}\n", .{raw_line});
 }
 
 /// JSON-encode an arbitrary value into the arena and return the encoded slice.
