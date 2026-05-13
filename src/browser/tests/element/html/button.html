@@ -142,3 +142,120 @@
     testing.expectEqual(true, captured.isTrusted)
   }
 </script>
+
+<!-- Test fixtures for form submission attribute overrides -->
+<button id="btn_no_overrides"></button>
+<button id="btn_with_overrides"
+        formaction="/override" formmethod="POST"
+        formenctype="text/plain" formtarget="_blank" formnovalidate></button>
+<button id="btn_invalid_overrides"
+        formmethod="WEIRD" formenctype="bogus"></button>
+
+<script id="form_action_initial">
+  // Missing: returns the document URL per spec.
+  testing.expectEqual(testing.BASE_URL + 'element/html/button.html', $('#btn_no_overrides').formAction)
+
+  // Present: resolved against the document URL.
+  testing.expectEqual(testing.ORIGIN + '/override', $('#btn_with_overrides').formAction)
+</script>
+
+<script id="form_action_set">
+  {
+    const b = document.createElement('button')
+    testing.expectEqual(testing.BASE_URL + 'element/html/button.html', b.formAction)
+
+    b.formAction = 'hello'
+    testing.expectEqual(testing.BASE_URL + 'element/html/hello', b.formAction)
+
+    b.formAction = '/hello'
+    testing.expectEqual(testing.ORIGIN + '/hello', b.formAction)
+
+    b.formAction = 'https://lightpanda.io/hello'
+    testing.expectEqual('https://lightpanda.io/hello', b.formAction)
+  }
+</script>
+
+<script id="form_enctype_initial">
+  // Missing-value default on overrides: empty string (so `submitter.formEnctype ||
+  // form.enctype` falls through to the form's value).
+  testing.expectEqual('', $('#btn_no_overrides').formEnctype)
+  testing.expectEqual('text/plain', $('#btn_with_overrides').formEnctype)
+
+  // Invalid-value default: "application/x-www-form-urlencoded"
+  testing.expectEqual('application/x-www-form-urlencoded', $('#btn_invalid_overrides').formEnctype)
+</script>
+
+<script id="form_enctype_set">
+  {
+    const b = document.createElement('button')
+    testing.expectEqual('', b.formEnctype)
+
+    b.formEnctype = 'multipart/form-data'
+    testing.expectEqual('multipart/form-data', b.formEnctype)
+    testing.expectEqual('multipart/form-data', b.getAttribute('formenctype'))
+  }
+</script>
+
+<script id="form_method_initial">
+  testing.expectEqual('', $('#btn_no_overrides').formMethod)
+  testing.expectEqual('post', $('#btn_with_overrides').formMethod)
+
+  // Invalid-value default: "get"
+  testing.expectEqual('get', $('#btn_invalid_overrides').formMethod)
+</script>
+
+<script id="form_method_normalization">
+  {
+    const b = document.createElement('button')
+    testing.expectEqual('', b.formMethod)
+
+    b.setAttribute('formmethod', 'POST')
+    testing.expectEqual('post', b.formMethod)
+
+    b.setAttribute('formmethod', 'DIALOG')
+    testing.expectEqual('dialog', b.formMethod)
+
+    b.setAttribute('formmethod', '')
+    testing.expectEqual('get', b.formMethod)
+
+    b.formMethod = 'GET'
+    testing.expectEqual('get', b.formMethod)
+    testing.expectEqual('GET', b.getAttribute('formmethod'))
+  }
+</script>
+
+<script id="form_target_initial">
+  testing.expectEqual('', $('#btn_no_overrides').formTarget)
+  testing.expectEqual('_blank', $('#btn_with_overrides').formTarget)
+</script>
+
+<script id="form_target_set">
+  {
+    const b = document.createElement('button')
+    testing.expectEqual('', b.formTarget)
+
+    b.formTarget = '_self'
+    testing.expectEqual('_self', b.formTarget)
+    testing.expectEqual('_self', b.getAttribute('formtarget'))
+  }
+</script>
+
+<script id="form_no_validate_initial">
+  testing.expectEqual(false, $('#btn_no_overrides').formNoValidate)
+  testing.expectEqual(true, $('#btn_with_overrides').formNoValidate)
+</script>
+
+<script id="form_no_validate_set">
+  {
+    const b = document.createElement('button')
+    testing.expectEqual(false, b.formNoValidate)
+
+    b.formNoValidate = true
+    testing.expectEqual(true, b.formNoValidate)
+    testing.expectEqual('', b.getAttribute('formnovalidate'))
+
+    b.formNoValidate = false
+    testing.expectEqual(false, b.formNoValidate)
+    testing.expectEqual(null, b.getAttribute('formnovalidate'))
+  }
+</script>

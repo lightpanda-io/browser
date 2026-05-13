@@ -119,6 +119,23 @@ pub fn setAcceptCharset(self: *Form, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(.wrap("accept-charset"), .wrap(value), frame);
 }
 
+pub fn getEnctype(self: *const Form) []const u8 {
+    const enctype = self.asConstElement().getAttributeSafe(comptime .wrap("enctype")) orelse return "application/x-www-form-urlencoded";
+
+    if (std.ascii.eqlIgnoreCase(enctype, "multipart/form-data")) {
+        return "multipart/form-data";
+    }
+    if (std.ascii.eqlIgnoreCase(enctype, "text/plain")) {
+        return "text/plain";
+    }
+    // invalid, or it was application/x-www-form-urlencoded all along
+    return "application/x-www-form-urlencoded";
+}
+
+pub fn setEnctype(self: *Form, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("enctype"), .wrap(value), frame);
+}
+
 pub fn getLength(self: *Form, frame: *Frame) !u32 {
     const elements = try self.getElements(frame);
     return elements.length(frame);
@@ -209,6 +226,7 @@ pub const JsApi = struct {
     pub const action = bridge.accessor(Form.getAction, Form.setAction, .{});
     pub const target = bridge.accessor(Form.getTarget, Form.setTarget, .{});
     pub const acceptCharset = bridge.accessor(Form.getAcceptCharset, Form.setAcceptCharset, .{});
+    pub const enctype = bridge.accessor(Form.getEnctype, Form.setEnctype, .{});
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});

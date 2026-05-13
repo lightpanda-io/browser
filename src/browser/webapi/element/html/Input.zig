@@ -834,6 +834,80 @@ pub fn getForm(self: *const Input, frame: *Frame) ?*Form {
     return null;
 }
 
+// Form submission attribute overrides
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-0
+// Mirrors Button's overrides — same spec semantics.
+
+pub fn getFormAction(self: *Input, frame: *Frame) ![]const u8 {
+    const element = self.asElement();
+    const action = element.getAttributeSafe(comptime .wrap("formaction")) orelse return frame.url;
+    if (action.len == 0) {
+        return frame.url;
+    }
+    return element.asNode().resolveURL(action, frame, .{});
+}
+
+pub fn setFormAction(self: *Input, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("formaction"), .wrap(value), frame);
+}
+
+pub fn getFormEnctype(self: *const Input) []const u8 {
+    const enctype = self.asConstElement().getAttributeSafe(comptime .wrap("formenctype")) orelse return "";
+
+    if (std.ascii.eqlIgnoreCase(enctype, "multipart/form-data")) {
+        return "multipart/form-data";
+    }
+    if (std.ascii.eqlIgnoreCase(enctype, "text/plain")) {
+        return "text/plain";
+    }
+    if (std.ascii.eqlIgnoreCase(enctype, "application/x-www-form-urlencoded")) {
+        return "application/x-www-form-urlencoded";
+    }
+    // invalid -> invalid-value default state (application/x-www-form-urlencoded)
+    return "application/x-www-form-urlencoded";
+}
+
+pub fn setFormEnctype(self: *Input, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("formenctype"), .wrap(value), frame);
+}
+
+pub fn getFormMethod(self: *const Input) []const u8 {
+    const method = self.asConstElement().getAttributeSafe(comptime .wrap("formmethod")) orelse return "";
+
+    if (std.ascii.eqlIgnoreCase(method, "post")) {
+        return "post";
+    }
+    if (std.ascii.eqlIgnoreCase(method, "dialog")) {
+        return "dialog";
+    }
+    // "get" or invalid -> invalid-value default state (get)
+    return "get";
+}
+
+pub fn setFormMethod(self: *Input, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("formmethod"), .wrap(value), frame);
+}
+
+pub fn getFormTarget(self: *const Input) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("formtarget")) orelse "";
+}
+
+pub fn setFormTarget(self: *Input, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("formtarget"), .wrap(value), frame);
+}
+
+pub fn getFormNoValidate(self: *const Input) bool {
+    return self.asConstElement().getAttributeSafe(.wrap("formnovalidate")) != null;
+}
+
+pub fn setFormNoValidate(self: *Input, value: bool, frame: *Frame) !void {
+    if (value) {
+        try self.asElement().setAttributeSafe(.wrap("formnovalidate"), .wrap(""), frame);
+    } else {
+        try self.asElement().removeAttribute(.wrap("formnovalidate"), frame);
+    }
+}
+
 /// Sanitize the value according to the current input type
 fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *Frame) ![]const u8 {
     switch (self._input_type) {
@@ -1265,6 +1339,11 @@ pub const JsApi = struct {
     pub const size = bridge.accessor(Input.getSize, Input.setSize, .{});
     pub const src = bridge.accessor(Input.getSrc, Input.setSrc, .{});
     pub const form = bridge.accessor(Input.getForm, null, .{});
+    pub const formAction = bridge.accessor(Input.getFormAction, Input.setFormAction, .{});
+    pub const formEnctype = bridge.accessor(Input.getFormEnctype, Input.setFormEnctype, .{});
+    pub const formMethod = bridge.accessor(Input.getFormMethod, Input.setFormMethod, .{});
+    pub const formNoValidate = bridge.accessor(Input.getFormNoValidate, Input.setFormNoValidate, .{});
+    pub const formTarget = bridge.accessor(Input.getFormTarget, Input.setFormTarget, .{});
     pub const labels = bridge.accessor(Input.getLabels, null, .{});
     pub const indeterminate = bridge.accessor(Input.getIndeterminate, Input.setIndeterminate, .{});
     pub const placeholder = bridge.accessor(Input.getPlaceholder, Input.setPlaceholder, .{});
