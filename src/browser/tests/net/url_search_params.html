@@ -489,6 +489,26 @@
 }
 </script>
 
+<script id=prototypeMembersAreNonEnumerable>
+{
+  // Per WebIDL, interface prototype members are non-enumerable. Several
+  // libraries iterate caller-supplied objects with `for..in` or
+  // `Object.keys` to build querystrings; if prototype methods leak in,
+  // they end up serialized as URL params with values like
+  // "function has() { [native code] }". Real Chrome/Firefox return [].
+  testing.expectEqual([], Object.keys(URLSearchParams.prototype));
+
+  const usp = new URLSearchParams('a=1&b=2');
+  const keys = [];
+  for (const k in usp) keys.push(k);
+  testing.expectEqual([], keys);
+
+  // Sanity: instance own enumerable keys are still empty (entries live in
+  // the C++ side, exposed only via the iterator protocol).
+  testing.expectEqual([], Object.keys(usp));
+}
+</script>
+
 <script id=utf8Encoding>
 {
   // Test that UTF-8 characters are properly percent-encoded (not double-encoded)
