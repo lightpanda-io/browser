@@ -793,7 +793,9 @@ fn resolveOptionalNode(registry: *CDPNode.Registry, backend_node_id: ?CDPNode.Id
 }
 
 fn mapActionError(err: anytype) ToolError {
-    return if (err == error.InvalidNodeType) ToolError.InvalidParams else ToolError.InternalError;
+    if (err == error.InvalidNodeType) return ToolError.InvalidParams;
+    log.debug(.browser, "action error", .{ .err = @errorName(err) });
+    return ToolError.InternalError;
 }
 
 /// If the previous action queued a navigation (form submit, link click,
@@ -1149,7 +1151,10 @@ pub const ParseArgsError = error{ OutOfMemory, InvalidParams };
 pub fn parseValue(comptime T: type, arena: std.mem.Allocator, value: std.json.Value) ParseArgsError!T {
     return std.json.parseFromValueLeaky(T, arena, value, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
-        else => error.InvalidParams,
+        else => {
+            log.debug(.browser, "parseValue rejected", .{ .err = @errorName(err), .type = @typeName(T) });
+            return error.InvalidParams;
+        },
     };
 }
 

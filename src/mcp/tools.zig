@@ -164,11 +164,11 @@ fn dispatchBrowserTool(
 
     // JS errors are returned as isError tool results, not protocol errors
     if (action == .eval) {
-        const result = browser_tools.callEval(arena, server.session, &server.node_registry, arguments) catch |err| {
-            return sendToolResultText(server, id, @errorName(err), true);
-        };
-        if (!result.isError()) recordIfActive(server, name, arguments);
-        return sendToolResultText(server, id, result.text(), result.isError());
+        const outcome = browser_tools.callEval(arena, server.session, &server.node_registry, arguments);
+        if (outcome) |r| {
+            if (!r.isError()) recordIfActive(server, name, arguments);
+        } else |_| {}
+        return sendEvalOutcome(server, id, outcome);
     }
 
     const result = browser_tools.call(arena, server.session, &server.node_registry, name, arguments) catch |err| {
@@ -268,10 +268,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
             return sendToolResultText(server, id, "comment", false);
         },
         .extract => |sel| {
-            const result = browser_tools.extractText(arena, server.session, &server.node_registry, sel) catch |err| {
-                return sendToolResultText(server, id, @errorName(err), true);
-            };
-            return sendToolResultText(server, id, result.text(), result.isError());
+            return sendEvalOutcome(server, id, browser_tools.extractText(arena, server.session, &server.node_registry, sel));
         },
         else => {},
     }
@@ -288,10 +285,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     };
 
     if (action == .eval) {
-        const result = browser_tools.callEval(arena, server.session, &server.node_registry, tcv.args) catch |err| {
-            return sendToolResultText(server, id, @errorName(err), true);
-        };
-        return sendToolResultText(server, id, result.text(), result.isError());
+        return sendEvalOutcome(server, id, browser_tools.callEval(arena, server.session, &server.node_registry, tcv.args));
     }
 
     const result = browser_tools.call(arena, server.session, &server.node_registry, tcv.name, tcv.args) catch |err| {
@@ -392,6 +386,11 @@ fn indexLines(arena: std.mem.Allocator, content: []const u8) !std.StringHashMapU
 fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = is_error });
+}
+
+fn sendEvalOutcome(server: *Server, id: std.json.Value, outcome: browser_tools.ToolError!browser_tools.EvalResult) !void {
+    const result = outcome catch |err| return sendToolResultText(server, id, @errorName(err), true);
+    return sendToolResultText(server, id, result.text(), result.isError());
 }
 
 fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void {
