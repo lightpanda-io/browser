@@ -379,6 +379,7 @@ pub fn disposeBrowserContext(self: *CDP, browser_context_id: []const u8) bool {
     bc.deinit();
     self.browser.closeSession();
     self.browser_context = null;
+    _ = self.browser_context_arena.reset(.{ .retain_with_limit = 1024 * 16 });
     return true;
 }
 
