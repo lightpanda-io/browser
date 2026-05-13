@@ -83,6 +83,12 @@ loader_id_gen: u32 = 0,
 // configuration (or CDP command) to disable iframe loading
 subframe_loading_enabled: bool = true,
 
+// configuration (or CDP command) to disable Web Worker loading. When false,
+// `new Worker(url)` returns a Worker object whose script is never fetched
+// and never evaluated. Set from the `--disable-workers` CLI flag at
+// session init; the LP.configureLoading CDP method can flip it per-session.
+worker_loading_enabled: bool = true,
+
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
     const arena_pool = browser.arena_pool;
@@ -101,8 +107,9 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .notification = notification,
         .fc_identity_pool = .init(allocator),
         .cookie_jar = storage.Cookie.Jar.init(allocator),
-        // CLI default; LP.configureLoading can flip this per-session.
+        // CLI defaults; LP.configureLoading can flip these per-session.
         .subframe_loading_enabled = !browser.app.config.disableSubframes(),
+        .worker_loading_enabled = !browser.app.config.disableWorkers(),
     };
 }
 

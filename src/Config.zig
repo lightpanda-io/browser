@@ -99,6 +99,7 @@ const CommonOptions = .{
     .{ .name = "storage_engine", .type = ?Storage.EngineType },
     .{ .name = "storage_sqlite_path", .type = ?[:0]const u8 },
     .{ .name = "disable_subframes", .type = bool },
+    .{ .name = "disable_workers", .type = bool },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -243,6 +244,13 @@ pub fn obeyRobots(self: *const Config) bool {
 pub fn disableSubframes(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp => |opts| opts.disable_subframes,
+        else => unreachable,
+    };
+}
+
+pub fn disableWorkers(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.disable_workers,
         else => unreachable,
     };
 }
@@ -543,6 +551,18 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                executionContextIds (lightpanda-io/browser#2400). On the CDP
         \\                serve path, drivers can also toggle this per-session via the
         \\                LP.configureLoading method.
+        \\                Defaults to false.
+        \\
+        \\--disable-workers
+        \\                Skip loading dedicated Web Workers. The Worker constructor
+        \\                still returns a Worker object so calling pages do not throw,
+        \\                but no script fetch is initiated and the worker scope's
+        \\                eval never runs (postMessage from the page to the worker is
+        \\                queued indefinitely). Sidesteps a v8 entered-context
+        \\                corruption that crashes the process when an in-page Worker
+        \\                completes its script fetch under specific HTTP-proxy timing
+        \\                conditions on Shopify storefront pages. Drivers can also
+        \\                toggle this per-session via the LP.configureLoading method.
         \\                Defaults to false.
         \\
         \\--block-private-networks
