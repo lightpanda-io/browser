@@ -1208,10 +1208,10 @@ fn promptForProvider(found: []const Config.AiProvider) !Config.AiProvider {
     var labels_buf: [@typeInfo(Config.AiProvider).@"enum".fields.len][]const u8 = undefined;
     for (found, 0..) |p, i| labels_buf[i] = @tagName(p);
 
-    const idx = (promptNumberedChoice("Multiple API keys detected. Pick provider:", labels_buf[0..found.len], false, null) catch {
+    const idx = promptNumberedChoice("Multiple API keys detected. Pick provider:", labels_buf[0..found.len], null) catch {
         std.debug.print("Cancelled — pass --provider to skip the picker.\n", .{});
         return error.UserCancelled;
-    }) orelse return error.AmbiguousProvider;
+    };
     return found[idx];
 }
 
@@ -1253,28 +1253,25 @@ fn pickModel(
     };
 
     var header_buf: [128]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, "Pick model for {s} (Enter for default):", .{@tagName(provider)}) catch
-        "Pick model (Enter for default):";
+    const enter_hint: []const u8 = if (default_idx == null) "" else " (Enter for default)";
+    const header = std.fmt.bufPrint(&header_buf, "Pick model for {s}{s}:", .{ @tagName(provider), enter_hint }) catch
+        "Pick model:";
 
-    const result = promptNumberedChoice(header, ids, true, default_idx) catch {
+    const idx = promptNumberedChoice(header, ids, default_idx) catch {
         std.debug.print("Cancelled — pass --model to skip the picker.\n", .{});
         return error.UserCancelled;
     };
-    if (result) |idx| return try allocator.dupe(u8, ids[idx]);
-    // Honor the baked-in default even when it isn't in the listed ids.
-    std.debug.print("Using default: {s}\n", .{default_model});
-    return try allocator.dupe(u8, default_model);
+    return try allocator.dupe(u8, ids[idx]);
 }
 
 fn interactiveTty() bool {
     return std.posix.isatty(std.posix.STDIN_FILENO) and std.posix.isatty(std.posix.STDERR_FILENO);
 }
 
-/// Numbered TTY picker. With `allow_default`, empty input returns null so
-/// the caller can substitute its own default; `default_marker_idx` (if set)
-/// just renders `(default)` next to that row. Errors with NoChoice after
-/// 3 invalid attempts.
-fn promptNumberedChoice(header: []const u8, items: []const []const u8, allow_default: bool, default_marker_idx: ?usize) !?usize {
+/// Numbered TTY picker. `default` (if set) marks that row "(default)" and
+/// makes Enter return that index. Errors with NoChoice after 3 invalid
+/// attempts.
+fn promptNumberedChoice(header: []const u8, items: []const []const u8, default: ?usize) !usize {
     var stdin_buf: [128]u8 = undefined;
     var stdin = std.fs.File.stdin().reader(&stdin_buf);
 
@@ -1282,7 +1279,7 @@ fn promptNumberedChoice(header: []const u8, items: []const []const u8, allow_def
     while (attempt < 3) : (attempt += 1) {
         std.debug.print("{s}\n", .{header});
         for (items, 0..) |item, idx| {
-            const marker: []const u8 = if (default_marker_idx) |d| (if (d == idx) " (default)" else "") else "";
+            const marker: []const u8 = if (default) |d| (if (d == idx) " (default)" else "") else "";
             std.debug.print("  {d:>3}) {s}{s}\n", .{ idx + 1, item, marker });
         }
         std.debug.print("> ", .{});
@@ -1292,12 +1289,12 @@ fn promptNumberedChoice(header: []const u8, items: []const []const u8, allow_def
         };
         const trimmed = std.mem.trim(u8, line, " \t\r\n");
         if (trimmed.len == 0) {
-            if (allow_default) return null;
+            if (default) |d| return d;
             std.debug.print("Invalid input — type a number.\n", .{});
             continue;
         }
         const choice = std.fmt.parseInt(usize, trimmed, 10) catch {
-            const hint: []const u8 = if (allow_default) " (or press Enter for default)" else "";
+            const hint: []const u8 = if (default != null) " (or press Enter for default)" else "";
             std.debug.print("Invalid input — type a number{s}.\n", .{hint});
             continue;
         };
