@@ -301,6 +301,14 @@ pub fn toJson(self: Value, allocator: Allocator) ![]u8 {
     return js.String.toSliceWithAlloc(.{ .local = local, .handle = str_handle }, allocator);
 }
 
+pub fn jsonStringify(self: Value, jws: anytype) !void {
+    const local = self.local;
+    const v = self.toJson(local.call_arena) catch return error.WriteFailed;
+    jws.beginWriteRaw() catch return error.WriteFailed;
+    jws.writer.writeAll(v) catch return error.WriteFailed;
+    jws.endWriteRaw();
+}
+
 // Throws a DataCloneError for host objects (Blob, File, etc.) that cannot be serialized.
 // Does not support transferables which require additional delegate callbacks.
 pub fn structuredClone(self: Value) !Value {
