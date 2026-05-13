@@ -195,6 +195,25 @@ fn cancelInvocation(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
+// Called from BrowserContext.deinit. Sends `toolResponded { status: "Canceled" }`
+// for every pending invocation so a CDP client waiting on `invokeTool` doesn't
+// see the invocation go silent on teardown. The V8 promise callbacks become
+// unreachable once the JS context is torn down by browser.closeSession, so
+// we don't need to clear them ourselves.
+pub fn cancelAllPending(bc: *CDP.BrowserContext) void {
+    var it = bc.webmcp_invocations.iterator();
+    while (it.next()) |entry| {
+        const invocation = entry.value_ptr.*;
+        bc.cdp.sendEvent("WebMCP.toolResponded", .{
+            .invocationId = &id.toInvocationId(invocation.id),
+            .status = "Canceled",
+        }, .{ .session_id = bc.session_id }) catch |err| {
+            log.err(.cdp, "WebMCP cancelAllPending", .{ .err = err });
+        };
+    }
+    bc.webmcp_invocations.clearRetainingCapacity();
+}
+
 fn onPromiseFulfilled(invocation: *Invocation, value: js.Value) anyerror!void {
     // The map is the source of truth for "still active". cancelInvocation
     // removes it from the map and sends Canceled; we drop the late result.

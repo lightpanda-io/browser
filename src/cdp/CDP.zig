@@ -578,6 +578,11 @@ pub const BrowserContext = struct {
             }
         }
 
+        // Notify any CDP client waiting on an in-flight WebMCP invocation
+        // before the V8 context (and its promise callbacks) get torn down
+        // by browser.closeSession below.
+        @import("domains/webmcp.zig").cancelAllPending(self);
+
         for (self.isolated_worlds.items) |world| {
             world.deinit();
         }
