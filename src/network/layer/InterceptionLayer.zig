@@ -26,6 +26,7 @@ const IS_DEBUG = builtin.mode == .Debug;
 const http = @import("../http.zig");
 const Client = @import("../../browser/HttpClient.zig").Client;
 const Request = @import("../../browser/HttpClient.zig").Request;
+const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Response = @import("../../browser/HttpClient.zig").Response;
 const FulfilledResponse = @import("../../browser/HttpClient.zig").FulfilledResponse;
 const Layer = @import("../../browser/HttpClient.zig").Layer;
@@ -33,13 +34,11 @@ const Forward = @import("Forward.zig");
 
 const InterceptionLayer = @This();
 
-// Count of intercepted requests. This is to help deal with intercepted requests.
-// The client doesn't track intercepted transfers. If a request is intercepted,
-// the client forgets about it and requires the interceptor to continue or abort
-// it. That works well, except if we only rely on active, we might think there's
-// no more network activity when, with interecepted requests, there might be more
-// in the future. (We really only need this to properly emit a 'networkIdle' and
-// 'networkAlmostIdle' Page.lifecycleEvent in CDP).
+// Count of intercepted requests. The client doesn't track intercepted transfers
+// on its own active counters: once intercepted, a transfer leaves the layer
+// chain and waits for the interceptor (CDP) to call continue/abort/fulfill.
+// We track them here so the network-idle / network-almost-idle CDP lifecycle
+// events don't fire prematurely.
 intercepted: usize = 0,
 
 next: Layer = undefined,
@@ -51,35 +50,33 @@ pub fn layer(self: *InterceptionLayer) Layer {
     };
 }
 
-fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
+fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     const self: *InterceptionLayer = @ptrCast(@alignCast(ptr));
+    const req = &transfer.req;
 
-    const intercept_ctx = try in_req.params.arena.create(InterceptContext);
-    intercept_ctx.* = .{
-        .client = client,
-        .forward = Forward.fromRequest(in_req),
+    const ctx = try transfer.arena.create(InterceptContext);
+    ctx.* = .{
         .layer = self,
-        .request = in_req,
+        .transfer = transfer,
+        .forward = Forward.capture(req),
     };
 
-    var req = intercept_ctx.forward.wrapRequest(
-        in_req,
-        intercept_ctx,
-        .{
-            .start = InterceptContext.startCallback,
-            .header = InterceptContext.headerCallback,
-            .data = InterceptContext.dataCallback,
-            .done = InterceptContext.doneCallback,
-            .err = InterceptContext.errorCallback,
-            .shutdown = InterceptContext.shutdownCallback,
-        },
-    );
+    // Install our wrappers on the transfer's request. The interceptor wants to
+    // observe every callback (start/header/data/done/err/shutdown) so it can
+    // mirror the Network.* CDP events.
+    req.ctx = ctx;
+    if (ctx.forward.start != null) req.start_callback = InterceptContext.startCallback;
+    req.header_callback = InterceptContext.headerCallback;
+    req.data_callback = InterceptContext.dataCallback;
+    req.done_callback = InterceptContext.doneCallback;
+    req.error_callback = InterceptContext.errorCallback;
+    if (ctx.forward.shutdown != null) req.shutdown_callback = InterceptContext.shutdownCallback;
 
-    req.params.notification.dispatch(.http_request_start, &.{ .request = &req });
+    req.params.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
 
     var wait_for_interception = false;
     req.params.notification.dispatch(.http_request_intercept, &.{
-        .request = &req,
+        .transfer = transfer,
         .wait_for_interception = &wait_for_interception,
     });
 
@@ -90,40 +87,44 @@ fn request(ptr: *anyopaque, client: *Client, in_req: Request) anyerror!void {
     });
 
     if (!wait_for_interception) {
-        return self.next.request(client, req);
+        return self.next.request(transfer);
     }
 
+    // Paused: the CDP listener stashed `transfer` and will eventually call
+    // continueRequest / abortRequest / fulfillRequest. Until then, CDP owns
+    // the transfer's lifecycle, so flag it loop_owned to keep the outer
+    // Client.request errdefer from tearing it down.
     self.intercepted += 1;
+    transfer.loop_owned = true;
     if (comptime IS_DEBUG) {
         log.debug(.http, "wait for interception", .{ .intercepted = self.intercepted });
     }
 }
 
 pub const InterceptContext = struct {
-    client: *Client,
-    forward: Forward,
     layer: *InterceptionLayer,
-    request: Request,
+    transfer: *Transfer,
+    forward: Forward,
     content_length: usize = 0,
 
     fn startCallback(response: Response) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
-        log.debug(.http, "intercept start", .{ .url = self.request.params.url });
+        log.debug(.http, "intercept start", .{ .url = self.transfer.url });
         return self.forward.forwardStart(response);
     }
 
     fn headerCallback(response: Response) anyerror!bool {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
         log.debug(.http, "intercept header", .{
-            .url = self.request.params.url,
+            .url = self.transfer.url,
             .status = response.status(),
             .content_length = response.contentLength(),
         });
 
         self.content_length = response.contentLength() orelse 0;
 
-        self.request.params.notification.dispatch(.http_response_header_done, &.{
-            .request = &self.request,
+        self.transfer.req.params.notification.dispatch(.http_response_header_done, &.{
+            .transfer = self.transfer,
             .response = &response,
         });
 
@@ -133,13 +134,13 @@ pub const InterceptContext = struct {
     fn dataCallback(response: Response, chunk: []const u8) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
         log.debug(.http, "intercept data", .{
-            .url = self.request.params.url,
+            .url = self.transfer.url,
             .len = chunk.len,
         });
 
-        self.request.params.notification.dispatch(.http_response_data, &.{
+        self.transfer.req.params.notification.dispatch(.http_response_data, &.{
             .data = chunk,
-            .request = &self.request,
+            .transfer = self.transfer,
         });
 
         return self.forward.forwardData(response, chunk);
@@ -149,12 +150,12 @@ pub const InterceptContext = struct {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
 
         log.debug(.http, "intercept done", .{
-            .url = self.request.params.url,
+            .url = self.transfer.url,
             .content_length = self.content_length,
         });
 
-        self.request.params.notification.dispatch(.http_request_done, &.{
-            .request = &self.request,
+        self.transfer.req.params.notification.dispatch(.http_request_done, &.{
+            .transfer = self.transfer,
             .content_length = self.content_length,
         });
         return self.forward.forwardDone();
@@ -164,11 +165,11 @@ pub const InterceptContext = struct {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
 
         log.debug(.http, "intercept error", .{
-            .url = self.request.params.url,
+            .url = self.transfer.url,
             .err = err,
         });
-        self.request.params.notification.dispatch(.http_request_fail, &.{
-            .request = &self.request,
+        self.transfer.req.params.notification.dispatch(.http_request_fail, &.{
+            .transfer = self.transfer,
             .err = err,
         });
         self.forward.forwardErr(err);
@@ -177,50 +178,82 @@ pub const InterceptContext = struct {
     fn shutdownCallback(ctx: *anyopaque) void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
 
-        log.debug(.http, "intercept shutdown", .{ .url = self.request.params.url });
-        self.request.params.notification.dispatch(.http_request_fail, &.{
-            .request = &self.request,
+        log.debug(.http, "intercept shutdown", .{ .url = self.transfer.url });
+        self.transfer.req.params.notification.dispatch(.http_request_fail, &.{
+            .transfer = self.transfer,
             .err = error.Shutdown,
         });
         self.forward.forwardShutdown();
     }
 };
 
-// CDP Callbacks
-// These handle their own clean up on errors with `self.next.request`.
-// This is because they don't pass their error up the chain as they are async callbacks.
+// CDP-driven resolution entry points. The transfer was paused inside `request`
+// (loop_owned = true). One of these three is called by CDP to resume / drop
+// the transfer.
 
-pub fn continueRequest(self: *InterceptionLayer, client: *Client, req: Request) anyerror!void {
+pub fn continueRequest(self: *InterceptionLayer, transfer: *Transfer) anyerror!void {
     if (comptime IS_DEBUG) {
         lp.assert(self.intercepted > 0, "InterceptionLayer.continueRequest", .{ .value = self.intercepted });
         log.debug(.http, "continue transfer", .{ .intercepted = self.intercepted });
     }
-
     self.intercepted -= 1;
-    self.next.request(client, req) catch |err| {
-        const ctx: *InterceptContext = @ptrCast(@alignCast(req.ctx));
-        req.error_callback(req.ctx, err);
-        ctx.client.deinitRequest(req);
+
+    // Resume the layer chain. Ownership is re-handed to whichever subsequent
+    // layer commits the transfer (queue, multi, or another pause). If the
+    // chain fails before any commit, we clean up here. Mirror the errdefer
+    // pattern in Client.request.
+    transfer.loop_owned = false;
+    self.next.request(transfer) catch |err| {
+        if (!transfer.loop_owned) {
+            transfer.abort(err);
+        }
         return err;
     };
 }
 
-pub fn abortRequest(self: *InterceptionLayer, client: *Client, req: Request) void {
+pub fn abortRequest(self: *InterceptionLayer, transfer: *Transfer) void {
     if (comptime IS_DEBUG) {
         lp.assert(self.intercepted > 0, "InterceptionLayer.abortRequest", .{ .value = self.intercepted });
         log.debug(.http, "abort transfer", .{ .intercepted = self.intercepted });
     }
     self.intercepted -= 1;
-
-    req.error_callback(req.ctx, error.Abort);
-    client.deinitRequest(req);
+    transfer.abort(error.Abort);
 }
 
-fn fulfillInner(
-    req: Request,
+pub fn fulfillRequest(
+    self: *InterceptionLayer,
+    transfer: *Transfer,
     status: u16,
     headers: []const http.Header,
     body: ?[]const u8,
+) !void {
+    if (comptime IS_DEBUG) {
+        lp.assert(self.intercepted > 0, "InterceptionLayer.fulfillRequest", .{ .value = self.intercepted });
+        log.debug(.http, "fulfill transfer", .{ .intercepted = self.intercepted });
+    }
+    self.intercepted -= 1;
+
+    // `done` flips true once we've called the user's done_callback. If
+    // done_callback itself throws, the user already saw their end-of-flow
+    // notification; suppress error_callback to avoid double-notify.
+    var done: bool = false;
+    fulfillInner(&transfer.req, status, headers, body, &done) catch |err| {
+        if (!done) {
+            transfer.abort(err);
+        } else {
+            transfer.deinit();
+        }
+        return err;
+    };
+    transfer.deinit();
+}
+
+fn fulfillInner(
+    req: *Request,
+    status: u16,
+    headers: []const http.Header,
+    body: ?[]const u8,
+    done: *bool,
 ) !void {
     const fulfilled = FulfilledResponse{
         .status = status,
@@ -244,27 +277,6 @@ fn fulfillInner(
         try req.data_callback(response, b);
     }
 
+    done.* = true;
     try req.done_callback(req.ctx);
-}
-
-pub fn fulfillRequest(
-    self: *InterceptionLayer,
-    client: *Client,
-    req: Request,
-    status: u16,
-    headers: []const http.Header,
-    body: ?[]const u8,
-) !void {
-    if (comptime IS_DEBUG) {
-        lp.assert(self.intercepted > 0, "InterceptionLayer.fulfillRequest", .{ .value = self.intercepted });
-        log.debug(.http, "fulfill transfer", .{ .intercepted = self.intercepted });
-    }
-
-    self.intercepted -= 1;
-    defer client.deinitRequest(req);
-
-    fulfillInner(req, status, headers, body) catch |err| {
-        req.error_callback(req.ctx, err);
-        return err;
-    };
 }

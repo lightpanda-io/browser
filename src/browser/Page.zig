@@ -119,10 +119,8 @@ queued_close: std.ArrayList(*Frame) = .empty,
 // destination of a root navigation — its V8 context exists but is not yet the
 // session's active context. Flipped to `.active` by Session.commitPendingPage
 // when response headers arrive. Frame.navigate / frameHeaderDoneCallback
-// branch on this to: (a) stamp `is_pending_root` on the frame_navigate
+// branch on this to stamp `is_pending_root` on the frame_navigate
 // notification (so CDP doesn't reset its node registry yet) and
-// (b) flag the HTTP request `protect_from_abort` (so the old page's deinit
-// can't kill the transfer we're sitting inside).
 _state: enum { active, pending } = .active,
 
 // Initialize a Page and its root Frame.

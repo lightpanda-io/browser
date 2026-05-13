@@ -58,17 +58,13 @@ _on_error: ?js.Function.Global = null,
 _on_message: ?js.Function.Global = null,
 _on_messageerror: ?js.Function.Global = null,
 
-pub fn init(url: []const u8, exec: *Execution) !*Worker {
-    const frame = switch (exec.context.global) {
-        .frame => |f| f,
-        .worker => return error.WorkerCannotCreateWorker,
-    };
+pub fn init(url: []const u8, frame: *Frame) !*Worker {
     const session = frame._session;
 
     const arena = try session.getArena(.large, "Worker");
     errdefer session.releaseArena(arena);
 
-    const resolved_url = try URL.resolve(arena, exec.url.*, url, .{ .encoding = frame.charset });
+    const resolved_url = try URL.resolve(arena, frame.base(), url, .{ .encoding = frame.charset });
     const self = try frame._page.factory.eventTargetWithAllocator(arena, Worker{
         ._arena = arena,
         ._proto = undefined,
@@ -92,13 +88,13 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
         return self;
     }
 
-    const http_client = &session.browser.http_client;
-    http_client.request(.{
+    const headers = try session.browser.http_client.newHeaders();
+    frame.makeRequest(.{
         .ctx = self,
         .params = .{
-            .url = resolved_url,
             .method = .GET,
-            .headers = try http_client.newHeaders(),
+            .headers = headers,
+            .url = resolved_url,
             .frame_id = self._frame_id,
             .loader_id = self._loader_id,
             .resource_type = .script,
@@ -122,7 +118,6 @@ pub fn init(url: []const u8, exec: *Execution) !*Worker {
 // remove from the frame's worker list.
 pub fn deinit(self: *Worker) void {
     // No pending frame for workers, so we can abort all frames.
-    self._frame._session.browser.http_client.abortFrame(self._frame_id, .{ .scope = .full });
     if (self._http_response) |res| {
         res.abort(error.Abort);
         self._http_response = null;

@@ -59,6 +59,8 @@ _page: *Page,
 _session: *Session,
 _factory: *Factory,
 _identity: JS.Identity = .{},
+_http_owner: HttpClient.Owner = .{},
+
 arena: Allocator,
 call_arena: Allocator,
 url: [:0]const u8,
@@ -148,16 +150,21 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
 }
 
 pub fn deinit(self: *WorkerGlobalScope) void {
+    const page = self._page;
+    const session = page.session;
+    const browser = session.browser;
+
+    browser.http_client.abortOwner(&self._http_owner);
+
     self._identity.deinit();
     self._script_manager.deinit();
 
-    const page = self._page;
     var it = self._blob_urls.valueIterator();
     while (it.next()) |blob| {
         blob.*.releaseRef(page);
     }
-    page.session.browser.env.destroyContext(self.js);
-    page.releaseArena(self.call_arena);
+    browser.env.destroyContext(self.js);
+    session.releaseArena(self.call_arena);
 }
 
 pub fn base(self: *const WorkerGlobalScope) [:0]const u8 {
@@ -208,6 +215,10 @@ pub fn isSameOrigin(self: *const WorkerGlobalScope, url: [:0]const u8) bool {
 
 pub fn lookupBlobUrl(self: *WorkerGlobalScope, url: []const u8) ?*Blob {
     return self._blob_urls.get(url);
+}
+
+pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
+    return self._session.browser.http_client.request(req, &self._http_owner);
 }
 
 pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {

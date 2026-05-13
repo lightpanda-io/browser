@@ -47,8 +47,7 @@ pub const Owner = union(enum) {
 
     pub fn url(self: Owner) [:0]const u8 {
         return switch (self) {
-            .frame => |f| f.url,
-            .worker => |w| w.url,
+            inline else => |g| g.url,
         };
     }
 
@@ -68,23 +67,26 @@ pub const Owner = union(enum) {
 
     pub fn session(self: Owner) *Session {
         return switch (self) {
-            .frame => |f| f._session,
-            .worker => |w| w._session,
+            inline else => |g| g._session,
         };
     }
 
     pub fn jsContext(self: Owner) *js.Context {
         return switch (self) {
-            .frame => |f| f.js,
-            .worker => |w| w.js,
+            inline else => |g| g.js,
         };
     }
 
     pub fn addHeaders(self: Owner, headers: *HttpClient.Headers) !void {
-        switch (self) {
-            .frame => |f| try f.headersForRequest(headers),
-            .worker => {},
-        }
+        return switch (self) {
+            inline else => |g| g.headersForRequest(headers),
+        };
+    }
+
+    pub fn makeRequest(self: Owner, req: HttpClient.Request) !void {
+        return switch (self) {
+            inline else => |g| g.makeRequest(req),
+        };
     }
 };
 
@@ -259,17 +261,18 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
     // called).
     self.async_scripts.append(&script.node);
 
-    const session = self.owner.session();
-    self.client.request(.{
+    const owner = self.owner;
+    const session = owner.session();
+    owner.makeRequest(.{
         .ctx = script,
         .params = .{
             .url = url,
             .method = .GET,
-            .frame_id = self.owner.frameId(),
-            .loader_id = self.owner.loaderId(),
+            .frame_id = owner.frameId(),
+            .loader_id = owner.loaderId(),
             .headers = try self.getHeaders(),
             .cookie_jar = &session.cookie_jar,
-            .cookie_origin = self.owner.url(),
+            .cookie_origin = owner.url(),
             .resource_type = .script,
             .notification = session.notification,
         },
@@ -364,19 +367,20 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
     self.is_evaluating = true;
     defer self.is_evaluating = was_evaluating;
 
+    const owner = self.owner;
     const session = self.owner.session();
     self.async_scripts.append(&script.node);
-    self.client.request(.{
+    owner.makeRequest(.{
         .ctx = script,
         .params = .{
             .url = url,
             .method = .GET,
-            .frame_id = self.owner.frameId(),
-            .loader_id = self.owner.loaderId(),
+            .frame_id = owner.frameId(),
+            .loader_id = owner.loaderId(),
             .headers = try self.getHeaders(),
             .resource_type = .script,
             .cookie_jar = &session.cookie_jar,
-            .cookie_origin = self.owner.url(),
+            .cookie_origin = owner.url(),
             .notification = session.notification,
         },
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
