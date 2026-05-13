@@ -753,27 +753,23 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) Tool
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
-    const js_result = ls.local.compileAndRun(script, null) catch |err| {
-        const caught = try_catch.caughtOrError(arena, err);
-        var aw: std.Io.Writer.Allocating = .init(arena);
-        caught.format(&aw.writer) catch |fmt_err| switch (fmt_err) {
-            error.WriteFailed => return error.OutOfMemory,
-        };
-        return .{ .js_error = aw.written() };
-    };
+    const js_result = ls.local.compileAndRun(script, null) catch |err|
+        return .{ .js_error = try formatJsError(arena, &try_catch, err) };
 
     const text = js_result.toStringSliceWithAlloc(arena) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => {
-            const caught = try_catch.caughtOrError(arena, err);
-            var aw: std.Io.Writer.Allocating = .init(arena);
-            caught.format(&aw.writer) catch |fmt_err| switch (fmt_err) {
-                error.WriteFailed => return error.OutOfMemory,
-            };
-            return .{ .js_error = aw.written() };
-        },
+        else => return .{ .js_error = try formatJsError(arena, &try_catch, err) },
     };
     return .{ .ok = text };
+}
+
+fn formatJsError(arena: std.mem.Allocator, try_catch: *lp.js.TryCatch, err: anyerror) error{OutOfMemory}![]const u8 {
+    const caught = try_catch.caughtOrError(arena, err);
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    caught.format(&aw.writer) catch |fmt_err| switch (fmt_err) {
+        error.WriteFailed => return error.OutOfMemory,
+    };
+    return aw.written();
 }
 
 /// Resolve a target element from either a CSS selector or a backendNodeId.
