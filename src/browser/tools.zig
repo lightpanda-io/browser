@@ -776,23 +776,24 @@ fn awaitQueuedNavigation(session: *lp.Session) ToolError!void {
     runner.wait(.{ .ms = 10000, .until = .done }) catch return ToolError.NavigationFailed;
 }
 
-/// Render `"{prefix} ({target}){suffix}. Page url: X, title: Y"`, where target
-/// is either `"selector: X"` or `"backendNodeId: N"`.
 fn formatActionResult(
     arena: std.mem.Allocator,
     prefix: []const u8,
     selector: ?[]const u8,
     backend_node_id: ?CDPNode.Id,
     suffix: []const u8,
-    page: *lp.Frame,
 ) ToolError![]const u8 {
-    const page_title = page.getTitle() catch null;
     const target = if (selector) |sel|
         std.fmt.allocPrint(arena, "selector: {s}", .{sel}) catch return ToolError.InternalError
     else
         std.fmt.allocPrint(arena, "backendNodeId: {d}", .{backend_node_id.?}) catch return ToolError.InternalError;
-    return std.fmt.allocPrint(arena, "{s} ({s}){s}. Page url: {s}, title: {s}", .{
-        prefix, target, suffix, page.url, page_title orelse "(none)",
+    return std.fmt.allocPrint(arena, "{s} ({s}){s}", .{ prefix, target, suffix }) catch ToolError.InternalError;
+}
+
+fn appendPageContext(arena: std.mem.Allocator, body: []const u8, page: *lp.Frame) ToolError![]const u8 {
+    const page_title = page.getTitle() catch null;
+    return std.fmt.allocPrint(arena, "{s}. Page url: {s}, title: {s}", .{
+        body, page.url, page_title orelse "(none)",
     }) catch ToolError.InternalError;
 }
 
@@ -809,7 +810,8 @@ fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
     try awaitQueuedNavigation(session);
 
     const page = try requireFrame(session);
-    return formatActionResult(arena, "Clicked element", args.selector, args.backendNodeId, "", page);
+    const body = try formatActionResult(arena, "Clicked element", args.selector, args.backendNodeId, "");
+    return appendPageContext(arena, body, page);
 }
 
 fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -828,7 +830,7 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
 
     // Show the original reference (e.g. $LP_PASSWORD) in the result, not the resolved value
     const suffix = std.fmt.allocPrint(arena, " with \"{s}\"", .{raw_text}) catch return ToolError.InternalError;
-    return formatActionResult(arena, "Filled element", args.selector, args.backendNodeId, suffix, resolved.page);
+    return formatActionResult(arena, "Filled element", args.selector, args.backendNodeId, suffix);
 }
 
 fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -843,12 +845,9 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
 
     lp.actions.scroll(target_node, args.x, args.y, page) catch |err| return mapActionError(err);
 
-    const page_title = page.getTitle() catch null;
-    return std.fmt.allocPrint(arena, "Scrolled to x: {d}, y: {d}. Page url: {s}, title: {s}", .{
+    return std.fmt.allocPrint(arena, "Scrolled to x: {d}, y: {d}", .{
         args.x orelse 0,
         args.y orelse 0,
-        page.url,
-        page_title orelse "(none)",
     }) catch return ToolError.InternalError;
 }
 
@@ -882,7 +881,7 @@ fn execHover(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
 
     lp.actions.hover(resolved.node, resolved.page) catch |err| return mapActionError(err);
 
-    return formatActionResult(arena, "Hovered element", args.selector, args.backendNodeId, "", resolved.page);
+    return formatActionResult(arena, "Hovered element", args.selector, args.backendNodeId, "");
 }
 
 fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -901,12 +900,8 @@ fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
     try awaitQueuedNavigation(session);
 
     const current_page = try requireFrame(session);
-    const page_title = current_page.getTitle() catch null;
-    return std.fmt.allocPrint(arena, "Pressed key '{s}'. Page url: {s}, title: {s}", .{
-        args.key,
-        current_page.url,
-        page_title orelse "(none)",
-    }) catch return ToolError.InternalError;
+    const body = std.fmt.allocPrint(arena, "Pressed key '{s}'", .{args.key}) catch return ToolError.InternalError;
+    return appendPageContext(arena, body, current_page);
 }
 
 fn execSelectOption(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -921,7 +916,7 @@ fn execSelectOption(arena: std.mem.Allocator, session: *lp.Session, registry: *C
     lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| return mapActionError(err);
 
     const prefix = std.fmt.allocPrint(arena, "Selected option '{s}'", .{args.value}) catch return ToolError.InternalError;
-    return formatActionResult(arena, prefix, args.selector, args.backendNodeId, "", resolved.page);
+    return formatActionResult(arena, prefix, args.selector, args.backendNodeId, "");
 }
 
 fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -937,7 +932,7 @@ fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *CDP
 
     const state_str: []const u8 = if (args.checked) "checked" else "unchecked";
     const suffix = std.fmt.allocPrint(arena, " to {s}", .{state_str}) catch return ToolError.InternalError;
-    return formatActionResult(arena, "Set element", args.selector, args.backendNodeId, suffix, resolved.page);
+    return formatActionResult(arena, "Set element", args.selector, args.backendNodeId, suffix);
 }
 
 fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
