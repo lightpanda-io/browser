@@ -266,7 +266,9 @@ fn stripQuotes(arena: std.mem.Allocator, raw: []const u8) ParseError![]const u8 
 
 fn buildJson(arena: std.mem.Allocator, schema: *const SchemaInfo, pairs: []const KvPair) error{OutOfMemory}![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
-    return buildJsonInner(&aw, schema, pairs) catch error.OutOfMemory;
+    return buildJsonInner(&aw, schema, pairs) catch |err| switch (err) {
+        error.WriteFailed => error.OutOfMemory,
+    };
 }
 
 fn buildJsonInner(aw: *std.Io.Writer.Allocating, schema: *const SchemaInfo, pairs: []const KvPair) ![]const u8 {

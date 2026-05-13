@@ -14,7 +14,7 @@ const CommandExecutor = @import("CommandExecutor.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const script = lp.script;
 
-const Self = @This();
+const Agent = @This();
 
 const default_system_prompt = script.mcp_driver_guidance ++
     \\
@@ -122,7 +122,7 @@ one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
 slash_schemas: []const SlashCommand.SchemaInfo,
 
-pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
+pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
     if (opts.task != null and opts.script_file != null) {
         log.fatal(.app, "conflicting flags", .{
             .hint = "--task runs a one-shot turn; drop the positional script or drop --task",
@@ -185,7 +185,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     const tool_executor: *ToolExecutor = try .init(allocator, app);
     errdefer tool_executor.deinit();
 
-    const self = try allocator.create(Self);
+    const self = try allocator.create(Agent);
     errdefer allocator.destroy(self);
 
     const ai_client: ?zenai.provider.Client = if (api_key) |key| switch (effective_provider.?) {
@@ -255,7 +255,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self 
     return self;
 }
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Agent) void {
     self.recorder.deinit();
     self.terminal.deinit();
     self.message_arena.deinit();
@@ -284,7 +284,7 @@ pub const TurnInput = struct {
 };
 
 /// Returns true on success.
-pub fn run(self: *Self) bool {
+pub fn run(self: *Agent) bool {
     if (self.one_shot_task) |task| return self.runTurn(.{
         .prompt = task,
         .attachments = self.one_shot_attachments,
@@ -299,7 +299,7 @@ pub fn run(self: *Self) bool {
 
 /// Final answer goes to stdout; errors go to stderr, so a caller can
 /// pipe stdout to capture a clean answer.
-fn runTurn(self: *Self, input: TurnInput) bool {
+fn runTurn(self: *Agent, input: TurnInput) bool {
     const text = self.processUserMessage(input) catch |err| switch (err) {
         error.UnsupportedAttachment, error.AttachmentReadFailed => return false,
         else => {
@@ -311,7 +311,7 @@ fn runTurn(self: *Self, input: TurnInput) bool {
     return true;
 }
 
-fn runRepl(self: *Self) void {
+fn runRepl(self: *Agent) void {
     self.terminal.printInfo("Lightpanda Agent (type '/quit' to exit)");
     self.terminal.printInfo("Tab completes/cycles through commands; the dim grey ghost shows the first match.");
     log.debug(.app, "tools loaded", .{ .count = self.tool_executor.tools.len });
@@ -378,7 +378,7 @@ fn runRepl(self: *Self) void {
 /// Handle a REPL line that started with `/`. Returns `true` if the user asked
 /// to quit (`/quit`), `false` otherwise. All errors are printed and
 /// swallowed — the REPL must not die from a malformed slash command.
-fn handleSlash(self: *Self, body: []const u8) bool {
+fn handleSlash(self: *Agent, body: []const u8) bool {
     const split = SlashCommand.splitNameRest(body) orelse {
         self.terminal.printError("Empty slash command. Try /help.");
         return false;
@@ -435,7 +435,7 @@ fn handleSlash(self: *Self, body: []const u8) bool {
     return false;
 }
 
-fn printSlashHelp(self: *Self, target: []const u8) void {
+fn printSlashHelp(self: *Agent, target: []const u8) void {
     if (target.len == 0) {
         self.terminal.printInfo("Slash commands (no LLM, REPL only):");
         for (self.slash_schemas) |s| {
@@ -472,7 +472,7 @@ fn printSlashHelp(self: *Self, target: []const u8) void {
     self.terminal.printInfoFmt("schema:\n{s}", .{pretty});
 }
 
-fn printSlashParseError(self: *Self, err: SlashCommand.ParseError, name: []const u8) void {
+fn printSlashParseError(self: *Agent, err: SlashCommand.ParseError, name: []const u8) void {
     const reason: []const u8 = switch (err) {
         error.UnknownTool => "unknown tool",
         error.MissingName => return self.terminal.printError("missing tool name. Try /help."),
@@ -504,7 +504,7 @@ fn extractEvalScript(arena: std.mem.Allocator, args_json: []const u8) ![]const u
 
 const Replacement = script.Replacement;
 
-fn runScript(self: *Self, path: []const u8) bool {
+fn runScript(self: *Agent, path: []const u8) bool {
     self.terminal.printInfoFmt("Running script: {s}", .{path});
 
     var script_arena: std.heap.ArenaAllocator = .init(self.allocator);
@@ -596,7 +596,7 @@ const ActionOutcome = union(enum) {
 
 /// Execute one action-style script entry, including post-execution
 /// verification, transient-failure retry, and LLM self-heal escalation.
-fn runActionEntry(self: *Self, sa: std.mem.Allocator, entry: Command.ScriptIterator.Entry, last_comment: ?[]const u8) ActionOutcome {
+fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIterator.Entry, last_comment: ?[]const u8) ActionOutcome {
     var cmd_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer cmd_arena.deinit();
     const ca = cmd_arena.allocator();
@@ -644,7 +644,7 @@ fn runActionEntry(self: *Self, sa: std.mem.Allocator, entry: Command.ScriptItera
 
 /// Re-run a verification-failed command with bounded backoff. Returns true
 /// once both execution and verification pass, false after 3 attempts.
-fn retryCommand(self: *Self, ca: std.mem.Allocator, cmd: Command.Command) bool {
+fn retryCommand(self: *Agent, ca: std.mem.Allocator, cmd: Command.Command) bool {
     for (0..3) |i| {
         std.Thread.sleep((500 + i * 250) * std.time.ns_per_ms);
         self.terminal.printInfo("Retrying command...");
@@ -657,7 +657,7 @@ fn retryCommand(self: *Self, ca: std.mem.Allocator, cmd: Command.Command) bool {
     return false;
 }
 
-fn flushReplacements(self: *Self, path: []const u8, content: []const u8, replacements: []const Replacement) void {
+fn flushReplacements(self: *Agent, path: []const u8, content: []const u8, replacements: []const Replacement) void {
     if (replacements.len == 0) return;
     script.writeAtomic(self.allocator, std.fs.cwd(), path, content, replacements) catch |err| {
         self.terminal.printErrorFmt(
@@ -681,7 +681,7 @@ fn isRetryable(cmd: Command.Command) bool {
 
 const self_heal_max_attempts = 3;
 
-fn ensureSystemPrompt(self: *Self) !void {
+fn ensureSystemPrompt(self: *Agent) !void {
     if (self.messages.items.len == 0) {
         try self.messages.append(self.allocator, .{
             .role = .system,
@@ -695,7 +695,7 @@ fn ensureSystemPrompt(self: *Self) !void {
 const prune_high = 30;
 const prune_keep = 20;
 
-fn pruneMessages(self: *Self) void {
+fn pruneMessages(self: *Agent) void {
     const msgs = self.messages.items;
     if (msgs.len <= prune_high) return;
 
@@ -730,7 +730,7 @@ fn isHealAllowed(cmd: Command.Command) bool {
 
 /// Runs a single LLM turn, captures the commands it called without recording
 /// them — so the caller can splice healed commands into the script directly.
-fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Command.Command {
+fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Command.Command {
     const provider_client = self.ai_client orelse return error.NoAiClient;
     const ma = self.message_arena.allocator();
 
@@ -784,7 +784,7 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
     return cmds.toOwnedSlice(arena);
 }
 
-fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []const u8, verify_context: ?[]const u8, context_comment: ?[]const u8) ?[]Command.Command {
+fn attemptSelfHeal(self: *Agent, arena: std.mem.Allocator, failed_command: []const u8, verify_context: ?[]const u8, context_comment: ?[]const u8) ?[]Command.Command {
     // Build the prompt in `arena` (the caller's per-replay arena), not in
     // `message_arena`. The prompt is re-used across attempts, so it must
     // survive arena rebuilds done between failed attempts.
@@ -831,7 +831,7 @@ fn attemptSelfHeal(self: *Self, arena: std.mem.Allocator, failed_command: []cons
 /// after a failed turn (API error, self-heal attempt, synthesis) so the
 /// next turn doesn't replay the dropped messages and the arena doesn't
 /// accumulate their bytes.
-fn rollbackMessages(self: *Self, baseline: usize) void {
+fn rollbackMessages(self: *Agent, baseline: usize) void {
     self.messages.shrinkRetainingCapacity(baseline);
     self.rebuildMessageArena();
 }
@@ -839,7 +839,7 @@ fn rollbackMessages(self: *Self, baseline: usize) void {
 /// Rebuild `message_arena` keeping only the messages currently in
 /// `self.messages`. Used between failed self-heal attempts so the arena
 /// doesn't accumulate prompt/tool-output bytes from doomed turns.
-fn rebuildMessageArena(self: *Self) void {
+fn rebuildMessageArena(self: *Agent) void {
     const msgs = self.messages.items;
     if (msgs.len <= 1) {
         // Only the system prompt (or nothing) remains — the system prompt
@@ -862,7 +862,7 @@ fn rebuildMessageArena(self: *Self) void {
 /// Returned text lives in `message_arena`, so it's only valid until the
 /// next prune. `null` means the model emitted nothing even after the
 /// synthesis turn.
-fn processUserMessage(self: *Self, input: TurnInput) !?[]const u8 {
+fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     const ma = self.message_arena.allocator();
 
     try self.ensureSystemPrompt();
@@ -993,7 +993,7 @@ fn processUserMessage(self: *Self, input: TurnInput) !?[]const u8 {
 /// provider inline-data parts. Unknown extensions error out so the caller
 /// fails loudly instead of silently dropping the attachment.
 fn buildUserMessageParts(
-    self: *Self,
+    self: *Agent,
     ma: std.mem.Allocator,
     user_input: []const u8,
     paths: []const []const u8,
@@ -1056,7 +1056,7 @@ fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
 }
 
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
-    const self: *Self = @ptrCast(@alignCast(ctx));
+    const self: *Agent = @ptrCast(@alignCast(ctx));
     // Stringifying tool args is wasted work for non-interactive low-verbosity
     // runs: the spinner doesn't render it and `agentToolDone` skips the bullet
     // line. Skip the alloc when no consumer will read it.
@@ -1192,7 +1192,7 @@ fn promptForProvider(found: []const Config.AiProvider) !Config.AiProvider {
     const idx = (promptNumberedChoice("Multiple API keys detected. Pick provider:", labels_buf[0..found.len], false, null) catch {
         std.debug.print("Cancelled — pass --provider to skip the picker.\n", .{});
         return error.UserCancelled;
-    }) orelse unreachable;
+    }) orelse return error.AmbiguousProvider;
     return found[idx];
 }
 

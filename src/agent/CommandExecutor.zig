@@ -26,13 +26,13 @@ pub const ExecResult = struct {
 
 /// Caller contract: `cmd` must not be `.natural_language`, `.comment`,
 /// `.login`, or `.accept_cookies` — those are filtered upstream (see
-/// `Agent.runRepl`) because they have no tool mapping and would hit the
-/// `unreachable` arm below.
+/// `Agent.runRepl`) because they have no tool mapping.
 pub fn executeWithResult(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) ExecResult {
     if (cmd == .extract) return self.execExtract(arena, cmd.extract);
 
     const tcv = (Command.toToolCallValue(arena, cmd, browser_tools.substituteEnvVars) catch
-        return .{ .output = "out of memory", .failed = true }) orelse unreachable;
+        return .{ .output = "out of memory", .failed = true }) orelse
+        return .{ .output = "internal: command has no tool mapping", .failed = true };
     if (self.tool_executor.callValue(arena, tcv.name, tcv.args)) |output|
         return .{ .output = output, .failed = false }
     else |err|

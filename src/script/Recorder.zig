@@ -57,7 +57,12 @@ fn openRecording(allocator: std.mem.Allocator, path: ?[]const u8) OpenedRecordin
         return .{ .file = null, .path = null, .err = @errorName(err) };
     };
     const pos = f.getPos() catch 0;
-    if (pos > 0) f.writeAll("\n") catch {};
+    if (pos > 0) f.writeAll("\n") catch |err| {
+        log.warn(.app, "append newline failed", .{ .err = @errorName(err) });
+        f.close();
+        allocator.free(owned_path);
+        return .{ .file = null, .path = null, .err = @errorName(err) };
+    };
     return .{ .file = f, .path = owned_path, .err = null };
 }
 
