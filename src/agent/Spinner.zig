@@ -88,6 +88,8 @@ fn ensureWorkerLocked(self: *Self) void {
         self.thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch |err| blk: {
             log.warn(.app, "spinner thread spawn failed", .{ .err = @errorName(err) });
             self.enabled = false;
+            self.state = .idle;
+            self.last_render_len = 0;
             break :blk null;
         };
     }
