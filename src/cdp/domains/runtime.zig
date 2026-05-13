@@ -23,6 +23,8 @@ const js = @import("../../browser/js/js.zig");
 const CDP = @import("../CDP.zig");
 const Notification = @import("../../Notification.zig");
 
+const Allocator = std.mem.Allocator;
+
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
@@ -125,7 +127,7 @@ const ConsoleMessage = struct {
     args: []RemoteObject,
 };
 
-pub fn consoleMessage(bc: *CDP.BrowserContext, event: *const Notification.ConsoleMessage) !void {
+pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.ConsoleMessage) !void {
     const session_id = bc.session_id orelse return;
     const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
 
@@ -134,7 +136,6 @@ pub fn consoleMessage(bc: *CDP.BrowserContext, event: *const Notification.Consol
     defer ls.deinit();
 
     const context_id = bc.inspector_session.inspector.getContextId(&ls.local);
-    const arena = bc.notification_arena;
 
     var args: std.ArrayList(RemoteObject) = .empty;
     for (event.values) |value| {

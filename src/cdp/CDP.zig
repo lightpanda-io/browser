@@ -778,6 +778,18 @@ pub const BrowserContext = struct {
         try @import("domains/fetch.zig").requestAuthRequired(self, data);
     }
 
+    pub fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        defer self.resetNotificationArena();
+        return @import("domains/console.zig").consoleMessage(self.notification_arena, self, msg);
+    }
+
+    pub fn onRuntimeConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        defer self.resetNotificationArena();
+        return @import("domains/runtime.zig").consoleMessage(self.notification_arena, self, msg);
+    }
+
     fn resetNotificationArena(self: *BrowserContext) void {
         defer _ = self.cdp.notification_arena.reset(.{ .retain_with_limit = 1024 * 64 });
     }
@@ -848,20 +860,6 @@ pub const BrowserContext = struct {
         }
 
         try cdp.client.sendJSONRaw(buf);
-    }
-
-    pub fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
-        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        defer self.resetNotificationArena();
-
-        return @import("domains/console.zig").consoleMessage(self, msg);
-    }
-
-    pub fn onRuntimeConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
-        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        defer self.resetNotificationArena();
-
-        return @import("domains/runtime.zig").consoleMessage(self, msg);
     }
 };
 

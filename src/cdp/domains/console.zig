@@ -22,6 +22,8 @@ const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 const Notification = @import("../../Notification.zig");
 
+const Allocator = std.mem.Allocator;
+
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
@@ -57,11 +59,11 @@ const ConsoleMessage = struct {
     columns: ?u32 = null,
 };
 
-pub fn consoleMessage(bc: *CDP.BrowserContext, event: *const Notification.ConsoleMessage) !void {
+pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.ConsoleMessage) !void {
     const session_id = bc.session_id orelse return;
 
     // format values
-    var aw: std.io.Writer.Allocating = .init(bc.notification_arena);
+    var aw: std.io.Writer.Allocating = .init(arena);
     const w = &aw.writer;
     for (event.values, 0..) |v, i| {
         if (i != 0) try w.writeByte(' ');
