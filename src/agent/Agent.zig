@@ -4,15 +4,16 @@ const lp = @import("lightpanda");
 
 const log = lp.log;
 const Config = lp.Config;
-const App = @import("../App.zig");
-const ToolExecutor = @import("ToolExecutor.zig");
-const Terminal = @import("Terminal.zig");
+const script = lp.script;
 const Command = lp.script.Command;
 const Recorder = lp.script.Recorder;
 const Verifier = lp.script.Verifier;
+
+const App = @import("../App.zig");
+const ToolExecutor = @import("ToolExecutor.zig");
+const Terminal = @import("Terminal.zig");
 const CommandExecutor = @import("CommandExecutor.zig");
 const SlashCommand = @import("SlashCommand.zig");
-const script = lp.script;
 
 const Agent = @This();
 

@@ -46,24 +46,30 @@ fn verifyFill(self: *Self, arena: std.mem.Allocator, selector: []const u8, expec
             };
         return .{ .result = .passed };
     }
-    return self.verifyElementValue(arena, selector, "value", expected_value, "value");
+    return self.verifyElementValue(arena, selector, .{ .js_property = "value", .expected = expected_value, .label = "value" });
 }
 
 fn verifyCheck(self: *Self, arena: std.mem.Allocator, selector: []const u8, expected: bool) VerifyResult {
     const expected_str: []const u8 = if (expected) "true" else "false";
-    return self.verifyElementValue(arena, selector, "String(el.checked)", expected_str, "checked state");
+    return self.verifyElementValue(arena, selector, .{ .js_property = "String(el.checked)", .expected = expected_str, .label = "checked state" });
 }
 
 fn verifySelect(self: *Self, arena: std.mem.Allocator, selector: []const u8, expected_value: []const u8) VerifyResult {
-    return self.verifyElementValue(arena, selector, "value", expected_value, "selected value");
+    return self.verifyElementValue(arena, selector, .{ .js_property = "value", .expected = expected_value, .label = "selected value" });
 }
 
-fn verifyElementValue(self: *Self, arena: std.mem.Allocator, selector: []const u8, js_property: []const u8, expected: []const u8, label: []const u8) VerifyResult {
-    const actual = self.queryElementProperty(arena, selector, js_property) orelse return .{ .result = .inconclusive };
-    if (!std.mem.eql(u8, actual, expected))
+const Check = struct {
+    js_property: []const u8,
+    expected: []const u8,
+    label: []const u8,
+};
+
+fn verifyElementValue(self: *Self, arena: std.mem.Allocator, selector: []const u8, check: Check) VerifyResult {
+    const actual = self.queryElementProperty(arena, selector, check.js_property) orelse return .{ .result = .inconclusive };
+    if (!std.mem.eql(u8, actual, check.expected))
         return .{
             .result = .failed,
-            .reason = std.fmt.allocPrint(arena, "element {s} is \"{s}\" (expected \"{s}\")", .{ label, actual, expected }) catch null,
+            .reason = std.fmt.allocPrint(arena, "element {s} is \"{s}\" (expected \"{s}\")", .{ check.label, actual, check.expected }) catch null,
         };
     return .{ .result = .passed };
 }

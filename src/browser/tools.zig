@@ -369,30 +369,17 @@ const ActionTarget = union(enum) {
 
 const NodeAndPage = struct { node: *DOMNode, page: *lp.Frame, target: ActionTarget };
 
-pub const Action = enum {
-    goto,
-    search,
-    markdown,
-    links,
-    nodeDetails,
-    interactiveElements,
-    structuredData,
-    detectForms,
-    eval,
-    tree,
-    click,
-    fill,
-    scroll,
-    waitForSelector,
-    hover,
-    press,
-    selectOption,
-    setChecked,
-    findElement,
-    getEnv,
-    consoleLogs,
-    getUrl,
-    getCookies,
+/// Derived from `tool_defs` so the enum and the tool table can't drift.
+/// Tag order follows declaration order in `tool_defs`.
+pub const Action = blk: {
+    var fields: [tool_defs.len]std.builtin.Type.EnumField = undefined;
+    for (tool_defs, 0..) |td, i| fields[i] = .{ .name = td.name[0..td.name.len :0], .value = i };
+    break :blk @Type(.{ .@"enum" = .{
+        .tag_type = u8,
+        .fields = &fields,
+        .decls = &.{},
+        .is_exhaustive = true,
+    } });
 };
 
 pub fn call(
