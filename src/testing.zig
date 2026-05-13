@@ -560,8 +560,9 @@ test "tests:afterAll" {
 
     @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
 
-    test_notification.deinit();
+    // Sessions hold registrations on test_notification, so browser first.
     test_browser.deinit();
+    test_notification.deinit();
     test_app.deinit();
     test_config.deinit(@import("root").tracking_allocator);
 }

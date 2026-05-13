@@ -7,9 +7,9 @@ const Terminal = @import("Terminal.zig");
 
 const Self = @This();
 
+allocator: std.mem.Allocator,
 tool_executor: *ToolExecutor,
 terminal: *Terminal,
-allocator: std.mem.Allocator,
 
 pub fn init(allocator: std.mem.Allocator, tool_executor: *ToolExecutor, terminal: *Terminal) Self {
     return .{

@@ -401,6 +401,8 @@ pub const ScriptIterator = struct {
     fn collectMultiLineBlock(self: *ScriptIterator, quote_type: QuoteType) ?[]const u8 {
         const closer = quote_type.toLiteral();
         var parts: std.ArrayList(u8) = .empty;
+        // toOwnedSlice empties `parts`, so this defer is a no-op on success.
+        defer parts.deinit(self.allocator);
         while (self.lines.next()) |line| {
             self.line_num += 1;
             const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
@@ -412,7 +414,6 @@ pub const ScriptIterator = struct {
             }
             parts.appendSlice(self.allocator, line) catch return null;
         }
-        parts.deinit(self.allocator);
         return null;
     }
 };

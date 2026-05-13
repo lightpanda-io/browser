@@ -1004,7 +1004,7 @@ pub fn lpEnvNames() error{OutOfMemory}![]const []const u8 {
         const line = std.mem.span(entry);
         const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
         const name = line[0..eq_idx];
-        if (!std.ascii.startsWithIgnoreCase(name, "LP_")) continue;
+        if (!std.mem.startsWith(u8, name, "LP_")) continue;
         env_names.appendAssumeCapacity(name);
     }
     std.mem.sort([]const u8, env_names.items, {}, struct {
@@ -1025,7 +1025,7 @@ var lp_env_names_cache: ?[]const []const u8 = null;
 /// (provider API keys, system env, third-party secrets) is hidden so the LLM
 /// can't probe for it. Same pattern as Kakoune's `kak_*`.
 fn lookupLpEnv(name: []const u8) ?[:0]const u8 {
-    if (!std.ascii.startsWithIgnoreCase(name, "LP_")) return null;
+    if (!std.mem.startsWith(u8, name, "LP_")) return null;
     var name_buf: [256]u8 = undefined;
     if (name.len >= name_buf.len) {
         log.warn(.browser, "getEnv name too long", .{ .name_len = name.len, .limit = name_buf.len - 1 });
