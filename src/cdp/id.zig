@@ -57,6 +57,12 @@ pub fn toInterceptId(id: u32) [14]u8 {
     return buf;
 }
 
+pub fn toInvocationId(id: u32) [14]u8 {
+    var buf: [14]u8 = undefined;
+    _ = std.fmt.bufPrint(&buf, "INV-{d:0>10}", .{id}) catch unreachable;
+    return buf;
+}
+
 // Generates incrementing prefixed integers, i.e. CTX-1, CTX-2, CTX-3.
 // Wraps to 0 on overflow.
 // Many caveats for using this:
@@ -97,11 +103,16 @@ pub fn Incrementing(comptime T: type, comptime prefix: []const u8) type {
 
         const Self = @This();
 
-        pub fn next(self: *Self) []const u8 {
+        pub fn incr(self: *Self) T {
             const counter = self.counter;
             const n = counter +% 1;
             defer self.counter = n;
 
+            return n;
+        }
+
+        pub fn next(self: *Self) []const u8 {
+            const n = self.incr();
             const size = std.fmt.printInt(self.buffer[NUMERIC_START..], n, 10, .lower, .{});
             return self.buffer[0 .. NUMERIC_START + size];
         }

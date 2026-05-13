@@ -46,6 +46,8 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const SessionIdGen = Incrementing(u32, "SID");
 const BrowserContextIdGen = Incrementing(u32, "BID");
+// webmcp tool invocation
+pub const InvocationIdGen = Incrementing(u32, "INV");
 
 // Generic so that we can inject mocks into it.
 const CDP = @This();
@@ -490,8 +492,9 @@ pub const BrowserContext = struct {
     // own message arena.
     pending_dialog_response: ?Notification.DialogResponse = null,
 
+    // webmcp tool invocation
+    invocation_id_gen: InvocationIdGen = .{},
     // WebMCP domain state. Populated when `WebMCP.enable` is received.
-    webmcp_next_invocation_id: u32 = 0,
     webmcp_invocations: std.AutoHashMapUnmanaged(u32, *@import("domains/webmcp.zig").Invocation) = .empty,
 
     fn init(self: *BrowserContext, id: []const u8, cdp: *CDP) !void {

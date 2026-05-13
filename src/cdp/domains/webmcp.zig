@@ -18,21 +18,10 @@
 
 // CDP WebMCP domain.
 // https://chromedevtools.github.io/devtools-protocol/tot/WebMCP/
-//
-// Bridges the page-side `navigator.modelContext` surface (see
-// browser/webapi/ModelContext.zig) to a CDP client. The client `enable`s
-// the domain, then receives:
-//   - `toolsAdded` whenever the page registers tools.
-//   - `toolsRemoved` whenever an AbortSignal-bound tool's signal fires
-//     (lazy — detected on the next compaction).
-//   - `toolInvoked` immediately after the client sends `invokeTool`.
-//   - `toolResponded` once the tool's execute promise settles, or
-//     immediately on `cancelInvocation`.
-
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const id_mod = @import("../id.zig");
+const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 
 const ModelContext = @import("../../browser/webapi/ModelContext.zig");
@@ -43,8 +32,6 @@ const ModelContextClient = ModelContext.ModelContextClient;
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
-
-const INVOCATION_PREFIX = "INV-";
 
 pub const Invocation = struct {
     id: u32,
@@ -103,7 +90,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
     const params = (try cmd.params(InvokeToolParams)) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame_id = try id_mod.parseFrameId(params.frameId);
+    const frame_id = try id.parseFrameId(params.frameId);
     const frame = bc.session.findFrameByFrameId(frame_id) orelse return error.FrameNotFound;
     const mc = frame.window.getModelContext();
     const tool = mc.findTool(frame, params.toolName) orelse return error.NotFound;
@@ -112,9 +99,8 @@ fn invokeTool(cmd: *CDP.Command) !void {
     // `toolInvoked.input` and pass the parsed form into the JS callback.
     const input_str = try std.json.Stringify.valueAlloc(cmd.arena, params.input, .{});
 
-    bc.webmcp_next_invocation_id +%= 1;
-    const inv_id = bc.webmcp_next_invocation_id;
-    const inv_id_str = try std.fmt.allocPrint(cmd.arena, INVOCATION_PREFIX ++ "{d}", .{inv_id});
+    const inv_id = bc.invocation_id_gen.incr();
+    const inv_id_str = &id.toInvocationId(inv_id);
 
     const invocation = try bc.arena.create(Invocation);
     invocation.* = .{
@@ -128,7 +114,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
     // Send toolInvoked event before we run the JS, so the client sees
     // them in order even if the tool resolves synchronously.
     const session_id = bc.session_id;
-    const frame_id_str = id_mod.toFrameId(frame_id);
+    const frame_id_str = id.toFrameId(frame_id);
     try cmd.sendEvent("WebMCP.toolInvoked", .{
         .toolName = tool.name,
         .frameId = &frame_id_str,
@@ -188,25 +174,17 @@ fn cancelInvocation(cmd: *CDP.Command) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    const inv_id = parseInvocationId(params.invocationId) orelse return error.InvalidParams;
+    const inv_id = CDP.InvocationIdGen.parse(params.invocationId) catch return error.InvalidParams;
     const entry = bc.webmcp_invocations.fetchRemove(inv_id) orelse return error.NotFound;
     entry.value.canceled = true;
 
-    const inv_id_str = try std.fmt.allocPrint(cmd.arena, INVOCATION_PREFIX ++ "{d}", .{inv_id});
     try cmd.cdp.sendEvent("WebMCP.toolResponded", .{
-        .invocationId = inv_id_str,
+        .invocationId = &id.toInvocationId(inv_id),
         .status = "Canceled",
     }, .{ .session_id = bc.session_id });
 
     return cmd.sendResult(null, .{});
 }
-
-fn parseInvocationId(s: []const u8) ?u32 {
-    if (!std.mem.startsWith(u8, s, INVOCATION_PREFIX)) return null;
-    return std.fmt.parseInt(u32, s[INVOCATION_PREFIX.len..], 10) catch null;
-}
-
-// === Promise resolution callbacks ===
 
 fn onPromiseFulfilled(invocation: *Invocation, value: js.Value) anyerror!void {
     // The map is the source of truth for "still active". cancelInvocation
@@ -233,9 +211,8 @@ fn respondCompleted(
 ) !void {
     const arena = bc.notification_arena;
     const output_json = value.toJson(arena) catch "null";
-    const inv_id_str = try std.fmt.allocPrint(arena, INVOCATION_PREFIX ++ "{d}", .{invocation.id});
     try cdp.sendEvent("WebMCP.toolResponded", .{
-        .invocationId = inv_id_str,
+        .invocationId = &id.toInvocationId(invocation.id),
         .status = "Completed",
         .output = RawJson{ .raw = output_json },
     }, .{ .session_id = bc.session_id });
@@ -257,17 +234,13 @@ fn respondError(
     invocation: *Invocation,
     err_text: []const u8,
 ) !void {
-    const arena = bc.notification_arena;
-    const inv_id_str = try std.fmt.allocPrint(arena, INVOCATION_PREFIX ++ "{d}", .{invocation.id});
     try cdp.sendEvent("WebMCP.toolResponded", .{
-        .invocationId = inv_id_str,
+        .invocationId = &id.toInvocationId(invocation.id),
         .status = "Error",
         .errorText = err_text,
     }, .{ .session_id = bc.session_id });
     _ = bc.webmcp_invocations.remove(invocation.id);
 }
-
-// === Tool added / removed dispatch (called from BrowserContext) ===
 
 pub fn onToolAdded(
     arena: Allocator,
@@ -279,7 +252,7 @@ pub fn onToolAdded(
     defer ls.deinit();
 
     const writer = ToolWriter{
-        .frame_id = id_mod.toFrameId(event.frame._frame_id),
+        .frame_id = id.toFrameId(event.frame._frame_id),
         .tools = &.{event.tool},
         .local = &ls.local,
         .arena = arena,
@@ -295,7 +268,7 @@ pub fn onToolRemoved(
     event: *const Notification.ModelContextToolEvent,
 ) !void {
     _ = arena;
-    const frame_id_str = id_mod.toFrameId(event.frame._frame_id);
+    const frame_id_str = id.toFrameId(event.frame._frame_id);
     try bc.cdp.sendEvent("WebMCP.toolsRemoved", .{
         .tools = &.{
             .{ .name = event.tool.name, .frameId = &frame_id_str },
@@ -314,7 +287,7 @@ fn sendToolsAdded(
     defer ls.deinit();
 
     const writer = ToolWriter{
-        .frame_id = id_mod.toFrameId(frame._frame_id),
+        .frame_id = id.toFrameId(frame._frame_id),
         .tools = tools,
         .local = &ls.local,
         .arena = bc.notification_arena,
@@ -405,7 +378,7 @@ test "cdp.WebMCP: invokeTool fires toolInvoked + toolResponded" {
         .target_id = "TID-000000000M".*,
         .url = "cdp/webmcp_fixture.html",
     });
-    const frame_id = id_mod.toFrameId(bc.session.currentFrame().?._frame_id);
+    const frame_id = id.toFrameId(bc.session.currentFrame().?._frame_id);
 
     try ctx.processMessage(.{ .id = 1, .method = "WebMCP.enable", .session_id = "SID-M" });
     try ctx.expectSentResult(null, .{ .id = 1 });
@@ -421,16 +394,16 @@ test "cdp.WebMCP: invokeTool fires toolInvoked + toolResponded" {
             .input = .{ .who = "world" },
         },
     });
-    try ctx.expectSentResult(.{ .invocationId = "INV-1" }, .{ .id = 2 });
+    try ctx.expectSentResult(.{ .invocationId = "INV-0000000001" }, .{ .id = 2 });
 
     try ctx.expectSentEvent("WebMCP.toolInvoked", .{
         .toolName = "greet",
         .frameId = &frame_id,
-        .invocationId = "INV-1",
+        .invocationId = "INV-0000000001",
     }, .{ .session_id = "SID-M" });
 
     try ctx.expectSentEvent("WebMCP.toolResponded", .{
-        .invocationId = "INV-1",
+        .invocationId = "INV-0000000001",
         .status = "Completed",
     }, .{ .session_id = "SID-M" });
 }
@@ -445,7 +418,7 @@ test "cdp.WebMCP: invokeTool unknown name" {
         .target_id = "TID-000000000M".*,
         .url = "cdp/webmcp_fixture.html",
     });
-    const frame_id = id_mod.toFrameId(bc.session.currentFrame().?._frame_id);
+    const frame_id = id.toFrameId(bc.session.currentFrame().?._frame_id);
 
     try ctx.processMessage(.{ .id = 1, .method = "WebMCP.enable", .session_id = "SID-M" });
     try ctx.expectSentResult(null, .{ .id = 1 });
@@ -494,7 +467,7 @@ test "cdp.WebMCP: cancelInvocation" {
         .tools = &.{.{ .name = "hang" }},
     }, .{ .session_id = "SID-M" });
 
-    const frame_id = id_mod.toFrameId(bc.session.currentFrame().?._frame_id);
+    const frame_id = id.toFrameId(bc.session.currentFrame().?._frame_id);
     try ctx.processMessage(.{
         .id = 2,
         .method = "WebMCP.invokeTool",
@@ -505,18 +478,18 @@ test "cdp.WebMCP: cancelInvocation" {
             .input = .{},
         },
     });
-    try ctx.expectSentResult(.{ .invocationId = "INV-1" }, .{ .id = 2 });
-    try ctx.expectSentEvent("WebMCP.toolInvoked", .{ .invocationId = "INV-1" }, .{ .session_id = "SID-M" });
+    try ctx.expectSentResult(.{ .invocationId = "INV-0000000001" }, .{ .id = 2 });
+    try ctx.expectSentEvent("WebMCP.toolInvoked", .{ .invocationId = "INV-0000000001" }, .{ .session_id = "SID-M" });
 
     try ctx.processMessage(.{
         .id = 3,
         .method = "WebMCP.cancelInvocation",
         .session_id = "SID-M",
-        .params = .{ .invocationId = "INV-1" },
+        .params = .{ .invocationId = "INV-0000000001" },
     });
     try ctx.expectSentResult(null, .{ .id = 3 });
     try ctx.expectSentEvent("WebMCP.toolResponded", .{
-        .invocationId = "INV-1",
+        .invocationId = "INV-0000000001",
         .status = "Canceled",
     }, .{ .session_id = "SID-M" });
 }
