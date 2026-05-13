@@ -747,7 +747,7 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
         &self.messages,
         self.allocator,
         ma,
-        .{ .context = @ptrCast(self), .callFn = &handleToolCall },
+        .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
             .tools = self.tool_executor.tools,
             .max_tool_calls = 4,
@@ -877,7 +877,7 @@ fn processUserMessage(self: *Self, input: TurnInput) !?[]const u8 {
     const msg_baseline = self.messages.items.len;
 
     if (turn_attachments) |paths| {
-        const parts = try buildUserMessageParts(self, ma, input.prompt, paths);
+        const parts = try self.buildUserMessageParts(ma, input.prompt, paths);
         try self.messages.append(self.allocator, .{
             .role = .user,
             .parts = parts,
@@ -897,7 +897,7 @@ fn processUserMessage(self: *Self, input: TurnInput) !?[]const u8 {
         &self.messages,
         self.allocator,
         ma,
-        .{ .context = @ptrCast(self), .callFn = &handleToolCall },
+        .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
             .tools = self.tool_executor.tools,
             .max_turns = 30,
@@ -958,7 +958,7 @@ fn processUserMessage(self: *Self, input: TurnInput) !?[]const u8 {
             &self.messages,
             self.allocator,
             ma,
-            .{ .context = @ptrCast(self), .callFn = &handleToolCall },
+            .{ .context = @ptrCast(self), .callFn = handleToolCall },
             .{
                 // tool_choice = .none forbids tools; serializing the full
                 // catalog anyway just pads the request body.
@@ -1128,9 +1128,9 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
         return error.MissingApiKey;
     };
 
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
-    defer arena_state.deinit();
-    const ids = try zenai.provider.listChatModelIds(allocator, arena_state.allocator(), provider, api_key, opts.base_url);
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const ids = try zenai.provider.listChatModelIds(allocator, arena.allocator(), provider, api_key, opts.base_url);
 
     var stdout_file = std.fs.File.stdout().writer(&.{});
     const w = &stdout_file.interface;
@@ -1213,12 +1213,11 @@ fn pickModel(
         return error.NotInteractive;
     }
 
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
 
     std.debug.print("Fetching models for {s}…\n", .{@tagName(provider)});
-    const ids = zenai.provider.listChatModelIds(allocator, arena, provider, api_key, base_url) catch |err| {
+    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), provider, api_key, base_url) catch |err| {
         log.fatal(.app, "list models failed", .{ .err = @errorName(err) });
         return err;
     };

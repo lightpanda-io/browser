@@ -915,7 +915,7 @@ test "parse EXTRACT" {
 
 test "format EXTRACT single-line schema round-trip" {
     const schema = "{\"title\":\"h1\",\"items\":[\".item\"]}";
-    const cmd = Command{ .extract = schema };
+    const cmd: Command = .{ .extract = schema };
 
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
@@ -928,7 +928,7 @@ test "format EXTRACT single-line schema round-trip" {
 
 test "format EXTRACT multi-line schema uses triple quotes" {
     const schema = "{\n  \"title\": \"h1\"\n}";
-    const cmd = Command{ .extract = schema };
+    const cmd: Command = .{ .extract = schema };
 
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
@@ -1207,7 +1207,7 @@ test "format round-trip for quoted selectors" {
 
     for (cases, 0..) |c, i| {
         errdefer std.debug.print("failing case {d}: {s}\n", .{ i, c.input });
-        const cmd = Command{ .click = c.input };
+        const cmd: Command = .{ .click = c.input };
 
         var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
         defer aw.deinit();
@@ -1220,7 +1220,7 @@ test "format round-trip for quoted selectors" {
 }
 
 test "format TYPE with nested single quotes round-trip" {
-    const cmd = Command{ .type_cmd = .{
+    const cmd: Command = .{ .type_cmd = .{
         .selector = "input[name='acct']",
         .value = "$LP_USERNAME",
     } };
@@ -1236,7 +1236,7 @@ test "format TYPE with nested single quotes round-trip" {
 }
 
 test "format with both quote types uses triple quotes" {
-    const cmd = Command{ .click = "a[x='y'][z=\"w\"]" };
+    const cmd: Command = .{ .click = "a[x='y'][z=\"w\"]" };
 
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
@@ -1248,7 +1248,7 @@ test "format with both quote types uses triple quotes" {
 }
 
 test "format TYPE with both quote types round-trip" {
-    const cmd = Command{ .type_cmd = .{
+    const cmd: Command = .{ .type_cmd = .{
         .selector = "a[x='y'][z=\"w\"]",
         .value = "some 'value' with \"quotes\"",
     } };
@@ -1266,7 +1266,7 @@ test "format TYPE with both quote types round-trip" {
 test "format swaps to triple-double when body contains '''" {
     // Value contains a literal ''' plus a single `"`, forcing the triple-quote
     // branch. The recorder must pick """…""" so the line round-trips.
-    const cmd = Command{ .click = "weird '''selector\"" };
+    const cmd: Command = .{ .click = "weird '''selector\"" };
 
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
