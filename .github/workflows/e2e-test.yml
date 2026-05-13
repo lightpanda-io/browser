@@ -296,9 +296,12 @@ jobs:
     needs: zig-build-release
 
     env:
-      MAX_VmHWM: 28000 # 28MB (KB)
-      MAX_CG_PEAK: 8000 # 8MB (KB)
-      MAX_AVG_DURATION: 17
+      CDP_MAX_VmHWM: 28000 # 28MB (KB)
+      CDP_MAX_CG_PEAK: 8000 # 8MB (KB)
+      CDP_MAX_AVG_DURATION: 17
+      M8B_MAX_VmHWM: 28000 # 28MB (KB)
+      M8B_MAX_CG_PEAK: 8000 # 8MB (KB)
+      M8B_MAX_AVG_DURATION: 17
 
       # How to give cgroups access to the user actions-runner on the host:
       # $ sudo apt install cgroup-tools
@@ -331,6 +334,8 @@ jobs:
         run: |
           go run runner/main.go -serve & echo $! > WS.pid
           sleep 2
+
+      # == CDP BENCH ==
 
       - name: run lightpanda in cgroup
         run: |
@@ -369,13 +374,13 @@ jobs:
           PEAK_KB=$((PEAK_BYTES / 1024))
           echo "memory.peak_bytes=$PEAK_BYTES"
           echo "memory.peak_kb=$PEAK_KB"
-          test "$PEAK_KB" -le "$MAX_CG_PEAK"
+          test "$PEAK_KB" -le "$CDP_MAX_CG_PEAK"
 
       - name: virtual memory regression
         run: |
           export LPD_VmHWM=`cat LPD.VmHWM`
           echo "Peak resident set size: $LPD_VmHWM"
-          test "$LPD_VmHWM" -le "$MAX_VmHWM"
+          test "$LPD_VmHWM" -le "$CDP_MAX_VmHWM"
 
       - name: cleanup cgroup
         run: rmdir $CG_ROOT/$CG
@@ -384,7 +389,7 @@ jobs:
         run: |
           export PUPPETEER_AVG_DURATION=`cat puppeteer.out|grep 'avg run'|sed 's/avg run duration (ms) //'`
           echo "puppeteer avg duration: $PUPPETEER_AVG_DURATION"
-          test "$PUPPETEER_AVG_DURATION" -le "$MAX_AVG_DURATION"
+          test "$PUPPETEER_AVG_DURATION" -le "$CDP_MAX_AVG_DURATION"
 
       - name: json output
         run: |
@@ -392,8 +397,75 @@ jobs:
           export TOTAL_DURATION=`cat puppeteer.out|grep 'total duration'|sed 's/total duration (ms) //'`
           export LPD_VmHWM=`cat LPD.VmHWM`
           export LPD_CG_PEAK_KB=$(( $(cat LPD.cg_mem_peak) / 1024 ))
-          echo "{\"duration_total\":${TOTAL_DURATION},\"duration_avg\":${AVG_DURATION},\"mem_peak\":${LPD_VmHWM},\"cg_mem_peak\":${LPD_CG_PEAK_KB}}" > bench.json
-          cat bench.json
+          echo "{\"duration_total\":${TOTAL_DURATION},\"duration_avg\":${AVG_DURATION},\"mem_peak\":${LPD_VmHWM},\"cg_mem_peak\":${LPD_CG_PEAK_KB}}" > cdp-bench.json
+          cat cdp-bench.json
+
+      # == MAGIC8BALL BENCH ==
+
+      - name: run lightpanda in cgroup
+        run: |
+          if [ ! -f /sys/fs/cgroup/cgroup.controllers ]; then
+            echo "cgroup v2 not available: /sys/fs/cgroup/cgroup.controllers missing"
+            exit 1
+          fi
+
+          mkdir -p $CG_ROOT/$CG
+          cgexec -g memory:$CG ./lightpanda serve & echo $! > LPD.pid
+
+          sleep 2
+
+      - name: run puppeteer
+        run: |
+          RUNS=100 node puppeteer/magic8ball.js > puppeteer.out || exit 1
+          cat /proc/`cat LPD.pid`/status |grep VmHWM|grep -oP '\d+' > LPD.VmHWM
+          kill `cat LPD.pid`
+
+          PID=$(cat LPD.pid)
+          while kill -0 $PID 2>/dev/null; do
+            sleep 1
+          done
+          if [ ! -f $CG_ROOT/$CG/memory.peak ]; then
+            echo "memory.peak not available in $CG"
+            exit 1
+          fi
+          cat $CG_ROOT/$CG/memory.peak > LPD.cg_mem_peak
+
+      - name: puppeteer result
+        run: cat puppeteer.out
+
+      - name: cgroup memory regression
+        run: |
+          PEAK_BYTES=$(cat LPD.cg_mem_peak)
+          PEAK_KB=$((PEAK_BYTES / 1024))
+          echo "memory.peak_bytes=$PEAK_BYTES"
+          echo "memory.peak_kb=$PEAK_KB"
+          test "$PEAK_KB" -le "$M8B_MAX_CG_PEAK"
+
+      - name: virtual memory regression
+        run: |
+          export LPD_VmHWM=`cat LPD.VmHWM`
+          echo "Peak resident set size: $LPD_VmHWM"
+          test "$LPD_VmHWM" -le "$M8B_MAX_VmHWM"
+
+      - name: cleanup cgroup
+        run: rmdir $CG_ROOT/$CG
+
+      - name: duration regression
+        run: |
+          export PUPPETEER_AVG_DURATION=`cat puppeteer.out|grep 'avg run'|sed 's/avg run duration (ms) //'`
+          echo "puppeteer avg duration: $PUPPETEER_AVG_DURATION"
+          test "$PUPPETEER_AVG_DURATION" -le "$M8B_MAX_AVG_DURATION"
+
+      - name: json output
+        run: |
+          export AVG_DURATION=`cat puppeteer.out|grep 'avg run'|sed 's/avg run duration (ms) //'`
+          export TOTAL_DURATION=`cat puppeteer.out|grep 'total duration'|sed 's/total duration (ms) //'`
+          export LPD_VmHWM=`cat LPD.VmHWM`
+          export LPD_CG_PEAK_KB=$(( $(cat LPD.cg_mem_peak) / 1024 ))
+          echo "{\"duration_total\":${TOTAL_DURATION},\"duration_avg\":${AVG_DURATION},\"mem_peak\":${LPD_VmHWM},\"cg_mem_peak\":${LPD_CG_PEAK_KB}}" > m8b-bench.json
+          cat m8b-bench.json
+
+      # == Hyperfine BENCH ==
 
       - name: run hyperfine
         run: |
@@ -411,7 +483,8 @@ jobs:
         with:
           name: bench-results
           path: |
-            bench.json
+            cdp-bench.json
+            m8b-bench.json
             hyperfine.json
             commit.txt
           retention-days: 10
@@ -440,7 +513,7 @@ jobs:
           name: bench-results
 
       - name: format and send json result
-        run: /perf-fmt cdp ${{ github.sha }} bench.json
+        run: /perf-fmt cdp ${{ github.sha }} cdp-bench.json
 
       - name: format and send json result
         run: /perf-fmt hyperfine ${{ github.sha }} hyperfine.json
