@@ -72,11 +72,12 @@ pub const Command = union(enum) {
     /// content-aware quotes so the output round-trips through `parse()`:
     ///   - single quotes by default,
     ///   - double quotes if the content contains `'` but not `"`,
-    ///   - triple single quotes (`'''…'''`) if the content contains both.
+    ///   - triple quotes (`'''…'''` or `"""…"""`) if it contains both — the
+    ///     triple delimiter is whichever the content doesn't include.
     ///
-    /// There is no escape syntax, so a value that literally contains `'''`
-    /// still cannot round-trip. This is much rarer than the mixed-quote case
-    /// (CSS selectors and form values almost never contain `'''`).
+    /// There is no escape syntax, so a value that contains BOTH `'''` and
+    /// `"""` still cannot round-trip — vanishingly rare for selectors and
+    /// form values, which is the entire input domain here.
     pub fn format(self: Command, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
             .goto => |url| try writer.print("GOTO {s}", .{url}),
@@ -104,7 +105,8 @@ pub const Command = union(enum) {
 
 fn writeBlockOrInline(writer: *std.Io.Writer, keyword: []const u8, body: []const u8) std.Io.Writer.Error!void {
     if (std.mem.indexOfScalar(u8, body, '\n') != null) {
-        try writer.print("{s} '''\n{s}\n'''", .{ keyword, body });
+        const q = QuoteType.pickFor(body).toLiteral();
+        try writer.print("{s} {s}\n{s}\n{s}", .{ keyword, q, body, q });
     } else {
         try writer.print("{s} {f}", .{ keyword, quote(body) });
     }
@@ -443,6 +445,14 @@ const QuoteType = enum {
             .triple_single => "'''",
         };
     }
+
+    /// Pick the triple-quote delimiter that does not collide with `body`.
+    /// Defaults to `triple_single`; swaps to `triple_double` only when the
+    /// body already contains `'''`.
+    fn pickFor(body: []const u8) QuoteType {
+        if (std.mem.indexOf(u8, body, "'''") != null) return .triple_double;
+        return .triple_single;
+    }
 };
 
 fn extractQuotedWithRemainder(s: []const u8) ?QuotedResult {
@@ -501,9 +511,10 @@ const Quoted = struct {
         const has_double = std.mem.indexOfScalar(u8, self.s, '"') != null;
 
         if (has_single and has_double) {
-            try writer.writeAll("'''");
+            const q = QuoteType.pickFor(self.s).toLiteral();
+            try writer.writeAll(q);
             try writer.writeAll(self.s);
-            try writer.writeAll("'''");
+            try writer.writeAll(q);
         } else {
             const q: u8 = if (has_single) '"' else '\'';
             try writer.writeByte(q);
@@ -1250,6 +1261,20 @@ test "format TYPE with both quote types round-trip" {
     const round = parse(aw.written());
     try std.testing.expectEqualStrings("a[x='y'][z=\"w\"]", round.type_cmd.selector);
     try std.testing.expectEqualStrings("some 'value' with \"quotes\"", round.type_cmd.value);
+}
+
+test "format swaps to triple-double when body contains '''" {
+    // Value contains a literal ''' plus a single `"`, forcing the triple-quote
+    // branch. The recorder must pick """…""" so the line round-trips.
+    const cmd = Command{ .click = "weird '''selector\"" };
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try cmd.format(&aw.writer);
+    try std.testing.expectEqualStrings("CLICK \"\"\"weird '''selector\"\"\"\"", aw.written());
+
+    const round = parse(aw.written());
+    try std.testing.expectEqualStrings("weird '''selector\"", round.click);
 }
 
 // --- Tool-call round-trip tests ---
