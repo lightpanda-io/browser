@@ -42,6 +42,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         scrollNode,
         waitForSelector,
         handleJavaScriptDialog,
+        configureLoading,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -56,7 +57,23 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .scrollNode => return scrollNode(cmd),
         .waitForSelector => return waitForSelector(cmd),
         .handleJavaScriptDialog => return handleJavaScriptDialog(cmd),
+        .configureLoading => return configureLoading(cmd),
     }
+}
+
+fn configureLoading(cmd: *CDP.Command) !void {
+    // Each field is optional so callers can flip one without resetting
+    // the other to its default. Backwards-compatible: existing callers
+    // that pass only `{ subFrame: bool }` are unchanged.
+    const params = (try cmd.params(struct {
+        subFrame: ?bool = null,
+        worker: ?bool = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    if (params.subFrame) |v| bc.session.subframe_loading_enabled = v;
+    if (params.worker) |v| bc.session.worker_loading_enabled = v;
+    return cmd.sendResult(null, .{});
 }
 
 fn getSemanticTree(cmd: anytype) !void {
@@ -628,4 +645,46 @@ test "cdp.lp: handleJavaScriptDialog controls confirm/prompt/alert return values
     // the response doesn't leak across dialogs.
     const c_after_alert = try ls.local.exec("confirm('leak?')", null);
     try testing.expectEqual(false, c_after_alert.toBool());
+}
+
+test "cdp.lp: configureLoading toggles subFrame and worker independently" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    _ = try bc.session.createPage();
+
+    // Defaults: both loading types enabled.
+    try testing.expectEqual(true, bc.session.subframe_loading_enabled);
+    try testing.expectEqual(true, bc.session.worker_loading_enabled);
+
+    // subFrame-only: leaves worker untouched.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.configureLoading",
+        .params = .{ .subFrame = false },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expectEqual(false, bc.session.subframe_loading_enabled);
+    try testing.expectEqual(true, bc.session.worker_loading_enabled);
+
+    // worker-only: leaves subFrame untouched.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "LP.configureLoading",
+        .params = .{ .worker = false },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual(false, bc.session.subframe_loading_enabled);
+    try testing.expectEqual(false, bc.session.worker_loading_enabled);
+
+    // Both at once.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "LP.configureLoading",
+        .params = .{ .subFrame = true, .worker = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try testing.expectEqual(true, bc.session.subframe_loading_enabled);
+    try testing.expectEqual(true, bc.session.worker_loading_enabled);
 }

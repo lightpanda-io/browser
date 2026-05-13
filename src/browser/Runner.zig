@@ -66,6 +66,9 @@ pub fn waitCDP(self: *Runner, opts: WaitOpts) !CDPWaitResult {
 }
 
 fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
+    const session = self.session;
+    const browser = session.browser;
+
     var timer = try std.time.Timer.start();
 
     const tick_opts = TickOpts{
@@ -85,8 +88,9 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
         if (gc_hint_timer.read() >= gc_hint_period_ns) {
             gc_hint_timer.reset();
             self.frame._page.cleanupClosedPopups();
-            self.session.browser.env.memoryPressureNotification(.moderate);
+            browser.env.memoryPressureNotification(.moderate);
         }
+        session.processQueuedDestroyed();
 
         const tick_result = self._tick(is_cdp, tick_opts) catch |err| {
             switch (err) {

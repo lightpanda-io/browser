@@ -40,14 +40,14 @@ pub fn toLoaderId(id: u32) [14]u8 {
 
 // requestId has special requirements. If it's the main document navigation,
 // then it should match the loader id.
-const Request = @import("../browser/HttpClient.zig").Request;
-pub fn toRequestId(req: *const Request) [14]u8 {
-    if (req.params.resource_type == .document) {
-        return toLoaderId(req.params.loader_id);
+const Transfer = @import("../browser/HttpClient.zig").Transfer;
+pub fn toRequestId(transfer: *const Transfer) [14]u8 {
+    if (transfer.req.params.resource_type == .document) {
+        return toLoaderId(transfer.req.params.loader_id);
     }
 
     var buf: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&buf, "REQ-{d:0>10}", .{req.params.request_id}) catch unreachable;
+    _ = std.fmt.bufPrint(&buf, "REQ-{d:0>10}", .{transfer.id}) catch unreachable;
     return buf;
 }
 

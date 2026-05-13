@@ -269,7 +269,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     self.acquireRef();
     self._active_request = true;
 
-    http_client.request(.{
+    exec.makeRequest(.{
         .ctx = self,
         .params = .{
             .url = self._url,

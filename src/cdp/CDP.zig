@@ -28,7 +28,7 @@ const Frame = @import("../browser/Frame.zig");
 const Mime = @import("../browser/Mime.zig");
 const Element = @import("../browser/webapi/Element.zig");
 const Label = @import("../browser/webapi/element/html/Label.zig");
-const Request = @import("../browser/HttpClient.zig").Request;
+const Transfer = @import("../browser/HttpClient.zig").Transfer;
 const CDPClient = @import("../browser/HttpClient.zig").CDPClient;
 const WsConnection = @import("../network/WsConnection.zig");
 
@@ -315,6 +315,7 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
             asUint(u56, "Runtime") => return @import("domains/runtime.zig").processMessage(command),
             asUint(u56, "Network") => return @import("domains/network.zig").processMessage(command),
             asUint(u56, "Storage") => return @import("domains/storage.zig").processMessage(command),
+            asUint(u56, "Console") => return @import("domains/console.zig").processMessage(command),
             else => {},
         },
         8 => switch (@as(u64, @bitCast(domain[0..8].*))) {
@@ -552,25 +553,21 @@ pub const BrowserContext = struct {
         env.inspector.?.stopSession();
 
         // abort all intercepted requests before closing the session/page
-        // since some of these might callback into the page/scriptmanager
+        // since some of these might callback into the page/scriptmanager.
+        // intercept_state stores ids — look each one up; if it's already
+        // gone (out-of-band destroy), there's nothing to abort, but the
+        // intercepted counter still needs decrementing because we
+        // incremented it on pause.
         const http_client = &browser.http_client;
-        for (self.intercept_state.pendingIntercepts()) |intercept| {
-            defer {
-                lp.assert(
-                    http_client.interception_layer.intercepted > 0,
-                    "BrowserContext.deinit.intercepted",
-                    .{ .value = http_client.interception_layer.intercepted },
-                );
-                http_client.interception_layer.intercepted -= 1;
-            }
-            switch (intercept) {
-                .transfer => |t| {
-                    t.abort(error.ClientDisconnect);
-                },
-                .request => |r| {
-                    defer http_client.deinitRequest(r);
-                    r.error_callback(r.ctx, error.ClientDisconnect);
-                },
+        for (self.intercept_state.pendingIntercepts()) |transfer_id| {
+            lp.assert(
+                http_client.interception_layer.intercepted > 0,
+                "BrowserContext.deinit.intercepted",
+                .{ .value = http_client.interception_layer.intercepted },
+            );
+            http_client.interception_layer.intercepted -= 1;
+            if (http_client.findTransfer(transfer_id)) |transfer| {
+                transfer.abort(error.ClientDisconnect);
             }
         }
 
@@ -715,6 +712,22 @@ pub const BrowserContext = struct {
         self.notification.unregister(.frame_network_almost_idle, self);
     }
 
+    pub fn consoleEnable(self: *BrowserContext) !void {
+        try self.notification.register(.console_message, self, onConsoleMessage);
+    }
+
+    pub fn consoleDisable(self: *BrowserContext) void {
+        self.notification.unregister(.console_message, self);
+    }
+
+    pub fn runtimeEnable(self: *BrowserContext) !void {
+        try self.notification.register(.runtime_console_message, self, onRuntimeConsoleMessage);
+    }
+
+    pub fn runtimeDisable(self: *BrowserContext) void {
+        self.notification.unregister(.runtime_console_message, self);
+    }
+
     pub fn onFrameRemove(ctx: *anyopaque, _: Notification.FrameRemove) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         @import("domains/page.zig").frameRemove(self);
@@ -781,11 +794,11 @@ pub const BrowserContext = struct {
         return @import("domains/page.zig").javascriptDialogOpening(self, msg);
     }
 
-    fn keyFromRequestReq(req: *const Request) CDP.BrowserContext.CapturedResponseKey {
-        return if (req.params.resource_type == .document)
-            .{ .kind = .loader, .id = req.params.loader_id }
+    fn keyFromTransfer(transfer: *const Transfer) CDP.BrowserContext.CapturedResponseKey {
+        return if (transfer.req.params.resource_type == .document)
+            .{ .kind = .loader, .id = transfer.req.params.loader_id }
         else
-            .{ .kind = .request, .id = req.params.request_id };
+            .{ .kind = .request, .id = transfer.id };
     }
 
     pub fn onHttpResponseHeadersDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
@@ -795,7 +808,7 @@ pub const BrowserContext = struct {
         const arena = self.frame_arena;
 
         // Prepare the captured response value.
-        const key = keyFromRequestReq(msg.request);
+        const key = keyFromTransfer(msg.transfer);
         const gop = try self.captured_responses.getOrPut(arena, key);
         if (!gop.found_existing) {
             gop.value_ptr.* = .{
@@ -832,7 +845,7 @@ pub const BrowserContext = struct {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         const arena = self.frame_arena;
 
-        const key = keyFromRequestReq(msg.request);
+        const key = keyFromTransfer(msg.transfer);
         const resp = self.captured_responses.getPtr(key) orelse lp.assert(false, "onHttpResponseData missing captured response", .{});
 
         return resp.data.appendSlice(arena, msg.data);
@@ -842,6 +855,18 @@ pub const BrowserContext = struct {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
         try @import("domains/fetch.zig").requestAuthRequired(self, data);
+    }
+
+    pub fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        defer self.resetNotificationArena();
+        return @import("domains/console.zig").consoleMessage(self.notification_arena, self, msg);
+    }
+
+    pub fn onRuntimeConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        defer self.resetNotificationArena();
+        return @import("domains/runtime.zig").consoleMessage(self.notification_arena, self, msg);
     }
 
     fn resetNotificationArena(self: *BrowserContext) void {

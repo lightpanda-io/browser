@@ -98,6 +98,8 @@ const CommonOptions = .{
     .{ .name = "cookie_jar", .type = ?[]const u8 },
     .{ .name = "storage_engine", .type = ?Storage.EngineType },
     .{ .name = "storage_sqlite_path", .type = ?[:0]const u8 },
+    .{ .name = "disable_subframes", .type = bool },
+    .{ .name = "disable_workers", .type = bool },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -201,7 +203,7 @@ const Commands = cli.Builder(.{
         .shared_options = CommonOptions,
     },
     .{ .name = "version", .options = .{} },
-    .{ .name = "help", .options = .{} },
+    .{ .name = "help", .positional = .{ .name = "subcommand", .type = ?[]const u8 }, .options = .{} },
 });
 
 pub const RunMode = Commands.Enum;
@@ -235,6 +237,20 @@ pub fn tlsVerifyHost(self: *const Config) bool {
 pub fn obeyRobots(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp => |opts| opts.obey_robots,
+        else => unreachable,
+    };
+}
+
+pub fn disableSubframes(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.disable_subframes,
+        else => unreachable,
+    };
+}
+
+pub fn disableWorkers(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.disable_workers,
         else => unreachable,
     };
 }
@@ -526,6 +542,29 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                we make requests towards.
         \\                Defaults to false.
         \\
+        \\--disable-subframes
+        \\                Skip loading <iframe> elements. The HTML parser registers them
+        \\                in the DOM but no child frame, document fetch, or
+        \\                Page.frameAttached / Runtime.executionContextCreated events are
+        \\                produced. Useful for pages that load many analytics / pixel
+        \\                iframes where each subframe navigation invalidates driver-side
+        \\                executionContextIds (lightpanda-io/browser#2400). On the CDP
+        \\                serve path, drivers can also toggle this per-session via the
+        \\                LP.configureLoading method.
+        \\                Defaults to false.
+        \\
+        \\--disable-workers
+        \\                Skip loading dedicated Web Workers. The Worker constructor
+        \\                still returns a Worker object so calling pages do not throw,
+        \\                but no script fetch is initiated and the worker scope's
+        \\                eval never runs (postMessage from the page to the worker is
+        \\                queued indefinitely). Sidesteps a v8 entered-context
+        \\                corruption that crashes the process when an in-page Worker
+        \\                completes its script fetch under specific HTTP-proxy timing
+        \\                conditions on Shopify storefront pages. Drivers can also
+        \\                toggle this per-session via the LP.configureLoading method.
+        \\                Defaults to false.
+        \\
         \\--block-private-networks
         \\                Blocks HTTP requests to private/internal IP addresses
         \\                after DNS resolution. Useful for sandboxing, multi-tenant
@@ -623,11 +662,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
     ;
 
     //                                                                     MAX_HELP_LEN|
-    const usage =
-        \\usage: {0s} command [options] [URL]
-        \\
-        \\Command can be either 'fetch', 'serve', 'mcp' or 'help'
-        \\
+    const fetch_options =
         \\fetch command
         \\Fetches the specified URL
         \\Example: {0s} fetch --dump html https://lightpanda.io/
@@ -686,11 +721,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Defaults to no cookie loading.
         \\
         \\--cookie-jar    Path to a JSON file to save cookies to on exit (write-only).
-        \\                Available for fetch and mcp commands.
         \\                Defaults to no cookie saving.
         \\
-    ++ common_options ++
-        \\
+    ++ common_options;
+
+    //                                                                     MAX_HELP_LEN|
+    const serve_options =
         \\serve command
         \\Starts a websocket CDP server
         \\Example: {0s} serve --host 127.0.0.1 --port 9222
@@ -718,20 +754,37 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--cookie        Path to a JSON file to load cookies from (read-only).
         \\                Defaults to no cookie loading.
         \\
-    ++ common_options ++
-        \\
+    ++ common_options;
+
+    //                                                                     MAX_HELP_LEN|
+    const mcp_options =
         \\mcp command
         \\Starts an MCP (Model Context Protocol) server over stdio
         \\Example: {0s} mcp
         \\
+        \\Options:
         \\--cookie        Path to a JSON file to load cookies from (read-only).
         \\                Defaults to no cookie loading.
         \\
         \\--cookie-jar    Path to a JSON file to save cookies to on exit (write-only).
-        \\                Available for fetch and mcp commands.
         \\                Defaults to no cookie saving.
         \\
-    ++ common_options ++
+    ++ common_options;
+
+    //                                                                     MAX_HELP_LEN|
+    const usage =
+        \\usage: {0s} command [options] [URL]
+        \\
+        \\Command can be either 'fetch', 'serve', 'mcp' or 'help'
+        \\
+    ++ fetch_options ++
+        \\
+        \\
+    ++ serve_options ++
+        \\
+        \\
+    ++ mcp_options ++
+        \\
         \\
         \\version command
         \\Displays the version of {0s}
@@ -740,6 +793,26 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\Displays this message
         \\
     ;
+
+    // When called with a subcommand argument,
+    // print only the relevant subcommand section instead of the full help.
+    switch (self.mode) {
+        .help => |h| if (h.subcommand) |sub| {
+            if (std.mem.eql(u8, sub, "fetch")) {
+                std.debug.print(fetch_options ++ "\n", .{self.exec_name});
+            } else if (std.mem.eql(u8, sub, "serve")) {
+                std.debug.print(serve_options ++ "\n", .{self.exec_name});
+            } else if (std.mem.eql(u8, sub, "mcp")) {
+                std.debug.print(mcp_options ++ "\n", .{self.exec_name});
+            } else {
+                std.debug.print(usage, .{self.exec_name});
+            }
+            if (success) return std.process.cleanExit();
+            std.process.exit(1);
+        },
+        else => {},
+    }
+
     std.debug.print(usage, .{self.exec_name});
     if (success) {
         return std.process.cleanExit();

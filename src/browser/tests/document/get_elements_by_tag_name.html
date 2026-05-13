@@ -23,51 +23,63 @@
 <main>Main</main>
 
 <script id=basic>
-  testing.expectEqual(24, document.getElementsByTagName('*').length);
-  testing.expectEqual(0, document.getElementsByTagName('a').length);
-  testing.expectEqual(0, document.getElementsByTagName('unknown').length);
+  {
+    const all = document.getElementsByTagName('*');
+    testing.expectEqual(24, all.length);
+    testing.expectEqual(false, "values" in all);
+    testing.expectEqual(false, "entries" in all);
+    testing.expectEqual(false, "forEach" in all);
+    testing.expectEqual(0, document.getElementsByTagName('a').length);
+    testing.expectEqual(0, document.getElementsByTagName('unknown').length);
 
-  const divs = document.getElementsByTagName('div');
-  testing.expectEqual(true, divs instanceof HTMLCollection);
-  testing.expectEqual(3, divs.length);
-  testing.expectEqual(3, divs.length);
-  testing.expectEqual('0', divs[0].textContent);
-  testing.expectEqual('0', divs[0].textContent);
-  testing.expectEqual('0', divs[0].textContent);
-  testing.expectEqual('1', divs[1].textContent);
-  testing.expectEqual('2', divs[2].textContent);
-  testing.expectEqual('2', divs[2].textContent);
-  testing.expectEqual('1', divs[1].textContent);
-  testing.expectEqual('1', divs[1].textContent);
-  testing.expectEqual('2', divs[2].textContent);
-  testing.expectEqual('0', divs[0].textContent);
-  testing.expectEqual(undefined, divs[-1]);
-  testing.expectEqual(undefined, divs[4]);
+    const divs = document.getElementsByTagName('div');
+    testing.expectEqual(true, divs instanceof HTMLCollection);
+    testing.expectEqual(3, divs.length);
+    testing.expectEqual(3, divs.length);
+    testing.expectEqual('0', divs[0].textContent);
+    testing.expectEqual('0', divs[0].textContent);
+    testing.expectEqual('0', divs[0].textContent);
+    testing.expectEqual('1', divs[1].textContent);
+    testing.expectEqual('2', divs[2].textContent);
+    testing.expectEqual('2', divs[2].textContent);
+    testing.expectEqual('1', divs[1].textContent);
+    testing.expectEqual('1', divs[1].textContent);
+    testing.expectEqual('2', divs[2].textContent);
+    testing.expectEqual('0', divs[0].textContent);
+    testing.expectEqual(undefined, divs[-1]);
+    testing.expectEqual(undefined, divs[4]);
 
-  testing.expectEqual('2', divs.item(2).textContent);
-  testing.expectEqual(null, divs.item(-3));
-  testing.expectEqual('0', divs.item(0).textContent);
-  testing.expectEqual(null, divs.item(-100));
+    testing.expectEqual('2', divs.item(2).textContent);
+    testing.expectEqual(null, divs.item(-3));
+    testing.expectEqual('0', divs.item(0).textContent);
+    testing.expectEqual(null, divs.item(-100));
+  }
 </script>
 
 <script id=namedItem>
-  testing.expectEqual(null, divs.namedItem('d1'));
+  {
+    const divs = document.getElementsByTagName('div');
+    testing.expectEqual(null, divs.namedItem('d1'));
 
-  const ps = document.getElementsByTagName('p');
-  testing.expectEqual('p1', ps.namedItem('p1').id);
-  testing.expectEqual('p2', ps.namedItem('p2').id);
-  testing.expectEqual('p3', ps.namedItem('p3').id);
-  testing.expectEqual(null, ps.namedItem('p4'));
+    const ps = document.getElementsByTagName('p');
+    testing.expectEqual('p1', ps.namedItem('p1').id);
+    testing.expectEqual('p2', ps.namedItem('p2').id);
+    testing.expectEqual('p3', ps.namedItem('p3').id);
+    testing.expectEqual(null, ps.namedItem('p4'));
 
-  testing.expectEqual('p1', ps['p1'].id);
+    testing.expectEqual('p1', ps['p1'].id);
+  }
 </script>
 
 <script id=iterator>
-  let acc = [];
-  for (let x of ps) {
-    acc.push(x.id);
+  {
+    const ps = document.getElementsByTagName('p');
+    let acc = [];
+    for (let x of ps) {
+      acc.push(x.id);
+    }
+    testing.expectEqual(['p1', 'p2', 'p3'], acc);
   }
-  testing.expectEqual(['p1', 'p2', 'p3'], acc);
 </script>
 
 <script id=extendedTags>

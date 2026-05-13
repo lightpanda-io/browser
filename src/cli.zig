@@ -268,7 +268,17 @@ pub fn Builder(comptime commands: anytype) type {
             inline for (commands) |command| {
                 // Match a command.
                 if (std.mem.eql(u8, cmd_str, command.name)) {
-                    return .{ exec_name, try parseCommand(allocator, command, &args) };
+                    const cmd_parsed = parseCommand(allocator, command, &args) catch |err| {
+                        if (err == error.HelpRequested) {
+                            // <subcommand> help requested, return help <subcommand>
+                            var h = @FieldType(Union, "help"){};
+                            if (@hasField(@FieldType(Union, "help"), "subcommand")) {
+                                h.subcommand = command.name;
+                            }
+                            return .{ exec_name, @unionInit(Union, "help", h) };
+                        } else return err;
+                    };
+                    return .{ exec_name, cmd_parsed };
                 }
             }
 
@@ -291,7 +301,17 @@ pub fn Builder(comptime commands: anytype) type {
 
             inline for (commands) |command| {
                 if (std.mem.eql(u8, @tagName(command_enum), command.name)) {
-                    return .{ exec_name, try parseCommand(allocator, command, &args) };
+                    const cmd_parsed = parseCommand(allocator, command, &args) catch |err| {
+                        if (err == error.HelpRequested) {
+                            // <subcommand> help requested, return help <subcommand>
+                            var h = @FieldType(Union, "help"){};
+                            if (@hasField(@FieldType(Union, "help"), "subcommand")) {
+                                h.subcommand = command.name;
+                            }
+                            return .{ exec_name, @unionInit(Union, "help", h) };
+                        } else return err;
+                    };
+                    return .{ exec_name, cmd_parsed };
                 }
             }
 
@@ -585,6 +605,11 @@ pub fn Builder(comptime commands: anytype) type {
                             }
                         }
                     }
+                }
+
+                // Subcommand help: `lightpanda fetch help` or `lightpanda fetch --help`
+                if (std.mem.eql(u8, option_name, "help") or std.mem.eql(u8, option_name, "--help")) {
+                    return error.HelpRequested;
                 }
 
                 // Encountered an option we don't know of.

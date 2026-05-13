@@ -617,20 +617,44 @@ pub fn replaceChildren(self: *Document, nodes: []const Node.NodeOrText, frame: *
 }
 
 pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
-    // Traverse document in depth-first order to find the topmost (last in document order)
-    // element that contains the point (x, y)
+    // DFS in document order; topmost = last visited element whose rect contains (x, y).
+    //
+    // Faux-layout shortcut: rect.top is calculateDocumentPosition × 5, which is
+    // monotonically increasing in document order. So we maintain a running
+    // preorder counter instead of calling calculateDocumentPosition per node
+    // (which itself is O(N)). Once the counter's y passes the query y, no
+    // later element can contain the point, and we can return.
+    //
+    // We also share a single VisibilityCache across all elements so the
+    // ancestor-walk inside isHidden gets amortized.
     var topmost: ?*Element = null;
 
     const root = self.asNode();
     var stack: std.ArrayList(*Node) = .empty;
     try stack.append(frame.call_arena, root);
 
+    var visibility_cache: Element.VisibilityCache = .{};
+    var preorder_index: f64 = 0;
+
     while (stack.items.len > 0) {
         const node = stack.pop() orelse break;
+        const pos = preorder_index * 5.0;
+
+        if (pos > y) {
+            // Monotonic: no later element has top <= y, so none can contain (x, y).
+            return topmost;
+        }
+
+        preorder_index += 1;
         if (node.is(Element)) |element| {
-            if (element.checkVisibilityCached(null, frame)) {
-                const rect = element.getBoundingClientRectForVisible(frame);
-                if (x >= rect.getLeft() and x <= rect.getRight() and y >= rect.getTop() and y <= rect.getBottom()) {
+            if (element.checkVisibilityCached(&visibility_cache, frame)) {
+                const dims = element.getElementDimensions(frame);
+                // x and y both come from preorder position in our faux layout.
+                const left = pos;
+                const top = pos;
+                const right = pos + dims.width;
+                const bottom = pos + dims.height;
+                if (x >= left and x <= right and y >= top and y <= bottom) {
                     topmost = element;
                 }
             }

@@ -947,6 +947,11 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/WorkerGlobalScope.zig"),
     @import("../webapi/WorkerLocation.zig"),
     @import("../webapi/EventTarget.zig"),
+    @import("../webapi/Event.zig"),
+    @import("../webapi/event/MessageEvent.zig"),
+    @import("../webapi/event/ErrorEvent.zig"),
+    @import("../webapi/event/PromiseRejectionEvent.zig"),
+    @import("../webapi/event/CloseEvent.zig"),
     @import("../webapi/DOMException.zig"),
     @import("../webapi/net/URLSearchParams.zig"),
     @import("../webapi/encoding/TextEncoder.zig"),
@@ -973,9 +978,11 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/AbortController.zig"),
     @import("../webapi/URL.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
+    @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
     @import("../webapi/net/XMLHttpRequest.zig"),
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
     @import("../webapi/FileReader.zig"),
+    @import("../webapi/ImageData.zig"),
     // @import("../webapi/Performance.zig"),
 });
 

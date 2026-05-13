@@ -61,10 +61,7 @@ pub fn init(arena: Allocator, frame: *Frame) EventManager {
 }
 
 pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, opts: RegisterOptions) !void {
-    const listener = self.base.register(target, typ, callback, opts) catch |err| switch (err) {
-        error.SignalAborted, error.DuplicateListener => return,
-        else => return err,
-    };
+    const listener = (try self.base.register(target, typ, callback, opts)) orelse return;
 
     if (listener.typ.eql(comptime .wrap("load"))) {
         if (target._type == .node) {
@@ -321,16 +318,14 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
     // Track dispatch depth for deferred removal
     base.dispatch_depth += 1;
     defer {
-        const dispatch_depth = base.dispatch_depth;
+        base.dispatch_depth -= 1;
         // Only destroy deferred listeners when we exit the outermost dispatch
-        if (dispatch_depth == 1) {
+        if (base.dispatch_depth == 0) {
             for (base.deferred_removals.items) |removal| {
                 removal.list.remove(&removal.listener.node);
                 base.listener_pool.destroy(removal.listener);
             }
             base.deferred_removals.clearRetainingCapacity();
-        } else {
-            base.dispatch_depth = dispatch_depth - 1;
         }
     }
 
@@ -385,6 +380,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
 
         was_handled.* = true;
         event._current_target = current_target;
+        event._in_passive_listener = listener.passive;
 
         // Compute adjusted target for shadow DOM retargeting (only if needed)
         const original_target = event._target;
@@ -393,6 +389,8 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
         }
 
         try listener.run(frame.call_arena, local, event, "listener");
+
+        event._in_passive_listener = false;
 
         // Restore original target (only if we changed it)
         if (event._needs_retargeting) {
