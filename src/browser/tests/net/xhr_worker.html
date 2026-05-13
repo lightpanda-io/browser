@@ -6,7 +6,7 @@
     const state = await testing.async();
     const worker = new Worker('./xhr-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'basic' }), 100);
+    worker.postMessage({ kind: 'basic' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker xhr error: ' + data.err);
@@ -29,7 +29,7 @@
     const state = await testing.async();
     const worker = new Worker('./xhr-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'arraybuffer' }), 100);
+    worker.postMessage({ kind: 'arraybuffer' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker xhr error: ' + data.err);
@@ -48,7 +48,7 @@
     const state = await testing.async();
     const worker = new Worker('./xhr-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    setTimeout(() => worker.postMessage({ kind: 'document_unsupported' }), 100);
+    worker.postMessage({ kind: 'document_unsupported' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker xhr error: ' + data.err);
