@@ -318,6 +318,40 @@ test "applyReplacements: single-line span replaced with multi-line content" {
     );
 }
 
+test "applyReplacements: heals a multi-line EVAL block using iterator span" {
+    const content =
+        "GOTO https://x\n" ++
+        "EVAL '''\n" ++
+        "  const x = 1;\n" ++
+        "  return x;\n" ++
+        "'''\n" ++
+        "CLICK '#after'\n";
+
+    var iter: Command.ScriptIterator = .init(std.testing.allocator, content);
+    const e1 = iter.next().?;
+    try std.testing.expect(e1.command == .goto);
+    const e2 = iter.next().?;
+    try std.testing.expect(e2.command == .eval_js);
+    defer std.testing.allocator.free(e2.command.eval_js);
+    const e3 = iter.next().?;
+    try std.testing.expect(e3.command == .click);
+    try std.testing.expect(iter.next() == null);
+
+    const replacements = [_]Replacement{.{
+        .original_span = e2.raw_span,
+        .new_text = "# [Auto-healed] Original: EVAL block\nCLICK '#healed'\n",
+    }};
+    const out = try applyReplacements(std.testing.allocator, content, &replacements);
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings(
+        "GOTO https://x\n" ++
+            "# [Auto-healed] Original: EVAL block\n" ++
+            "CLICK '#healed'\n" ++
+            "CLICK '#after'\n",
+        out,
+    );
+}
+
 test "formatHealReplacement: single command produces one-line replacement" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
