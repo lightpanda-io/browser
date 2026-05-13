@@ -1094,6 +1094,25 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
         "") else "";
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
+
+    // `eval` is the one tool whose body distinguishes "JS threw" from "JS
+    // returned a value" — both produce text. `callValue` collapses them
+    // (the LLM would then see a JS error as a successful tool result).
+    // Route eval through `callEval` so the JS-error path sets is_error=true,
+    // letting the model self-correct.
+    if (std.mem.eql(u8, tool_name, @tagName(lp.tools.Action.eval))) {
+        const result = lp.tools.callEval(allocator, self.tool_executor.session, &self.tool_executor.node_registry, arguments) catch |err| {
+            const msg = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
+            self.terminal.agentToolDone(tool_name, args_str, false);
+            if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, msg);
+            return .{ .content = msg, .is_error = true };
+        };
+        const capped = capToolOutput(allocator, result.text());
+        self.terminal.agentToolDone(tool_name, args_str, !result.isError());
+        if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, capped);
+        return .{ .content = capped, .is_error = result.isError() };
+    }
+
     if (self.tool_executor.callValue(allocator, tool_name, arguments)) |output| {
         const capped = capToolOutput(allocator, output);
         self.terminal.agentToolDone(tool_name, args_str, true);
