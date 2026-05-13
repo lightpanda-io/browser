@@ -67,7 +67,17 @@ fn enable(cmd: *CDP.Command) !void {
         const mc = frame.window.getModelContext();
         const tools = mc.tools(frame);
         if (tools.len > 0) {
-            try sendToolsAdded(cmd.cdp, bc, frame, tools);
+            var ls: js.Local.Scope = undefined;
+            frame.js.localScope(&ls);
+            defer ls.deinit();
+
+            const writer = ToolWriter{
+                .frame_id = id.toFrameId(frame._frame_id),
+                .tools = tools,
+                .local = &ls.local,
+                .arena = cmd.arena,
+            };
+            try bc.cdp.sendEvent("WebMCP.toolsAdded", .{ .tools = writer }, .{ .session_id = bc.session_id });
         }
     }
 
@@ -197,7 +207,7 @@ fn onPromiseFulfilled(invocation: *Invocation, value: js.Value) anyerror!void {
 
 fn onPromiseRejected(invocation: *Invocation, reason: js.Value) anyerror!void {
     if (invocation.bc.webmcp_invocations.fetchRemove(invocation.id) == null) return;
-    const msg = reason.toStringSliceWithAlloc(invocation.bc.notification_arena) catch "tool rejected";
+    const msg = reason.toStringSlice() catch "tool rejected";
     respondError(invocation.bc.cdp, invocation.bc, invocation, msg) catch |err| {
         log.err(.cdp, "WebMCP rejected", .{ .err = err });
     };
@@ -209,24 +219,13 @@ fn respondCompleted(
     invocation: *Invocation,
     value: js.Value,
 ) !void {
-    const arena = bc.notification_arena;
-    const output_json = value.toJson(arena) catch "null";
     try cdp.sendEvent("WebMCP.toolResponded", .{
         .invocationId = &id.toInvocationId(invocation.id),
         .status = "Completed",
-        .output = RawJson{ .raw = output_json },
+        .output = value,
     }, .{ .session_id = bc.session_id });
     _ = bc.webmcp_invocations.remove(invocation.id);
 }
-
-// Embeds a pre-stringified JSON value into the outer payload.
-const RawJson = struct {
-    raw: []const u8,
-
-    pub fn jsonStringify(self: RawJson, w: anytype) !void {
-        try w.print("{s}", .{self.raw});
-    }
-};
 
 fn respondError(
     cdp: *CDP,
@@ -263,36 +262,15 @@ pub fn onToolAdded(
 }
 
 pub fn onToolRemoved(
-    arena: Allocator,
     bc: *CDP.BrowserContext,
     event: *const Notification.ModelContextToolEvent,
 ) !void {
-    _ = arena;
     const frame_id_str = id.toFrameId(event.frame._frame_id);
     try bc.cdp.sendEvent("WebMCP.toolsRemoved", .{
         .tools = &.{
             .{ .name = event.tool.name, .frameId = &frame_id_str },
         },
     }, .{ .session_id = bc.session_id });
-}
-
-fn sendToolsAdded(
-    cdp: *CDP,
-    bc: *CDP.BrowserContext,
-    frame: *Frame,
-    tools: []const *const ModelContext.Tool,
-) !void {
-    var ls: js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
-    defer ls.deinit();
-
-    const writer = ToolWriter{
-        .frame_id = id.toFrameId(frame._frame_id),
-        .tools = tools,
-        .local = &ls.local,
-        .arena = bc.notification_arena,
-    };
-    try cdp.sendEvent("WebMCP.toolsAdded", .{ .tools = writer }, .{ .session_id = bc.session_id });
 }
 
 const testing = @import("../testing.zig");
