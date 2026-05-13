@@ -1,4 +1,6 @@
 const std = @import("std");
+const lp = @import("lightpanda");
+const log = lp.log;
 const ansi = @import("Terminal.zig").ansi;
 
 const Self = @This();
@@ -83,7 +85,11 @@ pub fn start(self: *Self) void {
 
 fn ensureWorkerLocked(self: *Self) void {
     if (self.thread == null) {
-        self.thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch null;
+        self.thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch |err| blk: {
+            log.warn(.app, "spinner thread spawn failed", .{ .err = @errorName(err) });
+            self.enabled = false;
+            break :blk null;
+        };
     }
 }
 
