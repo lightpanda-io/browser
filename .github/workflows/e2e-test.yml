@@ -291,8 +291,8 @@ jobs:
           wait $VALIDATOR_PID
           exec 3>&-
 
-  cdp-and-hyperfine-bench:
-    name: cdp-and-hyperfine-bench
+  perf-bench:
+    name: perf-bench
     needs: zig-build-release
 
     env:
@@ -419,7 +419,7 @@ jobs:
 
   perf-fmt:
     name: perf-fmt
-    needs: cdp-and-hyperfine-bench
+    needs: perf-bench
 
     # Don't execute on PR
     if: github.event_name != 'pull_request'
