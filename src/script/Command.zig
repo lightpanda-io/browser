@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-pub const stringifyJson = @import("../script.zig").stringifyJson;
 
 pub const TypeArgs = struct {
     selector: []const u8,
@@ -636,7 +635,7 @@ pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: Substitute
     const tcv = (try toToolCallValue(arena, cmd, substitute)) orelse return null;
     return .{
         .name = tcv.name,
-        .args_json = if (tcv.args) |v| stringifyJson(arena, v) else "",
+        .args_json = if (tcv.args) |v| try std.json.Stringify.valueAlloc(arena, v, .{}) else "",
     };
 }
 

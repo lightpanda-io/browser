@@ -93,12 +93,15 @@ fn verifyElementValue(self: *Self, arena: std.mem.Allocator, selector: []const u
 }
 
 fn queryElementProperty(self: *Self, arena: std.mem.Allocator, selector: []const u8, js_property: []const u8) ?[]const u8 {
+    const selector_json = std.json.Stringify.valueAlloc(arena, selector, .{}) catch return null;
     const script = std.fmt.allocPrint(
         arena,
         "(function(){{ var el = document.querySelector({s}); return el ? {s} : null; }})()",
-        .{ Command.stringifyJson(arena, selector), js_property },
+        .{ selector_json, js_property },
     ) catch return null;
-    const result = browser_tools.evalScript(arena, self.session, self.node_registry, script);
-    if (result.is_error) return null;
-    return result.text;
+    const result = browser_tools.evalScript(arena, self.session, self.node_registry, script) catch return null;
+    return switch (result) {
+        .ok => |t| t,
+        .js_error => null,
+    };
 }

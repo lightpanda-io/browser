@@ -96,8 +96,9 @@ pub fn getCurrentUrl(self: *Self) []const u8 {
     return browser_tools.currentUrlOrPlaceholder(self.session);
 }
 
-/// Run a JavaScript expression and return the full result (text + error flag).
-pub fn callEval(self: *Self, arena: std.mem.Allocator, script: []const u8) browser_tools.EvalResult {
+/// Run a JavaScript expression. Operational failures (OOM, missing page)
+/// come back as `ToolError`; JS errors are returned as data inside `EvalResult`.
+pub fn callEval(self: *Self, arena: std.mem.Allocator, script: []const u8) browser_tools.ToolError!browser_tools.EvalResult {
     return browser_tools.evalScript(arena, self.session, &self.node_registry, script);
 }
 
@@ -118,10 +119,10 @@ pub fn callValue(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, a
     return browser_tools.call(arena, self.session, &self.node_registry, tool_name, arguments);
 }
 
-pub fn extractText(self: *Self, arena: std.mem.Allocator, selector: []const u8) browser_tools.EvalResult {
+pub fn extractText(self: *Self, arena: std.mem.Allocator, selector: []const u8) browser_tools.ToolError!browser_tools.EvalResult {
     return browser_tools.extractText(arena, self.session, &self.node_registry, selector);
 }
 
-pub fn extractSchema(self: *Self, arena: std.mem.Allocator, schema_json: []const u8) browser_tools.EvalResult {
+pub fn extractSchema(self: *Self, arena: std.mem.Allocator, schema_json: []const u8) browser_tools.ToolError!browser_tools.EvalResult {
     return browser_tools.extractSchema(arena, self.session, &self.node_registry, schema_json);
 }

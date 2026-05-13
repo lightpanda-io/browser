@@ -164,9 +164,11 @@ fn dispatchBrowserTool(
 
     // JS errors are returned as isError tool results, not protocol errors
     if (action == .eval) {
-        const result = browser_tools.callEval(arena, server.session, &server.node_registry, arguments);
-        if (!result.is_error) recordIfActive(server, name, arguments);
-        return sendToolResultText(server, id, result.text, result.is_error);
+        const result = browser_tools.callEval(arena, server.session, &server.node_registry, arguments) catch |err| {
+            return sendToolResultText(server, id, @errorName(err), true);
+        };
+        if (!result.isError()) recordIfActive(server, name, arguments);
+        return sendToolResultText(server, id, result.text(), result.isError());
     }
 
     const result = browser_tools.call(arena, server.session, &server.node_registry, name, arguments) catch |err| {
@@ -266,8 +268,10 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
             return sendToolResultText(server, id, "comment", false);
         },
         .extract => |sel| {
-            const result = browser_tools.extractText(arena, server.session, &server.node_registry, sel);
-            return sendToolResultText(server, id, result.text, result.is_error);
+            const result = browser_tools.extractText(arena, server.session, &server.node_registry, sel) catch |err| {
+                return sendToolResultText(server, id, @errorName(err), true);
+            };
+            return sendToolResultText(server, id, result.text(), result.isError());
         },
         else => {},
     }
@@ -284,8 +288,10 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     };
 
     if (action == .eval) {
-        const result = browser_tools.callEval(arena, server.session, &server.node_registry, tcv.args);
-        return sendToolResultText(server, id, result.text, result.is_error);
+        const result = browser_tools.callEval(arena, server.session, &server.node_registry, tcv.args) catch |err| {
+            return sendToolResultText(server, id, @errorName(err), true);
+        };
+        return sendToolResultText(server, id, result.text(), result.isError());
     }
 
     const result = browser_tools.call(arena, server.session, &server.node_registry, tcv.name, tcv.args) catch |err| {

@@ -426,19 +426,27 @@ fn handleSlash(self: *Agent, body: []const u8) bool {
     };
 
     if (std.mem.eql(u8, schema.tool_name, @tagName(lp.tools.Action.eval))) {
-        // callEval surfaces the is_error flag separately from the text;
-        // tool_executor.call discards it.
+        // callEval surfaces JS errors separately from operational errors;
+        // tool_executor.call collapses them.
         const eval_script = extractEvalScript(aa, args_json) catch {
             self.terminal.printError("eval requires a `script` argument.");
             return false;
         };
         self.terminal.beginTool(schema.tool_name, rest);
-        const result = self.tool_executor.callEval(aa, eval_script);
-        self.terminal.endTool(!result.is_error);
-        if (result.is_error) {
-            self.terminal.printErrorFmt("eval: {s}", .{result.text});
-        } else {
-            self.terminal.printToolResult(schema.tool_name, result.text);
+        const result = self.tool_executor.callEval(aa, eval_script) catch |err| {
+            self.terminal.endTool(false);
+            self.terminal.printErrorFmt("eval: {s}", .{@errorName(err)});
+            return false;
+        };
+        switch (result) {
+            .ok => |text| {
+                self.terminal.endTool(true);
+                self.terminal.printToolResult(schema.tool_name, text);
+            },
+            .js_error => |text| {
+                self.terminal.endTool(false);
+                self.terminal.printErrorFmt("eval: {s}", .{text});
+            },
         }
         return false;
     }

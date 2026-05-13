@@ -352,12 +352,23 @@ pub const ToolError = error{
     OutOfMemory,
 };
 
-pub const EvalResult = struct {
-    text: []const u8,
-    is_error: bool = false,
+/// Outcome of running JavaScript against the page. Operational failures
+/// (OOM, missing page) come out as Zig errors on the enclosing `!EvalResult`;
+/// this union only distinguishes two normal outcomes: the script ran to a
+/// value (`ok`), or V8 caught a throw (`js_error`). The text in `js_error`
+/// is the formatted V8 error — the LLM consumes it to self-correct.
+pub const EvalResult = union(enum) {
+    ok: []const u8,
+    js_error: []const u8,
 
-    pub fn err(text: []const u8) EvalResult {
-        return .{ .text = text, .is_error = true };
+    pub fn text(self: EvalResult) []const u8 {
+        return switch (self) {
+            .ok, .js_error => |t| t,
+        };
+    }
+
+    pub fn isError(self: EvalResult) bool {
+        return self == .js_error;
     }
 };
 
@@ -428,7 +439,7 @@ pub fn call(
         .selectOption => execSelectOption(arena, session, registry, arguments),
         .setChecked => execSetChecked(arena, session, registry, arguments),
         .findElement => execFindElement(arena, session, registry, arguments),
-        .eval => execEval(arena, session, registry, arguments).text,
+        .eval => (try execEval(arena, session, registry, arguments)).text(),
         .getEnv => execGetEnv(arena, arguments),
         .consoleLogs => execConsoleLogs(arena, session),
         .getUrl => execGetUrl(session),
@@ -441,7 +452,7 @@ pub fn callEval(
     session: *lp.Session,
     registry: *CDPNode.Registry,
     arguments: ?std.json.Value,
-) EvalResult {
+) ToolError!EvalResult {
     return execEval(arena, session, registry, arguments);
 }
 
@@ -453,9 +464,9 @@ pub fn evalScript(
     session: *lp.Session,
     registry: *CDPNode.Registry,
     script: []const u8,
-) EvalResult {
-    const z = arena.dupeZ(u8, script) catch return .err("Error: out of memory");
-    const page = ensurePage(session, registry, null, null, null) catch return .err("Error: page not loaded");
+) ToolError!EvalResult {
+    const z = try arena.dupeZ(u8, script);
+    const page = try ensurePage(session, registry, null, null, null);
     return runEval(arena, page, z);
 }
 
@@ -467,14 +478,15 @@ pub fn extractText(
     session: *lp.Session,
     registry: *CDPNode.Registry,
     selector: []const u8,
-) EvalResult {
-    const eval_script = std.fmt.allocPrintSentinel(
+) ToolError!EvalResult {
+    const selector_json = try std.json.Stringify.valueAlloc(arena, selector, .{});
+    const eval_script = try std.fmt.allocPrintSentinel(
         arena,
         "JSON.stringify(Array.from(document.querySelectorAll({s})).map(el => el.textContent.trim()))",
-        .{lp.script.stringifyJson(arena, selector)},
+        .{selector_json},
         0,
-    ) catch return .err("Error: out of memory");
-    const page = ensurePage(session, registry, null, null, null) catch return .err("Error: page not loaded");
+    );
+    const page = try ensurePage(session, registry, null, null, null);
     return runEval(arena, page, eval_script);
 }
 
@@ -492,17 +504,14 @@ pub fn extractSchema(
     session: *lp.Session,
     registry: *CDPNode.Registry,
     schema_json: []const u8,
-) EvalResult {
+) ToolError!EvalResult {
     const trimmed = std.mem.trim(u8, schema_json, &std.ascii.whitespace);
-    if (trimmed.len == 0 or trimmed[0] != '{') {
-        return .err("Error: EXTRACT schema must be a JSON object");
-    }
-    const valid = std.json.validate(arena, schema_json) catch return .err("Error: out of memory");
-    if (!valid) return .err("Error: invalid EXTRACT schema JSON");
+    if (trimmed.len == 0 or trimmed[0] != '{') return error.InvalidParams;
+    const valid = try std.json.validate(arena, schema_json);
+    if (!valid) return error.InvalidParams;
 
-    const script = std.mem.concatWithSentinel(arena, u8, &.{ schema_walker_prefix, schema_json, schema_walker_suffix }, 0) catch
-        return .err("Error: out of memory");
-    const page = ensurePage(session, registry, null, null, null) catch return .err("Error: page not loaded");
+    const script = try std.mem.concatWithSentinel(arena, u8, &.{ schema_walker_prefix, schema_json, schema_walker_suffix }, 0);
+    const page = try ensurePage(session, registry, null, null, null);
     return runEval(arena, page, script);
 }
 
@@ -723,22 +732,19 @@ fn execDetectForms(arena: std.mem.Allocator, session: *lp.Session, registry: *CD
     return renderJson(arena, forms_data);
 }
 
-fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) EvalResult {
+fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!EvalResult {
     const Params = struct {
         script: [:0]const u8,
         url: ?[:0]const u8 = null,
         timeout: ?u32 = null,
         waitUntil: ?lp.Config.WaitUntil = null,
     };
-    const args = parseArgs(Params, arena, arguments) catch |err| return .err(switch (err) {
-        error.OutOfMemory => "Error: out of memory",
-        error.InvalidParams => "Error: missing or invalid 'script' argument",
-    });
-    const page = ensurePage(session, registry, args.url, args.timeout, args.waitUntil) catch return .err("Error: page not loaded");
+    const args = try parseArgs(Params, arena, arguments);
+    const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
     return runEval(arena, page, args.script);
 }
 
-fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) EvalResult {
+fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) ToolError!EvalResult {
     var ls: lp.js.Local.Scope = undefined;
     page.js.localScope(&ls);
     defer ls.deinit();
@@ -750,12 +756,24 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) Eval
     const js_result = ls.local.compileAndRun(script, null) catch |err| {
         const caught = try_catch.caughtOrError(arena, err);
         var aw: std.Io.Writer.Allocating = .init(arena);
-        caught.format(&aw.writer) catch return .err("Error: out of memory");
-        return .{ .text = aw.written(), .is_error = true };
+        caught.format(&aw.writer) catch |fmt_err| switch (fmt_err) {
+            error.WriteFailed => return error.OutOfMemory,
+        };
+        return .{ .js_error = aw.written() };
     };
 
-    const text = js_result.toStringSliceWithAlloc(arena) catch return .err("Error: out of memory");
-    return .{ .text = text };
+    const text = js_result.toStringSliceWithAlloc(arena) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            const caught = try_catch.caughtOrError(arena, err);
+            var aw: std.Io.Writer.Allocating = .init(arena);
+            caught.format(&aw.writer) catch |fmt_err| switch (fmt_err) {
+                error.WriteFailed => return error.OutOfMemory,
+            };
+            return .{ .js_error = aw.written() };
+        },
+    };
+    return .{ .ok = text };
 }
 
 /// Resolve a target element from either a CSS selector or a backendNodeId.
