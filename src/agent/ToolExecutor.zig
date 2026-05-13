@@ -36,6 +36,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App) !*Self {
         .tool_schema_arena = std.heap.ArenaAllocator.init(allocator),
         .tools = &.{},
     };
+    errdefer self.tool_schema_arena.deinit();
+    errdefer self.node_registry.deinit();
 
     self.tools = try buildTools(self.tool_schema_arena.allocator());
 
