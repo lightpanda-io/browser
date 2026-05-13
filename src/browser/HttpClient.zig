@@ -611,7 +611,18 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
             return err;
         };
     }
-    _ = try self.perform(0);
+    // Drive curl_multi_perform so bytes hit the wire now, but DON'T call
+    // processMessages — that's what reads curl_multi_info_read and fires
+    // header/data/done callbacks. If the transfer completed inside the
+    // perform above (fast/local server, cached conn) we'd otherwise run
+    // user callbacks synchronously from inside the JS task that called
+    // e.g. xhr.send(), violating event-loop ordering. The next tick's
+    // perform() will drain the done-message and fire callbacks then.
+    {
+        self.performing = true;
+        defer self.performing = false;
+        _ = try self.handles.perform();
+    }
 }
 
 pub const PerformStatus = enum {
