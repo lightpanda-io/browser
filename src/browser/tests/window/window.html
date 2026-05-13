@@ -403,3 +403,12 @@
     testing.onload(() => testing.expectEqual(2, unhandledCalled));
   }
 </script>
+
+<iframe id=iframe></iframe>
+<script id=window>
+  {
+    const iframe = $('#iframe');
+    testing.expectEqual(null, window.frameElement);
+    testing.expectEqual(iframe, iframe.contentWindow.frameElement);
+  }
+</script>
