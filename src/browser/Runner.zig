@@ -212,7 +212,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
                 },
             }
 
-            if (http_active == 0 and http_client.ws_active == 0 and (comptime is_cdp == false)) {
+            if (http_active == 0 and http_client.ws_active == 0 and http_client.queue.first == null and (comptime is_cdp == false)) {
                 // we don't need to consider http_client.intercepted here
                 // because is_cdp is false, and that can only be
                 // the case when interception isn't possible.
