@@ -110,7 +110,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
     const input_str = try std.json.Stringify.valueAlloc(cmd.arena, params.input, .{});
 
     const inv_id = bc.invocation_id_gen.incr();
-    const inv_id_str = &id.toInvocationId(inv_id);
+    const inv_id_str = id.toInvocationId(inv_id);
 
     const invocation = try bc.arena.create(Invocation);
     invocation.* = .{
@@ -124,11 +124,10 @@ fn invokeTool(cmd: *CDP.Command) !void {
     // Send toolInvoked event before we run the JS, so the client sees
     // them in order even if the tool resolves synchronously.
     const session_id = bc.session_id;
-    const frame_id_str = id.toFrameId(frame_id);
     try cmd.sendEvent("WebMCP.toolInvoked", .{
         .toolName = tool.name,
-        .frameId = &frame_id_str,
-        .invocationId = inv_id_str,
+        .frameId = id.toFrameId(frame_id),
+        .invocationId = &inv_id_str,
         .input = input_str,
     }, .{ .session_id = session_id });
 
@@ -140,7 +139,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
 
     const input_value = local.parseJSON(input_str) catch {
         try respondError(cmd.cdp, bc, invocation, "failed to parse input JSON");
-        return cmd.sendResult(.{ .invocationId = inv_id_str }, .{});
+        return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     };
 
     const callback = local.toLocal(tool.execute);
@@ -155,13 +154,13 @@ fn invokeTool(cmd: *CDP.Command) !void {
     const result = callback.tryCall(js.Value, .{ input_value, client_value }, &caught) catch {
         const msg = caught.exception orelse "tool threw";
         try respondError(cmd.cdp, bc, invocation, msg);
-        return cmd.sendResult(.{ .invocationId = inv_id_str }, .{});
+        return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     };
 
     // If the tool returned a non-promise value, settle immediately.
     if (!result.isPromise()) {
         try respondCompleted(cmd.cdp, bc, invocation, result);
-        return cmd.sendResult(.{ .invocationId = inv_id_str }, .{});
+        return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     }
 
     const promise = js.Promise{ .local = local, .handle = @ptrCast(result.handle) };
@@ -171,10 +170,10 @@ fn invokeTool(cmd: *CDP.Command) !void {
         // If we couldn't chain, settle as error. Map entry will be
         // cleaned up below.
         try respondError(cmd.cdp, bc, invocation, "promise chain failed");
-        return cmd.sendResult(.{ .invocationId = inv_id_str }, .{});
+        return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     };
 
-    return cmd.sendResult(.{ .invocationId = inv_id_str }, .{});
+    return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
 }
 
 fn cancelInvocation(cmd: *CDP.Command) !void {
@@ -265,10 +264,9 @@ pub fn onToolRemoved(
     bc: *CDP.BrowserContext,
     event: *const Notification.ModelContextToolEvent,
 ) !void {
-    const frame_id_str = id.toFrameId(event.frame._frame_id);
     try bc.cdp.sendEvent("WebMCP.toolsRemoved", .{
         .tools = &.{
-            .{ .name = event.tool.name, .frameId = &frame_id_str },
+            .{ .name = event.tool.name, .frameId = id.toFrameId(event.frame._frame_id) },
         },
     }, .{ .session_id = bc.session_id });
 }
