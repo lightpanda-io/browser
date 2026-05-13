@@ -44,7 +44,6 @@ pub const URL_BASE = "chrome://newtab/";
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
-const TargetIdGen = Incrementing(u32, "TID");
 const SessionIdGen = Incrementing(u32, "SID");
 const BrowserContextIdGen = Incrementing(u32, "BID");
 
@@ -62,7 +61,6 @@ browser: Browser,
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
 
-target_id_gen: TargetIdGen = .{},
 session_id_gen: SessionIdGen = .{},
 browser_context_id_gen: BrowserContextIdGen = .{},
 
