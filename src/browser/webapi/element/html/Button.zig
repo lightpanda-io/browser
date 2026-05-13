@@ -144,19 +144,7 @@ pub fn setFormAction(self: *Button, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getFormEnctype(self: *const Button) []const u8 {
-    const enctype = self.asConstElement().getAttributeSafe(comptime .wrap("formenctype")) orelse return "";
-
-    if (std.ascii.eqlIgnoreCase(enctype, "multipart/form-data")) {
-        return "multipart/form-data";
-    }
-    if (std.ascii.eqlIgnoreCase(enctype, "text/plain")) {
-        return "text/plain";
-    }
-    if (std.ascii.eqlIgnoreCase(enctype, "application/x-www-form-urlencoded")) {
-        return "application/x-www-form-urlencoded";
-    }
-    // invalid -> invalid-value default state (application/x-www-form-urlencoded)
-    return "application/x-www-form-urlencoded";
+    return Form.normalizeEnctype(self.asConstElement().getAttributeSafe(comptime .wrap("formenctype")), "");
 }
 
 pub fn setFormEnctype(self: *Button, value: []const u8, frame: *Frame) !void {
@@ -164,16 +152,7 @@ pub fn setFormEnctype(self: *Button, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getFormMethod(self: *const Button) []const u8 {
-    const method = self.asConstElement().getAttributeSafe(comptime .wrap("formmethod")) orelse return "";
-
-    if (std.ascii.eqlIgnoreCase(method, "post")) {
-        return "post";
-    }
-    if (std.ascii.eqlIgnoreCase(method, "dialog")) {
-        return "dialog";
-    }
-    // "get" or invalid -> invalid-value default state (get)
-    return "get";
+    return Form.normalizeMethod(self.asConstElement().getAttributeSafe(comptime .wrap("formmethod")), "");
 }
 
 pub fn setFormMethod(self: *Button, value: []const u8, frame: *Frame) !void {
