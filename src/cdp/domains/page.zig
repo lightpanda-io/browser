@@ -645,7 +645,7 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     // frame's JS context for inspector.contextCreated prevents re-registering
     // the root context under a new id (which silently invalidates the
     // previous id on the V8 side).
-    const frame = bc.session.findFrameByFrameId(event.frame_id) orelse root_frame;
+    const frame = bc.session.findFrameByFrameId(event.frame_id) orelse return error.FrameNotFound;
 
     // frameNavigated event
     try cdp.sendEvent("Page.frameNavigated", .{
