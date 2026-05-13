@@ -169,7 +169,6 @@ fn httpDataCallback(response: HttpClient.Response, data: []const u8) !void {
 fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Worker = @ptrCast(@alignCast(ctx));
     self._http_response = null;
-    self._script_loaded = true;
 
     const url = self._url;
     const script = self._script_buffer.items;
@@ -185,6 +184,13 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 }
 
 fn loadInitialScript(self: *Worker, script: []const u8) !void {
+    // Mark loaded BEFORE eval: messages received during eval (e.g. while
+    // an importScripts() call pumps the CDP socket) should be scheduled
+    // normally, not re-buffered. drainPendingMessages below picks up any
+    // messages that arrived strictly before this point.
+    self._script_loaded = true;
+    defer self._worker_scope.drainPendingMessages();
+
     var ls: js.Local.Scope = undefined;
     self._worker_scope.js.localScope(&ls);
     defer ls.deinit();
@@ -226,6 +232,13 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
         .url = self._worker_scope.url,
         .err = err,
     });
+
+    // The worker will never load and onmessage will never be registered.
+    // Drain any buffered messages so they get dispatched (and silently
+    // dropped at the "no listener" check) rather than accumulating until
+    // worker teardown. Future postMessages then schedule normally.
+    self._script_loaded = true;
+    self._worker_scope.drainPendingMessages();
 
     self.fireErrorEvent(@errorName(err), null);
 }
