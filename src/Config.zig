@@ -291,7 +291,7 @@ pub fn disableSubframes(self: *const Config) bool {
 
 pub fn disableWorkers(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.disable_workers,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_workers,
         else => unreachable,
     };
 }

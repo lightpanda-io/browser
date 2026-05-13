@@ -1037,8 +1037,7 @@ fn lookupLpEnv(name: []const u8) ?[:0]const u8 {
 }
 
 fn execConsoleLogs(arena: std.mem.Allocator, session: *lp.Session) ToolError![]const u8 {
-    const page = try requireFrame(session);
-    const text = page.drainConsoleMessages();
+    const text = session.drainConsoleMessages();
     if (text.len == 0) return "No console messages.";
     return arena.dupe(u8, text) catch ToolError.InternalError;
 }

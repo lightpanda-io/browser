@@ -89,6 +89,13 @@ subframe_loading_enabled: bool = true,
 // session init; the LP.configureLoading CDP method can flip it per-session.
 worker_loading_enabled: bool = true,
 
+// Session-scoped capture of console.* output for the `consoleLogs` MCP tool.
+// Fed by an `console_message` notification listener; drained on tool call.
+// Capped at `max_console_bytes` so a runaway page can't grow it unbounded.
+_console_messages: std.Io.Writer.Allocating,
+
+const max_console_bytes = 64 * 1024;
+
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
     const arena_pool = browser.arena_pool;
@@ -110,10 +117,16 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         // CLI defaults; LP.configureLoading can flip these per-session.
         .subframe_loading_enabled = !browser.app.config.disableSubframes(),
         .worker_loading_enabled = !browser.app.config.disableWorkers(),
+        ._console_messages = .init(allocator),
     };
+    errdefer self._console_messages.deinit();
+
+    try notification.register(.console_message, self, onConsoleMessage);
 }
 
 pub fn deinit(self: *Session) void {
+    self.notification.unregister(.console_message, self);
+
     if (self._pending != null) {
         self.discardPendingPage();
     }
@@ -132,7 +145,36 @@ pub fn deinit(self: *Session) void {
     self.fc_identity_pool.deinit();
 
     self.storage_shed.deinit(self.browser.app.allocator);
+    self._console_messages.deinit();
     self.arena_pool.release(self.arena);
+}
+
+fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+    const self: *Session = @ptrCast(@alignCast(ctx));
+    const aw = &self._console_messages;
+    const start = aw.written().len;
+    if (start >= max_console_bytes) return;
+    appendConsoleMessageInner(&aw.writer, msg) catch {
+        aw.shrinkRetainingCapacity(start);
+    };
+}
+
+fn appendConsoleMessageInner(w: *std.Io.Writer, msg: *const Notification.ConsoleMessage) !void {
+    try w.print("[{s}] ", .{@tagName(msg.type)});
+    for (msg.values, 0..) |value, i| {
+        if (i > 0) try w.writeAll(" ");
+        try value.format(w);
+    }
+    try w.writeByte('\n');
+}
+
+/// Drains and clears the buffered console output. The returned slice is valid
+/// until the next dispatched `console_message` reuses the backing storage,
+/// so callers must consume or copy it before that happens.
+pub fn drainConsoleMessages(self: *Session) []const u8 {
+    const text = self._console_messages.written();
+    self._console_messages.clearRetainingCapacity();
+    return text;
 }
 
 pub fn processQueuedDestroyed(self: *Session) void {
