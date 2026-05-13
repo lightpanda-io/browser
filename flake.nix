@@ -83,7 +83,7 @@
             demoRepo = pkgs.fetchFromGitHub {
               owner = "lightpanda-io";
               repo = "demo";
-              rev = "main";
+              rev = "6120b426dd3bb5d0b06512efe735f2e2778caa15";
               sha256 = "sha256-TaLi1uIpM+fUk8LFVnPOZM6rKbdHKmB2FcofvGHtcpM=";
             };
 
@@ -96,7 +96,7 @@
             wptRepo = pkgs.fetchFromGitHub {
               owner = "lightpanda-io";
               repo = "wpt";
-              rev = "fork";
+              rev = "8c4054c7d2662e5b695832c6a239a1e0ba2af86b";
               sha256 = "sha256-235E75oIQmYH4eyHRqCP3xXr2TRt1j2FRB6A2Iiy5Q8=";
             };
 
