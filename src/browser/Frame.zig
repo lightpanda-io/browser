@@ -154,6 +154,8 @@ _to_load: *std.ArrayList(*Element.Html) = undefined,
 _style_manager: StyleManager,
 _script_manager: ScriptManager,
 
+_http_owner: HttpClient.Owner = .{},
+
 // List of active live ranges (for mutation updates per DOM spec)
 _live_ranges: std.DoublyLinkedList = .{},
 
@@ -405,8 +407,7 @@ pub fn deinit(self: *Frame) void {
 
     const browser = page.session.browser;
 
-    // don't abort pending frames.
-    browser.http_client.abortFrame(self._frame_id, .{});
+    browser.http_client.abortOwner(&self._http_owner);
 
     browser.env.destroyContext(self.js);
 
@@ -634,7 +635,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     // Session.initiateRootNavigation) flags both the notification and the
     // HTTP request itself: CDP skips its node-registry reset until commit,
     // and the in-flight transfer survives the OLD page's frame.deinit which
-    // calls http_client.abortFrame(frame_id) on the shared frame_id during
+    // calls http_client.abortList() on the shared frame_id during
     // commitPendingPage.
     const is_pending_root = self._page._state == .pending;
 
@@ -658,7 +659,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     session.navigation._current_navigation_kind = opts.kind;
 
-    http_client.request(.{
+    self.makeRequest(.{
         .ctx = self,
         .params = .{
             .url = self.url,
@@ -671,7 +672,6 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             .cookie_origin = self.url,
             .resource_type = .document,
             .notification = self._session.notification,
-            .protect_from_abort = is_pending_root,
         },
         .header_callback = frameHeaderDoneCallback,
         .data_callback = frameDataCallback,
@@ -762,7 +762,9 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         .type = target._type,
     });
 
-    session.browser.http_client.abortFrame(target._frame_id, .{});
+    // Navigation: kill in-flight HTTP transfers, but leave WebSockets
+    // alive — they're cross-document by spec.
+    session.browser.http_client.abortRequests(&target._http_owner);
 
     // Capture the originating frame's URL as the Referer for this
     // navigation. The originator's frame may be torn down before navigate()
@@ -821,6 +823,19 @@ fn canScheduleNavigation(self: *Frame, new_target_type: NavigationType) bool {
         .form => false, // nothing is higher priority than a form
         .script => new_target_type == .form, // a form is higher priority than a script
     };
+}
+
+pub fn makeRequest(self: *Frame, req: HttpClient.Request) !void {
+    return self._session.browser.http_client.request(req, &self._http_owner);
+}
+
+// Synchronously abort every transfer and WebSocket owned by this frame
+// and all of its descendants.
+pub fn abortTransfers(self: *Frame) void {
+    for (self.child_frames.items) |child| {
+        child.abortTransfers();
+    }
+    self._session.browser.http_client.abortOwner(&self._http_owner);
 }
 
 pub fn documentIsLoaded(self: *Frame) void {
@@ -973,20 +988,8 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
     // frame_remove (clears OLD V8 context group + CDP node_registry),
     // tears down the OLD page, flips the pointer, and dispatches
     // frame_created against the new (now active) frame.
-    //
-    // The OLD page's frame.deinit calls http_client.abortFrame(frame_id) on
-    // the frame_id it shares with the (now-active) pending page; our transfer
-    // survives because Session.initiateRootNavigation flagged the request
-    // protect_from_abort, which abortFrame's default .normal scope honors.
-    // Once we are past commit, that protection is no longer needed and may
-    // interfere with subsequent aborts (e.g. another navigation while we are
-    // still streaming the body), so clear it.
     if (self._page._state == .pending) {
         try self._session.commitPendingPage();
-        switch (response.inner) {
-            .transfer => |t| t.req.params.protect_from_abort = false,
-            .fulfilled, .cached => {},
-        }
     }
 
     const response_url = response.url();

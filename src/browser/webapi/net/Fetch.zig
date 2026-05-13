@@ -99,7 +99,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     // httpErrorCallback by Client.request, which rejects the promise and
     // releases response._arena. Propagating the error from here would also
     // fire the `errdefer response.deinit` above and double-free the arena.
-    http_client.request(.{
+    exec.makeRequest(.{
         .ctx = fetch,
         .params = .{
             .url = request._url,

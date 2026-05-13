@@ -74,12 +74,20 @@ _active: ?*Page = null,
 // In-flight root navigation
 _pending: ?*Page = null,
 
+_queued_destroy: std.ArrayList(*Page) = .{},
+
 // IDs. Kept at Session level so IDs can remain unique across Page replacements.
 frame_id_gen: u32 = 0,
 loader_id_gen: u32 = 0,
 
 // configuration (or CDP command) to disable iframe loading
 subframe_loading_enabled: bool = true,
+
+// configuration (or CDP command) to disable Web Worker loading. When false,
+// `new Worker(url)` returns a Worker object whose script is never fetched
+// and never evaluated. Set from the `--disable-workers` CLI flag at
+// session init; the LP.configureLoading CDP method can flip it per-session.
+worker_loading_enabled: bool = true,
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
@@ -99,8 +107,9 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .notification = notification,
         .fc_identity_pool = .init(allocator),
         .cookie_jar = storage.Cookie.Jar.init(allocator),
-        // CLI default; LP.configureLoading can flip this per-session.
+        // CLI defaults; LP.configureLoading can flip these per-session.
         .subframe_loading_enabled = !browser.app.config.disableSubframes(),
+        .worker_loading_enabled = !browser.app.config.disableWorkers(),
     };
 }
 
@@ -111,6 +120,8 @@ pub fn deinit(self: *Session) void {
     if (self._active != null) {
         self.removePage();
     }
+    self.processQueuedDestroyed();
+
     self.cookie_jar.deinit();
 
     // Force V8 to flush any remaining weak callbacks while
@@ -122,6 +133,14 @@ pub fn deinit(self: *Session) void {
 
     self.storage_shed.deinit(self.browser.app.allocator);
     self.arena_pool.release(self.arena);
+}
+
+pub fn processQueuedDestroyed(self: *Session) void {
+    for (self._queued_destroy.items) |page| {
+        page.deinit();
+        self.browser.page_pool.destroy(page);
+    }
+    self._queued_destroy.clearRetainingCapacity();
 }
 
 // True iff there is an active Page. CDP / external callers should use this
@@ -141,8 +160,7 @@ fn allocatePage(self: *Session, frame_id: u32) !*Page {
 
 // Tear down and free a Page allocated via allocatePage.
 fn destroyPage(self: *Session, page: *Page) void {
-    page.deinit();
-    self.browser.page_pool.destroy(page);
+    self._queued_destroy.append(self.arena, page) catch @panic("OOM");
 }
 
 // Tear down the currently-active Page. Dispatches `frame_remove` first
@@ -163,6 +181,8 @@ fn tearDownActivePage(self: *Session) void {
         }
         return;
     };
+
+    page.frame.abortTransfers();
     self.destroyPage(page);
     self._active = null;
     self.navigation.onRemoveFrame();
@@ -538,12 +558,6 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
 //      response for the request we are committing was just inserted by
 //      onHttpResponseHeadersDone moments earlier and must survive).
 //   4. pending_page = null. Order matters: step 3 reads it.
-//   5. OLD Page.deinit + free LAST. Its frame.deinit calls
-//      http_client.abortFrame(frame_id) on the frame_id that the OLD
-//      page shares with the now-active pending page; the in-flight
-//      navigation transfer (whose callback we are inside) is shielded
-//      by protect_from_abort, which abortFrame's default .normal scope
-//      honors. The caller clears the flag AFTER we return.
 pub fn commitPendingPage(self: *Session) !void {
     const pending = self._pending orelse {
         lp.assert(false, "Session.commitPendingPage - no pending page", .{});
@@ -580,10 +594,12 @@ pub fn commitPendingPage(self: *Session) !void {
 
     // Step 5: tear down the OLD page LAST. Anything in steps 1-4 that
     // needed to walk the OLD page's state (CDP node_registry, inspector
-    // context group, isolated worlds) has already done so. The OLD page's
-    // frame.deinit calls http_client.abortFrame(frame_id) on the frame_id
-    // shared with the pending page; the in-flight transfer survives via
-    // protect_from_abort.
+    // context group, isolated worlds) has already done so. Kill any
+    // remaining transfers/websockets synchronously before queuing for
+    // deferred destroy — otherwise a still-inflight transfer firing its
+    // done_callback after this point would re-enter against the new
+    // _active and trip the half-torn-down session.
+    old_active.frame.abortTransfers();
     self.destroyPage(old_active);
 }
 
@@ -597,8 +613,9 @@ pub fn discardPendingPage(self: *Session) void {
         log.debug(.browser, "discard pending page", .{});
     }
 
-    // Force abort all inflight queries.
-    self.browser.http_client.abortFrame(page.frame._frame_id, .{ .scope = .full });
+    // Force abort all inflight queries (HTTP + WS) before queuing for
+    // deferred destroy.
+    page.frame.abortTransfers();
 
     self._pending = null;
     self.destroyPage(page);

@@ -53,6 +53,8 @@ pub fn deinit(self: *Scheduler) void {
 }
 
 pub fn reset(self: *Scheduler) void {
+    finalizeTasks(&self.low_priority);
+    finalizeTasks(&self.high_priority);
     self.low_priority.clearRetainingCapacity();
     self.high_priority.clearRetainingCapacity();
 }

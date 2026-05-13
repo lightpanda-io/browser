@@ -58,6 +58,8 @@ _conn: ?*http.Connection,
 _http_client: *HttpClient,
 _req_headers: http.Headers,
 
+_owner_node: std.DoublyLinkedList.Node = .{},
+
 // buffered outgoing messages
 _send_queue: std.ArrayList(Message) = .empty,
 _send_offset: usize = 0,
@@ -148,6 +150,7 @@ pub fn init(url: []const u8, protocols: [][]const u8, frame: *Frame) !*WebSocket
     });
     conn.transport = .{ .websocket = self };
     try http_client.trackConn(conn);
+    frame._http_owner.addWS(self);
 
     if (comptime IS_DEBUG) {
         log.info(.websocket, "connecting", .{ .url = url });
@@ -233,6 +236,7 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
 
 fn cleanup(self: *WebSocket) void {
     if (self._conn) |conn| {
+        self._frame._http_owner.removeWS(self);
         self._http_client.removeConn(conn);
         self._req_headers.deinit();
         self._conn = null;
