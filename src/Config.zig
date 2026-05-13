@@ -836,6 +836,9 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                With -i: replays if present, then enters the REPL and
         \\                appends any new commands to the file (creating it if
         \\                it does not yet exist).
+        \\                Caution: .lp files can contain EVAL blocks that run
+        \\                arbitrary JavaScript in the page. Only replay scripts
+        \\                you trust, the same way you would a shell script.
         \\
         \\Options:
         \\--provider      The AI provider: anthropic, openai, gemini, or ollama.

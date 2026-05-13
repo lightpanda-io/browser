@@ -123,6 +123,22 @@ one_shot_attachments: ?[]const []const u8,
 slash_schemas: []const SlashCommand.SchemaInfo,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Self {
+    if (opts.task != null and opts.script_file != null) {
+        log.fatal(.app, "conflicting flags", .{
+            .hint = "--task runs a one-shot turn; drop the positional script or drop --task",
+        });
+        return error.ConflictingFlags;
+    }
+    if (opts.self_heal and opts.script_file == null) {
+        log.fatal(.app, "self-heal needs a script", .{
+            .hint = "--self-heal rewrites a recorded .lp on drift; pass a script path",
+        });
+        return error.ConflictingFlags;
+    }
+    if (opts.no_llm and opts.provider != null) {
+        log.warn(.app, "ignoring --provider", .{ .reason = "--no-llm takes precedence" });
+    }
+
     const is_one_shot = opts.task != null;
     const will_repl = !is_one_shot and (opts.interactive or opts.script_file == null);
     const needs_llm = will_repl or is_one_shot;
@@ -1086,6 +1102,14 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     if (opts.no_llm) {
         log.fatal(.app, "list-models needs LLM", .{
             .hint = "--no-llm and --list-models conflict; drop --no-llm",
+        });
+        return error.ConflictingFlags;
+    }
+    if (opts.task != null or opts.self_heal or opts.interactive or
+        opts.script_file != null or opts.pick_model)
+    {
+        log.fatal(.app, "list-models is exclusive", .{
+            .hint = "--list-models only takes --provider/--model/--base-url",
         });
         return error.ConflictingFlags;
     }
