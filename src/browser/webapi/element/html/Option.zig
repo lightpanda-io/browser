@@ -117,12 +117,12 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const value = bridge.accessor(Option.getValue, Option.setValue, .{});
-    pub const text = bridge.accessor(Option.getText, Option.setText, .{});
+    pub const value = bridge.accessor(Option.getValue, Option.setValue, .{ .ce_reactions = true });
+    pub const text = bridge.accessor(Option.getText, Option.setText, .{ .ce_reactions = true });
     pub const selected = bridge.accessor(Option.getSelected, Option.setSelected, .{});
     pub const defaultSelected = bridge.accessor(Option.getDefaultSelected, null, .{});
-    pub const disabled = bridge.accessor(Option.getDisabled, Option.setDisabled, .{});
-    pub const name = bridge.accessor(Option.getName, Option.setName, .{});
+    pub const disabled = bridge.accessor(Option.getDisabled, Option.setDisabled, .{ .ce_reactions = true });
+    pub const name = bridge.accessor(Option.getName, Option.setName, .{ .ce_reactions = true });
 };
 
 pub const Build = struct {

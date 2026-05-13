@@ -307,13 +307,13 @@ pub const JsApi = struct {
     pub const HAVE_FUTURE_DATA = bridge.property(@intFromEnum(ReadyState.HAVE_FUTURE_DATA), .{ .template = true });
     pub const HAVE_ENOUGH_DATA = bridge.property(@intFromEnum(ReadyState.HAVE_ENOUGH_DATA), .{ .template = true });
 
-    pub const src = bridge.accessor(Media.getSrc, Media.setSrc, .{});
+    pub const src = bridge.accessor(Media.getSrc, Media.setSrc, .{ .ce_reactions = true });
     pub const currentSrc = bridge.accessor(Media.getSrc, null, .{});
-    pub const autoplay = bridge.accessor(Media.getAutoplay, Media.setAutoplay, .{});
-    pub const controls = bridge.accessor(Media.getControls, Media.setControls, .{});
-    pub const loop = bridge.accessor(Media.getLoop, Media.setLoop, .{});
+    pub const autoplay = bridge.accessor(Media.getAutoplay, Media.setAutoplay, .{ .ce_reactions = true });
+    pub const controls = bridge.accessor(Media.getControls, Media.setControls, .{ .ce_reactions = true });
+    pub const loop = bridge.accessor(Media.getLoop, Media.setLoop, .{ .ce_reactions = true });
     pub const muted = bridge.accessor(Media.getMuted, Media.setMuted, .{});
-    pub const preload = bridge.accessor(Media.getPreload, Media.setPreload, .{});
+    pub const preload = bridge.accessor(Media.getPreload, Media.setPreload, .{ .ce_reactions = true });
     pub const volume = bridge.accessor(Media.getVolume, Media.setVolume, .{});
     pub const playbackRate = bridge.accessor(Media.getPlaybackRate, Media.setPlaybackRate, .{});
     pub const currentTime = bridge.accessor(Media.getCurrentTime, Media.setCurrentTime, .{});

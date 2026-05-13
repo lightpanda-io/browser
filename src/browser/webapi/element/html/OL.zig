@@ -72,9 +72,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const start = bridge.accessor(OL.getStart, OL.setStart, .{});
-    pub const reversed = bridge.accessor(OL.getReversed, OL.setReversed, .{});
-    pub const @"type" = bridge.accessor(OL.getType, OL.setType, .{});
+    pub const start = bridge.accessor(OL.getStart, OL.setStart, .{ .ce_reactions = true });
+    pub const reversed = bridge.accessor(OL.getReversed, OL.setReversed, .{ .ce_reactions = true });
+    pub const @"type" = bridge.accessor(OL.getType, OL.setType, .{ .ce_reactions = true });
 };
 
 const testing = @import("../../../../testing.zig");

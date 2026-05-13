@@ -81,8 +81,8 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const src = bridge.accessor(IFrame.getSrc, IFrame.setSrc, .{});
-    pub const name = bridge.accessor(IFrame.getName, IFrame.setName, .{});
+    pub const src = bridge.accessor(IFrame.getSrc, IFrame.setSrc, .{ .ce_reactions = true });
+    pub const name = bridge.accessor(IFrame.getName, IFrame.setName, .{ .ce_reactions = true });
     pub const contentWindow = bridge.accessor(IFrame.getContentWindow, null, .{});
     pub const contentDocument = bridge.accessor(IFrame.getContentDocument, null, .{});
 };

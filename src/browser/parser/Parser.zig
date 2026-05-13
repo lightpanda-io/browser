@@ -346,6 +346,8 @@ fn parseErrorCallback(ctx: *anyopaque, err: h5e.StringSlice) callconv(.c) void {
 
 fn popCallback(ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    const cp = self.frame._ce_reactions.push();
+    defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._popCallback(getNode(node_ref)) catch |err| {
         self.err = .{ .err = err, .source = .pop };
     };
@@ -368,6 +370,8 @@ fn createXMLElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualNa
 
 fn _createElementCallbackWithDefaultnamespace(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator, default_namespace: Element.Namespace) ?*anyopaque {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    const cp = self.frame._ce_reactions.push();
+    defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     return self._createElementCallback(data, qname, attributes, default_namespace) catch |err| {
         self.err = .{ .err = err, .source = .create_element };
         return null;
@@ -390,6 +394,8 @@ fn _createElementCallback(self: *Parser, data: *anyopaque, qname: h5e.QualName, 
 
 fn createCommentCallback(ctx: *anyopaque, str: h5e.StringSlice) callconv(.c) ?*anyopaque {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    const cp = self.frame._ce_reactions.push();
+    defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     return self._createCommentCallback(str.slice()) catch |err| {
         self.err = .{ .err = err, .source = .create_comment };
         return null;
@@ -408,6 +414,8 @@ fn _createCommentCallback(self: *Parser, str: []const u8) !*anyopaque {
 
 fn createProcessingInstruction(ctx: *anyopaque, target: h5e.StringSlice, data: h5e.StringSlice) callconv(.c) ?*anyopaque {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    const cp = self.frame._ce_reactions.push();
+    defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     return self._createProcessingInstruction(target.slice(), data.slice()) catch |err| {
         self.err = .{ .err = err, .source = .create_processing_instruction };
         return null;
@@ -426,6 +434,8 @@ fn _createProcessingInstruction(self: *Parser, target: []const u8, data: []const
 
 fn appendDoctypeToDocument(ctx: *anyopaque, name: h5e.StringSlice, public_id: h5e.StringSlice, system_id: h5e.StringSlice) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    const cp = self.frame._ce_reactions.push();
+    defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._appendDoctypeToDocument(name.slice(), public_id.slice(), system_id.slice()) catch |err| {
         self.err = .{ .err = err, .source = .append_doctype_to_document };
     };
@@ -448,6 +458,8 @@ fn _appendDoctypeToDocument(self: *Parser, name: []const u8, public_id: []const 
 
 fn addAttrsIfMissingCallback(ctx: *anyopaque, target_ref: *anyopaque, attributes: h5e.AttributeIterator) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    const cp = self.frame._ce_reactions.push();
+    defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._addAttrsIfMissingCallback(getNode(target_ref), attributes) catch |err| {
         self.err = .{ .err = err, .source = .add_attrs_if_missing };
     };
@@ -497,6 +509,8 @@ fn getDataCallback(ctx: *anyopaque) callconv(.c) *anyopaque {
 
 fn appendCallback(ctx: *anyopaque, parent_ref: *anyopaque, node_or_text: h5e.NodeOrText) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    const cp = self.frame._ce_reactions.push();
+    defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._appendCallback(getNode(parent_ref), node_or_text) catch |err| {
         self.err = .{ .err = err, .source = .append };
     };
@@ -529,6 +543,8 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
 
 fn removeFromParentCallback(ctx: *anyopaque, target_ref: *anyopaque) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    const cp = self.frame._ce_reactions.push();
+    defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._removeFromParentCallback(getNode(target_ref)) catch |err| {
         self.err = .{ .err = err, .source = .remove_from_parent };
     };
@@ -545,6 +561,8 @@ fn _removeFromParentCallback(self: *Parser, node: *Node) !void {
 
 fn reparentChildrenCallback(ctx: *anyopaque, node_ref: *anyopaque, new_parent_ref: *anyopaque) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    const cp = self.frame._ce_reactions.push();
+    defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._reparentChildrenCallback(getNode(node_ref), getNode(new_parent_ref)) catch |err| {
         self.err = .{ .err = err, .source = .reparent_children };
     };
@@ -559,6 +577,8 @@ fn _reparentChildrenCallback(self: *Parser, node: *Node, new_parent: *Node) !voi
 
 fn appendBeforeSiblingCallback(ctx: *anyopaque, sibling_ref: *anyopaque, node_or_text: h5e.NodeOrText) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    const cp = self.frame._ce_reactions.push();
+    defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._appendBeforeSiblingCallback(getNode(sibling_ref), node_or_text) catch |err| {
         self.err = .{ .err = err, .source = .append_before_sibling };
     };
@@ -587,6 +607,8 @@ fn _appendBeforeSiblingCallback(self: *Parser, sibling: *Node, node_or_text: h5e
 
 fn appendBasedOnParentNodeCallback(ctx: *anyopaque, element_ref: *anyopaque, prev_element_ref: *anyopaque, node_or_text: h5e.NodeOrText) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
+    const cp = self.frame._ce_reactions.push();
+    defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._appendBasedOnParentNodeCallback(getNode(element_ref), getNode(prev_element_ref), node_or_text) catch |err| {
         self.err = .{ .err = err, .source = .append_based_on_parent_node };
     };

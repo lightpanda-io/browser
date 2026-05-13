@@ -77,8 +77,8 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const name = bridge.accessor(MetaElement.getName, MetaElement.setName, .{});
-    pub const httpEquiv = bridge.accessor(MetaElement.getHttpEquiv, MetaElement.setHttpEquiv, .{});
-    pub const content = bridge.accessor(MetaElement.getContent, MetaElement.setContent, .{});
-    pub const media = bridge.accessor(MetaElement.getMedia, MetaElement.setMedia, .{});
+    pub const name = bridge.accessor(MetaElement.getName, MetaElement.setName, .{ .ce_reactions = true });
+    pub const httpEquiv = bridge.accessor(MetaElement.getHttpEquiv, MetaElement.setHttpEquiv, .{ .ce_reactions = true });
+    pub const content = bridge.accessor(MetaElement.getContent, MetaElement.setContent, .{ .ce_reactions = true });
+    pub const media = bridge.accessor(MetaElement.getMedia, MetaElement.setMedia, .{ .ce_reactions = true });
 };

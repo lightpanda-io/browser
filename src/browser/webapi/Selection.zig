@@ -734,7 +734,7 @@ pub const JsApi = struct {
     pub const collapseToEnd = bridge.function(Selection.collapseToEnd, .{});
     pub const collapseToStart = bridge.function(Selection.collapseToStart, .{ .dom_exception = true });
     pub const containsNode = bridge.function(Selection.containsNode, .{});
-    pub const deleteFromDocument = bridge.function(Selection.deleteFromDocument, .{});
+    pub const deleteFromDocument = bridge.function(Selection.deleteFromDocument, .{ .ce_reactions = true });
     pub const empty = bridge.function(Selection.removeAllRanges, .{});
     pub const extend = bridge.function(Selection.extend, .{ .dom_exception = true });
     // unimplemented: getComposedRanges

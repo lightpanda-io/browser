@@ -52,7 +52,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const value = bridge.accessor(LI.getValue, LI.setValue, .{});
+    pub const value = bridge.accessor(LI.getValue, LI.setValue, .{ .ce_reactions = true });
 };
 
 const testing = @import("../../../../testing.zig");

@@ -130,6 +130,18 @@ pub const Constructor = struct {
                     }
                     defer caller.deinit();
 
+                    // Constructors are a JS-execution boundary, just like
+                    // [CEReactions] methods. Open a reactions scope so any
+                    // callbacks queued by the user's constructor body (or
+                    // by attribute_changed reactions queued before invocation)
+                    // drain at the constructor's exit, not later.
+                    const ce_frame: ?*Frame = switch (caller.local.ctx.global) {
+                        .frame => |frame| frame,
+                        .worker => null,
+                    };
+                    const ce_checkpoint: usize = if (ce_frame) |frame| frame._ce_reactions.push() else 0;
+                    defer if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
+
                     caller.constructor(T, func, handle.?, .{
                         .dom_exception = opts.dom_exception,
                         .new_target = opts.new_target,
@@ -292,6 +304,10 @@ pub const NamedIndexed = struct {
     const Opts = struct {
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
+        // Mirrors [CEReactions] on a named-property setter/deleter (e.g.,
+        // HTMLElement.dataset, which proxies setAttribute/removeAttribute).
+        // Only applies to setter and deleter; getters don't mutate.
+        ce_reactions: bool = false,
     };
 
     fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, comptime opts: Opts) NamedIndexed {
@@ -320,6 +336,18 @@ pub const NamedIndexed = struct {
                 }
                 defer caller.deinit();
 
+                const ce_frame: ?*Frame = if (comptime opts.ce_reactions) switch (caller.local.ctx.global) {
+                    .frame => |frame| frame,
+                    .worker => null,
+                } else null;
+                var ce_checkpoint: usize = undefined;
+                if (comptime opts.ce_reactions) {
+                    if (ce_frame) |frame| ce_checkpoint = frame._ce_reactions.push();
+                }
+                defer if (comptime opts.ce_reactions) {
+                    if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
+                };
+
                 return caller.setNamedIndex(T, setter, c_name.?, c_value.?, handle.?, .{
                     .as_typed_array = opts.as_typed_array,
                     .null_as_undefined = opts.null_as_undefined,
@@ -335,6 +363,18 @@ pub const NamedIndexed = struct {
                     return 0;
                 }
                 defer caller.deinit();
+
+                const ce_frame: ?*Frame = if (comptime opts.ce_reactions) switch (caller.local.ctx.global) {
+                    .frame => |frame| frame,
+                    .worker => null,
+                } else null;
+                var ce_checkpoint: usize = undefined;
+                if (comptime opts.ce_reactions) {
+                    if (ce_frame) |frame| ce_checkpoint = frame._ce_reactions.push();
+                }
+                defer if (comptime opts.ce_reactions) {
+                    if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
+                };
 
                 return caller.deleteNamedIndex(T, deleter, c_name.?, handle.?, .{
                     .as_typed_array = opts.as_typed_array,

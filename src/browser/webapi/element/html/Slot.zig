@@ -155,7 +155,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const name = bridge.accessor(Slot.getName, Slot.setName, .{});
+    pub const name = bridge.accessor(Slot.getName, Slot.setName, .{ .ce_reactions = true });
     pub const assignedNodes = bridge.function(Slot.assignedNodes, .{});
     pub const assignedElements = bridge.function(Slot.assignedElements, .{});
     pub const assign = bridge.function(Slot.assign, .{});

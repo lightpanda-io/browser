@@ -142,13 +142,13 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(Image.constructor, .{});
-    pub const src = bridge.accessor(Image.getSrc, Image.setSrc, .{});
+    pub const src = bridge.accessor(Image.getSrc, Image.setSrc, .{ .ce_reactions = true });
     pub const currentSrc = bridge.accessor(Image.getSrc, null, .{});
-    pub const alt = bridge.accessor(Image.getAlt, Image.setAlt, .{});
-    pub const width = bridge.accessor(Image.getWidth, Image.setWidth, .{});
-    pub const height = bridge.accessor(Image.getHeight, Image.setHeight, .{});
-    pub const crossOrigin = bridge.accessor(Image.getCrossOrigin, Image.setCrossOrigin, .{});
-    pub const loading = bridge.accessor(Image.getLoading, Image.setLoading, .{});
+    pub const alt = bridge.accessor(Image.getAlt, Image.setAlt, .{ .ce_reactions = true });
+    pub const width = bridge.accessor(Image.getWidth, Image.setWidth, .{ .ce_reactions = true });
+    pub const height = bridge.accessor(Image.getHeight, Image.setHeight, .{ .ce_reactions = true });
+    pub const crossOrigin = bridge.accessor(Image.getCrossOrigin, Image.setCrossOrigin, .{ .ce_reactions = true });
+    pub const loading = bridge.accessor(Image.getLoading, Image.setLoading, .{ .ce_reactions = true });
     pub const naturalWidth = bridge.accessor(Image.getNaturalWidth, null, .{});
     pub const naturalHeight = bridge.accessor(Image.getNaturalHeight, null, .{});
     pub const complete = bridge.accessor(Image.getComplete, null, .{});
