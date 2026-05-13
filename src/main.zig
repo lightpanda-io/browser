@@ -43,9 +43,12 @@ pub fn main() !void {
     const main_arena = main_arena_instance.allocator();
     defer main_arena_instance.deinit();
 
-    run(gpa, main_arena) catch |err| {
-        log.fatal(.app, "exit", .{ .err = err });
-        std.posix.exit(1);
+    run(gpa, main_arena) catch |err| switch (err) {
+        error.UserCancelled => std.posix.exit(130),
+        else => {
+            log.fatal(.app, "exit", .{ .err = err });
+            std.posix.exit(1);
+        },
     };
 }
 
@@ -185,25 +188,31 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             log.info(.app, "starting agent", .{});
 
             var failed: bool = false;
+            var cancelled: bool = false;
             {
-                var worker_thread = try std.Thread.spawn(.{}, agentThread, .{ allocator, app, opts, &failed });
+                var worker_thread = try std.Thread.spawn(.{}, agentThread, .{ allocator, app, opts, &failed, &cancelled });
                 defer worker_thread.join();
 
                 app.network.run();
             }
 
+            if (cancelled) return error.UserCancelled;
             if (failed) return error.AgentFailed;
         },
         else => unreachable,
     }
 }
 
-fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent, failed: *bool) void {
+fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent, failed: *bool, cancelled: *bool) void {
     defer app.network.stop();
 
     var agent_instance = lp.agent.Agent.init(allocator, app, opts) catch |err| {
-        log.fatal(.app, "agent init error", .{ .err = err });
-        failed.* = true;
+        if (err == error.UserCancelled) {
+            cancelled.* = true;
+        } else {
+            log.fatal(.app, "agent init error", .{ .err = err });
+            failed.* = true;
+        }
         return;
     };
     defer agent_instance.deinit();

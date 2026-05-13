@@ -1189,8 +1189,8 @@ fn promptForProvider(found: []const Config.AiProvider) !Config.AiProvider {
     for (found, 0..) |p, i| labels_buf[i] = @tagName(p);
 
     const idx = (promptNumberedChoice("Multiple API keys detected. Pick provider:", labels_buf[0..found.len], false, null) catch {
-        log.fatal(.app, "could not pick provider", .{ .hint = "Pass --provider explicitly" });
-        return error.AmbiguousProvider;
+        std.debug.print("Cancelled — pass --provider to skip the picker.\n", .{});
+        return error.UserCancelled;
     }) orelse unreachable;
     return found[idx];
 }
@@ -1238,8 +1238,8 @@ fn pickModel(
         "Pick model (Enter for default):";
 
     const result = promptNumberedChoice(header, ids, true, default_idx) catch {
-        log.fatal(.app, "could not pick model", .{ .hint = "Pass --model explicitly" });
-        return error.NoChoice;
+        std.debug.print("Cancelled — pass --model to skip the picker.\n", .{});
+        return error.UserCancelled;
     };
     if (result) |idx| return try allocator.dupe(u8, ids[idx]);
     // Honor the baked-in default even when it isn't in the listed ids.
@@ -1268,7 +1268,7 @@ fn promptNumberedChoice(header: []const u8, items: []const []const u8, allow_def
         }
         std.debug.print("> ", .{});
 
-        const line = stdin.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
+        const line = stdin.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream, error.StreamTooLong, error.ReadFailed => return error.UserCancelled,
         };
         const trimmed = std.mem.trim(u8, line, " \t\r\n");
