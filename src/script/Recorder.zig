@@ -37,51 +37,40 @@ lines: u32,
 buf: std.Io.Writer.Allocating,
 
 /// Append-open `path`, inserting a leading newline if the file is non-empty.
-/// A null path disables recording.
+/// A null path disables recording. Open failures are captured in `init_error`
+/// so callers can surface them in the UI; `init` itself never fails.
 pub fn init(allocator: std.mem.Allocator, path: ?[]const u8) Self {
-    const opened = openRecording(allocator, path);
-    return .{
+    var self: Self = .{
         .allocator = allocator,
-        .file = opened.file,
-        .path = opened.path,
-        .init_error = opened.err,
+        .file = null,
+        .path = null,
         .lines = 0,
         .buf = .init(allocator),
     };
+    const p = path orelse return self;
+    const owned_path = allocator.dupe(u8, p) catch |err| {
+        log.warn(.app, "recording path alloc failed", .{ .err = @errorName(err) });
+        self.init_error = @errorName(err);
+        return self;
+    };
+    const f = openForAppend(p) catch |err| {
+        log.warn(.app, "recording file open failed", .{ .err = @errorName(err) });
+        allocator.free(owned_path);
+        self.init_error = @errorName(err);
+        return self;
+    };
+    self.file = f;
+    self.path = owned_path;
+    return self;
 }
 
-const OpenedRecording = struct {
-    file: ?std.fs.File,
-    path: ?[]const u8,
-    err: ?[]const u8,
-};
-
-fn openRecording(allocator: std.mem.Allocator, path: ?[]const u8) OpenedRecording {
-    const p = path orelse return .{ .file = null, .path = null, .err = null };
-    const owned_path = allocator.dupe(u8, p) catch {
-        log.warn(.app, "recording path alloc failed", .{});
-        return .{ .file = null, .path = null, .err = @errorName(error.OutOfMemory) };
-    };
-
-    const f = std.fs.cwd().createFile(p, .{ .truncate = false }) catch |err| {
-        log.warn(.app, "could not open recording file", .{ .err = @errorName(err) });
-        allocator.free(owned_path);
-        return .{ .file = null, .path = null, .err = @errorName(err) };
-    };
-    f.seekFromEnd(0) catch |err| {
-        log.warn(.app, "could not seek recording file", .{ .err = @errorName(err) });
-        f.close();
-        allocator.free(owned_path);
-        return .{ .file = null, .path = null, .err = @errorName(err) };
-    };
-    const pos = f.getPos() catch 0;
-    if (pos > 0) f.writeAll("\n") catch |err| {
-        log.warn(.app, "append newline failed", .{ .err = @errorName(err) });
-        f.close();
-        allocator.free(owned_path);
-        return .{ .file = null, .path = null, .err = @errorName(err) };
-    };
-    return .{ .file = f, .path = owned_path, .err = null };
+fn openForAppend(path: []const u8) !std.fs.File {
+    const f = try std.fs.cwd().createFile(path, .{ .truncate = false });
+    errdefer f.close();
+    try f.seekFromEnd(0);
+    const pos = try f.getPos();
+    if (pos > 0) try f.writeAll("\n");
+    return f;
 }
 
 pub fn deinit(self: *Self) void {
