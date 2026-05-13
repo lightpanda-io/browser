@@ -520,7 +520,12 @@ fn runScript(self: *Self, path: []const u8) bool {
     var last_comment: ?[]const u8 = null;
     var replacements: std.ArrayList(Replacement) = .empty;
 
-    while (iter.next()) |entry| {
+    while (true) {
+        const entry = (iter.next() catch |err| {
+            self.terminal.printErrorFmt("line {d}: {s} parsing script", .{ iter.line_num, @errorName(err) });
+            self.flushReplacements(path, content, replacements.items);
+            return false;
+        }) orelse break;
         switch (entry.command) {
             .comment => {
                 // Recorded scripts prefix LLM-generated commands with the

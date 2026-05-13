@@ -350,7 +350,7 @@ pub const ScriptIterator = struct {
     };
 
     /// Multi-line EVAL / EXTRACT blocks are assembled into a single command.
-    pub fn next(self: *ScriptIterator) ?Entry {
+    pub fn next(self: *ScriptIterator) std.mem.Allocator.Error!?Entry {
         while (self.lines.next()) |line| {
             self.line_num += 1;
             const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
@@ -360,7 +360,7 @@ pub const ScriptIterator = struct {
 
             if (BlockKeyword.fromOpener(trimmed)) |opener| {
                 const start_line = self.line_num;
-                const body_or_null = self.collectMultiLineBlock(opener.quote_type);
+                const body_or_null = try self.collectMultiLineBlock(opener.quote_type);
                 const span_end = self.lines.index orelse self.lines.buffer.len;
                 const cmd: Command = switch (opener.kind) {
                     .eval => if (body_or_null) |body| .{ .eval_js = body } else .{ .natural_language = "unterminated EVAL block" },
@@ -400,7 +400,7 @@ pub const ScriptIterator = struct {
         }
     };
 
-    fn collectMultiLineBlock(self: *ScriptIterator, quote_type: QuoteType) ?[]const u8 {
+    fn collectMultiLineBlock(self: *ScriptIterator, quote_type: QuoteType) std.mem.Allocator.Error!?[]const u8 {
         const closer = quote_type.toLiteral();
         var parts: std.ArrayList(u8) = .empty;
         // toOwnedSlice empties `parts`, so this defer is a no-op on success.
@@ -409,12 +409,12 @@ pub const ScriptIterator = struct {
             self.line_num += 1;
             const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
             if (std.mem.eql(u8, trimmed, closer)) {
-                return parts.toOwnedSlice(self.allocator) catch null;
+                return try parts.toOwnedSlice(self.allocator);
             }
             if (parts.items.len > 0) {
-                parts.append(self.allocator, '\n') catch return null;
+                try parts.append(self.allocator, '\n');
             }
-            parts.appendSlice(self.allocator, line) catch return null;
+            try parts.appendSlice(self.allocator, line);
         }
         return null;
     }
@@ -1000,17 +1000,17 @@ test "ScriptIterator basic commands" {
     ;
     var iter: ScriptIterator = .init(std.testing.allocator, script);
 
-    const e1 = iter.next().?;
+    const e1 = (try iter.next()).?;
     try std.testing.expectEqualStrings("https://example.com", e1.command.goto);
     try std.testing.expectEqual(@as(u32, 1), e1.line_num);
 
-    const e2 = iter.next().?;
+    const e2 = (try iter.next()).?;
     try std.testing.expect(e2.command == .tree);
 
-    const e3 = iter.next().?;
+    const e3 = (try iter.next()).?;
     try std.testing.expectEqualStrings("Login", e3.command.click);
 
-    try std.testing.expect(iter.next() == null);
+    try std.testing.expect((try iter.next()) == null);
 }
 
 test "ScriptIterator skips blank lines and comments" {
@@ -1023,19 +1023,19 @@ test "ScriptIterator skips blank lines and comments" {
     ;
     var iter: ScriptIterator = .init(std.testing.allocator, script);
 
-    const e1 = iter.next().?;
+    const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .comment);
 
-    const e2 = iter.next().?;
+    const e2 = (try iter.next()).?;
     try std.testing.expect(e2.command == .goto);
 
-    const e3 = iter.next().?;
+    const e3 = (try iter.next()).?;
     try std.testing.expect(e3.command == .comment);
 
-    const e4 = iter.next().?;
+    const e4 = (try iter.next()).?;
     try std.testing.expect(e4.command == .tree);
 
-    try std.testing.expect(iter.next() == null);
+    try std.testing.expect((try iter.next()) == null);
 }
 
 test "ScriptIterator multi-line EVAL" {
@@ -1050,19 +1050,19 @@ test "ScriptIterator multi-line EVAL" {
     ;
     var iter: ScriptIterator = .init(std.testing.allocator, script);
 
-    const e1 = iter.next().?;
+    const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .goto);
 
-    const e2 = iter.next().?;
+    const e2 = (try iter.next()).?;
     try std.testing.expect(e2.command == .eval_js);
     try std.testing.expect(std.mem.indexOf(u8, e2.command.eval_js, "const x = 1;") != null);
     try std.testing.expect(std.mem.indexOf(u8, e2.command.eval_js, "return x + y;") != null);
     defer std.testing.allocator.free(e2.command.eval_js);
 
-    const e3 = iter.next().?;
+    const e3 = (try iter.next()).?;
     try std.testing.expect(e3.command == .tree);
 
-    try std.testing.expect(iter.next() == null);
+    try std.testing.expect((try iter.next()) == null);
 }
 
 test "ScriptIterator unterminated EVAL" {
@@ -1072,7 +1072,7 @@ test "ScriptIterator unterminated EVAL" {
     ;
     var iter: ScriptIterator = .init(std.testing.allocator, script);
 
-    const e1 = iter.next().?;
+    const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .natural_language);
     try std.testing.expectEqualStrings("unterminated EVAL block", e1.command.natural_language);
 }
@@ -1086,15 +1086,15 @@ test "ScriptIterator inline triple-quoted EVAL stays single-line" {
     ;
     var iter: ScriptIterator = .init(std.testing.allocator, script);
 
-    const e1 = iter.next().?;
+    const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .eval_js);
     try std.testing.expectEqualStrings("console.log(\"x\")", e1.command.eval_js);
 
-    const e2 = iter.next().?;
+    const e2 = (try iter.next()).?;
     try std.testing.expect(e2.command == .click);
     try std.testing.expectEqualStrings(".btn", e2.command.click);
 
-    try std.testing.expect(iter.next() == null);
+    try std.testing.expect((try iter.next()) == null);
 }
 
 test "ScriptIterator multi-line EXTRACT" {
@@ -1110,19 +1110,19 @@ test "ScriptIterator multi-line EXTRACT" {
     ;
     var iter: ScriptIterator = .init(std.testing.allocator, script);
 
-    const e1 = iter.next().?;
+    const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .goto);
 
-    const e2 = iter.next().?;
+    const e2 = (try iter.next()).?;
     try std.testing.expect(e2.command == .extract);
     try std.testing.expect(std.mem.indexOf(u8, e2.command.extract, "\"title\": \"h1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, e2.command.extract, "\"items\": [\".item\"]") != null);
     defer std.testing.allocator.free(e2.command.extract);
 
-    const e3 = iter.next().?;
+    const e3 = (try iter.next()).?;
     try std.testing.expect(e3.command == .tree);
 
-    try std.testing.expect(iter.next() == null);
+    try std.testing.expect((try iter.next()) == null);
 }
 
 test "ScriptIterator unterminated EXTRACT" {
@@ -1132,7 +1132,7 @@ test "ScriptIterator unterminated EXTRACT" {
     ;
     var iter: ScriptIterator = .init(std.testing.allocator, script);
 
-    const e1 = iter.next().?;
+    const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .natural_language);
     try std.testing.expectEqualStrings("unterminated EXTRACT block", e1.command.natural_language);
 }
@@ -1146,7 +1146,7 @@ test "ScriptIterator multi-line EVAL mismatched triple quote" {
     ;
     var iter: ScriptIterator = .init(std.testing.allocator, script);
 
-    const e1 = iter.next().?;
+    const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .eval_js);
     try std.testing.expectEqualStrings("  const s = \" ''' \";\n  console.log(s);", e1.command.eval_js);
     std.testing.allocator.free(e1.command.eval_js);

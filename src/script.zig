@@ -324,14 +324,14 @@ test "applyReplacements: heals a multi-line EVAL block using iterator span" {
         "CLICK '#after'\n";
 
     var iter: Command.ScriptIterator = .init(std.testing.allocator, content);
-    const e1 = iter.next().?;
+    const e1 = (try iter.next()).?;
     try std.testing.expect(e1.command == .goto);
-    const e2 = iter.next().?;
+    const e2 = (try iter.next()).?;
     try std.testing.expect(e2.command == .eval_js);
     defer std.testing.allocator.free(e2.command.eval_js);
-    const e3 = iter.next().?;
+    const e3 = (try iter.next()).?;
     try std.testing.expect(e3.command == .click);
-    try std.testing.expect(iter.next() == null);
+    try std.testing.expect((try iter.next()) == null);
 
     const replacements = [_]Replacement{.{
         .original_span = e2.raw_span,
