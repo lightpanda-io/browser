@@ -84,22 +84,22 @@ or mixed-case input is forwarded to the LLM as natural language, so prompts
 like `click the login button` flow through without being misread as a `CLICK`
 command. In the REPL, TAB completion fills in the canonical caps form for you.
 
-| Command          | Form                                  | Notes                                                |
-|------------------|---------------------------------------|------------------------------------------------------|
-| `GOTO`           | `GOTO <url>`                          | Navigate. URL is unquoted.                           |
-| `CLICK`          | `CLICK '<selector>'`                  | CSS selector.                                        |
-| `TYPE`           | `TYPE '<selector>' '<value>'`         | Fills an input. `$LP_*` env refs auto-resolve.       |
-| `WAIT`           | `WAIT '<selector>'`                   | Wait for selector to be present in the DOM.          |
-| `SCROLL`         | `SCROLL [x] [y]`                      | Default `(0, 0)`.                                    |
-| `HOVER`          | `HOVER '<selector>'`                  |                                                      |
-| `SELECT`         | `SELECT '<selector>' '<value>'`       | `<select>` option by value.                          |
-| `CHECK`          | `CHECK '<selector>' [true\|false]`    | Check / uncheck. Default `true`.                     |
-| `EXTRACT`        | `EXTRACT '<selector>'`                | Returns text content.                                |
-| `EVAL`           | `EVAL '<js>'` or `EVAL '''…'''`       | Triple-quote for multi-line JS.                      |
-| `TREE`           | `TREE`                                | Print the semantic tree (not recorded).              |
-| `MARKDOWN`       | `MARKDOWN`                            | Print page as markdown (not recorded).               |
-| `LOGIN`          | `LOGIN`                               | LLM-driven: fills credentials from `$LP_*` env vars. |
-| `ACCEPT_COOKIES` | `ACCEPT_COOKIES`                      | LLM-driven: dismiss the consent banner.              |
+| Command          | Form                                     | Notes                                                |
+|------------------|------------------------------------------|------------------------------------------------------|
+| `GOTO`           | `GOTO <url>`                             | Navigate. URL is unquoted.                           |
+| `CLICK`          | `CLICK '<selector>'`                     | CSS selector.                                        |
+| `TYPE`           | `TYPE '<selector>' '<value>'`            | Fills an input. `$LP_*` env refs auto-resolve.       |
+| `WAIT`           | `WAIT '<selector>'`                      | Wait for selector to be present in the DOM.          |
+| `SCROLL`         | `SCROLL [x] [y]`                         | Default `(0, 0)`.                                    |
+| `HOVER`          | `HOVER '<selector>'`                     |                                                      |
+| `SELECT`         | `SELECT '<selector>' '<value>'`          | `<select>` option by value.                          |
+| `CHECK`          | `CHECK '<selector>' [true\|false]`       | Check / uncheck. Default `true`.                     |
+| `EXTRACT`        | `EXTRACT '<schema>'` or `'''<schema>'''` | JSON schema in, single JSON object on stdout.        |
+| `EVAL`           | `EVAL '<js>'` or `'''<js>'''`            | Triple-quote for multi-line JS.                      |
+| `TREE`           | `TREE`                                   | Print the semantic tree (not recorded).              |
+| `MARKDOWN`       | `MARKDOWN`                               | Print page as markdown (not recorded).               |
+| `LOGIN`          | `LOGIN`                                  | LLM-driven: fills credentials from `$LP_*` env vars. |
+| `ACCEPT_COOKIES` | `ACCEPT_COOKIES`                         | LLM-driven: dismiss the consent banner.              |
 
 In the REPL, anything that does not parse as a PandaScript command is sent to
 the LLM as natural language. To leave the REPL, use the `/quit` slash command.
@@ -107,7 +107,7 @@ the LLM as natural language. To leave the REPL, use the `/quit` slash command.
 ### Example script
 
 ```pandascript
-# Log into the demo and grab the dashboard title.
+# Log into the demo and grab the dashboard title and visible cards.
 # Site-scoped vars (LP_<SITE>_<FIELD>) avoid collisions when you have
 # credentials for several sites; the unprefixed form is the fallback.
 GOTO https://demo-browser.lightpanda.io/
@@ -116,8 +116,25 @@ TYPE '#email' '$LP_DEMO_USERNAME'
 TYPE '#password' '$LP_DEMO_PASSWORD'
 CLICK 'button[type="submit"]'
 WAIT '.dashboard'
-EXTRACT '.dashboard h1'
+EXTRACT '{"title": ".dashboard h1", "cards": [".dashboard .card .name"]}'
 ```
+
+`EXTRACT` takes a JSON schema object — each value tells the extractor
+what to lift off the page, and the whole result is printed to stdout
+as a single JSON object. Supported value forms:
+
+- `"<sel>"` — `textContent.trim()` of the first match (string or `null`).
+- `""` — the matched element's own text (only inside a `fields` block).
+- `["<sel>"]` — text of every match (string array).
+- `{"selector": "<sel>", "attr": "<name>"}` — attribute of the first match.
+- `[{"selector": "<sel>", "fields": {…}}]` — array of records, each
+  `fields` value resolved relative to the matched element.
+
+Use `EXTRACT '''…'''` (or `"""…"""`) to spread a schema across multiple
+lines. The schema is parsed in Zig before the page-side walker runs,
+so a malformed schema fails with `Error: invalid EXTRACT schema JSON`
+rather than a V8 stack trace. See [agent-tutorial.md](agent-tutorial.md)
+section 3 for a worked example against Hacker News.
 
 ### Recording
 
