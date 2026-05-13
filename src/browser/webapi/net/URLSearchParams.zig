@@ -53,6 +53,15 @@ pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
                     break :blk try paramsFromArray(arena, js_val.toArray());
                 }
                 if (js_val.isObject()) {
+                    // Per the URL spec, an iterable init (URLSearchParams,
+                    // Map, ...) should be walked via its @@iterator. We
+                    // don't have a generic iterable path yet; cover the
+                    // common case of `new URLSearchParams(otherUSP)` so
+                    // the prototype-method-leak doesn't just turn into a
+                    // silent empty querystring.
+                    if (js_val.toZig(*URLSearchParams)) |other| {
+                        break :blk try KeyValueList.copy(arena, other._params);
+                    } else |_| {}
                     // normalizer is null, so frame won't be used
                     break :blk try KeyValueList.fromJsObject(arena, js_val.toObject(), null, exec.buf);
                 }

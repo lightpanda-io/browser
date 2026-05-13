@@ -152,7 +152,7 @@ pub fn getPropertyNames(self: Object) js.Array {
 }
 
 pub fn nameIterator(self: Object) !NameIterator {
-    const handle = v8.v8__Object__GetPropertyNames(self.handle, self.local.handle) orelse {
+    const handle = v8.v8__Object__GetOwnPropertyNames(self.handle, self.local.handle) orelse {
         // see getOwnPropertyNames above
         return error.TypeError;
     };

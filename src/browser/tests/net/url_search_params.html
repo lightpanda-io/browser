@@ -416,6 +416,79 @@
 }
 </script>
 
+<script id=fromURLSearchParams>
+{
+  const original = new URLSearchParams();
+  original.append('operationId', 'abc123');
+  original.append('variables', '{"x":1}');
+  original.append('locale', 'en');
+
+  const cloned = new URLSearchParams(original);
+  testing.expectEqual(3, cloned.size);
+  testing.expectEqual('abc123', cloned.get('operationId'));
+  testing.expectEqual('{"x":1}', cloned.get('variables'));
+  testing.expectEqual('en', cloned.get('locale'));
+  testing.expectEqual('operationId=abc123&variables=%7B%22x%22%3A1%7D&locale=en', cloned.toString());
+
+  // Regression: prototype methods (has, get, size, ...) must not leak in as entries.
+  testing.expectEqual(false, cloned.has('has'));
+  testing.expectEqual(false, cloned.has('get'));
+  testing.expectEqual(false, cloned.has('size'));
+  testing.expectEqual(false, cloned.has('toString'));
+}
+</script>
+
+<script id=fromURLSearchParamsDuplicateKeys>
+{
+  const original = new URLSearchParams('a=1&b=2&a=3');
+  const cloned = new URLSearchParams(original);
+  testing.expectEqual(3, cloned.size);
+  testing.expectEqual(['1', '3'], cloned.getAll('a'));
+  testing.expectEqual('a=1&b=2&a=3', cloned.toString());
+}
+</script>
+
+<script id=fromURLSearchParamsEmpty>
+{
+  const cloned = new URLSearchParams(new URLSearchParams());
+  testing.expectEqual(0, cloned.size);
+  testing.expectEqual('', cloned.toString());
+}
+</script>
+
+<script id=fromURLSearchParamsIndependent>
+{
+  // Mutating the clone must not affect the original, and vice versa.
+  const original = new URLSearchParams('a=1&b=2');
+  const cloned = new URLSearchParams(original);
+
+  cloned.append('c', '3');
+  testing.expectEqual(2, original.size);
+  testing.expectEqual(false, original.has('c'));
+  testing.expectEqual(3, cloned.size);
+
+  original.set('a', 'changed');
+  testing.expectEqual('1', cloned.get('a'));
+}
+</script>
+
+<script id=fromObjectIgnoresInheritedProperties>
+{
+  // Per WebIDL "record" semantics, only own enumerable string properties of
+  // the init object contribute to the URLSearchParams. Properties reached
+  // via the prototype chain (including bridged WebAPI prototype methods)
+  // must be ignored.
+  const proto = {inherited: 'no'};
+  const target = Object.create(proto);
+  target.own = 'yes';
+
+  const usp = new URLSearchParams(target);
+  testing.expectEqual(1, usp.size);
+  testing.expectEqual('yes', usp.get('own'));
+  testing.expectEqual(false, usp.has('inherited'));
+}
+</script>
+
 <script id=utf8Encoding>
 {
   // Test that UTF-8 characters are properly percent-encoded (not double-encoded)
