@@ -4023,6 +4023,9 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
                     @import("../id.zig").uuidv4(&boundary_buf);
                     break :blk .{ .formdata = &boundary_buf };
                 }
+                if (std.ascii.eqlIgnoreCase(attr, "text/plain")) {
+                    break :blk .plaintext;
+                }
                 if (!std.ascii.eqlIgnoreCase(attr, "application/x-www-form-urlencoded")) {
                     log.warn(.not_implemented, "FormData.encoding", .{ .encoding = attr });
                 }
@@ -4051,6 +4054,9 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         opts.header = switch (encoding) {
             .urlencode => "Content-Type: application/x-www-form-urlencoded",
             .formdata => |b| try std.fmt.allocPrintSentinel(arena, "Content-Type: multipart/form-data; boundary={s}", .{b}, 0),
+            // Per WHATWG HTML §4.10.21.6, text/plain submissions include the form's
+            // resolved encoding (accept-charset or document charset).
+            .plaintext => try std.fmt.allocPrintSentinel(arena, "Content-Type: text/plain; charset={s}", .{charset}, 0),
         };
     } else {
         action = try URL.concatQueryString(arena, action, buf.written());
