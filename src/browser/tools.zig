@@ -351,7 +351,19 @@ pub const UrlParams = struct {
     waitUntil: ?lp.Config.WaitUntil = null,
 };
 
-const NodeAndPage = struct { node: *DOMNode, page: *lp.Frame };
+const ActionTarget = union(enum) {
+    selector: []const u8,
+    backend_node_id: CDPNode.Id,
+
+    pub fn format(self: ActionTarget, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        switch (self) {
+            .selector => |sel| try writer.print("selector: {s}", .{sel}),
+            .backend_node_id => |id| try writer.print("backendNodeId: {d}", .{id}),
+        }
+    }
+};
+
+const NodeAndPage = struct { node: *DOMNode, page: *lp.Frame, target: ActionTarget };
 
 pub const Action = enum {
     goto,
@@ -779,15 +791,10 @@ fn awaitQueuedNavigation(session: *lp.Session) ToolError!void {
 fn formatActionResult(
     arena: std.mem.Allocator,
     prefix: []const u8,
-    selector: ?[]const u8,
-    backend_node_id: ?CDPNode.Id,
+    target: ActionTarget,
     suffix: []const u8,
 ) ToolError![]const u8 {
-    const target = if (selector) |sel|
-        std.fmt.allocPrint(arena, "selector: {s}", .{sel}) catch return ToolError.InternalError
-    else
-        std.fmt.allocPrint(arena, "backendNodeId: {d}", .{backend_node_id.?}) catch return ToolError.InternalError;
-    return std.fmt.allocPrint(arena, "{s} ({s}){s}", .{ prefix, target, suffix }) catch ToolError.InternalError;
+    return std.fmt.allocPrint(arena, "{s} ({f}){s}", .{ prefix, target, suffix }) catch ToolError.InternalError;
 }
 
 /// Finish a state-changing action: drain any queued navigation triggered by
@@ -812,7 +819,7 @@ fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
 
     lp.actions.click(resolved.node, resolved.page) catch |err| return mapActionError(err);
 
-    const body = try formatActionResult(arena, "Clicked element", args.selector, args.backendNodeId, "");
+    const body = try formatActionResult(arena, "Clicked element", resolved.target, "");
     return finalizeAction(arena, session, body);
 }
 
@@ -832,7 +839,7 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
 
     // Show the original reference (e.g. $LP_PASSWORD) in the result, not the resolved value
     const suffix = std.fmt.allocPrint(arena, " with \"{s}\"", .{raw_text}) catch return ToolError.InternalError;
-    const body = try formatActionResult(arena, "Filled element", args.selector, args.backendNodeId, suffix);
+    const body = try formatActionResult(arena, "Filled element", resolved.target, suffix);
     return finalizeAction(arena, session, body);
 }
 
@@ -884,7 +891,7 @@ fn execHover(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
 
     lp.actions.hover(resolved.node, resolved.page) catch |err| return mapActionError(err);
 
-    const body = try formatActionResult(arena, "Hovered element", args.selector, args.backendNodeId, "");
+    const body = try formatActionResult(arena, "Hovered element", resolved.target, "");
     return finalizeAction(arena, session, body);
 }
 
@@ -918,7 +925,7 @@ fn execSelectOption(arena: std.mem.Allocator, session: *lp.Session, registry: *C
     lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| return mapActionError(err);
 
     const prefix = std.fmt.allocPrint(arena, "Selected option '{s}'", .{args.value}) catch return ToolError.InternalError;
-    const body = try formatActionResult(arena, prefix, args.selector, args.backendNodeId, "");
+    const body = try formatActionResult(arena, prefix, resolved.target, "");
     return finalizeAction(arena, session, body);
 }
 
@@ -935,7 +942,7 @@ fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *CDP
 
     const state_str: []const u8 = if (args.checked) "checked" else "unchecked";
     const suffix = std.fmt.allocPrint(arena, " to {s}", .{state_str}) catch return ToolError.InternalError;
-    const body = try formatActionResult(arena, "Set element", args.selector, args.backendNodeId, suffix);
+    const body = try formatActionResult(arena, "Set element", resolved.target, suffix);
     return finalizeAction(arena, session, body);
 }
 
@@ -1110,14 +1117,14 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
 fn resolveNodeAndPage(session: *lp.Session, registry: *CDPNode.Registry, node_id: CDPNode.Id) ToolError!NodeAndPage {
     const page = try requireFrame(session);
     const node = registry.lookup_by_id.get(node_id) orelse return ToolError.NodeNotFound;
-    return .{ .node = node.dom, .page = page };
+    return .{ .node = node.dom, .page = page, .target = .{ .backend_node_id = node_id } };
 }
 
 fn resolveBySelector(session: *lp.Session, selector: []const u8) ToolError!NodeAndPage {
     const page = try requireFrame(session);
     const element = Selector.querySelector(page.document.asNode(), selector, page) catch return ToolError.InvalidParams;
     const node = (element orelse return ToolError.NodeNotFound).asNode();
-    return .{ .node = node, .page = page };
+    return .{ .node = node, .page = page, .target = .{ .selector = selector } };
 }
 
 pub const ParseArgsError = error{ OutOfMemory, InvalidParams };
