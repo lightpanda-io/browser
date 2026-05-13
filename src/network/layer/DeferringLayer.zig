@@ -86,7 +86,7 @@ pub fn flushUnblocked(
     while (node) |n| {
         node = n.next;
         const ctx: *DeferredContext = @fieldParentPtr("node", n);
-        if (!ctx.deferring) continue;
+        if (!ctx.deferring or !ctx.terminal) continue;
 
         const deferred_req = ctx.transfer.req;
         const frame_id = deferred_req.params.frame_id;
@@ -102,7 +102,7 @@ pub fn flushFrame(self: *DeferringLayer, frame_id: u32) void {
     while (node) |n| {
         node = n.next;
         const ctx: *DeferredContext = @fieldParentPtr("node", n);
-        if (!ctx.deferring) continue;
+        if (!ctx.deferring or !ctx.terminal) continue;
 
         const deferred_req = ctx.transfer.req;
         if (deferred_req.params.frame_id == frame_id) {
@@ -128,6 +128,7 @@ const DeferredContext = struct {
 
     buffered: std.ArrayListUnmanaged(BufferedEvent) = .{},
     deferring: bool = false,
+    terminal: bool = false,
     stable_resp: ?StableResponse = null,
 
     const BufferedEvent = union(enum) {
@@ -203,6 +204,7 @@ const DeferredContext = struct {
 
         log.debug(.http, "deferring done callback", .{ .url = req.params.url });
         self.deferring = true;
+        self.terminal = true;
         try self.buffered.append(self.arena, .done);
     }
 
@@ -219,6 +221,7 @@ const DeferredContext = struct {
 
         log.debug(.http, "deferring error callback", .{ .url = req.params.url, .err = err });
         self.deferring = true;
+        self.terminal = true;
         self.buffered.append(self.arena, .{ .err = err }) catch {};
     }
 
@@ -235,6 +238,7 @@ const DeferredContext = struct {
 
         log.debug(.http, "deferring shutdown callback", .{ .url = req.params.url });
         self.deferring = true;
+        self.terminal = true;
         self.buffered.append(self.arena, .shutdown) catch {};
     }
 
