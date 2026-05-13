@@ -624,7 +624,8 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
         }, .{ .session_id = session_id });
     }
 
-    const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const root_frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
+    const is_root_frame = event.frame_id == root_frame._frame_id;
 
     // When we actually recreated the context we should have the inspector send
     // this event, see: resetContextGroup. Sending this event will tell the
@@ -635,9 +636,16 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     // frames (iframes), clearing all contexts would destroy the main frame's
     // context, causing Puppeteer's frame.evaluate()/frame.content() to hang
     // forever.
-    if (event.frame_id == frame._frame_id) {
+    if (is_root_frame) {
         try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
     }
+
+    // Look up the actual navigated frame. For main frame navigations this is
+    // the root frame; for iframes it is the child frame. Using the correct
+    // frame's JS context for inspector.contextCreated prevents re-registering
+    // the root context under a new id (which silently invalidates the
+    // previous id on the V8 side).
+    const frame = bc.session.findFrameByFrameId(event.frame_id) orelse return error.FrameNotFound;
 
     // frameNavigated event
     try cdp.sendEvent("Page.frameNavigated", .{
@@ -663,25 +671,32 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
             "",
             frame.origin orelse "",
             aux_data,
-            true,
+            is_root_frame,
         );
     }
-    for (bc.isolated_worlds.items) |isolated_world| {
-        const aux_json = try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
+    // Isolated worlds are session-wide (single V8 context shared across
+    // navigations). Only re-register them for main frame navigations;
+    // re-registering during child frame (iframe) navigations would
+    // re-register the same V8 context under a new inspector id, silently
+    // invalidating the id the main frame is using.
+    if (is_root_frame) {
+        for (bc.isolated_worlds.items) |isolated_world| {
+            const aux_json = try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
 
-        // Calling contextCreated will assign a new Id to the context and send the contextCreated event
+            // Calling contextCreated will assign a new Id to the context and send the contextCreated event
 
-        var ls: js.Local.Scope = undefined;
-        (isolated_world.context orelse continue).localScope(&ls);
-        defer ls.deinit();
+            var ls: js.Local.Scope = undefined;
+            (isolated_world.context orelse continue).localScope(&ls);
+            defer ls.deinit();
 
-        bc.inspector_session.inspector.contextCreated(
-            &ls.local,
-            isolated_world.name,
-            "://",
-            aux_json,
-            false,
-        );
+            bc.inspector_session.inspector.contextCreated(
+                &ls.local,
+                isolated_world.name,
+                "://",
+                aux_json,
+                false,
+            );
+        }
     }
 
     // Evaluate scripts registered via Page.addScriptToEvaluateOnNewDocument.
@@ -704,18 +719,6 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
             };
         }
     }
-
-    // frameNavigated event
-    try cdp.sendEvent("Page.frameNavigated", .{
-        .type = "Navigation",
-        .frame = CDPFrame{
-            .id = frame_id,
-            .url = event.url,
-            .loaderId = loader_id,
-            .securityOrigin = bc.security_origin,
-            .secureContextType = bc.secure_context_type,
-        },
-    }, .{ .session_id = session_id });
 
     // The DOM.documentUpdated event must be send after the frameNavigated one.
     // chromedp client expects to receive the events is this order.
