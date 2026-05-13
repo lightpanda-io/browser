@@ -611,7 +611,15 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
             return err;
         };
     }
-    _ = try self.perform(0);
+
+    // Start the request (and move along any other request). This used to call
+    // self.perform(0) but that can also execute callbacks. Normally, that
+    // wouldn't be so bad. But curl can synchronously fire callbacks for the
+    // request we JUST added, which we do not want (it results in incorrect
+    // execution).
+    self.performing = true;
+    defer self.performing = false;
+    _ = try self.handles.perform();
 }
 
 pub const PerformStatus = enum {
