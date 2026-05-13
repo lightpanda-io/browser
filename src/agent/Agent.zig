@@ -726,6 +726,7 @@ fn isHealAllowed(cmd: Command.Command) bool {
 /// Runs a single LLM turn, captures the commands it called without recording
 /// them — so the caller can splice healed commands into the script directly.
 fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Command.Command {
+    const provider_client = self.ai_client orelse return error.NoAiClient;
     const ma = self.message_arena.allocator();
 
     try self.ensureSystemPrompt();
@@ -734,8 +735,6 @@ fn runHealTurn(self: *Self, arena: std.mem.Allocator, prompt: []const u8) ![]Com
         .role = .user,
         .content = try ma.dupe(u8, prompt),
     });
-
-    const provider_client = self.ai_client orelse return error.NoAiClient;
 
     self.terminal.spinner.start();
     var result = provider_client.runTools(
