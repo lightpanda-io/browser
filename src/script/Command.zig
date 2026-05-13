@@ -538,9 +538,9 @@ pub const ToolCall = struct {
 /// Callback for resolving placeholder strings (typically `$LP_*` env vars)
 /// inside selector-like fields before serialization. Pass `noSubstitute`
 /// when raw output is desired (e.g. in tests).
-pub const SubstituteFn = *const fn (arena: std.mem.Allocator, input: []const u8) []const u8;
+pub const SubstituteFn = *const fn (arena: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]const u8;
 
-pub fn noSubstitute(_: std.mem.Allocator, input: []const u8) []const u8 {
+pub fn noSubstitute(_: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]const u8 {
     return input;
 }
 
@@ -561,50 +561,50 @@ pub const ToolCallValue = struct {
 /// `type_cmd` is intentionally NOT substituted: `execFill` in
 /// `browser/tools.zig` substitutes it itself so the secret never appears
 /// in the result text echoed back to the LLM/terminal.
-pub fn toToolCallValue(arena: std.mem.Allocator, cmd: Command, substitute: SubstituteFn) ?ToolCallValue {
+pub fn toToolCallValue(arena: std.mem.Allocator, cmd: Command, substitute: SubstituteFn) std.mem.Allocator.Error!?ToolCallValue {
     const Action = lp.tools.Action;
     var obj: std.json.ObjectMap = .init(arena);
     switch (cmd) {
         .goto => |url| {
-            obj.put("url", .{ .string = substitute(arena, url) }) catch return null;
+            try obj.put("url", .{ .string = try substitute(arena, url) });
             return .{ .name = @tagName(Action.goto), .args = .{ .object = obj } };
         },
         .click => |sel| {
-            obj.put("selector", .{ .string = substitute(arena, sel) }) catch return null;
+            try obj.put("selector", .{ .string = try substitute(arena, sel) });
             return .{ .name = @tagName(Action.click), .args = .{ .object = obj } };
         },
         .type_cmd => |args| {
-            obj.put("selector", .{ .string = substitute(arena, args.selector) }) catch return null;
-            obj.put("value", .{ .string = args.value }) catch return null;
+            try obj.put("selector", .{ .string = try substitute(arena, args.selector) });
+            try obj.put("value", .{ .string = args.value });
             return .{ .name = @tagName(Action.fill), .args = .{ .object = obj } };
         },
         .wait => |sel| {
-            obj.put("selector", .{ .string = sel }) catch return null;
+            try obj.put("selector", .{ .string = sel });
             return .{ .name = @tagName(Action.waitForSelector), .args = .{ .object = obj } };
         },
         .scroll => |args| {
-            obj.put("x", .{ .integer = args.x }) catch return null;
-            obj.put("y", .{ .integer = args.y }) catch return null;
+            try obj.put("x", .{ .integer = args.x });
+            try obj.put("y", .{ .integer = args.y });
             return .{ .name = @tagName(Action.scroll), .args = .{ .object = obj } };
         },
         .hover => |sel| {
-            obj.put("selector", .{ .string = substitute(arena, sel) }) catch return null;
+            try obj.put("selector", .{ .string = try substitute(arena, sel) });
             return .{ .name = @tagName(Action.hover), .args = .{ .object = obj } };
         },
         .select => |args| {
-            obj.put("selector", .{ .string = substitute(arena, args.selector) }) catch return null;
-            obj.put("value", .{ .string = substitute(arena, args.value) }) catch return null;
+            try obj.put("selector", .{ .string = try substitute(arena, args.selector) });
+            try obj.put("value", .{ .string = try substitute(arena, args.value) });
             return .{ .name = @tagName(Action.selectOption), .args = .{ .object = obj } };
         },
         .check => |args| {
-            obj.put("selector", .{ .string = substitute(arena, args.selector) }) catch return null;
-            obj.put("checked", .{ .bool = args.checked }) catch return null;
+            try obj.put("selector", .{ .string = try substitute(arena, args.selector) });
+            try obj.put("checked", .{ .bool = args.checked });
             return .{ .name = @tagName(Action.setChecked), .args = .{ .object = obj } };
         },
         .tree => return .{ .name = @tagName(Action.tree), .args = null },
         .markdown => return .{ .name = @tagName(Action.markdown), .args = null },
         .eval_js => |script| {
-            obj.put("script", .{ .string = script }) catch return null;
+            try obj.put("script", .{ .string = script });
             return .{ .name = @tagName(Action.eval), .args = .{ .object = obj } };
         },
         .extract, .natural_language, .comment, .login, .accept_cookies => return null,
@@ -614,8 +614,8 @@ pub fn toToolCallValue(arena: std.mem.Allocator, cmd: Command, substitute: Subst
 /// Stringified flavor of `toToolCallValue` — used by the recorder/diagnostic
 /// paths (and tests) that want a JSON string. Hot dispatch should use
 /// `toToolCallValue` instead and skip the stringify+reparse.
-pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: SubstituteFn) ?ToolCall {
-    const tcv = toToolCallValue(arena, cmd, substitute) orelse return null;
+pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: SubstituteFn) std.mem.Allocator.Error!?ToolCall {
+    const tcv = (try toToolCallValue(arena, cmd, substitute)) orelse return null;
     return .{
         .name = tcv.name,
         .args_json = if (tcv.args) |v| stringifyJson(arena, v) else "",
@@ -686,8 +686,8 @@ fn getJsonI32(o: std.json.ObjectMap, key: []const u8, default: i32) i32 {
 
 // --- Tests ---
 
-fn testUpcase(ar: std.mem.Allocator, input: []const u8) []const u8 {
-    const out = ar.alloc(u8, input.len) catch return input;
+fn testUpcase(ar: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]const u8 {
+    const out = try ar.alloc(u8, input.len);
     return std.ascii.upperString(out, input);
 }
 
@@ -1286,7 +1286,7 @@ fn expectRoundTrip(cmd: Command) !void {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const tc = toToolCall(a, cmd, noSubstitute) orelse return error.NoToolMapping;
+    const tc = (try toToolCall(a, cmd, noSubstitute)) orelse return error.NoToolMapping;
     const back = fromToolCall(a, tc.name, if (tc.args_json.len == 0) "{}" else tc.args_json) orelse
         return error.RoundTripFailed;
     try std.testing.expectEqualDeep(cmd, back);
@@ -1333,11 +1333,11 @@ test "toToolCall: variants without tool mapping return null" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    try std.testing.expect(toToolCall(a, .{ .extract = "{\"x\":\".x\"}" }, noSubstitute) == null);
-    try std.testing.expect(toToolCall(a, .login, noSubstitute) == null);
-    try std.testing.expect(toToolCall(a, .accept_cookies, noSubstitute) == null);
-    try std.testing.expect(toToolCall(a, .comment, noSubstitute) == null);
-    try std.testing.expect(toToolCall(a, .{ .natural_language = "hi" }, noSubstitute) == null);
+    try std.testing.expect((try toToolCall(a, .{ .extract = "{\"x\":\".x\"}" }, noSubstitute)) == null);
+    try std.testing.expect((try toToolCall(a, .login, noSubstitute)) == null);
+    try std.testing.expect((try toToolCall(a, .accept_cookies, noSubstitute)) == null);
+    try std.testing.expect((try toToolCall(a, .comment, noSubstitute)) == null);
+    try std.testing.expect((try toToolCall(a, .{ .natural_language = "hi" }, noSubstitute)) == null);
 }
 
 test "fromToolCall: unknown tool returns null" {
@@ -1357,7 +1357,7 @@ test "toToolCall: substitute callback applied to selector fields" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    const tc = toToolCall(a, .{ .click = "abc" }, testUpcase).?;
+    const tc = (try toToolCall(a, .{ .click = "abc" }, testUpcase)).?;
     try std.testing.expectEqualStrings("click", tc.name);
     try std.testing.expectEqualStrings("{\"selector\":\"ABC\"}", tc.args_json);
 }
@@ -1367,7 +1367,7 @@ test "toToolCall: type_cmd value is NOT substituted" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    const tc = toToolCall(a, .{ .type_cmd = .{ .selector = "abc", .value = "$LP_PASSWORD" } }, testUpcase).?;
+    const tc = (try toToolCall(a, .{ .type_cmd = .{ .selector = "abc", .value = "$LP_PASSWORD" } }, testUpcase)).?;
     try std.testing.expectEqualStrings("fill", tc.name);
     // selector substituted, value preserved as $LP_* reference
     try std.testing.expectEqualStrings("{\"selector\":\"ABC\",\"value\":\"$LP_PASSWORD\"}", tc.args_json);

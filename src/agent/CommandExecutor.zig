@@ -31,7 +31,8 @@ pub const ExecResult = struct {
 pub fn executeWithResult(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) ExecResult {
     if (cmd == .extract) return self.execExtract(arena, cmd.extract);
 
-    const tcv = Command.toToolCallValue(arena, cmd, browser_tools.substituteEnvVars) orelse unreachable;
+    const tcv = (Command.toToolCallValue(arena, cmd, browser_tools.substituteEnvVars) catch
+        return .{ .output = "out of memory", .failed = true }) orelse unreachable;
     if (self.tool_executor.callValue(arena, tcv.name, tcv.args)) |output|
         return .{ .output = output, .failed = false }
     else |err|
@@ -57,7 +58,8 @@ pub fn printResult(self: *Self, cmd: Command.Command, result: ExecResult) void {
 }
 
 fn execExtract(self: *Self, arena: std.mem.Allocator, raw_schema: []const u8) ExecResult {
-    const schema = browser_tools.substituteEnvVars(arena, raw_schema);
+    const schema = browser_tools.substituteEnvVars(arena, raw_schema) catch
+        return .{ .output = "out of memory", .failed = true };
     const result = self.tool_executor.extractSchema(arena, schema);
     return .{ .output = result.text, .failed = result.is_error };
 }

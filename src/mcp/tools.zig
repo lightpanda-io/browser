@@ -275,7 +275,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     // Map the Command to its underlying browser tool and dispatch through
     // the same path as a direct MCP call. Recording is intentionally NOT
     // applied to script_step lines: replay shouldn't double-record.
-    const tcv = Command.toToolCallValue(arena, cmd, Command.noSubstitute) orelse {
+    const tcv = (try Command.toToolCallValue(arena, cmd, Command.noSubstitute)) orelse {
         return sendErrorContent(server, id, "command has no browser-tool mapping");
     };
 
