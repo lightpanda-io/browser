@@ -184,18 +184,9 @@ pub fn formatHealReplacement(
     cmds: []const Command.Command,
 ) !Replacement {
     std.debug.assert(cmds.len > 0);
-    var aw: std.Io.Writer.Allocating = .init(arena);
-
-    try aw.writer.print("# [Auto-healed] Original: {s}\n", .{raw_line});
-    for (cmds) |cmd| {
-        try cmd.format(&aw.writer);
-        try aw.writer.writeAll("\n");
-    }
-
-    return .{
-        .original_span = original_span,
-        .new_text = aw.written(),
-    };
+    const lines = try arena.alloc([]const u8, cmds.len);
+    for (cmds, 0..) |cmd, i| lines[i] = try std.fmt.allocPrint(arena, "{f}", .{cmd});
+    return formatHealReplacementLines(arena, original_span, raw_line, lines);
 }
 
 /// Same shape as `formatHealReplacement` but for callers that already have
