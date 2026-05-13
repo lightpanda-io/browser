@@ -361,12 +361,11 @@ fn runRepl(self: *Self) void {
             .natural_language => _ = self.runTurn(.{ .prompt = line, .record_comment = line }),
             else => {
                 const split = SlashCommand.splitNameRest(line) orelse continue :repl;
-                self.terminal.spinner.setTool(split.name, split.rest);
+                self.terminal.beginTool(split.name, split.rest);
                 var arena: std.heap.ArenaAllocator = .init(self.allocator);
                 defer arena.deinit();
                 const result = self.cmd_executor.executeWithResult(arena.allocator(), cmd);
-                if (result.failed) self.terminal.spinner.markToolFailed();
-                self.terminal.spinner.cancel();
+                self.terminal.endTool(!result.failed);
                 self.cmd_executor.printResult(cmd, result);
                 self.recorder.record(cmd);
             },
@@ -414,10 +413,9 @@ fn handleSlash(self: *Self, body: []const u8) bool {
             self.terminal.printError("eval requires a `script` argument.");
             return false;
         };
-        self.terminal.spinner.setTool(schema.tool_name, rest);
+        self.terminal.beginTool(schema.tool_name, rest);
         const result = self.tool_executor.callEval(aa, eval_script);
-        if (result.is_error) self.terminal.spinner.markToolFailed();
-        self.terminal.spinner.cancel();
+        self.terminal.endTool(!result.is_error);
         if (result.is_error) {
             self.terminal.printErrorFmt("eval: {s}", .{result.text});
         } else {
@@ -426,13 +424,12 @@ fn handleSlash(self: *Self, body: []const u8) bool {
         return false;
     }
 
-    self.terminal.spinner.setTool(schema.tool_name, rest);
+    self.terminal.beginTool(schema.tool_name, rest);
     if (self.tool_executor.call(aa, schema.tool_name, args_json)) |result| {
-        self.terminal.spinner.cancel();
+        self.terminal.endTool(true);
         self.terminal.printToolResult(schema.tool_name, result);
     } else |err| {
-        self.terminal.spinner.markToolFailed();
-        self.terminal.spinner.cancel();
+        self.terminal.endTool(false);
         self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, @errorName(err) });
     }
     return false;

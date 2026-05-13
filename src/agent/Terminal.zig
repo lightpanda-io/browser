@@ -112,6 +112,18 @@ pub fn deinit(self: *Self) void {
 
 const bullet_line_fmt = "{s}●{s} {s}[tool: {s}]{s} {s}\n";
 
+/// Mark the start of a manual REPL tool call. Pairs with `endTool`.
+pub fn beginTool(self: *Self, name: []const u8, args: []const u8) void {
+    self.spinner.setTool(name, args);
+}
+
+/// Mark the end of a manual REPL tool call. On failure, flashes the spinner
+/// label red before clearing it.
+pub fn endTool(self: *Self, ok: bool) void {
+    if (!ok) self.spinner.markToolFailed();
+    self.spinner.cancel();
+}
+
 /// Called after the tool returns.
 ///
 /// - Spinner mode (TTY REPL): the running label flashes red on failure
