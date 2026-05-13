@@ -671,7 +671,7 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
             "",
             frame.origin orelse "",
             aux_data,
-            true,
+            is_root_frame,
         );
     }
     // Isolated worlds are session-wide (single V8 context shared across
