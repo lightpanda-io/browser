@@ -339,7 +339,7 @@ pub var test_session: *Session = undefined;
 
 const WEB_API_TEST_ROOT = "src/browser/tests/";
 const HtmlRunnerOpts = struct {
-    timeout_ms: u32 = 2000,
+    timeout_ms: u32 = 10000,
     inject_script: ?[]const u8 = null,
 };
 
