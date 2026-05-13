@@ -44,3 +44,19 @@
 
 <!-- Leave it, it used to crash -->
 <script src='empty.js?x=["violated-directive=worker-src","TEST COMPLETE"]'></script>
+
+<!--
+  A blocking <script src> whose fetch returns a non-2xx status must:
+    - NOT execute the response body as JavaScript
+    - Fire an `error` event on the element (and NOT `load`)
+  /404.js returns valid JS (`window.__404_body_executed = true;`) with a
+  404 status, so the regression where we eval'd 4xx bodies would flip
+  __404_body_executed to true.
+-->
+<script>window.__bad404 = { error: false, load: false };</script>
+<script src="404.js" onerror="window.__bad404.error = true" onload="window.__bad404.load = true"></script>
+<script>
+  testing.expectEqual(true, window.__bad404.error);
+  testing.expectEqual(false, window.__bad404.load);
+  testing.expectEqual('undefined', typeof window.__404_body_executed);
+</script>

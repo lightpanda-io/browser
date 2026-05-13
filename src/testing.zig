@@ -649,6 +649,18 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/404.js")) {
+        // Valid JS body served with a 404 status. Used to assert that
+        // ScriptManager does NOT execute the body of a failed script
+        // fetch — if it did, window.__404_body_executed would be set.
+        return req.respond("window.__404_body_executed = true;", .{
+            .status = .not_found,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/javascript" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/xhr/500")) {
         return req.respond("Internal Server Error", .{
             .status = .internal_server_error,

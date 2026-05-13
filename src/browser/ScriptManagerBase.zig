@@ -687,7 +687,7 @@ pub const Script = struct {
                 const entry = manager.imported_modules.getPtr(self.url).?;
                 entry.state = .err;
             },
-            .frame => {},
+            .frame => self.executeCallback(comptime .wrap("error")),
         }
         self.deinit();
         manager.evaluate();
@@ -792,7 +792,7 @@ pub const Script = struct {
         self.executeCallback(comptime .wrap("error"));
     }
 
-    fn executeCallback(self: *const Script, typ: String) void {
+    pub fn executeCallback(self: *const Script, typ: String) void {
         const fe = self.extra.frame;
         const frame = fe.frame;
         const Event = @import("webapi/Event.zig");

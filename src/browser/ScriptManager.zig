@@ -284,8 +284,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         return;
     }
 
-    if (script.status == 0) {
-        // an error (that we already logged)
+    if (script.status < 200 or script.status > 299) {
+        log.info(.http, "script load error", .{ .status = script.status });
+        script.executeCallback(comptime .wrap("error"));
         script.deinit();
         return;
     }
