@@ -337,3 +337,26 @@
     });
   }
 </script>
+
+<script id="worker_post_before_load" type=module>
+  // Per spec, messages posted before the worker has finished loading must
+  // be buffered and delivered once onmessage is registered. Without the
+  // pending-message queue this hangs: postMessage fires immediately after
+  // new Worker, while the worker script's HTTP fetch is still in flight,
+  // so by the time the worker dispatches the message there is no
+  // onmessage listener yet and the message gets silently dropped.
+  {
+    const state = await testing.async();
+    const worker = new Worker('./echo-worker.js');
+    worker.onmessage = function(event) {
+      state.resolve(event.data);
+    };
+    // No setTimeout — post right now while the script is still loading.
+    worker.postMessage({ greeting: 'before-load' });
+
+    await state.done((response) => {
+      testing.expectEqual('before-load', response.echo.greeting);
+      testing.expectEqual('worker', response.from);
+    });
+  }
+</script>
