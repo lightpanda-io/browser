@@ -54,17 +54,32 @@ pub fn setName(self: *Form, name: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
 }
 
-pub fn getMethod(self: *const Form) []const u8 {
-    const method = self.asConstElement().getAttributeSafe(comptime .wrap("method")) orelse return "get";
-
-    if (std.ascii.eqlIgnoreCase(method, "post")) {
-        return "post";
-    }
-    if (std.ascii.eqlIgnoreCase(method, "dialog")) {
-        return "dialog";
-    }
-    // invalid, or it was get all along
+/// Canonicalize the `method` content attribute (or its `formmethod` submitter
+/// override) per WHATWG HTML "limited to only known values":
+///   - missing → returns `missing_default`
+///   - "post" / "dialog" → returns the lowercased keyword
+///   - empty / invalid / "get" → returns "get" (invalid-value default)
+pub fn normalizeMethod(attr: ?[]const u8, missing_default: []const u8) []const u8 {
+    const method = attr orelse return missing_default;
+    if (std.ascii.eqlIgnoreCase(method, "post")) return "post";
+    if (std.ascii.eqlIgnoreCase(method, "dialog")) return "dialog";
     return "get";
+}
+
+/// Canonicalize the `enctype` content attribute (or its `formenctype` submitter
+/// override) per WHATWG HTML "limited to only known values":
+///   - missing → returns `missing_default`
+///   - "multipart/form-data" / "text/plain" → returns the lowercased keyword
+///   - empty / invalid / urlencoded → returns "application/x-www-form-urlencoded"
+pub fn normalizeEnctype(attr: ?[]const u8, missing_default: []const u8) []const u8 {
+    const enctype = attr orelse return missing_default;
+    if (std.ascii.eqlIgnoreCase(enctype, "multipart/form-data")) return "multipart/form-data";
+    if (std.ascii.eqlIgnoreCase(enctype, "text/plain")) return "text/plain";
+    return "application/x-www-form-urlencoded";
+}
+
+pub fn getMethod(self: *const Form) []const u8 {
+    return normalizeMethod(self.asConstElement().getAttributeSafe(comptime .wrap("method")), "get");
 }
 
 pub fn setMethod(self: *Form, method: []const u8, frame: *Frame) !void {
@@ -117,6 +132,14 @@ pub fn getAcceptCharset(self: *Form) []const u8 {
 
 pub fn setAcceptCharset(self: *Form, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(.wrap("accept-charset"), .wrap(value), frame);
+}
+
+pub fn getEnctype(self: *const Form) []const u8 {
+    return normalizeEnctype(self.asConstElement().getAttributeSafe(comptime .wrap("enctype")), "application/x-www-form-urlencoded");
+}
+
+pub fn setEnctype(self: *Form, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("enctype"), .wrap(value), frame);
 }
 
 pub fn getLength(self: *Form, frame: *Frame) !u32 {
@@ -209,6 +232,7 @@ pub const JsApi = struct {
     pub const action = bridge.accessor(Form.getAction, Form.setAction, .{});
     pub const target = bridge.accessor(Form.getTarget, Form.setTarget, .{});
     pub const acceptCharset = bridge.accessor(Form.getAcceptCharset, Form.setAcceptCharset, .{});
+    pub const enctype = bridge.accessor(Form.getEnctype, Form.setEnctype, .{});
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});

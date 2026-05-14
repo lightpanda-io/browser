@@ -3994,13 +3994,14 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         }
         break :blk form_element.getAttributeSafe(comptime .wrap("enctype"));
     };
-    const method = blk: {
+    const method_attr: ?[]const u8 = blk: {
         if (submit_button) |s| {
             if (s.getAttributeSafe(comptime .wrap("formmethod"))) |fm| break :blk fm;
         }
-        break :blk form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
+        break :blk form_element.getAttributeSafe(comptime .wrap("method"));
     };
-    const is_post = std.ascii.eqlIgnoreCase(method, "post");
+    const method = Element.Html.Form.normalizeMethod(method_attr, "get");
+    const is_post = std.mem.eql(u8, method, "post");
 
     // Get charset from accept-charset attribute or fall back to document charset
     const charset: []const u8 = blk: {
@@ -4017,16 +4018,14 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     var boundary_buf: [36]u8 = undefined;
     // GET ignores enctype per HTML spec; only resolve the union for POST.
     const encoding: FormData.EncType = blk: {
-        if (is_post) {
-            if (enctype_attr) |attr| {
-                if (std.ascii.eqlIgnoreCase(attr, "multipart/form-data")) {
-                    @import("../id.zig").uuidv4(&boundary_buf);
-                    break :blk .{ .formdata = &boundary_buf };
-                }
-                if (!std.ascii.eqlIgnoreCase(attr, "application/x-www-form-urlencoded")) {
-                    log.warn(.not_implemented, "FormData.encoding", .{ .encoding = attr });
-                }
-            }
+        if (!is_post) break :blk .urlencode;
+        const canonical = Element.Html.Form.normalizeEnctype(enctype_attr, "application/x-www-form-urlencoded");
+        if (std.mem.eql(u8, canonical, "multipart/form-data")) {
+            @import("../id.zig").uuidv4(&boundary_buf);
+            break :blk .{ .formdata = &boundary_buf };
+        }
+        if (std.mem.eql(u8, canonical, "text/plain")) {
+            break :blk .plaintext;
         }
         break :blk .urlencode;
     };
@@ -4051,6 +4050,9 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         opts.header = switch (encoding) {
             .urlencode => "Content-Type: application/x-www-form-urlencoded",
             .formdata => |b| try std.fmt.allocPrintSentinel(arena, "Content-Type: multipart/form-data; boundary={s}", .{b}, 0),
+            // Per WHATWG HTML §4.10.21.6, text/plain submissions include the form's
+            // resolved encoding (accept-charset or document charset).
+            .plaintext => try std.fmt.allocPrintSentinel(arena, "Content-Type: text/plain; charset={s}", .{charset}, 0),
         };
     } else {
         action = try URL.concatQueryString(arena, action, buf.written());
