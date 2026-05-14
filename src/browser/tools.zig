@@ -470,26 +470,6 @@ pub fn evalScript(
     return runEval(arena, page, z);
 }
 
-/// JSON-encoded array of `el.textContent.trim()` for every element matching
-/// `selector`. Shared between PandaScript's EXTRACT command and the MCP
-/// `script_step` extract arm.
-pub fn extractText(
-    arena: std.mem.Allocator,
-    session: *lp.Session,
-    registry: *CDPNode.Registry,
-    selector: []const u8,
-) ToolError!EvalResult {
-    const selector_json = try std.json.Stringify.valueAlloc(arena, selector, .{});
-    const eval_script = try std.fmt.allocPrintSentinel(
-        arena,
-        "JSON.stringify(Array.from(document.querySelectorAll({s})).map(el => el.textContent.trim()))",
-        .{selector_json},
-        0,
-    );
-    const page = try ensurePage(session, registry, null, null, null);
-    return runEval(arena, page, eval_script);
-}
-
 /// Schema-driven extraction. The schema is parsed in Zig so a syntax error
 /// surfaces here instead of as a confusing V8 SyntaxError on the spliced
 /// walker. Each value in the schema object is one of:

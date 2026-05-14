@@ -267,8 +267,8 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         .comment => {
             return sendToolResultText(server, id, "comment", false);
         },
-        .extract => |sel| {
-            return sendEvalOutcome(server, id, browser_tools.extractText(arena, server.session, &server.node_registry, sel));
+        .extract => |schema| {
+            return sendEvalOutcome(server, id, browser_tools.extractSchema(arena, server.session, &server.node_registry, schema));
         },
         else => {},
     }

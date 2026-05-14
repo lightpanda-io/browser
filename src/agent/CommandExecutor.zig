@@ -25,13 +25,11 @@ const Terminal = @import("Terminal.zig");
 
 const Self = @This();
 
-allocator: std.mem.Allocator,
 tool_executor: *ToolExecutor,
 terminal: *Terminal,
 
-pub fn init(allocator: std.mem.Allocator, tool_executor: *ToolExecutor, terminal: *Terminal) Self {
+pub fn init(tool_executor: *ToolExecutor, terminal: *Terminal) Self {
     return .{
-        .allocator = allocator,
         .tool_executor = tool_executor,
         .terminal = terminal,
     };
@@ -55,14 +53,6 @@ pub fn executeWithResult(self: *Self, arena: std.mem.Allocator, cmd: Command.Com
         return .{ .output = output, .failed = false }
     else |err|
         return .{ .output = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tcv.name, @errorName(err) }) catch "tool failed", .failed = true };
-}
-
-pub fn execute(self: *Self, cmd: Command.Command) void {
-    var arena: std.heap.ArenaAllocator = .init(self.allocator);
-    defer arena.deinit();
-
-    const result = self.executeWithResult(arena.allocator(), cmd);
-    self.printResult(cmd, result);
 }
 
 /// Data-producing commands (EXTRACT/EVAL/MARKDOWN/TREE) go to stdout so shell
