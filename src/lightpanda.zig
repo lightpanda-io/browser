@@ -154,19 +154,20 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
     }
 
     const writer = opts.writer orelse return;
+    const current = session.currentFrame() orelse return error.NoCurrentFrame;
     if (opts.dump_mode) |mode| {
         switch (mode) {
-            .html => try dump.root(frame.window._document, opts.dump, writer, frame),
-            .markdown => try markdown.dump(frame.window._document.asNode(), .{}, writer, frame),
+            .html => try dump.root(current.window._document, opts.dump, writer, current),
+            .markdown => try markdown.dump(current.window._document.asNode(), .{}, writer, current),
             .semantic_tree, .semantic_tree_text => {
                 var registry = CDPNode.Registry.init(app.allocator);
                 defer registry.deinit();
 
                 const st: SemanticTree = .{
-                    .dom_node = frame.window._document.asNode(),
+                    .dom_node = current.window._document.asNode(),
                     .registry = &registry,
-                    .frame = frame,
-                    .arena = frame.call_arena,
+                    .frame = current,
+                    .arena = current.call_arena,
                     .prune = (mode == .semantic_tree_text),
                 };
 
@@ -176,7 +177,7 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
                     try st.textStringify(writer);
                 }
             },
-            .wpt => try dumpWPT(frame, writer),
+            .wpt => try dumpWPT(current, writer),
         }
     }
     try writer.flush();
