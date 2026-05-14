@@ -488,6 +488,9 @@ pub const HttpHeaders = struct {
     // normal client.
     pub const accept_language: [:0]const u8 = "Accept-Language: en-US,en;q=0.9";
 
+    // Document-navigation Accept value Chrome sends.
+    pub const navigation_accept: [:0]const u8 = "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+
     user_agent: [:0]const u8, // User agent value (e.g. "Lightpanda/1.0")
     user_agent_header: [:0]const u8,
 
