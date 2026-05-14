@@ -81,26 +81,26 @@ pub fn getOwnerRule(self: *const CSSStyleSheet) ?*CSSRule {
 pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, frame: *Frame) !u32 {
     const requested_index = maybe_index orelse 0;
     var it = Parser.parseStylesheet(rule);
-    const parsed_rule = it.next() orelse {
-        if (it.has_skipped_at_rule) {
-            log.debug(.not_implemented, "CSSStyleSheet.insertRule", .{});
-            // Lightpanda currently skips at-rules (e.g., @keyframes, @media) in its
-            // CSS parser. To prevent JS apps (like Expo/Reanimated) from crashing
-            // during initialization, we simulate a successful insertion by returning
-            // the requested index.
-            return requested_index;
-        }
-        return error.SyntaxError;
-    };
+    const parsed_rule = it.next() orelse return error.SyntaxError;
 
     if (it.next() != null) return error.SyntaxError;
 
-    const style_rule = try CSSStyleRule.init(frame);
-    try style_rule.setSelectorText(parsed_rule.selector, frame);
+    const inserted: *CSSRule = switch (parsed_rule) {
+        .style => |s| blk: {
+            const style_rule = try CSSStyleRule.init(frame);
+            try style_rule.setSelectorText(s.selector, frame);
 
-    const style_props = try style_rule.getStyle(frame);
-    const style = style_props.asCSSStyleDeclaration();
-    try style.setCssText(parsed_rule.block, frame);
+            const style_props = try style_rule.getStyle(frame);
+            const style = style_props.asCSSStyleDeclaration();
+            try style.setCssText(s.block, frame);
+            break :blk style_rule._proto;
+        },
+        // Opaque placeholder for at-rules. The CSS engine doesn't apply
+        // these (`@keyframes`, `@media`, ...) but JS-side reads must see
+        // them via `cssRules` so CSS-in-JS libraries don't fall back to
+        // per-render `<style>` injection. See #2459.
+        .at_rule => |a| try CSSRule.initAtRule(atRuleTypeFor(a.keyword), a.text, frame),
+    };
 
     const rules = try self.getCssRules(frame);
 
@@ -113,12 +113,46 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, fra
     if (index != requested_index) {
         log.debug(.not_implemented, "insertRule clamped index", .{});
     }
-    try rules.insert(index, style_rule._proto, frame);
+    try rules.insert(index, inserted, frame);
 
     // Notify StyleManager that rules have changed
     frame._style_manager.sheetModified();
 
     return index;
+}
+
+/// Map an at-rule keyword (without `@`) to the matching `CSSRule.Type`
+/// variant. Vendor prefixes are stripped before matching
+/// (`-webkit-keyframes` -> `keyframes`). Unrecognized keywords fall back
+/// to `.media`: this is a deliberate choice to avoid changing the
+/// `CSSRule.Type` enum's numeric layout (which is exposed as the spec
+/// `CSSRule.type` constant) just to add an `unknown` variant. The CSS
+/// engine doesn't use the type for anything; the value matters only for
+/// JS-side `rule.type` checks, and CSS-in-JS dedup paths key on `length`
+/// or `cssText` rather than `type`.
+fn atRuleTypeFor(keyword_with_prefix: []const u8) CSSRule.Type {
+    var keyword = keyword_with_prefix;
+    inline for (.{ "-webkit-", "-moz-", "-ms-", "-o-" }) |prefix| {
+        if (std.ascii.startsWithIgnoreCase(keyword, prefix)) {
+            keyword = keyword[prefix.len..];
+            break;
+        }
+    }
+
+    const eql = std.ascii.eqlIgnoreCase;
+    if (eql(keyword, "media")) return .media;
+    if (eql(keyword, "keyframes")) return .keyframes;
+    if (eql(keyword, "supports")) return .supports;
+    if (eql(keyword, "font-face")) return .font_face;
+    if (eql(keyword, "import")) return .import;
+    if (eql(keyword, "charset")) return .charset;
+    if (eql(keyword, "namespace")) return .namespace;
+    if (eql(keyword, "page")) return .frame;
+    if (eql(keyword, "counter-style")) return .counter_style;
+    if (eql(keyword, "font-feature-values")) return .font_feature_values;
+    if (eql(keyword, "viewport")) return .viewport;
+    if (eql(keyword, "document")) return .document;
+    return .media;
 }
 
 pub fn deleteRule(self: *CSSStyleSheet, index: u32, frame: *Frame) !void {
@@ -141,14 +175,20 @@ pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSErr
     var it = Parser.parseStylesheet(text);
     var index: u32 = 0;
     while (it.next()) |parsed_rule| {
-        const style_rule = try CSSStyleRule.init(frame);
-        try style_rule.setSelectorText(parsed_rule.selector, frame);
+        const inserted: *CSSRule = switch (parsed_rule) {
+            .style => |s| blk: {
+                const style_rule = try CSSStyleRule.init(frame);
+                try style_rule.setSelectorText(s.selector, frame);
 
-        const style_props = try style_rule.getStyle(frame);
-        const style = style_props.asCSSStyleDeclaration();
-        try style.setCssText(parsed_rule.block, frame);
+                const style_props = try style_rule.getStyle(frame);
+                const style = style_props.asCSSStyleDeclaration();
+                try style.setCssText(s.block, frame);
+                break :blk style_rule._proto;
+            },
+            .at_rule => |a| try CSSRule.initAtRule(atRuleTypeFor(a.keyword), a.text, frame),
+        };
 
-        try rules.insert(index, style_rule._proto, frame);
+        try rules.insert(index, inserted, frame);
         index += 1;
     }
 
