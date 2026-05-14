@@ -89,7 +89,13 @@ fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
         const text = try style.asNode().getTextContentAlloc(self.arena);
         var it = CssParser.parseStylesheet(text);
         while (it.next()) |parsed_rule| {
-            try self.addRawRule(parsed_rule.selector, parsed_rule.block);
+            // StyleManager only filters on regular style rules (display,
+            // visibility, opacity). At-rules don't carry top-level
+            // declarations relevant here -- skip them.
+            switch (parsed_rule) {
+                .style => |s| try self.addRawRule(s.selector, s.block),
+                .at_rule => {},
+            }
         }
     }
 }
