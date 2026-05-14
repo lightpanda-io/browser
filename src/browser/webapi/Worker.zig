@@ -184,12 +184,22 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 }
 
 fn loadInitialScript(self: *Worker, script: []const u8) !void {
-    // Mark loaded BEFORE eval: messages received during eval (e.g. while
-    // an importScripts() call pumps the CDP socket) should be scheduled
-    // normally, not re-buffered. drainPendingMessages below picks up any
-    // messages that arrived strictly before this point.
-    self._script_loaded = true;
-    defer self._worker_scope.drainPendingMessages();
+    // Keep buffering throughout the entire outer eval (including any
+    // runMacrotasks pumped by importScripts via the synchronous CDP path,
+    // see WorkerGlobalScope.importScripts). The flip-and-drain happens
+    // via defer so it runs after eval AND after the trailing
+    // runMacrotasks below — by which point the outer script has had its
+    // only chance to register onmessage. drainPendingMessages enqueues
+    // messages in receive order, so pre-eval and during-eval messages
+    // are delivered FIFO on the next runner tick, matching the spec.
+    //
+    // On eval-throw the defer still fires; the messages get scheduled
+    // and then drop at the "no listener" check, mirroring the
+    // httpErrorCallback path.
+    defer {
+        self._script_loaded = true;
+        self._worker_scope.drainPendingMessages();
+    }
 
     var ls: js.Local.Scope = undefined;
     self._worker_scope.js.localScope(&ls);
