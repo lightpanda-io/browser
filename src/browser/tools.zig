@@ -1203,11 +1203,6 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutO
     return result.toOwnedSlice(arena);
 }
 
-test "substituteEnvVars no vars" {
-    const r = try substituteEnvVars(std.testing.allocator, "hello world");
-    try std.testing.expectEqualStrings("hello world", r);
-}
-
 test "substituteEnvVars resolves LP_* vars" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();

@@ -915,14 +915,26 @@ test "parse CHECK" {
     }
 }
 
-test "parse TREE" {
-    const cmd = parse("TREE");
-    try std.testing.expect(cmd == .tree);
-}
-
-test "parse MARKDOWN" {
-    try std.testing.expect(parse("MARKDOWN") == .markdown);
-    try std.testing.expect(parse("markdown") == .natural_language);
+test "parse argless and tag-only inputs" {
+    const Tag = std.meta.Tag(Command);
+    const cases = [_]struct { in: []const u8, expected: Tag }{
+        .{ .in = "TREE", .expected = .tree },
+        .{ .in = "MARKDOWN", .expected = .markdown },
+        .{ .in = "LOGIN", .expected = .login },
+        .{ .in = "ACCEPT_COOKIES", .expected = .accept_cookies },
+        // Lowercase English words that overlap with command names must fall
+        // through so prose reaches the LLM unmolested.
+        .{ .in = "markdown", .expected = .natural_language },
+        .{ .in = "login", .expected = .natural_language },
+        .{ .in = "accept_cookies", .expected = .natural_language },
+        .{ .in = "# this is a comment", .expected = .comment },
+        .{ .in = "# INTENT: LOGIN", .expected = .comment },
+        .{ .in = "", .expected = .natural_language },
+    };
+    for (cases, 0..) |c, i| {
+        errdefer std.debug.print("failing case {d}: \"{s}\"\n", .{ i, c.in });
+        try std.testing.expectEqual(c.expected, std.meta.activeTag(parse(c.in)));
+    }
 }
 
 test "parse EXTRACT" {
@@ -958,24 +970,9 @@ test "parse EVAL single line" {
     try std.testing.expectEqualStrings("document.title", cmd.eval_js);
 }
 
-test "parse LOGIN" {
-    try std.testing.expect(parse("LOGIN") == .login);
-    try std.testing.expect(parse("login") == .natural_language);
-}
-
-test "parse ACCEPT_COOKIES" {
-    try std.testing.expect(parse("ACCEPT_COOKIES") == .accept_cookies);
-    try std.testing.expect(parse("accept_cookies") == .natural_language);
-}
-
 test "parse EVAL triple-quote opener requires uppercase" {
     try std.testing.expect(parse("eval '''") == .natural_language);
     try std.testing.expect(parse("eval \"\"\"") == .natural_language);
-}
-
-test "parse comment" {
-    try std.testing.expect(parse("# this is a comment") == .comment);
-    try std.testing.expect(parse("# INTENT: LOGIN") == .comment);
 }
 
 test "parse natural language fallback" {
@@ -986,11 +983,6 @@ test "parse natural language fallback" {
 test "parse whitespace trimming" {
     const cmd = parse("  GOTO  https://example.com  ");
     try std.testing.expectEqualStrings("https://example.com", cmd.goto);
-}
-
-test "parse empty input" {
-    const cmd = parse("");
-    try std.testing.expect(cmd == .natural_language);
 }
 
 test "isRecorded" {
@@ -1309,41 +1301,23 @@ fn expectRoundTrip(cmd: Command) !void {
     try std.testing.expectEqualDeep(cmd, back);
 }
 
-test "toToolCall/fromToolCall round-trip: goto" {
-    try expectRoundTrip(.{ .goto = "https://example.com" });
-}
-
-test "toToolCall/fromToolCall round-trip: click" {
-    try expectRoundTrip(.{ .click = "#login-btn" });
-}
-
-test "toToolCall/fromToolCall round-trip: type_cmd" {
-    try expectRoundTrip(.{ .type_cmd = .{ .selector = "#email", .value = "x@y.z" } });
-}
-
-test "toToolCall/fromToolCall round-trip: wait" {
-    try expectRoundTrip(.{ .wait = ".loaded" });
-}
-
-test "toToolCall/fromToolCall round-trip: scroll" {
-    try expectRoundTrip(.{ .scroll = .{ .x = 0, .y = 500 } });
-}
-
-test "toToolCall/fromToolCall round-trip: hover" {
-    try expectRoundTrip(.{ .hover = ".menu-item" });
-}
-
-test "toToolCall/fromToolCall round-trip: select" {
-    try expectRoundTrip(.{ .select = .{ .selector = "#country", .value = "US" } });
-}
-
-test "toToolCall/fromToolCall round-trip: check true and false" {
-    try expectRoundTrip(.{ .check = .{ .selector = "#tos", .checked = true } });
-    try expectRoundTrip(.{ .check = .{ .selector = "#tos", .checked = false } });
-}
-
-test "toToolCall/fromToolCall round-trip: eval_js" {
-    try expectRoundTrip(.{ .eval_js = "document.title" });
+test "toToolCall/fromToolCall round-trip" {
+    const cases = [_]Command{
+        .{ .goto = "https://example.com" },
+        .{ .click = "#login-btn" },
+        .{ .type_cmd = .{ .selector = "#email", .value = "x@y.z" } },
+        .{ .wait = ".loaded" },
+        .{ .scroll = .{ .x = 0, .y = 500 } },
+        .{ .hover = ".menu-item" },
+        .{ .select = .{ .selector = "#country", .value = "US" } },
+        .{ .check = .{ .selector = "#tos", .checked = true } },
+        .{ .check = .{ .selector = "#tos", .checked = false } },
+        .{ .eval_js = "document.title" },
+    };
+    for (cases, 0..) |c, i| {
+        errdefer std.debug.print("failing case {d}: tag={s}\n", .{ i, @tagName(c) });
+        try expectRoundTrip(c);
+    }
 }
 
 test "toToolCall: variants without tool mapping return null" {
