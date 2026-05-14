@@ -50,6 +50,14 @@ pub const Entry = struct {
                 .file => unreachable, // nothing currently creates this type of value
             };
         }
+
+
+        pub fn format(self: Value, writer: *std.Io.Writer) !void {
+            return switch (self) {
+                .string => |s| s.format(writer),
+                .file => unreachable, // nothing currently creates this type of value
+            };
+        }
     };
 };
 
@@ -204,9 +212,9 @@ fn urlEncodeEntry(entry: *const Entry, opts: WriteOpts, writer: *std.Io.Writer) 
 /// value containing "=" or CRLF produces an ambiguous wire format, by design.
 fn plaintextEncode(self: *const FormData, writer: *std.Io.Writer) !void {
     for (self._entries.items) |*entry| {
-        try writer.writeAll(entry.name.str());
+        try entry.name.format(writer);
         try writer.writeByte('=');
-        try writer.writeAll(entry.value.asString());
+        try entry.value.format(writer);
         try writer.writeAll("\r\n");
     }
 }
