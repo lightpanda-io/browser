@@ -322,15 +322,34 @@ pub fn Builder(comptime commands: anytype) type {
 
             // Help is not in `commands`; so, we have to special case it.
             if (std.mem.eql(u8, cmd_str, "help")) {
-                return .{ exec_name, @unionInit(Union, "help", .help) };
+                // Check if we're followed by a command name.
+                const command_name: []const u8 = args.next() orelse {
+                    // "lightpanda help"; short-circuit.
+                    return .{ exec_name, @unionInit(Union, "help", .help) };
+                };
+
+                inline for (commands) |command| {
+                    if (std.mem.eql(u8, command_name, command.name)) {
+                        return .{
+                            exec_name,
+                            @unionInit(Union, "help", std.meta.stringToEnum(Enum, command.name).?),
+                        };
+                    }
+                }
+
+                // Treat `help help` as the full help.
+                if (std.mem.eql(u8, command_name, "help")) {
+                    return .{ exec_name, @unionInit(Union, "help", .help) };
+                }
+
+                log.fatal(.app, "unknown command", .{ .arg = command_name });
+                return error.UnknownCommand;
             }
 
             // Last resort, try sniffing.
             const command_enum = try sniffCommand(cmd_str);
 
             // Legacy `--help` situation.
-            // `help` takes no arguments; short-circuit so the sniffed flag
-            // isn't re-parsed as an unknown option.
             if (command_enum == .help) {
                 return .{ exec_name, @unionInit(Union, "help", .help) };
             }
