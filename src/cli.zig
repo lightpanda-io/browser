@@ -23,7 +23,21 @@ const log = lp.log;
 
 /// Comptime CLI builder that generates a tagged union parser from a
 /// declarative command recipe. Each command becomes a union variant whose
-/// payload is a struct with one field per option.
+/// payload is a struct with one field per option. A `help` variant is added
+/// automatically; do not include it in the recipe.
+///
+/// ## Parsing behavior
+///
+/// `parse` reads `std.process.args`, picks a command by the first non-exec
+/// argument, then walks the rest as `--flag value` pairs. Quirks:
+///
+///   - When no command is given, the parser defaults to `serve`.
+///   - `help` (no args) and `<command> help` / `<command> --help` both yield
+///     the `help` union variant; the latter form carries the originating
+///     command's enum tag so callers can print command-specific help.
+///   - Legacy fallback: if the first argument starts with `--` and matches a
+///     known fetch/serve flag, the parser sniffs the command from it and
+///     re-parses argv. Only exists for backwards compatibility.
 ///
 /// ## Command descriptor fields
 ///
@@ -34,8 +48,9 @@ const log = lp.log;
 ///     command. Useful for common flags shared across commands.
 ///   - `positional: struct` (optional) — a single positional argument with
 ///     `.name` and `.type`. Type must be an optional pointer-to-u8 slice
-///     (e.g. `?[:0]const u8`). Positionals can appear anywhere in argv and
-///     must be provided; a missing positional returns `error.MissingArgument`.
+///     (e.g. `?[:0]const u8`); it defaults to `null` and may appear anywhere
+///     in argv. Passing it more than once returns
+///     `error.TooManyPositionalArguments`.
 ///
 /// ## Option descriptor fields
 ///
@@ -49,6 +64,8 @@ const log = lp.log;
 ///     `bool` or packed-struct options.
 ///   - `validator: fn` (optional) — custom parse function that replaces the
 ///     built-in type switch. See the validator section below.
+///   - `variants: tuple` (optional) — alternate flag names that write into
+///     the same field. See the variants section below.
 ///
 /// ## Supported types and their defaults
 ///
@@ -60,10 +77,10 @@ const log = lp.log;
 ///   - `[]const u8`, `[:0]const u8` (and mutable variants) — string slices
 ///     duped from argv. Sentinel is preserved. Requires `default` unless `?`.
 ///   - Enums — parsed via `std.meta.stringToEnum`. Returns
-///     `error.UnknownArgument` on a bad value. Requires `default` unless `?`.
+///     `error.InvalidArgument` on a bad value. Requires `default` unless `?`.
 ///   - Packed structs of `bool` fields — parsed from a comma-separated list
 ///     (e.g. `--strip-mode js,css`). The literal `"full"` sets every field.
-///     Unknown names return `error.UnknownArgument`. Requires `default`.
+///     Unknown names return `error.InvalidArgument`. Requires `default`.
 ///     `multiple` is not supported.
 ///   - Optional types default to `null` when `default` is omitted.
 ///
@@ -79,6 +96,15 @@ const log = lp.log;
 ///
 /// When a validator is present, the built-in type switch is skipped entirely.
 /// The validator owns advancing the iterator and is free to peek ahead.
+///
+/// ## Variants
+///
+/// A `variants` tuple lets multiple flag names write into the same field
+/// using different parse logic. Each variant has its own `.name` and an
+/// optional `.validator` (with the same signatures as above); the option's
+/// `type` and `multiple` are inherited. Useful for "value or file" pairs:
+/// e.g. `--wait-script "code"` vs `--wait-script-file path/to/script.js`,
+/// both populating the same `wait_script` field.
 ///
 /// ## Example
 ///
@@ -113,19 +139,25 @@ const log = lp.log;
 ///             .{ .name = "strip_mode", .type = StripMode, .default = .{} },
 ///             .{ .name = "wait_until", .type = ?WaitUntil },
 ///             .{ .name = "extra_header", .type = []const u8, .multiple = true },
+///             .{
+///                 .name = "wait_script",
+///                 .type = ?[:0]const u8,
+///                 .variants = .{
+///                     .{ .name = "wait_script_file", .validator = readScriptFile },
+///                 },
+///             },
 ///         },
 ///         .shared_options = CommonOptions,
 ///     },
 ///     .{ .name = "version", .options = .{} },
-///     .{ .name = "help", .options = .{} },
 /// });
 ///
 /// const _, const cmd = try Cli.parse(arena);
 /// switch (cmd) {
 ///     .serve => |opts| listen(opts.host, opts.port),
-///     .fetch => |opts| fetch(opts.url.?, opts.dump),
+///     .fetch => |opts| fetch(opts.url orelse return error.UrlRequired, opts.dump),
 ///     .version => printVersion(),
-///     .help => printHelp(),
+///     .help => |tag| printHelp(tag),
 /// }
 /// ```
 pub fn Builder(comptime commands: anytype) type {
