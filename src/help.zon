@@ -1,0 +1,249 @@
+.{
+    //                                                                     MAX_HELP_LEN|
+    .serve =
+    \\serve command
+    \\Starts a WebSocket CDP server.
+    \\
+    \\Usage:
+    \\  {0s} serve [OPTIONS] [COMMON_OPTIONS]
+    \\
+    \\Options:
+    \\--host <HOST>              Host of the CDP server.
+    \\                           Defaults to "127.0.0.1".
+    \\
+    \\--port <INT>               Port of the CDP server.
+    \\                           Defaults to 9222.
+    \\
+    \\--advertise-host <HOST>
+    \\                           The host to advertise, e.g. in the /json/version
+    \\                           response. Useful, for example, when --host is 0.0.0.0.
+    \\                           Defaults to --host value.
+    \\
+    \\--cdp-max-connections <INT>
+    \\                           Maximum number of simultaneous CDP connections.
+    \\                           Defaults to 16.
+    \\
+    \\--cdp-max-pending-connections <INT>
+    \\                           Maximum pending connections in the accept queue.
+    \\                           Defaults to 128.
+    \\
+    \\--cookie <PATH>            Path to a JSON file to load cookies from (read-only).
+    \\                           Defaults to no cookie loading.
+    ,
+    .fetch =
+    \\fetch command
+    \\Fetches the specified URL.
+    \\
+    \\Usage:
+    \\  {0s} fetch <url> [OPTIONS] [COMMON_OPTIONS]
+    \\
+    \\Options:
+    \\--dump <DUMP>              Dumps the document to stdout.
+    \\                           Defaults to no dump.
+    \\
+    \\                           Allowed values:
+    \\                             html               Serialized HTML of the DOM.
+    \\                             markdown           Converts content to Markdown.
+    \\                             semantic_tree      JSON-serialized semantic tree.
+    \\                             semantic_tree_text Pruned plain-text semantic tree.
+    \\
+    \\--strip-mode <STRIP>       Comma-separated list of tag groups to remove from dump.
+    \\                           Defaults to no-strip.
+    \\
+    \\                           Allowed values:
+    \\                             js   script and link[as=script, rel=preload].
+    \\                             ui   Includes img, picture, video, CSS and SVG.
+    \\                             css  Includes style and link[rel=stylesheet].
+    \\                             full Strip everything.
+    \\
+    \\--with-base                Add a <base> tag in dump.
+    \\                           Defaults to false.
+    \\
+    \\--with-frames              Includes the contents of iframes.
+    \\                           Defaults to false.
+    \\
+    \\--wait-ms <INT>            Wait time in milliseconds. Supersedes all other --wait
+    \\                           parameters.
+    \\                           Defaults to 5000.
+    \\
+    \\--wait-until <UNTIL>       Wait until the specified event. Checked before other
+    \\                           --wait-* options.
+    \\                           Defaults to 'done'. If --wait-selector, --wait-script
+    \\                           or --wait-script-file specified, defaults to none.
+    \\
+    \\                           Allowed values:
+    \\                             "load", "domcontentloaded", "networkidle", "done".
+    \\
+    \\--wait-selector <QUERY>    Wait for an element matching the CSS selector to
+    \\                           appear. Checked after --wait-until condition is met.
+    \\
+    \\--wait-script <EXPR>       Wait for a JavaScript expression to return truthy.
+    \\                           Checked after --wait-until condition is met.
+    \\
+    \\--wait-script-file <PATH>  Like --wait-script, but reads the script from a file.
+    \\
+    \\--inject-script <EXPR>     JavaScript to execute as the document's <head> is
+    \\                           parsed, before any other scripts in the page run.
+    \\                           Can be passed multiple times; scripts run in order.
+    \\
+    \\--inject-script-file <PATH>
+    \\                           Like --inject-script, but reads the script from a file.
+    \\                           Can be passed multiple times; can be mixed with
+    \\                           --inject-script and runs in CLI order.
+    \\
+    \\--terminate-ms <INT>       Hard deadline in milliseconds. After this time elapses,
+    \\                           JavaScript execution is forcibly terminated (e.g. for
+    \\                           pages with endless scripts). Unlike --wait-ms, which
+    \\                           only stops waiting, --terminate-ms aborts the page.
+    \\                           Defaults to no terminate.
+    \\
+    \\--cookie <PATH>            Path to a JSON file to load cookies from (read-only).
+    \\                           Defaults to no cookie loading.
+    \\
+    \\--cookie-jar <PATH>        Path to a JSON file to save cookies to on exit.
+    \\                           (write-only).
+    \\                           Defaults to no cookie saving.
+    ,
+    .mcp =
+    \\mcp command
+    \\Starts an MCP (Model Context Protocol) server over stdio.
+    \\
+    \\Usage:
+    \\  {0s} mcp [OPTIONS] [COMMON_OPTIONS]
+    \\
+    \\Options:
+    \\--cookie <PATH>            Path to a JSON file to load cookies from (read-only).
+    \\                           Defaults to no cookie loading.
+    \\
+    \\--cookie-jar <PATH>        Path to a JSON file to save cookies to on exit.
+    \\                           (write-only).
+    \\                           Defaults to no cookie saving.
+    ,
+    .version =
+    \\version command
+    \\Displays the version of {0s}.
+    \\
+    \\Usage:
+    \\  {0s} version
+    ,
+    .help =
+    \\help command
+    \\Displays this message.
+    \\
+    \\Usage:
+    \\  {0s} help
+    ,
+    .common =
+    \\Common Options:
+    \\--insecure-disable-tls-host-verification
+    \\                           Disables host verification on all HTTP requests.
+    \\                           Only set this if you understand and accept the risk.
+    \\
+    \\--obey-robots              Fetches and obeys robots.txt of the target page.
+    \\                           Defaults to false.
+    \\
+    \\--disable-subframes        Skip loading <iframe> elements. The parser still
+    \\                           registers them in the DOM, but no child frame or
+    \\                           Page.frameAttached events are produced.
+    \\                           Defaults to false.
+    \\
+    \\--disable-workers          Skip loading dedicated Web Workers. The Worker
+    \\                           constructor still returns a Worker object, but no
+    \\                           script fetch is initiated and its scope never runs.
+    \\                           Defaults to false.
+    \\
+    \\--block-private-networks   Block HTTP requests to private/internal IP
+    \\                           addresses after DNS resolution.
+    \\                           Defaults to false.
+    \\
+    \\--block-cidrs <LIST>       Additional CIDR ranges to block, comma-separated.
+    \\                           Prefix with '-' to allow (exempt from blocking).
+    \\                           e.g. --block-cidrs 10.0.0.0/8,-10.0.0.42/32
+    \\                           Can be combined with --block-private-networks.
+    \\
+    \\--http-proxy <URL>         HTTP proxy for all HTTP requests.
+    \\                           username:password may be included for basic auth.
+    \\                           Defaults to none.
+    \\
+    \\--proxy-bearer-token <TOKEN>
+    \\                           Token sent for bearer authentication with the
+    \\                           proxy: Proxy-Authorization: Bearer <token>.
+    \\
+    \\--http-max-concurrent <INT>
+    \\                           Maximum number of concurrent HTTP requests.
+    \\                           Defaults to 10.
+    \\
+    \\--http-max-host-open <INT> Maximum open connections to a given host:port.
+    \\                           Defaults to 4.
+    \\
+    \\--http-connect-timeout <INT>
+    \\                           Time in ms to establish an HTTP connection before
+    \\                           timing out. 0 means never.
+    \\                           Defaults to 0.
+    \\
+    \\--http-timeout <INT>       Maximum time in ms the transfer is allowed to
+    \\                           complete. 0 means never.
+    \\                           Defaults to 10000.
+    \\
+    \\--http-max-response-size <INT>
+    \\                           Limits the acceptable response size for any
+    \\                           request (e.g. XHR, fetch, script loading).
+    \\                           Defaults to no limit.
+    \\
+    \\--ws-max-concurrent <INT>  Maximum number of concurrent WebSocket connections.
+    \\                           Defaults to 8.
+    \\
+    \\--log-level <LEVEL>        The log level.
+    \\                           Defaults to {1s}.
+    \\
+    \\                           Allowed values:
+    \\                             "debug", "info", "warn", "error", "fatal".
+    \\
+    \\--log-format <FORMAT>      The log format.
+    \\                           Defaults to {2s}.
+    \\
+    \\                           Allowed values: "pretty", "logfmt".
+    \\
+    \\--log-filter-scopes <SCOPES>
+    \\                           Filter out too-verbose logs per scope,
+    \\                           comma-separated. e.g. http, unknown_prop, event.
+    \\
+    \\--user-agent <STRING>      Override the User-Agent header entirely.
+    \\                           Must not impersonate other browsers; any value
+    \\                           containing "Mozilla" is forbidden. The browser
+    \\                           still sends Sec-Ch-Ua. Incompatible with
+    \\                           --user-agent-suffix.
+    \\
+    \\--user-agent-suffix <STRING>
+    \\                           Suffix appended to the Lightpanda/X.Y User-Agent.
+    \\
+    \\--web-bot-auth-key-file <PATH>
+    \\                           Path to the Ed25519 private key PEM file.
+    \\
+    \\--web-bot-auth-keyid <STRING>
+    \\                           The JWK thumbprint of your public key.
+    \\
+    \\--web-bot-auth-domain <DOMAIN>
+    \\                           Your domain, e.g. yourdomain.com.
+    \\
+    \\--http-cache-dir <PATH>    Directory used as a filesystem cache for network
+    \\                           resources. Omitting this disables caching.
+    \\                           Defaults to no caching.
+    \\
+    \\--cookie <PATH>            Path to a JSON file to load cookies from (read-only).
+    \\                           Defaults to no cookie loading.
+    \\
+    \\--cookie-jar <PATH>        Path to a JSON file to save cookies to on exit
+    \\                           (write-only).
+    \\                           Defaults to no cookie saving.
+    \\
+    \\--storage-engine <ENGINE>  The storage engine to use.
+    \\                           Defaults to none.
+    \\
+    \\                           Allowed values: "none", "sqlite".
+    \\
+    \\--storage-sqlite-path <PATH>
+    \\                           Path to the SQLite database file for persistent
+    \\                           storage. Use ":memory:" for in-memory storage.
+    ,
+}
