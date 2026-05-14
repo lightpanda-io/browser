@@ -24,6 +24,8 @@ const TestHTTPServer = @This();
 shutdown: std.atomic.Value(bool),
 listener: ?std.net.Server,
 handler: Handler,
+next_conn_id: std.atomic.Value(u64),
+live_handlers: std.atomic.Value(i64),
 
 const Handler = *const fn (req: *std.http.Server.Request) anyerror!void;
 
@@ -32,7 +34,14 @@ pub fn init(handler: Handler) TestHTTPServer {
         .shutdown = .init(true),
         .listener = null,
         .handler = handler,
+        .next_conn_id = .init(0),
+        .live_handlers = .init(0),
     };
+}
+
+fn dlog(conn_id: u64, comptime fmt: []const u8, args: anytype) void {
+    const ms = std.time.milliTimestamp();
+    std.debug.print("[TestHTTP t={d} c={d}] " ++ fmt ++ "\n", .{ ms, conn_id } ++ args);
 }
 
 pub fn deinit(self: *TestHTTPServer) void {
@@ -57,21 +66,40 @@ pub fn run(self: *TestHTTPServer, wg: *std.Thread.WaitGroup) !void {
     self.shutdown.store(false, .release);
 
     wg.finish();
+    dlog(0, "listener ready on 127.0.0.1:9582", .{});
 
     while (true) {
         const conn = listener.accept() catch |err| {
             if (self.shutdown.load(.acquire) or err == error.SocketNotListening) {
+                dlog(0, "accept loop exiting cleanly (shutdown={}, err={s})", .{
+                    self.shutdown.load(.acquire),
+                    @errorName(err),
+                });
                 return;
             }
+            dlog(0, "accept loop exiting on error: {s}", .{@errorName(err)});
             return err;
         };
-        const thrd = try std.Thread.spawn(.{}, handleConnection, .{ self, conn });
+        const conn_id = self.next_conn_id.fetchAdd(1, .monotonic) + 1;
+        const live_before = self.live_handlers.load(.monotonic);
+        dlog(conn_id, "accepted (live_handlers_before_spawn={d})", .{live_before});
+        const thrd = std.Thread.spawn(.{}, handleConnection, .{ self, conn, conn_id }) catch |err| {
+            dlog(conn_id, "thread spawn failed: {s}", .{@errorName(err)});
+            conn.stream.close();
+            return err;
+        };
         thrd.detach();
     }
 }
 
-fn handleConnection(self: *TestHTTPServer, conn: std.net.Server.Connection) !void {
-    defer conn.stream.close();
+fn handleConnection(self: *TestHTTPServer, conn: std.net.Server.Connection, conn_id: u64) !void {
+    const live_after_inc = self.live_handlers.fetchAdd(1, .monotonic) + 1;
+    dlog(conn_id, "handler start (live_handlers={d})", .{live_after_inc});
+    defer {
+        const live_after_dec = self.live_handlers.fetchSub(1, .monotonic) - 1;
+        dlog(conn_id, "handler exit (live_handlers={d})", .{live_after_dec});
+        conn.stream.close();
+    }
 
     var req_buf: [2048]u8 = undefined;
     var conn_reader = conn.stream.reader(&req_buf);
@@ -79,20 +107,39 @@ fn handleConnection(self: *TestHTTPServer, conn: std.net.Server.Connection) !voi
 
     var http_server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
 
+    var request_count: u32 = 0;
     while (true) {
+        dlog(conn_id, "receiveHead #{d} waiting...", .{request_count});
         var req = http_server.receiveHead() catch |err| switch (err) {
-            error.ReadFailed, error.HttpConnectionClosing => return,
+            error.ReadFailed, error.HttpConnectionClosing => {
+                dlog(conn_id, "receiveHead #{d} -> {s} (closing)", .{ request_count, @errorName(err) });
+                return;
+            },
             else => {
+                dlog(conn_id, "receiveHead #{d} -> {s} (fatal)", .{ request_count, @errorName(err) });
                 std.debug.print("Test HTTP Server error: {}\n", .{err});
                 return err;
             },
         };
+        request_count += 1;
+        // Copy target before invoking handler: req.head.target is a slice
+        // into req_buf, which respond() will overwrite (conn_writer shares
+        // the same backing buffer).
+        var target_buf: [512]u8 = undefined;
+        const raw_target = req.head.target;
+        const target_len = @min(raw_target.len, target_buf.len);
+        @memcpy(target_buf[0..target_len], raw_target[0..target_len]);
+        const target = target_buf[0..target_len];
+        dlog(conn_id, "req #{d} {s} {s}", .{ request_count, @tagName(req.head.method), target });
 
+        var timer = std.time.Timer.start() catch unreachable;
         self.handler(&req) catch |err| {
-            std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
+            dlog(conn_id, "handler '{s}' err {s}", .{ target, @errorName(err) });
+            std.debug.print("test http error '{s}': {}\n", .{ target, err });
             try req.respond("server error", .{ .status = .internal_server_error });
             return;
         };
+        dlog(conn_id, "handler '{s}' done in {d}us", .{ target, timer.read() / std.time.ns_per_us });
     }
 }
 
