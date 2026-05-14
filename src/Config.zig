@@ -833,7 +833,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\agent command
         \\Starts an interactive AI agent that can browse the web
         \\Example: {0s} agent                         (auto-detects API key from env)
-        \\Example: {0s} agent --provider anthropic --model claude-haiku-4-5-20251001
+        \\Example: {0s} agent --provider anthropic --model claude-sonnet-4-6
         \\Example: {0s} agent --provider ollama --model gemma4
         \\Example: {0s} agent --no-llm                (basic PandaScript-only REPL)
         \\Example: {0s} agent script.lp            (replay a recorded script)

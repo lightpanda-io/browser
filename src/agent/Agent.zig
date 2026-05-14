@@ -190,7 +190,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     else if (opts.model) |m|
         try allocator.dupe(u8, m)
     else if (effective_provider) |p|
-        try allocator.dupe(u8, zenai.provider.defaultModel(p))
+        try allocator.dupe(u8, defaultModel(p))
     else
         try allocator.dupe(u8, "");
     errdefer allocator.free(model);
@@ -1222,6 +1222,15 @@ fn envVarName(p: Config.AiProvider) []const u8 {
     };
 }
 
+fn defaultModel(p: Config.AiProvider) []const u8 {
+    return switch (p) {
+        .anthropic => "claude-sonnet-4-6",
+        .openai => "gpt-5.5",
+        .gemini => "gemini-3-flash-preview",
+        .ollama => "gemma4",
+    };
+}
+
 fn promptForProvider(found: []const Config.AiProvider) !Config.AiProvider {
     if (!interactiveTty()) {
         log.fatal(.app, "multiple API keys detected", .{
@@ -1270,7 +1279,7 @@ fn pickModel(
         return error.NoModels;
     }
 
-    const default_model = zenai.provider.defaultModel(provider);
+    const default_model = defaultModel(provider);
     var default_idx: ?usize = null;
     for (ids, 0..) |id, i| if (std.mem.eql(u8, id, default_model)) {
         default_idx = i;

@@ -39,8 +39,8 @@
             .hash = "N-V-__8AABGOuAC_dhAN07kfoP4dycCFi8Bka4O-tuhriNH8",
         },
         .zenai = .{
-            .url = "git+https://github.com/lightpanda-io/zenai.git#bb9b13cc4919cfe60c349df272f68e88e2448b42",
-            .hash = "zenai-0.0.0-iOY_VKqVAwA8ClDiylLg0IperswehYiSztLYSf0OEOtm",
+            .url = "git+https://github.com/lightpanda-io/zenai.git#a1d0bd57d8920772723773f1f2346ad717b0259a",
+            .hash = "zenai-0.0.0-iOY_VJWTAwBt4OeEsYnTSHQBdwtY-CEshH17KAPRfGl1",
         },
         .isocline = .{
             .url = "git+https://github.com/arrufat/isocline.git#48d94027aec0408dc58af9ca2dfedf4720870e8c",
