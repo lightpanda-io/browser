@@ -82,11 +82,16 @@ pub const mcp_driver_guidance =
     \\  find the id/class/structure, then write a plain selector against that.
     \\
     \\Credentials:
-    \\- When filling credentials, pass environment variable references like
-    \\  $LP_USERNAME and $LP_PASSWORD directly as the `value` field of fill —
-    \\  they are resolved inside the Lightpanda subprocess so the literal
-    \\  secret never enters your context. Do NOT call getEnv with a credential
-    \\  name; getEnv returns the value and would leak it into your context.
+    \\- Pass `$LP_*` references directly in ANY tool's string args — fill
+    \\  values, goto URLs, click selectors, anywhere a credential appears.
+    \\  The placeholder is resolved inside the Lightpanda subprocess so the
+    \\  literal secret never enters your context. If `getUrl` returns a URL
+    \\  where the credential has already been resolved (e.g.
+    \\  `?id=actualname`), DO NOT retype the literal value into a follow-up
+    \\  `goto` — keep using the `$LP_*` form. Retyping leaks the secret into
+    \\  the recording.
+    \\- Do NOT call getEnv with a credential name; getEnv returns the value
+    \\  and would leak it into your context.
     \\- To discover which variables are available, call getEnv with NO `name`
     \\  argument — it lists every LP_* variable that is set, names only,
     \\  values never included. Safe to call before logging in to pick the
@@ -112,9 +117,22 @@ pub const mcp_driver_guidance =
     \\  recorded as an `EXTRACT` PandaScript line, so a later replay (no LLM)
     \\  prints the value to stdout. Reading the page via `markdown` and
     \\  answering only in chat does NOT survive replay.
-    \\- Use `markdown` / `tree` / `interactiveElements` to *discover* the right
-    \\  selector, then commit to one `extract` call. See the `extract` tool
-    \\  description for the schema grammar and examples.
+    \\- After every navigation (`goto` or a `click` that changes URL), call
+    \\  `tree` BEFORE any `extract`. Do NOT rely on memorized site structure —
+    \\  even well-known sites (Hacker News, GitHub, …) are where models go
+    \\  wrong, because they pattern-match training data instead of reading
+    \\  the current DOM.
+    \\- `tree` returns roles/names/text and a `backendNodeId` per node but NOT
+    \\  raw HTML attributes. To turn a tree node into a CSS selector, call
+    \\  `nodeDetails(backendNodeId)` on the node you want — it returns the
+    \\  element's `id` and `class`. Build your selector from those (e.g.
+    \\  `#karma`, `.athing`) rather than guessing structural paths like
+    \\  `tr:nth-child(3) td:nth-child(2)`.
+    \\- Commit to one `extract` call against an id/class you read from
+    \\  `nodeDetails`. If `extract` errors with "no selector matched", you
+    \\  guessed; go back to tree/nodeDetails. If the value comes back but
+    \\  looks wrong (wrong type, garbage text), same thing.
+    \\- See the `extract` tool description for the schema grammar and examples.
     \\
 ;
 

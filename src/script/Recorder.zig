@@ -77,7 +77,15 @@ pub fn record(self: *Self, cmd: Command.Command) void {
     self.buf.clearRetainingCapacity();
     cmd.format(&self.buf.writer) catch return;
     self.buf.writer.writeByte('\n') catch return;
-    self.writeOrDisable(self.buf.written()) catch return;
+
+    // Reverse-substitute any LP_* env-var values that snuck in as literals
+    // (e.g. an agent that retyped a username it saw via getUrl) so the
+    // recording stays portable instead of leaking the resolved secret.
+    var scrub_arena: std.heap.ArenaAllocator = .init(self.allocator);
+    defer scrub_arena.deinit();
+    const scrubbed = lp.tools.reverseSubstituteEnvVars(scrub_arena.allocator(), self.buf.written()) catch self.buf.written();
+
+    self.writeOrDisable(scrubbed) catch return;
     self.lines += 1;
 }
 

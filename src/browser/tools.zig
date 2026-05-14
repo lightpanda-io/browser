@@ -161,7 +161,7 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "tree",
-        .description = "Get the page content as a simplified semantic DOM tree for AI reasoning. If a url is provided, it navigates to that url first.",
+        .description = "Get the page content as a simplified semantic DOM tree (role, name, value, backendNodeId per node) for AI reasoning. Tree output does NOT include raw HTML attributes like `id` or `class` — once you've located the node you want, call `nodeDetails` on its backendNodeId to read its id/class for selector synthesis. If a url is provided, it navigates to that url first.",
         .input_schema = minify(
             \\{
             \\  "type": "object",
@@ -177,7 +177,7 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "nodeDetails",
-        .description = "Get detailed information about a specific node by its backend node ID. Returns tag, role, name, interactivity, disabled state, value, input type, placeholder, href, checked state, and select options.",
+        .description = "Get detailed information about a specific node by its backend node ID. Returns tag, role, name, interactivity, disabled state, value, input type, placeholder, href, **id**, **class**, checked state, and select options. Use this AFTER `tree` to discover the id/class of a node you want to target with `extract` or `click` — it's the canonical way to turn a tree backendNodeId into a CSS selector.",
         .input_schema = minify(
             \\{
             \\  "type": "object",
@@ -576,7 +576,13 @@ const schema_walker_prefix =
     \\    return valueOf(t, v);
     \\  }
     \\  const out = {};
-    \\  for (const k in schema) out[k] = ext(document, schema[k]);
+    \\  let any = false;
+    \\  for (const k in schema) {
+    \\    out[k] = ext(document, schema[k]);
+    \\    const v = out[k];
+    \\    if (v !== null && !(Array.isArray(v) && v.length === 0)) any = true;
+    \\  }
+    \\  if (!any) throw new Error("extract: no selector in the schema matched any element on the page — inspect with `tree` or `markdown` first to find real ids/classes, then retry with a corrected schema");
     \\  return out;
     \\})(
 ;
@@ -1237,6 +1243,31 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutO
     if (last_copy == 0) return input;
     try result.appendSlice(arena, input[last_copy..]);
     return result.toOwnedSlice(arena);
+}
+
+/// Inverse of `substituteEnvVars`: replace literal LP_* env-var values with
+/// their `$LP_NAME` placeholders. Used by the recorder so an agent that
+/// paste-substituted a credential into a tool call doesn't leak the
+/// resolved secret into the .lp file. Returns input unchanged when nothing
+/// matched. Short values (< 4 chars) are skipped to avoid false-positive
+/// matches against incidental substrings.
+pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
+    const env_names = lpEnvNames() catch return input;
+    var current: []const u8 = input;
+    var changed = false;
+    var name_buf: [256]u8 = undefined;
+    for (env_names) |name| {
+        const value = lookupLpEnv(name) orelse continue;
+        if (value.len < 4) continue;
+        if (std.mem.indexOf(u8, current, value) == null) continue;
+        if (name.len + 1 >= name_buf.len) continue;
+        name_buf[0] = '$';
+        @memcpy(name_buf[1 .. 1 + name.len], name);
+        const placeholder = name_buf[0 .. 1 + name.len];
+        current = try std.mem.replaceOwned(u8, arena, current, value, placeholder);
+        changed = true;
+    }
+    return if (changed) current else input;
 }
 
 test "substituteEnvVars resolves LP_* vars" {

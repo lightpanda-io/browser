@@ -429,11 +429,10 @@ fn handleSlash(self: *Agent, body: []const u8) bool {
     };
 
     if (std.meta.stringToEnum(lp.tools.Action, schema.tool_name)) |action| {
-        const parsed_args: ?std.json.Value = if (args_json.len == 0) null else
-            std.json.parseFromSliceLeaky(std.json.Value, aa, args_json, .{}) catch {
-                self.terminal.printErrorFmt("{s}: invalid JSON arguments", .{schema.tool_name});
-                return false;
-            };
+        const parsed_args: ?std.json.Value = if (args_json.len == 0) null else std.json.parseFromSliceLeaky(std.json.Value, aa, args_json, .{}) catch {
+            self.terminal.printErrorFmt("{s}: invalid JSON arguments", .{schema.tool_name});
+            return false;
+        };
         if (lp.tools.callEvalLike(aa, self.tool_executor.session, &self.tool_executor.node_registry, action, parsed_args)) |outcome| {
             self.terminal.beginTool(schema.tool_name, rest);
             const result = outcome catch |err| {
@@ -948,9 +947,21 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     defer result.deinit();
 
     if (self.recorder) |*r| if (r.isActive()) {
-        var recorded_any = false;
-        for (result.tool_calls_made) |tc| {
+        // Probing: when the LLM tries several `extract` schemas in one turn,
+        // keep only the last successful one in the recording — earlier
+        // attempts are noise.
+        var last_extract_idx: ?usize = null;
+        for (result.tool_calls_made, 0..) |tc, i| {
             if (tc.is_error) continue;
+            if (std.mem.eql(u8, tc.name, "extract")) last_extract_idx = i;
+        }
+
+        var recorded_any = false;
+        for (result.tool_calls_made, 0..) |tc, i| {
+            if (tc.is_error) continue;
+            if (std.mem.eql(u8, tc.name, "extract")) {
+                if (last_extract_idx) |idx| if (idx != i) continue;
+            }
             const args = tc.arguments orelse continue;
             const cmd = Command.fromToolCall(tc.name, args) orelse continue;
             if (!recorded_any) {
