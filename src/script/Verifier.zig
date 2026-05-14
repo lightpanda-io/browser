@@ -27,20 +27,21 @@ const Self = @This();
 session: *lp.Session,
 node_registry: *CDPNode.Registry,
 
-pub const Result = enum {
+/// Verdict for a verify pass.
+///   passed       — the command's intent was confirmed against the DOM.
+///   failed       — the DOM doesn't reflect the intent; payload is the
+///                  human-readable explanation, or null if formatting the
+///                  message itself OOM'd.
+///   inconclusive — no verification rule applies (or one was inconclusive,
+///                  e.g. the queried property couldn't be read).
+pub const VerifyResult = union(enum) {
     passed,
-    failed,
+    failed: ?[]const u8,
     inconclusive,
 };
 
-pub const VerifyResult = struct {
-    result: Result,
-    reason: ?[]const u8 = null,
-};
-
-/// Verify that a command achieved its intent after execution and return
-/// both the verdict and a human-readable failure reason (if applicable).
-/// Only called when the command did not hard-fail (ExecResult.failed == false).
+/// Verify that a command achieved its intent after execution. Only called
+/// when the command did not hard-fail (ExecResult.failed == false).
 /// Commands without a dedicated verifier return `.inconclusive` so callers
 /// can distinguish "no verification available" from "explicitly verified".
 pub fn verify(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) VerifyResult {
@@ -48,7 +49,7 @@ pub fn verify(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) Verif
         .type_cmd => |args| self.verifyFill(arena, args.selector, args.value),
         .check => |args| self.verifyCheck(arena, args.selector, args.checked),
         .select => |args| self.verifySelect(arena, args.selector, args.value),
-        else => .{ .result = .inconclusive },
+        else => .inconclusive,
     };
 }
 
@@ -56,13 +57,10 @@ fn verifyFill(self: *Self, arena: std.mem.Allocator, selector: []const u8, expec
     // Secret env-var references can't be compared literally — just
     // verify the field isn't empty after substitution.
     if (std.mem.indexOf(u8, expected_value, "$LP_") != null) {
-        const actual = self.queryElementProperty(arena, selector, "value") orelse return .{ .result = .inconclusive };
+        const actual = self.queryElementProperty(arena, selector, "value") orelse return .inconclusive;
         if (actual.len == 0 or std.mem.eql(u8, actual, "null"))
-            return .{
-                .result = .failed,
-                .reason = "element value is empty after fill (expected non-empty for secret)",
-            };
-        return .{ .result = .passed };
+            return .{ .failed = "element value is empty after fill (expected non-empty for secret)" };
+        return .passed;
     }
     return self.verifyElementValue(arena, selector, .{ .js_property = "value", .expected = expected_value, .label = "value" });
 }
@@ -83,13 +81,10 @@ const Check = struct {
 };
 
 fn verifyElementValue(self: *Self, arena: std.mem.Allocator, selector: []const u8, check: Check) VerifyResult {
-    const actual = self.queryElementProperty(arena, selector, check.js_property) orelse return .{ .result = .inconclusive };
+    const actual = self.queryElementProperty(arena, selector, check.js_property) orelse return .inconclusive;
     if (!std.mem.eql(u8, actual, check.expected))
-        return .{
-            .result = .failed,
-            .reason = std.fmt.allocPrint(arena, "element {s} is \"{s}\" (expected \"{s}\")", .{ check.label, actual, check.expected }) catch null,
-        };
-    return .{ .result = .passed };
+        return .{ .failed = std.fmt.allocPrint(arena, "element {s} is \"{s}\" (expected \"{s}\")", .{ check.label, actual, check.expected }) catch null };
+    return .passed;
 }
 
 fn queryElementProperty(self: *Self, arena: std.mem.Allocator, selector: []const u8, js_property: []const u8) ?[]const u8 {

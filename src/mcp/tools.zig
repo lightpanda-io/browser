@@ -298,9 +298,9 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     // DOM actually reflects the intent. Failure here drives the heal
     // roundtrip the same way an exec failure does.
     const verification = server.verifier.verify(arena, cmd);
-    if (verification.result == .failed) {
+    if (verification == .failed) {
         const url = browser_tools.currentUrlOrPlaceholder(server.session);
-        const reason = verification.reason orelse "verification failed";
+        const reason = verification.failed orelse "verification failed";
         const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tc.name, args.line, url, reason }) catch reason;
         return sendErrorContent(server, id, msg);
     }

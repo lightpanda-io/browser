@@ -634,12 +634,12 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIter
     const result = self.cmd_executor.executeWithResult(ca, entry.command);
     self.cmd_executor.printResult(entry.command, result);
 
-    const verification = if (!result.failed and self.self_heal)
+    const verification: Verifier.VerifyResult = if (!result.failed and self.self_heal)
         self.verifier.verify(ca, entry.command)
     else
-        Verifier.VerifyResult{ .result = .inconclusive };
+        .inconclusive;
 
-    if (!result.failed and verification.result != .failed) return .ok;
+    if (!result.failed and verification != .failed) return .ok;
 
     if (self.self_heal and self.ai_client != null) {
         // Verification-only failures often resolve with a brief wait
@@ -654,7 +654,11 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIter
             "Command succeeded but verification failed, attempting self-healing...";
         self.terminal.printInfo(msg);
 
-        if (self.attemptSelfHeal(sa, entry.raw_line, verification.reason, last_comment)) |healed_cmds| {
+        const reason: ?[]const u8 = switch (verification) {
+            .failed => |r| r,
+            else => null,
+        };
+        if (self.attemptSelfHeal(sa, entry.raw_line, reason, last_comment)) |healed_cmds| {
             const replacement = script.formatHealReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds) catch |err| {
                 self.terminal.printErrorFmt(
                     "line {d}: failed to record heal: {s} (script left unchanged)",
@@ -680,7 +684,7 @@ fn retryCommand(self: *Agent, ca: std.mem.Allocator, cmd: Command.Command) bool 
         self.terminal.printInfo("Retrying command...");
         const retry_result = self.cmd_executor.executeWithResult(ca, cmd);
         if (retry_result.failed) continue;
-        if (self.verifier.verify(ca, cmd).result == .failed) continue;
+        if (self.verifier.verify(ca, cmd) == .failed) continue;
         self.cmd_executor.printResult(cmd, retry_result);
         return true;
     }
