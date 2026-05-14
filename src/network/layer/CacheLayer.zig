@@ -64,6 +64,12 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
         .timestamp = std.time.timestamp(),
         .request_headers = req_header_list.items,
     })) |cached| {
+        // Dispatch that the Request was served from the Cache.
+        transfer.req.params.notification.dispatch(
+            .http_request_served_from_cache,
+            &.{ .transfer = transfer },
+        );
+
         // Cache hit: serve synchronously from the original callbacks, then
         // tear down. On error, the transfer is still alive and Client.request's
         // errdefer will handle cleanup (loop_owned is still false).

@@ -82,6 +82,7 @@ const EventListeners = struct {
     http_request_intercept: List = .{},
     http_request_done: List = .{},
     http_request_auth_required: List = .{},
+    http_request_served_from_cache: List = .{},
     http_response_data: List = .{},
     http_response_header_done: List = .{},
     javascript_dialog_opening: List = .{},
@@ -103,6 +104,7 @@ const Events = union(enum) {
     http_request_start: *const RequestStart,
     http_request_intercept: *const RequestIntercept,
     http_request_auth_required: *const RequestAuthRequired,
+    http_request_served_from_cache: *const RequestServedFromCache,
     http_request_done: *const RequestDone,
     http_response_data: *const ResponseData,
     http_response_header_done: *const ResponseHeaderDone,
@@ -204,6 +206,10 @@ pub const RequestDone = struct {
 pub const RequestFail = struct {
     transfer: *Transfer,
     err: anyerror,
+};
+
+pub const RequestServedFromCache = struct {
+    transfer: *Transfer,
 };
 
 pub const JavascriptDialogOpening = struct {

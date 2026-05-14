@@ -349,6 +349,15 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     }, .{ .session_id = session_id });
 }
 
+pub fn httpServedFromCache(bc: *CDP.BrowserContext, msg: *const Notification.RequestServedFromCache) !void {
+    const session_id = bc.session_id orelse return;
+    const transfer = msg.transfer;
+
+    try bc.cdp.sendEvent("Network.requestServedFromCache", .{
+        .requestId = &id.toRequestId(transfer),
+    }, .{ .session_id = session_id });
+}
+
 pub const RequestWriter = struct {
     transfer: *Transfer,
 
