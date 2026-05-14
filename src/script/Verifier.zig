@@ -27,15 +27,9 @@ const Self = @This();
 session: *lp.Session,
 node_registry: *CDPNode.Registry,
 
-/// Verdict for a verify pass.
-///   passed       — the command's intent was confirmed against the DOM.
-///   failed       — the DOM doesn't reflect the intent; payload is the
-///                  human-readable explanation, or null if formatting the
-///                  message itself OOM'd.
-///   inconclusive — no verification rule applies (or one was inconclusive,
-///                  e.g. the queried property couldn't be read).
 pub const VerifyResult = union(enum) {
     passed,
+    /// Reason is null only when formatting the message itself OOM'd.
     failed: ?[]const u8,
     inconclusive,
 };

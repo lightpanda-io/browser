@@ -947,21 +947,17 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     defer result.deinit();
 
     if (self.recorder) |*r| if (r.isActive()) {
-        // Probing: when the LLM tries several `extract` schemas in one turn,
-        // keep only the last successful one in the recording — earlier
-        // attempts are noise.
+        // When the LLM tries multiple `extract` schemas in one turn, only the
+        // last successful one is the answer — earlier probes are noise.
         var last_extract_idx: ?usize = null;
         for (result.tool_calls_made, 0..) |tc, i| {
-            if (tc.is_error) continue;
-            if (std.mem.eql(u8, tc.name, "extract")) last_extract_idx = i;
+            if (!tc.is_error and std.mem.eql(u8, tc.name, "extract")) last_extract_idx = i;
         }
 
         var recorded_any = false;
         for (result.tool_calls_made, 0..) |tc, i| {
             if (tc.is_error) continue;
-            if (std.mem.eql(u8, tc.name, "extract")) {
-                if (last_extract_idx) |idx| if (idx != i) continue;
-            }
+            if (last_extract_idx) |idx| if (std.mem.eql(u8, tc.name, "extract") and idx != i) continue;
             const args = tc.arguments orelse continue;
             const cmd = Command.fromToolCall(tc.name, args) orelse continue;
             if (!recorded_any) {
@@ -1097,9 +1093,8 @@ fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
 
 fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
     const self: *Agent = @ptrCast(@alignCast(ctx));
-    // Stringifying tool args is wasted work for non-interactive low-verbosity
-    // runs: the spinner doesn't render it and `agentToolDone` skips the bullet
-    // line. Skip the alloc when no consumer will read it.
+    // The spinner doesn't render args, and `agentToolDone` skips the body
+    // line at low verbosity — don't pay for the stringify when nobody reads it.
     const needs_args = self.terminal.spinner.enabled or self.terminal.verbosity != .low;
     const args_str: []const u8 = if (needs_args) (if (arguments) |v|
         std.json.Stringify.valueAlloc(allocator, v, .{}) catch ""
@@ -1108,7 +1103,6 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    // V8 throw/return must surface in `is_error` — the recorder gates on it.
     const action = std.meta.stringToEnum(lp.tools.Action, tool_name);
     const eval_like = if (action) |a|
         lp.tools.callEvalLike(allocator, self.tool_executor.session, &self.tool_executor.node_registry, a, arguments)
@@ -1130,14 +1124,10 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     if (self.tool_executor.callValue(allocator, tool_name, arguments)) |output| {
         const capped = capToolOutput(allocator, output);
         self.terminal.agentToolDone(tool_name, args_str, true);
-        // Only `high` keeps the per-call body line — benchmark harness parses it.
         if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, capped);
         return .{ .content = capped };
     } else |err| {
         const msg = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
-        // Errors go back to the model so it can self-correct. The red
-        // bullet (per-line) or red spinner label is the user-facing
-        // failure signal; we only print the body at `high` (harness).
         self.terminal.agentToolDone(tool_name, args_str, false);
         if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, msg);
         return .{ .content = msg, .is_error = true };

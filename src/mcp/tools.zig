@@ -148,9 +148,6 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
     return dispatchBrowserTool(server, arena, id, call_params.name, call_params.arguments);
 }
 
-/// Browser-tool dispatch shared by direct MCP calls and `script_step`.
-/// On success, if a recorder is active and the call maps cleanly to a
-/// PandaScript Command, the call is appended to the recording.
 fn dispatchBrowserTool(
     server: *Server,
     arena: std.mem.Allocator,
@@ -184,9 +181,6 @@ fn dispatchBrowserTool(
     try sendToolResultText(server, id, result, false);
 }
 
-/// If a recorder is active and the (name, args) pair maps to a PandaScript
-/// Command, append it to the recording. Tools without a Command mapping
-/// (tree, markdown, findElement, etc.) are silently skipped.
 fn recordIfActive(server: *Server, name: []const u8, arguments: ?std.json.Value) void {
     if (server.recorder == null) return;
     const args_value = arguments orelse return;
@@ -266,9 +260,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendToolResultText(server, id, "comment", false);
     }
 
-    // Map the Command to its underlying browser tool and dispatch through
-    // the same path as a direct MCP call. Recording is intentionally NOT
-    // applied to script_step lines: replay shouldn't double-record.
+    // No recording on script_step: replay must not double-record.
     const tc = (try Command.toToolCall(arena, cmd, Command.noSubstitute)) orelse {
         return sendErrorContent(server, id, "command has no browser-tool mapping");
     };
@@ -287,15 +279,15 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendErrorContent(server, id, msg);
     };
 
-    // Post-execution verification for TYPE / CHECK / SELECT: confirm the
-    // DOM actually reflects the intent. Failure here drives the heal
-    // roundtrip the same way an exec failure does.
-    const verification = server.verifier.verify(arena, cmd);
-    if (verification == .failed) {
-        const url = browser_tools.currentUrlOrPlaceholder(server.session);
-        const reason = verification.failed orelse "verification failed";
-        const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tc.name, args.line, url, reason }) catch reason;
-        return sendErrorContent(server, id, msg);
+    // Post-exec verification drives the heal roundtrip on TYPE/CHECK/SELECT.
+    switch (server.verifier.verify(arena, cmd)) {
+        .failed => |reason| {
+            const url = browser_tools.currentUrlOrPlaceholder(server.session);
+            const why = reason orelse "verification failed";
+            const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tc.name, args.line, url, why }) catch why;
+            return sendErrorContent(server, id, msg);
+        },
+        .passed, .inconclusive => {},
     }
 
     try sendToolResultText(server, id, result, false);

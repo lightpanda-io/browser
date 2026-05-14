@@ -75,7 +75,7 @@ fn execExtract(self: *Self, arena: std.mem.Allocator, raw_schema: []const u8) Ex
     return evalLikeResult(self.tool_executor.extract(arena, schema));
 }
 
-/// `EvalResult` → `ExecResult`, preserving `isError` (the generic text path drops it).
+// `isError` must flow into `failed` — the generic tool path can't carry it.
 fn evalLikeResult(result: browser_tools.ToolError!browser_tools.EvalResult) ExecResult {
     const r = result catch |err| return .{ .output = @errorName(err), .failed = true };
     return .{ .output = r.text(), .failed = r.isError() };

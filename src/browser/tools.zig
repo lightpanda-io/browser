@@ -477,27 +477,9 @@ pub fn call(
     };
 }
 
-pub fn callEval(
-    arena: std.mem.Allocator,
-    session: *lp.Session,
-    registry: *CDPNode.Registry,
-    arguments: ?std.json.Value,
-) ToolError!EvalResult {
-    return execEval(arena, session, registry, arguments);
-}
-
-pub fn callExtract(
-    arena: std.mem.Allocator,
-    session: *lp.Session,
-    registry: *CDPNode.Registry,
-    arguments: ?std.json.Value,
-) ToolError!EvalResult {
-    return execExtract(arena, session, registry, arguments);
-}
-
-/// Dispatch the eval-like subset (`eval`, `extract`) — they return
-/// `EvalResult` so JS errors stay distinguishable. Returns null for other
-/// actions so callers fall through to `call()`.
+/// `eval` and `extract` return `EvalResult` so JS errors stay distinguishable
+/// from operational ones; non-eval-like actions return null to let callers
+/// fall through to `call()`.
 pub fn callEvalLike(
     arena: std.mem.Allocator,
     session: *lp.Session,
@@ -506,8 +488,8 @@ pub fn callEvalLike(
     arguments: ?std.json.Value,
 ) ?(ToolError!EvalResult) {
     return switch (action) {
-        .eval => callEval(arena, session, registry, arguments),
-        .extract => callExtract(arena, session, registry, arguments),
+        .eval => execEval(arena, session, registry, arguments),
+        .extract => execExtract(arena, session, registry, arguments),
         else => null,
     };
 }
@@ -1245,25 +1227,18 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutO
     return result.toOwnedSlice(arena);
 }
 
-/// Inverse of `substituteEnvVars`: replace literal LP_* env-var values with
-/// their `$LP_NAME` placeholders. Used by the recorder so an agent that
-/// paste-substituted a credential into a tool call doesn't leak the
-/// resolved secret into the .lp file. Returns input unchanged when nothing
-/// matched. Short values (< 4 chars) are skipped to avoid false-positive
-/// matches against incidental substrings.
+/// Inverse of `substituteEnvVars`, used by the recorder so a credential the
+/// agent retyped as a literal doesn't leak into the recording. Values < 4
+/// chars are skipped to avoid false-positive substring matches.
 pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
     const env_names = lpEnvNames() catch return input;
     var current: []const u8 = input;
     var changed = false;
-    var name_buf: [256]u8 = undefined;
     for (env_names) |name| {
         const value = lookupLpEnv(name) orelse continue;
         if (value.len < 4) continue;
         if (std.mem.indexOf(u8, current, value) == null) continue;
-        if (name.len + 1 >= name_buf.len) continue;
-        name_buf[0] = '$';
-        @memcpy(name_buf[1 .. 1 + name.len], name);
-        const placeholder = name_buf[0 .. 1 + name.len];
+        const placeholder = try std.fmt.allocPrint(arena, "${s}", .{name});
         current = try std.mem.replaceOwned(u8, arena, current, value, placeholder);
         changed = true;
     }
