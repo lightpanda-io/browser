@@ -227,7 +227,7 @@ const Commands = cli.Builder(.{
             .{ .name = "interactive", .short = 'i', .type = bool },
             .{ .name = "task", .type = ?[]const u8 },
             .{ .name = "task_attachments", .type = []const u8, .multiple = true },
-            .{ .name = "verbosity", .type = AgentVerbosity, .default = AgentVerbosity.low },
+            .{ .name = "verbosity", .type = ?AgentVerbosity },
             .{ .name = "list_models", .type = bool },
             .{ .name = "no_llm", .type = bool },
             .{ .name = "pick_model", .type = bool },
@@ -359,13 +359,23 @@ pub fn wsMaxConcurrent(self: *const Config) u8 {
 pub fn logLevel(self: *const Config) ?log.Level {
     return switch (self.mode) {
         // Agent mode quiets page-driven `console.error` noise unless verbosity=high.
-        .agent => |opts| opts.log_level orelse switch (opts.verbosity) {
+        .agent => |opts| opts.log_level orelse switch (agentVerbosity(opts)) {
             .low, .medium => .err,
             .high => null,
         },
         inline .serve, .fetch, .mcp => |opts| opts.log_level,
         else => unreachable,
     };
+}
+
+/// Resolve --verbosity. Explicit value wins. Else: --task with stderr
+/// captured (pipe/file) defaults to .high so benchmark harnesses and
+/// other programmatic consumers get the [tool/result] trace; REPL and
+/// --task on a TTY default to .low.
+pub fn agentVerbosity(opts: Agent) AgentVerbosity {
+    if (opts.verbosity) |v| return v;
+    const piped_one_shot = opts.task != null and !std.posix.isatty(std.posix.STDERR_FILENO);
+    return if (piped_one_shot) .high else .low;
 }
 
 pub fn logFormat(self: *const Config) ?log.Format {
@@ -888,17 +898,16 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                is omitted.
         \\
         \\--verbosity     Stderr chatter level: low, medium, high.
-        \\                Default: low. In a TTY REPL, low shows a single-
-        \\                line agent indicator and a per-turn summary;
-        \\                outside a TTY REPL, low is silent (final answer
-        \\                only). medium prints one `● [tool: ...]` line
-        \\                per LLM tool call (green bullet on success, red
-        \\                on failure). high also prints each `[result: ...]`
-        \\                body (required by the benchmarks harness). When
-        \\                --log-level is not set, low/medium raise it to
-        \\                err to suppress page-side console.error spam;
-        \\                high keeps the build default (warn). Pass
-        \\                --log-level explicitly to override.
+        \\                low: silent in --task mode (final answer to
+        \\                stdout only); spinner + summary in REPL.
+        \\                medium: + one `● [tool: ...]` line per call.
+        \\                high: + the matching `[result: ...]` body
+        \\                (required by the benchmarks harness).
+        \\                Default: high when --task captures stderr to
+        \\                a pipe or file; low otherwise. low/medium also
+        \\                raise --log-level to err (mutes page-side
+        \\                console.error spam) unless --log-level is set
+        \\                explicitly.
         \\
         \\API keys are read from the environment:
         \\ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY/GEMINI_API_KEY.

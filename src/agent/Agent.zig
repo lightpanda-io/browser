@@ -239,7 +239,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .allocator = allocator,
         .ai_client = ai_client,
         .tool_executor = tool_executor,
-        .terminal = .init(allocator, history_path, opts.verbosity, will_repl),
+        .terminal = .init(allocator, history_path, Config.agentVerbosity(opts), will_repl),
         .cmd_executor = undefined,
         .verifier = .{ .session = tool_executor.session, .node_registry = &tool_executor.node_registry },
         .recorder = null,
