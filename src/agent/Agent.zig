@@ -796,7 +796,7 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
     for (result.tool_calls_made) |tc| {
         if (tc.is_error) continue;
         const args = tc.arguments orelse continue;
-        const cmd = Command.fromToolCallValue(tc.name, args) orelse continue;
+        const cmd = Command.fromToolCall(tc.name, args) orelse continue;
         if (!isHealAllowed(cmd)) {
             self.terminal.printInfoFmt(
                 "self-heal: ignoring {s} (navigation and eval are not allowed during heal)",
@@ -953,7 +953,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         for (result.tool_calls_made) |tc| {
             if (tc.is_error) continue;
             const args = tc.arguments orelse continue;
-            const cmd = Command.fromToolCallValue(tc.name, args) orelse continue;
+            const cmd = Command.fromToolCall(tc.name, args) orelse continue;
             if (!recorded_any) {
                 if (input.record_comment) |c| r.recordComment(c);
                 recorded_any = true;

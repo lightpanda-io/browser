@@ -545,13 +545,6 @@ fn quote(s: []const u8) Quoted {
     return .{ .s = s };
 }
 
-/// A serialized LLM tool call: tool name plus JSON arguments.
-/// `args_json` is empty for no-arg tools (e.g. tree, markdown).
-pub const ToolCall = struct {
-    name: []const u8,
-    args_json: []const u8,
-};
-
 /// Callback for resolving placeholder strings (typically `$LP_*` env vars)
 /// inside selector-like fields before serialization. Pass `noSubstitute`
 /// when raw output is desired (e.g. in tests).
@@ -561,10 +554,9 @@ pub fn noSubstitute(_: std.mem.Allocator, input: []const u8) std.mem.Allocator.E
     return input;
 }
 
-/// Same shape as `ToolCall` but the args are an already-built `std.json.Value`,
-/// so callers can hand them straight to `lp.tools.call` without a stringify/
-/// reparse round-trip on the hot replay path.
-pub const ToolCallValue = struct {
+/// A tool call: the action name plus its already-built JSON arguments,
+/// ready to hand to `lp.tools.call` without a stringify/reparse round-trip.
+pub const ToolCall = struct {
     name: []const u8,
     args: ?std.json.Value,
 };
@@ -578,7 +570,7 @@ pub const ToolCallValue = struct {
 /// `type_cmd` is intentionally NOT substituted: `execFill` in
 /// `browser/tools.zig` substitutes it itself so the secret never appears
 /// in the result text echoed back to the LLM/terminal.
-pub fn toToolCallValue(arena: std.mem.Allocator, cmd: Command, substitute: SubstituteFn) std.mem.Allocator.Error!?ToolCallValue {
+pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: SubstituteFn) std.mem.Allocator.Error!?ToolCall {
     const Action = lp.tools.Action;
     var obj: std.json.ObjectMap = .init(arena);
     switch (cmd) {
@@ -628,29 +620,10 @@ pub fn toToolCallValue(arena: std.mem.Allocator, cmd: Command, substitute: Subst
     }
 }
 
-/// Stringified flavor of `toToolCallValue` — used by the recorder/diagnostic
-/// paths (and tests) that want a JSON string. Hot dispatch should use
-/// `toToolCallValue` instead and skip the stringify+reparse.
-pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: SubstituteFn) std.mem.Allocator.Error!?ToolCall {
-    const tcv = (try toToolCallValue(arena, cmd, substitute)) orelse return null;
-    return .{
-        .name = tcv.name,
-        .args_json = if (tcv.args) |v| try std.json.Stringify.valueAlloc(arena, v, .{}) else "",
-    };
-}
-
-/// Inverse of `toToolCall`: parse an LLM tool call into a Command, or
-/// return null if the tool name doesn't correspond to a PandaScript
-/// command. Variants emitted by `toToolCall` round-trip through this.
-pub fn fromToolCall(arena: std.mem.Allocator, tool_name: []const u8, arguments: []const u8) ?Command {
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, arguments, .{}) catch return null;
-    return fromToolCallValue(tool_name, parsed);
-}
-
-/// Like `fromToolCall` but takes the already-parsed JSON value directly,
-/// skipping the string round-trip when the caller already has it (e.g. the
-/// MCP server, which dispatches off `std.json.Value`).
-pub fn fromToolCallValue(tool_name: []const u8, arguments: std.json.Value) ?Command {
+/// Inverse of `toToolCall`: map an LLM tool call into a Command, or return
+/// null if the tool name doesn't correspond to a PandaScript command.
+/// Variants emitted by `toToolCall` round-trip through this.
+pub fn fromToolCall(tool_name: []const u8, arguments: std.json.Value) ?Command {
     const Action = lp.tools.Action;
     const action = std.meta.stringToEnum(Action, tool_name) orelse return null;
     const obj = switch (arguments) {
@@ -1296,8 +1269,8 @@ fn expectRoundTrip(cmd: Command) !void {
     defer arena.deinit();
     const a = arena.allocator();
     const tc = (try toToolCall(a, cmd, noSubstitute)) orelse return error.NoToolMapping;
-    const back = fromToolCall(a, tc.name, if (tc.args_json.len == 0) "{}" else tc.args_json) orelse
-        return error.RoundTripFailed;
+    const args = tc.args orelse return error.RoundTripFailed;
+    const back = fromToolCall(tc.name, args) orelse return error.RoundTripFailed;
     try std.testing.expectEqualDeep(cmd, back);
 }
 
@@ -1334,13 +1307,15 @@ test "toToolCall: variants without tool mapping return null" {
 test "fromToolCall: unknown tool returns null" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    try std.testing.expect(fromToolCall(arena.allocator(), "no_such_tool", "{}") == null);
+    const empty = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), "{}", .{});
+    try std.testing.expect(fromToolCall("no_such_tool", empty) == null);
 }
 
 test "fromToolCall: missing required field returns null" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    try std.testing.expect(fromToolCall(arena.allocator(), "click", "{}") == null);
+    const empty = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), "{}", .{});
+    try std.testing.expect(fromToolCall("click", empty) == null);
 }
 
 test "toToolCall: substitute callback applied to selector fields" {
@@ -1350,7 +1325,8 @@ test "toToolCall: substitute callback applied to selector fields" {
 
     const tc = (try toToolCall(a, .{ .click = "abc" }, testUpcase)).?;
     try std.testing.expectEqualStrings("click", tc.name);
-    try std.testing.expectEqualStrings("{\"selector\":\"ABC\"}", tc.args_json);
+    const args_json = try std.json.Stringify.valueAlloc(a, tc.args.?, .{});
+    try std.testing.expectEqualStrings("{\"selector\":\"ABC\"}", args_json);
 }
 
 test "toToolCall: type_cmd value is NOT substituted" {
@@ -1361,7 +1337,8 @@ test "toToolCall: type_cmd value is NOT substituted" {
     const tc = (try toToolCall(a, .{ .type_cmd = .{ .selector = "abc", .value = "$LP_PASSWORD" } }, testUpcase)).?;
     try std.testing.expectEqualStrings("fill", tc.name);
     // selector substituted, value preserved as $LP_* reference
-    try std.testing.expectEqualStrings("{\"selector\":\"ABC\",\"value\":\"$LP_PASSWORD\"}", tc.args_json);
+    const args_json = try std.json.Stringify.valueAlloc(a, tc.args.?, .{});
+    try std.testing.expectEqualStrings("{\"selector\":\"ABC\",\"value\":\"$LP_PASSWORD\"}", args_json);
 }
 
 fn expectBody(body: []const u8, complete_args: usize, at_boundary: bool) !void {

@@ -46,13 +46,13 @@ pub const ExecResult = struct {
 pub fn executeWithResult(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) ExecResult {
     if (cmd == .extract) return self.execExtract(arena, cmd.extract);
 
-    const tcv = (Command.toToolCallValue(arena, cmd, browser_tools.substituteEnvVars) catch
+    const tc = (Command.toToolCall(arena, cmd, browser_tools.substituteEnvVars) catch
         return .{ .output = "out of memory", .failed = true }) orelse
         return .{ .output = "internal: command has no tool mapping", .failed = true };
-    if (self.tool_executor.callValue(arena, tcv.name, tcv.args)) |output|
+    if (self.tool_executor.callValue(arena, tc.name, tc.args)) |output|
         return .{ .output = output, .failed = false }
     else |err|
-        return .{ .output = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tcv.name, @errorName(err) }) catch "tool failed", .failed = true };
+        return .{ .output = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name, @errorName(err) }) catch "tool failed", .failed = true };
 }
 
 /// Data-producing commands (EXTRACT/EVAL/MARKDOWN/TREE) go to stdout so shell
