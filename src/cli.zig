@@ -32,9 +32,12 @@ const log = lp.log;
 /// argument, then walks the rest as `--flag value` pairs. Quirks:
 ///
 ///   - When no command is given, the parser defaults to `serve`.
-///   - `help` (no args) and `<command> help` / `<command> --help` both yield
-///     the `help` union variant; the latter form carries the originating
-///     command's enum tag so callers can print command-specific help.
+///   - `help`, `help <command>`, `<command> help`, and `<command> --help` all
+///     yield the `help` union variant. When a command is named (in either
+///     position), the variant carries that command's enum tag so callers can
+///     print command-specific help; bare `help` and `help help` carry the
+///     `.help` tag. An unknown name after `help` returns
+///     `error.UnknownCommand`.
 ///   - Legacy fallback: if the first argument starts with `--` and matches a
 ///     known fetch/serve flag, the parser sniffs the command from it and
 ///     re-parses argv. Only exists for backwards compatibility.
