@@ -136,11 +136,18 @@ pub const tool_defs = [_]ToolDef{
         \\Extract structured data from the current page using a small JSON schema. Prefer this over `markdown` or `eval` whenever the user asked for a specific value or list (a score, price, count, profile field, headlines, …) — the result is returned as JSON AND the call is recorded as an `EXTRACT` PandaScript line, so a later replay (no LLM) prints the answer to stdout. Use `markdown` / `tree` / `interactiveElements` only to discover the right selector, then commit to one `extract` call.
         \\
         \\Schema is a JSON object literal (pass it as a string in `schema`). Each value picks what to lift out:
-        \\  "<sel>"                                    → first match's textContent.trim() (string|null)
-        \\  ["<sel>"]                                  → every match's text (string[])
-        \\  {"selector":"<sel>","attr":"<name>"}       → first match's attribute (string|null)
-        \\  [{"selector":"<sel>","fields":{…}}]        → array of objects, fields resolved relative to each match
-        \\Example: schema `{"karma": "#karma"}` → `{"karma":"42"}`.
+        \\  "<sel>"                                → first match's textContent.trim() (string|null)
+        \\  ""                                     → element's own textContent.trim() (only meaningful inside `fields`)
+        \\  ["<sel>"]                              → every match's text (string[])
+        \\  {"selector":"<sel>","attr":"<name>"}   → first match's attribute (string|null)
+        \\  [{"selector":"<sel>","attr":"<name>"}] → every match's attribute (string[])
+        \\  [{"selector":"<sel>","fields":{…}}]    → array of objects, fields resolved relative to each match
+        \\
+        \\Examples (schema → result):
+        \\  {"karma": "#karma"} → {"karma":"42"}
+        \\  {"items": [".story .title"]} → {"items":["Title 1","Title 2"]}
+        \\  {"links": [{"selector":"a.title","attr":"href"}]} → {"links":["/a","/b"]}
+        \\  {"stories": [{"selector":".athing","fields":{"title":".titleline","rank":".rank"}}]} → {"stories":[{"title":"Foo","rank":"1"}]}
         ,
         .input_schema = minify(
             \\{
@@ -504,13 +511,7 @@ pub fn evalScript(
 
 /// Schema-driven extraction. The schema is parsed in Zig so a syntax error
 /// surfaces here instead of as a confusing V8 SyntaxError on the spliced
-/// walker. Each value in the schema object is one of:
-///   "sel"                → first match's textContent.trim() (string|null)
-///   ""                   → matched element's own textContent.trim()
-///   ["sel"]              → all matches' textContent (string[])
-///   {selector, attr}     → first match's attribute (string|null)
-///   [{selector, attr}]   → all matches' attributes (string[])
-///   [{selector, fields}] → all matches, with `fields` relative to each (object[])
+/// walker.
 pub fn extract(
     arena: std.mem.Allocator,
     session: *lp.Session,

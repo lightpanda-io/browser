@@ -109,13 +109,8 @@ pub const mcp_driver_guidance =
     \\  prints the value to stdout. Reading the page via `markdown` and
     \\  answering only in chat does NOT survive replay.
     \\- Use `markdown` / `tree` / `interactiveElements` to *discover* the right
-    \\  selector, then commit to one `extract` call. Schema examples:
-    \\    {"karma": "#karma"}                            → single value
-    \\    {"items": [".story .title"]}                   → list of texts
-    \\    {"links": [{"selector":"a.title","attr":"href"}]}  → list of attrs
-    \\- Pass the schema as a JSON string in the `schema` argument. It must be
-    \\  a JSON object literal — see the `extract` tool description for
-    \\  the full schema grammar.
+    \\  selector, then commit to one `extract` call. See the `extract` tool
+    \\  description for the schema grammar and examples.
     \\
 ;
 
