@@ -21,12 +21,12 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
-const Frame = @import("../Frame.zig");
 
 const Node = @import("Node.zig");
 const EventTarget = @import("EventTarget.zig");
 
 const String = lp.String;
+const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
 pub const Event = @This();
@@ -264,7 +264,7 @@ pub fn getIsTrusted(self: *const Event) bool {
     return self._is_trusted;
 }
 
-pub fn composedPath(self: *Event, frame: *Frame) ![]const *EventTarget {
+pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
     // Return empty array if event is not being dispatched
     if (self._event_phase == .none) {
         return &.{};
@@ -329,8 +329,13 @@ pub fn composedPath(self: *Event, frame: *Frame) ![]const *EventTarget {
     // Add window at the end (unless we stopped at shadow boundary)
     if (!stopped_at_shadow_boundary) {
         if (path_len < path_buffer.len) {
-            path_buffer[path_len] = frame.window.asEventTarget();
-            path_len += 1;
+            switch (exec.context.global) {
+                .worker => {},
+                .frame => |frame| {
+                    path_buffer[path_len] = frame.window.asEventTarget();
+                    path_len += 1;
+                },
+            }
         }
     }
 
@@ -366,7 +371,7 @@ pub fn composedPath(self: *Event, frame: *Frame) ![]const *EventTarget {
     const visible_path_len = if (path_len > visible_start_index) path_len - visible_start_index else 0;
 
     // Allocate and return the visible path using call_arena (short-lived)
-    const path = try frame.call_arena.alloc(*EventTarget, visible_path_len);
+    const path = try exec.call_arena.alloc(*EventTarget, visible_path_len);
     @memcpy(path, path_buffer[visible_start_index..path_len]);
     return path;
 }

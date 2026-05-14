@@ -379,19 +379,27 @@ pub fn abortRequests(_: *Client, owner: *Owner) void {
 }
 
 pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
+    try self.drainQueue();
+    const status = try self.perform(@intCast(timeout_ms));
+    // perform/processMessages just released a batch of connections back to
+    // the pool. Drain again so queued transfers can use them this tick
+    // instead of waiting for the next runner iteration.
+    try self.drainQueue();
+    return status;
+}
+
+fn drainQueue(self: *Client) !void {
     while (self.queue.popFirst()) |queue_node| {
         const transfer: *Transfer = @fieldParentPtr("_node", queue_node);
         const conn = self.network.getConnection() orelse {
             self.queue.prepend(queue_node);
-            break;
+            return;
         };
         // Cleared only after we've successfully obtained a connection;
         // if we put the node back, _queued stays true.
         transfer._queued = false;
         try self.makeRequest(conn, transfer);
     }
-
-    return self.perform(@intCast(timeout_ms));
 }
 
 // last layer
@@ -611,7 +619,15 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
             return err;
         };
     }
-    _ = try self.perform(0);
+
+    // Start the request (and move along any other request). This used to call
+    // self.perform(0) but that can also execute callbacks. Normally, that
+    // wouldn't be so bad. But curl can synchronously fire callbacks for the
+    // request we JUST added, which we do not want (it results in incorrect
+    // execution).
+    self.performing = true;
+    defer self.performing = false;
+    _ = try self.handles.perform();
 }
 
 pub const PerformStatus = enum {

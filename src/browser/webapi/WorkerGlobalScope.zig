@@ -105,6 +105,13 @@ _location: WorkerLocation,
 
 _timers: Timers = .{},
 
+// Messages received before the worker script finished evaluating. Per the
+// HTML spec, postMessage'd data is buffered while the worker is loading
+// and delivered once the worker is ready (i.e. once onmessage can be set).
+// Drained by drainPendingMessages, called from Worker.loadInitialScript
+// after the initial script has been evaluated.
+_pending_messages: std.ArrayList(?JS.Value.Temp) = .empty,
+
 pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
     const arena = worker._arena;
     const parent = worker._frame;
@@ -155,6 +162,14 @@ pub fn deinit(self: *WorkerGlobalScope) void {
     const browser = session.browser;
 
     browser.http_client.abortOwner(&self._http_owner);
+
+    // Release any messages that were buffered while waiting for the
+    // worker script to load but never got drained (e.g. worker script
+    // failed to fetch). Backing array lives on self.arena so the storage
+    // itself is freed with the arena.
+    for (self._pending_messages.items) |maybe_data| {
+        if (maybe_data) |d| d.release();
+    }
 
     self._identity.deinit();
     self._script_manager.deinit();
@@ -300,6 +315,20 @@ pub fn receiveMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
         break :blk cloned.temp() catch break :blk null;
     };
 
+    if (!self._worker._script_loaded) {
+        // Buffer until Worker.loadInitialScript calls drainPendingMessages.
+        // Without this, postMessage'd data races against the worker's
+        // script load: if onmessage hasn't been registered yet (because
+        // the worker hasn't been evaluated), the dispatched event finds
+        // no listener and the message is silently dropped.
+        try self._pending_messages.append(self.arena, cloned_data);
+        return;
+    }
+
+    try self.scheduleMessage(cloned_data);
+}
+
+fn scheduleMessage(self: *WorkerGlobalScope, cloned_data: ?JS.Value.Temp) !void {
     const session = self._session;
 
     const message_arena = try session.getArena(.tiny, "WorkerGlobalScope.receiveMessage");
@@ -317,6 +346,20 @@ pub fn receiveMessage(self: *WorkerGlobalScope, data: JS.Value) !void {
         .low_priority = false,
         .finalizer = ReceiveMessageCallback.cancelled,
     });
+}
+
+// Called by Worker.loadInitialScript once the initial script has been
+// evaluated and onmessage has had a chance to be registered. Any messages
+// that arrived while the worker was loading are scheduled for delivery in
+// the order they were received.
+pub fn drainPendingMessages(self: *WorkerGlobalScope) void {
+    for (self._pending_messages.items) |cloned_data| {
+        self.scheduleMessage(cloned_data) catch |err| {
+            log.warn(.browser, "worker drain msg failed", .{ .err = err });
+            if (cloned_data) |d| d.release();
+        };
+    }
+    self._pending_messages.clearRetainingCapacity();
 }
 
 pub fn btoa(_: *const WorkerGlobalScope, input: JS.String.OneByte, exec: *JS.Execution) ![]const u8 {

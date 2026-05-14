@@ -671,3 +671,7 @@ const testing = @import("../../../testing.zig");
 test "WebApi: XHR" {
     try testing.htmlRunner("net/xhr.html", .{});
 }
+
+test "WebApi: XHR in worker" {
+    try testing.htmlRunner("net/xhr_worker.html", .{});
+}

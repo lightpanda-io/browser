@@ -88,7 +88,6 @@ jobs:
       matrix:
         proxy: [true, false]
         wba: [true, false]
-        cache: [true, false]
         robotstxt: [true, false]
 
     name: demo-runner
@@ -130,9 +129,6 @@ jobs:
           go build
           ./proxy &
 
-      - if: matrix.cache == true
-        run: mkdir /tmp/lp-cache
-
       - if: matrix.wba == true
         run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
 
@@ -141,7 +137,6 @@ jobs:
         run: |
           args=""
           [ "${{ matrix.proxy }}" = "true" ] && args="$args --http-proxy http://127.0.0.1:3000"
-          [ "${{ matrix.cache }}" = "true" ] && args="$args --http-cache-dir /tmp/lp-cache"
           [ "${{ matrix.robotstxt }}" = "true" ] && args="$args --obey-robots"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-key-file private_key.pem"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-domain ${{ vars.WBA_DOMAIN }}"
@@ -159,7 +154,7 @@ jobs:
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: cdp-log-demo-runner-${{ matrix.proxy }}-${{ matrix.wba }}-${{ matrix.cache }}-${{ matrix.robotstxt }}
+          name: cdp-log-demo-runner-${{ matrix.proxy }}-${{ matrix.wba }}-${{ matrix.robotstxt }}
           path: cdp.log
           retention-days: 1
 
@@ -168,7 +163,6 @@ jobs:
       fail-fast: false
       matrix:
         wba: [true, false]
-        cache: [true, false]
         robotstxt: [true, false]
 
     name: proxy-auth
@@ -209,9 +203,6 @@ jobs:
           go build
           ./proxy &
 
-      - if: matrix.cache == true
-        run: mkdir /tmp/lp-cache
-
       - if: matrix.wba == true
         run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
 
@@ -219,7 +210,6 @@ jobs:
         name: build LP args
         run: |
           args=""
-          [ "${{ matrix.cache }}" = "true" ] && args="$args --http-cache-dir /tmp/lp-cache"
           [ "${{ matrix.robotstxt }}" = "true" ] && args="$args --obey-robots"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-key-file private_key.pem"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-domain ${{ vars.WBA_DOMAIN }}"
@@ -244,7 +234,7 @@ jobs:
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: cdp-log-proxy-auth-${{ matrix.wba }}-${{ matrix.cache }}-${{ matrix.robotstxt }}
+          name: cdp-log-proxy-auth-${{ matrix.wba }}-${{ matrix.robotstxt }}
           path: cdp.log
           retention-days: 1
 

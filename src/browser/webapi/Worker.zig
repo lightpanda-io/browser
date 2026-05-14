@@ -169,7 +169,6 @@ fn httpDataCallback(response: HttpClient.Response, data: []const u8) !void {
 fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Worker = @ptrCast(@alignCast(ctx));
     self._http_response = null;
-    self._script_loaded = true;
 
     const url = self._url;
     const script = self._script_buffer.items;
@@ -185,6 +184,23 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 }
 
 fn loadInitialScript(self: *Worker, script: []const u8) !void {
+    // Keep buffering throughout the entire outer eval (including any
+    // runMacrotasks pumped by importScripts via the synchronous CDP path,
+    // see WorkerGlobalScope.importScripts). The flip-and-drain happens
+    // via defer so it runs after eval AND after the trailing
+    // runMacrotasks below — by which point the outer script has had its
+    // only chance to register onmessage. drainPendingMessages enqueues
+    // messages in receive order, so pre-eval and during-eval messages
+    // are delivered FIFO on the next runner tick, matching the spec.
+    //
+    // On eval-throw the defer still fires; the messages get scheduled
+    // and then drop at the "no listener" check, mirroring the
+    // httpErrorCallback path.
+    defer {
+        self._script_loaded = true;
+        self._worker_scope.drainPendingMessages();
+    }
+
     var ls: js.Local.Scope = undefined;
     self._worker_scope.js.localScope(&ls);
     defer ls.deinit();
@@ -226,6 +242,13 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
         .url = self._worker_scope.url,
         .err = err,
     });
+
+    // The worker will never load and onmessage will never be registered.
+    // Drain any buffered messages so they get dispatched (and silently
+    // dropped at the "no listener" check) rather than accumulating until
+    // worker teardown. Future postMessages then schedule normally.
+    self._script_loaded = true;
+    self._worker_scope.drainPendingMessages();
 
     self.fireErrorEvent(@errorName(err), null);
 }
