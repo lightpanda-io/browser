@@ -208,12 +208,12 @@ fn handleRecordStart(server: *Server, arena: std.mem.Allocator, id: std.json.Val
         return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
     }
 
-    var recorder: Recorder = .init(server.allocator, args.path);
-    if (!recorder.isActive()) {
-        recorder.deinit();
-        return sendErrorContent(server, id, "could not open recording file");
-    }
-    const msg = std.fmt.allocPrint(arena, "recording started: {s}", .{recorder.path.?}) catch {
+    var recorder = Recorder.init(server.allocator, args.path) catch |err| {
+        const msg = std.fmt.allocPrint(arena, "could not open recording file: {s}", .{@errorName(err)}) catch
+            return sendErrorContent(server, id, "could not open recording file");
+        return sendErrorContent(server, id, msg);
+    };
+    const msg = std.fmt.allocPrint(arena, "recording started: {s}", .{recorder.path}) catch {
         recorder.deinit();
         return sendErrorContent(server, id, "out of memory");
     };
@@ -228,7 +228,7 @@ fn handleRecordStop(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     }
     var r = server.recorder.?;
     // Build the response before deinit so we can quote the path/lines.
-    const msg = std.fmt.allocPrint(arena, "recording stopped: {s} ({d} line(s) written)", .{ r.path.?, r.lines }) catch
+    const msg = std.fmt.allocPrint(arena, "recording stopped: {s} ({d} line(s) written)", .{ r.path, r.lines }) catch
         return sendErrorContent(server, id, "out of memory");
 
     r.deinit();

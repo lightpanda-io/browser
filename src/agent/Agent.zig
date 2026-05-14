@@ -129,7 +129,7 @@ tool_executor: *ToolExecutor,
 terminal: Terminal,
 cmd_executor: CommandExecutor,
 verifier: Verifier,
-recorder: Recorder,
+recorder: ?Recorder,
 messages: std.ArrayList(zenai.provider.Message),
 message_arena: std.heap.ArenaAllocator,
 model: []u8,
@@ -248,7 +248,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .terminal = .init(allocator, history_path, opts.verbosity, will_repl),
         .cmd_executor = undefined,
         .verifier = .{ .session = tool_executor.session, .node_registry = &tool_executor.node_registry },
-        .recorder = .init(allocator, recorder_path),
+        .recorder = null,
         .messages = .empty,
         .message_arena = .init(allocator),
         .model = model,
@@ -265,17 +265,20 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     if (will_repl) self.terminal.attachCompleter(slash_schemas);
 
-    if (self.recorder.path) |p| {
-        self.terminal.printInfoFmt("recording to {s}", .{p});
-    } else if (self.recorder.init_error) |reason| {
-        self.terminal.printErrorFmt("recording disabled: {s}", .{reason});
+    if (recorder_path) |p| {
+        if (Recorder.init(allocator, p)) |r| {
+            self.recorder = r;
+            self.terminal.printInfoFmt("recording to {s}", .{r.path});
+        } else |err| {
+            self.terminal.printErrorFmt("recording disabled: {s}", .{@errorName(err)});
+        }
     }
 
     return self;
 }
 
 pub fn deinit(self: *Agent) void {
-    self.recorder.deinit();
+    if (self.recorder) |*r| r.deinit();
     self.terminal.deinit();
     self.message_arena.deinit();
     self.messages.deinit(self.allocator);
@@ -386,7 +389,7 @@ fn runRepl(self: *Agent) void {
                 const result = self.cmd_executor.executeWithResult(arena.allocator(), cmd);
                 self.terminal.endTool(!result.failed);
                 self.cmd_executor.printResult(cmd, result);
-                self.recorder.record(cmd);
+                if (self.recorder) |*r| r.record(cmd);
             },
         }
     }
@@ -945,24 +948,24 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     self.terminal.spinner.stop();
     defer result.deinit();
 
-    if (self.recorder.isActive()) {
+    if (self.recorder) |*r| if (r.isActive()) {
         var recorded_any = false;
         for (result.tool_calls_made) |tc| {
             if (tc.is_error) continue;
             const args = tc.arguments orelse continue;
             const cmd = Command.fromToolCallValue(tc.name, args) orelse continue;
             if (!recorded_any) {
-                if (input.record_comment) |c| self.recorder.recordComment(c);
+                if (input.record_comment) |c| r.recordComment(c);
                 recorded_any = true;
             }
-            self.recorder.record(cmd);
+            r.record(cmd);
         }
         // Recorder self-disables on write failure (disk full, fd closed). Tell
         // the user the recording stopped instead of silently dropping appends.
-        if (!self.recorder.isActive()) {
+        if (!r.isActive()) {
             self.terminal.printError("recording disabled (write failed); see logs");
         }
-    }
+    };
 
     // `result.text` and `synth.text` are owned by their RunToolsResult arenas,
     // which are deinited at the end of this function. Dupe into the agent's
