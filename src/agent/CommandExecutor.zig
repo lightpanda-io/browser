@@ -44,7 +44,11 @@ pub const ExecResult = struct {
 /// `.login`, or `.accept_cookies` — those are filtered upstream (see
 /// `Agent.runRepl`) because they have no tool mapping.
 pub fn executeWithResult(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) ExecResult {
-    if (cmd == .extract) return self.execExtract(arena, cmd.extract);
+    switch (cmd) {
+        .extract => |schema| return self.execExtract(arena, schema),
+        .eval_js => |script| return evalLikeResult(self.tool_executor.callEval(arena, script)),
+        else => {},
+    }
 
     const tc = (Command.toToolCall(arena, cmd, browser_tools.substituteEnvVars) catch
         return .{ .output = "out of memory", .failed = true }) orelse
@@ -68,7 +72,13 @@ pub fn printResult(self: *Self, cmd: Command.Command, result: ExecResult) void {
 fn execExtract(self: *Self, arena: std.mem.Allocator, raw_schema: []const u8) ExecResult {
     const schema = browser_tools.substituteEnvVars(arena, raw_schema) catch
         return .{ .output = "out of memory", .failed = true };
-    const result = self.tool_executor.extract(arena, schema) catch |err|
-        return .{ .output = @errorName(err), .failed = true };
-    return .{ .output = result.text(), .failed = result.isError() };
+    return evalLikeResult(self.tool_executor.extract(arena, schema));
+}
+
+/// Collapse an `EvalResult` into an `ExecResult` while preserving `isError`:
+/// V8 throws would otherwise round-trip as `failed = false` through the
+/// generic `[]const u8` path.
+fn evalLikeResult(result: browser_tools.ToolError!browser_tools.EvalResult) ExecResult {
+    const r = result catch |err| return .{ .output = @errorName(err), .failed = true };
+    return .{ .output = r.text(), .failed = r.isError() };
 }
