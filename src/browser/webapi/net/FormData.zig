@@ -50,6 +50,13 @@ pub const Entry = struct {
                 .file => unreachable, // nothing currently creates this type of value
             };
         }
+
+        pub fn format(self: Value, writer: *std.Io.Writer) !void {
+            return switch (self) {
+                .string => |s| s.format(writer),
+                .file => unreachable, // nothing currently creates this type of value
+            };
+        }
     };
 };
 
@@ -163,6 +170,7 @@ pub const EncType = union(enum) {
     urlencode,
     // Boundary delimiter; caller owns the bytes (must outlive the write).
     formdata: []const u8,
+    plaintext,
 };
 
 pub const WriteOpts = struct {
@@ -175,6 +183,7 @@ pub fn write(self: *const FormData, opts: WriteOpts, writer: *std.Io.Writer) !vo
     switch (opts.encoding) {
         .urlencode => return self.urlEncode(opts, writer),
         .formdata => |boundary| return self.multipartEncode(boundary, writer),
+        .plaintext => return self.plaintextEncode(writer),
     }
 }
 
@@ -193,6 +202,20 @@ fn urlEncodeEntry(entry: *const Entry, opts: WriteOpts, writer: *std.Io.Writer) 
     try KeyValueList.urlEncodeFormValue(entry.name.str(), opts.allocator, opts.charset, writer);
     try writer.writeByte('=');
     try KeyValueList.urlEncodeFormValue(entry.value.asString(), opts.allocator, opts.charset, writer);
+}
+
+/// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#text/plain-encoding-algorithm
+///
+/// For each entry: name, "=", value, CRLF. No URL-encoding, no escaping. Per the
+/// spec this is a low-fidelity encoding intended for human-readable values; a
+/// value containing "=" or CRLF produces an ambiguous wire format, by design.
+fn plaintextEncode(self: *const FormData, writer: *std.Io.Writer) !void {
+    for (self._entries.items) |*entry| {
+        try entry.name.format(writer);
+        try writer.writeByte('=');
+        try entry.value.format(writer);
+        try writer.writeAll("\r\n");
+    }
 }
 
 fn multipartEncode(self: *const FormData, boundary: []const u8, writer: *std.Io.Writer) !void {
@@ -460,4 +483,43 @@ test "FormData: multipart empty body" {
     }, &buf.writer);
 
     try testing.expectString("--B--\r\n", buf.written());
+}
+
+test "FormData: plaintext write" {
+    const allocator = testing.arena_allocator;
+
+    var fd = FormData{
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+    try fd.append("name", "John");
+    try fd.append("note", "two\r\nlines");
+    try fd.append("equals", "a=b");
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try fd.write(.{ .encoding = .plaintext, .allocator = allocator }, &buf.writer);
+
+    // Per WHATWG HTML text/plain encoding algorithm: name=value CRLF per entry.
+    // Values containing "=" or CRLF are written verbatim — the spec accepts that
+    // text/plain is a low-fidelity, lossy encoding for human-readable content.
+    try testing.expectString(
+        "name=John\r\n" ++
+            "note=two\r\nlines\r\n" ++
+            "equals=a=b\r\n",
+        buf.written(),
+    );
+}
+
+test "FormData: plaintext empty body" {
+    const allocator = testing.arena_allocator;
+
+    var fd = FormData{
+        ._arena = allocator,
+        ._entries = .empty,
+    };
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    try fd.write(.{ .encoding = .plaintext, .allocator = allocator }, &buf.writer);
+
+    try testing.expectString("", buf.written());
 }

@@ -85,6 +85,51 @@
   }
 </script>
 
+<!-- Test fixtures for form.enctype -->
+<form id="form_enctype_default"></form>
+<form id="form_enctype_url" enctype="application/x-www-form-urlencoded"></form>
+<form id="form_enctype_multipart" enctype="multipart/form-data"></form>
+<form id="form_enctype_plain" enctype="text/plain"></form>
+
+<script id="enctype_initial">
+  // Missing-value default: "application/x-www-form-urlencoded"
+  testing.expectEqual('application/x-www-form-urlencoded', $('#form_enctype_default').enctype)
+  testing.expectEqual('application/x-www-form-urlencoded', $('#form_enctype_url').enctype)
+  testing.expectEqual('multipart/form-data', $('#form_enctype_multipart').enctype)
+  testing.expectEqual('text/plain', $('#form_enctype_plain').enctype)
+</script>
+
+<script id="enctype_set">
+  {
+    const form = document.createElement('form')
+    testing.expectEqual('application/x-www-form-urlencoded', form.enctype)
+
+    form.enctype = 'multipart/form-data'
+    testing.expectEqual('multipart/form-data', form.enctype)
+    testing.expectEqual('multipart/form-data', form.getAttribute('enctype'))
+  }
+</script>
+
+<script id="enctype_normalization">
+  {
+    const form = document.createElement('form')
+
+    // Case-insensitive match against known values
+    form.setAttribute('enctype', 'MULTIPART/FORM-DATA')
+    testing.expectEqual('multipart/form-data', form.enctype)
+
+    form.setAttribute('enctype', 'Text/Plain')
+    testing.expectEqual('text/plain', form.enctype)
+
+    // Invalid-value default: "application/x-www-form-urlencoded"
+    form.setAttribute('enctype', 'application/json')
+    testing.expectEqual('application/x-www-form-urlencoded', form.enctype)
+
+    form.setAttribute('enctype', '')
+    testing.expectEqual('application/x-www-form-urlencoded', form.enctype)
+  }
+</script>
+
 <!-- Test fixtures for form.elements -->
 <form id="form1">
   <input name="field1" value="value1">

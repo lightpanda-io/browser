@@ -287,3 +287,80 @@
     testing.expectEqual('5', s12.value);
   }
 </script>
+
+<!-- Test fixtures for form submission attribute overrides -->
+<input id="inp_no_overrides" type="submit">
+<input id="inp_with_overrides" type="submit"
+       formaction="/override" formmethod="POST"
+       formenctype="text/plain" formtarget="_blank" formnovalidate>
+<input id="inp_invalid_overrides" type="submit"
+       formmethod="WEIRD" formenctype="bogus">
+
+<script id="input_form_action_initial">
+  // Missing: returns the document URL per spec.
+  testing.expectEqual(testing.BASE_URL + 'element/html/input-attrs.html', $('#inp_no_overrides').formAction)
+  testing.expectEqual(testing.ORIGIN + '/override', $('#inp_with_overrides').formAction)
+</script>
+
+<script id="input_form_action_set">
+  {
+    const i = document.createElement('input')
+    i.type = 'submit'
+    testing.expectEqual(testing.BASE_URL + 'element/html/input-attrs.html', i.formAction)
+
+    i.formAction = '/hello'
+    testing.expectEqual(testing.ORIGIN + '/hello', i.formAction)
+  }
+</script>
+
+<script id="input_form_enctype_initial">
+  testing.expectEqual('', $('#inp_no_overrides').formEnctype)
+  testing.expectEqual('text/plain', $('#inp_with_overrides').formEnctype)
+  testing.expectEqual('application/x-www-form-urlencoded', $('#inp_invalid_overrides').formEnctype)
+</script>
+
+<script id="input_form_method_initial">
+  testing.expectEqual('', $('#inp_no_overrides').formMethod)
+  testing.expectEqual('post', $('#inp_with_overrides').formMethod)
+  testing.expectEqual('get', $('#inp_invalid_overrides').formMethod)
+</script>
+
+<script id="input_form_method_normalization">
+  {
+    const i = document.createElement('input')
+    i.type = 'submit'
+    testing.expectEqual('', i.formMethod)
+
+    i.setAttribute('formmethod', 'POST')
+    testing.expectEqual('post', i.formMethod)
+
+    i.setAttribute('formmethod', '')
+    testing.expectEqual('get', i.formMethod)
+  }
+</script>
+
+<script id="input_form_target_initial">
+  testing.expectEqual('', $('#inp_no_overrides').formTarget)
+  testing.expectEqual('_blank', $('#inp_with_overrides').formTarget)
+</script>
+
+<script id="input_form_no_validate_initial">
+  testing.expectEqual(false, $('#inp_no_overrides').formNoValidate)
+  testing.expectEqual(true, $('#inp_with_overrides').formNoValidate)
+</script>
+
+<script id="input_form_no_validate_set">
+  {
+    const i = document.createElement('input')
+    i.type = 'submit'
+    testing.expectEqual(false, i.formNoValidate)
+
+    i.formNoValidate = true
+    testing.expectEqual(true, i.formNoValidate)
+    testing.expectEqual('', i.getAttribute('formnovalidate'))
+
+    i.formNoValidate = false
+    testing.expectEqual(false, i.formNoValidate)
+    testing.expectEqual(null, i.getAttribute('formnovalidate'))
+  }
+</script>

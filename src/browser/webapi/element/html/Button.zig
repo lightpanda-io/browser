@@ -120,6 +120,65 @@ pub fn getLabels(self: *Button, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
+// Form submission attribute overrides
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-0
+//
+// Each `formX` IDL attribute reflects the matching `formx` content attribute and
+// overrides the form-owner's value when this button is the submitter. Per spec
+// these are "no missing value default" reflections — getters return "" when the
+// content attribute is absent, so the `submitter.formX || form.X` idiom in
+// downstream CDP clients (e.g. Turbo's FormSubmission constructor) falls
+// through to the form's value.
+
+pub fn getFormAction(self: *Button, frame: *Frame) ![]const u8 {
+    const element = self.asElement();
+    const action = element.getAttributeSafe(comptime .wrap("formaction")) orelse return frame.url;
+    if (action.len == 0) {
+        return frame.url;
+    }
+    return element.asNode().resolveURL(action, frame, .{});
+}
+
+pub fn setFormAction(self: *Button, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("formaction"), .wrap(value), frame);
+}
+
+pub fn getFormEnctype(self: *const Button) []const u8 {
+    return Form.normalizeEnctype(self.asConstElement().getAttributeSafe(comptime .wrap("formenctype")), "");
+}
+
+pub fn setFormEnctype(self: *Button, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("formenctype"), .wrap(value), frame);
+}
+
+pub fn getFormMethod(self: *const Button) []const u8 {
+    return Form.normalizeMethod(self.asConstElement().getAttributeSafe(comptime .wrap("formmethod")), "");
+}
+
+pub fn setFormMethod(self: *Button, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("formmethod"), .wrap(value), frame);
+}
+
+pub fn getFormTarget(self: *const Button) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("formtarget")) orelse "";
+}
+
+pub fn setFormTarget(self: *Button, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("formtarget"), .wrap(value), frame);
+}
+
+pub fn getFormNoValidate(self: *const Button) bool {
+    return self.asConstElement().getAttributeSafe(.wrap("formnovalidate")) != null;
+}
+
+pub fn setFormNoValidate(self: *Button, value: bool, frame: *Frame) !void {
+    if (value) {
+        try self.asElement().setAttributeSafe(.wrap("formnovalidate"), .wrap(""), frame);
+    } else {
+        try self.asElement().removeAttribute(.wrap("formnovalidate"), frame);
+    }
+}
+
 // Constraint validation
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#the-constraint-validation-api
 //
@@ -182,6 +241,11 @@ pub const JsApi = struct {
     pub const name = bridge.accessor(Button.getName, Button.setName, .{});
     pub const required = bridge.accessor(Button.getRequired, Button.setRequired, .{});
     pub const form = bridge.accessor(Button.getForm, null, .{});
+    pub const formAction = bridge.accessor(Button.getFormAction, Button.setFormAction, .{});
+    pub const formEnctype = bridge.accessor(Button.getFormEnctype, Button.setFormEnctype, .{});
+    pub const formMethod = bridge.accessor(Button.getFormMethod, Button.setFormMethod, .{});
+    pub const formNoValidate = bridge.accessor(Button.getFormNoValidate, Button.setFormNoValidate, .{});
+    pub const formTarget = bridge.accessor(Button.getFormTarget, Button.setFormTarget, .{});
     pub const value = bridge.accessor(Button.getValue, Button.setValue, .{});
     pub const @"type" = bridge.accessor(Button.getType, Button.setType, .{});
     pub const labels = bridge.accessor(Button.getLabels, null, .{});
