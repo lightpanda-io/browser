@@ -85,7 +85,7 @@ const script_heal_schema = browser_tools.minify(
 const extra_tools = [_]protocol.Tool{
     .{
         .name = "record_start",
-        .description = "Start recording state-mutating browser tool calls into a PandaScript file. Subsequent calls to `goto`, `click`, `fill`, `scroll`, `hover`, `selectOption`, `setChecked`, `waitForSelector`, and `eval` get appended as PandaScript lines. Query-only tools (tree, markdown, links, findElement, …) are not recorded.",
+        .description = "Start recording state-mutating browser tool calls into a PandaScript file. Subsequent calls to `goto`, `click`, `fill`, `scroll`, `hover`, `selectOption`, `setChecked`, `waitForSelector`, `eval`, and `extract` get appended as PandaScript lines. Query-only tools (tree, markdown, links, findElement, …) are not recorded.",
         .inputSchema = record_start_schema,
     },
     .{
@@ -163,8 +163,12 @@ fn dispatchBrowserTool(
     };
 
     // JS errors are returned as isError tool results, not protocol errors
-    if (action == .eval) {
-        const outcome = browser_tools.callEval(arena, server.session, &server.node_registry, arguments);
+    const eval_outcome: ?(browser_tools.ToolError!browser_tools.EvalResult) = switch (action) {
+        .eval => browser_tools.callEval(arena, server.session, &server.node_registry, arguments),
+        .extract => browser_tools.callExtract(arena, server.session, &server.node_registry, arguments),
+        else => null,
+    };
+    if (eval_outcome) |outcome| {
         if (outcome) |r| {
             if (!r.isError()) recordIfActive(server, name, arguments);
         } else |_| {}
@@ -263,14 +267,8 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendErrorContent(server, id, "LOGIN / ACCEPT_COOKIES / natural-language steps require an LLM and are not handled by lightpanda mcp; the calling agent owns those");
     }
 
-    switch (cmd) {
-        .comment => {
-            return sendToolResultText(server, id, "comment", false);
-        },
-        .extract => |schema| {
-            return sendEvalOutcome(server, id, browser_tools.extractSchema(arena, server.session, &server.node_registry, schema));
-        },
-        else => {},
+    if (cmd == .comment) {
+        return sendToolResultText(server, id, "comment", false);
     }
 
     // Map the Command to its underlying browser tool and dispatch through
@@ -284,8 +282,10 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendErrorContent(server, id, "internal: unknown action from Command.toToolCall");
     };
 
-    if (action == .eval) {
-        return sendEvalOutcome(server, id, browser_tools.callEval(arena, server.session, &server.node_registry, tc.args));
+    switch (action) {
+        .eval => return sendEvalOutcome(server, id, browser_tools.callEval(arena, server.session, &server.node_registry, tc.args)),
+        .extract => return sendEvalOutcome(server, id, browser_tools.callExtract(arena, server.session, &server.node_registry, tc.args)),
+        else => {},
     }
 
     const result = browser_tools.call(arena, server.session, &server.node_registry, tc.name, tc.args) catch |err| {

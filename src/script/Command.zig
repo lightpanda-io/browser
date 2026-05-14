@@ -563,8 +563,7 @@ pub const ToolCall = struct {
 
 /// Map a Command to its (tool_name, JSON args) representation. Returns
 /// null for variants without a 1:1 tool mapping (login, accept_cookies,
-/// natural_language, comment, extract — extract is handled by the caller
-/// via `extractSchema`, which compiles the schema into a single eval).
+/// natural_language, comment).
 ///
 /// `substitute` is applied to selector-like fields. The `value` field of
 /// `type_cmd` is intentionally NOT substituted: `execFill` in
@@ -616,7 +615,11 @@ pub fn toToolCall(arena: std.mem.Allocator, cmd: Command, substitute: Substitute
             try obj.put("script", .{ .string = script });
             return .{ .name = @tagName(Action.eval), .args = .{ .object = obj } };
         },
-        .extract, .natural_language, .comment, .login, .accept_cookies => return null,
+        .extract => |schema| {
+            try obj.put("schema", .{ .string = try substitute(arena, schema) });
+            return .{ .name = @tagName(Action.extract), .args = .{ .object = obj } };
+        },
+        .natural_language, .comment, .login, .accept_cookies => return null,
     }
 }
 
@@ -636,6 +639,7 @@ pub fn fromToolCall(tool_name: []const u8, arguments: std.json.Value) ?Command {
         .click => .{ .click = getJsonString(obj, "selector") orelse return null },
         .hover => .{ .hover = getJsonString(obj, "selector") orelse return null },
         .eval => .{ .eval_js = getJsonString(obj, "script") orelse return null },
+        .extract => .{ .extract = getJsonString(obj, "schema") orelse return null },
         .waitForSelector => .{ .wait = getJsonString(obj, "selector") orelse return null },
         .fill => .{ .type_cmd = .{
             .selector = getJsonString(obj, "selector") orelse return null,
@@ -1286,6 +1290,7 @@ test "toToolCall/fromToolCall round-trip" {
         .{ .check = .{ .selector = "#tos", .checked = true } },
         .{ .check = .{ .selector = "#tos", .checked = false } },
         .{ .eval_js = "document.title" },
+        .{ .extract = "{\"karma\": \"#karma\"}" },
     };
     for (cases, 0..) |c, i| {
         errdefer std.debug.print("failing case {d}: tag={s}\n", .{ i, @tagName(c) });
@@ -1297,7 +1302,6 @@ test "toToolCall: variants without tool mapping return null" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    try std.testing.expect((try toToolCall(a, .{ .extract = "{\"x\":\".x\"}" }, noSubstitute)) == null);
     try std.testing.expect((try toToolCall(a, .login, noSubstitute)) == null);
     try std.testing.expect((try toToolCall(a, .accept_cookies, noSubstitute)) == null);
     try std.testing.expect((try toToolCall(a, .comment, noSubstitute)) == null);
@@ -1327,6 +1331,17 @@ test "toToolCall: substitute callback applied to selector fields" {
     try std.testing.expectEqualStrings("click", tc.name);
     const args_json = try std.json.Stringify.valueAlloc(a, tc.args.?, .{});
     try std.testing.expectEqualStrings("{\"selector\":\"ABC\"}", args_json);
+}
+
+test "toToolCall: substitute callback applied to extract schema" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const tc = (try toToolCall(a, .{ .extract = "abc" }, testUpcase)).?;
+    try std.testing.expectEqualStrings("extract", tc.name);
+    const args_json = try std.json.Stringify.valueAlloc(a, tc.args.?, .{});
+    try std.testing.expectEqualStrings("{\"schema\":\"ABC\"}", args_json);
 }
 
 test "toToolCall: type_cmd value is NOT substituted" {

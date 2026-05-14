@@ -131,6 +131,28 @@ pub const tool_defs = [_]ToolDef{
         ),
     },
     .{
+        .name = "extract",
+        .description =
+        \\Extract structured data from the current page using a small JSON schema. Prefer this over `markdown` or `eval` whenever the user asked for a specific value or list (a score, price, count, profile field, headlines, …) — the result is returned as JSON AND the call is recorded as an `EXTRACT` PandaScript line, so a later replay (no LLM) prints the answer to stdout. Use `markdown` / `tree` / `interactiveElements` only to discover the right selector, then commit to one `extract` call.
+        \\
+        \\Schema is a JSON object literal (pass it as a string in `schema`). Each value picks what to lift out:
+        \\  "<sel>"                                    → first match's textContent.trim() (string|null)
+        \\  ["<sel>"]                                  → every match's text (string[])
+        \\  {"selector":"<sel>","attr":"<name>"}       → first match's attribute (string|null)
+        \\  [{"selector":"<sel>","fields":{…}}]        → array of objects, fields resolved relative to each match
+        \\Example: schema `{"karma": "#karma"}` → `{"karma":"42"}`.
+        ,
+        .input_schema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "schema": { "type": "string", "description": "JSON schema object (as a string) describing what to extract. Must be a JSON object literal." }
+            \\  },
+            \\  "required": ["schema"]
+            \\}
+        ),
+    },
+    .{
         .name = "tree",
         .description = "Get the page content as a simplified semantic DOM tree for AI reasoning. If a url is provided, it navigates to that url first.",
         .input_schema = minify(
@@ -440,6 +462,7 @@ pub fn call(
         .setChecked => execSetChecked(arena, session, registry, arguments),
         .findElement => execFindElement(arena, session, registry, arguments),
         .eval => (try execEval(arena, session, registry, arguments)).text(),
+        .extract => (try execExtract(arena, session, registry, arguments)).text(),
         .getEnv => execGetEnv(arena, arguments),
         .consoleLogs => execConsoleLogs(arena, session),
         .getUrl => execGetUrl(session),
@@ -454,6 +477,15 @@ pub fn callEval(
     arguments: ?std.json.Value,
 ) ToolError!EvalResult {
     return execEval(arena, session, registry, arguments);
+}
+
+pub fn callExtract(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *CDPNode.Registry,
+    arguments: ?std.json.Value,
+) ToolError!EvalResult {
+    return execExtract(arena, session, registry, arguments);
 }
 
 /// Run JavaScript against the current page, skipping the JSON parameter
@@ -479,7 +511,7 @@ pub fn evalScript(
 ///   {selector, attr}     → first match's attribute (string|null)
 ///   [{selector, attr}]   → all matches' attributes (string[])
 ///   [{selector, fields}] → all matches, with `fields` relative to each (object[])
-pub fn extractSchema(
+pub fn extract(
     arena: std.mem.Allocator,
     session: *lp.Session,
     registry: *CDPNode.Registry,
@@ -722,6 +754,12 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     const args = try parseArgs(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout, args.waitUntil);
     return runEval(arena, page, args.script);
+}
+
+fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!EvalResult {
+    const Params = struct { schema: []const u8 };
+    const args = try parseArgs(Params, arena, arguments);
+    return extract(arena, session, registry, args.schema);
 }
 
 fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) ToolError!EvalResult {

@@ -119,6 +119,6 @@ pub fn callValue(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, a
     return browser_tools.call(arena, self.session, &self.node_registry, tool_name, arguments);
 }
 
-pub fn extractSchema(self: *Self, arena: std.mem.Allocator, schema_json: []const u8) browser_tools.ToolError!browser_tools.EvalResult {
-    return browser_tools.extractSchema(arena, self.session, &self.node_registry, schema_json);
+pub fn extract(self: *Self, arena: std.mem.Allocator, schema_json: []const u8) browser_tools.ToolError!browser_tools.EvalResult {
+    return browser_tools.extract(arena, self.session, &self.node_registry, schema_json);
 }

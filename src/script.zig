@@ -101,6 +101,22 @@ pub const mcp_driver_guidance =
     \\- If you do goto Google manually, append &hl=en&gl=us to bypass
     \\  localized consent pages.
     \\
+    \\Data extraction:
+    \\- When the user's request asks for a specific piece of data — a number,
+    \\  price, score, profile field, list of items, etc. — finish by calling
+    \\  `extract` with a JSON schema. The result is JSON AND the call is
+    \\  recorded as an `EXTRACT` PandaScript line, so a later replay (no LLM)
+    \\  prints the value to stdout. Reading the page via `markdown` and
+    \\  answering only in chat does NOT survive replay.
+    \\- Use `markdown` / `tree` / `interactiveElements` to *discover* the right
+    \\  selector, then commit to one `extract` call. Schema examples:
+    \\    {"karma": "#karma"}                            → single value
+    \\    {"items": [".story .title"]}                   → list of texts
+    \\    {"links": [{"selector":"a.title","attr":"href"}]}  → list of attrs
+    \\- Pass the schema as a JSON string in the `schema` argument. It must be
+    \\  a JSON object literal — see the `extract` tool description for
+    \\  the full schema grammar.
+    \\
 ;
 
 pub const Replacement = struct {
