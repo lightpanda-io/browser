@@ -203,7 +203,6 @@ const Commands = cli.Builder(.{
         .shared_options = CommonOptions,
     },
     .{ .name = "version", .options = .{} },
-    .{ .name = "help", .positional = .{ .name = "subcommand", .type = ?[]const u8 }, .options = .{} },
 });
 
 pub const RunMode = Commands.Enum;

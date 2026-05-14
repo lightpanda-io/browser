@@ -166,17 +166,24 @@ pub fn Builder(comptime commands: anytype) type {
 
         /// Enum type for provided commands.
         pub const Enum = blk: {
-            var enum_fields: [commands.len]std.builtin.Type.EnumField = undefined;
-            for (commands, 0..) |command, i| {
+            const len = commands.len + 1;
+            var enum_fields: [len]std.builtin.Type.EnumField = undefined;
+
+            var i: usize = 0;
+            while (i < commands.len) : (i += 1) {
+                const command = commands[i];
                 enum_fields[i] = .{ .name = command.name, .value = i };
             }
+
+            // Entry for help.
+            enum_fields[i] = .{ .name = "help", .value = i };
 
             break :blk @Type(.{
                 .@"enum" = .{
                     .decls = &.{},
                     .fields = &enum_fields,
                     .is_exhaustive = true,
-                    .tag_type = std.math.IntFittingRange(0, commands.len),
+                    .tag_type = std.math.IntFittingRange(0, len),
                 },
             });
         };
@@ -244,8 +251,12 @@ pub fn Builder(comptime commands: anytype) type {
 
         /// Union type for provided commands.
         pub const Union = blk: {
-            var union_fields: [commands.len]std.builtin.Type.UnionField = undefined;
-            for (commands, 0..) |command, i| {
+            const len = commands.len + 1;
+            var union_fields: [len]std.builtin.Type.UnionField = undefined;
+
+            var i: usize = 0;
+            while (i < commands.len) : (i += 1) {
+                const command = commands[i];
                 const Command = @TypeOf(command);
                 const options = command.options;
 
@@ -279,6 +290,10 @@ pub fn Builder(comptime commands: anytype) type {
                 union_fields[i] = .{ .name = command.name, .type = T, .alignment = @alignOf(T) };
             }
 
+            // Entry for help; just takes `Enum` itself.
+            const Help = Enum;
+            union_fields[i] = .{ .name = "help", .type = Help, .alignment = @alignOf(Help) };
+
             break :blk @Type(.{
                 .@"union" = .{
                     .decls = &.{},
@@ -300,27 +315,24 @@ pub fn Builder(comptime commands: anytype) type {
             inline for (commands) |command| {
                 // Match a command.
                 if (std.mem.eql(u8, cmd_str, command.name)) {
-                    const cmd_parsed = parseCommand(allocator, command, &args) catch |err| {
-                        if (err == error.HelpRequested) {
-                            // <subcommand> help requested, return help <subcommand>
-                            var h = @FieldType(Union, "help"){};
-                            if (@hasField(@FieldType(Union, "help"), "subcommand")) {
-                                h.subcommand = command.name;
-                            }
-                            return .{ exec_name, @unionInit(Union, "help", h) };
-                        } else return err;
-                    };
+                    const cmd_parsed = try parseCommand(allocator, command, &args);
                     return .{ exec_name, cmd_parsed };
                 }
+            }
+
+            // Help is not in `commands`; so, we have to special case it.
+            if (std.mem.eql(u8, cmd_str, "help")) {
+                return .{ exec_name, @unionInit(Union, "help", .help) };
             }
 
             // Last resort, try sniffing.
             const command_enum = try sniffCommand(cmd_str);
 
+            // Legacy `--help` situation.
             // `help` takes no arguments; short-circuit so the sniffed flag
             // isn't re-parsed as an unknown option.
             if (command_enum == .help) {
-                return .{ exec_name, .{ .help = .{} } };
+                return .{ exec_name, @unionInit(Union, "help", .help) };
             }
 
             // "cmd_str" wasn't a command but an option. We can't reset args, but
@@ -333,16 +345,7 @@ pub fn Builder(comptime commands: anytype) type {
 
             inline for (commands) |command| {
                 if (std.mem.eql(u8, @tagName(command_enum), command.name)) {
-                    const cmd_parsed = parseCommand(allocator, command, &args) catch |err| {
-                        if (err == error.HelpRequested) {
-                            // <subcommand> help requested, return help <subcommand>
-                            var h = @FieldType(Union, "help"){};
-                            if (@hasField(@FieldType(Union, "help"), "subcommand")) {
-                                h.subcommand = command.name;
-                            }
-                            return .{ exec_name, @unionInit(Union, "help", h) };
-                        } else return err;
-                    };
+                    const cmd_parsed = try parseCommand(allocator, command, &args);
                     return .{ exec_name, cmd_parsed };
                 }
             }
@@ -639,9 +642,9 @@ pub fn Builder(comptime commands: anytype) type {
                     }
                 }
 
-                // Subcommand help: `lightpanda fetch help` or `lightpanda fetch --help`
+                // Subcommand help: `lightpanda fetch help` or `lightpanda fetch --help`.
                 if (std.mem.eql(u8, option_name, "help") or std.mem.eql(u8, option_name, "--help")) {
-                    return error.HelpRequested;
+                    return @unionInit(Union, "help", std.meta.stringToEnum(Enum, command.name).?);
                 }
 
                 // Encountered an option we don't know of.
