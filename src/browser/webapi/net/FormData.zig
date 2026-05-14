@@ -51,7 +51,6 @@ pub const Entry = struct {
             };
         }
 
-
         pub fn format(self: Value, writer: *std.Io.Writer) !void {
             return switch (self) {
                 .string => |s| s.format(writer),
