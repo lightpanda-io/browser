@@ -161,7 +161,7 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "tree",
-        .description = "Get the page content as a simplified semantic DOM tree (role, name, value, backendNodeId per node) for AI reasoning. Tree output does NOT include raw HTML attributes like `id` or `class` — once you've located the node you want, call `nodeDetails` on its backendNodeId to read its id/class for selector synthesis. If a url is provided, it navigates to that url first.",
+        .description = "Simplified semantic DOM tree (role, name, value, backendNodeId per node). Output omits raw HTML attributes; call `nodeDetails` on a backendNodeId to read id/class for selector synthesis. Navigates first if `url` is provided.",
         .input_schema = minify(
             \\{
             \\  "type": "object",
@@ -177,7 +177,7 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "nodeDetails",
-        .description = "Get detailed information about a specific node by its backend node ID. Returns tag, role, name, interactivity, disabled state, value, input type, placeholder, href, **id**, **class**, checked state, and select options. Use this AFTER `tree` to discover the id/class of a node you want to target with `extract` or `click` — it's the canonical way to turn a tree backendNodeId into a CSS selector.",
+        .description = "Details for a node by backendNodeId: tag, role, name, interactivity, disabled, value, input type, placeholder, href, **id**, **class**, checked, select options. Canonical way to turn a tree backendNodeId into a CSS selector.",
         .input_schema = minify(
             \\{
             \\  "type": "object",
@@ -338,7 +338,7 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "getUrl",
-        .description = "Get the current page URL. The browser may already have a page loaded from a user slash command or a replayed script that is not visible in this conversation — call this before assuming nothing is loaded whenever the user references the current page/site/website (explicitly or implicitly) or you otherwise lack the URL needed to ground the request. Also useful to verify a navigation or detect a redirect.",
+        .description = "Current page URL. The browser may already have a page loaded (slash command, replayed script) not visible in this conversation — call this before assuming nothing is loaded when the user references the current page/site. Also useful to verify a navigation or detect a redirect.",
         .input_schema = minify(
             \\{ "type": "object", "properties": {} }
         ),
@@ -352,7 +352,7 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "getEnv",
-        .description = "With `name`: read an environment variable from the LP_* namespace (other names are reported as not set). Without `name`: list all LP_* variable names that are set (names only, no values) — safe for discovering what site-scoped credentials are available. Operators commonly name site-scoped values as LP_<SITE>_<FIELD> (e.g. LP_HN_USERNAME, LP_GH_TOKEN). For credentials specifically, do NOT pass `name` — the return value would land in your context. Use $LP_* placeholders in fill values instead: substitution happens inside the Lightpanda subprocess so the secret never reaches the model. getEnv with a name is for non-secret config (base URLs, feature flags, defaults).",
+        .description = "With `name`: read an LP_* env var (other namespaces report as not set) — for non-secret config only (base URLs, flags). Without `name`: list LP_* names that are set (no values) — safe credential discovery. For secrets, pass `$LP_*` placeholders in tool args; never request a credential by name (the value would land in your context).",
         .input_schema = minify(
             \\{
             \\  "type": "object",
@@ -564,7 +564,7 @@ const schema_walker_prefix =
     \\    const v = out[k];
     \\    if (v !== null && !(Array.isArray(v) && v.length === 0)) any = true;
     \\  }
-    \\  if (!any) throw new Error("extract: no selector in the schema matched any element on the page — inspect with `tree` or `markdown` first to find real ids/classes, then retry with a corrected schema");
+    \\  if (!any) throw new Error("extract: no schema selector matched any element — inspect the page with tree/markdown and retry with corrected selectors");
     \\  return out;
     \\})(
 ;

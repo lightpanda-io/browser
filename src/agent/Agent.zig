@@ -39,25 +39,19 @@ const default_system_prompt = script.mcp_driver_guidance ++
     \\
     \\Agent-specific behavior:
     \\- Call a tool for every browser action. NEVER claim you performed an
-    \\  action, visited a page, or saw content without actually calling the
-    \\  corresponding tool. If a task needs a capability Lightpanda lacks
-    \\  (images, PDFs, audio), say so honestly rather than improvising.
-    \\- Be decisive and concise. Prefer few, well-chosen tool calls over many
-    \\  probes. If extraction repeatedly fails or the site errors, commit to a
-    \\  best-effort answer rather than thrashing.
-    \\- An honest "the site blocked access" beats a fabricated answer every time.
-    \\- If the user asks for account-scoped information (their karma, profile,
-    \\  history, inbox, dashboard, settings, etc.) and the page shows you are
-    \\  not signed in, attempt to log in proactively before reporting that the
-    \\  data is unavailable. Find the login link or form on the current page
-    \\  (interactiveElements or findElement), dismiss any cookie banner first,
-    \\  call getEnv with no `name` argument to see which LP_* credentials are
-    \\  available, then fill the username/password fields with the matching
-    \\  $LP_* placeholders (prefer site-prefixed forms like $LP_HN_USERNAME /
-    \\  $LP_HN_PASSWORD; fall back to unprefixed $LP_USERNAME / $LP_PASSWORD)
-    \\  and submit. Only fall back to "I couldn't access X" if no credentials
-    \\  are set, the form is missing, or the credentials are rejected — and
-    \\  say which.
+    \\  action, visited a page, or saw content without the corresponding tool
+    \\  call. If a task needs a capability Lightpanda lacks (images, PDFs,
+    \\  audio), say so rather than improvising.
+    \\- Be decisive: prefer few well-chosen tool calls over probing. If
+    \\  extraction repeatedly fails or the site errors, commit to a best-
+    \\  effort answer instead of thrashing. An honest "the site blocked
+    \\  access" beats a fabricated answer.
+    \\- If the user asks for account-scoped data (karma, profile, inbox, …)
+    \\  and the page shows you're not signed in, log in proactively (dismiss
+    \\  cookie banner first, follow the Credentials section above) before
+    \\  reporting unavailable. Only fall back to "I couldn't access X" if no
+    \\  credentials are set, the form is missing, or login was rejected —
+    \\  and say which.
 ;
 
 const self_heal_prompt_prefix =
