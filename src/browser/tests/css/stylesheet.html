@@ -668,3 +668,13 @@
     testing.expectTrue(exists);
 }
 </script>
+
+<script id="CSSStyleSheet_insertRule_unknown_at_rule_typed_as_zero">
+{
+  const sheet = new CSSStyleSheet();
+  sheet.insertRule('@layer utilities { .x { color: red; } }');
+  testing.expectEqual(1, sheet.cssRules.length);
+  testing.expectEqual(0, sheet.cssRules[0].type);
+  testing.expectTrue(sheet.cssRules[0].cssText.includes('@layer'));
+}
+</script>

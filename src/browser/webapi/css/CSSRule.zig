@@ -23,6 +23,7 @@ pub const Type = union(enum) {
     font_feature_values: void,
     viewport: void,
     region_style: void,
+    unknown: void,
 };
 
 _type: Type,
@@ -62,6 +63,9 @@ pub fn initAtRule(rule_type: Type, text: []const u8, frame: *Frame) !*CSSRule {
 }
 
 pub fn getType(self: *const CSSRule) u16 {
+    if (self._type == .unknown) {
+        return 0;
+    }
     return @as(u16, @intFromEnum(std.meta.activeTag(self._type))) + 1;
 }
 

@@ -124,12 +124,7 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, fra
 /// Map an at-rule keyword (without `@`) to the matching `CSSRule.Type`
 /// variant. Vendor prefixes are stripped before matching
 /// (`-webkit-keyframes` -> `keyframes`). Unrecognized keywords fall back
-/// to `.media`: this is a deliberate choice to avoid changing the
-/// `CSSRule.Type` enum's numeric layout (which is exposed as the spec
-/// `CSSRule.type` constant) just to add an `unknown` variant. The CSS
-/// engine doesn't use the type for anything; the value matters only for
-/// JS-side `rule.type` checks, and CSS-in-JS dedup paths key on `length`
-/// or `cssText` rather than `type`.
+/// to `.unknown`: which maps to 0 for rule.type.
 fn atRuleTypeFor(keyword_with_prefix: []const u8) CSSRule.Type {
     var keyword = keyword_with_prefix;
     inline for (.{ "-webkit-", "-moz-", "-ms-", "-o-" }) |prefix| {
@@ -152,7 +147,7 @@ fn atRuleTypeFor(keyword_with_prefix: []const u8) CSSRule.Type {
     if (eql(keyword, "font-feature-values")) return .font_feature_values;
     if (eql(keyword, "viewport")) return .viewport;
     if (eql(keyword, "document")) return .document;
-    return .media;
+    return .unknown;
 }
 
 pub fn deleteRule(self: *CSSStyleSheet, index: u32, frame: *Frame) !void {
