@@ -76,6 +76,10 @@ pub const mcp_driver_guidance =
     \\  distinguishing attributes like value, name, or position to avoid
     \\  ambiguity. Example: input[type="submit"][value="login"], NOT just
     \\  input[type="submit"].
+    \\- Use standard CSS selectors only. jQuery's `:contains()` and
+    \\  Playwright's `:has-text()` are not supported and raise a SyntaxError.
+    \\  To target by visible text, inspect with `tree` or `markdown` first to
+    \\  find the id/class/structure, then write a plain selector against that.
     \\
     \\Credentials:
     \\- When filling credentials, pass environment variable references like

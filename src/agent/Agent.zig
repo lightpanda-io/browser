@@ -428,30 +428,31 @@ fn handleSlash(self: *Agent, body: []const u8) bool {
         return false;
     };
 
-    if (std.mem.eql(u8, schema.tool_name, @tagName(lp.tools.Action.eval))) {
-        // callEval surfaces JS errors separately from operational errors;
-        // tool_executor.call collapses them.
-        const eval_script = extractEvalScript(aa, args_json) catch {
-            self.terminal.printError("eval requires a `script` argument.");
-            return false;
-        };
-        self.terminal.beginTool(schema.tool_name, rest);
-        const result = self.tool_executor.callEval(aa, eval_script) catch |err| {
-            self.terminal.endTool(false);
-            self.terminal.printErrorFmt("eval: {s}", .{@errorName(err)});
-            return false;
-        };
-        switch (result) {
-            .ok => |text| {
-                self.terminal.endTool(true);
-                self.terminal.printToolResult(schema.tool_name, text);
-            },
-            .js_error => |text| {
+    if (std.meta.stringToEnum(lp.tools.Action, schema.tool_name)) |action| {
+        const parsed_args: ?std.json.Value = if (args_json.len == 0) null else
+            std.json.parseFromSliceLeaky(std.json.Value, aa, args_json, .{}) catch {
+                self.terminal.printErrorFmt("{s}: invalid JSON arguments", .{schema.tool_name});
+                return false;
+            };
+        if (lp.tools.callEvalLike(aa, self.tool_executor.session, &self.tool_executor.node_registry, action, parsed_args)) |outcome| {
+            self.terminal.beginTool(schema.tool_name, rest);
+            const result = outcome catch |err| {
                 self.terminal.endTool(false);
-                self.terminal.printErrorFmt("eval: {s}", .{text});
-            },
+                self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, @errorName(err) });
+                return false;
+            };
+            switch (result) {
+                .ok => |text| {
+                    self.terminal.endTool(true);
+                    self.terminal.printToolResult(schema.tool_name, text);
+                },
+                .js_error => |text| {
+                    self.terminal.endTool(false);
+                    self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, text });
+                },
+            }
+            return false;
         }
-        return false;
     }
 
     self.terminal.beginTool(schema.tool_name, rest);
@@ -524,12 +525,6 @@ fn firstSentence(text: []const u8) []const u8 {
         if (idx + 1 == text.len or std.ascii.isWhitespace(text[idx + 1])) return text[0..idx];
     }
     return text;
-}
-
-fn extractEvalScript(arena: std.mem.Allocator, args_json: []const u8) ![]const u8 {
-    if (args_json.len == 0) return error.MissingScript;
-    const parsed = std.json.parseFromSliceLeaky(struct { script: []const u8 }, arena, args_json, .{ .ignore_unknown_fields = true }) catch return error.MissingScript;
-    return parsed.script;
 }
 
 const Replacement = script.Replacement;
@@ -1102,13 +1097,14 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    // `eval` is the one tool whose body distinguishes "JS threw" from "JS
-    // returned a value" — both produce text. `callValue` collapses them
-    // (the LLM would then see a JS error as a successful tool result).
-    // Route eval through `callEval` so the JS-error path sets is_error=true,
-    // letting the model self-correct.
-    if (std.mem.eql(u8, tool_name, @tagName(lp.tools.Action.eval))) {
-        const result = lp.tools.callEval(allocator, self.tool_executor.session, &self.tool_executor.node_registry, arguments) catch |err| {
+    // V8 throw/return must surface in `is_error` — the recorder gates on it.
+    const action = std.meta.stringToEnum(lp.tools.Action, tool_name);
+    const eval_like = if (action) |a|
+        lp.tools.callEvalLike(allocator, self.tool_executor.session, &self.tool_executor.node_registry, a, arguments)
+    else
+        null;
+    if (eval_like) |outcome| {
+        const result = outcome catch |err| {
             const msg = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
             self.terminal.agentToolDone(tool_name, args_str, false);
             if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, msg);

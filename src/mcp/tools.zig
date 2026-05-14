@@ -163,12 +163,7 @@ fn dispatchBrowserTool(
     };
 
     // JS errors are returned as isError tool results, not protocol errors
-    const eval_outcome: ?(browser_tools.ToolError!browser_tools.EvalResult) = switch (action) {
-        .eval => browser_tools.callEval(arena, server.session, &server.node_registry, arguments),
-        .extract => browser_tools.callExtract(arena, server.session, &server.node_registry, arguments),
-        else => null,
-    };
-    if (eval_outcome) |outcome| {
+    if (browser_tools.callEvalLike(arena, server.session, &server.node_registry, action, arguments)) |outcome| {
         if (outcome) |r| {
             if (!r.isError()) recordIfActive(server, name, arguments);
         } else |_| {}
@@ -282,10 +277,8 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendErrorContent(server, id, "internal: unknown action from Command.toToolCall");
     };
 
-    switch (action) {
-        .eval => return sendEvalOutcome(server, id, browser_tools.callEval(arena, server.session, &server.node_registry, tc.args)),
-        .extract => return sendEvalOutcome(server, id, browser_tools.callExtract(arena, server.session, &server.node_registry, tc.args)),
-        else => {},
+    if (browser_tools.callEvalLike(arena, server.session, &server.node_registry, action, tc.args)) |outcome| {
+        return sendEvalOutcome(server, id, outcome);
     }
 
     const result = browser_tools.call(arena, server.session, &server.node_registry, tc.name, tc.args) catch |err| {

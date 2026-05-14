@@ -59,10 +59,10 @@ pub fn executeWithResult(self: *Self, arena: std.mem.Allocator, cmd: Command.Com
         return .{ .output = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name, @errorName(err) }) catch "tool failed", .failed = true };
 }
 
-/// Data-producing commands (EXTRACT/EVAL/MARKDOWN/TREE) go to stdout so shell
-/// redirection captures only their output; action commands go to stderr.
+/// Data output (EXTRACT/EVAL/MARKDOWN/TREE) → stdout on success; everything
+/// else, including failures from those same commands, → stderr.
 pub fn printResult(self: *Self, cmd: Command.Command, result: ExecResult) void {
-    if (cmd.producesData()) {
+    if (cmd.producesData() and !result.failed) {
         self.terminal.printAssistant(result.output);
     } else {
         self.terminal.printActionResult(result.output);
@@ -75,9 +75,7 @@ fn execExtract(self: *Self, arena: std.mem.Allocator, raw_schema: []const u8) Ex
     return evalLikeResult(self.tool_executor.extract(arena, schema));
 }
 
-/// Collapse an `EvalResult` into an `ExecResult` while preserving `isError`:
-/// V8 throws would otherwise round-trip as `failed = false` through the
-/// generic `[]const u8` path.
+/// `EvalResult` → `ExecResult`, preserving `isError` (the generic text path drops it).
 fn evalLikeResult(result: browser_tools.ToolError!browser_tools.EvalResult) ExecResult {
     const r = result catch |err| return .{ .output = @errorName(err), .failed = true };
     return .{ .output = r.text(), .failed = r.isError() };

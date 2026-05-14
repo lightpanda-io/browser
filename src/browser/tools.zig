@@ -495,6 +495,23 @@ pub fn callExtract(
     return execExtract(arena, session, registry, arguments);
 }
 
+/// Dispatch the eval-like subset (`eval`, `extract`) — they return
+/// `EvalResult` so JS errors stay distinguishable. Returns null for other
+/// actions so callers fall through to `call()`.
+pub fn callEvalLike(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *CDPNode.Registry,
+    action: Action,
+    arguments: ?std.json.Value,
+) ?(ToolError!EvalResult) {
+    return switch (action) {
+        .eval => callEval(arena, session, registry, arguments),
+        .extract => callExtract(arena, session, registry, arguments),
+        else => null,
+    };
+}
+
 /// Run JavaScript against the current page, skipping the JSON parameter
 /// round-trip that `callEval` requires. The script need not be 0-terminated;
 /// a copy is made internally.
