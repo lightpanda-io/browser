@@ -570,6 +570,61 @@ test "cdp.target: disposeBrowserContext" {
     }
 }
 
+// Issue #2472 follow-up: `disposeBrowserContext` may defer cleanup if
+// a script eval is on the stack (CDP-pump from `HttpClient.syncRequest`
+// drains a `Target.disposeBrowserContext` while is_evaluating == true).
+// Without `flushPendingDispose`, the next `Target.createBrowserContext`
+// rejects with `AlreadyExists` forever -- the original comment said
+// cleanup was "deferred to CDP.deinit at connection close," but
+// long-lived CDP connections (Playwright `connectOverCDP`) never close
+// between contexts. The fix flushes pending-dispose at the next
+// createBrowserContext call once eval has unwound.
+test "cdp.target: createBrowserContext flushes deferred dispose once eval unwinds" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // Set up bc#1 with an active page (target_id, session, frame).
+    const bc1 = try ctx.loadBrowserContext(.{
+        .id = "BID-1",
+        .url = "hi.html",
+        .target_id = "FID-000000000X".*,
+    });
+    const bc1_id_copy = bc1.id;
+
+    // Simulate "CDP message arrived while script eval is on the stack":
+    // the page exists and we forcibly mark its script manager as
+    // evaluating, mirroring `HttpClient.syncRequest` pumping CDP messages
+    // mid-fetch (`ScriptManager.executeScript` sets `is_evaluating = true`
+    // around the syncRequest).
+    const page = bc1.session.currentPage().?;
+    page.frame._script_manager.base.is_evaluating = true;
+
+    // disposeBrowserContext returns success (true) but defers actual
+    // teardown -- bc remains on `cdp.browser_context`, marked
+    // `pending_dispose`.
+    try testing.expectEqual(true, ctx.cdp().disposeBrowserContext(bc1_id_copy));
+    try testing.expect(ctx.cdp().browser_context != null);
+    try testing.expect(ctx.cdp().browser_context.?.pending_dispose);
+
+    // While eval is still on the stack, createBrowserContext can't drain
+    // the pending dispose -- it must surface AlreadyExists rather than
+    // half-tearing-down a context whose Session/V8 state is still in use.
+    try testing.expectError(error.AlreadyExists, ctx.cdp().createBrowserContext());
+
+    // Eval finishes (HttpClient.syncRequest returns, ScriptManager pops
+    // its `defer is_evaluating = was_evaluating`). The next CDP message
+    // arrives -- `createBrowserContext` flushes the deferred dispose and
+    // proceeds normally.
+    page.frame._script_manager.base.is_evaluating = false;
+
+    const bc2_id = try ctx.cdp().createBrowserContext();
+    try testing.expect(ctx.cdp().browser_context != null);
+    try testing.expect(!ctx.cdp().browser_context.?.pending_dispose);
+    // The new bc must be a distinct allocation -- the deferred bc was
+    // freed by the flush, not reused.
+    try testing.expect(!std.mem.eql(u8, bc1_id_copy, bc2_id));
+}
+
 test "cdp.target: createTarget" {
     {
         var ctx = try testing.context();
