@@ -670,6 +670,24 @@ pub const BrowserContext = struct {
         };
     }
 
+    pub fn axnodeQueryWriter(self: *BrowserContext, temp_arena: Allocator, root: *const Node, opts: AXNode.QueryWriter.Opts) !AXNode.QueryWriter {
+        const frame = self.session.currentFrame() orelse return error.FrameNotLoaded;
+        const cache = try frame.call_arena.create(Element.VisibilityCache);
+        cache.* = .empty;
+        const label_index = try frame.call_arena.create(Label.LabelByForIndex);
+        label_index.* = .{};
+        return .{
+            .root = root,
+            .registry = &self.node_registry,
+            .frame = frame,
+            .visibility_cache = cache,
+            .label_index = label_index,
+            .temp_arena = temp_arena,
+            .accessible_name = opts.accessible_name,
+            .role = opts.role,
+        };
+    }
+
     pub fn getURL(self: *const BrowserContext) ?[:0]const u8 {
         const frame = self.session.currentFrame() orelse return null;
         const url = frame.url;
