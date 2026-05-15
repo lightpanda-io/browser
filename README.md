@@ -169,6 +169,30 @@ Add to your MCP configuration:
 
 A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpanda-io/agent-skill).
 
+### Agent mode
+
+`lightpanda agent` runs an interactive agent on top of the same browser. It
+supports an LLM-driven REPL (Anthropic, OpenAI, Gemini, Ollama), a one-shot
+`--task` mode that prints the answer to stdout, and a small scripting
+language (PandaScript) for recording and deterministically replaying browser
+sessions, with optional `--self-heal` recovery from selector drift.
+
+To drive Lightpanda from another LLM agent (Claude Code, an MCP-aware client,
+etc.), use `lightpanda mcp` above — it exposes the same browser tools without
+needing an LLM (or API key) inside Lightpanda.
+
+```console
+./lightpanda agent                                    # auto-detects API key from env
+./lightpanda agent --task "top story on news.ycombinator.com?"
+./lightpanda agent --no-llm                           # basic REPL, no LLM
+./lightpanda agent session.lp                         # replay a recorded script
+./lightpanda agent --provider gemini --task "..."     # force a specific provider
+```
+
+See [docs/agent.md](docs/agent.md) for the full reference, or
+[docs/agent-tutorial.md](docs/agent-tutorial.md) for a step-by-step
+end-to-end walkthrough.
+
 ### Telemetry
 By default, Lightpanda collects and sends usage telemetry. This can be disabled by setting an environment variable `LIGHTPANDA_DISABLE_TELEMETRY=true`. You can read Lightpanda's privacy policy at: [https://lightpanda.io/privacy-policy](https://lightpanda.io/privacy-policy).
 

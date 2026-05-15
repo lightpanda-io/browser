@@ -43,9 +43,12 @@ pub fn main() !void {
     const main_arena = main_arena_instance.allocator();
     defer main_arena_instance.deinit();
 
-    run(gpa, main_arena) catch |err| {
-        log.fatal(.app, "exit", .{ .err = err });
-        std.posix.exit(1);
+    run(gpa, main_arena) catch |err| switch (err) {
+        error.UserCancelled => std.posix.exit(130),
+        else => {
+            log.fatal(.app, "exit", .{ .err = err });
+            std.posix.exit(1);
+        },
     };
 }
 
@@ -61,6 +64,10 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
         .version => {
             var stdout = std.fs.File.stdout().writer(&.{});
             try stdout.interface.print("{s}\n", .{lp.build_config.version});
+            return std.process.cleanExit();
+        },
+        .agent => |opts| if (opts.list_models) {
+            try lp.Agent.listModels(allocator, opts);
             return std.process.cleanExit();
         },
         else => {},
@@ -177,7 +184,50 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
             app.network.run();
         },
+        .agent => |opts| {
+            log.info(.app, "starting agent", .{});
+
+            // Ctrl-C cancels the current turn; signals never kill the
+            // process. `/quit` (or Ctrl-D on an empty prompt) exits.
+            sighandler.no_hard_exit = true;
+
+            var sig_bridge: lp.Agent.SigBridge = .{};
+            try sighandler.on(lp.Agent.SigBridge.onSignal, .{&sig_bridge});
+
+            var failed: bool = false;
+            var cancelled: bool = false;
+            {
+                var worker_thread = try std.Thread.spawn(.{}, agentThread, .{ allocator, app, opts, &failed, &cancelled, &sig_bridge });
+                defer worker_thread.join();
+
+                app.network.run();
+            }
+
+            if (cancelled) return error.UserCancelled;
+            if (failed) return error.AgentFailed;
+        },
         else => unreachable,
+    }
+}
+
+fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent, failed: *bool, cancelled: *bool, sig_bridge: *lp.Agent.SigBridge) void {
+    defer app.network.stop();
+
+    var agent_instance = lp.Agent.init(allocator, app, opts) catch |err| {
+        if (err == error.UserCancelled) {
+            cancelled.* = true;
+        } else {
+            log.fatal(.app, "agent init error", .{ .err = err });
+            failed.* = true;
+        }
+        return;
+    };
+    sig_bridge.attach(agent_instance);
+    defer sig_bridge.detach();
+    defer agent_instance.deinit();
+
+    if (!agent_instance.run()) {
+        failed.* = true;
     }
 }
 

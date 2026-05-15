@@ -42,9 +42,12 @@ pub const links = @import("browser/links.zig");
 pub const forms = @import("browser/forms.zig");
 pub const actions = @import("browser/actions.zig");
 pub const structured_data = @import("browser/structured_data.zig");
+pub const tools = @import("browser/tools.zig");
 pub const HttpClient = @import("browser/HttpClient.zig");
 
 pub const mcp = @import("mcp.zig");
+pub const Agent = @import("agent/Agent.zig");
+pub const script = @import("script.zig");
 pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
@@ -66,6 +69,8 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
     defer notification.deinit();
 
     var session = try browser.newSession(notification);
+    // Session.deinit unregisters from notification; close before notification.deinit runs.
+    defer browser.closeSession();
 
     if (app.config.cookieFile()) |cookie_path| {
         cookies.loadFromFile(session, cookie_path);
@@ -149,11 +154,11 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
         _ = try runner.waitForSelector(selector, remaining);
     }
 
-    if (opts.wait_script) |script| {
+    if (opts.wait_script) |wait_script| {
         const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
         const remaining = opts.wait_ms -| elapsed;
         if (remaining == 0) return error.Timeout;
-        try runner.waitForScript(script, remaining);
+        try runner.waitForScript(wait_script, remaining);
     }
 
     const writer = opts.writer orelse return;

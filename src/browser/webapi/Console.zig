@@ -82,11 +82,12 @@ pub fn warn(_: *const Console, values: []js.Value, exec: *js.Execution) void {
 
 pub fn clear(_: *const Console) void {}
 
-pub fn assert(_: *const Console, assertion: js.Value, values: []js.Value) void {
+pub fn assert(_: *const Console, assertion: js.Value, values: []js.Value, exec: *js.Execution) void {
     if (assertion.toBool()) {
         return;
     }
     logger.warn(.js, "console.assert", .{ValueWriter{ .values = values }});
+    dispatchConsoleMessage(values, .warn, exec);
 }
 
 pub fn @"error"(_: *const Console, values: []js.Value, exec: *js.Execution) void {

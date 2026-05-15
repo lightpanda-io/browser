@@ -5,8 +5,13 @@ const lp = @import("lightpanda");
 const App = @import("../App.zig");
 const testing = @import("../testing.zig");
 const protocol = @import("protocol.zig");
+const resources = @import("resources.zig");
 const router = @import("router.zig");
+const tools = @import("tools.zig");
+const Transport = @import("Transport.zig");
 const CDPNode = @import("../cdp/Node.zig");
+const Recorder = lp.script.Recorder;
+const Verifier = lp.script.Verifier;
 
 const Self = @This();
 
@@ -17,10 +22,14 @@ notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
 node_registry: CDPNode.Registry,
+verifier: Verifier,
 
-writer: *std.io.Writer,
-mutex: std.Thread.Mutex = .{},
-aw: std.io.Writer.Allocating,
+transport: Transport,
+
+/// Optional PandaScript recorder. Activated by the `record_start` tool;
+/// cleared by `record_stop`. State-mutating browser tool calls are
+/// serialized into the active recorder via `Command.fromToolCall`.
+recorder: ?Recorder = null,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*Self {
     const notification = try lp.Notification.init(allocator);
@@ -32,18 +41,19 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
     self.* = .{
         .allocator = allocator,
         .app = app,
-        .writer = writer,
         .browser = undefined,
-        .aw = .init(allocator),
+        .transport = .init(allocator, writer),
         .notification = notification,
         .session = undefined,
         .node_registry = CDPNode.Registry.init(allocator),
+        .verifier = undefined,
     };
 
     try self.browser.init(app, .{}, null);
     errdefer self.browser.deinit();
 
     self.session = try self.browser.newSession(self.notification);
+    self.verifier = .{ .session = self.session, .node_registry = &self.node_registry };
 
     if (app.config.cookieFile()) |cookie_path| {
         lp.cookies.loadFromFile(self.session, cookie_path);
@@ -57,45 +67,51 @@ pub fn deinit(self: *Self) void {
         lp.cookies.saveToFile(&self.session.cookie_jar, cookie_jar_path);
     }
 
+    if (self.recorder) |*r| r.deinit();
+
     self.node_registry.deinit();
-    self.aw.deinit();
+    self.transport.deinit();
     self.browser.deinit();
     self.notification.deinit();
 
     self.allocator.destroy(self);
 }
 
-pub fn sendResponse(self: *Self, response: anytype) !void {
-    self.mutex.lock();
-    defer self.mutex.unlock();
-
-    self.aw.clearRetainingCapacity();
-    try std.json.Stringify.value(response, .{ .emit_null_optional_fields = false }, &self.aw.writer);
-    try self.aw.writer.writeByte('\n');
-    try self.writer.writeAll(self.aw.writer.buffered());
-    try self.writer.flush();
+pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {
+    return self.transport.sendError(id, code, message);
 }
 
 pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
-    const GenericResponse = struct {
-        jsonrpc: []const u8 = "2.0",
-        id: std.json.Value,
-        result: @TypeOf(result),
-    };
-    try self.sendResponse(GenericResponse{
-        .id = id,
-        .result = result,
+    return self.transport.sendResult(id, result);
+}
+
+pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
+    const id = req.id orelse return;
+    try self.sendResult(id, protocol.InitializeResult{
+        .protocolVersion = @tagName(protocol.Version.default),
+        .capabilities = .{
+            .resources = .{},
+            .tools = .{},
+        },
+        .serverInfo = .{ .name = "lightpanda", .version = "0.1.0" },
+        .instructions = lp.script.mcp_driver_guidance,
     });
 }
 
-pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {
-    try self.sendResponse(protocol.Response{
-        .id = id,
-        .@"error" = protocol.Error{
-            .code = @intFromEnum(code),
-            .message = message,
-        },
-    });
+pub fn handleToolList(self: *Self, arena: std.mem.Allocator, req: protocol.Request) !void {
+    return tools.handleList(self, arena, req);
+}
+
+pub fn handleToolCall(self: *Self, arena: std.mem.Allocator, req: protocol.Request) !void {
+    return tools.handleCall(self, arena, req);
+}
+
+pub fn handleResourceList(self: *Self, req: protocol.Request) !void {
+    return resources.handleList(self, req);
+}
+
+pub fn handleResourceRead(self: *Self, arena: std.mem.Allocator, req: protocol.Request) !void {
+    return resources.handleRead(self, arena, req);
 }
 
 test "MCP.Server - Integration: synchronous smoke test" {

@@ -332,6 +332,7 @@ fn asUint(comptime string: anytype) std.meta.Int(
 }
 
 const testing = @import("testing.zig");
+
 test "String" {
     const other_short = try String.init(undefined, "other_short", .{});
     const other_long = try String.init(testing.allocator, "other_long" ** 100, .{});

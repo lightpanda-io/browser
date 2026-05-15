@@ -411,9 +411,7 @@ pub fn validateAttributeName(name: String) !void {
             return error.InvalidCharacterError;
         }
 
-        const is_valid = (c >= 'a' and c <= 'z') or
-            (c >= 'A' and c <= 'Z') or
-            (c >= '0' and c <= '9') or
+        const is_valid = std.ascii.isAlphanumeric(c) or
             c == '_' or c == '-' or c == '.' or c == ':';
 
         if (!is_valid) {

@@ -1,970 +1,404 @@
 const std = @import("std");
 
 const lp = @import("lightpanda");
-const log = lp.log;
 const js = lp.js;
+const browser_tools = lp.tools;
+const script = lp.script;
+const Command = lp.script.Command;
+const Recorder = lp.script.Recorder;
 
-const DOMNode = @import("../browser/webapi/Node.zig");
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
-const CDPNode = @import("../cdp/Node.zig");
 
-const goto_schema = protocol.minify(
+/// Convert browser tool_defs to MCP protocol.Tool format (comptime).
+const browser_tool_list = blk: {
+    var tools: [browser_tools.tool_defs.len]protocol.Tool = undefined;
+    for (browser_tools.tool_defs, 0..) |td, i| {
+        tools[i] = .{
+            .name = td.name,
+            .description = td.description,
+            .inputSchema = td.input_schema,
+        };
+    }
+    break :blk tools;
+};
+
+const record_start_schema = browser_tools.minify(
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
-    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+    \\    "path": { "type": "string", "description": "Relative path (no '..' segments) where PandaScript commands will be appended. The file is created if missing. Only one recording can be active at a time." }
     \\  },
-    \\  "required": ["url"]
+    \\  "required": ["path"]
     \\}
 );
 
-const url_params_schema = protocol.minify(
+const record_stop_schema = browser_tools.minify(
     \\{
     \\  "type": "object",
-    \\  "properties": {
-    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing." },
-    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
-    \\  }
+    \\  "properties": {}
     \\}
 );
 
-const evaluate_schema = protocol.minify(
+const record_comment_schema = browser_tools.minify(
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "script": { "type": "string" },
-    \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." },
-    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." }
+    \\    "text": { "type": "string", "description": "Comment text. Written as `# <text>` to the active recording. Errors if no recording is active." }
     \\  },
-    \\  "required": ["script"]
+    \\  "required": ["text"]
     \\}
 );
 
-pub const tool_list = [_]protocol.Tool{
+const script_step_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "line": { "type": "string", "description": "A single PandaScript command (e.g. `GOTO https://x`, `CLICK '#btn'`, `TYPE '#email' 'a@b.c'`). Comments (`# …`) and blank lines are accepted as no-ops. LLM-driven keywords (LOGIN, ACCEPT_COOKIES, natural language) are rejected — the calling agent owns those." }
+    \\  },
+    \\  "required": ["line"]
+    \\}
+);
+
+const script_heal_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "path": { "type": "string", "description": "Relative path of the .lp script to rewrite (no '..' segments). A `<path>.bak` of the original is written before any in-place edit." },
+    \\    "replacements": {
+    \\      "type": "array",
+    \\      "description": "List of in-place line splices applied atomically.",
+    \\      "items": {
+    \\        "type": "object",
+    \\        "properties": {
+    \\          "original_line": { "type": "string", "description": "Verbatim line to replace, exactly as it appears in the script (without trailing newline)." },
+    \\          "replacement_lines": { "type": "array", "items": { "type": "string" }, "description": "New lines (without trailing newlines) to splice in. The first replacement is prefixed with `# [Auto-healed] Original: <original_line>` automatically." }
+    \\        },
+    \\        "required": ["original_line", "replacement_lines"]
+    \\      }
+    \\    }
+    \\  },
+    \\  "required": ["path", "replacements"]
+    \\}
+);
+
+const extra_tools = [_]protocol.Tool{
     .{
-        .name = "goto",
-        .description = "Navigate to a specified URL and load the page in memory so it can be reused later for info extraction.",
-        .inputSchema = goto_schema,
+        .name = "record_start",
+        .description = "Start recording state-mutating browser tool calls into a PandaScript file. Subsequent calls to `goto`, `click`, `fill`, `scroll`, `hover`, `selectOption`, `setChecked`, `waitForSelector`, `eval`, and `extract` get appended as PandaScript lines. Query-only tools (tree, markdown, links, findElement, …) are not recorded.",
+        .inputSchema = record_start_schema,
     },
     .{
-        .name = "navigate",
-        .description = "Alias for goto. Navigate to a specified URL and load the page in memory.",
-        .inputSchema = goto_schema,
+        .name = "record_stop",
+        .description = "Stop the active recording and return the path and number of lines written. Errors if no recording is active.",
+        .inputSchema = record_stop_schema,
     },
     .{
-        .name = "markdown",
-        .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
-        .inputSchema = url_params_schema,
+        .name = "record_comment",
+        .description = "Append a `# <text>` comment line to the active recording. Useful as a breadcrumb above LLM-driven steps.",
+        .inputSchema = record_comment_schema,
     },
     .{
-        .name = "links",
-        .description = "Extract all links in the opened frame. If a url is provided, it navigates to that url first.",
-        .inputSchema = url_params_schema,
+        .name = "script_step",
+        .description = "Parse and execute one PandaScript line on the current browser session. Returns success or a structured failure descriptor (failed line, page URL, error reason) so the calling agent can synthesize a heal step. Comments and blank lines are accepted as no-ops.",
+        .inputSchema = script_step_schema,
     },
     .{
-        .name = "evaluate",
-        .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first.",
-        .inputSchema = evaluate_schema,
+        .name = "script_heal",
+        .description = "Atomically rewrite a .lp script with in-place line replacements. A `.bak` of the original is written first. Designed for the script_step → fail → script_heal roundtrip where the calling agent owns the LLM that synthesizes replacements.",
+        .inputSchema = script_heal_schema,
     },
-    .{
-        .name = "eval",
-        .description = "Alias for evaluate. Evaluate JavaScript in the current page context.",
-        .inputSchema = evaluate_schema,
-    },
-    .{
-        .name = "semantic_tree",
-        .description = "Get the page content as a simplified semantic DOM tree for AI reasoning. If a url is provided, it navigates to that url first.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-            \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle", "done"], "description": "Optional wait strategy. Defaults to 'done'." },
-            \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root." },
-            \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
-            \\  }
-            \\}
-        ),
-    },
-    .{
-        .name = "nodeDetails",
-        .description = "Get detailed information about a specific node by its backend node ID. Returns tag, role, name, interactivity, disabled state, value, input type, placeholder, href, checked state, and select options.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to inspect." }
-            \\  },
-            \\  "required": ["backendNodeId"]
-            \\}
-        ),
-    },
-    .{
-        .name = "interactiveElements",
-        .description = "Extract interactive elements from the opened frame. If a url is provided, it navigates to that url first.",
-        .inputSchema = url_params_schema,
-    },
-    .{
-        .name = "structuredData",
-        .description = "Extract structured data (like JSON-LD, OpenGraph, etc) from the opened frame. If a url is provided, it navigates to that url first.",
-        .inputSchema = url_params_schema,
-    },
-    .{
-        .name = "detectForms",
-        .description = "Detect all forms on the page and return their structure including fields, types, and required status. If a url is provided, it navigates to that url first.",
-        .inputSchema = url_params_schema,
-    },
-    .{
-        .name = "click",
-        .description = "Click on an interactive element. Returns the current page URL and title after the click.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to click." }
-            \\  },
-            \\  "required": ["backendNodeId"]
-            \\}
-        ),
-    },
-    .{
-        .name = "fill",
-        .description = "Fill text into an input element. Returns the filled value and current page URL and title.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the input element to fill." },
-            \\    "text": { "type": "string", "description": "The text to fill into the input element." }
-            \\  },
-            \\  "required": ["backendNodeId", "text"]
-            \\}
-        ),
-    },
-    .{
-        .name = "scroll",
-        .description = "Scroll the page or a specific element. Returns the scroll position and current page URL and title.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If omitted, scrolls the window." },
-            \\    "x": { "type": "integer", "description": "Optional: The horizontal scroll offset." },
-            \\    "y": { "type": "integer", "description": "Optional: The vertical scroll offset." }
-            \\  }
-            \\}
-        ),
-    },
-    .{
-        .name = "waitForSelector",
-        .description = "Wait for an element matching a CSS selector to appear in the frame. Returns the backend node ID of the matched element.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "selector": { "type": "string", "description": "The CSS selector to wait for." },
-            \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
-            \\  },
-            \\  "required": ["selector"]
-            \\}
-        ),
-    },
-    .{
-        .name = "hover",
-        .description = "Hover over an element, triggering mouseover and mouseenter events. Useful for menus, tooltips, and hover states.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the element to hover over." }
-            \\  },
-            \\  "required": ["backendNodeId"]
-            \\}
-        ),
-    },
-    .{
-        .name = "press",
-        .description = "Press a keyboard key, dispatching keydown and keyup events. Use key names like 'Enter', 'Tab', 'Escape', 'ArrowDown', 'Backspace', or single characters like 'a', '1'.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "key": { "type": "string", "description": "The key to press (e.g. 'Enter', 'Tab', 'a')." },
-            \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the document." }
-            \\  },
-            \\  "required": ["key"]
-            \\}
-        ),
-    },
-    .{
-        .name = "selectOption",
-        .description = "Select an option in a <select> dropdown element by its value. Dispatches input and change events.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the <select> element." },
-            \\    "value": { "type": "string", "description": "The value of the option to select." }
-            \\  },
-            \\  "required": ["backendNodeId", "value"]
-            \\}
-        ),
-    },
-    .{
-        .name = "setChecked",
-        .description = "Check or uncheck a checkbox or radio button. Dispatches input, change, and click events.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the checkbox or radio input element." },
-            \\    "checked": { "type": "boolean", "description": "Whether to check (true) or uncheck (false) the element." }
-            \\  },
-            \\  "required": ["backendNodeId", "checked"]
-            \\}
-        ),
-    },
-    .{
-        .name = "findElement",
-        .description = "Find interactive elements by role and/or accessible name. Returns matching elements with their backend node IDs. Useful for locating specific elements without parsing the full semantic tree.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "role": { "type": "string", "description": "Optional ARIA role to match (e.g. 'button', 'link', 'textbox', 'checkbox')." },
-            \\    "name": { "type": "string", "description": "Optional accessible name substring to match (case-insensitive)." }
-            \\  }
-            \\}
-        ),
-    },
+};
+
+const all_tools = browser_tool_list ++ extra_tools;
+
+/// Tools that bypass the browser-tool dispatch and have their own handlers.
+const ExtraTool = enum {
+    record_start,
+    record_stop,
+    record_comment,
+    script_step,
+    script_heal,
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     _ = arena;
     const id = req.id orelse return;
-    try server.sendResult(id, .{ .tools = &tool_list });
+    try server.sendResult(id, .{ .tools = &all_tools });
 }
-
-const GotoParams = struct {
-    url: [:0]const u8,
-    timeout: ?u32 = null,
-    waitUntil: ?lp.Config.WaitUntil = null,
-};
-
-const UrlParams = struct {
-    url: ?[:0]const u8 = null,
-    timeout: ?u32 = null,
-    waitUntil: ?lp.Config.WaitUntil = null,
-};
-
-const EvaluateParams = struct {
-    script: [:0]const u8,
-    url: ?[:0]const u8 = null,
-    timeout: ?u32 = null,
-    waitUntil: ?lp.Config.WaitUntil = null,
-};
-
-const ToolStreamingText = struct {
-    frame: *lp.Frame,
-    action: enum { markdown, links, semantic_tree },
-    registry: ?*CDPNode.Registry = null,
-    arena: ?std.mem.Allocator = null,
-    backendNodeId: ?u32 = null,
-    maxDepth: ?u32 = null,
-
-    pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) !void {
-        try jw.beginWriteRaw();
-        try jw.writer.writeByte('"');
-        var escaped: protocol.JsonEscapingWriter = .init(jw.writer);
-        const w = &escaped.writer;
-
-        switch (self.action) {
-            .markdown => lp.markdown.dump(self.frame.document.asNode(), .{}, w, self.frame) catch |err| {
-                log.err(.mcp, "markdown dump failed", .{ .err = err });
-                return error.WriteFailed;
-            },
-            .links => {
-                const links = lp.links.collectLinks(self.frame.call_arena, self.frame.document.asNode(), self.frame) catch |err| {
-                    log.err(.mcp, "query links failed", .{ .err = err });
-                    return error.WriteFailed;
-                };
-                var first = true;
-                for (links) |href| {
-                    if (!first) try w.writeByte('\n');
-                    try w.writeAll(href);
-                    first = false;
-                }
-            },
-            .semantic_tree => {
-                var root_node = self.frame.document.asNode();
-                if (self.backendNodeId) |node_id| {
-                    if (self.registry) |registry| {
-                        if (registry.lookup_by_id.get(node_id)) |n| {
-                            root_node = n.dom;
-                        } else {
-                            log.warn(.mcp, "semantic_tree id missing", .{ .id = node_id });
-                        }
-                    }
-                }
-
-                const st = lp.SemanticTree{
-                    .dom_node = root_node,
-                    .registry = self.registry.?,
-                    .frame = self.frame,
-                    .arena = self.arena.?,
-                    .prune = true,
-                    .max_depth = self.maxDepth orelse std.math.maxInt(u32) - 1,
-                };
-
-                st.textStringify(w) catch |err| {
-                    log.err(.mcp, "semantic tree dump failed", .{ .err = err });
-                    return error.WriteFailed;
-                };
-            },
-        }
-
-        try jw.writer.writeByte('"');
-        jw.endWriteRaw();
-    }
-};
-
-const ToolAction = enum {
-    goto,
-    navigate,
-    markdown,
-    links,
-    nodeDetails,
-    interactiveElements,
-    structuredData,
-    detectForms,
-    evaluate,
-    eval,
-    semantic_tree,
-    click,
-    fill,
-    scroll,
-    waitForSelector,
-    hover,
-    press,
-    selectOption,
-    setChecked,
-    findElement,
-};
-
-const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
-    .{ "goto", .goto },
-    .{ "navigate", .navigate },
-    .{ "markdown", .markdown },
-    .{ "links", .links },
-    .{ "nodeDetails", .nodeDetails },
-    .{ "interactiveElements", .interactiveElements },
-    .{ "structuredData", .structuredData },
-    .{ "detectForms", .detectForms },
-    .{ "evaluate", .evaluate },
-    .{ "eval", .eval },
-    .{ "semantic_tree", .semantic_tree },
-    .{ "click", .click },
-    .{ "fill", .fill },
-    .{ "scroll", .scroll },
-    .{ "waitForSelector", .waitForSelector },
-    .{ "hover", .hover },
-    .{ "press", .press },
-    .{ "selectOption", .selectOption },
-    .{ "setChecked", .setChecked },
-    .{ "findElement", .findElement },
-});
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
-    if (req.params == null or req.id == null) {
-        return server.sendError(req.id orelse .{ .integer = -1 }, .InvalidParams, "Missing params");
+    const id = req.id orelse return;
+    const params = req.params orelse return server.sendError(id, .InvalidParams, "Missing params");
+
+    const call_params = browser_tools.parseValue(protocol.CallParams, arena, params) catch {
+        return server.sendError(id, .InvalidParams, "Invalid params");
+    };
+
+    if (std.meta.stringToEnum(ExtraTool, call_params.name)) |tool| {
+        return switch (tool) {
+            .record_start => handleRecordStart(server, arena, id, call_params.arguments),
+            .record_stop => handleRecordStop(server, arena, id),
+            .record_comment => handleRecordComment(server, arena, id, call_params.arguments),
+            .script_step => handleScriptStep(server, arena, id, call_params.arguments),
+            .script_heal => handleScriptHeal(server, arena, id, call_params.arguments),
+        };
     }
 
-    const CallParams = struct {
-        name: []const u8,
-        arguments: ?std.json.Value = null,
+    return dispatchBrowserTool(server, arena, id, call_params.name, call_params.arguments);
+}
+
+fn dispatchBrowserTool(
+    server: *Server,
+    arena: std.mem.Allocator,
+    id: std.json.Value,
+    name: []const u8,
+    arguments: ?std.json.Value,
+) !void {
+    const action = std.meta.stringToEnum(browser_tools.Action, name) orelse {
+        return server.sendError(id, .MethodNotFound, "Tool not found");
     };
 
-    const call_params = std.json.parseFromValueLeaky(CallParams, arena, req.params.?, .{ .ignore_unknown_fields = true }) catch {
-        return server.sendError(req.id.?, .InvalidParams, "Invalid params");
-    };
-
-    const action = tool_map.get(call_params.name) orelse {
-        return server.sendError(req.id.?, .MethodNotFound, "Tool not found");
-    };
-
-    switch (action) {
-        .goto, .navigate => try handleGoto(server, arena, req.id.?, call_params.arguments),
-        .markdown => try handleMarkdown(server, arena, req.id.?, call_params.arguments),
-        .links => try handleLinks(server, arena, req.id.?, call_params.arguments),
-        .nodeDetails => try handleNodeDetails(server, arena, req.id.?, call_params.arguments),
-        .interactiveElements => try handleInteractiveElements(server, arena, req.id.?, call_params.arguments),
-        .structuredData => try handleStructuredData(server, arena, req.id.?, call_params.arguments),
-        .detectForms => try handleDetectForms(server, arena, req.id.?, call_params.arguments),
-        .eval, .evaluate => try handleEvaluate(server, arena, req.id.?, call_params.arguments),
-        .semantic_tree => try handleSemanticTree(server, arena, req.id.?, call_params.arguments),
-        .click => try handleClick(server, arena, req.id.?, call_params.arguments),
-        .fill => try handleFill(server, arena, req.id.?, call_params.arguments),
-        .scroll => try handleScroll(server, arena, req.id.?, call_params.arguments),
-        .waitForSelector => try handleWaitForSelector(server, arena, req.id.?, call_params.arguments),
-        .hover => try handleHover(server, arena, req.id.?, call_params.arguments),
-        .press => try handlePress(server, arena, req.id.?, call_params.arguments),
-        .selectOption => try handleSelectOption(server, arena, req.id.?, call_params.arguments),
-        .setChecked => try handleSetChecked(server, arena, req.id.?, call_params.arguments),
-        .findElement => try handleFindElement(server, arena, req.id.?, call_params.arguments),
+    // JS errors are returned as isError tool results, not protocol errors
+    if (browser_tools.callEvalLike(arena, server.session, &server.node_registry, action, arguments)) |outcome| {
+        if (outcome) |r| {
+            if (!r.isError()) recordIfActive(server, name, arguments);
+        } else |_| {}
+        return sendEvalOutcome(server, id, outcome);
     }
-}
 
-fn handleGoto(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseArgs(GotoParams, arena, arguments, server, id, "goto");
-    try performGoto(server, args.url, id, args.timeout, args.waitUntil);
-
-    const content = [_]protocol.TextContent([]const u8){.{ .text = "Navigated successfully." }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
-
-    const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{ .frame = frame, .action = .markdown },
-    }};
-    server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
-        return server.sendError(id, .InternalError, "Failed to serialize markdown content");
+    const result = browser_tools.call(arena, server.session, &server.node_registry, name, arguments) catch |err| {
+        const code: protocol.ErrorCode = switch (err) {
+            error.FrameNotLoaded => .FrameNotLoaded,
+            error.NodeNotFound, error.InvalidParams => .InvalidParams,
+            error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
+        };
+        return server.sendError(id, code, @errorName(err));
     };
+
+    recordIfActive(server, name, arguments);
+
+    try sendToolResultText(server, id, result, false);
 }
 
-fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
-
-    const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{ .frame = frame, .action = .links },
-    }};
-    server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
-        return server.sendError(id, .InternalError, "Failed to serialize links content");
-    };
+fn recordIfActive(server: *Server, name: []const u8, arguments: ?std.json.Value) void {
+    if (server.recorder == null) return;
+    const args_value = arguments orelse return;
+    const cmd = Command.fromToolCall(name, args_value) orelse return;
+    server.recorder.?.record(cmd);
 }
 
-fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const TreeParams = struct {
-        url: ?[:0]const u8 = null,
-        backendNodeId: ?u32 = null,
-        maxDepth: ?u32 = null,
-        timeout: ?u32 = null,
-        waitUntil: ?lp.Config.WaitUntil = null,
+fn handleRecordStart(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    if (server.recorder != null) {
+        return sendErrorContent(server, id, "a recording is already active; call record_stop first");
+    }
+    const Args = struct { path: []const u8 };
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
+        return server.sendError(id, .InvalidParams, "expected { path: string }");
     };
-    const args = try parseArgsOrDefault(TreeParams, arena, arguments, server, id);
-    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
 
-    const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{
-            .frame = frame,
-            .action = .semantic_tree,
-            .registry = &server.node_registry,
-            .arena = arena,
-            .backendNodeId = args.backendNodeId,
-            .maxDepth = args.maxDepth,
+    if (!script.isPathSafe(args.path)) {
+        return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
+    }
+
+    var recorder = Recorder.init(server.allocator, args.path) catch |err| {
+        const msg = std.fmt.allocPrint(arena, "could not open recording file: {s}", .{@errorName(err)}) catch
+            return sendErrorContent(server, id, "could not open recording file");
+        return sendErrorContent(server, id, msg);
+    };
+    const msg = std.fmt.allocPrint(arena, "recording started: {s}", .{recorder.path}) catch {
+        recorder.deinit();
+        return sendErrorContent(server, id, "out of memory");
+    };
+    server.recorder = recorder;
+
+    try sendToolResultText(server, id, msg, false);
+}
+
+fn handleRecordStop(server: *Server, arena: std.mem.Allocator, id: std.json.Value) !void {
+    if (server.recorder == null) {
+        return sendErrorContent(server, id, "no recording is active");
+    }
+    var r = server.recorder.?;
+    // Build the response before deinit so we can quote the path/lines.
+    const msg = std.fmt.allocPrint(arena, "recording stopped: {s} ({d} line(s) written)", .{ r.path, r.lines }) catch
+        return sendErrorContent(server, id, "out of memory");
+
+    r.deinit();
+    server.recorder = null;
+
+    try sendToolResultText(server, id, msg, false);
+}
+
+fn handleRecordComment(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    if (server.recorder == null) {
+        return sendErrorContent(server, id, "no recording is active");
+    }
+    const Args = struct { text: []const u8 };
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
+        return server.sendError(id, .InvalidParams, "expected { text: string }");
+    };
+
+    server.recorder.?.recordComment(args.text);
+
+    try sendToolResultText(server, id, "ok", false);
+}
+
+fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Args = struct { line: []const u8 };
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
+        return server.sendError(id, .InvalidParams, "expected { line: string }");
+    };
+
+    const cmd = Command.parse(args.line);
+
+    if (cmd.needsLlm()) {
+        return sendErrorContent(server, id, "LOGIN / ACCEPT_COOKIES / natural-language steps require an LLM and are not handled by lightpanda mcp; the calling agent owns those");
+    }
+
+    if (cmd == .comment) {
+        return sendToolResultText(server, id, "comment", false);
+    }
+
+    // No recording on script_step: replay must not double-record.
+    const tc = (try Command.toToolCall(arena, cmd, Command.noSubstitute)) orelse {
+        return sendErrorContent(server, id, "command has no browser-tool mapping");
+    };
+
+    const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse {
+        return sendErrorContent(server, id, "internal: unknown action from Command.toToolCall");
+    };
+
+    if (browser_tools.callEvalLike(arena, server.session, &server.node_registry, action, tc.args)) |outcome| {
+        return sendEvalOutcome(server, id, outcome);
+    }
+
+    const result = browser_tools.call(arena, server.session, &server.node_registry, tc.name, tc.args) catch |err| {
+        const url = browser_tools.currentUrlOrPlaceholder(server.session);
+        const msg = std.fmt.allocPrint(arena, "{s} failed at line `{s}` (url: {s}): {s}", .{ tc.name, args.line, url, @errorName(err) }) catch @errorName(err);
+        return sendErrorContent(server, id, msg);
+    };
+
+    // Post-exec verification drives the heal roundtrip on TYPE/CHECK/SELECT.
+    switch (server.verifier.verify(arena, cmd)) {
+        .failed => |reason| {
+            const url = browser_tools.currentUrlOrPlaceholder(server.session);
+            const why = reason orelse "verification failed";
+            const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tc.name, args.line, url, why }) catch why;
+            return sendErrorContent(server, id, msg);
         },
-    }};
-    server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content }) catch {
-        return server.sendError(id, .InternalError, "Failed to serialize semantic tree content");
-    };
-}
-
-fn handleNodeDetails(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const Params = struct {
-        backendNodeId: CDPNode.Id,
-    };
-    const args = try parseArgs(Params, arena, arguments, server, id, "nodeDetails");
-    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
-
-    const details = lp.SemanticTree.getNodeDetails(arena, resolved.node, &server.node_registry, resolved.frame) catch {
-        return server.sendError(id, .InternalError, "Failed to get node details");
-    };
-
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    try std.json.Stringify.value(&details, .{}, &aw.writer);
-
-    const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
-
-    const elements = lp.interactive.collectInteractiveElements(frame.document.asNode(), arena, frame) catch |err| {
-        log.err(.mcp, "elements collection failed", .{ .err = err });
-        return server.sendError(id, .InternalError, "Failed to collect interactive elements");
-    };
-
-    lp.interactive.registerNodes(elements, &server.node_registry) catch |err| {
-        log.err(.mcp, "node registration failed", .{ .err = err });
-        return server.sendError(id, .InternalError, "Failed to register element nodes");
-    };
-
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    try std.json.Stringify.value(elements, .{}, &aw.writer);
-
-    const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
-
-    const data = lp.structured_data.collectStructuredData(frame.document.asNode(), arena, frame) catch |err| {
-        log.err(.mcp, "struct data collection failed", .{ .err = err });
-        return server.sendError(id, .InternalError, "Failed to collect structured data");
-    };
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    try std.json.Stringify.value(data, .{}, &aw.writer);
-
-    const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn handleDetectForms(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseArgsOrDefault(UrlParams, arena, arguments, server, id);
-    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
-
-    const forms_data = lp.forms.collectForms(arena, frame.document.asNode(), frame) catch |err| {
-        log.err(.mcp, "form collection failed", .{ .err = err });
-        return server.sendError(id, .InternalError, "Failed to collect forms");
-    };
-
-    lp.forms.registerNodes(forms_data, &server.node_registry) catch |err| {
-        log.err(.mcp, "form node registration failed", .{ .err = err });
-        return server.sendError(id, .InternalError, "Failed to register form nodes");
-    };
-
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    try std.json.Stringify.value(forms_data, .{}, &aw.writer);
-
-    const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseArgs(EvaluateParams, arena, arguments, server, id, "evaluate");
-    const frame = try ensurePage(server, id, args.url, args.timeout, args.waitUntil);
-
-    var ls: js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
-    defer ls.deinit();
-
-    var try_catch: js.TryCatch = undefined;
-    try_catch.init(&ls.local);
-    defer try_catch.deinit();
-
-    const js_result = ls.local.compileAndRun(args.script, null) catch |err| {
-        const caught = try_catch.caughtOrError(arena, err);
-        var aw: std.Io.Writer.Allocating = .init(arena);
-        try caught.format(&aw.writer);
-
-        const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-        return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = true });
-    };
-
-    const str_result = js_result.toStringSliceWithAlloc(arena) catch "undefined";
-
-    const content = [_]protocol.TextContent([]const u8){.{ .text = str_result }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn handleClick(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const ClickParams = struct {
-        backendNodeId: CDPNode.Id,
-    };
-    const args = try parseArgs(ClickParams, arena, arguments, server, id, "click");
-    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
-
-    lp.actions.click(resolved.node, resolved.frame) catch |err| {
-        if (err == error.InvalidNodeType) {
-            return server.sendError(id, .InvalidParams, "Node is not an HTML element");
-        }
-        return server.sendError(id, .InternalError, "Failed to click element");
-    };
-
-    const page_title = resolved.frame.getTitle() catch null;
-    const result_text = try std.fmt.allocPrint(arena, "Clicked element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
-        args.backendNodeId,
-        resolved.frame.url,
-        page_title orelse "(none)",
-    });
-    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn handleFill(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const FillParams = struct {
-        backendNodeId: CDPNode.Id,
-        text: []const u8,
-    };
-    const args = try parseArgs(FillParams, arena, arguments, server, id, "fill");
-    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
-
-    lp.actions.fill(resolved.node, args.text, resolved.frame) catch |err| {
-        if (err == error.InvalidNodeType) {
-            return server.sendError(id, .InvalidParams, "Node is not an input, textarea or select");
-        }
-        return server.sendError(id, .InternalError, "Failed to fill element");
-    };
-
-    const page_title = resolved.frame.getTitle() catch null;
-    const result_text = try std.fmt.allocPrint(arena, "Filled element (backendNodeId: {d}) with \"{s}\". Page url: {s}, title: {s}", .{
-        args.backendNodeId,
-        args.text,
-        resolved.frame.url,
-        page_title orelse "(none)",
-    });
-    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const ScrollParams = struct {
-        backendNodeId: ?CDPNode.Id = null,
-        x: ?i32 = null,
-        y: ?i32 = null,
-    };
-    const args = try parseArgs(ScrollParams, arena, arguments, server, id, "scroll");
-
-    const frame = server.session.currentFrame() orelse {
-        return server.sendError(id, .FrameNotLoaded, "Frame not loaded");
-    };
-
-    var target_node: ?*DOMNode = null;
-    if (args.backendNodeId) |node_id| {
-        const node = server.node_registry.lookup_by_id.get(node_id) orelse {
-            return server.sendError(id, .InvalidParams, "Node not found");
-        };
-        target_node = node.dom;
+        .passed, .inconclusive => {},
     }
 
-    lp.actions.scroll(target_node, args.x, args.y, frame) catch |err| {
-        if (err == error.InvalidNodeType) {
-            return server.sendError(id, .InvalidParams, "Node is not an element");
-        }
-        return server.sendError(id, .InternalError, "Failed to scroll");
-    };
-
-    const page_title = frame.getTitle() catch null;
-    const result_text = try std.fmt.allocPrint(arena, "Scrolled to x: {d}, y: {d}. Page url: {s}, title: {s}", .{
-        args.x orelse 0,
-        args.y orelse 0,
-        frame.url,
-        page_title orelse "(none)",
-    });
-    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try sendToolResultText(server, id, result, false);
 }
 
-fn handleWaitForSelector(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const WaitParams = struct {
-        selector: [:0]const u8,
-        timeout: ?u32 = null,
+fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const ReplacementSpec = struct {
+        original_line: []const u8,
+        replacement_lines: []const []const u8,
     };
-    const args = try parseArgs(WaitParams, arena, arguments, server, id, "waitForSelector");
-
-    _ = server.session.currentFrame() orelse {
-        return server.sendError(id, .FrameNotLoaded, "Frame not loaded");
+    const Args = struct {
+        path: []const u8,
+        replacements: []const ReplacementSpec,
+    };
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
+        return server.sendError(id, .InvalidParams, "expected { path: string, replacements: [{ original_line, replacement_lines }] }");
     };
 
-    const timeout_ms = args.timeout orelse 5000;
+    if (!script.isPathSafe(args.path)) {
+        return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
+    }
 
-    const node = lp.actions.waitForSelector(args.selector, timeout_ms, server.session) catch |err| {
-        if (err == error.InvalidSelector) {
-            return server.sendError(id, .InvalidParams, "Invalid selector");
-        } else if (err == error.Timeout) {
-            return server.sendError(id, .InternalError, "Timeout waiting for selector");
+    const content = std.fs.cwd().readFileAlloc(arena, args.path, 10 * 1024 * 1024) catch |err| {
+        const msg = std.fmt.allocPrint(arena, "failed to read {s}: {s}", .{ args.path, @errorName(err) }) catch @errorName(err);
+        return sendErrorContent(server, id, msg);
+    };
+
+    var splices = arena.alloc(script.Replacement, args.replacements.len) catch return sendErrorContent(server, id, "out of memory");
+
+    const index = indexLines(arena, content) catch return sendErrorContent(server, id, "out of memory");
+
+    for (args.replacements, 0..) |spec, i| {
+        const entry = index.get(spec.original_line) orelse {
+            const msg = std.fmt.allocPrint(arena, "original_line not found verbatim: `{s}`", .{spec.original_line}) catch "original_line not found verbatim";
+            return sendErrorContent(server, id, msg);
+        };
+        if (entry.dup) {
+            const msg = std.fmt.allocPrint(arena, "original_line matches more than one line; make it unique to disambiguate: `{s}`", .{spec.original_line}) catch "original_line matches more than one line; make it unique to disambiguate";
+            return sendErrorContent(server, id, msg);
         }
-        return server.sendError(id, .InternalError, "Failed waiting for selector");
+
+        splices[i] = script.formatHealReplacementLines(arena, entry.span, spec.original_line, spec.replacement_lines) catch |err|
+            return sendErrorContent(server, id, @errorName(err));
+    }
+
+    script.writeAtomic(arena, std.fs.cwd(), args.path, content, splices) catch |err| {
+        const msg = std.fmt.allocPrint(arena, "failed to write {s}: {s} (script left unchanged)", .{ args.path, @errorName(err) }) catch @errorName(err);
+        return sendErrorContent(server, id, msg);
     };
 
-    const registered = try server.node_registry.register(node);
-    const msg = std.fmt.allocPrint(arena, "Element found. backendNodeId: {d}", .{registered.id}) catch "Element found.";
+    const msg = std.fmt.allocPrint(arena, "healed {d} line(s) in {s}; backup at {s}.bak", .{ args.replacements.len, args.path, args.path }) catch "ok";
+    try sendToolResultText(server, id, msg, false);
+}
 
+const LineEntry = struct { span: []const u8, dup: bool };
+
+/// Walk `content` once and map each unique line to the slice covering that
+/// line plus its terminating `\n`. Duplicate lines are flagged via `dup` so
+/// the caller can reject ambiguous matches — `applyReplacements`'
+/// non-overlapping invariant would break if two specs resolved to the same
+/// span.
+fn indexLines(arena: std.mem.Allocator, content: []const u8) !std.StringHashMapUnmanaged(LineEntry) {
+    var index: std.StringHashMapUnmanaged(LineEntry) = .empty;
+    var pos: usize = 0;
+    while (pos <= content.len) {
+        const nl = std.mem.indexOfScalarPos(u8, content, pos, '\n') orelse content.len;
+        const this_line = content[pos..nl];
+        const end = if (nl < content.len) nl + 1 else nl;
+        const gop = try index.getOrPut(arena, this_line);
+        if (gop.found_existing) {
+            gop.value_ptr.dup = true;
+        } else {
+            gop.value_ptr.* = .{ .span = content[pos..end], .dup = false };
+        }
+        if (nl == content.len) break;
+        pos = nl + 1;
+    }
+    return index;
+}
+
+fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
-    return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = is_error });
 }
 
-fn handleHover(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const Params = struct {
-        backendNodeId: CDPNode.Id,
-    };
-    const args = try parseArgs(Params, arena, arguments, server, id, "hover");
-    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
-
-    lp.actions.hover(resolved.node, resolved.frame) catch |err| {
-        if (err == error.InvalidNodeType) {
-            return server.sendError(id, .InvalidParams, "Node is not an HTML element");
-        }
-        return server.sendError(id, .InternalError, "Failed to hover element");
-    };
-
-    const page_title = resolved.frame.getTitle() catch null;
-    const result_text = try std.fmt.allocPrint(arena, "Hovered element (backendNodeId: {d}). Page url: {s}, title: {s}", .{
-        args.backendNodeId,
-        resolved.frame.url,
-        page_title orelse "(none)",
-    });
-    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+fn sendEvalOutcome(server: *Server, id: std.json.Value, outcome: browser_tools.ToolError!browser_tools.EvalResult) !void {
+    const result = outcome catch |err| return sendToolResultText(server, id, @errorName(err), true);
+    return sendToolResultText(server, id, result.text(), result.isError());
 }
 
-fn handlePress(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const Params = struct {
-        key: []const u8,
-        backendNodeId: ?CDPNode.Id = null,
-    };
-    const args = try parseArgs(Params, arena, arguments, server, id, "press");
-
-    const frame = server.session.currentFrame() orelse {
-        return server.sendError(id, .FrameNotLoaded, "Frame not loaded");
-    };
-
-    var target_node: ?*DOMNode = null;
-    if (args.backendNodeId) |node_id| {
-        const node = server.node_registry.lookup_by_id.get(node_id) orelse {
-            return server.sendError(id, .InvalidParams, "Node not found");
-        };
-        target_node = node.dom;
-    }
-
-    lp.actions.press(target_node, args.key, frame) catch |err| {
-        if (err == error.InvalidNodeType) {
-            return server.sendError(id, .InvalidParams, "Node is not an HTML element");
-        }
-        return server.sendError(id, .InternalError, "Failed to press key");
-    };
-
-    const page_title = frame.getTitle() catch null;
-    const result_text = try std.fmt.allocPrint(arena, "Pressed key '{s}'. Page url: {s}, title: {s}", .{
-        args.key,
-        frame.url,
-        page_title orelse "(none)",
-    });
-    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn handleSelectOption(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const Params = struct {
-        backendNodeId: CDPNode.Id,
-        value: []const u8,
-    };
-    const args = try parseArgs(Params, arena, arguments, server, id, "selectOption");
-    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
-
-    lp.actions.selectOption(resolved.node, args.value, resolved.frame) catch |err| {
-        if (err == error.InvalidNodeType) {
-            return server.sendError(id, .InvalidParams, "Node is not a <select> element");
-        }
-        return server.sendError(id, .InternalError, "Failed to select option");
-    };
-
-    const page_title = resolved.frame.getTitle() catch null;
-    const result_text = try std.fmt.allocPrint(arena, "Selected option '{s}' (backendNodeId: {d}). Page url: {s}, title: {s}", .{
-        args.value,
-        args.backendNodeId,
-        resolved.frame.url,
-        page_title orelse "(none)",
-    });
-    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn handleSetChecked(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const Params = struct {
-        backendNodeId: CDPNode.Id,
-        checked: bool,
-    };
-    const args = try parseArgs(Params, arena, arguments, server, id, "setChecked");
-    const resolved = try resolveNodeAndPage(server, id, args.backendNodeId);
-
-    lp.actions.setChecked(resolved.node, args.checked, resolved.frame) catch |err| {
-        if (err == error.InvalidNodeType) {
-            return server.sendError(id, .InvalidParams, "Node is not a checkbox or radio input");
-        }
-        return server.sendError(id, .InternalError, "Failed to set checked state");
-    };
-
-    const state_str = if (args.checked) "checked" else "unchecked";
-    const page_title = resolved.frame.getTitle() catch null;
-    const result_text = try std.fmt.allocPrint(arena, "Set element (backendNodeId: {d}) to {s}. Page url: {s}, title: {s}", .{
-        args.backendNodeId,
-        state_str,
-        resolved.frame.url,
-        page_title orelse "(none)",
-    });
-    const content = [_]protocol.TextContent([]const u8){.{ .text = result_text }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn handleFindElement(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const Params = struct {
-        role: ?[]const u8 = null,
-        name: ?[]const u8 = null,
-    };
-    const args = try parseArgsOrDefault(Params, arena, arguments, server, id);
-
-    if (args.role == null and args.name == null) {
-        return server.sendError(id, .InvalidParams, "At least one of 'role' or 'name' must be provided");
-    }
-
-    const frame = server.session.currentFrame() orelse {
-        return server.sendError(id, .FrameNotLoaded, "Frame not loaded");
-    };
-
-    const elements = lp.interactive.collectInteractiveElements(frame.document.asNode(), arena, frame) catch |err| {
-        log.err(.mcp, "elements collection failed", .{ .err = err });
-        return server.sendError(id, .InternalError, "Failed to collect interactive elements");
-    };
-
-    var matches: std.ArrayList(lp.interactive.InteractiveElement) = .empty;
-    for (elements) |el| {
-        if (args.role) |role| {
-            const el_role = el.role orelse continue;
-            if (!std.ascii.eqlIgnoreCase(el_role, role)) continue;
-        }
-        if (args.name) |name| {
-            const el_name = el.name orelse continue;
-            if (!containsIgnoreCase(el_name, name)) continue;
-        }
-        try matches.append(arena, el);
-    }
-
-    const matched = try matches.toOwnedSlice(arena);
-    lp.interactive.registerNodes(matched, &server.node_registry) catch |err| {
-        log.err(.mcp, "node registration failed", .{ .err = err });
-        return server.sendError(id, .InternalError, "Failed to register element nodes");
-    };
-
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    try std.json.Stringify.value(matched, .{}, &aw.writer);
-
-    const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
-    if (needle.len > haystack.len) return false;
-    if (needle.len == 0) return true;
-    const end = haystack.len - needle.len + 1;
-    for (0..end) |i| {
-        if (std.ascii.eqlIgnoreCase(haystack[i..][0..needle.len], needle)) return true;
-    }
-    return false;
-}
-
-const NodeAndPage = struct { node: *DOMNode, frame: *lp.Frame };
-
-fn resolveNodeAndPage(server: *Server, id: std.json.Value, node_id: CDPNode.Id) !NodeAndPage {
-    const frame = server.session.currentFrame() orelse {
-        try server.sendError(id, .FrameNotLoaded, "Frame not loaded");
-        return error.FrameNotLoaded;
-    };
-    const node = server.node_registry.lookup_by_id.get(node_id) orelse {
-        try server.sendError(id, .InvalidParams, "Node not found");
-        return error.InvalidParams;
-    };
-    return .{ .node = node.dom, .frame = frame };
-}
-
-fn ensurePage(server: *Server, id: std.json.Value, url: ?[:0]const u8, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !*lp.Frame {
-    if (url) |u| {
-        try performGoto(server, u, id, timeout, waitUntil);
-    }
-    return server.session.currentFrame() orelse {
-        try server.sendError(id, .FrameNotLoaded, "Frame not loaded");
-        return error.FrameNotLoaded;
-    };
-}
-
-/// Parses JSON arguments into a given struct type `T`.
-/// If the arguments are missing, it returns a default-initialized `T` (e.g., `.{}`).
-/// If the arguments are present but invalid, it sends an MCP error response and returns `error.InvalidParams`.
-/// Use this for tools where all arguments are optional.
-fn parseArgsOrDefault(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value, server: *Server, id: std.json.Value) !T {
-    const args_raw = arguments orelse return .{};
-    return std.json.parseFromValueLeaky(T, arena, args_raw, .{ .ignore_unknown_fields = true }) catch {
-        try server.sendError(id, .InvalidParams, "Invalid arguments");
-        return error.InvalidParams;
-    };
-}
-
-/// Parses JSON arguments into a given struct type `T`.
-/// If the arguments are missing or invalid, it automatically sends an MCP error response to the client
-/// and returns an `error.InvalidParams`.
-/// Use this for tools that require strict validation or mandatory arguments.
-fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value, server: *Server, id: std.json.Value, tool_name: []const u8) !T {
-    const args_raw = arguments orelse {
-        try server.sendError(id, .InvalidParams, "Missing arguments");
-        return error.InvalidParams;
-    };
-    return std.json.parseFromValueLeaky(T, arena, args_raw, .{ .ignore_unknown_fields = true }) catch {
-        const msg = std.fmt.allocPrint(arena, "Invalid arguments for {s}", .{tool_name}) catch "Invalid arguments";
-        try server.sendError(id, .InvalidParams, msg);
-        return error.InvalidParams;
-    };
-}
-
-fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value, timeout: ?u32, waitUntil: ?lp.Config.WaitUntil) !void {
-    const session = server.session;
-    if (session.hasPage()) {
-        session.removePage();
-    }
-    const frame = session.createPage() catch {
-        try server.sendError(id, .InternalError, "Failed to create page");
-        return error.NavigationFailed;
-    };
-    frame.navigate(url, .{
-        .reason = .address_bar,
-        .kind = .{ .push = null },
-    }) catch {
-        try server.sendError(id, .InternalError, "Internal error during navigation");
-        return error.NavigationFailed;
-    };
-
-    var runner = session.runner(.{}) catch {
-        try server.sendError(id, .InternalError, "Failed to start page runner");
-        return error.NavigationFailed;
-    };
-    runner.wait(.{
-        .ms = timeout orelse 10000,
-        .until = waitUntil orelse .done,
-    }) catch {
-        try server.sendError(id, .InternalError, "Error waiting for page load");
-        return error.NavigationFailed;
-    };
+fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void {
+    return sendToolResultText(server, id, msg, true);
 }
 
 const router = @import("router.zig");
 const testing = @import("../testing.zig");
 
-test "MCP - evaluate error reporting" {
+test "MCP - eval error reporting" {
     defer testing.reset();
     var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
-    // Call evaluate with a script that throws an error
+    // Call eval with a script that throws an error
     const msg =
         \\{
         \\  "jsonrpc": "2.0",
         \\  "id": 1,
         \\  "method": "tools/call",
         \\  "params": {
-        \\    "name": "evaluate",
+        \\    "name": "eval",
         \\    "arguments": {
         \\      "script": "throw new Error('test error')"
         \\    }
@@ -978,6 +412,108 @@ test "MCP - evaluate error reporting" {
         .isError = true,
         .content = &.{.{ .type = "text" }},
     } }, out.written());
+}
+
+test "MCP - indexLines: exact match returns line + trailing newline" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const content = "GOTO https://x\nCLICK 'old'\nWAIT '.thanks'\n";
+    const index = try indexLines(arena.allocator(), content);
+    const entry = index.get("CLICK 'old'").?;
+    try std.testing.expect(!entry.dup);
+    try std.testing.expectEqualStrings("CLICK 'old'\n", entry.span);
+}
+
+test "MCP - indexLines: missing line absent from index" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const content = "GOTO https://x\nCLICK 'a'\n";
+    const index = try indexLines(arena.allocator(), content);
+    try std.testing.expect(index.get("CLICK 'b'") == null);
+}
+
+test "MCP - indexLines: last line without trailing newline" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const content = "GOTO https://x\nCLICK 'last'";
+    const index = try indexLines(arena.allocator(), content);
+    try std.testing.expectEqualStrings("CLICK 'last'", index.get("CLICK 'last'").?.span);
+}
+
+test "MCP - indexLines: duplicate line flagged dup" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const content = "CLICK 'go'\nWAIT '.x'\nCLICK 'go'\n";
+    const index = try indexLines(arena.allocator(), content);
+    try std.testing.expect(index.get("CLICK 'go'").?.dup);
+}
+
+test "MCP - record_start rejects unsafe path" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"record_start","arguments":{"path":"../escape.lp"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "must be relative") != null);
+}
+
+test "MCP - record_stop without active recording errors" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"record_stop","arguments":{}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "no recording is active") != null);
+}
+
+test "MCP - script_step rejects natural-language input" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"please summarize this page"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "require an LLM") != null);
+}
+
+test "MCP - script_step runs TYPE and verifier passes" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    // TYPE on the input that exists on the test page; verifier checks
+    // the field's `value` property after execution.
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"TYPE '#inp' 'hello world'"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "verification failed") == null);
+}
+
+test "MCP - script_step accepts comment line" {
+    defer testing.reset();
+    var out: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"script_step","arguments":{"line":"# fetch the homepage"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") == null);
 }
 
 test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked" {
@@ -1009,7 +545,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const inp_id = (try server.node_registry.register(inp)).id;
         var inp_id_buf: [12]u8 = undefined;
         const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
-        const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"text\":\"hello\"}}}" });
+        const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"value\":\"hello\"}}}" });
         try router.handleMessage(server, aa, fill_msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "Filled element") != null);
         try testing.expect(std.mem.indexOf(u8, out.written(), "with \\\"hello\\\"") != null);
@@ -1022,7 +558,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         const sel_id = (try server.node_registry.register(sel)).id;
         var sel_id_buf: [12]u8 = undefined;
         const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
-        const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"text\":\"opt2\"}}}" });
+        const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"value\":\"opt2\"}}}" });
         try router.handleMessage(server, aa, fill_sel_msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "Filled element") != null);
         try testing.expect(std.mem.indexOf(u8, out.written(), "with \\\"opt2\\\"") != null);
@@ -1117,6 +653,79 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         \\ window.hovered === true &&
         \\ window.keyPressed === 'Enter' && window.keyReleased === 'Enter' &&
         \\ window.sel2Changed === 'b' &&
+        \\ window.chkClicked === true && window.chkChanged === true &&
+        \\ window.radClicked === true && window.radChanged === true
+    , null);
+
+    try testing.expect(result.isTrue());
+}
+
+test "MCP - Actions by selector: hover, selectOption, setChecked" {
+    defer testing.reset();
+    const aa = testing.arena_allocator;
+
+    var out: std.io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    const page = server.session.currentPage().?;
+
+    {
+        // Hover by selector
+        const msg =
+            \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hover","arguments":{"selector":"#hoverTarget"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Hovered element") != null);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #hoverTarget") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // SelectOption by selector
+        const msg =
+            \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"selectOption","arguments":{"selector":"#sel2","value":"c"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Selected option") != null);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #sel2") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // SetChecked checkbox by selector
+        const msg =
+            \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"setChecked","arguments":{"selector":"#chk","checked":true}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #chk") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // SetChecked radio by selector
+        const msg =
+            \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"setChecked","arguments":{"selector":"#rad","checked":true}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #rad") != null);
+        out.clearRetainingCapacity();
+    }
+
+    // Verify the underlying actions actually fired their handlers
+    var ls: js.Local.Scope = undefined;
+    page.frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const result = try ls.local.exec(
+        \\ window.hovered === true &&
+        \\ window.sel2Changed === 'c' &&
         \\ window.chkClicked === true && window.chkChanged === true &&
         \\ window.radClicked === true && window.radChanged === true
     , null);
