@@ -621,6 +621,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     };
 
     var headers = try http_client.newHeaders();
+    try headers.add(lp.Config.HttpHeaders.navigation_accept);
     if (opts.header) |hdr| {
         try headers.add(hdr);
     }
