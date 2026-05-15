@@ -45,6 +45,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         clearBrowserCookies,
         clearBrowserCache,
         canClearBrowserCache,
+        emulateNetworkConditions,
         setCookie,
         setCookies,
         getCookies,
@@ -62,6 +63,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .clearBrowserCookies => return clearBrowserCookies(cmd),
         .clearBrowserCache => return clearBrowserCache(cmd),
         .canClearBrowserCache => return canClearBrowserCache(cmd),
+        .emulateNetworkConditions => return emulateNetworkConditions(cmd),
         .setCookie => return setCookie(cmd),
         .setCookies => return setCookies(cmd),
         .getCookies => return getCookies(cmd),
@@ -90,6 +92,43 @@ fn setCacheDisabled(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const client = &bc.cdp.browser.http_client;
     client.cache_layer.disabled = params.cacheDisabled;
+    return cmd.sendResult(null, .{});
+}
+
+// Network.emulateNetworkConditions
+// https://chromedevtools.github.io/devtools-protocol/tot/Network/#method-emulateNetworkConditions
+//
+// `offline` is honored: every subsequent HTTP transfer fails with
+// InternetDisconnected before reaching curl, and surfaces to the client as
+// Network.loadingFailed (matching Chrome's offline emulation). Bandwidth /
+// latency / connectionType parameters are accepted for protocol compatibility
+// but not enforced — Lightpanda has no rendering or compositor pipeline that
+// would observe wall-clock latency, and no per-transfer bandwidth limiter.
+fn emulateNetworkConditions(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        offline: bool,
+        latency: ?f64 = null,
+        downloadThroughput: ?f64 = null,
+        uploadThroughput: ?f64 = null,
+        connectionType: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const client = &bc.cdp.browser.http_client;
+    client.offline = params.offline;
+
+    if ((params.latency orelse 0) > 0 or
+        (params.downloadThroughput orelse 0) > 0 or
+        (params.uploadThroughput orelse 0) > 0)
+    {
+        log.warn(.not_implemented, "network throttling", .{
+            .latency = params.latency,
+            .downloadThroughput = params.downloadThroughput,
+            .uploadThroughput = params.uploadThroughput,
+        });
+    }
+    _ = params.connectionType;
+
     return cmd.sendResult(null, .{});
 }
 
@@ -783,4 +822,77 @@ test "cdp.Network: setCacheDisabled re-enables cache" {
 
     const client = ctx.cdp().browser.http_client;
     try testing.expectEqual(false, client.cache_layer.disabled);
+}
+
+test "cdp.Network: emulateNetworkConditions toggles offline" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-EN1" });
+
+    // Default: client starts online.
+    {
+        const client = ctx.cdp().browser.http_client;
+        try testing.expectEqual(false, client.offline);
+    }
+
+    // Go offline.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.emulateNetworkConditions",
+        .params = .{
+            .offline = true,
+            .latency = 0,
+            .downloadThroughput = -1,
+            .uploadThroughput = -1,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    {
+        const client = ctx.cdp().browser.http_client;
+        try testing.expectEqual(true, client.offline);
+    }
+
+    // Back online.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Network.emulateNetworkConditions",
+        .params = .{
+            .offline = false,
+            .latency = 0,
+            .downloadThroughput = -1,
+            .uploadThroughput = -1,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    {
+        const client = ctx.cdp().browser.http_client;
+        try testing.expectEqual(false, client.offline);
+    }
+}
+
+test "cdp.Network: emulateNetworkConditions accepts connectionType + throttling params" {
+    // Bandwidth / latency / connectionType parameters are accepted for protocol
+    // compatibility but currently no-op (logged via .not_implemented). Clients
+    // built against Chrome's CDP (Puppeteer, chrome-remote-interface, Selenium's
+    // execute_cdp) always pass the full 4-tuple, so a strict struct schema would
+    // reject every real call.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-EN2" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.emulateNetworkConditions",
+        .params = .{
+            .offline = false,
+            .latency = 150,
+            .downloadThroughput = 750000,
+            .uploadThroughput = 250000,
+            .connectionType = "cellular3g",
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const client = ctx.cdp().browser.http_client;
+    try testing.expectEqual(false, client.offline);
 }

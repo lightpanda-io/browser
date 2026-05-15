@@ -118,6 +118,11 @@ use_proxy: bool,
 // Current TLS verification state, applied per-connection in makeRequest.
 tls_verify: bool = true,
 
+// When true, every new HTTP request fails immediately with
+// error.InternetDisconnected before reaching curl. Toggled by
+// Network.emulateNetworkConditions ({"offline": true|false}).
+offline: bool = false,
+
 obey_robots: bool,
 
 // User agent override set via CDP Emulation.setUserAgentOverride.
@@ -461,6 +466,16 @@ pub fn request(self: *Client, req: Request, owner: ?*Owner) !void {
     // layer chain fails before any layer commits the transfer to an external
     // owner (queue / multi handle / pending interception), we clean up here
     // via transfer.abort which fires error_callback and deinits.
+    //
+    // Network.emulateNetworkConditions({"offline": true}) short-circuits here:
+    // every transfer is aborted with InternetDisconnected and surfaced to the
+    // client through the same RequestFail path libcurl uses on real connection
+    // failures (i.e. Network.loadingFailed with errorText set).
+    if (self.offline) {
+        transfer.abort(error.InternetDisconnected);
+        return error.InternetDisconnected;
+    }
+
     self.entry_layer.request(transfer) catch |err| {
         if (!transfer.loop_owned) {
             transfer.abort(err);
