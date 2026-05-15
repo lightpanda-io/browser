@@ -304,6 +304,17 @@ pub fn toJson(self: Value, allocator: Allocator) ![]u8 {
 pub fn jsonStringify(self: Value, jws: anytype) !void {
     const local = self.local;
     const v = self.toJson(local.call_arena) catch return error.WriteFailed;
+    // V8's JSON::Stringify finishes by calling Object::ToString on whatever
+    // i::JsonStringify returns. For values that JSON.stringify treats as
+    // non-serializable at the top level (undefined, functions, symbols),
+    // i::JsonStringify yields the undefined sentinel, and ToString coerces
+    // it to the JS string "undefined". Writing those 9 bytes raw embeds a
+    // bare `undefined` token into the JSON stream — invalid per RFC 8259.
+    // Map that case to `null`, matching what JSON.stringify emits when an
+    // unserializable value sits in an array slot.
+    if (std.mem.eql(u8, v, "undefined")) {
+        return jws.write(null);
+    }
     jws.beginWriteRaw() catch return error.WriteFailed;
     jws.writer.writeAll(v) catch return error.WriteFailed;
     jws.endWriteRaw();
@@ -490,4 +501,61 @@ fn G(comptime global_type: GlobalType) type {
             }
         }
     };
+}
+
+const testing = @import("../../testing.zig");
+test "Value: jsonStringify maps unserializable JS values to null" {
+    const session = testing.test_session;
+    const frame = try session.createPage();
+    defer session.removePage();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // V8::JSON::Stringify finishes with Object::ToString on whatever
+    // i::JsonStringify returns. For values JSON.stringify treats as
+    // non-serializable at the top level (undefined, functions, symbols),
+    // i::JsonStringify yields the undefined sentinel, and ToString coerces
+    // it to the JS string "undefined". Without the jsonStringify fix, those
+    // 9 bytes get written raw and the produced JSON is invalid.
+    const Wrapper = struct { v: Value };
+    const cases = .{
+        .{ .name = "undefined", .expr = "undefined" },
+        .{ .name = "function", .expr = "(function(){})" },
+        .{ .name = "symbol", .expr = "Symbol('s')" },
+    };
+    inline for (cases) |case| {
+        const value = try ls.local.exec(case.expr, null);
+        const out = try std.json.Stringify.valueAlloc(
+            testing.allocator,
+            Wrapper{ .v = value },
+            .{},
+        );
+        defer testing.allocator.free(out);
+        try testing.expectEqualSlices(u8, "{\"v\":null}", out);
+    }
+
+    // Values that DO serialize must pass through unchanged.
+    const ok_cases = .{
+        .{ .expr = "null", .expected = "{\"v\":null}" },
+        .{ .expr = "42", .expected = "{\"v\":42}" },
+        .{ .expr = "'hi'", .expected = "{\"v\":\"hi\"}" },
+        .{ .expr = "true", .expected = "{\"v\":true}" },
+        .{ .expr = "({a:1})", .expected = "{\"v\":{\"a\":1}}" },
+        .{ .expr = "[undefined]", .expected = "{\"v\":[null]}" },
+        .{ .expr = "({x:undefined})", .expected = "{\"v\":{}}" },
+        // A string literally equal to "undefined" must keep its quotes.
+        .{ .expr = "'undefined'", .expected = "{\"v\":\"undefined\"}" },
+    };
+    inline for (ok_cases) |case| {
+        const value = try ls.local.exec(case.expr, null);
+        const out = try std.json.Stringify.valueAlloc(
+            testing.allocator,
+            Wrapper{ .v = value },
+            .{},
+        );
+        defer testing.allocator.free(out);
+        try testing.expectEqualSlices(u8, case.expected, out);
+    }
 }
