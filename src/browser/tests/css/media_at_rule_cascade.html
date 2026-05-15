@@ -53,6 +53,15 @@
   @media (min-width: 1px) {
     #visibility-hidden-cascade { visibility: hidden; }
   }
+  /* Comment-in-prelude: the brace inside the comment must not be mistaken
+     for the rule's opening brace. */
+  @media /* { fake */ (min-width: 1px) {
+    #commented-prelude { display: none; }
+  }
+  /* Comment-in-query: the prelude includes a comment between tokens. */
+  @media screen /*x*/ and (min-width: 1px) {
+    #commented-query { display: none; }
+  }
 </style>
 
 <body>
@@ -65,8 +74,12 @@
   <div id="hidden-by-nested">nested-hit</div>
   <div id="not-hidden-unsupported">unsupported</div>
   <div id="visibility-hidden-cascade">visibility</div>
+  <div id="commented-prelude">commented-prelude</div>
+  <div id="commented-query">commented-query</div>
   <div id="dyn-target">dyn-target</div>
+  <div id="dyn2-target">dyn2-target</div>
   <style id="dyn"></style>
+  <style id="dyn2"></style>
 </body>
 
 <script id=cascade_matching_query_hides>
@@ -148,5 +161,30 @@
   const sheet = $('#dyn').sheet;
   const rule = sheet.cssRules[0];
   testing.expectEqual(4, rule.type);
+}
+</script>
+
+<script id=cascade_commented_prelude>
+{
+  // `@media /* { fake */ (min-width: 1px)` — the brace inside the comment
+  // would otherwise fool a naive prelude/inner split.
+  testing.expectFalse($('#commented-prelude').checkVisibility());
+}
+</script>
+
+<script id=cascade_commented_query>
+{
+  // Comments between query tokens must be stripped before evaluation.
+  testing.expectFalse($('#commented-query').checkVisibility());
+}
+</script>
+
+<script id=cascade_replaceSync_matching>
+{
+  // The _css_rules path also fires through replaceSync, not just insertRule.
+  $('#dyn2').sheet.replaceSync(
+    '@media (min-width: 600px) { #dyn2-target { display: none; } }'
+  );
+  testing.expectFalse($('#dyn2-target').checkVisibility());
 }
 </script>

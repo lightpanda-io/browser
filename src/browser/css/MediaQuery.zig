@@ -55,7 +55,12 @@ pub const Viewport = struct {
 /// Returns true if `query` matches the given viewport. Comma-separated
 /// queries are evaluated independently and combined with OR.
 pub fn matches(query: []const u8, viewport: Viewport) bool {
-    var rest = std.mem.trim(u8, query, &std.ascii.whitespace);
+    // Strip CSS `/* ... */` comments up-front so a comment in the prelude or
+    // inside a feature parenthesis can't shadow a brace, comma, or paren.
+    var buf: [4096]u8 = undefined;
+    const stripped = stripComments(query, &buf);
+
+    var rest = std.mem.trim(u8, stripped, &std.ascii.whitespace);
     if (rest.len == 0) return false;
 
     while (rest.len > 0) {
@@ -66,6 +71,31 @@ pub fn matches(query: []const u8, viewport: Viewport) bool {
         rest = rest[cut + 1 ..];
     }
     return false;
+}
+
+/// Strip CSS comments (`/* ... */`) from `query` into `buf`, returning the
+/// stripped slice. Each comment is replaced with a single space so token
+/// boundaries are preserved (`a/*x*/b` becomes `a b`, not `ab`). An unclosed
+/// `/* ...` returns the original input so callers fall through to the normal
+/// parser error path. If the query is larger than the buffer, returns the
+/// original input — sane media queries are ~tens of bytes so 4 KiB is plenty.
+fn stripComments(query: []const u8, buf: []u8) []const u8 {
+    if (query.len > buf.len) return query;
+    var out: usize = 0;
+    var i: usize = 0;
+    while (i < query.len) {
+        if (i + 1 < query.len and query[i] == '/' and query[i + 1] == '*') {
+            const close = std.mem.indexOf(u8, query[i + 2 ..], "*/") orelse return query;
+            buf[out] = ' ';
+            out += 1;
+            i = i + 2 + close + 2;
+            continue;
+        }
+        buf[out] = query[i];
+        out += 1;
+        i += 1;
+    }
+    return buf[0..out];
 }
 
 fn nextTopLevelComma(s: []const u8) usize {
@@ -246,8 +276,11 @@ fn parseLengthPx(value: []const u8) ?u32 {
         return if (num == 0) 0 else null;
     }
     if (std.ascii.eqlIgnoreCase(unit, "px")) return num;
-    if (std.ascii.eqlIgnoreCase(unit, "em")) return num * 16;
-    if (std.ascii.eqlIgnoreCase(unit, "rem")) return num * 16;
+    // `em` / `rem`: 1em = 16px. `std.math.mul` returns an error on u32 overflow
+    // (e.g. `268435456em` would otherwise wrap or panic in debug); treat that
+    // as an unparseable length so the query fails closed per MQ4.
+    if (std.ascii.eqlIgnoreCase(unit, "em")) return std.math.mul(u32, num, 16) catch null;
+    if (std.ascii.eqlIgnoreCase(unit, "rem")) return std.math.mul(u32, num, 16) catch null;
     return null;
 }
 
@@ -424,10 +457,43 @@ test "MediaQuery: not print is true on screen viewport" {
     try testing.expect(matches("not print", v));
 }
 
-test "MediaQuery: complex real-world responsive pattern" {
-    // Decidim / Spree pattern: hide mobile CTA above breakpoint.
-    const v = Viewport.default(); // 1920×1080 — desktop
+test "MediaQuery: common responsive breakpoint" {
+    // Pattern: hide one of mobile/desktop CTA duplicates above a breakpoint.
+    const v = Viewport.default(); // 1920×1080 — desktop side.
     try testing.expect(matches("(min-width: 768px)", v));
-    // Inverse pattern: mobile-only CTA below breakpoint.
     try testing.expect(!matches("(max-width: 767px)", v));
+}
+
+test "MediaQuery: comments are stripped" {
+    const v = Viewport.default();
+    // Comment between tokens.
+    try testing.expect(matches("screen and /*hidden*/ (min-width: 1px)", v));
+    // Comment at the start.
+    try testing.expect(matches("/* leading */ screen", v));
+    // Comment that would otherwise change parens depth.
+    try testing.expect(matches("(min-width: /* hi */ 600px)", v));
+    // Comment containing a comma — must not split the query.
+    try testing.expect(matches("screen /*, print*/", v));
+    // Unclosed comment falls through to the parser, which fails closed.
+    try testing.expect(!matches("/* unterminated", v));
+}
+
+test "MediaQuery: em / rem overflow fails closed" {
+    const v = Viewport.default();
+    // 268435456 × 16 overflows u32 (would wrap to 0); the evaluator must
+    // treat the length as unparseable and the query as non-matching.
+    try testing.expect(!matches("(min-width: 268435456em)", v));
+    try testing.expect(!matches("(min-width: 268435456rem)", v));
+    // Just below the overflow threshold still parses (but doesn't match
+    // because 268435455 × 16 > viewport width).
+    try testing.expect(!matches("(min-width: 268435455em)", v));
+}
+
+test "MediaQuery: unimplemented units fail closed" {
+    const v = Viewport.default();
+    try testing.expect(!matches("(min-width: 5cm)", v));
+    try testing.expect(!matches("(min-width: 50mm)", v));
+    try testing.expect(!matches("(min-width: 10pt)", v));
+    try testing.expect(!matches("(min-width: 1in)", v));
+    try testing.expect(!matches("(min-width: 50vw)", v));
 }

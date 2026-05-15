@@ -125,7 +125,11 @@ fn applyMediaAtRule(self: *StyleManager, text: []const u8) !void {
     if (!std.ascii.eqlIgnoreCase(text[0.."@media".len], "@media")) return;
 
     var rest = text["@media".len..];
-    const open = std.mem.indexOfScalar(u8, rest, '{') orelse return;
+    // Use a comment-aware brace finder; a `/* { */` in the prelude would
+    // otherwise split the rule at the wrong place. The inner block's
+    // contents are re-parsed by CssParser below, which has its own trivia
+    // handling, so only this outer boundary needs the special-case scan.
+    const open = indexOfOpenBraceSkippingComments(rest) orelse return;
     const query = std.mem.trim(u8, rest[0..open], &std.ascii.whitespace);
 
     if (rest.len == 0 or rest[rest.len - 1] != '}') return;
@@ -144,6 +148,22 @@ fn applyMediaAtRule(self: *StyleManager, text: []const u8) !void {
             },
         }
     }
+}
+
+/// Find the first `{` in `s` that is not inside a CSS `/* ... */` comment.
+/// An unclosed comment returns `null` (treat the whole rule as malformed).
+fn indexOfOpenBraceSkippingComments(s: []const u8) ?usize {
+    var i: usize = 0;
+    while (i < s.len) {
+        if (i + 1 < s.len and s[i] == '/' and s[i + 1] == '*') {
+            const close = std.mem.indexOf(u8, s[i + 2 ..], "*/") orelse return null;
+            i = i + 2 + close + 2;
+            continue;
+        }
+        if (s[i] == '{') return i;
+        i += 1;
+    }
+    return null;
 }
 
 fn addRawRule(self: *StyleManager, selector_text: []const u8, block_text: []const u8) !void {

@@ -101,6 +101,29 @@
   testing.expectEqual(true,  window.matchMedia('(min-width: 30em)').matches);
   // 121em = 1936px > 1920px → does not match.
   testing.expectEqual(false, window.matchMedia('(min-width: 121em)').matches);
+  // u32-overflowing em / rem fails closed instead of panicking.
+  testing.expectEqual(false, window.matchMedia('(min-width: 268435456em)').matches);
+  testing.expectEqual(false, window.matchMedia('(min-width: 268435456rem)').matches);
+}
+</script>
+
+<script id=matchMedia_comments_stripped>
+{
+  // CSS `/* ... */` comments between query tokens are stripped per spec.
+  testing.expectEqual(true,  window.matchMedia('screen and /*x*/ (min-width: 1px)').matches);
+  testing.expectEqual(true,  window.matchMedia('/* leading */ screen').matches);
+  testing.expectEqual(true,  window.matchMedia('(min-width: /* hi */ 600px)').matches);
+}
+</script>
+
+<script id=matchMedia_unimplemented_units>
+{
+  // Units the evaluator doesn't claim to support (cm/mm/pt/in/vw/vh) fail closed.
+  testing.expectEqual(false, window.matchMedia('(min-width: 5cm)').matches);
+  testing.expectEqual(false, window.matchMedia('(min-width: 50mm)').matches);
+  testing.expectEqual(false, window.matchMedia('(min-width: 10pt)').matches);
+  testing.expectEqual(false, window.matchMedia('(min-width: 1in)').matches);
+  testing.expectEqual(false, window.matchMedia('(min-width: 50vw)').matches);
 }
 </script>
 
