@@ -47,7 +47,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev run run-release test bench data end2end
+.PHONY: build build-v8-snapshot build-dev run run-release test bench data end2end clean
 
 ## Build v8 snapshot
 build-v8-snapshot:
@@ -92,6 +92,10 @@ endif
 end2end:
 	@test -d ../demo
 	cd ../demo && go run runner/main.go
+
+## Remove build artifacts (keeps v8/ and zig-pkg/ — slow to re-fetch)
+clean:
+	rm -rf zig-out .zig-cache src/snapshot.bin
 
 # Install and build required dependencies commands
 # ------------
