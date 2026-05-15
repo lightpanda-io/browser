@@ -144,14 +144,8 @@ fn invokeTool(cmd: *CDP.Command) !void {
 
     const callback = local.toLocal(tool.execute);
 
-    // ModelContextClient has no per-instance state today (see
-    // ModelContext.zig). We still build a fresh wrapper so the page-side
-    // signature `execute(input, client)` works as documented.
-    var client_inst = ModelContextClient{};
-    const client_value = try local.zigValueToJs(&client_inst, .{});
-
     var caught: js.TryCatch.Caught = undefined;
-    const result = callback.tryCall(js.Value, .{ input_value, client_value }, &caught) catch {
+    const result = callback.tryCall(js.Value, .{ input_value, ModelContextClient{} }, &caught) catch {
         const msg = caught.exception orelse "tool threw";
         try respondError(cmd.cdp, bc, invocation, msg);
         return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
