@@ -693,7 +693,19 @@ pub const QueryWriter = struct {
     }
 
     fn maybeEmit(self: *const QueryWriter, axn: AXNode, in_aria_hidden: bool, w: anytype) !void {
-        const role_str = axn.getRole() catch return;
+        // Mirror Writer.writeNode (line 488-499): if this is a <label> for a
+        // hidden checkbox/radio (toggle-switch / CSS-only radio pattern), emit
+        // the label with the input's role so clients searching by role land
+        // on the label's clickable backendDOMNodeId rather than the hidden,
+        // non-interactable input.
+        const promoted_input = labelPromotionTarget(axn, self.frame, self.visibility_cache);
+
+        const role_str = if (promoted_input) |input| switch (input._input_type) {
+            .checkbox => "checkbox",
+            .radio => "radio",
+            else => unreachable,
+        } else (axn.getRole() catch return);
+
         if (self.role) |needle| {
             if (!std.mem.eql(u8, needle, role_str)) return;
         }
@@ -1785,7 +1797,7 @@ test "AXNode: QueryWriter filters by accessible name" {
     }
 }
 
-test "AXNode: QueryWriter combined role and name filter" {
+test "AXNode: QueryWriter combined role and name filter promotes hidden-input labels" {
     var registry = Node.Registry.init(testing.allocator);
     defer registry.deinit();
 
@@ -1799,8 +1811,12 @@ test "AXNode: QueryWriter combined role and name filter" {
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer frame.releaseArena(temp_arena);
 
-    // Fixture has a CSS-hidden checkbox whose label says "Enable feature".
-    // Filter by both — should pin to one match.
+    // Fixture has a CSS-hidden checkbox `<input id="toggle-switch" ...>` plus
+    // `<label for="toggle-switch">Enable feature</label>`. Walking finds both:
+    //   - the label (role promoted to "checkbox", ignored=false, clickable)
+    //   - the hidden input (intrinsic role="checkbox", ignored=true)
+    // The label is the actionable target — a real client searching by role
+    // would act on the entry with ignored=false.
     const json = try std.json.Stringify.valueAlloc(testing.allocator, QueryWriter{
         .root = node,
         .registry = &registry,
@@ -1817,10 +1833,20 @@ test "AXNode: QueryWriter combined role and name filter" {
     defer parsed.deinit();
 
     const nodes = parsed.value.array.items;
-    try testing.expectEqual(1, nodes.len);
+    try testing.expect(nodes.len >= 1);
 
-    const role_val = nodes[0].object.get("role").?.object.get("value").?.string;
-    try testing.expectEqual("checkbox", role_val);
+    // Every match has the right role and name.
+    var actionable_match = false;
+    for (nodes) |n| {
+        const role_val = n.object.get("role").?.object.get("value").?.string;
+        const name_val = n.object.get("name").?.object.get("value").?.string;
+        try testing.expectEqual("checkbox", role_val);
+        try testing.expectEqual("Enable feature", name_val);
+        if (!n.object.get("ignored").?.bool) actionable_match = true;
+    }
+    // At least one match must be ignored=false. If the label wasn't promoted,
+    // only the hidden input would match (ignored=true) — a regression.
+    try testing.expect(actionable_match);
 }
 
 test "AXNode: QueryWriter no match returns empty array" {
