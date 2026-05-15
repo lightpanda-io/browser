@@ -291,6 +291,23 @@ fn addPartialKeyCompletions(
     }
 }
 
+fn addMetaValueCompletions(
+    cenv: ?*c.ic_completion_env_t,
+    input: []const u8,
+    body: []const u8,
+    meta: *const SlashCommand.MetaCommand,
+    buf: *[completion_buf_len:0]u8,
+) void {
+    if (meta.values.len == 0) return;
+    // Past the first positional arg — don't offer value completions anymore.
+    if (std.mem.indexOfAny(u8, body, &std.ascii.whitespace) != null) return;
+    const partial = body;
+    const prefix = input[0 .. input.len - partial.len];
+    for (meta.values) |v| {
+        addPrefixedCompletion(cenv, buf, input, prefix, v, "", partial);
+    }
+}
+
 // Completes `$LP_*` against the live process environment.
 fn addEnvVarCompletions(
     cenv: ?*c.ic_completion_env_t,
@@ -333,6 +350,8 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
             if (parseSlashCommand(input)) |parts| {
                 if (SlashCommand.findSchema(self.slash_schemas, parts.name)) |schema| {
                     addPartialKeyCompletions(cenv, input, parts.rest, schema, &buf);
+                } else if (SlashCommand.findMeta(parts.name)) |meta| {
+                    addMetaValueCompletions(cenv, input, parts.rest, meta, &buf);
                 }
             }
             // Fall through so `value=$LP_` picks up env completions.
@@ -381,6 +400,9 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
         if (SlashCommand.findSchema(self.slash_schemas, parts.name)) |schema| {
             return renderSchemaHint(schema, parts.rest, ends_ws);
         }
+        if (SlashCommand.findMeta(parts.name)) |meta| {
+            return renderMetaHint(meta, parts.rest, ends_ws);
+        }
         return null;
     }
 
@@ -421,6 +443,25 @@ fn writeHints(lead: []const u8, fragments: []const []const u8) [*c]const u8 {
     }
     hint_buf[pos] = 0;
     return @ptrCast(&hint_buf);
+}
+
+// Renders a meta command's value hint, e.g. `<low|medium|high>` for
+// `/verbosity`. While the user is mid-typing a value, shows the matching
+// value's suffix.
+fn renderMetaHint(meta: *const SlashCommand.MetaCommand, body: []const u8, ends_ws: bool) [*c]const u8 {
+    if (meta.hint.len == 0) return null;
+    if (body.len == 0) {
+        var frags: [1][]const u8 = .{meta.hint};
+        return writeHints(if (ends_ws) "" else " ", &frags);
+    }
+    // Value already committed (trailing space past it) or past the first arg.
+    if (ends_ws) return null;
+    for (meta.values) |v| {
+        if (!std.ascii.startsWithIgnoreCase(v, body)) continue;
+        const text = std.fmt.bufPrintZ(&hint_buf, "{s}", .{v[body.len..]}) catch return null;
+        return text.ptr;
+    }
+    return null;
 }
 
 // Renders `<required>` and `[optional=…]` for each unused field, or
@@ -536,8 +577,9 @@ fn keywordHasPrefix(name: []const u8) bool {
 }
 
 fn slashHasParams(schemas: []const SlashCommand.SchemaInfo, name: []const u8) bool {
-    const s = SlashCommand.findSchema(schemas, name) orelse return false;
-    return s.hints.len > 0;
+    if (SlashCommand.findSchema(schemas, name)) |s| return s.hints.len > 0;
+    if (SlashCommand.findMeta(name)) |m| return m.hint.len > 0;
+    return false;
 }
 
 fn highlightBareToken(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize, end: usize) void {

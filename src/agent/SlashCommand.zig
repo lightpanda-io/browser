@@ -54,7 +54,33 @@ pub const SchemaInfo = struct {
 
 /// Meta slash commands handled directly by the agent (not by ToolExecutor).
 /// Kept in sync with `handleSlash` in Agent.zig.
-pub const meta_names = [_][:0]const u8{ "help", "quit" };
+pub const MetaCommand = struct {
+    name: [:0]const u8,
+    /// Ghost-text fragment shown after the name + space. Empty when the
+    /// command takes no args (`/help`, `/quit`).
+    hint: []const u8,
+    /// Tab-completion candidates for the first positional arg.
+    values: []const [:0]const u8,
+};
+
+pub const meta_commands = [_]MetaCommand{
+    .{ .name = "help", .hint = "", .values = &.{} },
+    .{ .name = "quit", .hint = "", .values = &.{} },
+    .{ .name = "verbosity", .hint = "<low|medium|high>", .values = &.{ "low", "medium", "high" } },
+};
+
+pub const meta_names: [meta_commands.len][:0]const u8 = blk: {
+    var arr: [meta_commands.len][:0]const u8 = undefined;
+    for (meta_commands, 0..) |m, i| arr[i] = m.name;
+    break :blk arr;
+};
+
+pub fn findMeta(name: []const u8) ?*const MetaCommand {
+    for (&meta_commands) |*m| {
+        if (std.ascii.eqlIgnoreCase(m.name, name)) return m;
+    }
+    return null;
+}
 
 pub const ParseError = error{
     MissingName,

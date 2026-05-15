@@ -407,6 +407,10 @@ fn handleSlash(self: *Agent, body: []const u8) bool {
         self.printSlashHelp(rest);
         return false;
     }
+    if (std.mem.eql(u8, name, "verbosity")) {
+        self.handleVerbosity(rest);
+        return false;
+    }
 
     const schema = SlashCommand.findSchema(self.slash_schemas, name) orelse {
         self.printSlashParseError(error.UnknownTool, name);
@@ -459,6 +463,19 @@ fn handleSlash(self: *Agent, body: []const u8) bool {
     return false;
 }
 
+fn handleVerbosity(self: *Agent, rest: []const u8) void {
+    if (rest.len == 0) {
+        self.terminal.printInfoFmt("verbosity: {s}", .{@tagName(self.terminal.verbosity)});
+        return;
+    }
+    const level = std.meta.stringToEnum(Config.AgentVerbosity, rest) orelse {
+        self.terminal.printErrorFmt("usage: /verbosity <low|medium|high> (got {s})", .{rest});
+        return;
+    };
+    self.terminal.verbosity = level;
+    self.terminal.printInfoFmt("verbosity: {s}", .{@tagName(level)});
+}
+
 fn printSlashHelp(self: *Agent, target: []const u8) void {
     if (target.len == 0) {
         self.terminal.printInfo("Slash commands (no LLM, REPL only):");
@@ -466,7 +483,7 @@ fn printSlashHelp(self: *Agent, target: []const u8) void {
             const summary = firstSentence(s.description);
             self.terminal.printInfoFmt("  /{s} — {s}", .{ s.tool_name, summary });
         }
-        self.terminal.printInfo("Meta: /help [name], /quit");
+        self.terminal.printInfo("Meta: /help [name], /quit, /verbosity <low|medium|high>");
         return;
     }
     const lookup = if (target[0] == '/') target[1..] else target;
@@ -476,6 +493,13 @@ fn printSlashHelp(self: *Agent, target: []const u8) void {
     }
     if (std.ascii.eqlIgnoreCase(lookup, "quit")) {
         self.terminal.printInfo("/quit — exit the REPL");
+        return;
+    }
+    if (std.ascii.eqlIgnoreCase(lookup, "verbosity")) {
+        self.terminal.printInfoFmt(
+            "/verbosity <low|medium|high> — set REPL agent verbosity (currently: {s}). Bare /verbosity prints the level.",
+            .{@tagName(self.terminal.verbosity)},
+        );
         return;
     }
     const schema = SlashCommand.findSchema(self.slash_schemas, lookup) orelse {
