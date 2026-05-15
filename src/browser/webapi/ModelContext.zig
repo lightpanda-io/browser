@@ -17,17 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // WebMCP — https://webmachinelearning.github.io/webmcp/
-//
-// Exposes `navigator.modelContext`, the page-side surface for declaring MCP
-// tools to a browser agent. Lightpanda doesn't ship an agent yet; the
-// follow-ups will wire the registered tools through:
-//   1. CDP `WebMCP` domain (https://chromedevtools.github.io/devtools-protocol/tot/WebMCP/)
-//   2. Lightpanda's own MCP server forwarding tools to an external LLM.
-//
-// Both consumers reach into `tools()` / `findTool()` from Zig; the JS-side
-// surface (`registerTool`, `requestUserInteraction`) is the only part shipped
-// today.
-
 const std = @import("std");
 
 const js = @import("../js/js.zig");
@@ -63,9 +52,6 @@ pub const Tool = struct {
     input_schema: ?js.Object.Global,
     execute: js.Function.Global,
     annotations: Annotations,
-    // When present, the tool is considered unregistered once the signal
-    // fires. Checked lazily on each `tools()` / `findTool()` call — fine
-    // for headless usage where there's no synchronous observer to notify.
     signal: ?*AbortSignal,
 
     pub fn markAborted(self: *Tool, exec: *const Execution) !void {
@@ -106,9 +92,7 @@ pub fn registerTool(
         }
     }
 
-    // Reject duplicate names. The spec says `InvalidStateError`. We compact
-    // the list lazily here so a tool whose signal already aborted doesn't
-    // block re-registering under the same name.
+    // Reject duplicate names. The spec says `InvalidStateError`.
     for (self._tools.items) |existing| {
         if (std.mem.eql(u8, existing.name, tool.name)) {
             return error.InvalidStateError;
@@ -144,7 +128,7 @@ pub fn registerTool(
     session.notification.dispatch(.model_context_tool_added, &event);
 }
 
-/// Snapshot of currently-registered tools, with aborted entries filtered.
+/// Snapshot of currently-registered tools.
 /// Used by the CDP `WebMCP.enable` replay and the native MCP forwarder.
 pub fn tools(self: *ModelContext) []const *Tool {
     return self._tools.items;
