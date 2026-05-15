@@ -44,8 +44,8 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
 
     const wba = transfer.client.network.web_bot_auth orelse @panic("WebBotAuthLayer shouldn't be active without WebBotAuth");
 
-    const authority = URL.getHost(transfer.url);
-    try wba.signRequest(transfer.arena, &transfer.req.params.headers, authority);
+    const authority = URL.getHost(transfer.req.url);
+    try wba.signRequest(transfer.arena, &transfer.req.headers, authority);
 
     return self.next.request(transfer);
 }

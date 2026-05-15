@@ -32,6 +32,7 @@ const CachedResponse = @import("../cache/Cache.zig").CachedResponse;
 const Forward = @import("Forward.zig");
 
 const log = lp.log;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const CacheLayer = @This();
 
@@ -51,22 +52,22 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     const self: *CacheLayer = @ptrCast(@alignCast(ptr));
     const req = &transfer.req;
 
-    if (self.disabled or req.params.method != .GET) {
+    if (self.disabled or req.method != .GET) {
         return self.next.request(transfer);
     }
 
     const arena = transfer.arena;
 
-    var iter = req.params.headers.iterator();
+    var iter = req.headers.iterator();
     const req_header_list = try iter.collect(arena);
 
     if (transfer.client.network.cache.?.get(arena, .{
-        .url = transfer.url,
+        .url = req.url,
         .timestamp = std.time.timestamp(),
         .request_headers = req_header_list.items,
     })) |cached| {
         // Dispatch that the Request was served from the Cache.
-        transfer.req.params.notification.dispatch(
+        transfer.req.notification.dispatch(
             .http_request_served_from_cache,
             &.{ .transfer = transfer },
         );
@@ -86,8 +87,8 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
         .arena = arena,
         .transfer = transfer,
         .forward = Forward.capture(req),
-        .req_url = transfer.url,
-        .req_headers = req.params.headers,
+        .req_url = req.url,
+        .req_headers = req.headers,
     };
 
     req.ctx = ctx;
@@ -185,11 +186,11 @@ const CacheContext = struct {
         const conn = transfer._conn.?;
         const vary = if (conn.getResponseHeader("vary", 0)) |h| h.value else null;
 
-        var rh = &transfer.response_header.?;
+        var rh = &transfer.res.header.?;
         const maybe_cm = try Cache.tryCache(
             arena,
             std.time.timestamp(),
-            transfer.url,
+            self.req_url,
             rh.status,
             rh.contentType(),
             if (conn.getResponseHeader("cache-control", 0)) |h| h.value else null,
@@ -237,11 +238,12 @@ const CacheContext = struct {
         if (self.pending_metadata) |metadata| {
             const cache = &transfer.client.network.cache.?;
 
-            log.debug(.browser, "http cache", .{ .key = self.req_url, .metadata = metadata });
-            cache.put(metadata.*, transfer._stream_buffer.items) catch |err| {
+            if (comptime IS_DEBUG) {
+                log.debug(.browser, "http cache", .{ .key = self.req_url, .metadata = metadata });
+            }
+            cache.put(metadata.*, transfer.res.stream_buffer.items) catch |err| {
                 log.warn(.http, "cache put failed", .{ .err = err });
             };
-            log.debug(.browser, "http.cache.put", .{ .url = self.req_url });
         }
 
         return self.forward.forwardDone();

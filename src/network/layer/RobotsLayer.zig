@@ -60,11 +60,11 @@ pub fn deinit(self: *RobotsLayer, allocator: Allocator) void {
 fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     const self: *RobotsLayer = @ptrCast(@alignCast(ptr));
 
-    if (transfer.req.params.skip_robots) {
+    if (transfer.req.skip_robots) {
         return self.next.request(transfer);
     }
 
-    const url = transfer.url;
+    const url = transfer.req.url;
     const robots_url = try URL.getRobotsUrl(transfer.arena, url);
 
     if (self.network.robot_store.get(robots_url)) |robot_entry| {
@@ -111,37 +111,30 @@ fn fetchRobotsThenRequest(
             .robots_url = robots_url,
         };
 
-        var params = transfer.req.params;
-        if (@typeInfo(@TypeOf(params)) != .@"struct") {
-            // protect against mutating the original request
-            @compileError("expected request.params to be a struct");
-        }
-
         // CRITICAL: build a fresh Headers for the inner robots fetch.
-        // params is value-copied from the parent's req.params, but
-        // Headers is a struct wrapping a *curl_slist — value copy shares
-        // the pointer. Letting Client.request take ownership of a shared
-        // headers list means both transfers will free it at deinit time
-        // -> double-free. The robots.txt fetch is a system-level GET
-        // anyway, no need to inherit the parent's user headers.
-        params.headers = try transfer.client.newHeaders();
-        errdefer params.headers.deinit();
-        params.method = .GET;
-        params.url = robots_url;
-        params.skip_robots = true;
-        params.resource_type = .fetch;
-        params.body = null;
+        // We value-copy req from the parent, but Headers is a struct wrapping
+        // a *curl_slist — value copy shares the pointer. Letting Client.request
+        // take ownership of a shared headers list means both transfers will
+        // free it at deinit time -> double-free. The robots.txt fetch is a
+        // system-level GET anyway, no need to inherit the parent's user headers.
+        var new_req = transfer.req;
+        new_req.headers = try transfer.client.newHeaders();
+        errdefer new_req.headers.deinit();
+        new_req.method = .GET;
+        new_req.url = robots_url;
+        new_req.skip_robots = true;
+        new_req.resource_type = .fetch;
+        new_req.body = null;
+        new_req.ctx = robots_ctx;
+        new_req.start_callback = null;
+        new_req.header_callback = RobotsContext.headerCallback;
+        new_req.data_callback = RobotsContext.dataCallback;
+        new_req.done_callback = RobotsContext.doneCallback;
+        new_req.error_callback = RobotsContext.errorCallback;
+        new_req.shutdown_callback = RobotsContext.shutdownCallback;
 
         log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
-        try transfer.client.request(.{
-            .ctx = robots_ctx,
-            .params = params,
-            .header_callback = RobotsContext.headerCallback,
-            .data_callback = RobotsContext.dataCallback,
-            .done_callback = RobotsContext.doneCallback,
-            .error_callback = RobotsContext.errorCallback,
-            .shutdown_callback = RobotsContext.shutdownCallback,
-        }, transfer.owner);
+        try transfer.client.request(new_req, transfer.owner);
     } else {
         // Already one in flight, just queue behind.
         try entry.value_ptr.append(self.allocator, transfer);
@@ -160,7 +153,7 @@ fn flushPending(self: *RobotsLayer, robots_url: [:0]const u8, allowed: bool) voi
 
     for (queued.value.items) |transfer| {
         if (!allowed) {
-            log.warn(.http, "blocked by robots", .{ .url = transfer.url });
+            log.warn(.http, "blocked by robots", .{ .url = transfer.req.url });
             transfer.abort(error.RobotsBlocked);
         } else {
             // Reset ownership: handing back to the layer chain. If a downstream
@@ -207,7 +200,7 @@ const RobotsContext = struct {
         const self: *RobotsContext = @ptrCast(@alignCast(response.ctx));
         switch (response.inner) {
             .transfer => |t| {
-                if (t.response_header) |hdr| {
+                if (t.res.header) |hdr| {
                     log.debug(.browser, "robots status", .{ .status = hdr.status, .robots_url = self.robots_url });
                     self.status = hdr.status;
                 }
@@ -246,7 +239,7 @@ const RobotsContext = struct {
                     };
                     if (robots) |r| {
                         try network.robot_store.put(robots_url, r);
-                        const path = URL.getPathname(l.pending.get(robots_url).?.items[0].req.params.url);
+                        const path = URL.getPathname(l.pending.get(robots_url).?.items[0].req.url);
                         allowed = r.isAllowed(path);
                     }
                 }
