@@ -46,6 +46,8 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const SessionIdGen = Incrementing(u32, "SID");
 const BrowserContextIdGen = Incrementing(u32, "BID");
+// webmcp tool invocation
+pub const InvocationIdGen = Incrementing(u32, "INV");
 
 // Generic so that we can inject mocks into it.
 const CDP = @This();
@@ -306,6 +308,7 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
         6 => switch (@as(u48, @bitCast(domain[0..6].*))) {
             asUint(u48, "Target") => return @import("domains/target.zig").processMessage(command),
             asUint(u48, "Audits") => return @import("domains/audits.zig").processMessage(command),
+            asUint(u48, "WebMCP") => return @import("domains/webmcp.zig").processMessage(command),
             else => {},
         },
         7 => switch (@as(u56, @bitCast(domain[0..7].*))) {
@@ -489,6 +492,11 @@ pub const BrowserContext = struct {
     // own message arena.
     pending_dialog_response: ?Notification.DialogResponse = null,
 
+    // webmcp tool invocation
+    invocation_id_gen: InvocationIdGen = .{},
+    // WebMCP domain state. Populated when `WebMCP.enable` is received.
+    webmcp_invocations: std.AutoHashMapUnmanaged(u32, *@import("domains/webmcp.zig").Invocation) = .empty,
+
     fn init(self: *BrowserContext, id: []const u8, cdp: *CDP) !void {
         const allocator = cdp.allocator;
 
@@ -569,6 +577,11 @@ pub const BrowserContext = struct {
                 transfer.abort(error.ClientDisconnect);
             }
         }
+
+        // Notify any CDP client waiting on an in-flight WebMCP invocation
+        // before the V8 context (and its promise callbacks) get torn down
+        // by browser.closeSession below.
+        @import("domains/webmcp.zig").cancelAllPending(self);
 
         for (self.isolated_worlds.items) |world| {
             world.deinit();
@@ -727,6 +740,26 @@ pub const BrowserContext = struct {
 
     pub fn runtimeDisable(self: *BrowserContext) void {
         self.notification.unregister(.runtime_console_message, self);
+    }
+
+    pub fn webmcpEnable(self: *BrowserContext) !void {
+        try self.notification.register(.model_context_tool_added, self, onModelContextToolAdded);
+        try self.notification.register(.model_context_tool_removed, self, onModelContextToolRemoved);
+    }
+
+    pub fn webmcpDisable(self: *BrowserContext) void {
+        self.notification.unregister(.model_context_tool_added, self);
+        self.notification.unregister(.model_context_tool_removed, self);
+    }
+
+    pub fn onModelContextToolAdded(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/webmcp.zig").onToolAdded(self, event);
+    }
+
+    pub fn onModelContextToolRemoved(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/webmcp.zig").onToolRemoved(self, event);
     }
 
     pub fn onFrameRemove(ctx: *anyopaque, _: Notification.FrameRemove) !void {

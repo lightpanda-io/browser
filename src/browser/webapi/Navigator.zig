@@ -27,6 +27,7 @@ const PluginArray = @import("PluginArray.zig");
 const Permissions = @import("Permissions.zig");
 const StorageManager = @import("StorageManager.zig");
 const NavigatorUAData = @import("NavigatorUAData.zig");
+const ModelContext = @import("ModelContext.zig");
 
 const log = lp.log;
 
@@ -76,6 +77,10 @@ pub fn getStorage(self: *Navigator) *StorageManager {
 
 pub fn getUserAgentData(self: *Navigator) *NavigatorUAData {
     return &self._ua_data;
+}
+
+pub fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
+    return &frame.window._model_context;
 }
 
 pub fn getBattery(_: *const Navigator, frame: *Frame) !js.Promise {
@@ -189,6 +194,7 @@ pub const JsApi = struct {
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
+    pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{});
 };
 
 const testing = @import("../../testing.zig");

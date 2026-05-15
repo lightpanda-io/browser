@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=model_context_exists>
+  // navigator.modelContext exists and is SameObject (per spec)
+  testing.expectEqual(true, navigator.modelContext !== undefined);
+  testing.expectEqual(true, navigator.modelContext === navigator.modelContext);
+  testing.expectEqual(false, navigator.modelContext === navigator);
+</script>
+
+<script id=register_minimal>
+{
+  // Minimum required fields: name, description, execute
+  navigator.modelContext.registerTool({
+    name: 'minimal',
+    description: 'minimal tool',
+    execute: async () => ({ ok: true }),
+  });
+
+  // Same name re-registered -> InvalidStateError
+  testing.withError((err) => {
+    testing.expectEqual('InvalidStateError', err.name);
+  }, () => {
+    navigator.modelContext.registerTool({
+      name: 'minimal',
+      description: 'minimal tool',
+      execute: async () => ({ ok: true }),
+    });
+  });
+}
+</script>
+
+<script id=register_full>
+  // All optional fields populated
+  navigator.modelContext.registerTool({
+    name: 'search_products',
+    title: 'Search Products',
+    description: 'Search the product catalog',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+      },
+      required: ['query'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      untrustedContentHint: false,
+    },
+    execute: async (input, client) => ({ results: [] }),
+  });
+  testing.expectTrue(true);
+</script>
+
+<script id=name_validation_empty>
+  testing.withError((err) => {
+    testing.expectEqual('InvalidStateError', err.name);
+  }, () => {
+    navigator.modelContext.registerTool({
+      name: '',
+      description: 'd',
+      execute: async () => null,
+    });
+  });
+</script>
+
+<script id=name_validation_too_long>
+  testing.withError((err) => {
+    testing.expectEqual('InvalidStateError', err.name);
+  }, () => {
+    navigator.modelContext.registerTool({
+      name: 'a'.repeat(129),
+      description: 'd',
+      execute: async () => null,
+    });
+  });
+</script>
+
+<script id=name_validation_invalid_chars>
+  for (const bad of ['has space', 'has@symbol', 'has/slash', 'has!bang']) {
+    testing.withError((err) => {
+      testing.expectEqual('InvalidStateError', err.name);
+    }, () => {
+      navigator.modelContext.registerTool({
+        name: bad,
+        description: 'd',
+        execute: async () => null,
+      });
+    });
+  }
+</script>
+
+<script id=name_validation_allowed_specials>
+  // _, -, . are all allowed
+  navigator.modelContext.registerTool({
+    name: 'tool_with-various.chars123',
+    description: 'd',
+    execute: async () => null,
+  });
+  testing.expectTrue(true);
+</script>
+
+<script id=description_validation_empty>
+  testing.withError((err) => {
+    testing.expectEqual('InvalidStateError', err.name);
+  }, () => {
+    navigator.modelContext.registerTool({
+      name: 'empty_desc',
+      description: '',
+      execute: async () => null,
+    });
+  });
+</script>
+
+<script id=name_at_boundary>
+  // 128 chars is allowed
+  navigator.modelContext.registerTool({
+    name: 'a'.repeat(128),
+    description: 'd',
+    execute: async () => null,
+  });
+  testing.expectTrue(true);
+</script>
+
+<script id=abort_signal_unregisters>
+{
+  const controller = new AbortController();
+  navigator.modelContext.registerTool({
+    name: 'abortable',
+    description: 'd',
+    execute: async () => null,
+  }, { signal: controller.signal });
+
+  // While the signal is alive, re-registering the same name throws.
+  testing.withError((err) => {
+    testing.expectEqual('InvalidStateError', err.name);
+  }, () => {
+    navigator.modelContext.registerTool({
+      name: 'abortable',
+      description: 'd',
+      execute: async () => null,
+    });
+  });
+
+  // After abort, re-registering is allowed.
+  controller.abort();
+  navigator.modelContext.registerTool({
+    name: 'abortable',
+    description: 'd',
+    execute: async () => null,
+  });
+  testing.expectTrue(true);
+}
+</script>
+
+<script id=pre_aborted_signal_noop>
+{
+  const controller = new AbortController();
+  controller.abort();
+
+  // Pre-aborted signal -> registration is a silent no-op, no throw.
+  navigator.modelContext.registerTool({
+    name: 'pre_aborted',
+    description: 'd',
+    execute: async () => null,
+  }, { signal: controller.signal });
+
+  // Name was never actually registered, so we can register it fresh:
+  navigator.modelContext.registerTool({
+    name: 'pre_aborted',
+    description: 'd',
+    execute: async () => null,
+  });
+  testing.expectTrue(true);
+}
+</script>
