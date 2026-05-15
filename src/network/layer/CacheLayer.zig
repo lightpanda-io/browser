@@ -36,6 +36,7 @@ const log = lp.log;
 const CacheLayer = @This();
 
 next: Layer = undefined,
+disabled: bool = false,
 
 pub fn layer(self: *CacheLayer) Layer {
     return .{
@@ -50,7 +51,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     const self: *CacheLayer = @ptrCast(@alignCast(ptr));
     const req = &transfer.req;
 
-    if (req.params.method != .GET) {
+    if (self.disabled or req.params.method != .GET) {
         return self.next.request(transfer);
     }
 
