@@ -31,10 +31,10 @@
 const std = @import("std");
 
 const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
 const Notification = @import("../../Notification.zig");
 
 const AbortSignal = @import("AbortSignal.zig");
+const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
     return &.{ ModelContext, ModelContextClient };
@@ -56,6 +56,7 @@ pub const Annotations = struct {
 };
 
 pub const Tool = struct {
+    ctx: *ModelContext,
     name: []const u8,
     title: ?[]const u8,
     description: []const u8,
@@ -66,6 +67,10 @@ pub const Tool = struct {
     // fires. Checked lazily on each `tools()` / `findTool()` call — fine
     // for headless usage where there's no synchronous observer to notify.
     signal: ?*AbortSignal,
+
+    pub fn markAborted(self: *Tool, exec: *const Execution) !void {
+        try self.ctx.markAborted(self, exec);
+    }
 };
 
 const ToolDict = struct {
@@ -85,7 +90,7 @@ pub fn registerTool(
     self: *ModelContext,
     tool: ToolDict,
     options_: ?RegisterToolOptions,
-    frame: *Frame,
+    exec: *const Execution,
 ) !void {
     try validateName(tool.name);
     if (tool.description.len == 0) {
@@ -104,16 +109,16 @@ pub fn registerTool(
     // Reject duplicate names. The spec says `InvalidStateError`. We compact
     // the list lazily here so a tool whose signal already aborted doesn't
     // block re-registering under the same name.
-    self.compactAborted(frame);
     for (self._tools.items) |existing| {
         if (std.mem.eql(u8, existing.name, tool.name)) {
             return error.InvalidStateError;
         }
     }
 
-    const arena = frame.arena;
+    const arena = exec.arena;
     const entry = try arena.create(Tool);
     entry.* = .{
+        .ctx = self,
         .name = try arena.dupe(u8, tool.name),
         .title = if (tool.title) |t| try arena.dupe(u8, t) else null,
         .description = try arena.dupe(u8, tool.description),
@@ -123,25 +128,31 @@ pub fn registerTool(
         .signal = options.signal,
     };
 
+    if (entry.signal) |s| {
+        try s._dependents.append(arena, .{ .model_context_tool = entry });
+    }
     try self._tools.append(arena, entry);
 
     // Fire `model_context_tool_added` so observers (CDP `WebMCP` domain,
     // native MCP forwarder) can surface the new tool.
-    const event: Notification.ModelContextToolEvent = .{ .frame = frame, .tool = entry };
-    frame._session.notification.dispatch(.model_context_tool_added, &event);
+    const event: Notification.ModelContextToolEvent = .{ .exec = exec, .tool = entry };
+
+    const session = switch (exec.context.global) {
+        inline else => |g| g._session,
+    };
+
+    session.notification.dispatch(.model_context_tool_added, &event);
 }
 
 /// Snapshot of currently-registered tools, with aborted entries filtered.
 /// Used by the CDP `WebMCP.enable` replay and the native MCP forwarder.
-pub fn tools(self: *ModelContext, frame: *Frame) []const *Tool {
-    self.compactAborted(frame);
+pub fn tools(self: *ModelContext) []const *Tool {
     return self._tools.items;
 }
 
 /// Look up a tool by name. Returns null if not found or if its signal has
 /// fired. Used by CDP `WebMCP.invokeTool`.
-pub fn findTool(self: *ModelContext, frame: *Frame, name: []const u8) ?*Tool {
-    self.compactAborted(frame);
+pub fn findTool(self: *ModelContext, name: []const u8) ?*Tool {
     for (self._tools.items) |t| {
         if (std.mem.eql(u8, t.name, name)) return t;
     }
@@ -151,17 +162,19 @@ pub fn findTool(self: *ModelContext, frame: *Frame, name: []const u8) ?*Tool {
 /// Walk the tool list and remove any whose `AbortSignal` has fired,
 /// dispatching `model_context_tool_removed` for each. Cheap when no
 /// signals fired (which is the common case).
-fn compactAborted(self: *ModelContext, frame: *Frame) void {
+fn markAborted(self: *ModelContext, tool: *Tool, exec: *const Execution) !void {
+    const session = switch (exec.context.global) {
+        inline else => |g| g._session,
+    };
+
     var i: usize = 0;
     while (i < self._tools.items.len) {
         const t = self._tools.items[i];
-        if (t.signal) |signal| {
-            if (signal._aborted) {
-                _ = self._tools.swapRemove(i);
-                const event: Notification.ModelContextToolEvent = .{ .frame = frame, .tool = t };
-                frame._session.notification.dispatch(.model_context_tool_removed, &event);
-                continue;
-            }
+        if (t == tool) {
+            _ = self._tools.swapRemove(i);
+            const event: Notification.ModelContextToolEvent = .{ .exec = exec, .tool = t };
+            session.notification.dispatch(.model_context_tool_removed, &event);
+            return;
         }
         i += 1;
     }
@@ -191,10 +204,12 @@ pub const ModelContextClient = struct {
     pub fn requestUserInteraction(
         _: *ModelContextClient,
         callback: js.Function,
-        frame: *Frame,
+        exec: *const Execution,
     ) !js.Promise {
-        const local = frame.js.local.?;
-        const resolver = local.createPromiseResolver();
+        var ls: js.Local.Scope = undefined;
+        exec.context.global.getJs().localScope(&ls);
+        defer ls.deinit();
+        const resolver = ls.local.createPromiseResolver();
 
         var caught: js.TryCatch.Caught = undefined;
         if (callback.tryCall(js.Value, .{}, &caught)) |result| {

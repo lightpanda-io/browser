@@ -25,6 +25,7 @@ const Transfer = @import("browser/HttpClient.zig").Transfer;
 const Response = @import("browser/HttpClient.zig").Response;
 
 const log = lp.log;
+const Execution = js.Execution;
 const List = std.DoublyLinkedList;
 const Allocator = std.mem.Allocator;
 
@@ -231,7 +232,7 @@ pub const JavascriptDialogOpening = struct {
 };
 
 pub const ModelContextToolEvent = struct {
-    frame: *Frame,
+    exec: *const Execution,
     tool: *const ModelContextTool,
 };
 

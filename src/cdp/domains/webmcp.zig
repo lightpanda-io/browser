@@ -65,7 +65,7 @@ fn enable(cmd: *CDP.Command) !void {
     // frame only; subframes will be added when they register.
     if (bc.session.currentFrame()) |frame| {
         const mc = frame.window.getModelContext();
-        const tools = mc.tools(frame);
+        const tools = mc.tools();
         if (tools.len > 0) {
             var ls: js.Local.Scope = undefined;
             frame.js.localScope(&ls);
@@ -102,7 +102,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
     const frame_id = try id.parseFrameId(params.frameId);
     const frame = bc.session.findFrameByFrameId(frame_id) orelse return error.FrameNotFound;
     const mc = frame.window.getModelContext();
-    const tool = mc.findTool(frame, params.toolName) orelse return error.NotFound;
+    const tool = mc.findTool(params.toolName) orelse return error.NotFound;
 
     // Stringify the input once. We send it back to the client via
     // `toolInvoked.input` and pass the parsed form into the JS callback.
@@ -256,12 +256,18 @@ pub fn onToolAdded(
     bc: *CDP.BrowserContext,
     event: *const Notification.ModelContextToolEvent,
 ) !void {
+    const global = event.exec.context.global;
+
     var ls: js.Local.Scope = undefined;
-    event.frame.js.localScope(&ls);
+    global.getJs().localScope(&ls);
     defer ls.deinit();
 
+    const frame_id = switch (global) {
+        inline else => |g| g._frame_id,
+    };
+
     const writer = ToolWriter{
-        .frame_id = id.toFrameId(event.frame._frame_id),
+        .frame_id = id.toFrameId(frame_id),
         .tools = &.{event.tool},
         .local = &ls.local,
     };
@@ -274,9 +280,12 @@ pub fn onToolRemoved(
     bc: *CDP.BrowserContext,
     event: *const Notification.ModelContextToolEvent,
 ) !void {
+    const frame_id = switch (event.exec.context.global) {
+        inline else => |g| g._frame_id,
+    };
     try bc.cdp.sendEvent("WebMCP.toolsRemoved", .{
         .tools = &.{
-            .{ .name = event.tool.name, .frameId = id.toFrameId(event.frame._frame_id) },
+            .{ .name = event.tool.name, .frameId = id.toFrameId(frame_id) },
         },
     }, .{ .session_id = bc.session_id });
 }
