@@ -75,7 +75,6 @@ fn enable(cmd: *CDP.Command) !void {
                 .frame_id = id.toFrameId(frame._frame_id),
                 .tools = tools,
                 .local = &ls.local,
-                .arena = cmd.arena,
             };
             try bc.cdp.sendEvent("WebMCP.toolsAdded", .{ .tools = writer }, .{ .session_id = bc.session_id });
         }
@@ -254,7 +253,6 @@ fn respondError(
 }
 
 pub fn onToolAdded(
-    arena: Allocator,
     bc: *CDP.BrowserContext,
     event: *const Notification.ModelContextToolEvent,
 ) !void {
@@ -266,7 +264,6 @@ pub fn onToolAdded(
         .frame_id = id.toFrameId(event.frame._frame_id),
         .tools = &.{event.tool},
         .local = &ls.local,
-        .arena = arena,
     };
     try bc.cdp.sendEvent("WebMCP.toolsAdded", .{
         .tools = writer,
@@ -491,7 +488,6 @@ const ToolWriter = struct {
     frame_id: [14]u8,
     tools: []const *const ModelContext.Tool,
     local: *const js.Local,
-    arena: Allocator,
 
     pub fn jsonStringify(self: *const ToolWriter, w: anytype) !void {
         try w.beginArray();
@@ -505,10 +501,8 @@ const ToolWriter = struct {
             try w.write(t.description);
 
             try w.objectField("inputSchema");
-            if (t.input_schema) |schema_global| {
-                const schema_obj = schema_global.local(self.local);
-                const schema_json = schema_obj.toValue().toJson(self.arena) catch "{}";
-                try w.print("{s}", .{schema_json});
+            if (t.input_schema) |is| {
+                try w.write(is.local(self.local).toValue());
             } else {
                 try w.beginObject();
                 try w.endObject();

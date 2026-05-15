@@ -754,8 +754,7 @@ pub const BrowserContext = struct {
 
     pub fn onModelContextToolAdded(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        defer self.resetNotificationArena();
-        return @import("domains/webmcp.zig").onToolAdded(self.notification_arena, self, event);
+        return @import("domains/webmcp.zig").onToolAdded(self, event);
     }
 
     pub fn onModelContextToolRemoved(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
