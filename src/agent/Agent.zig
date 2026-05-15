@@ -324,6 +324,7 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
         },
     };
     if (text) |t| self.terminal.printAssistant(t) else self.terminal.printInfo("(no response from model)");
+    self.pruneMessages();
     return true;
 }
 
@@ -603,6 +604,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
                     return false;
                 };
                 if (text) |t| self.terminal.printAssistant(t);
+                self.pruneMessages();
             },
             else => {
                 self.terminal.printInfoFmt("[{d}] {s}", .{ entry.line_num, entry.raw_line });
@@ -906,8 +908,10 @@ fn rebuildMessageArena(self: *Agent) void {
 }
 
 /// Returned text lives in `message_arena`, so it's only valid until the
-/// next prune. `null` means the model emitted nothing even after the
-/// synthesis turn.
+/// next prune. The caller is responsible for calling `pruneMessages()`
+/// after consuming the returned text — pruning earlier would free the
+/// arena the slice points into. `null` means the model emitted nothing
+/// even after the synthesis turn.
 fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     const ma = self.message_arena.allocator();
 
@@ -1037,7 +1041,9 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         break :blk if (synth.text) |text| try ma.dupe(u8, text) else null;
     };
 
-    self.pruneMessages();
+    // NB: pruning is deferred to the caller. `final_text` is allocated in
+    // `message_arena`, and `pruneMessages` may rebuild that arena — running
+    // it here would hand the caller a dangling slice.
     return final_text;
 }
 
