@@ -940,6 +940,40 @@ test "Jar: forRequest" {
     // the 'global2' cookie
 }
 
+test "Jar: forRequest SameSite=Strict on cross-site navigation" {
+    const expectCookies = struct {
+        fn expect(expected: []const u8, jar: *Jar, target_url: [:0]const u8, opts: Jar.LookupOpts) !void {
+            var arr: std.ArrayList(u8) = .empty;
+            defer arr.deinit(testing.allocator);
+            try jar.forRequest(target_url, arr.writer(testing.allocator), opts);
+            try testing.expectEqual(expected, arr.items);
+        }
+    }.expect;
+
+    var jar = Jar.init(testing.allocator);
+    defer jar.deinit();
+
+    const victim_url: [:0]const u8 = "http://victim.example/";
+    try jar.add(try Cookie.parse(testing.allocator, victim_url, "sid=STRICT_COOKIE; Path=/; SameSite=Strict"), std.time.timestamp(), true);
+
+    // Same-site navigation: cookie included.
+    try expectCookies("sid=STRICT_COOKIE", &jar, "http://victim.example/transfer", .{
+        .origin_url = victim_url,
+        .is_http = true,
+    });
+
+    // Cross-site navigation from attacker.test: cookie excluded.
+    try expectCookies("", &jar, "http://victim.example/transfer", .{
+        .origin_url = "http://attacker.test/strict-form",
+        .is_http = true,
+    });
+
+    // Browser-initiated navigation (origin_url=null) is treated as same-site.
+    try expectCookies("sid=STRICT_COOKIE", &jar, "http://victim.example/transfer", .{
+        .is_http = true,
+    });
+}
+
 test "Cookie: parse key=value" {
     try expectError(error.Empty, null, "");
     try expectError(error.InvalidByteSequence, null, &.{ 'a', 30, '=', 'b' });
