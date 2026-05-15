@@ -111,6 +111,7 @@ pub fn init(
         .blocking_read_start = CDP.blockingReadStart,
         .blocking_read = CDP.blockingRead,
         .blocking_read_end = CDP.blockingReadStop,
+        .has_buffered_input = CDP.hasBufferedInput,
     });
 }
 
@@ -149,15 +150,27 @@ pub fn blockingReadStop(ctx: *anyopaque) bool {
     return true;
 }
 
+pub fn hasBufferedInput(ctx: *anyopaque) bool {
+    const self: *CDP = @ptrCast(@alignCast(ctx));
+    return self.ws.bufferedBytes() > 0;
+}
+
 pub fn readSocket(self: *CDP) bool {
-    const n = self.ws.read() catch |err| {
+    // Use tryRead, not read, so that if the socket has no new bytes (because
+    // we already drained them while a backpressured send was waiting in
+    // WsConnection.send) we still process whatever is buffered instead of
+    // logging an error and bailing. See lightpanda-io/browser#2462.
+    const result = self.ws.tryRead() catch |err| {
         log.warn(.app, "CDP read", .{ .err = err });
         return false;
     };
 
-    if (n == 0) {
-        log.info(.app, "CDP disconnect", .{});
-        return false;
+    switch (result) {
+        .closed => {
+            log.info(.app, "CDP disconnect", .{});
+            return false;
+        },
+        .data, .no_new_data => {},
     }
 
     return self.ws.processMessages(self) catch false;
@@ -574,7 +587,13 @@ pub const BrowserContext = struct {
             );
             http_client.interception_layer.intercepted -= 1;
             if (http_client.findTransfer(transfer_id)) |transfer| {
-                transfer.abort(error.ClientDisconnect);
+                // `kill` (not `abort`) fires shutdown_callback (or no-op),
+                // not error_callback. error_callback re-enters JS via XHR
+                // / script error handlers, which crash because the
+                // inspector + V8 context this BC owns are about to be
+                // torn down (and partially already are: we just called
+                // `inspector.stopSession`). See lightpanda-io/browser#2462.
+                transfer.kill();
             }
         }
 

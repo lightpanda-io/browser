@@ -288,22 +288,41 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
 }
 
 pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource {
-    const entry = self.imported_modules.getEntry(url) orelse {
-        // It shouldn't be possible for v8 to ask for a module that we didn't
-        // `preloadImport` above.
-        return error.UnknownModule;
-    };
-
     const was_evaluating = self.is_evaluating;
     self.is_evaluating = true;
     defer self.is_evaluating = was_evaluating;
 
     var client = self.client;
     while (true) {
+        // Re-fetch the entry on every iteration. We can't cache the pointer
+        // outside the loop: the CDP-drain step below (re-)enters JS, which
+        // can call back into `preloadImport` for a transitively-imported
+        // module. `preloadImport` calls `imported_modules.getOrPut`, which
+        // may rehash the map and invalidate every existing entry pointer.
+        // A cached `entry` would then be a use-after-free on the next
+        // `entry.value_ptr.state` access. See lightpanda-io/browser#2462.
+        const entry = self.imported_modules.getEntry(url) orelse {
+            // It shouldn't be possible for v8 to ask for a module that we
+            // didn't `preloadImport` above.
+            return error.UnknownModule;
+        };
+
         switch (entry.value_ptr.state) {
             .loading => {
-                _ = try client.tick(200);
-                continue;
+                // Drain pending CDP messages every iteration. Without this,
+                // a script imported under `Fetch.enable` whose request is
+                // paused at the InterceptionLayer hangs forever: the CDP
+                // client's matching `Fetch.continueRequest` reply never
+                // reaches `CDP.processMessage`, the request never resumes,
+                // and this loop spins until the client times out.
+                // `syncRequest` already does this; the import path needs
+                // the same treatment. See lightpanda-io/browser#2462.
+                const status = try client.tick(200);
+                if (status == .cdp_socket) {
+                    if (client.cdp_client) |cdp| {
+                        _ = cdp.blocking_read(cdp.ctx);
+                    }
+                }
             },
             .done => |script| {
                 var shared = false;
