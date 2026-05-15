@@ -450,3 +450,36 @@ jobs:
       - run: chmod a+x ./lightpanda
 
       - run: ./lightpanda fetch https://demo-browser.lightpanda.io/campfire-commerce/
+
+  mcp-smoke:
+    name: mcp smoke
+    needs: zig-build-release
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: lightpanda-build-release
+
+      - run: chmod a+x ./lightpanda
+
+      - name: jsonrpc round trip over stdio
+        run: |
+          set -euo pipefail
+
+          timeout 30 ./lightpanda mcp > mcp.out <<'JSONRPC'
+          {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1.0.0"}}}
+          {"jsonrpc":"2.0","method":"notifications/initialized"}
+          {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+          JSONRPC
+
+          cat mcp.out
+
+          grep '"id":1' mcp.out \
+            | jq -e '.result.protocolVersion == "2024-11-05"' > /dev/null
+
+          grep '"id":2' mcp.out \
+            | jq -e '.result.tools | type == "array" and length > 0' > /dev/null
