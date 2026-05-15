@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const Frame = @import("Frame.zig");
 
 const CssParser = @import("css/Parser.zig");
+const MediaQuery = @import("css/MediaQuery.zig");
 const Element = @import("webapi/Element.zig");
 
 const Selector = @import("webapi/selector/Selector.zig");
@@ -78,8 +79,14 @@ pub fn deinit(self: *StyleManager) void {
 fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
     if (sheet._css_rules) |css_rules| {
         for (css_rules._rules.items) |rule| {
-            const style_rule = rule.is(CSSStyleRule) orelse continue;
-            try self.addRule(style_rule);
+            switch (rule._type) {
+                .style => |sr| try self.addRule(sr),
+                // Re-parse the stored source so an `@media` rule inserted via
+                // `insertRule` / `replaceSync` participates in the cascade
+                // when its query matches the viewport.
+                .media => try self.applyMediaAtRule(rule._text),
+                else => {},
+            }
         }
         return;
     }
@@ -89,13 +96,52 @@ fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
         const text = try style.asNode().getTextContentAlloc(self.arena);
         var it = CssParser.parseStylesheet(text);
         while (it.next()) |parsed_rule| {
-            // StyleManager only filters on regular style rules (display,
-            // visibility, opacity). At-rules don't carry top-level
-            // declarations relevant here -- skip them.
             switch (parsed_rule) {
                 .style => |s| try self.addRawRule(s.selector, s.block),
-                .at_rule => {},
+                .at_rule => |a| {
+                    // Only `@media` participates in the cascade here. Other
+                    // at-rules (`@keyframes`, `@supports`, `@font-face`, …)
+                    // don't carry top-level declarations relevant to the
+                    // visibility filter and stay skipped as before.
+                    if (std.ascii.eqlIgnoreCase(a.keyword, "media")) {
+                        try self.applyMediaAtRule(a.text);
+                    }
+                },
             }
+        }
+    }
+}
+
+/// Apply an `@media` at-rule by evaluating its query against the current
+/// viewport and, if it matches, parsing the inner block as if its declarations
+/// lived at the top level. Non-matching queries silently drop the inner
+/// rules. Inline-only by design: external `<link rel="stylesheet">` is out
+/// of scope for the headless engine.
+fn applyMediaAtRule(self: *StyleManager, text: []const u8) !void {
+    // text shape: `@media <query> { <inner> }` (guaranteed by
+    // `CssParser.RulesIterator.consumeAtRule` for block at-rules — the span
+    // starts at `@` and ends after the matching close `}`).
+    if (text.len < @as(usize, "@media".len) + 2) return;
+    if (!std.ascii.eqlIgnoreCase(text[0.."@media".len], "@media")) return;
+
+    var rest = text["@media".len..];
+    const open = std.mem.indexOfScalar(u8, rest, '{') orelse return;
+    const query = std.mem.trim(u8, rest[0..open], &std.ascii.whitespace);
+
+    if (rest.len == 0 or rest[rest.len - 1] != '}') return;
+    const inner = rest[open + 1 .. rest.len - 1];
+
+    if (!MediaQuery.matches(query, MediaQuery.Viewport.default())) return;
+
+    var it = CssParser.parseStylesheet(inner);
+    while (it.next()) |nested_rule| {
+        switch (nested_rule) {
+            .style => |s| try self.addRawRule(s.selector, s.block),
+            .at_rule => |nested| {
+                if (std.ascii.eqlIgnoreCase(nested.keyword, "media")) {
+                    try self.applyMediaAtRule(nested.text);
+                }
+            },
         }
     }
 }

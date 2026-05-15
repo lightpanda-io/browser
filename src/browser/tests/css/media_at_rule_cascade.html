@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<head>
+  <script src="../testing.js"></script>
+</head>
+
+<!--
+  Inline `@media` rules are evaluated against the hardcoded viewport
+  (1920×1080). When the query matches, the inner declarations participate
+  in the visibility cascade exactly as if they were written at the top
+  level. When it doesn't, they are dropped.
+
+  Out of scope: external `<link rel="stylesheet">` fetch, dynamic viewport
+  emulation. Those remain unimplemented per the headless engine's design.
+-->
+
+<style>
+  /* Matches: 1920px ≥ 768px → #hide-on-desktop should be hidden. */
+  @media (min-width: 768px) {
+    #hide-on-desktop { display: none; }
+  }
+  /* Doesn't match: 1920px > 767px → #hide-on-mobile stays visible. */
+  @media (max-width: 767px) {
+    #hide-on-mobile { display: none; }
+  }
+  /* Comma-OR: at least one branch matches → #hidden-by-or hidden. */
+  @media (max-width: 100px), (min-width: 600px) {
+    #hidden-by-or { display: none; }
+  }
+  /* Neither branch matches → #not-hidden-by-or stays visible. */
+  @media (max-width: 100px), (min-width: 3000px) {
+    #not-hidden-by-or { display: none; }
+  }
+  /* Negation: matches when the inner query doesn't.
+     `not print` → matches on screen → #hidden-by-not hidden. */
+  @media not print {
+    #hidden-by-not { display: none; }
+  }
+  /* Bare type match: screen always matches in this engine. */
+  @media screen {
+    #hidden-by-screen { display: none; }
+  }
+  /* Nested @media — both must match (outer screen + inner min-width). */
+  @media screen {
+    @media (min-width: 600px) {
+      #hidden-by-nested { display: none; }
+    }
+  }
+  /* Unsupported feature → query doesn't match → element stays visible. */
+  @media (prefers-color-scheme: dark) {
+    #not-hidden-unsupported { display: none; }
+  }
+  /* visibility:hidden inside @media. */
+  @media (min-width: 1px) {
+    #visibility-hidden-cascade { visibility: hidden; }
+  }
+</style>
+
+<body>
+  <div id="hide-on-desktop">desktop</div>
+  <div id="hide-on-mobile">mobile</div>
+  <div id="hidden-by-or">or-hit</div>
+  <div id="not-hidden-by-or">or-miss</div>
+  <div id="hidden-by-not">not-hit</div>
+  <div id="hidden-by-screen">screen-hit</div>
+  <div id="hidden-by-nested">nested-hit</div>
+  <div id="not-hidden-unsupported">unsupported</div>
+  <div id="visibility-hidden-cascade">visibility</div>
+  <div id="dyn-target">dyn-target</div>
+  <style id="dyn"></style>
+</body>
+
+<script id=cascade_matching_query_hides>
+{
+  testing.expectFalse($('#hide-on-desktop').checkVisibility());
+}
+</script>
+
+<script id=cascade_non_matching_query_does_not_hide>
+{
+  testing.expectTrue($('#hide-on-mobile').checkVisibility());
+}
+</script>
+
+<script id=cascade_comma_is_or_hit>
+{
+  testing.expectFalse($('#hidden-by-or').checkVisibility());
+}
+</script>
+
+<script id=cascade_comma_is_or_miss>
+{
+  testing.expectTrue($('#not-hidden-by-or').checkVisibility());
+}
+</script>
+
+<script id=cascade_not_negates>
+{
+  testing.expectFalse($('#hidden-by-not').checkVisibility());
+}
+</script>
+
+<script id=cascade_bare_type_matches>
+{
+  testing.expectFalse($('#hidden-by-screen').checkVisibility());
+}
+</script>
+
+<script id=cascade_nested_media>
+{
+  testing.expectFalse($('#hidden-by-nested').checkVisibility());
+}
+</script>
+
+<script id=cascade_unsupported_feature_is_false>
+{
+  testing.expectTrue($('#not-hidden-unsupported').checkVisibility());
+}
+</script>
+
+<script id=cascade_visibility_hidden>
+{
+  // checkVisibility() defaults to checkVisibilityCSS only (display), so a
+  // visibility:hidden element still reports visible by default.
+  // Use the `visibilityProperty: true` option to include it.
+  testing.expectTrue($('#visibility-hidden-cascade').checkVisibility());
+  testing.expectFalse(
+    $('#visibility-hidden-cascade').checkVisibility({ visibilityProperty: true })
+  );
+}
+</script>
+
+<script id=cascade_dynamic_insertRule_matching>
+{
+  const sheet = $('#dyn').sheet;
+  const index = sheet.insertRule(
+    '@media (min-width: 600px) { #dyn-target { display: none; } }', 0
+  );
+  testing.expectEqual(0, index);
+  testing.expectFalse($('#dyn-target').checkVisibility());
+}
+</script>
+
+<script id=cascade_cssRules_surface>
+{
+  // Even when the @media rule's declarations apply to the cascade, the
+  // rule is still exposed via cssRules as a CSSRule with type MEDIA_RULE (4).
+  // CSS-in-JS libraries deduplicate on cssRules — keep that surface intact.
+  const sheet = $('#dyn').sheet;
+  const rule = sheet.cssRules[0];
+  testing.expectEqual(4, rule.type);
+}
+</script>

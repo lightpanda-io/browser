@@ -6,24 +6,101 @@
 <body>
 </body>
 
+<!--
+  The viewport reported by window.innerWidth / innerHeight is currently
+  hardcoded at 1920×1080. matchMedia evaluates against the same dimensions.
+-->
+
 <script id=matchMedia_basic>
 {
   const mql = window.matchMedia('(min-width: 600px)');
   testing.expectEqual('object', typeof mql);
   testing.expectEqual('(min-width: 600px)', mql.media);
+  testing.expectEqual(true, mql.matches);
+}
+</script>
+
+<script id=matchMedia_min_width_above_viewport>
+{
+  const mql = window.matchMedia('(min-width: 3000px)');
+  testing.expectEqual('(min-width: 3000px)', mql.media);
   testing.expectEqual(false, mql.matches);
 }
 </script>
 
-<script id=matchMedia_different_queries>
+<script id=matchMedia_max_width>
 {
-  const mql1 = window.matchMedia('(max-width: 1024px)');
-  testing.expectEqual('(max-width: 1024px)', mql1.media);
-  testing.expectEqual(false, mql1.matches);
+  const below = window.matchMedia('(max-width: 1024px)');
+  testing.expectEqual('(max-width: 1024px)', below.media);
+  testing.expectEqual(false, below.matches);
 
-  const mql2 = window.matchMedia('(prefers-color-scheme: dark)');
-  testing.expectEqual('(prefers-color-scheme: dark)', mql2.media);
-  testing.expectEqual(false, mql2.matches);
+  const above = window.matchMedia('(max-width: 2000px)');
+  testing.expectEqual(true, above.matches);
+}
+</script>
+
+<script id=matchMedia_orientation>
+{
+  // 1920×1080 is landscape.
+  testing.expectEqual(true, window.matchMedia('(orientation: landscape)').matches);
+  testing.expectEqual(false, window.matchMedia('(orientation: portrait)').matches);
+}
+</script>
+
+<script id=matchMedia_media_types>
+{
+  testing.expectEqual(true, window.matchMedia('all').matches);
+  testing.expectEqual(true, window.matchMedia('screen').matches);
+  testing.expectEqual(false, window.matchMedia('print').matches);
+}
+</script>
+
+<script id=matchMedia_unsupported_feature>
+{
+  // Unknown features evaluate to false per Media Queries Level 4.
+  testing.expectEqual(false, window.matchMedia('(prefers-color-scheme: dark)').matches);
+  testing.expectEqual(false, window.matchMedia('(hover: hover)').matches);
+}
+</script>
+
+<script id=matchMedia_combined>
+{
+  testing.expectEqual(true,  window.matchMedia('screen and (min-width: 600px)').matches);
+  testing.expectEqual(false, window.matchMedia('print and (min-width: 600px)').matches);
+  testing.expectEqual(true,  window.matchMedia('(min-width: 600px) and (max-width: 2000px)').matches);
+}
+</script>
+
+<script id=matchMedia_comma_is_or>
+{
+  testing.expectEqual(true, window.matchMedia('print, screen').matches);
+  testing.expectEqual(true, window.matchMedia('(max-width: 100px), (min-width: 600px)').matches);
+  testing.expectEqual(false, window.matchMedia('(max-width: 100px), (min-width: 3000px)').matches);
+}
+</script>
+
+<script id=matchMedia_not>
+{
+  testing.expectEqual(true,  window.matchMedia('not print').matches);
+  testing.expectEqual(false, window.matchMedia('not screen').matches);
+  testing.expectEqual(false, window.matchMedia('not (min-width: 600px)').matches);
+}
+</script>
+
+<script id=matchMedia_only>
+{
+  // `only` is a legacy hint to old parsers; behaves as no-op for modern engines.
+  testing.expectEqual(true, window.matchMedia('only screen').matches);
+  testing.expectEqual(true, window.matchMedia('only screen and (min-width: 600px)').matches);
+}
+</script>
+
+<script id=matchMedia_em_units>
+{
+  // 1em = 16px. 30em = 480px ≤ 1920px → matches.
+  testing.expectEqual(true,  window.matchMedia('(min-width: 30em)').matches);
+  // 121em = 1936px > 1920px → does not match.
+  testing.expectEqual(false, window.matchMedia('(min-width: 121em)').matches);
 }
 </script>
 
