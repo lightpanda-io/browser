@@ -96,6 +96,7 @@ end2end:
 ## Remove build artifacts (keeps v8/ and zig-pkg/ — slow to re-fetch)
 clean:
 	rm -rf zig-out .zig-cache src/snapshot.bin
+	cd src/html5ever && cargo clean
 
 # Install and build required dependencies commands
 # ------------
