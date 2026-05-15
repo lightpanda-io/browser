@@ -345,11 +345,40 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
 
 fn isValidSessionId(self: *const CDP, input_session_id: []const u8) bool {
     const browser_context = &(self.browser_context orelse return false);
+    // A pending-dispose bc is logically gone from the client's POV --
+    // commands on its session_id should reject like any other unknown
+    // session, not silently route into a half-alive context.
+    if (browser_context.pending_dispose) return false;
     const session_id = browser_context.session_id orelse return false;
     return std.mem.eql(u8, session_id, input_session_id);
 }
 
+// Finish a deferred `disposeBrowserContext` if one is pending and the
+// eval frame that blocked it has unwound. Returns true if the bc was
+// flushed (or there was none). Returns false if a pending dispose
+// remains (eval still on stack -- caller must surface that to the user).
+fn flushPendingDispose(self: *CDP) bool {
+    const bc = &(self.browser_context orelse return true);
+    if (!bc.pending_dispose) return true;
+    if (bc.session.currentPage()) |page| {
+        if (page.frame.anyScriptEvaluating()) return false;
+    }
+    bc.deinit();
+    self.browser.closeSession();
+    self.browser_context = null;
+    _ = self.browser_context_arena.reset(.{ .retain_with_limit = 1024 * 16 });
+    return true;
+}
+
 pub fn createBrowserContext(self: *CDP) ![]const u8 {
+    // Drain any deferred dispose first. Without this, a Playwright-style
+    // `ctx.close(); newContext()` sequence rejects with AlreadyExists
+    // forever once the original close hit the deferred branch in
+    // `disposeBrowserContext` -- the comment there says "deferred to
+    // CDP.deinit at connection close," but long-lived CDP connections
+    // (Playwright `connectOverCDP`) never close between contexts.
+    _ = self.flushPendingDispose();
+
     if (self.browser_context != null) {
         return error.AlreadyExists;
     }
@@ -370,10 +399,11 @@ pub fn disposeBrowserContext(self: *CDP, browser_context_id: []const u8) bool {
     // Reentrant teardown from a CDP message drained inside HttpClient.syncRequest.
     // Tearing down the browser context here would free Session/Page state
     // that the unwinding script-eval frame above us is about to dereference
-    // (see Session.removePage's matching guard). Defer cleanup to
-    // CDP.deinit at connection close, by which time eval has unwound.
+    // (see Session.removePage's matching guard). Mark the bc for deferred
+    // cleanup; the next `createBrowserContext` (or `deinit`) drains it.
     if (bc.session.currentPage()) |page| {
         if (page.frame.anyScriptEvaluating()) {
+            bc.pending_dispose = true;
             return true;
         }
     }
@@ -468,6 +498,13 @@ pub const BrowserContext = struct {
 
     http_proxy_changed: bool = false,
     user_agent_changed: bool = false,
+
+    // Set by `disposeBrowserContext` when teardown is deferred because
+    // a script eval is on the stack (`page.frame.anyScriptEvaluating()`).
+    // Drained on the next `createBrowserContext` (and treated as a
+    // hard "already-disposed" signal by `isValidSessionId` so commands
+    // on the old session_id reject instead of routing to a half-alive bc).
+    pending_dispose: bool = false,
 
     // Extra headers to add to all requests.
     extra_headers: std.ArrayList([*c]const u8) = .empty,
