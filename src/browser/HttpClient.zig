@@ -170,6 +170,12 @@ pub const CDPClient = struct {
     blocking_read_start: *const fn (*anyopaque) bool,
     blocking_read: *const fn (*anyopaque) bool,
     blocking_read_end: *const fn (*anyopaque) bool,
+    // Returns true if the CDP client has bytes already buffered (typically
+    // rescued from the socket while a synchronous send was backpressured;
+    // see WsConnection.send). When true, perform() returns .cdp_socket so
+    // the runner drains them even if the OS recv buffer is empty. See
+    // lightpanda-io/browser#2462.
+    has_buffered_input: *const fn (*anyopaque) bool,
 };
 
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: ?CDPClient) !void {
@@ -413,7 +419,8 @@ pub fn _request(_: *anyopaque, transfer: *Transfer) !void {
 // inside this function, we free it before returning the error. Callers
 // must NOT pair `request()` with their own `errdefer headers.deinit()`
 // — that's a double-free.
-pub fn request(self: *Client, req: Request, owner: ?*Owner) !void {
+pub fn request(self: *Client, req_in: Request, owner: ?*Owner) !void {
+    var req = req_in;
     const arena = self.arena_pool.acquire(.small, "Request.arena") catch |err| {
         req.params.headers.deinit();
         return err;
@@ -660,21 +667,36 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
 
     // We're potentially going to block for a while until we get data. Process
     // whatever messages we have waiting ahead of time.
-    if (try self.processMessages()) {
-        return .normal;
-    }
+    const processed = try self.processMessages();
 
     var status = PerformStatus.normal;
     if (self.cdp_client) |cdp_client| {
+        // Bytes may have been rescued from the CDP socket while a
+        // synchronous send was backpressured (see WsConnection.send). The
+        // OS recv buffer is empty in that case, but we still owe the
+        // dispatcher a chance to process them. See
+        // lightpanda-io/browser#2462.
+        if (cdp_client.has_buffered_input(cdp_client.ctx)) {
+            return .cdp_socket;
+        }
+
+        // Even when we processed completion messages this round, do a
+        // non-blocking poll of the CDP socket so a steady stream of HTTP
+        // completions can't starve CDP reads. Without this, a flood of
+        // intercepted/proxied transfers can leave Fetch.continueRequest
+        // messages unread for seconds at a time.
+        const cdp_timeout: c_int = if (processed) 0 else timeout_ms;
         var wait_fds = [_]http.WaitFd{.{
             .fd = cdp_client.socket,
             .events = .{ .pollin = true },
             .revents = .{},
         }};
-        try self.handles.poll(&wait_fds, timeout_ms);
+        try self.handles.poll(&wait_fds, cdp_timeout);
         if (wait_fds[0].revents.pollin or wait_fds[0].revents.pollpri or wait_fds[0].revents.pollout) {
             status = .cdp_socket;
         }
+    } else if (processed) {
+        return .normal;
     } else if (running > 0) {
         try self.handles.poll(&.{}, timeout_ms);
     }
@@ -932,7 +954,7 @@ pub const RequestParams = struct {
         }
     };
 
-    pub fn deinit(self: *const RequestParams) void {
+    pub fn deinit(self: *RequestParams) void {
         self.headers.deinit();
     }
 };
@@ -970,7 +992,7 @@ pub const Request = struct {
         return written.ptr[0..written.len :0];
     }
 
-    pub fn deinit(self: *const Request) void {
+    pub fn deinit(self: *Request) void {
         self.params.deinit();
     }
 };
@@ -1157,6 +1179,22 @@ pub const Transfer = struct {
     }
 
     pub fn deinit(self: *Transfer) void {
+        // Use `transfers.remove` as a one-shot ownership claim. If it
+        // returns false, this transfer has already been deinit'd by a
+        // cascade out of `error_callback` (e.g. Script.errorCallback ->
+        // manager.evaluate() -> JS execution -> Frame.deinit ->
+        // abortOwner -> Transfer.kill -> Transfer.deinit). Returning
+        // here keeps us from double-freeing the arena. See
+        // lightpanda-io/browser#2462.
+        //
+        // Reading `self.id` and `self.client` after a prior deinit has
+        // released `self.arena` is technically a stale read, but
+        // arena_pool zombies the memory until the slot is handed out
+        // again. If by some race the slot were re-used between the two
+        // deinits, the new tenant's id would not be in `transfers`
+        // either, so the early-out still fires and we bail cleanly.
+        if (!self.client.transfers.remove(self.id)) return;
+
         if (self._conn) |conn| {
             self.client.removeConn(conn);
             self._conn = null;
@@ -1170,10 +1208,6 @@ pub const Transfer = struct {
             self.client.queue.remove(&self._node);
             self._queued = false;
         }
-
-        // Drop the id→*Transfer index entry before freeing the memory.
-        // Any concurrent CDP lookup by id will now see this transfer as gone.
-        _ = self.client.transfers.remove(self.id);
 
         self.req.deinit();
         if (self.owner) |o| {
@@ -1201,8 +1235,12 @@ pub const Transfer = struct {
 
     // Owner-driven teardown: fires shutdown_callback (not error_callback)
     // and otherwise behaves like abort. Called by Client.abortOwner /
-    // abortRequests when a Frame / WGS is being torn down.
-    fn kill(self: *Transfer) void {
+    // abortRequests when a Frame / WGS is being torn down, and from
+    // BrowserContext.deinit when the CDP connection drops with paused
+    // intercepts still outstanding -- in both cases firing error_callback
+    // would re-enter JS via XHR/script error handlers, and the inspector
+    // / V8 context the handler reaches into has already been torn down.
+    pub fn kill(self: *Transfer) void {
         if (self.req.shutdown_callback) |cb| {
             cb(self.req.ctx);
         }
