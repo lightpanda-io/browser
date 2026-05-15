@@ -24,18 +24,43 @@ const js = @import("../js/js.zig");
 const Event = @import("Event.zig");
 const EventTarget = @import("EventTarget.zig");
 const DOMException = @import("DOMException.zig");
+const ModelContextTool = @import("ModelContext.zig").Tool;
 
 const log = lp.log;
 const Execution = js.Execution;
 
 const AbortSignal = @This();
 
+const Dependend = union(enum) {
+    signal: *AbortSignal,
+    model_context_tool: *ModelContextTool,
+
+    fn markAborted(self: Dependend, reason_: ?Reason, exec: *const Execution) !void {
+        switch (self) {
+            .signal => |dep| {
+                if (dep._aborted) return;
+                try dep.markAborted(reason_, exec);
+            },
+            .model_context_tool => |dep| {
+                try dep.markAborted(exec);
+            },
+        }
+    }
+
+    fn dispatchAbortEvent(self: Dependend, exec: *const Execution) !void {
+        switch (self) {
+            .signal => |dep| try dep.dispatchAbortEvent(exec),
+            .model_context_tool => {},
+        }
+    }
+};
+
 _proto: *EventTarget,
 _aborted: bool = false,
 _is_dependent: bool = false,
 _reason: Reason = .undefined,
 _on_abort: ?js.Function.Global = null,
-_dependents: std.ArrayList(*AbortSignal) = .{},
+_dependents: std.ArrayList(Dependend) = .{},
 _source_signals: std.ArrayList(*AbortSignal) = .{},
 
 pub fn init(exec: *const Execution) !*AbortSignal {
@@ -74,9 +99,8 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !void
     // Per spec: mark all direct dependents aborted (with this signal's reason)
     // BEFORE firing any abort events. The graph is flattened at any() creation,
     // so we never need to recurse here.
-    var to_dispatch: std.ArrayList(*AbortSignal) = .{};
+    var to_dispatch: std.ArrayList(Dependend) = .{};
     for (self._dependents.items) |dep| {
-        if (dep._aborted) continue;
         try dep.markAborted(self._reason, exec);
         try to_dispatch.append(exec.arena, dep);
     }
@@ -136,11 +160,11 @@ pub fn createAny(signals: []const *AbortSignal, exec: *const Execution) !*AbortS
 
     for (signals) |source| {
         if (!source._is_dependent) {
-            try source._dependents.append(exec.arena, result);
+            try source._dependents.append(exec.arena, .{ .signal = result });
             try result._source_signals.append(exec.arena, source);
         } else {
             for (source._source_signals.items) |s| {
-                try s._dependents.append(exec.arena, result);
+                try s._dependents.append(exec.arena, .{ .signal = result });
                 try result._source_signals.append(exec.arena, s);
             }
         }
