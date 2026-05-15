@@ -85,52 +85,55 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
     // Stash scripts user want to inject.
     session.inject_scripts = opts.inject_script.items;
 
-    const frame = try session.createPage();
+    {
+        const frame = try session.createPage();
+        // frame isn't safe to use after navigate, it can be swapped out
 
-    // // Comment this out to get a profile of the JS code in v8/profile.json.
-    // // You can open this in Chrome's profiler.
-    // // I've seen it generate invalid JSON, but I'm not sure why. It
-    // // happens rarely, and I manually fix the file.
-    // frame.js.startCpuProfiler();
-    // defer {
-    //     if (frame.js.stopCpuProfiler()) |profile| {
-    //         std.fs.cwd().writeFile(.{
-    //             .sub_path = ".lp-cache/cpu_profile.json",
-    //             .data = profile,
-    //         }) catch |err| {
-    //             log.err(.app, "profile write error", .{ .err = err });
-    //         };
-    //     } else |err| {
-    //         log.err(.app, "profile error", .{ .err = err });
-    //     }
-    // }
+        // // Comment this out to get a profile of the JS code in v8/profile.json.
+        // // You can open this in Chrome's profiler.
+        // // I've seen it generate invalid JSON, but I'm not sure why. It
+        // // happens rarely, and I manually fix the file.
+        // frame.js.startCpuProfiler();
+        // defer {
+        //     if (frame.js.stopCpuProfiler()) |profile| {
+        //         std.fs.cwd().writeFile(.{
+        //             .sub_path = ".lp-cache/cpu_profile.json",
+        //             .data = profile,
+        //         }) catch |err| {
+        //             log.err(.app, "profile write error", .{ .err = err });
+        //         };
+        //     } else |err| {
+        //         log.err(.app, "profile error", .{ .err = err });
+        //     }
+        // }
 
-    // // Comment this out to get a heap V8 heap profil
-    // frame.js.startHeapProfiler();
-    // defer {
-    //     if (frame.js.stopHeapProfiler()) |profile| {
-    //         std.fs.cwd().writeFile(.{
-    //             .sub_path = ".lp-cache/allocating.heapprofile",
-    //             .data = profile.@"0",
-    //         }) catch |err| {
-    //             log.err(.app, "allocating write error", .{ .err = err });
-    //         };
-    //         std.fs.cwd().writeFile(.{
-    //             .sub_path = ".lp-cache/snapshot.heapsnapshot",
-    //             .data = profile.@"1",
-    //         }) catch |err| {
-    //             log.err(.app, "heapsnapshot write error", .{ .err = err });
-    //         };
-    //     } else |err| {
-    //         log.err(.app, "profile error", .{ .err = err });
-    //     }
-    // }
+        // // Comment this out to get a heap V8 heap profil
+        // frame.js.startHeapProfiler();
+        // defer {
+        //     if (frame.js.stopHeapProfiler()) |profile| {
+        //         std.fs.cwd().writeFile(.{
+        //             .sub_path = ".lp-cache/allocating.heapprofile",
+        //             .data = profile.@"0",
+        //         }) catch |err| {
+        //             log.err(.app, "allocating write error", .{ .err = err });
+        //         };
+        //         std.fs.cwd().writeFile(.{
+        //             .sub_path = ".lp-cache/snapshot.heapsnapshot",
+        //             .data = profile.@"1",
+        //         }) catch |err| {
+        //             log.err(.app, "heapsnapshot write error", .{ .err = err });
+        //         };
+        //     } else |err| {
+        //         log.err(.app, "profile error", .{ .err = err });
+        //     }
+        // }
 
-    const encoded_url = try URL.ensureEncoded(frame.call_arena, url, "UTF-8");
-    _ = try frame.navigate(encoded_url, .{
-        .reason = .address_bar,
-        .kind = .{ .push = null },
-    });
+        const encoded_url = try URL.ensureEncoded(frame.call_arena, url, "UTF-8");
+        _ = try frame.navigate(encoded_url, .{
+            .reason = .address_bar,
+            .kind = .{ .push = null },
+        });
+    }
     var runner = try session.runner(.{});
 
     var timer = try std.time.Timer.start();
@@ -159,7 +162,11 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
     }
 
     const writer = opts.writer orelse return;
-    if (opts.dump_mode) |mode| {
+    if (opts.dump_mode) |mode| blk: {
+        const frame = session.currentFrame() orelse {
+            try writer.writeAll("Frame closed. Please open a bug report including the URL\n");
+            break :blk;
+        };
         switch (mode) {
             .html => try dump.root(frame.window._document, opts.dump, writer, frame),
             .markdown => try markdown.dump(frame.window._document.asNode(), .{}, writer, frame),

@@ -555,3 +555,126 @@
     testing.expectTrue(cssText.includes('}'));
 }
 </script>
+
+<script id="CSSStyleSheet_insertRule_keyframes_surfaces">
+{
+    // Regression test for #2459: at-rules must surface in cssRules so that
+    // CSS-in-JS libraries (styled-components, emotion, ...) don't fall back
+    // to per-render <style> element injection. Before the fix insertRule
+    // silently swallowed at-rules and returned a fake index, leaving
+    // cssRules.length at 0.
+    const sheet = new CSSStyleSheet();
+
+    const idx = sheet.insertRule('@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }');
+    testing.expectEqual(0, idx);
+    testing.expectEqual(1, sheet.cssRules.length);
+
+    const rule = sheet.cssRules[0];
+    testing.expectEqual(CSSRule.KEYFRAMES_RULE, rule.type);
+    testing.expectTrue(rule.cssText.includes('@keyframes'));
+    testing.expectTrue(rule.cssText.includes('spin'));
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_media_surfaces">
+{
+    const sheet = new CSSStyleSheet();
+
+    const idx = sheet.insertRule('@media screen and (min-width: 600px) { .test { color: red; } }');
+    testing.expectEqual(0, idx);
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual(CSSRule.MEDIA_RULE, sheet.cssRules[0].type);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_atrule_mixed_with_style">
+{
+    // CSS-in-JS dedup paths read back cssRules.length and per-index types
+    // after insertion; both must be correct when style and at-rules are
+    // interleaved.
+    const sheet = new CSSStyleSheet();
+
+    sheet.insertRule('.first { color: red; }', 0);
+    sheet.insertRule('@keyframes spin { from {} to {} }', 1);
+    sheet.insertRule('.last { color: blue; }', 2);
+
+    testing.expectEqual(3, sheet.cssRules.length);
+    testing.expectEqual(CSSRule.STYLE_RULE, sheet.cssRules[0].type);
+    testing.expectEqual(CSSRule.KEYFRAMES_RULE, sheet.cssRules[1].type);
+    testing.expectEqual(CSSRule.STYLE_RULE, sheet.cssRules[2].type);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_vendor_prefixed_keyframes">
+{
+    const sheet = new CSSStyleSheet();
+
+    sheet.insertRule('@-webkit-keyframes spin { from {} to {} }');
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual(CSSRule.KEYFRAMES_RULE, sheet.cssRules[0].type);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_supports_surfaces">
+{
+    const sheet = new CSSStyleSheet();
+
+    sheet.insertRule('@supports (display: grid) { .grid { display: grid; } }');
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual(CSSRule.SUPPORTS_RULE, sheet.cssRules[0].type);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_font_face_surfaces">
+{
+    const sheet = new CSSStyleSheet();
+
+    sheet.insertRule("@font-face { font-family: 'Test'; src: url('test.woff2'); }");
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual(CSSRule.FONT_FACE_RULE, sheet.cssRules[0].type);
+}
+</script>
+
+<script id="CSSStyleSheet_replaceSync_preserves_atrules">
+{
+    // replaceSync goes through the same parser path; at-rules in the
+    // replacement source should also surface in cssRules.
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync('.a { color: red; } @keyframes spin { from {} to {} } .b { color: blue; }');
+
+    testing.expectEqual(3, sheet.cssRules.length);
+    testing.expectEqual(CSSRule.STYLE_RULE, sheet.cssRules[0].type);
+    testing.expectEqual(CSSRule.KEYFRAMES_RULE, sheet.cssRules[1].type);
+    testing.expectEqual(CSSRule.STYLE_RULE, sheet.cssRules[2].type);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_atrule_repeated_no_growth">
+{
+    // The CSS-in-JS dedup pattern: insert a hash-keyed at-rule, read back
+    // cssRules to check whether it's already there, skip if so. Before the
+    // fix the read-back was always empty, so the library re-inserted every
+    // render -- and (separately) created a fresh <style> element each time.
+    // After the fix the read-back finds the rule and the library can dedup.
+    const sheet = new CSSStyleSheet();
+
+    sheet.insertRule('@keyframes spin { from {} to {} }');
+    testing.expectEqual(1, sheet.cssRules.length);
+
+    // Library checks cssRules and finds the rule -- doesn't re-insert.
+    const exists = Array.from(sheet.cssRules).some(
+        r => r.type === CSSRule.KEYFRAMES_RULE && r.cssText.includes('spin')
+    );
+    testing.expectTrue(exists);
+}
+</script>
+
+<script id="CSSStyleSheet_insertRule_unknown_at_rule_typed_as_zero">
+{
+  const sheet = new CSSStyleSheet();
+  sheet.insertRule('@layer utilities { .x { color: red; } }');
+  testing.expectEqual(1, sheet.cssRules.length);
+  testing.expectEqual(0, sheet.cssRules[0].type);
+  testing.expectTrue(sheet.cssRules[0].cssText.includes('@layer'));
+}
+</script>

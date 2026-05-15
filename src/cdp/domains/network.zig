@@ -55,7 +55,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     switch (action) {
         .enable => return enable(cmd),
         .disable => return disable(cmd),
-        .setCacheDisabled => return cmd.sendResult(null, .{}),
+        .setCacheDisabled => return setCacheDisabled(cmd),
         .setUserAgentOverride => return @import("emulation.zig").setUserAgentOverride(cmd),
         .setExtraHTTPHeaders => return setExtraHTTPHeaders(cmd),
         .deleteCookies => return deleteCookies(cmd),
@@ -79,6 +79,17 @@ fn enable(cmd: *CDP.Command) !void {
 fn disable(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     bc.networkDisable();
+    return cmd.sendResult(null, .{});
+}
+
+fn setCacheDisabled(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        cacheDisabled: bool,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const client = &bc.cdp.browser.http_client;
+    client.cache_layer.disabled = params.cacheDisabled;
     return cmd.sendResult(null, .{});
 }
 
@@ -733,4 +744,43 @@ test "cdp.Network: canClearBrowserCache" {
 
     // Cache is disabled in standard tests for now.
     try ctx.expectSentResult(.{ .result = false }, .{ .id = 1 });
+}
+
+test "cdp.Network: setCacheDisabled disables cache" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-CD1" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.setCacheDisabled",
+        .params = .{ .cacheDisabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const client = ctx.cdp().browser.http_client;
+    try testing.expectEqual(true, client.cache_layer.disabled);
+}
+
+test "cdp.Network: setCacheDisabled re-enables cache" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-CD2" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.setCacheDisabled",
+        .params = .{ .cacheDisabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Network.setCacheDisabled",
+        .params = .{ .cacheDisabled = false },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    const client = ctx.cdp().browser.http_client;
+    try testing.expectEqual(false, client.cache_layer.disabled);
 }

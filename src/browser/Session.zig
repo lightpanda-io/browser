@@ -258,6 +258,10 @@ fn installNewActivePage(self: *Session, frame_id: u32) !*Frame {
 // the pointer on Frame is just returned as a convenience
 pub fn createPage(self: *Session) !*Frame {
     lp.assert(self._active == null, "Session.createPage - page not null", .{});
+
+    // Drain any pending Page deinits now, while we're at a known-safe point
+    self.processQueuedDestroyed();
+
     if (comptime IS_DEBUG) {
         log.debug(.browser, "create page", .{});
     }
