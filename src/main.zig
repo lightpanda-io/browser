@@ -67,7 +67,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             return std.process.cleanExit();
         },
         .agent => |opts| if (opts.list_models) {
-            try lp.agent.Agent.listModels(allocator, opts);
+            try lp.Agent.listModels(allocator, opts);
             return std.process.cleanExit();
         },
         else => {},
@@ -187,10 +187,17 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
         .agent => |opts| {
             log.info(.app, "starting agent", .{});
 
+            // Ctrl-C cancels the current turn; signals never kill the
+            // process. `/quit` (or Ctrl-D on an empty prompt) exits.
+            sighandler.no_hard_exit = true;
+
+            var sig_bridge: lp.Agent.SigBridge = .{};
+            try sighandler.on(lp.Agent.SigBridge.onSignal, .{&sig_bridge});
+
             var failed: bool = false;
             var cancelled: bool = false;
             {
-                var worker_thread = try std.Thread.spawn(.{}, agentThread, .{ allocator, app, opts, &failed, &cancelled });
+                var worker_thread = try std.Thread.spawn(.{}, agentThread, .{ allocator, app, opts, &failed, &cancelled, &sig_bridge });
                 defer worker_thread.join();
 
                 app.network.run();
@@ -203,10 +210,10 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
     }
 }
 
-fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent, failed: *bool, cancelled: *bool) void {
+fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent, failed: *bool, cancelled: *bool, sig_bridge: *lp.Agent.SigBridge) void {
     defer app.network.stop();
 
-    var agent_instance = lp.agent.Agent.init(allocator, app, opts) catch |err| {
+    var agent_instance = lp.Agent.init(allocator, app, opts) catch |err| {
         if (err == error.UserCancelled) {
             cancelled.* = true;
         } else {
@@ -215,6 +222,8 @@ fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent, fail
         }
         return;
     };
+    sig_bridge.attach(agent_instance);
+    defer sig_bridge.detach();
     defer agent_instance.deinit();
 
     if (!agent_instance.run()) {

@@ -46,7 +46,7 @@ pub const tools = @import("browser/tools.zig");
 pub const HttpClient = @import("browser/HttpClient.zig");
 
 pub const mcp = @import("mcp.zig");
-pub const agent = @import("agent.zig");
+pub const Agent = @import("agent/Agent.zig");
 pub const script = @import("script.zig");
 pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");

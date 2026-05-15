@@ -134,6 +134,7 @@ interactive: bool,
 one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
 slash_schemas: []const SlashCommand.SchemaInfo,
+cancel_requested: std.atomic.Value(bool) = .init(false),
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
     if (opts.task != null and opts.script_file != null) {
@@ -289,6 +290,51 @@ pub fn deinit(self: *Agent) void {
     self.allocator.destroy(self);
 }
 
+/// Called from the sighandler thread on Ctrl-C. Just sets the flag —
+/// no terminal or V8 touches from this thread. The agent thread polls
+/// `checkCancel` inside zenai's `runTools` (between turns and after each
+/// tool call) and unwinds cleanly when it sees the flag set.
+pub fn requestCancel(self: *Agent) void {
+    self.cancel_requested.store(true, .release);
+}
+
+/// Lives in main's stack so it can be registered with the sighandler
+/// before the agent thread exists. The agent attaches itself once it's
+/// constructed and detaches before deinit, so the sighandler-thread
+/// listener can fire safely whether or not an agent is currently up.
+pub const SigBridge = struct {
+    agent: std.atomic.Value(?*Agent) = .init(null),
+
+    pub fn attach(self: *SigBridge, agent: *Agent) void {
+        self.agent.store(agent, .release);
+    }
+
+    pub fn detach(self: *SigBridge) void {
+        self.agent.store(null, .release);
+    }
+
+    pub fn onSignal(self: *SigBridge) void {
+        const a = self.agent.load(.acquire) orelse return;
+        a.requestCancel();
+    }
+};
+
+fn checkCancel(ctx: *anyopaque) bool {
+    const self: *Agent = @ptrCast(@alignCast(ctx));
+    return self.cancel_requested.load(.acquire);
+}
+
+/// Roll the agent back to `baseline` messages, clear the V8 termination
+/// flag, drop the cancel signal, and surface `error.UserCancelled` to the
+/// caller. Caller is responsible for any spinner cleanup that hasn't
+/// already happened on its path.
+fn drainCancellation(self: *Agent, baseline: usize) error{UserCancelled} {
+    self.rollbackMessages(baseline);
+    self.tool_executor.browser.env.cancelTerminate();
+    self.cancel_requested.store(false, .release);
+    return error.UserCancelled;
+}
+
 /// One agent turn: the prompt sent to the model, plus optional context
 /// (a recorder comment to write before the turn, file attachments to bundle
 /// into the first user message, and a display label used in error output).
@@ -318,6 +364,11 @@ pub fn run(self: *Agent) bool {
 fn runTurn(self: *Agent, input: TurnInput) bool {
     const text = self.processUserMessage(input) catch |err| switch (err) {
         error.UnsupportedAttachment, error.AttachmentReadFailed => return false,
+        error.UserCancelled => {
+            self.terminal.printInfo("Interrupted.");
+            self.pruneMessages();
+            return false;
+        },
         else => {
             self.terminal.printErrorFmt("{s} failed: {s}", .{ input.label, @errorName(err) });
             return false;
@@ -339,8 +390,16 @@ fn runRepl(self: *Agent) void {
     }
 
     repl: while (true) {
+        // Ctrl-D returns null here. Ctrl-C is handled by the sighandler
+        // and never makes ic_readline return null.
         const line = Terminal.readLine("") orelse break;
         defer Terminal.freeLine(line);
+
+        // Slash commands and idle Ctrl-C set the cancel flag without
+        // clearing V8's terminate state; drain both before the next turn.
+        if (self.cancel_requested.swap(false, .acq_rel)) {
+            self.tool_executor.browser.env.cancelTerminate();
+        }
 
         if (line.len == 0) continue;
 
@@ -958,15 +1017,22 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             // Cap per-turn reasoning so thinking models don't burn
             // minutes per turn. Ignored by non-thinking models.
             .thinking_budget = 2048,
+            .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
         },
     ) catch |err| {
         self.terminal.spinner.cancel();
+        // Ctrl-C can land while runTools is unwinding an HTTP error —
+        // surface UserCancelled, not ApiError, so the user sees the
+        // outcome they asked for.
+        if (self.cancel_requested.load(.acquire)) return self.drainCancellation(msg_baseline);
         log.err(.app, "AI API error", .{ .err = err });
         self.rollbackMessages(msg_baseline);
         return error.ApiError;
     };
     self.terminal.spinner.stop();
     defer result.deinit();
+
+    if (result.cancelled) return self.drainCancellation(msg_baseline);
 
     if (self.recorder) |*r| if (r.isActive()) {
         // When the LLM tries multiple `extract` schemas in one turn, only the
@@ -1030,13 +1096,17 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 // and emit nothing as the final text. 512 tokens is enough
                 // for the model to pick its answer but not to freewheel.
                 .thinking_budget = 512,
+                .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
             },
         ) catch |err| {
+            if (self.cancel_requested.load(.acquire)) return self.drainCancellation(msg_baseline);
             log.err(.app, "AI synthesis error", .{ .err = err });
             self.rollbackMessages(synth_baseline);
             break :blk null;
         };
         defer synth.deinit();
+
+        if (synth.cancelled) return self.drainCancellation(msg_baseline);
 
         break :blk if (synth.text) |text| try ma.dupe(u8, text) else null;
     };
@@ -1381,4 +1451,8 @@ test "isHealAllowed: blocks goto and eval_js, allows page-local commands" {
     try std.testing.expect(isHealAllowed(.{ .select = .{ .selector = "#s", .value = "x" } }));
     try std.testing.expect(isHealAllowed(.{ .check = .{ .selector = "#c", .checked = true } }));
     try std.testing.expect(isHealAllowed(.{ .scroll = .{ .x = 0, .y = 100 } }));
+}
+
+test {
+    _ = @import("SlashCommand.zig");
 }
