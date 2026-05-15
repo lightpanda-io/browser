@@ -930,7 +930,7 @@ pub const Request = struct {
     headers: http.Headers,
     body: ?[]const u8 = null,
     cookie_jar: ?*CookieJar,
-    cookie_origin: [:0]const u8,
+    cookie_origin: ?[:0]const u8,
     resource_type: ResourceType,
     credentials: ?[:0]const u8 = null,
     notification: *Notification,

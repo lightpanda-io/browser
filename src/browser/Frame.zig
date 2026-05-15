@@ -667,7 +667,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .headers = headers,
         .body = opts.body,
         .cookie_jar = &session.cookie_jar,
-        .cookie_origin = self.url,
+        .cookie_origin = opts.initiator_url,
         .resource_type = .document,
         .notification = self._session.notification,
         .header_callback = frameHeaderDoneCallback,
@@ -768,8 +768,18 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     // runs (processRootQueuedNavigation rebuilds the Page in-place), so dup
     // into the QueuedNavigation arena which outlives that tear-down.
     var nav_opts = opts;
-    if (nav_opts.referer == null and std.mem.startsWith(u8, originator.url, "http")) {
-        nav_opts.referer = try arena.dupe(u8, originator.url);
+    if (std.mem.startsWith(u8, originator.url, "http")) {
+        // The same dup feeds two purposes: Referer header (subject to
+        // Referrer-Policy in the future) and SameSite computation (which
+        // must use the real initiator regardless of policy). We share the
+        // same allocation for both.
+        const dup = try arena.dupeZ(u8, originator.url);
+        if (nav_opts.referer == null) {
+            nav_opts.referer = dup;
+        }
+        if (nav_opts.initiator_url == null) {
+            nav_opts.initiator_url = dup;
+        }
     }
 
     const qn = try arena.create(QueuedNavigation);
@@ -1355,9 +1365,8 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
 
     new_frame.navigate(url, .{
         .reason = .initialFrameNavigation,
-        // Iframe's initial src request carries the parent's URL as Referer.
-        // Parent frame outlives this navigate() call, so the slice is safe.
         .referer = if (std.mem.startsWith(u8, self.url, "http")) self.url else null,
+        .initiator_url = if (std.mem.startsWith(u8, self.url, "http")) self.url else null,
     }) catch |err| {
         log.warn(.frame, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
@@ -3647,6 +3656,11 @@ pub const NavigateOpts = struct {
     // anchor click / form submit / location.href navigations carry a Referer.
     // null on CDP Page.navigate (address-bar) and Page.reload — matches Chrome.
     referer: ?[]const u8 = null,
+    // The URL of the document that initiated this navigation, used as the
+    // "site for cookies" when computing SameSite. Distinct from `referer`
+    // because a Referrer-Policy can suppress the Referer header without
+    // affecting SameSite (which always considers the real initiator).
+    initiator_url: ?[:0]const u8 = null,
     force: bool = false,
     kind: NavigationKind = .{ .push = null },
 };
