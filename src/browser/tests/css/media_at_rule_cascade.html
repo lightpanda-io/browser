@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<head>
+  <script src="../testing.js"></script>
+</head>
+
+<!--
+  Inline `@media` rules are evaluated against the hardcoded viewport
+  (1920×1080). When the query matches, the inner declarations participate
+  in the visibility cascade exactly as if they were written at the top
+  level. When it doesn't, they are dropped.
+
+  Out of scope: external `<link rel="stylesheet">` fetch, dynamic viewport
+  emulation. Those remain unimplemented per the headless engine's design.
+-->
+
+<style>
+  /* Matches: 1920px ≥ 768px → #hide-on-desktop should be hidden. */
+  @media (min-width: 768px) {
+    #hide-on-desktop { display: none; }
+  }
+  /* Doesn't match: 1920px > 767px → #hide-on-mobile stays visible. */
+  @media (max-width: 767px) {
+    #hide-on-mobile { display: none; }
+  }
+  /* Comma-OR: at least one branch matches → #hidden-by-or hidden. */
+  @media (max-width: 100px), (min-width: 600px) {
+    #hidden-by-or { display: none; }
+  }
+  /* Neither branch matches → #not-hidden-by-or stays visible. */
+  @media (max-width: 100px), (min-width: 3000px) {
+    #not-hidden-by-or { display: none; }
+  }
+  /* Negation: matches when the inner query doesn't.
+     `not print` → matches on screen → #hidden-by-not hidden. */
+  @media not print {
+    #hidden-by-not { display: none; }
+  }
+  /* Bare type match: screen always matches in this engine. */
+  @media screen {
+    #hidden-by-screen { display: none; }
+  }
+  /* Nested @media — both must match (outer screen + inner min-width). */
+  @media screen {
+    @media (min-width: 600px) {
+      #hidden-by-nested { display: none; }
+    }
+  }
+  /* Unsupported feature → query doesn't match → element stays visible. */
+  @media (prefers-color-scheme: dark) {
+    #not-hidden-unsupported { display: none; }
+  }
+  /* visibility:hidden inside @media. */
+  @media (min-width: 1px) {
+    #visibility-hidden-cascade { visibility: hidden; }
+  }
+  /* Comment-in-prelude: the brace inside the comment must not be mistaken
+     for the rule's opening brace. */
+  @media /* { fake */ (min-width: 1px) {
+    #commented-prelude { display: none; }
+  }
+  /* Comment-in-query: the prelude includes a comment between tokens. */
+  @media screen /*x*/ and (min-width: 1px) {
+    #commented-query { display: none; }
+  }
+  /* Comments inside the inner block (between declarations and inside a
+     declaration's value position). The outer `@media` evaluation must not
+     interfere with the CSS parser's own comment handling for the inner
+     block. */
+  @media (min-width: 600px) {
+    #inner-block-comments {
+      /* leading comment */
+      display: none; /* trailing comment */
+      /* between */
+      color: red;
+    }
+  }
+  /* Nested @media where the inner query does NOT match. Outer matches
+     (screen), inner doesn't (print) → inner declarations must be dropped. */
+  @media screen {
+    @media print {
+      #nested-inner-miss { display: none; }
+    }
+  }
+  /* Whitespace-heavy prelude — many spaces between tokens. */
+  @media   screen   and    (min-width:   100px)   {
+    #ws-heavy { display: none; }
+  }
+  /* Mixed-case at-keyword and tokens. */
+  @MEDIA SCREEN AND (MIN-WIDTH: 100PX) {
+    #upper-case { display: none; }
+  }
+</style>
+
+<body>
+  <div id="hide-on-desktop">desktop</div>
+  <div id="hide-on-mobile">mobile</div>
+  <div id="hidden-by-or">or-hit</div>
+  <div id="not-hidden-by-or">or-miss</div>
+  <div id="hidden-by-not">not-hit</div>
+  <div id="hidden-by-screen">screen-hit</div>
+  <div id="hidden-by-nested">nested-hit</div>
+  <div id="not-hidden-unsupported">unsupported</div>
+  <div id="visibility-hidden-cascade">visibility</div>
+  <div id="commented-prelude">commented-prelude</div>
+  <div id="commented-query">commented-query</div>
+  <div id="inner-block-comments">inner-block-comments</div>
+  <div id="nested-inner-miss">nested-inner-miss</div>
+  <div id="ws-heavy">ws-heavy</div>
+  <div id="upper-case">upper-case</div>
+  <div id="dyn-target">dyn-target</div>
+  <div id="dyn2-target">dyn2-target</div>
+  <div id="deep-nest-target">deep-nest-target</div>
+  <style id="dyn"></style>
+  <style id="dyn2"></style>
+  <style id="deep-nest-style"></style>
+</body>
+
+<script id=cascade_matching_query_hides>
+{
+  testing.expectFalse($('#hide-on-desktop').checkVisibility());
+}
+</script>
+
+<script id=cascade_non_matching_query_does_not_hide>
+{
+  testing.expectTrue($('#hide-on-mobile').checkVisibility());
+}
+</script>
+
+<script id=cascade_comma_is_or_hit>
+{
+  testing.expectFalse($('#hidden-by-or').checkVisibility());
+}
+</script>
+
+<script id=cascade_comma_is_or_miss>
+{
+  testing.expectTrue($('#not-hidden-by-or').checkVisibility());
+}
+</script>
+
+<script id=cascade_not_negates>
+{
+  testing.expectFalse($('#hidden-by-not').checkVisibility());
+}
+</script>
+
+<script id=cascade_bare_type_matches>
+{
+  testing.expectFalse($('#hidden-by-screen').checkVisibility());
+}
+</script>
+
+<script id=cascade_nested_media>
+{
+  testing.expectFalse($('#hidden-by-nested').checkVisibility());
+}
+</script>
+
+<script id=cascade_unsupported_feature_is_false>
+{
+  testing.expectTrue($('#not-hidden-unsupported').checkVisibility());
+}
+</script>
+
+<script id=cascade_visibility_hidden>
+{
+  // checkVisibility() defaults to checkVisibilityCSS only (display), so a
+  // visibility:hidden element still reports visible by default.
+  // Use the `visibilityProperty: true` option to include it.
+  testing.expectTrue($('#visibility-hidden-cascade').checkVisibility());
+  testing.expectFalse(
+    $('#visibility-hidden-cascade').checkVisibility({ visibilityProperty: true })
+  );
+}
+</script>
+
+<script id=cascade_dynamic_insertRule_matching>
+{
+  const sheet = $('#dyn').sheet;
+  const index = sheet.insertRule(
+    '@media (min-width: 600px) { #dyn-target { display: none; } }', 0
+  );
+  testing.expectEqual(0, index);
+  testing.expectFalse($('#dyn-target').checkVisibility());
+}
+</script>
+
+<script id=cascade_cssRules_surface>
+{
+  // Even when the @media rule's declarations apply to the cascade, the
+  // rule is still exposed via cssRules as a CSSRule with type MEDIA_RULE (4).
+  // CSS-in-JS libraries deduplicate on cssRules — keep that surface intact.
+  const sheet = $('#dyn').sheet;
+  const rule = sheet.cssRules[0];
+  testing.expectEqual(4, rule.type);
+}
+</script>
+
+<script id=cascade_commented_prelude>
+{
+  // `@media /* { fake */ (min-width: 1px)` — the brace inside the comment
+  // would otherwise fool a naive prelude/inner split.
+  testing.expectFalse($('#commented-prelude').checkVisibility());
+}
+</script>
+
+<script id=cascade_commented_query>
+{
+  // Comments between query tokens must be stripped before evaluation.
+  testing.expectFalse($('#commented-query').checkVisibility());
+}
+</script>
+
+<script id=cascade_replaceSync_matching>
+{
+  // The _css_rules path also fires through replaceSync, not just insertRule.
+  $('#dyn2').sheet.replaceSync(
+    '@media (min-width: 600px) { #dyn2-target { display: none; } }'
+  );
+  testing.expectFalse($('#dyn2-target').checkVisibility());
+}
+</script>
+
+<script id=cascade_inner_block_comments>
+{
+  // Comments inside the inner block belong to the CSS parser's tokenizer,
+  // not to the media-query evaluator — they must not block the cascade.
+  testing.expectFalse($('#inner-block-comments').checkVisibility());
+}
+</script>
+
+<script id=cascade_nested_inner_miss>
+{
+  // Outer matches (screen), inner doesn't (print). The inner declarations
+  // must be dropped — the element stays visible.
+  testing.expectTrue($('#nested-inner-miss').checkVisibility());
+}
+</script>
+
+<script id=cascade_ws_heavy_prelude>
+{
+  testing.expectFalse($('#ws-heavy').checkVisibility());
+}
+</script>
+
+<script id=cascade_upper_case_keyword>
+{
+  // `@MEDIA SCREEN AND (MIN-WIDTH: 100PX)` should evaluate the same as the
+  // lower-case form — at-keywords, types, features, and units are all
+  // case-insensitive.
+  testing.expectFalse($('#upper-case').checkVisibility());
+}
+</script>
+
+<script id=cascade_deep_nesting_capped>
+{
+  // 50 levels of `@media screen { ... }` around a `display:none` rule. The
+  // depth guard (MAX_MEDIA_NESTING in StyleManager.zig) must short-circuit
+  // before the Zig stack is exhausted — and the inner rule sits beyond the
+  // cap, so the element stays visible.
+  let css = '';
+  for (let i = 0; i < 50; i++) css += '@media screen { ';
+  css += '#deep-nest-target { display: none; }';
+  for (let i = 0; i < 50; i++) css += ' }';
+  $('#deep-nest-style').sheet.replaceSync(css);
+  testing.expectTrue($('#deep-nest-target').checkVisibility());
+}
+</script>
