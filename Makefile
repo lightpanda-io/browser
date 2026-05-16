@@ -6,6 +6,11 @@ BC := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 # option test filter make test F="server"
 F=
 
+# Extra flags forwarded to every `$(ZIG) build` invocation. Most commonly used
+# to point at a prebuilt V8 archive and skip the multi-minute source rebuild:
+#   ZIGFLAGS=-Dprebuilt_v8_path=/path/to/libc_v8.a make test
+ZIGFLAGS ?=
+
 # OS and ARCH
 kernel = $(shell uname -ms)
 ifeq ($(kernel), Darwin arm64)
@@ -52,19 +57,19 @@ help:
 ## Build v8 snapshot
 build-v8-snapshot:
 	@printf "\033[36mBuilding v8 snapshot (release safe)...\033[0m\n"
-	@$(ZIG) build -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@$(ZIG) build $(ZIGFLAGS) -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
 
 ## Build in release-fast mode
 build: build-v8-snapshot
 	@printf "\033[36mBuilding (release fast)...\033[0m\n"
-	@$(ZIG) build -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@$(ZIG) build $(ZIGFLAGS) -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
 
 ## Build in debug mode
 build-dev:
 	@printf "\033[36mBuilding (debug)...\033[0m\n"
-	@$(ZIG) build || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@$(ZIG) build $(ZIGFLAGS) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
 
 ## Run the server in release mode
@@ -80,11 +85,11 @@ run-debug: build-dev
 ## Test - `grep` is used to filter out the huge compile command on build
 ifeq ($(OS), macos)
 test:
-	@script -q /dev/null sh -c 'TEST_FILTER="${F}" $(ZIG) build test -freference-trace' 2>&1 \
+	@script -q /dev/null sh -c 'TEST_FILTER="${F}" $(ZIG) build $(ZIGFLAGS) test -freference-trace' 2>&1 \
 		| grep --line-buffered -v "^/.*zig test -freference-trace"
 else
 test:
-	@script -qec 'TEST_FILTER="${F}" $(ZIG) build test -freference-trace' /dev/null 2>&1 \
+	@script -qec 'TEST_FILTER="${F}" $(ZIG) build $(ZIGFLAGS) test -freference-trace' /dev/null 2>&1 \
 		| grep --line-buffered -v "^/.*zig test -freference-trace"
 endif
 
