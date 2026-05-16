@@ -76,8 +76,10 @@ _pending: ?*Page = null,
 
 _queued_destroy: std.ArrayList(*Page) = .{},
 
-// IDs. Kept at Session level so IDs can remain unique across Page replacements.
-frame_id_gen: u32 = 0,
+// Loader IDs are scoped to the Session: each new BrowserContext gets a
+// fresh counter. Frame IDs (`frame_id_gen`) live on `Browser` instead so
+// CDP target IDs stay unique across BrowserContext lifecycle on a single
+// connection (see `Browser.frame_id_gen` and issue #2472).
 loader_id_gen: u32 = 0,
 
 // configuration (or CDP command) to disable iframe loading
@@ -165,10 +167,18 @@ fn destroyPage(self: *Session, page: *Page) void {
 
 // Tear down the currently-active Page. Dispatches `frame_remove` first
 // so CDP can clear inspector state while the OLD page is still walkable,
-// then frees the slot and notifies Navigation. Resets `frame_id_gen` to
-// match pre-pending-page behavior. Used by removePage and by the
-// synthetic-nav path (replaceRootImmediate). Does NOT touch any pending
-// page — callers handle that themselves.
+// then frees the slot and notifies Navigation. Used by removePage and
+// by the synthetic-nav path (replaceRootImmediate). Does NOT touch any
+// pending page — callers handle that themselves.
+//
+// Frame IDs are NOT reset here — the counter lives on `Browser` and is
+// monotonic for the lifetime of the CDP connection so target IDs stay
+// unique (issue #2472). The previous reset-to-zero behaviour was
+// invisible within a single Session/BrowserContext (the next
+// `installNewActivePage` was usually called with the old frame's
+// explicit `frame_id`, see `replaceRootImmediate`) but caused
+// `Duplicate target FID-...` collisions when a new BrowserContext
+// allocated its first page after dispose.
 //
 // NOT a substitute for the careful 5-step sequence in commitPendingPage,
 // which interleaves the OLD-page teardown with the pending-page promotion
@@ -186,7 +196,6 @@ fn tearDownActivePage(self: *Session) void {
     self.destroyPage(page);
     self._active = null;
     self.navigation.onRemoveFrame();
-    self.frame_id_gen = 0;
 }
 
 // Allocate a Page in a free slot, publish it as the active page, and
@@ -619,10 +628,11 @@ pub fn discardPendingPage(self: *Session) void {
     self.destroyPage(page);
 }
 
+// Frame IDs come from `Browser` (per-CDP-connection scope), not
+// `Session` (per-BrowserContext). Kept as a Session method so existing
+// callers (Frame, Worker) don't have to thread a Browser pointer.
 pub fn nextFrameId(self: *Session) u32 {
-    const id = self.frame_id_gen +% 1;
-    self.frame_id_gen = id;
-    return id;
+    return self.browser.nextFrameId();
 }
 
 pub fn nextLoaderId(self: *Session) u32 {
