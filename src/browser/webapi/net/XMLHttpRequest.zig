@@ -22,6 +22,7 @@ const js = @import("../../js/js.zig");
 
 const HttpClient = @import("../../HttpClient.zig");
 const http = @import("../../../network/http.zig");
+const Cors = @import("../../../network/Cors.zig");
 
 const URL = @import("../../URL.zig");
 const Mime = @import("../../Mime.zig");
@@ -469,8 +470,18 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
         };
     }
 
+    var allow_origin: ?[]const u8 = null;
+    var allow_credentials = false;
+
     var it = response.headerIterator();
     while (it.next()) |hdr| {
+        if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-origin")) {
+            allow_origin = hdr.value;
+        } else if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-credentials") and
+            std.ascii.eqlIgnoreCase(hdr.value, "true"))
+        {
+            allow_credentials = true;
+        }
         const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ hdr.name, hdr.value });
         try self._response_headers.append(self._arena, joined);
     }
@@ -480,9 +491,23 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
         self._response_len = cl;
         try self._response_data.ensureTotalCapacity(self._arena, cl);
     }
+
     self._response_url = try self._arena.dupeZ(u8, response.url());
 
     const exec = self._exec;
+    const request_origin = URL.getOrigin(self._arena, exec.url.*) catch null;
+    const response_origin = URL.getOrigin(self._arena, self._response_url) catch null;
+    const cross_origin = if (request_origin != null and response_origin != null)
+        !std.mem.eql(u8, request_origin.?, response_origin.?)
+    else
+        false;
+
+    if (cross_origin) {
+        if (!Cors.isResponseAllowed(allow_origin, allow_credentials, request_origin.?, self._with_credentials)) {
+            response.abort(error.CorsBlocked);
+            return false;
+        }
+    }
 
     var ls: js.Local.Scope = undefined;
     exec.context.localScope(&ls);

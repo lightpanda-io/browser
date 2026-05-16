@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const HttpClient = @import("../../HttpClient.zig");
+const Cors = @import("../../../network/Cors.zig");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
@@ -43,6 +44,7 @@ _response: *Response,
 _resolver: js.PromiseResolver.Global,
 _owns_response: bool,
 _signal: ?*AbortSignal,
+_allow_credentials: bool,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
@@ -74,6 +76,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         ._response = response,
         ._owns_response = true,
         ._signal = request._signal,
+        ._allow_credentials = request._credentials == .include,
     };
 
     const session = exec.context.page.session;
@@ -182,24 +185,34 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
     const exec = self._exec;
     const requesting_origin = URL.getOrigin(arena, exec.url.*) catch null;
     const response_origin = URL.getOrigin(arena, res._url) catch null;
+    const cross_origin = if (requesting_origin != null and response_origin != null)
+        !std.mem.eql(u8, requesting_origin.?, response_origin.?)
+    else
+        false;
 
-    if (requesting_origin) |fo| {
-        if (response_origin) |ro| {
-            if (std.mem.eql(u8, fo, ro)) {
-                res._type = .basic; // Same-origin
-            } else {
-                res._type = .cors; // Cross-origin (for simplicity, assume CORS passed)
-            }
-        } else {
-            res._type = .basic;
-        }
-    } else {
-        res._type = .basic;
-    }
+    var allow_origin: ?[]const u8 = null;
+    var allow_credentials = false;
 
     var it = response.headerIterator();
     while (it.next()) |hdr| {
+        if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-origin")) {
+            allow_origin = hdr.value;
+        } else if (std.ascii.eqlIgnoreCase(hdr.name, "access-control-allow-credentials") and
+            std.ascii.eqlIgnoreCase(hdr.value, "true"))
+        {
+            allow_credentials = true;
+        }
         try res._headers.append(hdr.name, hdr.value, exec);
+    }
+
+    if (cross_origin) {
+        if (!Cors.isResponseAllowed(allow_origin, allow_credentials, requesting_origin.?, self._allow_credentials)) {
+            response.abort(error.CorsBlocked);
+            return false;
+        }
+        res._type = .cors;
+    } else {
+        res._type = .basic;
     }
 
     return true;
