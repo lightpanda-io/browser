@@ -221,14 +221,20 @@ jobs:
         run: |
           export PROXY_USERNAME=username PROXY_PASSWORD=password
           ./lightpanda serve --port 9223 --http-proxy http://127.0.0.1:3000 ${{ steps.args.outputs.value }} &
+          echo $! > LPD.pid
           go run runner/main.go
           URL=https://demo-browser.lightpanda.io/campfire-commerce/ node puppeteer/proxy_auth.js
+          kill `cat LPD.pid`
+          while kill -0 `cat LPD.pid` 2>/dev/null; do sleep 1; done
 
       - name: run request interception through proxy and playwright
         run: |
           export PROXY_USERNAME=username PROXY_PASSWORD=password
           ./lightpanda serve --port 9223 ${{ steps.args.outputs.value }} &
+          echo $! > LPD.pid
           BASE_URL=https://demo-browser.lightpanda.io/ node playwright/proxy_auth.js
+          kill `cat LPD.pid`
+          while kill -0 `cat LPD.pid` 2>/dev/null; do sleep 1; done
 
       - name: upload cdp log
         uses: actions/upload-artifact@v7
