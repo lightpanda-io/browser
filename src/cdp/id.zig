@@ -42,8 +42,8 @@ pub fn toLoaderId(id: u32) [14]u8 {
 // then it should match the loader id.
 const Transfer = @import("../browser/HttpClient.zig").Transfer;
 pub fn toRequestId(transfer: *const Transfer) [14]u8 {
-    if (transfer.req.params.resource_type == .document) {
-        return toLoaderId(transfer.req.params.loader_id);
+    if (transfer.req.resource_type == .document) {
+        return toLoaderId(transfer.req.loader_id);
     }
 
     var buf: [14]u8 = undefined;

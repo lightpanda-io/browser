@@ -308,20 +308,20 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
 
     const transfer = msg.transfer;
     const req = &transfer.req;
-    const frame_id = req.params.frame_id;
+    const frame_id = req.frame_id;
     const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
 
     // Modify request with extra CDP headers
     for (bc.extra_headers.items) |extra| {
-        try req.params.headers.add(extra);
+        try req.headers.add(extra);
     }
 
     // We're missing a bunch of fields, but, for now, this eems like enough
     try bc.cdp.sendEvent("Network.requestWillBeSent", .{
         .frameId = &id.toFrameId(frame_id),
         .requestId = &id.toRequestId(transfer),
-        .loaderId = &id.toLoaderId(req.params.loader_id),
-        .type = req.params.resource_type.string(),
+        .loaderId = &id.toLoaderId(req.loader_id),
+        .type = req.resource_type.string(),
         .documentURL = frame.url,
         .request = RequestWriter.init(transfer),
         .initiator = .{ .type = "other" },
@@ -342,9 +342,9 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
-        .frameId = &id.toFrameId(req.params.frame_id),
+        .frameId = &id.toFrameId(req.frame_id),
         .requestId = &id.toRequestId(transfer),
-        .loaderId = &id.toLoaderId(req.params.loader_id),
+        .loaderId = &id.toLoaderId(req.loader_id),
         .response = ResponseWriter.init(arena, msg.response),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
@@ -389,11 +389,11 @@ pub const RequestWriter = struct {
         try jws.beginObject();
         {
             try jws.objectField("url");
-            try jws.write(request.params.url);
+            try jws.write(request.url);
         }
 
         {
-            const frag = URL.getHash(request.params.url);
+            const frag = URL.getHash(request.url);
             if (frag.len > 0) {
                 try jws.objectField("urlFragment");
                 try jws.write(frag);
@@ -402,18 +402,18 @@ pub const RequestWriter = struct {
 
         {
             try jws.objectField("method");
-            try jws.write(@tagName(request.params.method));
+            try jws.write(@tagName(request.method));
         }
 
         {
             try jws.objectField("hasPostData");
-            try jws.write(request.params.body != null);
+            try jws.write(request.body != null);
         }
 
         {
             try jws.objectField("headers");
             try jws.beginObject();
-            var it = request.params.headers.iterator();
+            var it = request.headers.iterator();
             while (it.next()) |hdr| {
                 try jws.objectField(hdr.name);
                 try jws.write(hdr.value);
