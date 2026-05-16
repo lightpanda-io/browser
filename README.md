@@ -234,7 +234,7 @@ brew install cmake
 
 ### Build and run
 
-You an build the entire browser with `make build` or `make build-dev` for debug
+You can build the entire browser with `make build` or `make build-dev` for debug
 env.
 
 But you can directly use the zig command: `zig build run`.
