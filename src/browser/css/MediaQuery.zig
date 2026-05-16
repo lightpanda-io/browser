@@ -47,25 +47,28 @@ pub const Viewport = struct {
     /// `innerHeight`, `Screen.width` / `height`, and `VisualViewport.width` /
     /// `height`. When viewport emulation lands, this is the single helper to
     /// rewire so the cascade and `matchMedia` move together.
-    pub fn default() Viewport {
-        return .{ .width = 1920, .height = 1080 };
-    }
+    pub const default = Viewport{
+        .width = 1920,
+        .height = 1080,
+    };
 };
 
 /// Returns true if `query` matches the given viewport. Comma-separated
 /// queries are evaluated independently and combined with OR.
 pub fn matches(query: []const u8, viewport: Viewport) bool {
-    // Strip CSS `/* ... */` comments up-front so a comment in the prelude or
-    // inside a feature parenthesis can't shadow a brace, comma, or paren.
-    var buf: [4096]u8 = undefined;
-    const stripped = stripComments(query, &buf);
+    // Reject any input with an unbalanced `/* ...` before parsing. Every
+    // downstream scanner is comment-aware but only on the assumption that
+    // each comment is closed; an unterminated one would otherwise silently
+    // swallow the rest of the input and could flip a partially-parsed query
+    // to `true`.
+    if (hasUnterminatedComment(query)) return false;
 
-    var rest = std.mem.trim(u8, stripped, &std.ascii.whitespace);
+    var rest = trimWsAndComments(query);
     if (rest.len == 0) return false;
 
     while (rest.len > 0) {
         const cut = nextTopLevelComma(rest);
-        const piece = std.mem.trim(u8, rest[0..cut], &std.ascii.whitespace);
+        const piece = trimWsAndComments(rest[0..cut]);
         if (piece.len > 0 and matchesSingle(piece, viewport)) return true;
         if (cut == rest.len) break;
         rest = rest[cut + 1 ..];
@@ -73,35 +76,88 @@ pub fn matches(query: []const u8, viewport: Viewport) bool {
     return false;
 }
 
-/// Strip CSS comments (`/* ... */`) from `query` into `buf`, returning the
-/// stripped slice. Each comment is replaced with a single space so token
-/// boundaries are preserved (`a/*x*/b` becomes `a b`, not `ab`). An unclosed
-/// `/* ...` returns the original input so callers fall through to the normal
-/// parser error path. If the query is larger than the buffer, returns the
-/// original input — sane media queries are ~tens of bytes so 4 KiB is plenty.
-fn stripComments(query: []const u8, buf: []u8) []const u8 {
-    if (query.len > buf.len) return query;
-    var out: usize = 0;
+/// Returns true if `s` contains an opening `/*` without a matching `*/`.
+/// Called once at the top of `matches`; lets every other scanner trust that
+/// comments are balanced.
+fn hasUnterminatedComment(s: []const u8) bool {
     var i: usize = 0;
-    while (i < query.len) {
-        if (i + 1 < query.len and query[i] == '/' and query[i + 1] == '*') {
-            const close = std.mem.indexOf(u8, query[i + 2 ..], "*/") orelse return query;
-            buf[out] = ' ';
-            out += 1;
-            i = i + 2 + close + 2;
+    while (i + 1 < s.len) {
+        if (s[i] == '/' and s[i + 1] == '*') {
+            const close = std.mem.indexOfPos(u8, s, i + 2, "*/") orelse return true;
+            i = close + 2;
             continue;
         }
-        buf[out] = query[i];
-        out += 1;
         i += 1;
     }
-    return buf[0..out];
+    return false;
+}
+
+/// Advance `i` past any whitespace and `/* ... */` comments. Assumes
+/// comments are balanced (see `hasUnterminatedComment`); an unterminated
+/// comment encountered defensively returns `s.len` so the caller breaks out.
+fn skipWsAndComments(s: []const u8, start: usize) usize {
+    var i = start;
+    while (i < s.len) {
+        if (std.ascii.isWhitespace(s[i])) {
+            i += 1;
+        } else if (i + 1 < s.len and s[i] == '/' and s[i + 1] == '*') {
+            const close = std.mem.indexOfPos(u8, s, i + 2, "*/") orelse return s.len;
+            i = close + 2;
+        } else break;
+    }
+    return i;
+}
+
+/// Strip leading and trailing whitespace and `/* ... */` comments from `s`.
+/// Interior trivia is preserved; token-by-token scanners skip it as they go.
+fn trimWsAndComments(s: []const u8) []const u8 {
+    var start: usize = 0;
+    var end: usize = s.len;
+    while (start < end) {
+        if (std.ascii.isWhitespace(s[start])) {
+            start += 1;
+        } else if (start + 1 < end and s[start] == '/' and s[start + 1] == '*') {
+            const close = std.mem.indexOfPos(u8, s, start + 2, "*/") orelse return s[start..end];
+            start = close + 2;
+        } else break;
+    }
+    while (end > start) {
+        if (std.ascii.isWhitespace(s[end - 1])) {
+            end -= 1;
+        } else if (end >= start + 2 and s[end - 1] == '/' and s[end - 2] == '*') {
+            const open_rel = std.mem.lastIndexOf(u8, s[start .. end - 2], "/*") orelse return s[start..end];
+            end = start + open_rel;
+        } else break;
+    }
+    return s[start..end];
+}
+
+/// First occurrence of `needle` in `s` that is not inside a `/* ... */`
+/// comment. Comments are assumed balanced (see `hasUnterminatedComment`).
+fn indexOfScalarSkippingComments(s: []const u8, needle: u8) ?usize {
+    var i: usize = 0;
+    while (i < s.len) {
+        if (i + 1 < s.len and s[i] == '/' and s[i + 1] == '*') {
+            const close = std.mem.indexOfPos(u8, s, i + 2, "*/") orelse return null;
+            i = close + 2;
+            continue;
+        }
+        if (s[i] == needle) return i;
+        i += 1;
+    }
+    return null;
 }
 
 fn nextTopLevelComma(s: []const u8) usize {
     var depth: usize = 0;
-    for (s, 0..) |c, i| {
-        switch (c) {
+    var i: usize = 0;
+    while (i < s.len) {
+        if (i + 1 < s.len and s[i] == '/' and s[i + 1] == '*') {
+            const close = std.mem.indexOfPos(u8, s, i + 2, "*/") orelse return s.len;
+            i = close + 2;
+            continue;
+        }
+        switch (s[i]) {
             '(' => depth += 1,
             ')' => if (depth > 0) {
                 depth -= 1;
@@ -109,6 +165,7 @@ fn nextTopLevelComma(s: []const u8) usize {
             ',' => if (depth == 0) return i,
             else => {},
         }
+        i += 1;
     }
     return s.len;
 }
@@ -116,12 +173,11 @@ fn nextTopLevelComma(s: []const u8) usize {
 const MediaType = enum { all, screen, print, speech, tv };
 
 fn parseMediaType(word: []const u8) ?MediaType {
-    const eql = std.ascii.eqlIgnoreCase;
-    if (eql(word, "all")) return .all;
-    if (eql(word, "screen")) return .screen;
-    if (eql(word, "print")) return .print;
-    if (eql(word, "speech")) return .speech;
-    if (eql(word, "tv")) return .tv;
+    if (std.mem.eql(u8, word, "all")) return .all;
+    if (std.mem.eql(u8, word, "screen")) return .screen;
+    if (std.mem.eql(u8, word, "print")) return .print;
+    if (std.mem.eql(u8, word, "speech")) return .speech;
+    if (std.mem.eql(u8, word, "tv")) return .tv;
     return null;
 }
 
@@ -133,7 +189,7 @@ fn matchesSingle(query: []const u8, viewport: Viewport) bool {
 
     var i: usize = 0;
     while (i < query.len) {
-        while (i < query.len and std.ascii.isWhitespace(query[i])) i += 1;
+        i = skipWsAndComments(query, i);
         if (i >= query.len) break;
 
         if (query[i] == '(') {
@@ -146,16 +202,24 @@ fn matchesSingle(query: []const u8, viewport: Viewport) bool {
         }
 
         const start = i;
-        while (i < query.len and isIdentChar(query[i])) i += 1;
-        if (i == start) return false;
-        const word = query[start..i];
-        saw_token = true;
+        while (i < query.len and isIdentChar(query[i])) {
+            i += 1;
+        }
 
-        if (std.ascii.eqlIgnoreCase(word, "not")) {
+        const len = i - start;
+        if (len < 2 or len > 16) {
+            return false;
+        }
+
+        var word_buf: [16]u8 = undefined;
+        const word = std.ascii.lowerString(&word_buf, query[start..i]);
+
+        saw_token = true;
+        if (std.mem.eql(u8, word, "not")) {
             negate = true;
-        } else if (std.ascii.eqlIgnoreCase(word, "only")) {
+        } else if (std.mem.eql(u8, word, "only")) {
             // 'only' is a hint to legacy parsers — treat as a no-op qualifier.
-        } else if (std.ascii.eqlIgnoreCase(word, "and")) {
+        } else if (std.mem.eql(u8, word, "and")) {
             // separator between media-type and feature, or between features.
         } else if (parseMediaType(word)) |t| {
             type_set = t;
@@ -166,7 +230,9 @@ fn matchesSingle(query: []const u8, viewport: Viewport) bool {
         }
     }
 
-    if (!saw_token) return false;
+    if (!saw_token) {
+        return false;
+    }
 
     const type_matches = if (type_set) |t|
         switch (t) {
@@ -184,13 +250,19 @@ fn findClosingParen(s: []const u8, open: usize) ?usize {
     std.debug.assert(s[open] == '(');
     var depth: usize = 1;
     var i = open + 1;
-    while (i < s.len) : (i += 1) {
+    while (i < s.len) {
+        if (i + 1 < s.len and s[i] == '/' and s[i + 1] == '*') {
+            const close = std.mem.indexOfPos(u8, s, i + 2, "*/") orelse return null;
+            i = close + 2;
+            continue;
+        }
         if (s[i] == '(') {
             depth += 1;
         } else if (s[i] == ')') {
             depth -= 1;
             if (depth == 0) return i;
         }
+        i += 1;
     }
     return null;
 }
@@ -200,12 +272,12 @@ fn isIdentChar(c: u8) bool {
 }
 
 fn evalFeature(text: []const u8, viewport: Viewport) bool {
-    const trimmed = std.mem.trim(u8, text, &std.ascii.whitespace);
+    const trimmed = trimWsAndComments(text);
     if (trimmed.len == 0) return false;
 
-    if (std.mem.indexOfScalar(u8, trimmed, ':')) |colon| {
-        const name = std.mem.trim(u8, trimmed[0..colon], &std.ascii.whitespace);
-        const value = std.mem.trim(u8, trimmed[colon + 1 ..], &std.ascii.whitespace);
+    if (indexOfScalarSkippingComments(trimmed, ':')) |colon| {
+        const name = trimWsAndComments(trimmed[0..colon]);
+        const value = trimWsAndComments(trimmed[colon + 1 ..]);
         return evalNameValue(name, value, viewport);
     }
 
@@ -213,45 +285,54 @@ fn evalFeature(text: []const u8, viewport: Viewport) bool {
 }
 
 fn evalNameValue(name: []const u8, value: []const u8, viewport: Viewport) bool {
-    const eql = std.ascii.eqlIgnoreCase;
+    if (name.len > 16) {
+        return false;
+    }
 
-    if (eql(name, "min-width")) {
+    var buf: [16]u8 = undefined;
+    const lname = std.ascii.lowerString(&buf, name);
+    if (std.mem.eql(u8, lname, "min-width")) {
         const px = parseLengthPx(value) orelse return false;
         return viewport.width >= px;
     }
-    if (eql(name, "max-width")) {
+    if (std.mem.eql(u8, lname, "max-width")) {
         const px = parseLengthPx(value) orelse return false;
         return viewport.width <= px;
     }
-    if (eql(name, "width")) {
+    if (std.mem.eql(u8, lname, "width")) {
         const px = parseLengthPx(value) orelse return false;
         return viewport.width == px;
     }
-    if (eql(name, "min-height")) {
+    if (std.mem.eql(u8, lname, "min-height")) {
         const px = parseLengthPx(value) orelse return false;
         return viewport.height >= px;
     }
-    if (eql(name, "max-height")) {
+    if (std.mem.eql(u8, lname, "max-height")) {
         const px = parseLengthPx(value) orelse return false;
         return viewport.height <= px;
     }
-    if (eql(name, "height")) {
+    if (std.mem.eql(u8, lname, "height")) {
         const px = parseLengthPx(value) orelse return false;
         return viewport.height == px;
     }
-    if (eql(name, "orientation")) {
-        if (eql(value, "landscape")) return viewport.width >= viewport.height;
-        if (eql(value, "portrait")) return viewport.height > viewport.width;
+    if (std.mem.eql(u8, lname, "orientation")) {
+        if (std.ascii.eqlIgnoreCase(value, "landscape")) return viewport.width >= viewport.height;
+        if (std.ascii.eqlIgnoreCase(value, "portrait")) return viewport.height > viewport.width;
         return false;
     }
     return false;
 }
 
 fn evalBoolean(name: []const u8, viewport: Viewport) bool {
-    const eql = std.ascii.eqlIgnoreCase;
-    if (eql(name, "width")) return viewport.width > 0;
-    if (eql(name, "height")) return viewport.height > 0;
-    if (eql(name, "orientation")) return true;
+    if (name.len > 16) {
+        return false;
+    }
+    var buf: [16]u8 = undefined;
+    const lname = std.ascii.lowerString(&buf, name);
+
+    if (std.mem.eql(u8, lname, "width")) return viewport.width > 0;
+    if (std.mem.eql(u8, lname, "height")) return viewport.height > 0;
+    if (std.mem.eql(u8, lname, "orientation")) return true;
     return false;
 }
 
@@ -287,12 +368,12 @@ fn parseLengthPx(value: []const u8) ?u32 {
 const testing = std.testing;
 
 test "MediaQuery: empty query is false" {
-    try testing.expect(!matches("", Viewport.default()));
-    try testing.expect(!matches("   ", Viewport.default()));
+    try testing.expect(!matches("", Viewport.default));
+    try testing.expect(!matches("   ", Viewport.default));
 }
 
 test "MediaQuery: bare media types" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("all", v));
     try testing.expect(matches("screen", v));
     try testing.expect(matches("ALL", v));
@@ -303,12 +384,12 @@ test "MediaQuery: bare media types" {
 }
 
 test "MediaQuery: unknown ident is false" {
-    try testing.expect(!matches("foo", Viewport.default()));
-    try testing.expect(!matches("braille", Viewport.default()));
+    try testing.expect(!matches("foo", Viewport.default));
+    try testing.expect(!matches("braille", Viewport.default));
 }
 
 test "MediaQuery: min-width on 1920x1080 viewport" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("(min-width: 1px)", v));
     try testing.expect(matches("(min-width: 600px)", v));
     try testing.expect(matches("(min-width: 1920px)", v));
@@ -317,7 +398,7 @@ test "MediaQuery: min-width on 1920x1080 viewport" {
 }
 
 test "MediaQuery: max-width" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("(max-width: 1920px)", v));
     try testing.expect(matches("(max-width: 2000px)", v));
     try testing.expect(!matches("(max-width: 1919px)", v));
@@ -325,14 +406,14 @@ test "MediaQuery: max-width" {
 }
 
 test "MediaQuery: width (exact)" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("(width: 1920px)", v));
     try testing.expect(!matches("(width: 1921px)", v));
     try testing.expect(!matches("(width: 1919px)", v));
 }
 
 test "MediaQuery: min-height / max-height / height" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("(min-height: 1080px)", v));
     try testing.expect(!matches("(min-height: 1081px)", v));
     try testing.expect(matches("(max-height: 1080px)", v));
@@ -342,7 +423,7 @@ test "MediaQuery: min-height / max-height / height" {
 }
 
 test "MediaQuery: orientation" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("(orientation: landscape)", v));
     try testing.expect(!matches("(orientation: portrait)", v));
 
@@ -356,7 +437,7 @@ test "MediaQuery: orientation" {
 }
 
 test "MediaQuery: combined with `and`" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("screen and (min-width: 600px)", v));
     try testing.expect(!matches("print and (min-width: 600px)", v));
     try testing.expect(matches("(min-width: 600px) and (max-width: 2000px)", v));
@@ -365,7 +446,7 @@ test "MediaQuery: combined with `and`" {
 }
 
 test "MediaQuery: `not` negates" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("not print", v));
     try testing.expect(!matches("not screen", v));
     try testing.expect(!matches("not (min-width: 600px)", v));
@@ -373,7 +454,7 @@ test "MediaQuery: `not` negates" {
 }
 
 test "MediaQuery: comma is OR" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("print, screen", v));
     try testing.expect(matches("(max-width: 100px), (min-width: 600px)", v));
     try testing.expect(!matches("(max-width: 100px), (min-width: 3000px)", v));
@@ -381,33 +462,33 @@ test "MediaQuery: comma is OR" {
 }
 
 test "MediaQuery: `only` is no-op" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("only screen", v));
     try testing.expect(matches("only screen and (min-width: 600px)", v));
     try testing.expect(!matches("only print", v));
 }
 
 test "MediaQuery: em units (1em=16px)" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("(min-width: 30em)", v)); // 480px <= 1920px
     try testing.expect(matches("(min-width: 120em)", v)); // 1920px == 1920
     try testing.expect(!matches("(min-width: 121em)", v)); // 1936px > 1920
 }
 
 test "MediaQuery: rem treated as em" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("(min-width: 30rem)", v));
     try testing.expect(!matches("(min-width: 121rem)", v));
 }
 
 test "MediaQuery: bare 0 is valid" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("(min-width: 0)", v));
     try testing.expect(!matches("(max-width: 0)", v));
 }
 
 test "MediaQuery: unknown feature is false" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(!matches("(monochrome)", v));
     try testing.expect(!matches("(prefers-color-scheme: dark)", v));
     try testing.expect(!matches("(prefers-reduced-motion: reduce)", v));
@@ -416,7 +497,7 @@ test "MediaQuery: unknown feature is false" {
 }
 
 test "MediaQuery: malformed value is false" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(!matches("(min-width: foo)", v));
     try testing.expect(!matches("(min-width:)", v));
     try testing.expect(!matches("(min-width: -100px)", v));
@@ -424,7 +505,7 @@ test "MediaQuery: malformed value is false" {
 }
 
 test "MediaQuery: boolean form (feature presence)" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("(width)", v));
     try testing.expect(matches("(height)", v));
     try testing.expect(matches("(orientation)", v));
@@ -433,19 +514,19 @@ test "MediaQuery: boolean form (feature presence)" {
 }
 
 test "MediaQuery: viewport-default values" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expectEqual(@as(u32, 1920), v.width);
     try testing.expectEqual(@as(u32, 1080), v.height);
 }
 
 test "MediaQuery: leading whitespace and case" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("  (MIN-WIDTH: 600PX)  ", v));
     try testing.expect(matches("SCREEN AND (Min-Width: 600px)", v));
 }
 
 test "MediaQuery: malformed query is false" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(!matches("(", v));
     try testing.expect(!matches("(min-width: 600px", v));
     try testing.expect(!matches("@@@", v));
@@ -453,19 +534,19 @@ test "MediaQuery: malformed query is false" {
 
 test "MediaQuery: not print is true on screen viewport" {
     // Common pattern: `<style media="not print">`
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(matches("not print", v));
 }
 
 test "MediaQuery: common responsive breakpoint" {
     // Pattern: hide one of mobile/desktop CTA duplicates above a breakpoint.
-    const v = Viewport.default(); // 1920×1080 — desktop side.
+    const v = Viewport.default; // 1920×1080 — desktop side.
     try testing.expect(matches("(min-width: 768px)", v));
     try testing.expect(!matches("(max-width: 767px)", v));
 }
 
 test "MediaQuery: comments are stripped" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     // Comment between tokens.
     try testing.expect(matches("screen and /*hidden*/ (min-width: 1px)", v));
     // Comment at the start.
@@ -479,7 +560,7 @@ test "MediaQuery: comments are stripped" {
 }
 
 test "MediaQuery: em / rem overflow fails closed" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     // 268435456 × 16 overflows u32 (would wrap to 0); the evaluator must
     // treat the length as unparseable and the query as non-matching.
     try testing.expect(!matches("(min-width: 268435456em)", v));
@@ -490,10 +571,108 @@ test "MediaQuery: em / rem overflow fails closed" {
 }
 
 test "MediaQuery: unimplemented units fail closed" {
-    const v = Viewport.default();
+    const v = Viewport.default;
     try testing.expect(!matches("(min-width: 5cm)", v));
     try testing.expect(!matches("(min-width: 50mm)", v));
     try testing.expect(!matches("(min-width: 10pt)", v));
     try testing.expect(!matches("(min-width: 1in)", v));
     try testing.expect(!matches("(min-width: 50vw)", v));
+}
+
+test "MediaQuery: range syntax is unsupported (fails closed)" {
+    const v = Viewport.default;
+    // MQ4 range form is not implemented — should evaluate false rather than
+    // accidentally matching via the `width` boolean form.
+    try testing.expect(!matches("(width >= 600px)", v));
+    try testing.expect(!matches("(width <= 600px)", v));
+    try testing.expect(!matches("(width < 100px)", v));
+    try testing.expect(!matches("(600px <= width <= 1200px)", v));
+}
+
+test "MediaQuery: decimal lengths are rejected" {
+    const v = Viewport.default;
+    try testing.expect(!matches("(min-width: 600.5px)", v));
+    try testing.expect(!matches("(min-width: 0.5em)", v));
+    try testing.expect(!matches("(width: 1920.0px)", v));
+}
+
+test "MediaQuery: whitespace-tight and -loose features" {
+    const v = Viewport.default;
+    try testing.expect(matches("(min-width:600px)", v));
+    try testing.expect(matches("( min-width : 600px )", v));
+    try testing.expect(matches("(  min-width  :  600px  )", v));
+}
+
+test "MediaQuery: additional comment placements" {
+    const v = Viewport.default;
+    // Two adjacent comments between tokens.
+    try testing.expect(matches("screen /*a*/ /*b*/ and (min-width: 1px)", v));
+    // Comments on both sides of the feature content.
+    try testing.expect(matches("(/*a*/ min-width: 600px /*b*/)", v));
+    // Comment that contains a colon — must not be confused with the
+    // feature's `:` separator.
+    try testing.expect(matches("(/* foo:bar */ min-width: 600px)", v));
+    // Comment that contains parens — must not derail paren matching.
+    try testing.expect(matches("(min-width: 600px /* ) ( */ )", v));
+}
+
+test "MediaQuery: u32 boundaries on length" {
+    const v = Viewport.default;
+    // u32 max parses; the viewport (1920) doesn't reach it.
+    try testing.expect(!matches("(min-width: 4294967295px)", v));
+    // Beyond u32 max overflows parseInt and fails closed.
+    try testing.expect(!matches("(min-width: 4294967296px)", v));
+    try testing.expect(!matches("(min-width: 9999999999px)", v));
+}
+
+test "MediaQuery: empty parens" {
+    const v = Viewport.default;
+    try testing.expect(!matches("()", v));
+    try testing.expect(!matches("(   )", v));
+    try testing.expect(!matches("screen and ()", v));
+}
+
+test "MediaQuery: long AND chains" {
+    const v = Viewport.default;
+    try testing.expect(matches(
+        "screen and (min-width: 600px) and (max-width: 2000px) and (orientation: landscape)",
+        v,
+    ));
+    try testing.expect(!matches(
+        "screen and (min-width: 600px) and (max-width: 1000px) and (orientation: landscape)",
+        v,
+    ));
+}
+
+test "MediaQuery: not all is always false" {
+    try testing.expect(!matches("not all", Viewport.default));
+}
+
+test "MediaQuery: not applies to the whole query" {
+    const v = Viewport.default;
+    // For 1920×1080: (min-width:3000px)=false, (orientation:landscape)=true.
+    // Combined feature match is false; `not` flips it to true.
+    try testing.expect(matches("not (min-width: 3000px) and (orientation: landscape)", v));
+    // Both branches true → combined true → `not` flips to false.
+    try testing.expect(!matches("not (min-width: 1px) and (orientation: landscape)", v));
+}
+
+test "MediaQuery: multibyte UTF-8 tokens fail closed" {
+    const v = Viewport.default;
+    // Unsupported feature name with a multi-byte character.
+    try testing.expect(!matches("(café-width: 600px)", v));
+    // Multi-byte identifier in media-type position.
+    try testing.expect(!matches("café", v));
+}
+
+test "MediaQuery: trailing unterminated comment fails closed" {
+    const v = Viewport.default;
+    // A valid prefix followed by an unbalanced `/* ...` must still evaluate
+    // to false. Without an explicit guard, the inline comment-skipper would
+    // silently consume the rest of the input and return whatever the prefix
+    // already parsed to.
+    try testing.expect(!matches("screen /* unterminated", v));
+    try testing.expect(!matches("(min-width: 600px) /* unterminated", v));
+    // Terminated then unterminated.
+    try testing.expect(!matches("screen /* a */ /* b", v));
 }

@@ -62,6 +62,33 @@
   @media screen /*x*/ and (min-width: 1px) {
     #commented-query { display: none; }
   }
+  /* Comments inside the inner block (between declarations and inside a
+     declaration's value position). The outer `@media` evaluation must not
+     interfere with the CSS parser's own comment handling for the inner
+     block. */
+  @media (min-width: 600px) {
+    #inner-block-comments {
+      /* leading comment */
+      display: none; /* trailing comment */
+      /* between */
+      color: red;
+    }
+  }
+  /* Nested @media where the inner query does NOT match. Outer matches
+     (screen), inner doesn't (print) → inner declarations must be dropped. */
+  @media screen {
+    @media print {
+      #nested-inner-miss { display: none; }
+    }
+  }
+  /* Whitespace-heavy prelude — many spaces between tokens. */
+  @media   screen   and    (min-width:   100px)   {
+    #ws-heavy { display: none; }
+  }
+  /* Mixed-case at-keyword and tokens. */
+  @MEDIA SCREEN AND (MIN-WIDTH: 100PX) {
+    #upper-case { display: none; }
+  }
 </style>
 
 <body>
@@ -76,10 +103,16 @@
   <div id="visibility-hidden-cascade">visibility</div>
   <div id="commented-prelude">commented-prelude</div>
   <div id="commented-query">commented-query</div>
+  <div id="inner-block-comments">inner-block-comments</div>
+  <div id="nested-inner-miss">nested-inner-miss</div>
+  <div id="ws-heavy">ws-heavy</div>
+  <div id="upper-case">upper-case</div>
   <div id="dyn-target">dyn-target</div>
   <div id="dyn2-target">dyn2-target</div>
+  <div id="deep-nest-target">deep-nest-target</div>
   <style id="dyn"></style>
   <style id="dyn2"></style>
+  <style id="deep-nest-style"></style>
 </body>
 
 <script id=cascade_matching_query_hides>
@@ -186,5 +219,51 @@
     '@media (min-width: 600px) { #dyn2-target { display: none; } }'
   );
   testing.expectFalse($('#dyn2-target').checkVisibility());
+}
+</script>
+
+<script id=cascade_inner_block_comments>
+{
+  // Comments inside the inner block belong to the CSS parser's tokenizer,
+  // not to the media-query evaluator — they must not block the cascade.
+  testing.expectFalse($('#inner-block-comments').checkVisibility());
+}
+</script>
+
+<script id=cascade_nested_inner_miss>
+{
+  // Outer matches (screen), inner doesn't (print). The inner declarations
+  // must be dropped — the element stays visible.
+  testing.expectTrue($('#nested-inner-miss').checkVisibility());
+}
+</script>
+
+<script id=cascade_ws_heavy_prelude>
+{
+  testing.expectFalse($('#ws-heavy').checkVisibility());
+}
+</script>
+
+<script id=cascade_upper_case_keyword>
+{
+  // `@MEDIA SCREEN AND (MIN-WIDTH: 100PX)` should evaluate the same as the
+  // lower-case form — at-keywords, types, features, and units are all
+  // case-insensitive.
+  testing.expectFalse($('#upper-case').checkVisibility());
+}
+</script>
+
+<script id=cascade_deep_nesting_capped>
+{
+  // 50 levels of `@media screen { ... }` around a `display:none` rule. The
+  // depth guard (MAX_MEDIA_NESTING in StyleManager.zig) must short-circuit
+  // before the Zig stack is exhausted — and the inner rule sits beyond the
+  // cap, so the element stays visible.
+  let css = '';
+  for (let i = 0; i < 50; i++) css += '@media screen { ';
+  css += '#deep-nest-target { display: none; }';
+  for (let i = 0; i < 50; i++) css += ' }';
+  $('#deep-nest-style').sheet.replaceSync(css);
+  testing.expectTrue($('#deep-nest-target').checkVisibility());
 }
 </script>
