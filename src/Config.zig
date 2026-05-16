@@ -100,6 +100,7 @@ const CommonOptions = .{
     .{ .name = "storage_sqlite_path", .type = ?[:0]const u8 },
     .{ .name = "disable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
+    .{ .name = "enable_external_stylesheets", .type = bool },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -250,6 +251,13 @@ pub fn disableSubframes(self: *const Config) bool {
 pub fn disableWorkers(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp => |opts| opts.disable_workers,
+        else => unreachable,
+    };
+}
+
+pub fn enableExternalStylesheets(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.enable_external_stylesheets,
         else => unreachable,
     };
 }

@@ -152,6 +152,20 @@
     \\                           script fetch is initiated and its scope never runs.
     \\                           Defaults to false.
     \\
+    \\--enable-external-stylesheets
+    \\                           Fetch external <link rel=stylesheet> resources so
+    \\                           their rules contribute to computed styles (and
+    \\                           therefore to visibility checks like display,
+    \\                           visibility, opacity, pointer-events). The default
+    \\                           skips these fetches, which makes utility-class-
+    \\                           heavy sites read as not-visible from the driver
+    \\                           side. Currently a no-op: reserves the surface
+    \\                           (CLI + LP.configureLoading externalStylesheets)
+    \\                           so drivers can adopt it before the fetch path
+    \\                           lands in a follow-up. Drivers can also toggle
+    \\                           this per-session via LP.configureLoading.
+    \\                           Defaults to false.
+    \\
     \\--block-private-networks   Block HTTP requests to private/internal IP
     \\                           addresses after DNS resolution.
     \\                           Defaults to false.
