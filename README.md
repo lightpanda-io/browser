@@ -339,7 +339,7 @@ Run a Lightpanda browser
 zig build run -- --insecure-disable-tls-host-verification
 ```
 
-Then you can start the wptrunner from the Demo's clone dir:
+Then you can start the wptrunner from the demo's clone dir:
 ```
 cd wptrunner && go run .
 ```
