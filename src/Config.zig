@@ -100,6 +100,7 @@ const CommonOptions = .{
     .{ .name = "storage_sqlite_path", .type = ?[:0]const u8 },
     .{ .name = "disable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
+    .{ .name = "enable_external_stylesheets", .type = bool },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -251,6 +252,13 @@ pub fn disableSubframes(self: *const Config) bool {
 pub fn disableWorkers(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp => |opts| opts.disable_workers,
+        else => unreachable,
+    };
+}
+
+pub fn enableExternalStylesheets(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.enable_external_stylesheets,
         else => unreachable,
     };
 }
@@ -566,6 +574,19 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                completes its script fetch under specific HTTP-proxy timing
         \\                conditions on Shopify storefront pages. Drivers can also
         \\                toggle this per-session via the LP.configureLoading method.
+        \\                Defaults to false.
+        \\
+        \\--enable-external-stylesheets
+        \\                Fetch external <link rel=stylesheet> resources so their
+        \\                rules contribute to computed styles (and therefore to
+        \\                visibility checks like display / visibility / opacity /
+        \\                pointer-events). The default skips these fetches, which
+        \\                makes utility-class-heavy sites read as not-visible from
+        \\                the driver side. The flag is currently a no-op: it
+        \\                reserves the surface (CLI + LP.configureLoading
+        \\                externalStylesheets) so drivers can adopt it before the
+        \\                fetch path lands in a follow-up. Drivers can also toggle
+        \\                this per-session via the LP.configureLoading method.
         \\                Defaults to false.
         \\
         \\--block-private-networks

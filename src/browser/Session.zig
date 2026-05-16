@@ -91,6 +91,15 @@ subframe_loading_enabled: bool = true,
 // session init; the LP.configureLoading CDP method can flip it per-session.
 worker_loading_enabled: bool = true,
 
+// Opt-in fetch of external <link rel=stylesheet> resources. Defaults to
+// false to preserve the current rendering-free fast path: drivers that
+// don't need accurate visibility checks pay nothing. Set from the
+// `--enable-external-stylesheets` CLI flag at session init; the
+// LP.configureLoading CDP method can flip it per-session. Currently
+// unread — the fetch path lands in a follow-up that depends on the
+// network refactor in #2303.
+load_external_stylesheets: bool = false,
+
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
     const arena_pool = browser.arena_pool;
@@ -112,6 +121,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         // CLI defaults; LP.configureLoading can flip these per-session.
         .subframe_loading_enabled = !browser.app.config.disableSubframes(),
         .worker_loading_enabled = !browser.app.config.disableWorkers(),
+        .load_external_stylesheets = browser.app.config.enableExternalStylesheets(),
     };
 }
 

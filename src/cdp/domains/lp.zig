@@ -68,11 +68,13 @@ fn configureLoading(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         subFrame: ?bool = null,
         worker: ?bool = null,
+        externalStylesheets: ?bool = null,
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
     if (params.subFrame) |v| bc.session.subframe_loading_enabled = v;
     if (params.worker) |v| bc.session.worker_loading_enabled = v;
+    if (params.externalStylesheets) |v| bc.session.load_external_stylesheets = v;
     return cmd.sendResult(null, .{});
 }
 
@@ -685,6 +687,39 @@ test "cdp.lp: configureLoading toggles subFrame and worker independently" {
         .params = .{ .subFrame = true, .worker = true },
     });
     try ctx.expectSentResult(null, .{ .id = 3 });
+    try testing.expectEqual(true, bc.session.subframe_loading_enabled);
+    try testing.expectEqual(true, bc.session.worker_loading_enabled);
+}
+
+test "cdp.lp: configureLoading toggles externalStylesheets independently" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    _ = try bc.session.createPage();
+
+    // Default is opt-in: off unless the CLI flag or CDP toggle enables it.
+    try testing.expectEqual(false, bc.session.load_external_stylesheets);
+
+    // Enable via CDP; the other two loading toggles stay at their defaults.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.configureLoading",
+        .params = .{ .externalStylesheets = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expectEqual(true, bc.session.load_external_stylesheets);
+    try testing.expectEqual(true, bc.session.subframe_loading_enabled);
+    try testing.expectEqual(true, bc.session.worker_loading_enabled);
+
+    // Flip back off; partial params must not reset the other fields.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "LP.configureLoading",
+        .params = .{ .externalStylesheets = false },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual(false, bc.session.load_external_stylesheets);
     try testing.expectEqual(true, bc.session.subframe_loading_enabled);
     try testing.expectEqual(true, bc.session.worker_loading_enabled);
 }
