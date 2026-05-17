@@ -125,21 +125,27 @@
   {
     // Stylesheet links parsed via innerHTML / outerHTML /
     // insertAdjacentHTML / Range.createContextualFragment / <template>
-    // content must NOT trigger a network fetch or register a sheet on
-    // the live document — the owning subtree may never be attached.
-    // Regression test for the fragment-mode bypass caught in code review.
+    // content / DOMParser.parseFromString must NOT trigger a network
+    // fetch or register a sheet on the live document — the owning
+    // subtree may never be attached or belongs to a different Document.
     //
-    // Assertion is synchronous on purpose: parseHtmlAsChildren runs
-    // inline, so any unintended sheet registration would be visible
-    // immediately. Deferring to testing.onload would race against the
-    // async tests above that legitimately add sheets.
-    //
-    // DOMParser.parseFromString is a separate case (parses with
-    // `_parse_mode = .document` into a *different* Document) and is not
-    // covered by the same gate — tracked as a follow-up.
+    // Assertion is synchronous on purpose: both parse paths run inline,
+    // so any unintended sheet registration would be visible immediately.
+    // Deferring to testing.onload would race against the async tests
+    // above that legitimately add sheets.
     const before = document.styleSheets.length;
+
     const div = document.createElement('div');
     div.innerHTML = '<link rel="stylesheet" href="/styles/visibility.css">';
+    testing.expectEqual(before, document.styleSheets.length);
+
+    const parsed = new DOMParser().parseFromString(
+      '<html><head><link rel="stylesheet" href="/styles/visibility2.css"></head><body></body></html>',
+      'text/html'
+    );
+    // Parsed link exists in the new document...
+    testing.expectEqual(1, parsed.querySelectorAll('link').length);
+    // ...but no sheet on the live document.
     testing.expectEqual(before, document.styleSheets.length);
   }
   </script>
