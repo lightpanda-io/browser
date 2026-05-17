@@ -26,6 +26,12 @@ const HtmlElement = @import("../Html.zig");
 
 const Link = @This();
 _proto: *HtmlElement,
+// Cached CSSStyleSheet for an external `rel=stylesheet` once
+// `Frame.loadExternalStylesheet` has registered it. Re-fetches (href
+// mutated on a connected link) reuse this sheet via `replaceSync` so the
+// old rules are dropped instead of accumulating in `document.styleSheets`.
+// Mirrors `Style._sheet`.
+_sheet: ?*@import("../../css/CSSStyleSheet.zig") = null,
 
 pub fn asElement(self: *Link) *Element {
     return self._proto._proto;

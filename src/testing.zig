@@ -693,6 +693,17 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/styles/visibility2.css")) {
+        // Second visibility sheet used by the href-change regression test:
+        // mutating link.href must replace the cached sheet's rules in place,
+        // not append a new entry to document.styleSheets.
+        return req.respond(".ext-hide-2 { display: none; }", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/styles/404.css")) {
         return req.respond("/* unused */", .{
             .status = .not_found,

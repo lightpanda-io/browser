@@ -1749,16 +1749,24 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link) !void {
         return;
     }
 
-    const sheet = try CSSStyleSheet.initWithOwner(element, self);
+    // Reuse the cached sheet on re-fetch (href mutation on a connected
+    // link) so `document.styleSheets` keeps a single entry per <link>
+    // instead of accumulating one per href change. On first load, create
+    // and register; on subsequent loads, replace content in place.
+    const sheet = link._sheet orelse blk: {
+        const new_sheet = try CSSStyleSheet.initWithOwner(element, self);
+        link._sheet = new_sheet;
+        const sheets = try self.document.getStyleSheets(self);
+        try sheets.add(new_sheet, self);
+        break :blk new_sheet;
+    };
+
     sheet._href = try self.arena.dupe(u8, resolved);
     sheet.replaceSync(response.body.items, self) catch |err| {
         log.warn(.browser, "external stylesheet parse", .{ .err = err, .url = resolved });
         try self.fireLinkEvent(link, comptime .wrap("error"));
         return;
     };
-
-    const sheets = try self.document.getStyleSheets(self);
-    try sheets.add(sheet, self);
 
     try self.fireLinkEvent(link, comptime .wrap("load"));
 }

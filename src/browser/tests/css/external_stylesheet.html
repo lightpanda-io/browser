@@ -82,4 +82,42 @@
     testing.expectEqual(true, true);
   }
   </script>
+
+  <script id="ext_stylesheet_href_change_replaces">
+  {
+    // Mutating link.href on a connected stylesheet link must REPLACE the
+    // cached sheet's rules, not append a second entry to
+    // document.styleSheets. Regression test for the stale-sheet
+    // accumulation bug caught in code review.
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/styles/visibility.css';
+    testing.async(async () => {
+      const baseline = document.styleSheets.length;
+
+      await new Promise(resolve => {
+        link.addEventListener('load', () => resolve(), { once: true });
+        document.head.appendChild(link);
+      });
+      const afterFirst = document.styleSheets.length;
+      testing.expectEqual(baseline + 1, afterFirst);
+
+      const second = await new Promise(resolve => {
+        link.addEventListener('load', () => resolve('load'), { once: true });
+        link.addEventListener('error', () => resolve('error'), { once: true });
+        link.href = '/styles/visibility2.css';
+      });
+      testing.expectEqual('load', second);
+      testing.expectEqual(afterFirst, document.styleSheets.length);
+
+      // New rules must be in effect after the swap. The reused sheet is
+      // the last registered one (the static head link registered first).
+      const sheet = document.styleSheets[afterFirst - 1];
+      testing.expectEqual(testing.ORIGIN + '/styles/visibility2.css', sheet.href);
+      testing.expectEqual(1, sheet.cssRules.length);
+      testing.expectEqual('.ext-hide-2', sheet.cssRules[0].selectorText);
+    });
+    testing.expectEqual(true, true);
+  }
+  </script>
 </body>
