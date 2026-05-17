@@ -273,7 +273,35 @@ pub const Connection = struct {
     _easy: *libcurl.Curl,
     in_use: bool,
     transport: Transport,
+
+    // Network-thread node. Lives in either the available pool or — once
+    // the network thread has handed the conn back — `Handle._completion_queue`.
+    // Mailbox messages reference the conn by pointer, so this node is *not*
+    // used for cross-thread submission; it's only used for the two
+    // network/worker-owned lists.
     node: std.DoublyLinkedList.Node = .{},
+
+    // Worker-thread node. Lives in `Handle.in_use` for the duration of a
+    // tracked submission. Independent of `node` — both are live
+    // simultaneously while a transfer is in flight.
+    _worker_node: std.DoublyLinkedList.Node = .{},
+
+    // Network-thread-private. Set in handleAdd, cleared in handleRemove
+    // and in processCompletions. Read by the mailbox drain to drop stale
+    // ops aimed at a conn that's no longer in the multi (e.g. worker
+    // enqueued an unpause but the conn completed before drain ran).
+    // Only the network thread touches this; no synchronization needed.
+    _in_multi: bool = false,
+
+    // Set by the conn's owner (Handle / telemetry) before submitting. The
+    // network thread invokes it after curl_multi_remove_handle or on an
+    // add failure, passing the cause. The callback then owns the conn
+    // (must eventually release it via `Handle.finishConn` or
+    // `Network.releaseConnection`).
+    on_complete: ?*const fn (conn: *Connection, err: ?anyerror) void = null,
+
+    // Stash for the on_complete callback to forward to the worker.
+    _completion_err: ?anyerror = null,
 
     pub const Transport = union(enum) {
         none, // used for cases that manage their own connection, e.g. telemetry
@@ -588,62 +616,6 @@ pub const Connection = struct {
 
     pub fn wsMeta(self: *const Connection) ?libcurl.WsFrameMeta {
         return libcurl.curl_ws_meta(self._easy);
-    }
-};
-
-pub const Handles = struct {
-    multi: *libcurl.CurlM,
-
-    pub fn init(config: *const Config) !Handles {
-        const multi = libcurl.curl_multi_init() orelse return error.FailedToInitializeMulti;
-        errdefer libcurl.curl_multi_cleanup(multi) catch {};
-
-        try libcurl.curl_multi_setopt(multi, .max_host_connections, config.httpMaxHostOpen());
-
-        return .{ .multi = multi };
-    }
-
-    pub fn deinit(self: *Handles) void {
-        libcurl.curl_multi_cleanup(self.multi) catch {};
-    }
-
-    pub fn add(self: *Handles, conn: *const Connection) !void {
-        try libcurl.curl_multi_add_handle(self.multi, conn._easy);
-    }
-
-    pub fn remove(self: *Handles, conn: *const Connection) !void {
-        try libcurl.curl_multi_remove_handle(self.multi, conn._easy);
-    }
-
-    pub fn perform(self: *Handles) !c_int {
-        var running: c_int = undefined;
-        try libcurl.curl_multi_perform(self.multi, &running);
-        return running;
-    }
-
-    pub fn poll(self: *Handles, extra_fds: []libcurl.CurlWaitFd, timeout_ms: c_int) !void {
-        try libcurl.curl_multi_poll(self.multi, extra_fds, timeout_ms, null);
-    }
-
-    pub const MultiMessage = struct {
-        conn: *Connection,
-        err: ?Error,
-    };
-
-    pub fn readMessage(self: *Handles) !?MultiMessage {
-        var messages_count: c_int = 0;
-        const msg = libcurl.curl_multi_info_read(self.multi, &messages_count) orelse return null;
-        return switch (msg.data) {
-            .done => |err| {
-                var private: *anyopaque = undefined;
-                try libcurl.curl_easy_getinfo(msg.easy_handle, .private, &private);
-                return .{
-                    .conn = @ptrCast(@alignCast(private)),
-                    .err = err,
-                };
-            },
-            else => unreachable,
-        };
     }
 };
 

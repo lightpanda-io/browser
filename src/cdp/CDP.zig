@@ -68,6 +68,11 @@ browser_context_id_gen: BrowserContextIdGen = .{},
 
 browser_context: ?BrowserContext,
 
+// Set by `onDisconnect` (fired from inbox dispatch on the worker
+// thread) when the network thread sees the CDP socket close. The
+// next `tick` checks this and returns false to break the loop.
+disconnected: bool = false,
+
 // Re-used arena for processing a message. We're assuming that we're getting
 // 1 message at a time.
 message_arena: std.heap.ArenaAllocator,
@@ -108,10 +113,29 @@ pub fn init(
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, .{
         .ctx = self,
         .socket = socket,
+        .on_data = onData,
+        .on_disconnect = onDisconnect,
         .blocking_read_start = CDP.blockingReadStart,
         .blocking_read = CDP.blockingRead,
         .blocking_read_end = CDP.blockingReadStop,
     });
+}
+
+// Worker-thread callback invoked by HttpClient.processInbox when the
+// network thread has read bytes from the CDP socket. Feed them into
+// the ws framer, then dispatch any complete frames. If the framer
+// returns false (close frame or handler asked to stop), flag for
+// disconnect so the next tick exits the loop.
+fn onData(ctx: *anyopaque, data: []const u8) anyerror!void {
+    const self: *CDP = @ptrCast(@alignCast(ctx));
+    try self.ws.feedBytes(data);
+    const keep = try self.ws.processMessages(self);
+    if (!keep) self.disconnected = true;
+}
+
+fn onDisconnect(ctx: *anyopaque) void {
+    const self: *CDP = @ptrCast(@alignCast(ctx));
+    self.disconnected = true;
 }
 
 pub fn deinit(self: *CDP) void {
@@ -194,22 +218,23 @@ pub fn tick(self: *CDP) !bool {
     // Network.acceptConnections; the wakeup lets V8 run or terminate.
     const wait_ms: u32 = 1000; // 1s
 
-    const result = self.pageWait(wait_ms) catch |wait_err| switch (wait_err) {
+    // CDP socket I/O is on the network thread now. Bytes / disconnect
+    // arrive via the inbox and dispatch inline through onData /
+    // onDisconnect; .cdp_socket from http_client.tick no longer means
+    // "go read the socket," so we don't act on it here. Disconnect
+    // shows up as `self.disconnected` being flipped during the inbox
+    // drain inside pageWait / http_client.tick.
+    _ = self.pageWait(wait_ms) catch |wait_err| switch (wait_err) {
         error.NoPage => {
-            const status = self.browser.http_client.tick(wait_ms) catch |err| {
+            _ = self.browser.http_client.tick(wait_ms) catch |err| {
                 log.err(.app, "http tick", .{ .err = err });
                 return false;
             };
-            return status != .cdp_socket or self.readSocket();
         },
         else => return wait_err,
     };
 
-    if (result == .cdp_socket) {
-        return self.readSocket();
-    }
-
-    return true;
+    return !self.disconnected;
 }
 
 // Called from above, in processMessage which handles client messages

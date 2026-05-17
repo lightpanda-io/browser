@@ -149,7 +149,7 @@ pub fn init(url: []const u8, protocols: [][]const u8, frame: *Frame) !*WebSocket
         ._http_client = http_client,
     });
     conn.transport = .{ .websocket = self };
-    try http_client.trackConn(conn);
+    try http_client.submitConn(conn);
     frame._http_owner.addWS(self);
 
     if (comptime IS_DEBUG) {
@@ -237,7 +237,12 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
 fn cleanup(self: *WebSocket) void {
     if (self._conn) |conn| {
         self._frame._http_owner.removeWS(self);
-        self._http_client.removeConn(conn);
+        // TODO: wrong in the new design — calling finishConn here
+        // releases the conn synchronously while it may still be in the
+        // multi. Correct fix is the async-cancel pattern (submitRemove
+        // + wait for canceled completion via disconnected). Tracked as
+        // part of the WS rewrite.
+        self._http_client.finishConn(conn);
         self._req_headers.deinit();
         self._conn = null;
         self.releaseRef(self._frame._page);

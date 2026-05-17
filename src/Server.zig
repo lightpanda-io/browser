@@ -169,6 +169,26 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
     self.registerConn(cdp);
     defer self.unregisterConn(cdp);
 
+    // Hand the CDP socket to the network thread for reading. From
+    // here on, cdp.ws.read MUST NOT be called — bytes arrive via
+    // HttpClient inbox → CDP.onData. We unregister on exit and wait
+    // for the disconnect ack via cdp.tick draining the inbox.
+    cdp.browser.http_client.registerCdpSocket(socket) catch |err| {
+        log.err(.app, "cdp register socket", .{ .err = err });
+        return;
+    };
+    defer {
+        cdp.browser.http_client.unregisterCdpSocket(socket) catch |err| {
+            log.warn(.app, "cdp unregister socket", .{ .err = err });
+        };
+        // Drain inbox until the on_disconnect ack arrives, so the
+        // network thread is guaranteed to be done with this socket
+        // before handleConnection returns and the socket is closed.
+        while (!cdp.disconnected) {
+            _ = cdp.browser.http_client.tick(100) catch break;
+        }
+    }
+
     // Check shutdown after registering to avoid missing the stop signal.
     // If shutdown() already iterated over conns, this conn won't be terminated
     // and would block deinit() indefinitely.

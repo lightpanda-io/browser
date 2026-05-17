@@ -45,9 +45,6 @@ const Listener = struct {
     onAccept: *const fn (ctx: *anyopaque, socket: posix.socket_t) void,
 };
 
-// Number of fixed pollfds entries (wakeup pipe + listener).
-const PSEUDO_POLLFDS = 2;
-
 const MAX_TICK_CALLBACKS = 16;
 
 allocator: Allocator,
@@ -68,21 +65,35 @@ ws_count: usize = 0,
 ws_max: u8,
 ws_mutex: std.Thread.Mutex = .{},
 
-pollfds: []posix.pollfd,
 listener: ?Listener = null,
 accept: std.atomic.Value(bool) = .init(true),
 
-// Wakeup pipe: workers write to [1], main thread polls [0]
-wakeup_pipe: [2]posix.fd_t = .{ -1, -1 },
+// CDP sockets the network thread polls on behalf of workers. Each
+// worker registers its accepted socket via submitCdpRegister; the
+// network thread applies the mutation in drainInbox and polls it
+// alongside the listener + curl's fds. Network-thread-private —
+// no lock needed because all mutations come through the inbox.
+//
+// `extra_fds` mirrors cdp_regs (parallel arrays). extra_fds[0] is
+// the listener slot when bound; cdp_regs covers entries from
+// extra_fds[cdp_start..].
+cdp_regs: std.ArrayList(CdpReg) = .empty,
+extra_fds: std.ArrayList(libcurl.CurlWaitFd) = .empty,
 
 shutdown: std.atomic.Value(bool) = .init(false),
 
-// Multi is a heavy structure that can consume up to 2MB of RAM.
-// Currently, Network is used sparingly, and we only create it on demand.
-// When Network becomes truly shared, it should become a regular field.
-multi: ?*libcurl.CurlM = null,
-submission_mutex: std.Thread.Mutex = .{},
-submission_queue: std.DoublyLinkedList = .{},
+multi: *libcurl.CurlM,
+
+// Cross-thread inbox: workers submit work (add/remove/op) via the
+// submit* methods; the network thread drains in `drainInbox` and
+// dispatches on Message kind. Modeled after an OTP-style GenServer
+// inbox: all worker → network communication funnels through here.
+//
+// InboxItem entries are allocated from `inbox_pool` under the
+// mutex; the drain frees them back to the pool in a single batch.
+inbox: std.DoublyLinkedList = .{},
+inbox_mutex: std.Thread.Mutex = .{},
+inbox_pool: std.heap.MemoryPool(InboxItem),
 
 callbacks: [MAX_TICK_CALLBACKS]TickCallback = undefined,
 callbacks_len: usize = 0,
@@ -94,6 +105,51 @@ ip_filter: ?*IpFilter = null,
 const TickCallback = struct {
     ctx: *anyopaque,
     fun: *const fn (*anyopaque) void,
+};
+
+// One message kind per worker → network operation. The dispatch is in
+// `drainInbox`. `_in_multi` gates the conn-targeting ops so a stale
+// .unpause / .tls_verify aimed at a conn whose completion is already
+// in the pipeline becomes a no-op.
+pub const Message = union(enum) {
+    add: *http.Connection,
+    remove: *http.Connection,
+    unpause: *http.Connection,
+    tls_verify: struct {
+        conn: *http.Connection,
+        verify: bool,
+        use_proxy: bool,
+    },
+    cdp_register: struct {
+        fd: posix.fd_t,
+        handler: CdpHandler,
+    },
+    cdp_unregister: posix.fd_t,
+};
+
+const InboxItem = struct {
+    msg: Message,
+    node: std.DoublyLinkedList.Node = .{},
+};
+
+// Handler invoked by the network thread when a CDP socket has data
+// or hits EOF. Both callbacks fire on the network thread; both
+// should be quick (push to the owner's inbox, don't do parsing here).
+pub const CdpHandler = struct {
+    ctx: *anyopaque,
+    on_data: *const fn (ctx: *anyopaque, data: []const u8) void,
+    on_disconnect: *const fn (ctx: *anyopaque) void,
+};
+
+const CdpReg = struct {
+    fd: posix.fd_t,
+    handler: CdpHandler,
+    // Set when we see EOF / read error / unregister request. The fd
+    // is removed from extra_fds when this flips so we stop polling
+    // it; the reg itself stays until on_disconnect is delivered and
+    // the worker confirms its inbox is drained (which it does
+    // implicitly by completing its deinit wait).
+    eof: bool = false,
 };
 
 const ZigToCurlAllocator = struct {
@@ -222,15 +278,6 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     globalInit(allocator);
     errdefer globalDeinit();
 
-    const pipe = try posix.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
-
-    // 0 is wakeup, 1 is listener, rest for curl fds
-    const pollfds = try allocator.alloc(posix.pollfd, PSEUDO_POLLFDS + config.httpMaxConcurrent());
-    errdefer allocator.free(pollfds);
-
-    @memset(pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
-    pollfds[0] = .{ .fd = pipe[0], .events = posix.POLL.IN, .revents = 0 };
-
     var ca_blob: ?http.Blob = null;
     if (config.tlsVerifyHost()) {
         ca_blob = try loadCerts(allocator);
@@ -285,13 +332,15 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     else
         null;
 
+    const multi = libcurl.curl_multi_init() orelse return error.FailedToInitializeMulti;
+    errdefer libcurl.curl_multi_cleanup(multi) catch {};
+
+    try libcurl.curl_multi_setopt(multi, .max_host_connections, config.httpMaxHostOpen());
+
     return .{
         .allocator = allocator,
         .config = config,
         .ca_blob = ca_blob,
-
-        .pollfds = pollfds,
-        .wakeup_pipe = pipe,
 
         .available = available,
         .connections = connections,
@@ -306,22 +355,17 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
         .ws_max = config.wsMaxConcurrent(),
 
         .ip_filter = ip_filter,
+
+        .multi = multi,
+        .inbox_pool = .init(allocator),
     };
 }
 
 pub fn deinit(self: *Network) void {
-    if (self.multi) |multi| {
-        libcurl.curl_multi_cleanup(multi) catch {};
-    }
-
-    for (&self.wakeup_pipe) |*fd| {
-        if (fd.* >= 0) {
-            posix.close(fd.*);
-            fd.* = -1;
-        }
-    }
-
-    self.allocator.free(self.pollfds);
+    libcurl.curl_multi_cleanup(self.multi) catch {};
+    self.inbox_pool.deinit();
+    self.cdp_regs.deinit(self.allocator);
+    self.extra_fds.deinit(self.allocator);
 
     if (self.ca_blob) |ca_blob| {
         const data: [*]u8 = @ptrCast(ca_blob.data);
@@ -384,16 +428,26 @@ pub fn bind(
         .ctx = ctx,
         .onAccept = on_accept,
     };
-    self.pollfds[1] = .{
-        .fd = listener,
-        .events = posix.POLL.IN,
-        .revents = 0,
-    };
 }
 
 pub fn unbind(self: *Network) void {
     self.accept.store(false, .release);
     self.wakeupPoll();
+}
+
+// Async: enqueue a CDP-socket registration. The network thread
+// applies it in drainInbox. Handler callbacks fire on the network
+// thread once polling picks up activity on the fd.
+pub fn submitCdpRegister(self: *Network, fd: posix.fd_t, handler: CdpHandler) !void {
+    return self.submit(.{ .cdp_register = .{ .fd = fd, .handler = handler } });
+}
+
+// Async: enqueue a CDP-socket unregistration. The network thread
+// flips the reg's `eof`, stops polling, and fires `on_disconnect` —
+// the worker uses that as the ack that no more handler calls will
+// happen for this fd (safe to free ctx after draining its inbox).
+pub fn submitCdpUnregister(self: *Network, fd: posix.fd_t) !void {
+    return self.submit(.{ .cdp_unregister = fd });
 }
 
 pub fn onTick(self: *Network, ctx: *anyopaque, callback: *const fn (*anyopaque) void) void {
@@ -421,11 +475,25 @@ pub fn fireTicks(self: *Network) void {
 }
 
 pub fn run(self: *Network) void {
-    var drain_buf: [64]u8 = undefined;
     var running_handles: c_int = 0;
 
-    const poll_fd = &self.pollfds[0];
-    const listen_fd = &self.pollfds[1];
+    // Per-iteration scratch for CDP socket reads. Sized to match the
+    // ws reader's initial capacity so one read fits one push.
+    var cdp_buf: [16 * 1024]u8 = undefined;
+
+    // Listener (if bound) lives at extra_fds[0] for the duration.
+    // CDP entries occupy extra_fds[cdpOffset()..] in lock-step with
+    // cdp_regs: cdp_regs[i] ↔ extra_fds[i + cdpOffset()]. All
+    // mutations happen on the network thread (here or in drainInbox)
+    // so no locking is needed; the invariant holds across each
+    // iteration boundary.
+    if (self.listener) |listener| {
+        self.extra_fds.append(self.allocator, .{
+            .fd = listener.socket,
+            .events = .{ .pollin = true },
+            .revents = .{},
+        }) catch @panic("OOM");
+    }
 
     // Please note that receiving a shutdown command does not terminate all connections.
     // When gracefully shutting down a server, we at least want to send the remaining
@@ -435,70 +503,72 @@ pub fn run(self: *Network) void {
         if (self.listener != null and !self.accept.load(.acquire)) {
             posix.close(self.listener.?.socket);
             self.listener = null;
-            self.pollfds[1] = .{ .fd = -1, .events = 0, .revents = 0 };
+            // Shift CDP entries down by 1 to keep the parallel
+            // invariant (cdp_regs[i] ↔ extra_fds[i + cdpOffset()]).
+            // O(N) but happens at most once per Network lifetime.
+            _ = self.extra_fds.orderedRemove(0);
         }
 
-        self.drainQueue();
+        self.drainInbox();
 
-        if (self.multi) |multi| {
-            // Kickstart newly added handles (DNS/connect) so that
-            // curl registers its sockets before we poll.
-            libcurl.curl_multi_perform(multi, &running_handles) catch |err| {
-                lp.log.err(.app, "curl perform", .{ .err = err });
-            };
+        // Kickstart newly added handles (DNS/connect) so that curl
+        // registers its sockets before we poll.
+        libcurl.curl_multi_perform(self.multi, &running_handles) catch |err| {
+            lp.log.err(.app, "curl perform", .{ .err = err });
+        };
+        self.processCompletions();
 
-            self.preparePollFds(multi);
-        }
-
-        // for ontick to work, you need to wake up periodically
+        // TODO: the 250ms cap is here only so `fireTicks` runs often
+        // enough for telemetry's periodic flush. Telemetry should
+        // schedule its own wakeup (via curl_multi_wakeup) when it has
+        // work, after which we can let curl pick the timeout freely.
         const timeout = blk: {
-            const min_timeout = 250; // 250ms
-            if (self.multi == null) {
-                break :blk min_timeout;
-            }
-
             const curl_timeout = self.getCurlTimeout();
-            if (curl_timeout == 0) {
-                break :blk min_timeout;
-            }
+            if (curl_timeout == 0) break :blk 0;
 
+            const min_timeout = 250;
             break :blk @min(min_timeout, curl_timeout);
         };
 
-        _ = posix.poll(self.pollfds, timeout) catch |err| {
-            lp.log.err(.app, "poll", .{ .err = err });
+        // curl_multi_poll handles curl's own sockets plus everything
+        // in extra_fds (listener + CDP sockets). Cross-thread wakeup
+        // comes via curl_multi_wakeup (no pipe needed).
+        libcurl.curl_multi_poll(self.multi, self.extra_fds.items, timeout, null) catch |err| {
+            lp.log.err(.app, "curl poll", .{ .err = err });
             continue;
         };
 
-        // check wakeup pipe
-        if (poll_fd.revents != 0) {
-            poll_fd.revents = 0;
-            while (true)
-                _ = posix.read(self.wakeup_pipe[0], &drain_buf) catch break;
-        }
-
-        // accept new connections
-        if (listen_fd.revents != 0) {
-            listen_fd.revents = 0;
+        // Listener: always extra_fds[0] when bound.
+        if (self.listener != null and self.extra_fds.items[0].revents.pollin) {
             self.acceptConnections();
         }
 
-        if (self.multi) |multi| {
-            // Drive transfers and process completions.
-            libcurl.curl_multi_perform(multi, &running_handles) catch |err| {
-                lp.log.err(.app, "curl perform", .{ .err = err });
-            };
-            self.processCompletions(multi);
+        // CDP: parallel-array dispatch, no fd lookups. Eof entries
+        // are skipped (their extra_fds.events is zeroed so they
+        // can't have pollin set, but the explicit check documents
+        // the invariant). Iteration order is stable because eof
+        // doesn't remove from either list — only unregister does.
+        const offset = self.cdpOffset();
+        for (self.cdp_regs.items, 0..) |*reg, i| {
+            if (reg.eof) continue;
+            const fd_state = self.extra_fds.items[i + offset];
+            if (!fd_state.revents.pollin) continue;
+            self.dispatchCdpRead(reg, i + offset, &cdp_buf);
         }
+
+        libcurl.curl_multi_perform(self.multi, &running_handles) catch |err| {
+            lp.log.err(.app, "curl perform", .{ .err = err });
+        };
+        self.processCompletions();
 
         self.fireTicks();
 
         if (self.shutdown.load(.acquire) and running_handles == 0) {
             // Check if fireTicks submitted new requests (e.g. telemetry flush).
             // If so, continue the loop to drain and send them before exiting.
-            self.submission_mutex.lock();
-            const has_pending = self.submission_queue.first != null;
-            self.submission_mutex.unlock();
+            self.inbox_mutex.lock();
+            const has_pending = self.inbox.first != null;
+            self.inbox_mutex.unlock();
             if (!has_pending) break;
         }
     }
@@ -517,44 +587,202 @@ pub fn run(self: *Network) void {
     }
 }
 
-pub fn submitRequest(self: *Network, conn: *http.Connection) void {
-    self.submission_mutex.lock();
-    self.submission_queue.append(&conn.node);
-    self.submission_mutex.unlock();
+// ── Inbox: worker → network thread submission ──────────────────────────────
+
+pub fn submitAdd(self: *Network, conn: *http.Connection) !void {
+    return self.submit(.{ .add = conn });
+}
+
+pub fn submitRemove(self: *Network, conn: *http.Connection) !void {
+    return self.submit(.{ .remove = conn });
+}
+
+pub fn submitUnpause(self: *Network, conn: *http.Connection) !void {
+    return self.submit(.{ .unpause = conn });
+}
+
+pub fn submitTlsVerify(self: *Network, conn: *http.Connection, verify: bool, use_proxy: bool) !void {
+    return self.submit(.{ .tls_verify = .{ .conn = conn, .verify = verify, .use_proxy = use_proxy } });
+}
+
+fn submit(self: *Network, msg: Message) !void {
+    {
+        self.inbox_mutex.lock();
+        defer self.inbox_mutex.unlock();
+        const item = try self.inbox_pool.create();
+        item.* = .{ .msg = msg };
+        self.inbox.append(&item.node);
+    }
     self.wakeupPoll();
 }
 
-fn wakeupPoll(self: *Network) void {
-    _ = posix.write(self.wakeup_pipe[1], &.{1}) catch {};
+// Called by callers driving submissions outside of `run` (tests, and
+// the late-shutdown path that needs to flush any canceled completions
+// after the network thread has stopped).
+pub fn drainPendingForShutdown(self: *Network) void {
+    self.drainInbox();
+    self.processCompletions();
 }
 
-fn drainQueue(self: *Network) void {
-    self.submission_mutex.lock();
-    defer self.submission_mutex.unlock();
-
-    if (self.submission_queue.first == null) return;
-
-    const multi = self.multi orelse blk: {
-        const m = libcurl.curl_multi_init() orelse {
-            lp.assert(false, "curl multi init failed", .{});
-            unreachable;
-        };
-        self.multi = m;
-        break :blk m;
+fn wakeupPoll(self: *Network) void {
+    libcurl.curl_multi_wakeup(self.multi) catch |err| {
+        lp.log.warn(.app, "curl multi wakeup", .{ .err = err });
     };
+}
 
-    while (self.submission_queue.popFirst()) |node| {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        conn.setPrivate(conn) catch |err| {
-            lp.log.err(.app, "curl set private", .{ .err = err });
-            self.releaseConnection(conn);
-            continue;
-        };
-        libcurl.curl_multi_add_handle(multi, conn._easy) catch |err| {
-            lp.log.err(.app, "curl multi add", .{ .err = err });
-            self.releaseConnection(conn);
-        };
+// Splice the inbox into a local list under the lock, then walk it
+// twice: once to process (handleAdd / handleRemove fire on_complete
+// which crosses into the worker's completion queue; ops touch
+// libcurl), then once to free items back to the pool in a single
+// locked batch.
+fn drainInbox(self: *Network) void {
+    var local: std.DoublyLinkedList = .{};
+    {
+        self.inbox_mutex.lock();
+        defer self.inbox_mutex.unlock();
+        while (self.inbox.popFirst()) |n| local.append(n);
     }
+    if (local.first == null) return;
+
+    var it = local.first;
+    while (it) |node| : (it = node.next) {
+        const item: *InboxItem = @fieldParentPtr("node", node);
+        switch (item.msg) {
+            .add => |conn| self.handleAdd(conn),
+            .remove => |conn| self.handleRemove(conn),
+            .unpause => |conn| {
+                if (!conn._in_multi) continue;
+                conn.pause(.{ .cont = true }) catch |err| {
+                    lp.log.warn(.app, "curl pause", .{ .err = err });
+                };
+            },
+            .tls_verify => |t| {
+                if (!t.conn._in_multi) continue;
+                t.conn.setTlsVerify(t.verify, t.use_proxy) catch |err| {
+                    lp.log.warn(.app, "curl setTlsVerify", .{ .err = err });
+                };
+            },
+            .cdp_register => |r| self.handleCdpRegister(r.fd, r.handler),
+            .cdp_unregister => |fd| self.handleCdpUnregister(fd),
+        }
+    }
+
+    self.inbox_mutex.lock();
+    defer self.inbox_mutex.unlock();
+    while (local.popFirst()) |node| {
+        const item: *InboxItem = @fieldParentPtr("node", node);
+        self.inbox_pool.destroy(item);
+    }
+}
+
+// Add a conn to the multi. On failure, fire on_complete with the
+// error (or release directly if no callback is set). `_in_multi`
+// stays false on failure so subsequent ops are dropped.
+fn handleAdd(self: *Network, conn: *http.Connection) void {
+    conn.setPrivate(conn) catch |err| {
+        lp.log.err(.app, "curl set private", .{ .err = err });
+        self.fireOnComplete(conn, err);
+        return;
+    };
+    libcurl.curl_multi_add_handle(self.multi, conn._easy) catch |err| {
+        lp.log.err(.app, "curl multi add", .{ .err = err });
+        self.fireOnComplete(conn, err);
+        return;
+    };
+    conn._in_multi = true;
+}
+
+// Remove a conn from the multi (cancel path). Always fires
+// on_complete with Canceled — even if the conn never made it into
+// the multi (e.g. .remove came in before .add ran), the contract
+// stands: the owner gets exactly one terminal on_complete.
+fn handleRemove(self: *Network, conn: *http.Connection) void {
+    if (conn._in_multi) {
+        libcurl.curl_multi_remove_handle(self.multi, conn._easy) catch |err| {
+            lp.assert(false, "curl multi remove (was in_multi)", .{ .err = err });
+        };
+        conn._in_multi = false;
+    }
+    self.fireOnComplete(conn, error.Canceled);
+}
+
+fn fireOnComplete(self: *Network, conn: *http.Connection, err: ?anyerror) void {
+    if (conn.on_complete) |cb| {
+        cb(conn, err);
+    } else {
+        self.releaseConnection(conn);
+    }
+}
+
+// Append a CDP registration. Both lists grow together so
+// extra_fds[cdp_start + i] always matches cdp_regs[i] for non-eof
+// entries — see the run loop's dispatch indexing.
+fn handleCdpRegister(self: *Network, fd: posix.fd_t, handler: CdpHandler) void {
+    self.cdp_regs.append(self.allocator, .{ .fd = fd, .handler = handler }) catch |err| {
+        lp.log.err(.app, "cdp register OOM", .{ .err = err });
+        handler.on_disconnect(handler.ctx);
+        return;
+    };
+    self.extra_fds.append(self.allocator, .{
+        .fd = fd,
+        .events = .{ .pollin = true },
+        .revents = .{},
+    }) catch |err| {
+        lp.log.err(.app, "cdp register OOM extra_fds", .{ .err = err });
+        _ = self.cdp_regs.pop();
+        handler.on_disconnect(handler.ctx);
+        return;
+    };
+}
+
+// Find the registration by fd, drop it from both parallel arrays.
+// Fires on_disconnect as the "unregister processed" ack the worker
+// is waiting for — unless we already fired it on EOF.
+//
+// swapRemove on both lists at the same logical index preserves the
+// parallel invariant: cdp_regs[i] ↔ extra_fds[i + offset]. Both
+// lists move their last entry to position i.
+fn handleCdpUnregister(self: *Network, fd: posix.fd_t) void {
+    const offset = self.cdpOffset();
+    for (self.cdp_regs.items, 0..) |*reg, i| {
+        if (reg.fd != fd) continue;
+        const already_eof = reg.eof;
+        const handler = reg.handler;
+        _ = self.cdp_regs.swapRemove(i);
+        _ = self.extra_fds.swapRemove(i + offset);
+        if (!already_eof) handler.on_disconnect(handler.ctx);
+        return;
+    }
+}
+
+inline fn cdpOffset(self: *Network) usize {
+    return if (self.listener != null) 1 else 0;
+}
+
+// Read from a readable CDP socket and dispatch to its handler.
+// On EOF / error, marks the reg eof'd and fires on_disconnect;
+// the reg+extra_fds slot stay parallel until the worker's
+// unregister fully removes them.
+fn dispatchCdpRead(self: *Network, reg: *CdpReg, fd_idx: usize, buf: []u8) void {
+    const n = posix.read(reg.fd, buf) catch |err| {
+        lp.log.warn(.app, "cdp read", .{ .err = err });
+        self.markCdpEof(reg, fd_idx);
+        return;
+    };
+    if (n == 0) {
+        self.markCdpEof(reg, fd_idx);
+        return;
+    }
+    reg.handler.on_data(reg.handler.ctx, buf[0..n]);
+}
+
+// EOF / error path. Reg stays in cdp_regs (and its extra_fds slot)
+// to preserve the parallel invariant; zeroing events stops poll
+// from waking us on this fd. Worker's unregister will fully remove.
+fn markCdpEof(self: *Network, reg: *CdpReg, fd_idx: usize) void {
+    reg.eof = true;
+    self.extra_fds.items[fd_idx].events = .{};
+    reg.handler.on_disconnect(reg.handler.ctx);
 }
 
 pub fn stop(self: *Network) void {
@@ -573,7 +801,6 @@ fn acceptConnections(self: *Network) void {
             switch (err) {
                 error.WouldBlock => break,
                 error.SocketNotListening => {
-                    self.pollfds[1] = .{ .fd = -1, .events = 0, .revents = 0 };
                     self.listener = null;
                     return;
                 },
@@ -614,34 +841,21 @@ fn acceptConnections(self: *Network) void {
     }
 }
 
-fn preparePollFds(self: *Network, multi: *libcurl.CurlM) void {
-    const curl_fds = self.pollfds[PSEUDO_POLLFDS..];
-    @memset(curl_fds, .{ .fd = -1, .events = 0, .revents = 0 });
-
-    var fd_count: c_uint = 0;
-    const wait_fds: []libcurl.CurlWaitFd = @ptrCast(curl_fds);
-    libcurl.curl_multi_waitfds(multi, wait_fds, &fd_count) catch |err| {
-        lp.log.err(.app, "curl waitfds", .{ .err = err });
-    };
-}
-
 fn getCurlTimeout(self: *Network) i32 {
-    const multi = self.multi orelse return -1;
     var timeout_ms: c_long = -1;
-    libcurl.curl_multi_timeout(multi, &timeout_ms) catch return -1;
+    libcurl.curl_multi_timeout(self.multi, &timeout_ms) catch return -1;
     return @intCast(@min(timeout_ms, std.math.maxInt(i32)));
 }
 
-fn processCompletions(self: *Network, multi: *libcurl.CurlM) void {
+fn processCompletions(self: *Network) void {
     var msgs_in_queue: c_int = 0;
-    while (libcurl.curl_multi_info_read(multi, &msgs_in_queue)) |msg| {
-        switch (msg.data) {
-            .done => |maybe_err| {
-                if (maybe_err) |err| {
-                    lp.log.warn(.app, "curl transfer error", .{ .err = err });
-                }
-            },
+    while (libcurl.curl_multi_info_read(self.multi, &msgs_in_queue)) |msg| {
+        const maybe_err: ?anyerror = switch (msg.data) {
+            .done => |e| e,
             else => continue,
+        };
+        if (maybe_err) |err| {
+            lp.log.warn(.app, "curl transfer error", .{ .err = err });
         }
 
         const easy: *libcurl.Curl = msg.easy_handle;
@@ -650,20 +864,11 @@ fn processCompletions(self: *Network, multi: *libcurl.CurlM) void {
             lp.assert(false, "curl getinfo private", .{});
         const conn: *http.Connection = @ptrCast(@alignCast(ptr));
 
-        libcurl.curl_multi_remove_handle(multi, easy) catch {};
-        self.releaseConnection(conn);
-    }
-}
-
-comptime {
-    if (@sizeOf(posix.pollfd) != @sizeOf(libcurl.CurlWaitFd)) {
-        @compileError("pollfd and CurlWaitFd size mismatch");
-    }
-    if (@offsetOf(posix.pollfd, "fd") != @offsetOf(libcurl.CurlWaitFd, "fd") or
-        @offsetOf(posix.pollfd, "events") != @offsetOf(libcurl.CurlWaitFd, "events") or
-        @offsetOf(posix.pollfd, "revents") != @offsetOf(libcurl.CurlWaitFd, "revents"))
-    {
-        @compileError("pollfd and CurlWaitFd layout mismatch");
+        libcurl.curl_multi_remove_handle(self.multi, easy) catch |err| {
+            lp.assert(false, "curl multi remove (post-completion)", .{ .err = err });
+        };
+        conn._in_multi = false;
+        self.fireOnComplete(conn, maybe_err);
     }
 }
 

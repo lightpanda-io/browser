@@ -477,6 +477,19 @@ pub fn read(self: *WsConnection) !usize {
     return n;
 }
 
+// Append pre-read bytes (from the network thread) to the reader.
+// Used post-handshake when the network thread owns socket reads and
+// hands bytes back via the HttpClient inbox. Returns BufferTooSmall
+// if the reader's free space can't hold this chunk — caller is
+// expected to chunk reads to fit (Network reads in 16 KB chunks
+// which matches the reader's initial capacity).
+pub fn feedBytes(self: *WsConnection, data: []const u8) !void {
+    const dst = self.reader.readBuf();
+    if (data.len > dst.len) return error.BufferTooSmall;
+    @memcpy(dst[0..data.len], data);
+    self.reader.len += data.len;
+}
+
 fn processHttpRequest(self: *WsConnection) !HttpResult {
     assert(self.reader.pos == 0, "WsConnection.HTTP pos", .{ .pos = self.reader.pos });
     const request = self.reader.buf[0..self.reader.len];

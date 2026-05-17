@@ -862,6 +862,13 @@ pub fn curl_multi_poll(
     try errorMCheck(c.curl_multi_poll(multi, raw_fds, @intCast(extra_fds.len), timeout_ms, numfds));
 }
 
+// The only libcurl-multi function that's safe to call from a thread
+// other than the one driving the multi. Unblocks a concurrent
+// curl_multi_poll on this handle.
+pub fn curl_multi_wakeup(multi: *CurlM) ErrorMulti!void {
+    try errorMCheck(c.curl_multi_wakeup(multi));
+}
+
 pub fn curl_multi_waitfds(multi: *CurlM, ufds: []CurlWaitFd, fd_count: *c_uint) ErrorMulti!void {
     const raw_fds: [*c]c.curl_waitfd = if (ufds.len == 0) null else @ptrCast(ufds.ptr);
     try errorMCheck(c.curl_multi_waitfds(multi, raw_fds, @intCast(ufds.len), fd_count));

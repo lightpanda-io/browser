@@ -25,6 +25,7 @@ const Notification = @import("../Notification.zig");
 const timestamp = @import("../datetime.zig").timestamp;
 
 const URL = @import("URL.zig");
+const WebSocket = @import("webapi/net/WebSocket.zig");
 const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
 
 const http = @import("../network/http.zig");
@@ -61,23 +62,13 @@ pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
 // impacting those other http requests.
 pub const Client = @This();
 
-// Count of active ws requests
-ws_active: usize = 0,
-
-// Count of active http requests
-http_active: usize = 0,
-
-// Our curl multi handle.
-handles: http.Handles,
-
-// Connections currently in this client's curl_multi.
+// Conns active in the multi (or about to enter). Iterated by abort /
+// setTlsVerify. A conn enters here when the worker calls `submitConn`
+// and exits when `finishConn` runs (after the terminal completion has
+// been drained from the inbox).
 in_use: std.DoublyLinkedList = .{},
-
-// Connections that failed to be removed from curl_multi during perform.
-dirty: std.DoublyLinkedList = .{},
-
-// Whether we're currently inside a curl_multi_perform call.
-performing: bool = false,
+http_active: usize = 0,
+ws_active: usize = 0,
 
 // Use to generate the next request ID
 next_request_id: u32 = 0,
@@ -89,15 +80,14 @@ next_request_id: u32 = 0,
 // only valid for the lifetime of the entry.
 transfers: std.AutoHashMapUnmanaged(u32, *Transfer) = .empty,
 
-// When handles has no more available easys, requests get queued.
+// Transfers waiting for a free Connection from the Network pool. Drained
+// in tick().
 queue: std.DoublyLinkedList = .{},
 
-// Queue is for Transfers that have no connection. ready_queue is for connections
-// that were initiated when performing == true and thus need to wait until
-// performing == false before being added. I'm hoping this is temporary and that
-// we can unify the two queues. But HTTP is being changed a lot right now, and
-// I'm trying to minimize the surface area.
-ready_queue: std.DoublyLinkedList = .{},
+// Per-worker inbox. The network thread pushes events here (HTTP
+// completions, WS frame events, CDP socket bytes); the worker drains
+// via `inbox.next(timeout_ms)` from its outer loop.
+inbox: Inbox,
 
 // The main app allocator
 allocator: Allocator,
@@ -167,22 +157,28 @@ fn layerWith(self: anytype, next: Layer) Layer {
 pub const CDPClient = struct {
     socket: posix.socket_t,
     ctx: *anyopaque,
+    // Fired from the worker thread when CDP bytes arrive in the
+    // inbox (the network thread did the read; we just hand the
+    // bytes back to CDP for ws framing + command dispatch).
+    on_data: *const fn (ctx: *anyopaque, data: []const u8) anyerror!void,
+    // Fired from the worker thread when the CDP socket has been
+    // closed / EOF'd / errored on the network thread side. After
+    // this fires, no more on_data will arrive for this connection.
+    on_disconnect: *const fn (ctx: *anyopaque) void,
+
     blocking_read_start: *const fn (*anyopaque) bool,
     blocking_read: *const fn (*anyopaque) bool,
     blocking_read_end: *const fn (*anyopaque) bool,
 };
 
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: ?CDPClient) !void {
-    var handles = try http.Handles.init(network.config);
-    errdefer handles.deinit();
-
     const http_proxy = network.config.httpProxy();
 
     self.* = Client{
-        .handles = handles,
         .network = network,
         .allocator = allocator,
         .cdp_client = cdp_client,
+        .inbox = .init(allocator),
 
         .use_proxy = http_proxy != null,
         .http_proxy = http_proxy,
@@ -221,10 +217,30 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: 
 
 pub fn deinit(self: *Client) void {
     self.abort();
-    self.handles.deinit();
 
+    // abort() submitted a remove for every in-flight conn. The network
+    // thread will deliver exactly one canceled completion per conn,
+    // each one decrementing in_use via finishConn. We wait for those
+    // acks before freeing anything libcurl callbacks could still reach.
+    //
+    // If the network thread has stopped (app shutdown), it won't ack
+    // us; drive its queues ourselves first.
+    var watchdog = std.time.Timer.start() catch unreachable;
+    while (self.in_use.first != null) {
+        if (self.network.shutdown.load(.acquire)) {
+            self.network.drainPendingForShutdown();
+        }
+        _ = self.processInbox(5_000) catch {};
+        if (watchdog.read() > 30 * std.time.ns_per_s) {
+            lp.assert(false, "HttpClient.deinit: stuck draining cancellations", .{
+                .http_active = self.http_active,
+                .ws_active = self.ws_active,
+            });
+        }
+    }
+
+    self.inbox.deinit();
     self.clearUserAgentOverride();
-
     self.robots_layer.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
 }
@@ -274,14 +290,8 @@ pub fn setTlsVerify(self: *Client, verify: bool) !void {
 
     var it = self.in_use.first;
     while (it) |node| : (it = node.next) {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        try conn.setTlsVerify(verify, self.use_proxy);
-    }
-
-    it = self.ready_queue.first;
-    while (it) |node| : (it = node.next) {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        try conn.setTlsVerify(verify, self.use_proxy);
+        const conn: *http.Connection = @fieldParentPtr("_worker_node", node);
+        try self.network.submitTlsVerify(conn, verify, self.use_proxy);
     }
 
     self.tls_verify = verify;
@@ -325,20 +335,14 @@ pub fn abort(self: *Client) void {
         t.kill();
     }
 
-    // After the kill loop, every internal list should drain itself via
-    // each transfer's deinit:
-    //   - self.transfers : transfers.remove(self.id)
-    //   - self.queue     : unlinked if _queued is set
-    //   - self.in_use / self.ready_queue : via removeConn
-    //   - self.dirty     : drained at end of each perform; nothing left here
-    // Any non-empty list means a transfer escaped cleanup — assert so we
-    // catch the regression rather than silently leaking on next use.
+    // After the kill loop:
+    //   - self.queue is empty (queued transfers had no conn and
+    //     deinit'd synchronously).
+    //   - self.transfers and self.in_use may still hold entries for
+    //     in-flight transfers waiting on their canceled completion.
+    //     deinit's wait loop drains those.
     if (comptime IS_DEBUG) {
-        std.debug.assert(self.transfers.size == 0);
         std.debug.assert(self.queue.first == null);
-        std.debug.assert(self.in_use.first == null);
-        std.debug.assert(self.ready_queue.first == null);
-        std.debug.assert(self.dirty.first == null);
     }
 }
 
@@ -550,14 +554,12 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
 // cases, the interceptor is expected to call resume to continue the transfer
 // or transfer.abort() to abort it.
 fn process(self: *Client, transfer: *Transfer) !void {
-    // libcurl doesn't allow recursive calls, if we're in a `perform()` operation
-    // then we _have_ to queue this.
-    if (self.performing == false) {
-        if (self.network.getConnection()) |conn| {
-            return self.makeRequest(conn, transfer);
-        }
+    // submitConn → Network.submitAdd is always safe to call. The network
+    // thread serializes mailbox processing, so there's no re-entrancy
+    // risk that used to require the `performing` check.
+    if (self.network.getConnection()) |conn| {
+        return self.makeRequest(conn, transfer);
     }
-
     self.queue.append(&transfer._node);
     transfer._queued = true;
     transfer.loop_owned = true;
@@ -592,17 +594,17 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
         transfer._conn = conn;
         errdefer {
             transfer._conn = null;
-            self.releaseConn(conn);
+            self.network.releaseConnection(conn);
         }
 
         try transfer.configureConn(conn);
     }
 
-    // As soon as trackConn succeeds, the multi handle owns the transfer's
-    // lifecycle. perform/processMessages will eventually invoke completion
-    // callbacks and call transfer.deinit. We flag loop_owned so Client.request
-    // (or anyone else holding the transfer pointer) knows not to deinit it.
-    self.trackConn(conn) catch |err| {
+    // submitConn tracks the conn in our in_use list and sends an .add
+    // message to the network thread's inbox. From here, the transfer's
+    // terminal cleanup happens when the canceled/done completion is
+    // delivered back to our inbox.
+    self.submitConn(conn) catch |err| {
         transfer._conn = null;
         return err;
     };
@@ -610,80 +612,85 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
 
     if (transfer.req.start_callback) |cb| {
         cb(Response.fromTransfer(transfer)) catch |err| {
-            // We're now committed to the multi. transfer.abort fires the
-            // error_callback and tears down (removeConn handles the
-            // already-in-multi case via the dirty queue).
             transfer.abort(err);
             return err;
         };
     }
-
-    // Start the request (and move along any other request). This used to call
-    // self.perform(0) but that can also execute callbacks. Normally, that
-    // wouldn't be so bad. But curl can synchronously fire callbacks for the
-    // request we JUST added, which we do not want (it results in incorrect
-    // execution).
-    self.performing = true;
-    defer self.performing = false;
-    _ = try self.handles.perform();
 }
 
+// Kept for caller-API stability; `.cdp_socket` is no longer returned
+// (CDP socket I/O migrated to the network thread — bytes arrive via
+// the inbox and are dispatched inline to `cdp_client.on_data`).
 pub const PerformStatus = enum {
     cdp_socket,
     normal,
 };
 
 fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
-    const running = blk: {
-        self.performing = true;
-        defer self.performing = false;
+    // Drain anything already pending (non-blocking).
+    _ = try self.processInbox(0);
 
-        break :blk try self.handles.perform();
-    };
-
-    // Process dirty connections — return them to Network pool.
-    while (self.dirty.popFirst()) |node| {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        self.handles.remove(conn) catch |err| {
-            log.fatal(.http, "multi remove handle", .{ .err = err, .src = "perform" });
-            @panic("multi_remove_handle");
-        };
-        self.releaseConn(conn);
+    // Block waiting for an event. With CDP I/O on the network
+    // thread, there's a single source of events (the inbox) — block
+    // there if there's anything we're waiting on.
+    if (self.in_use.first != null or self.cdp_client != null) {
+        _ = try self.processInbox(@intCast(timeout_ms));
     }
 
-    while (self.ready_queue.popFirst()) |node| {
-        const conn: *http.Connection = @fieldParentPtr("node", node);
-        try self.trackConn(conn);
-    }
-
-    // We're potentially going to block for a while until we get data. Process
-    // whatever messages we have waiting ahead of time.
-    if (try self.processMessages()) {
-        return .normal;
-    }
-
-    var status = PerformStatus.normal;
-    if (self.cdp_client) |cdp_client| {
-        var wait_fds = [_]http.WaitFd{.{
-            .fd = cdp_client.socket,
-            .events = .{ .pollin = true },
-            .revents = .{},
-        }};
-        try self.handles.poll(&wait_fds, timeout_ms);
-        if (wait_fds[0].revents.pollin or wait_fds[0].revents.pollpri or wait_fds[0].revents.pollout) {
-            status = .cdp_socket;
-        }
-    } else if (running > 0) {
-        try self.handles.poll(&.{}, timeout_ms);
-    }
-
-    _ = try self.processMessages();
-    return status;
+    _ = try self.processInbox(0);
+    return .normal;
 }
 
-fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) !bool {
-    if (msg.err == null or msg.err.? == error.RecvError) {
-        transfer.detectAuthChallenge(msg.conn);
+// Used by deinit to drain canceled completions until in_use empties.
+// Returns true if at least one message was processed.
+fn processInbox(self: *Client, timeout_ms: u32) !bool {
+    var processed = false;
+    while (true) {
+        const wait_ms: u32 = if (processed) 0 else timeout_ms;
+        const msg = self.inbox.next(wait_ms) orelse break;
+        processed = true;
+        switch (msg) {
+            .http_completion => |c| self.handleHttpCompletion(c.conn, c.err),
+            .cdp_data => |bytes| {
+                defer self.allocator.free(bytes);
+                if (self.cdp_client) |cdp| {
+                    cdp.on_data(cdp.ctx, bytes) catch |err| {
+                        log.err(.http, "cdp on_data", .{ .err = err });
+                    };
+                }
+            },
+            .cdp_disconnect => {
+                if (self.cdp_client) |cdp| cdp.on_disconnect(cdp.ctx);
+            },
+        }
+    }
+    return processed;
+}
+
+fn handleHttpCompletion(self: *Client, conn: *http.Connection, err: ?anyerror) void {
+    switch (conn.transport) {
+        .http => |transfer| {
+            const done = self.processOneMessage(conn, err, transfer) catch |perr| blk: {
+                log.err(.http, "process_messages", .{ .err = perr, .req = transfer });
+                transfer.requestFailed(perr, true);
+                break :blk true;
+            };
+            if (done) transfer.deinit();
+        },
+        .websocket => |ws| {
+            // ws_active gets decremented through the call to disconnected.
+            if (err) |e| switch (e) {
+                error.GotNothing, error.Canceled => ws.disconnected(null),
+                else => ws.disconnected(e),
+            } else ws.disconnected(null);
+        },
+        .none => unreachable,
+    }
+}
+
+fn processOneMessage(self: *Client, conn: *http.Connection, err: ?anyerror, transfer: *Transfer) !bool {
+    if (err == null or err.? == error.RecvError) {
+        transfer.detectAuthChallenge(conn);
     }
 
     // In case of auth challenge
@@ -709,59 +716,49 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         }
     }
 
-    // Handle redirects: reuse the same connection to preserve TCP state.
-    if (msg.err == null) {
-        const status = try msg.conn.getResponseCode();
+    // Redirect: reuse the same conn (preserve TCP state). The conn was
+    // already removed from the multi by Network.processCompletions before
+    // firing on_complete — we just reconfigure and submitAdd it back.
+    // No _detached_conn dance needed: at this point the conn is fully
+    // out of libcurl's view.
+    if (err == null) {
+        const status = try conn.getResponseCode();
         if (status >= 300 and status <= 399) {
             try transfer.handleRedirect();
-
-            const conn = transfer._conn.?;
-
-            try self.handles.remove(conn);
-            transfer._conn = null;
-            transfer._detached_conn = conn; // signal orphan for processMessages cleanup
-
             transfer.reset();
             try transfer.configureConn(conn);
-            try self.handles.add(conn);
-            transfer._detached_conn = null;
-            transfer._conn = conn; // reattach after successful re-add
-
-            _ = try self.perform(0);
-
+            try self.network.submitAdd(conn);
             return false;
         }
     }
 
-    // Transfer is done (success or error). Caller (processMessages) owns deinit.
+    // Transfer is done (success or error). Caller owns deinit.
     // Return true = done (caller will deinit), false = continues (redirect/auth).
 
-    // When the server closes the TLS onnection without a close_notify alert,
+    // When the server closes the TLS connection without a close_notify alert,
     // BoringSSL reports RecvError. If we already received valid HTTP headers,
     // this is a normal end-of-body (the connection closure signals the end
     // of the response per HTTP/1.1 when there is no Content-Length).
-    // We must check this before endTransfer, which may reset the easy handle.
     const is_conn_close_recv = blk: {
-        const err = msg.err orelse break :blk false;
-        if (err != error.RecvError) break :blk false;
-        const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk true;
+        const e = err orelse break :blk false;
+        if (e != error.RecvError) break :blk false;
+        const hdr = conn.getResponseHeader("connection", 0) orelse break :blk true;
         break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
     };
 
-    // make sure the transfer can't be immediately aborted from a callback
-    // since we still need it here.
+    // Block re-entrant abort from inside the user callback chain.
     transfer._performing = true;
     defer transfer._performing = false;
 
-    if (msg.err != null and !is_conn_close_recv) {
-        transfer.requestFailed(transfer.res.callback_error orelse msg.err.?, true);
+    if (err != null and !is_conn_close_recv) {
+        transfer.requestFailed(transfer.res.callback_error orelse err.?, true);
         return true;
     }
 
     if (!transfer.res.header_done_called) {
         // In case of request w/o data, we need to call the header done
         // callback now.
-        const proceed = try transfer.headerDoneCallback(msg.conn);
+        const proceed = try transfer.headerDoneCallback(conn);
         if (!proceed) {
             transfer.requestFailed(error.Abort, true);
             return true;
@@ -769,19 +766,16 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     }
 
     const body = transfer.res.stream_buffer.items;
-
-    // Replay buffered body through user's data_callback.
     if (body.len > 0) {
         try transfer.req.data_callback(Response.fromTransfer(transfer), body);
-
-        if (transfer.aborted) {
+        if (transfer.isAborted()) {
             transfer.requestFailed(error.Abort, true);
             return true;
         }
     }
 
-    // release conn ASAP so that it's available; some done_callbacks
-    // will load more resources.
+    // Release conn ASAP so it's available; some done_callbacks will
+    // load more resources.
     transfer.releaseConn();
 
     try transfer.req.done_callback(transfer.req.ctx);
@@ -789,103 +783,46 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     return true;
 }
 
-fn processMessages(self: *Client) !bool {
-    var processed = false;
-    while (try self.handles.readMessage()) |msg| {
-        switch (msg.conn.transport) {
-            .http => |transfer| {
-                const done = self.processOneMessage(msg, transfer) catch |err| blk: {
-                    log.err(.http, "process_messages", .{ .err = err, .req = transfer });
-                    transfer.requestFailed(err, true);
-                    if (transfer._detached_conn) |c| {
-                        // Conn was removed from handles during redirect reconfiguration
-                        // but not re-added. Release it directly to avoid double-remove.
-                        self.in_use.remove(&c.node);
-                        self.http_active -= 1;
-                        self.releaseConn(c);
-                        transfer._detached_conn = null;
-                    }
-                    break :blk true;
-                };
-                if (done) {
-                    transfer.deinit();
-                    processed = true;
-                }
-            },
-            .websocket => |ws| {
-                // ws_active will be decremented through the call to disconnected
-                if (msg.err) |err| switch (err) {
-                    error.GotNothing => ws.disconnected(null),
-                    else => ws.disconnected(err),
-                } else {
-                    // Clean close - no error
-                    ws.disconnected(null);
-                }
-
-                processed = true;
-            },
-            .none => unreachable,
-        }
-    }
-    return processed;
-}
-
-pub fn trackConn(self: *Client, conn: *http.Connection) !void {
-    if (self.performing) {
-        conn.in_use = false;
-        self.ready_queue.append(&conn.node);
-        return;
-    }
-
-    self.in_use.append(&conn.node);
+// Track a conn as in-flight on this worker and send an .add message
+// to the network thread. On submit failure, rolls back the in_use
+// bookkeeping and returns the conn to the pool.
+pub fn submitConn(self: *Client, conn: *http.Connection) !void {
+    self.in_use.append(&conn._worker_node);
     conn.in_use = true;
-    // Set private pointer so readMessage can find the Connection.
-    // Must be done each time since curl_easy_reset clears it when
-    // connections are returned to pool.
-    conn.setPrivate(conn) catch |err| {
-        self.in_use.remove(&conn.node);
-        conn.in_use = false;
-        self.releaseConn(conn);
-        return err;
-    };
-    self.handles.add(conn) catch |err| {
-        self.in_use.remove(&conn.node);
-        conn.in_use = false;
-        self.releaseConn(conn);
-        return err;
-    };
-
+    conn.on_complete = httpCompletionCallback;
     switch (conn.transport) {
         .http => self.http_active += 1,
         .websocket => self.ws_active += 1,
         else => unreachable,
     }
+    self.network.submitAdd(conn) catch |err| {
+        self.in_use.remove(&conn._worker_node);
+        conn.in_use = false;
+        switch (conn.transport) {
+            .http => self.http_active -= 1,
+            .websocket => self.ws_active -= 1,
+            else => unreachable,
+        }
+        self.network.releaseConnection(conn);
+        return err;
+    };
 }
 
-pub fn removeConn(self: *Client, conn: *http.Connection) void {
-    if (conn.in_use == false) {
-        self.ready_queue.remove(&conn.node);
-        self.releaseConn(conn);
+// Terminal cleanup. Called when a conn's final completion has been
+// processed: remove from in_use, decrement counter, return to pool.
+pub fn finishConn(self: *Client, conn: *http.Connection) void {
+    if (!conn.in_use) {
+        // Never tracked (e.g. submit failure rollback already ran).
+        self.network.releaseConnection(conn);
         return;
     }
-
-    self.in_use.remove(&conn.node);
+    self.in_use.remove(&conn._worker_node);
     conn.in_use = false;
     switch (conn.transport) {
         .http => self.http_active -= 1,
         .websocket => self.ws_active -= 1,
         else => unreachable,
     }
-    if (self.handles.remove(conn)) {
-        self.releaseConn(conn);
-    } else |_| {
-        // Can happen if we're in a perform() call, so we'll queue this
-        // for cleanup later.
-        self.dirty.append(&conn.node);
-    }
-}
-
-fn releaseConn(self: *Client, conn: *http.Connection) void {
     self.network.releaseConnection(conn);
 }
 
@@ -1102,37 +1039,47 @@ pub const Transfer = struct {
     client: *Client,
 
     start_time: u64,
-    aborted: bool = false,
+    // Atomic because the libcurl data/header callbacks (running on the
+    // network thread) read it to bail out early when the worker has
+    // aborted us.
+    aborted: std.atomic.Value(bool) = .init(false),
 
     _notified_fail: bool = false,
 
     _conn: ?*http.Connection = null,
-    // Set when conn is temporarily detached from transfer during redirect
-    // reconfiguration. Used by processMessages to release the orphaned conn
-    // if reconfiguration fails.
-    _detached_conn: ?*http.Connection = null,
 
     _auth_challenge: ?http.AuthChallenge = null,
 
     // number of times the transfer has been tried.
     // incremented by reset func.
     _tries: u8 = 0,
+    // True while this transfer is inside its processOneMessage callback
+    // chain on the worker. Blocks re-entrant abort/kill from deiniting
+    // out from under the chain.
     _performing: bool = false,
     _redirect_count: u8 = 0,
 
     // for when a Transfer is queued in the client.queue
     _node: std.DoublyLinkedList.Node = .{},
 
+    pub fn isAborted(self: *const Transfer) bool {
+        return self.aborted.load(.acquire);
+    }
+
+    fn setAborted(self: *Transfer) void {
+        self.aborted.store(true, .release);
+    }
+
     fn releaseConn(self: *Transfer) void {
         if (self._conn) |conn| {
-            self.client.removeConn(conn);
+            self.client.finishConn(conn);
             self._conn = null;
         }
     }
 
     pub fn deinit(self: *Transfer) void {
         if (self._conn) |conn| {
-            self.client.removeConn(conn);
+            self.client.finishConn(conn);
             self._conn = null;
         }
 
@@ -1161,21 +1108,16 @@ pub const Transfer = struct {
     }
 
     // Cancel this transfer with `err`. Fires error_callback once (latched
-    // via _notified_fail), then either deinits synchronously or, if we're
-    // mid-perform with a libcurl handle still in the multi, detaches and
-    // lets the natural processOneMessage flow deinit later.
-    //
-    // This is the ONE entry point external callers should use to cancel
-    // a transfer. Don't reach for kill() or requestFailed() directly —
-    // they're internal helpers.
+    // via _notified_fail), then either deinits synchronously or, if we
+    // have a libcurl handle, submits a remove to the network thread and
+    // lets the canceled completion drive the deinit from processOneMessage.
     pub fn abort(self: *Transfer, err: anyerror) void {
         self.requestFailed(err, true);
         self.detachOrDeinit();
     }
 
     // Owner-driven teardown: fires shutdown_callback (not error_callback)
-    // and otherwise behaves like abort. Called by Client.abortOwner /
-    // abortRequests when a Frame / WGS is being torn down.
+    // and otherwise behaves like abort.
     fn kill(self: *Transfer) void {
         if (self.req.shutdown_callback) |cb| {
             cb(self.req.ctx);
@@ -1183,47 +1125,45 @@ pub const Transfer = struct {
         self.detachOrDeinit();
     }
 
-    // Decide whether to tear down now or defer until processOneMessage
-    // eventually drains the in-flight curl handle.
-    //
-    // Two cases force deferral:
-    //   * `_performing` — processOneMessage is currently processing THIS
-    //     transfer (set/cleared around the callback chain). It will call
-    //     `transfer.deinit` itself after the chain returns; deiniting
-    //     here would double-free. Note that `_conn` is cleared partway
-    //     through this window (the "release conn ASAP" step before
-    //     done_callback fires), so we cannot rely on `_conn != null`.
-    //   * `client.performing` + we have a libcurl handle — libcurl could
-    //     still fire callbacks for us. Releasing the arena now would UAF
-    //     from inside curl.
-    //
-    // Otherwise (parked / queued / never-trackConn'd / fully drained),
-    // there is nothing left referencing this transfer and we can safely
-    // deinit inline even from inside a perform callback.
+    // Three cases:
+    //   1. `_performing` — we're inside our own processOneMessage callback
+    //      chain on this worker. It will call deinit when it returns;
+    //      deiniting here would double-free. Detach (noop callbacks, flag
+    //      aborted, unlink from owner) so anything the chain still does
+    //      is a no-op, then return.
+    //   2. We have a libcurl handle in the multi — submit a remove. The
+    //      network thread will fire a canceled completion that lands in
+    //      our inbox; processOneMessage will deinit then. Detach now so
+    //      no user callbacks fire in the meantime.
+    //   3. No handle and no in-flight callback (queued / parked / never
+    //      submitted). Deinit synchronously.
     fn detachOrDeinit(self: *Transfer) void {
-        const must_defer = self._performing or
-            (self.client.performing and self._conn != null);
-        if (must_defer) {
+        if (self._performing) {
             self.detachInPerform();
-        } else {
-            self.deinit();
+            return;
         }
+        if (self._conn) |conn| {
+            self.detachInPerform();
+            self.client.network.submitRemove(conn) catch |err| {
+                log.err(.http, "submit remove", .{ .err = err });
+            };
+            return;
+        }
+        self.deinit();
     }
 
-    // Deferred-cleanup path when we can't synchronously deinit.
-    //
-    // We:
-    //   - flag `aborted` so processOneMessage's normal-completion paths
-    //     short-circuit when they next see this transfer,
-    //   - noop every user callback so libcurl naturally draining the
-    //     in-flight response can't re-enter user code,
+    // Detach state used by the two "leave the transfer alive while we
+    // wait for libcurl to be done with it" paths:
+    //   - flag `aborted` so the libcurl data/header callbacks (running
+    //     on the network thread) bail out early,
+    //   - noop every user callback so anything still firing is a no-op,
     //   - unlink from owner.transfers and clear `owner` so the owning
     //     Frame/WGS can be freed while this transfer is still draining.
     //     transfer.deinit (called later by processOneMessage) sees
     //     `owner == null` and skips the list-remove that would otherwise
     //     UAF against a freed list.
     fn detachInPerform(self: *Transfer) void {
-        self.aborted = true;
+        self.setAborted();
         self.req.start_callback = null;
         self.req.shutdown_callback = null;
         self.req.header_callback = Noop.headerCallback;
@@ -1501,7 +1441,7 @@ pub const Transfer = struct {
             return err;
         };
 
-        return proceed and transfer.aborted == false;
+        return proceed and !transfer.isAborted();
     }
 
     fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) usize {
@@ -1551,7 +1491,7 @@ pub const Transfer = struct {
             return http.writefunc_error;
         };
 
-        if (transfer.aborted) {
+        if (transfer.isAborted()) {
             return http.writefunc_error;
         }
 
@@ -1649,8 +1589,6 @@ pub const Owner = struct {
     transfers: std.DoublyLinkedList = .{},
     websockets: std.DoublyLinkedList = .{},
 
-    const WebSocket = @import("webapi/net/WebSocket.zig");
-
     pub fn addTransfer(self: *Owner, t: *Transfer) void {
         self.transfers.append(&t.owner_node);
     }
@@ -1667,3 +1605,199 @@ pub const Owner = struct {
         self.websockets.remove(&ws._owner_node);
     }
 };
+
+// ── Inbox ────────────────────────────────────────────────────────────────────
+//
+// Per-worker mailbox. The network thread pushes events here; the worker
+// drains via `next()` from `Client.perform`. Same OTP-style queue
+// pattern as `Network.inbox`, but the directions are reversed (network
+// thread is the producer, worker is the consumer) and the wake
+// primitive is a pipe (so the worker can poll it alongside other fds —
+// the CDP socket today, removable once CDP I/O migrates fully).
+
+pub const InMessage = union(enum) {
+    http_completion: HttpCompletion,
+
+    // CDP socket bytes read by the network thread. The slice is
+    // heap-allocated from `Client.allocator`; the worker frees it
+    // after dispatching to `cdp_client.on_data`.
+    cdp_data: []u8,
+    // CDP socket EOF / error / unregister ack from the network thread.
+    cdp_disconnect,
+
+    pub const HttpCompletion = struct {
+        conn: *http.Connection,
+        err: ?anyerror,
+    };
+
+    // NOTE: a `.ws_event` variant for deferred WS event dispatch
+    // (open/message/close from libcurl callbacks → JS) will land with
+    // the WebSocket rewrite. For now only the WS-conn *terminal*
+    // completion flows through here, dispatched as .http_completion
+    // by httpCompletionCallback and handled in handleHttpCompletion's
+    // .websocket arm via ws.disconnected.
+};
+
+pub const Inbox = struct {
+    // The allocator backing both the item pool and cdp_data byte
+    // allocations. Stashed so deinit can free undrained cdp_data
+    // slices before tearing down the pool itself.
+    allocator: Allocator,
+    mutex: std.Thread.Mutex = .{},
+    queue: std.DoublyLinkedList = .{},
+    pool: std.heap.MemoryPool(Item),
+    wake_pipe: [2]posix.fd_t = .{ -1, -1 },
+
+    const Item = struct {
+        msg: InMessage,
+        node: std.DoublyLinkedList.Node = .{},
+    };
+
+    pub fn init(allocator: Allocator) Inbox {
+        const pipe = posix.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true }) catch |err| {
+            lp.assert(false, "inbox pipe create", .{ .err = err });
+            unreachable;
+        };
+        return .{
+            .allocator = allocator,
+            .pool = .init(allocator),
+            .wake_pipe = pipe,
+        };
+    }
+
+    pub fn deinit(self: *Inbox) void {
+        for (&self.wake_pipe) |*fd| {
+            if (fd.* >= 0) {
+                posix.close(fd.*);
+                fd.* = -1;
+            }
+        }
+        // Free any undrained cdp_data byte buffers before the pool
+        // (which owns the Item structs) goes away.
+        while (self.queue.popFirst()) |node| {
+            const item: *Item = @fieldParentPtr("node", node);
+            switch (item.msg) {
+                .cdp_data => |bytes| self.allocator.free(bytes),
+                else => {},
+            }
+        }
+        self.pool.deinit();
+    }
+
+    // Returns the read end of the wake pipe so the caller can include it
+    // in a poll set (alongside the CDP socket for now).
+    pub fn pollFd(self: *const Inbox) posix.fd_t {
+        return self.wake_pipe[0];
+    }
+
+    // Called from any thread (typically the network thread). Allocates a
+    // queue item from the pool, appends it, wakes the worker via the pipe.
+    pub fn push(self: *Inbox, msg: InMessage) !void {
+        {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            const item = try self.pool.create();
+            item.* = .{ .msg = msg };
+            self.queue.append(&item.node);
+        }
+        _ = posix.write(self.wake_pipe[1], &.{1}) catch {};
+    }
+
+    // Worker side. Pop next message, blocking up to `timeout_ms` (0 =
+    // non-blocking). Returns null on timeout.
+    pub fn next(self: *Inbox, timeout_ms: u32) ?InMessage {
+        {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            if (self.queue.popFirst()) |node| return self.takeItem(node);
+        }
+
+        if (timeout_ms == 0) return null;
+
+        var fds = [_]posix.pollfd{
+            .{ .fd = self.wake_pipe[0], .events = posix.POLL.IN, .revents = 0 },
+        };
+        _ = posix.poll(&fds, @intCast(timeout_ms)) catch return null;
+
+        if (fds[0].revents != 0) {
+            var drain: [64]u8 = undefined;
+            while (true) {
+                _ = posix.read(self.wake_pipe[0], &drain) catch break;
+            }
+        }
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (self.queue.popFirst()) |node| return self.takeItem(node);
+        return null;
+    }
+
+    fn takeItem(self: *Inbox, node: *std.DoublyLinkedList.Node) InMessage {
+        const item: *Item = @fieldParentPtr("node", node);
+        const msg = item.msg;
+        self.pool.destroy(item);
+        return msg;
+    }
+};
+
+// Set as `conn.on_complete` in `submitConn` for HTTP and WebSocket
+// conns. Fired by the network thread post-completion; routes the
+// completion to the owning HttpClient's inbox by inspecting transport.
+fn httpCompletionCallback(conn: *http.Connection, err: ?anyerror) void {
+    const client = switch (conn.transport) {
+        .http => |t| t.client,
+        .websocket => |ws| ws._http_client,
+        .none => return,
+    };
+    client.inbox.push(.{ .http_completion = .{ .conn = conn, .err = err } }) catch |e| {
+        log.err(.http, "inbox push failed", .{ .err = e });
+        // OOM during completion delivery. Release the conn directly so
+        // the pool isn't permanently down a slot; the worker won't see
+        // the completion but its deinit watchdog will catch the stuck
+        // in_use entry.
+        client.network.releaseConnection(conn);
+    };
+}
+
+// ── CDP socket handoff ──────────────────────────────────────────────────────
+//
+// The CDP socket is read by the network thread on this HttpClient's
+// behalf. Bytes are heap-copied per read and pushed to our inbox;
+// the worker dispatches them inline through `cdp_client.on_data`.
+// `cdp_client` itself must be set in `init` before registering.
+
+// Hand the worker's CDP socket to the network thread for reading.
+pub fn registerCdpSocket(self: *Client, fd: posix.fd_t) !void {
+    return self.network.submitCdpRegister(fd, .{
+        .ctx = self,
+        .on_data = cdpNetData,
+        .on_disconnect = cdpNetDisconnect,
+    });
+}
+
+// Tell the network thread to stop reading the CDP socket. After the
+// network processes this, it fires `on_disconnect` once — the worker
+// uses that as the ack that it's safe to free its ctx.
+pub fn unregisterCdpSocket(self: *Client, fd: posix.fd_t) !void {
+    return self.network.submitCdpUnregister(fd);
+}
+
+// Network-thread side of CDP read. Copy + push.
+fn cdpNetData(ctx: *anyopaque, data: []const u8) void {
+    const self: *Client = @ptrCast(@alignCast(ctx));
+    const owned = self.allocator.dupe(u8, data) catch |err| {
+        log.err(.http, "cdp_data alloc failed", .{ .err = err });
+        return;
+    };
+    self.inbox.push(.{ .cdp_data = owned }) catch |err| {
+        log.err(.http, "cdp_data push failed", .{ .err = err });
+        self.allocator.free(owned);
+    };
+}
+
+fn cdpNetDisconnect(ctx: *anyopaque) void {
+    const self: *Client = @ptrCast(@alignCast(ctx));
+    self.inbox.push(.cdp_disconnect) catch |err| {
+        log.err(.http, "cdp_disconnect push failed", .{ .err = err });
+    };
+}
