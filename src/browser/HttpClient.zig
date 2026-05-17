@@ -291,7 +291,7 @@ pub fn setTlsVerify(self: *Client, verify: bool) !void {
     var it = self.in_use.first;
     while (it) |node| : (it = node.next) {
         const conn: *http.Connection = @fieldParentPtr("_worker_node", node);
-        try self.network.submitTlsVerify(conn, verify, self.use_proxy);
+        self.network.submitTlsVerify(conn, verify, self.use_proxy);
     }
 
     self.tls_verify = verify;
@@ -395,7 +395,7 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
 fn drainQueue(self: *Client) !void {
     while (self.queue.popFirst()) |queue_node| {
         const transfer: *Transfer = @fieldParentPtr("_node", queue_node);
-        const conn = self.network.getConnection() orelse {
+        const conn = self.network.getConn() orelse {
             self.queue.prepend(queue_node);
             return;
         };
@@ -557,7 +557,7 @@ fn process(self: *Client, transfer: *Transfer) !void {
     // submitConn → Network.submitAdd is always safe to call. The network
     // thread serializes mailbox processing, so there's no re-entrancy
     // risk that used to require the `performing` check.
-    if (self.network.getConnection()) |conn| {
+    if (self.network.getConn()) |conn| {
         return self.makeRequest(conn, transfer);
     }
     self.queue.append(&transfer._node);
@@ -594,7 +594,7 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
         transfer._conn = conn;
         errdefer {
             transfer._conn = null;
-            self.network.releaseConnection(conn);
+            self.network.releaseConn(conn);
         }
 
         try transfer.configureConn(conn);
@@ -604,10 +604,7 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
     // message to the network thread's inbox. From here, the transfer's
     // terminal cleanup happens when the canceled/done completion is
     // delivered back to our inbox.
-    self.submitConn(conn) catch |err| {
-        transfer._conn = null;
-        return err;
-    };
+    self.submitConn(conn);
     transfer.loop_owned = true;
 
     if (transfer.req.start_callback) |cb| {
@@ -662,6 +659,15 @@ fn processInbox(self: *Client, timeout_ms: u32) !bool {
             .cdp_disconnect => {
                 if (self.cdp_client) |cdp| cdp.on_disconnect(cdp.ctx);
             },
+            .ws_open => |ws| ws.handleOpen() catch |err| {
+                log.err(.websocket, "ws_open dispatch", .{ .err = err });
+            },
+            .ws_message => |m| {
+                defer self.allocator.free(m.data);
+                m.ws.handleMessage(m.data, m.frame_type) catch |err| {
+                    log.err(.websocket, "ws_message dispatch", .{ .err = err });
+                };
+            },
         }
     }
     return processed;
@@ -684,7 +690,13 @@ fn handleHttpCompletion(self: *Client, conn: *http.Connection, err: ?anyerror) v
                 else => ws.disconnected(e),
             } else ws.disconnected(null);
         },
-        .none => unreachable,
+        .none => {
+            // The owner disowned this conn before the terminal
+            // completion landed (WebSocket.cleanup's abort path clears
+            // transport after submitRemoveAndWait). Release the conn
+            // now — the owner's already torn down its state.
+            self.finishConn(conn);
+        },
     }
 }
 
@@ -727,7 +739,7 @@ fn processOneMessage(self: *Client, conn: *http.Connection, err: ?anyerror, tran
             try transfer.handleRedirect();
             transfer.reset();
             try transfer.configureConn(conn);
-            try self.network.submitAdd(conn);
+            self.network.submitAdd(conn);
             return false;
         }
     }
@@ -784,9 +796,9 @@ fn processOneMessage(self: *Client, conn: *http.Connection, err: ?anyerror, tran
 }
 
 // Track a conn as in-flight on this worker and send an .add message
-// to the network thread. On submit failure, rolls back the in_use
-// bookkeeping and returns the conn to the pool.
-pub fn submitConn(self: *Client, conn: *http.Connection) !void {
+// to the network thread. submitAdd is infallible (panics on OOM), so
+// no rollback path is needed.
+pub fn submitConn(self: *Client, conn: *http.Connection) void {
     self.in_use.append(&conn._worker_node);
     conn.in_use = true;
     conn.on_complete = httpCompletionCallback;
@@ -795,27 +807,34 @@ pub fn submitConn(self: *Client, conn: *http.Connection) !void {
         .websocket => self.ws_active += 1,
         else => unreachable,
     }
-    self.network.submitAdd(conn) catch |err| {
-        self.in_use.remove(&conn._worker_node);
-        conn.in_use = false;
-        switch (conn.transport) {
-            .http => self.http_active -= 1,
-            .websocket => self.ws_active -= 1,
-            else => unreachable,
-        }
-        self.network.releaseConnection(conn);
-        return err;
-    };
+    self.network.submitAdd(conn);
 }
 
 // Terminal cleanup. Called when a conn's final completion has been
-// processed: remove from in_use, decrement counter, return to pool.
+// processed (the conn is provably out of the multi already): remove
+// from in_use, decrement counter, return to pool.
 pub fn finishConn(self: *Client, conn: *http.Connection) void {
-    if (!conn.in_use) {
-        // Never tracked (e.g. submit failure rollback already ran).
-        self.network.releaseConnection(conn);
-        return;
-    }
+    if (conn.in_use) self._untrack(conn);
+    self.network.releaseConn(conn);
+}
+
+// Synchronous abort: the conn may still be in the multi, and the
+// caller is about to free state that libcurl callbacks reference.
+// Blocks until the network thread has removed the easy handle (no
+// more callbacks will fire), then does the worker-side bookkeeping
+// while transport still tells us which counter to decrement, then
+// clears transport. The pool release is deferred to
+// handleHttpCompletion's `.none` arm — any stale completion still in
+// our inbox needs to land cleanly before the conn memory is recycled.
+pub fn disownConn(self: *Client, conn: *http.Connection) void {
+    self.network.submitRemoveAndWait(conn);
+    self._untrack(conn);
+    conn.transport = .none;
+}
+
+// in_use list removal + counter decrement. Caller decides whether to
+// release the conn afterward (finishConn) or defer (disownConn).
+fn _untrack(self: *Client, conn: *http.Connection) void {
     self.in_use.remove(&conn._worker_node);
     conn.in_use = false;
     switch (conn.transport) {
@@ -823,7 +842,6 @@ pub fn finishConn(self: *Client, conn: *http.Connection) void {
         .websocket => self.ws_active -= 1,
         else => unreachable,
     }
-    self.network.releaseConnection(conn);
 }
 
 fn ensureNoActiveConnection(self: *const Client) !void {
@@ -1144,9 +1162,7 @@ pub const Transfer = struct {
         }
         if (self._conn) |conn| {
             self.detachInPerform();
-            self.client.network.submitRemove(conn) catch |err| {
-                log.err(.http, "submit remove", .{ .err = err });
-            };
+            self.client.network.submitRemove(conn);
             return;
         }
         self.deinit();
@@ -1625,17 +1641,32 @@ pub const InMessage = union(enum) {
     // CDP socket EOF / error / unregister ack from the network thread.
     cdp_disconnect,
 
+    // WebSocket open handshake completed. The network thread observed
+    // the upgrade headers and set `_ready_state = .open`; the worker
+    // dispatches the JS open event.
+    ws_open: *WebSocket,
+    // WebSocket text/binary frame fully assembled. `data` is
+    // heap-allocated from `Client.allocator` (copied off the libcurl
+    // buffer); the worker frees it after dispatching the JS message
+    // event.
+    ws_message: WsMessage,
+    // NOTE: there is no `ws_disconnect`/`ws_close` variant. The
+    // close-handshake completion (whether the server initiates or we
+    // do) flows through libcurl's natural termination — the WS conn
+    // completes, fires the normal HTTP-style completion, and
+    // handleHttpCompletion's `.websocket` arm dispatches via
+    // `ws.disconnected` on the worker. Avoids duplicating the path.
+
     pub const HttpCompletion = struct {
         conn: *http.Connection,
         err: ?anyerror,
     };
 
-    // NOTE: a `.ws_event` variant for deferred WS event dispatch
-    // (open/message/close from libcurl callbacks → JS) will land with
-    // the WebSocket rewrite. For now only the WS-conn *terminal*
-    // completion flows through here, dispatched as .http_completion
-    // by httpCompletionCallback and handled in handleHttpCompletion's
-    // .websocket arm via ws.disconnected.
+    pub const WsMessage = struct {
+        ws: *WebSocket,
+        data: []u8,
+        frame_type: http.WsFrameType,
+    };
 };
 
 pub const Inbox = struct {
@@ -1672,12 +1703,14 @@ pub const Inbox = struct {
                 fd.* = -1;
             }
         }
-        // Free any undrained cdp_data byte buffers before the pool
-        // (which owns the Item structs) goes away.
+        // Free any undrained heap-allocated payloads (cdp_data /
+        // ws_message bytes) before the pool (which owns the Item
+        // structs) goes away.
         while (self.queue.popFirst()) |node| {
             const item: *Item = @fieldParentPtr("node", node);
             switch (item.msg) {
                 .cdp_data => |bytes| self.allocator.free(bytes),
+                .ws_message => |msg| self.allocator.free(msg.data),
                 else => {},
             }
         }
@@ -1755,7 +1788,7 @@ fn httpCompletionCallback(conn: *http.Connection, err: ?anyerror) void {
         // the pool isn't permanently down a slot; the worker won't see
         // the completion but its deinit watchdog will catch the stuck
         // in_use entry.
-        client.network.releaseConnection(conn);
+        client.network.releaseConn(conn);
     };
 }
 
@@ -1767,8 +1800,8 @@ fn httpCompletionCallback(conn: *http.Connection, err: ?anyerror) void {
 // `cdp_client` itself must be set in `init` before registering.
 
 // Hand the worker's CDP socket to the network thread for reading.
-pub fn registerCdpSocket(self: *Client, fd: posix.fd_t) !void {
-    return self.network.submitCdpRegister(fd, .{
+pub fn registerCdpSocket(self: *Client, fd: posix.fd_t) void {
+    self.network.submitCdpRegister(fd, .{
         .ctx = self,
         .on_data = cdpNetData,
         .on_disconnect = cdpNetDisconnect,
@@ -1778,8 +1811,8 @@ pub fn registerCdpSocket(self: *Client, fd: posix.fd_t) !void {
 // Tell the network thread to stop reading the CDP socket. After the
 // network processes this, it fires `on_disconnect` once — the worker
 // uses that as the ack that it's safe to free its ctx.
-pub fn unregisterCdpSocket(self: *Client, fd: posix.fd_t) !void {
-    return self.network.submitCdpUnregister(fd);
+pub fn unregisterCdpSocket(self: *Client, fd: posix.fd_t) void {
+    self.network.submitCdpUnregister(fd);
 }
 
 // Network-thread side of CDP read. Copy + push.

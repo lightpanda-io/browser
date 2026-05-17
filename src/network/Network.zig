@@ -114,6 +114,15 @@ const TickCallback = struct {
 pub const Message = union(enum) {
     add: *http.Connection,
     remove: *http.Connection,
+    // Synchronous variant of remove: caller blocks on `event.wait()`
+    // and the network thread sets it after handleRemove returns. Used
+    // by callers that need to know libcurl is provably done with the
+    // conn before they can safely tear down state libcurl callbacks
+    // reference (e.g. WebSocket.cleanup).
+    remove_with_event: struct {
+        conn: *http.Connection,
+        event: *std.Thread.ResetEvent,
+    },
     unpause: *http.Connection,
     tls_verify: struct {
         conn: *http.Connection,
@@ -438,16 +447,16 @@ pub fn unbind(self: *Network) void {
 // Async: enqueue a CDP-socket registration. The network thread
 // applies it in drainInbox. Handler callbacks fire on the network
 // thread once polling picks up activity on the fd.
-pub fn submitCdpRegister(self: *Network, fd: posix.fd_t, handler: CdpHandler) !void {
-    return self.submit(.{ .cdp_register = .{ .fd = fd, .handler = handler } });
+pub fn submitCdpRegister(self: *Network, fd: posix.fd_t, handler: CdpHandler) void {
+    self.submit(.{ .cdp_register = .{ .fd = fd, .handler = handler } });
 }
 
 // Async: enqueue a CDP-socket unregistration. The network thread
 // flips the reg's `eof`, stops polling, and fires `on_disconnect` —
 // the worker uses that as the ack that no more handler calls will
 // happen for this fd (safe to free ctx after draining its inbox).
-pub fn submitCdpUnregister(self: *Network, fd: posix.fd_t) !void {
-    return self.submit(.{ .cdp_unregister = fd });
+pub fn submitCdpUnregister(self: *Network, fd: posix.fd_t) void {
+    self.submit(.{ .cdp_unregister = fd });
 }
 
 pub fn onTick(self: *Network, ctx: *anyopaque, callback: *const fn (*anyopaque) void) void {
@@ -526,7 +535,12 @@ pub fn run(self: *Network) void {
             const curl_timeout = self.getCurlTimeout();
             if (curl_timeout == 0) break :blk 0;
 
+            // curl_multi_timeout returns -1 to mean "no timer set, wait
+            // indefinitely". curl_multi_poll rejects negative timeouts
+            // with BadFunctionArgument, so fall back to min_timeout in
+            // that case (also our telemetry tick cap — see TODO above).
             const min_timeout = 250;
+            if (curl_timeout < 0) break :blk min_timeout;
             break :blk @min(min_timeout, curl_timeout);
         };
 
@@ -537,6 +551,13 @@ pub fn run(self: *Network) void {
             lp.log.err(.app, "curl poll", .{ .err = err });
             continue;
         };
+
+        // Drain anything submitted during poll *before* the second perform,
+        // so newly-added handles get kickstarted in the very next perform
+        // (rather than waiting a full iteration for the top-of-loop drain).
+        // Also lets a worker waiting on a remove_with_event unblock as soon
+        // as poll returns, instead of after dispatch + perform + fireTicks.
+        self.drainInbox();
 
         // Listener: always extra_fds[0] when bound.
         if (self.listener != null and self.extra_fds.items[0].revents.pollin) {
@@ -589,27 +610,43 @@ pub fn run(self: *Network) void {
 
 // ── Inbox: worker → network thread submission ──────────────────────────────
 
-pub fn submitAdd(self: *Network, conn: *http.Connection) !void {
-    return self.submit(.{ .add = conn });
+pub fn submitAdd(self: *Network, conn: *http.Connection) void {
+    self.submit(.{ .add = conn });
 }
 
-pub fn submitRemove(self: *Network, conn: *http.Connection) !void {
-    return self.submit(.{ .remove = conn });
+pub fn submitRemove(self: *Network, conn: *http.Connection) void {
+    self.submit(.{ .remove = conn });
 }
 
-pub fn submitUnpause(self: *Network, conn: *http.Connection) !void {
-    return self.submit(.{ .unpause = conn });
+// Synchronously remove `conn` from the multi: blocks until the network
+// thread has processed the remove (curl is provably done with the easy
+// handle — no more libcurl callbacks will fire). For callers that need
+// to tear down state libcurl callbacks reference before returning.
+pub fn submitRemoveAndWait(self: *Network, conn: *http.Connection) void {
+    // Stack-local: stays valid for the entire wait, and the network
+    // thread has no use for the pointer after `set()` returns.
+    var event: std.Thread.ResetEvent = .{};
+    self.submit(.{ .remove_with_event = .{ .conn = conn, .event = &event } });
+    event.wait();
 }
 
-pub fn submitTlsVerify(self: *Network, conn: *http.Connection, verify: bool, use_proxy: bool) !void {
-    return self.submit(.{ .tls_verify = .{ .conn = conn, .verify = verify, .use_proxy = use_proxy } });
+pub fn submitUnpause(self: *Network, conn: *http.Connection) void {
+    self.submit(.{ .unpause = conn });
 }
 
-fn submit(self: *Network, msg: Message) !void {
+pub fn submitTlsVerify(self: *Network, conn: *http.Connection, verify: bool, use_proxy: bool) void {
+    self.submit(.{ .tls_verify = .{ .conn = conn, .verify = verify, .use_proxy = use_proxy } });
+}
+
+// OOM here is fatal — every submit* path is operating on resources
+// the caller is about to either spin up or tear down, and there's no
+// safe recovery if we can't enqueue the message. Treat it like any
+// other allocator panic.
+fn submit(self: *Network, msg: Message) void {
     {
         self.inbox_mutex.lock();
         defer self.inbox_mutex.unlock();
-        const item = try self.inbox_pool.create();
+        const item = self.inbox_pool.create() catch @panic("OOM");
         item.* = .{ .msg = msg };
         self.inbox.append(&item.node);
     }
@@ -650,6 +687,14 @@ fn drainInbox(self: *Network) void {
         switch (item.msg) {
             .add => |conn| self.handleAdd(conn),
             .remove => |conn| self.handleRemove(conn),
+            .remove_with_event => |r| {
+                self.handleRemove(r.conn);
+                // Always signal — handleRemove may have skipped its
+                // fireOnComplete (conn already out of multi), but the
+                // caller is blocked on this and needs to proceed
+                // regardless.
+                r.event.set();
+            },
             .unpause => |conn| {
                 if (!conn._in_multi) continue;
                 conn.pause(.{ .cont = true }) catch |err| {
@@ -692,17 +737,20 @@ fn handleAdd(self: *Network, conn: *http.Connection) void {
     conn._in_multi = true;
 }
 
-// Remove a conn from the multi (cancel path). Always fires
-// on_complete with Canceled — even if the conn never made it into
-// the multi (e.g. .remove came in before .add ran), the contract
-// stands: the owner gets exactly one terminal on_complete.
+// Remove a conn from the multi (cancel path). Only fires Canceled
+// if the conn was actually still in the multi; otherwise the
+// terminal completion has already been delivered (either by
+// processCompletions when curl finished naturally, or by handleAdd
+// when add failed). Firing again here would deliver two terminal
+// completions for one transfer — and the second would land in the
+// worker inbox after the worker had already reset the conn, hitting
+// the .none arm of handleHttpCompletion.
 fn handleRemove(self: *Network, conn: *http.Connection) void {
-    if (conn._in_multi) {
-        libcurl.curl_multi_remove_handle(self.multi, conn._easy) catch |err| {
-            lp.assert(false, "curl multi remove (was in_multi)", .{ .err = err });
-        };
-        conn._in_multi = false;
-    }
+    if (!conn._in_multi) return;
+    libcurl.curl_multi_remove_handle(self.multi, conn._easy) catch |err| {
+        lp.assert(false, "curl multi remove (was in_multi)", .{ .err = err });
+    };
+    conn._in_multi = false;
     self.fireOnComplete(conn, error.Canceled);
 }
 
@@ -710,7 +758,7 @@ fn fireOnComplete(self: *Network, conn: *http.Connection, err: ?anyerror) void {
     if (conn.on_complete) |cb| {
         cb(conn, err);
     } else {
-        self.releaseConnection(conn);
+        self.releaseConn(conn);
     }
 }
 
@@ -755,7 +803,7 @@ fn handleCdpUnregister(self: *Network, fd: posix.fd_t) void {
     }
 }
 
-inline fn cdpOffset(self: *Network) usize {
+fn cdpOffset(self: *Network) usize {
     return if (self.listener != null) 1 else 0;
 }
 
@@ -872,7 +920,8 @@ fn processCompletions(self: *Network) void {
     }
 }
 
-pub fn getConnection(self: *Network) ?*http.Connection {
+// Called from a Worker Thread
+pub fn getConn(self: *Network) ?*http.Connection {
     self.conn_mutex.lock();
     defer self.conn_mutex.unlock();
 
@@ -880,7 +929,8 @@ pub fn getConnection(self: *Network) ?*http.Connection {
     return @fieldParentPtr("node", node);
 }
 
-pub fn releaseConnection(self: *Network, conn: *http.Connection) void {
+// Called from a Worker Thread
+pub fn releaseConn(self: *Network, conn: *http.Connection) void {
     switch (conn.transport) {
         .websocket => {
             conn.deinit();
@@ -900,7 +950,8 @@ pub fn releaseConnection(self: *Network, conn: *http.Connection) void {
     }
 }
 
-pub fn newConnection(self: *Network) ?*http.Connection {
+// Called from a Worker Thread
+pub fn newWSConn(self: *Network) ?*http.Connection {
     const conn = blk: {
         self.ws_mutex.lock();
         defer self.ws_mutex.unlock();

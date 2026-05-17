@@ -71,17 +71,17 @@ fn flushCallback(ctx: *anyopaque) void {
 }
 
 fn postEvent(self: *LightPanda) !void {
-    const conn = self.network.getConnection() orelse {
+    const conn = self.network.getConn() orelse {
         return;
     };
-    errdefer self.network.releaseConnection(conn);
+    errdefer self.network.releaseConn(conn);
 
     const h = self.head.load(.monotonic);
     const t = self.tail.load(.acquire);
     const dropped = self.dropped.swap(0, .monotonic);
 
     if (h == t and dropped == 0) {
-        self.network.releaseConnection(conn);
+        self.network.releaseConn(conn);
         return;
     }
     errdefer _ = self.dropped.fetchAdd(dropped, .monotonic);
@@ -105,7 +105,7 @@ fn postEvent(self: *LightPanda) !void {
     try conn.setBody(self.writer.written());
 
     self.head.store(h + sent, .release);
-    try self.network.submitAdd(conn);
+    self.network.submitAdd(conn);
 }
 
 fn writeEvent(self: *LightPanda, event: telemetry.Event) !bool {
