@@ -120,4 +120,60 @@
     testing.expectEqual(true, true);
   }
   </script>
+
+  <script id="ext_stylesheet_fragment_parse_skipped">
+  {
+    // Stylesheet links parsed via innerHTML / outerHTML /
+    // insertAdjacentHTML / Range.createContextualFragment / <template>
+    // content must NOT trigger a network fetch or register a sheet on
+    // the live document — the owning subtree may never be attached.
+    // Regression test for the fragment-mode bypass caught in code review.
+    //
+    // Assertion is synchronous on purpose: parseHtmlAsChildren runs
+    // inline, so any unintended sheet registration would be visible
+    // immediately. Deferring to testing.onload would race against the
+    // async tests above that legitimately add sheets.
+    //
+    // DOMParser.parseFromString is a separate case (parses with
+    // `_parse_mode = .document` into a *different* Document) and is not
+    // covered by the same gate — tracked as a follow-up.
+    const before = document.styleSheets.length;
+    const div = document.createElement('div');
+    div.innerHTML = '<link rel="stylesheet" href="/styles/visibility.css">';
+    testing.expectEqual(before, document.styleSheets.length);
+  }
+  </script>
+
+  <script id="ext_stylesheet_disconnect_removes">
+  {
+    // Removing a connected stylesheet link must drop its sheet from
+    // document.styleSheets. Without symmetric deregistration the SPA
+    // theme-switch pattern (append new, remove old) would accumulate
+    // phantom entries and stale cascade rules.
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/styles/visibility2.css';
+    testing.async(async () => {
+      const baseline = document.styleSheets.length;
+
+      await new Promise(resolve => {
+        link.addEventListener('load', () => resolve(), { once: true });
+        document.head.appendChild(link);
+      });
+      testing.expectEqual(baseline + 1, document.styleSheets.length);
+
+      link.remove();
+      testing.expectEqual(baseline, document.styleSheets.length);
+
+      // Re-appending must register fresh — the disconnect cleanup
+      // cleared link._sheet so the cached short-circuit doesn't apply.
+      await new Promise(resolve => {
+        link.addEventListener('load', () => resolve(), { once: true });
+        document.head.appendChild(link);
+      });
+      testing.expectEqual(baseline + 1, document.styleSheets.length);
+    });
+    testing.expectEqual(true, true);
+  }
+  </script>
 </body>

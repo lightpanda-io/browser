@@ -1697,6 +1697,15 @@ const MAX_STYLESHEET_BYTES: usize = 2 * 1024 * 1024;
 pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link) !void {
     if (self.isGoingAway()) return;
 
+    // Fragment-parsed links (innerHTML / outerHTML / DOMParser /
+    // Range.createContextualFragment / <template>.content) reach
+    // `Link.Build.created` like any other parser-instantiated element, but
+    // their owner subtree may never be attached to the live document. A
+    // network fetch + sheet registration against `self.document` would be
+    // a visible side effect of merely parsing markup. Mirrors the
+    // `nodeIsReady` short-circuit at the existing parser-path guard.
+    if (self._parse_mode == .fragment) return;
+
     const element = link.asElement();
     const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
     if (href.len == 0) return;
@@ -1711,10 +1720,28 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link) !void {
     };
 
     const session = self._session;
-    // HttpClient takes ownership of `headers` via the request struct (see
-    // HttpClient.zig:411 — must NOT pair with a local `defer deinit`).
+    // HttpClient takes ownership of `headers` via the request struct on
+    // successful `syncRequest` (see HttpClient.zig:411). Until ownership
+    // transfers, `errdefer` covers the OOM window in `headers.add` /
+    // `headersForRequest` so the initial `newHeaders()` slist doesn't
+    // leak. Once `syncRequest` is entered the request struct handles
+    // cleanup — do NOT add a plain `defer deinit` here.
     var headers = try session.browser.http_client.newHeaders();
+    errdefer headers.deinit();
     try headers.add("Accept: text/css,*/*;q=0.1");
+    try self.headersForRequest(&headers);
+
+    // Set the script-manager `is_evaluating` flag for the same reason
+    // `ScriptManager.addFromElement` does: `syncRequest` pumps the CDP
+    // socket inline, so a `Target.closeTarget` / `Page.close` arriving
+    // mid-fetch would otherwise drive `Session.removePage` while this
+    // function still holds pointers to `self`. The check in
+    // `Session.removePage` (Session.zig:253) consults
+    // `frame.anyScriptEvaluating()`, which only sees this flag.
+    const sm = &self._script_manager.base;
+    const was_evaluating = sm.is_evaluating;
+    sm.is_evaluating = true;
+    defer sm.is_evaluating = was_evaluating;
 
     var response = session.browser.http_client.syncRequest(arena, .{
         .url = resolved,
@@ -1753,20 +1780,32 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link) !void {
     // link) so `document.styleSheets` keeps a single entry per <link>
     // instead of accumulating one per href change. On first load, create
     // and register; on subsequent loads, replace content in place.
+    //
+    // First-load creation assigns `link._sheet` AFTER `sheets.add`
+    // succeeds so an OOM during registration doesn't cache an unregistered
+    // sheet (which would short-circuit every future re-fetch via the
+    // `orelse` branch, leaving the sheet permanently unreachable through
+    // `document.styleSheets`).
     const sheet = link._sheet orelse blk: {
         const new_sheet = try CSSStyleSheet.initWithOwner(element, self);
-        link._sheet = new_sheet;
         const sheets = try self.document.getStyleSheets(self);
         try sheets.add(new_sheet, self);
+        link._sheet = new_sheet;
         break :blk new_sheet;
     };
 
-    sheet._href = try self.arena.dupe(u8, resolved);
+    // Parse first, only swap `_href` on success. `replaceSync` itself is
+    // not atomic (clears rules before the insert loop), so a mid-parse
+    // OOM still drops the old rules — full atomicity would require a
+    // scratch-list pattern in `CSSStyleSheet.replaceSync`. Keeping
+    // `_href` consistent with what the sheet actually contains is the
+    // minimum.
     sheet.replaceSync(response.body.items, self) catch |err| {
         log.warn(.browser, "external stylesheet parse", .{ .err = err, .url = resolved });
         try self.fireLinkEvent(link, comptime .wrap("error"));
         return;
     };
+    sheet._href = try self.arena.dupe(u8, resolved);
 
     try self.fireLinkEvent(link, comptime .wrap("load"));
 }
@@ -3109,6 +3148,20 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
                 style._sheet = null;
             }
             self._style_manager.sheetModified();
+        } else if (el.is(Element.Html.Link)) |link| {
+            // External stylesheet links registered via Frame.loadExternalStylesheet
+            // must be symmetrically deregistered on disconnect, or
+            // `document.styleSheets` accumulates phantom entries and the
+            // visibility cascade keeps honoring rules from removed links —
+            // exactly the SPA theme-switch pattern (append new sheet,
+            // remove old) the feature exists to serve.
+            if (link._sheet) |sheet| {
+                if (self.document._style_sheets) |sheets| {
+                    sheets.remove(sheet);
+                }
+                link._sheet = null;
+                self._style_manager.sheetModified();
+            }
         }
     }
 }
