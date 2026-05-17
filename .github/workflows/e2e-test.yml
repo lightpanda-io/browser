@@ -476,6 +476,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          jq --version
+
           timeout 30 ./lightpanda mcp > mcp.out <<'JSONRPC'
           {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1.0.0"}}}
           {"jsonrpc":"2.0","method":"notifications/initialized"}
@@ -484,8 +486,5 @@ jobs:
 
           cat mcp.out
 
-          grep '"id":1' mcp.out \
-            | jq -e '.result.protocolVersion == "2024-11-05"' > /dev/null
-
-          grep '"id":2' mcp.out \
-            | jq -e '.result.tools | type == "array" and length > 0' > /dev/null
+          jq -ec 'select(.id == 1) | .result.protocolVersion == "2024-11-05"' mcp.out > /dev/null
+          jq -ec 'select(.id == 2) | .result.tools | type == "array" and length > 0' mcp.out > /dev/null
