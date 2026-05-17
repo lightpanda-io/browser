@@ -114,6 +114,14 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
         return;
     }
 
+    // Opt-in fetch for `rel="stylesheet"` — drives `frame.loadExternalStylesheet`,
+    // which fires the load/error event itself. Other rels (preload,
+    // modulepreload) and the disabled case keep the rendering-free stub that
+    // fires a synthetic `load` event without touching the network.
+    if (std.mem.eql(u8, rel, "stylesheet") and frame._session.load_external_stylesheets) {
+        return frame.loadExternalStylesheet(self);
+    }
+
     try frame.queueLoad(self._proto);
 }
 
@@ -143,7 +151,22 @@ pub const JsApi = struct {
     }
 };
 
+// Parser-created <link> elements are void (no closing tag) so they never
+// reach `Frame.nodeComplete`. Mirror `Image.Build.created` so static head
+// links in HTML go through `linkAddedCallback` at element-create time,
+// with attributes already populated by `populateElementAttributes`.
+pub const Build = struct {
+    pub fn created(node: *Node, frame: *Frame) !void {
+        const self = node.as(Link);
+        return self.linkAddedCallback(frame);
+    }
+};
+
 const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Link" {
     try testing.htmlRunner("element/html/link.html", .{});
+}
+
+test "WebApi: HTML.Link external stylesheet" {
+    try testing.htmlRunner("css/external_stylesheet.html", .{ .load_external_stylesheets = true });
 }

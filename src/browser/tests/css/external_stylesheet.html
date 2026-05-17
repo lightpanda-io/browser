@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<head>
+  <script src="../testing.js"></script>
+  <link id="ext" rel="stylesheet" href="/styles/visibility.css">
+</head>
+<body>
+  <div id="visible">always visible</div>
+  <div id="hidden" class="ext-hide">hidden by external rule</div>
+
+  <script id="ext_stylesheet_registered">
+  {
+    // The parser-synchronous fetch in Frame.loadExternalStylesheet runs
+    // before this script executes, so document.styleSheets reflects the
+    // fetched sheet by the time we look.
+    testing.expectEqual(1, document.styleSheets.length);
+
+    const sheet = document.styleSheets[0];
+    testing.expectEqual(testing.ORIGIN + '/styles/visibility.css', sheet.href);
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual('.ext-hide', sheet.cssRules[0].selectorText);
+  }
+  </script>
+
+  <script id="ext_stylesheet_cascade">
+  {
+    // External rule must reach StyleManager: a `.ext-hide` element should
+    // report checkVisibility() === false, exactly as if the rule were
+    // declared inline in a `<style>` block.
+    testing.expectTrue(document.getElementById('visible').checkVisibility());
+    testing.expectFalse(document.getElementById('hidden').checkVisibility());
+  }
+  </script>
+
+  <script id="ext_stylesheet_dynamic_load_event">
+  {
+    // Dynamically-inserted <link> fires `load` after the fetch completes.
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/styles/visibility.css';
+    testing.async(async () => {
+      const fired = await new Promise(resolve => {
+        link.addEventListener('load', () => resolve(true));
+        link.addEventListener('error', () => resolve(false));
+        document.head.appendChild(link);
+      });
+      testing.expectEqual(true, fired);
+    });
+    testing.expectEqual(true, true);
+  }
+  </script>
+
+  <script id="ext_stylesheet_404_fires_error">
+  {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/styles/404.css';
+    testing.async(async () => {
+      const evt = await new Promise(resolve => {
+        link.addEventListener('load', () => resolve('load'));
+        link.addEventListener('error', () => resolve('error'));
+        document.head.appendChild(link);
+      });
+      testing.expectEqual('error', evt);
+    });
+    testing.expectEqual(true, true);
+  }
+  </script>
+
+  <script id="ext_stylesheet_oversize_fires_error">
+  {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/styles/oversize.css';
+    testing.async(async () => {
+      const evt = await new Promise(resolve => {
+        link.addEventListener('load', () => resolve('load'));
+        link.addEventListener('error', () => resolve('error'));
+        document.head.appendChild(link);
+      });
+      testing.expectEqual('error', evt);
+    });
+    testing.expectEqual(true, true);
+  }
+  </script>
+</body>

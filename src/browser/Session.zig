@@ -95,9 +95,9 @@ worker_loading_enabled: bool = true,
 // false to preserve the current rendering-free fast path: drivers that
 // don't need accurate visibility checks pay nothing. Set from the
 // `--enable-external-stylesheets` CLI flag at session init; the
-// LP.configureLoading CDP method can flip it per-session. Currently
-// unread — the fetch path lands in a follow-up that depends on the
-// network refactor in #2303.
+// LP.configureLoading CDP method can flip it per-session. When true,
+// `Link.linkAddedCallback` routes to `Frame.loadExternalStylesheet`
+// (synchronous fetch + parse + register on `document.styleSheets`).
 load_external_stylesheets: bool = false,
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {

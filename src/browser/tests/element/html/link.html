@@ -137,3 +137,19 @@
   });
 }
 </script>
+
+<script id="ext_stylesheet_disabled_default">
+{
+  // Flag defaults off — a <link rel=stylesheet> must NOT register a sheet
+  // on document.styleSheets and must NOT touch the network. The synthetic
+  // load event still fires (asserted by other tests above).
+  const before = document.styleSheets.length;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/styles/visibility.css';
+  document.head.appendChild(link);
+  testing.onload(() => {
+    testing.expectEqual(before, document.styleSheets.length);
+  });
+}
+</script>

@@ -341,6 +341,7 @@ const WEB_API_TEST_ROOT = "src/browser/tests/";
 const HtmlRunnerOpts = struct {
     timeout_ms: u32 = 2000,
     inject_script: ?[]const u8 = null,
+    load_external_stylesheets: bool = false,
 };
 
 pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
@@ -352,6 +353,9 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
         test_session.inject_scripts = inject_scripts[0..1];
     }
     defer test_session.inject_scripts = &.{};
+
+    test_session.load_external_stylesheets = opts.load_external_stylesheets;
+    defer test_session.load_external_stylesheets = false;
 
     const root = try std.fs.path.joinZ(arena_allocator, &.{ WEB_API_TEST_ROOT, path });
     const stat = std.fs.cwd().statFile(root) catch |err| {
@@ -674,6 +678,42 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(&.{ 0, 0, 1, 2, 0, 0, 9 }, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/octet-stream" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/styles/visibility.css")) {
+        // Used by css/external_stylesheet.html — drives the visibility
+        // cascade through StyleManager via Frame.loadExternalStylesheet
+        // so a `.ext-hide` element is observable to checkVisibility().
+        return req.respond(".ext-hide { display: none; }", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/styles/404.css")) {
+        return req.respond("/* unused */", .{
+            .status = .not_found,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/styles/oversize.css")) {
+        // Body that exceeds Frame.MAX_STYLESHEET_BYTES (2 MiB) — written as a
+        // long sequence of valid declarations so the response itself parses
+        // fine and the error path is exercised by the size cap, not by a
+        // CSS parse failure.
+        const chunk = ".pad { color: #abcdef; } "; // 25 bytes
+        const repeats = (2 * 1024 * 1024 / chunk.len) + 1024;
+        var body = try std.ArrayList(u8).initCapacity(arena_allocator, chunk.len * repeats);
+        for (0..repeats) |_| body.appendSliceAssumeCapacity(chunk);
+        return req.respond(body.items, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
             },
         });
     }

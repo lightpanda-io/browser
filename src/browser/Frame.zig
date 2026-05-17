@@ -52,6 +52,7 @@ const AbstractRange = @import("webapi/AbstractRange.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const Worker = @import("webapi/Worker.zig");
+const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const SubmitEvent = @import("webapi/event/SubmitEvent.zig");
@@ -1677,6 +1678,94 @@ pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
             }
         }.cleanup, 0, .{ .name = "frame.dispatchLoad" });
     }
+}
+
+// Hard cap on a single external stylesheet body. CSS rule storage is per-
+// arena so a hostile sheet could otherwise inflate page memory; 2 MiB is
+// well above anything seen on real sites (Tailwind's `preflight + utilities`
+// build is ~400 KiB gzipped, ~3 MiB raw — at which point a site should be
+// splitting by route anyway).
+const MAX_STYLESHEET_BYTES: usize = 2 * 1024 * 1024;
+
+// Synchronously fetch and parse an external `<link rel=stylesheet>`. Opt-in
+// behind `session.load_external_stylesheets` — scrapers/crawlers that don't
+// need accurate visibility checks still get the cheap no-fetch path via
+// `Link.linkAddedCallback`. Mirrors `ScriptManager.addFromElement`'s use of
+// `syncRequest`: stylesheets are render-blocking in real browsers, so a
+// synchronous fetch from inside the parser callback matches expected
+// document-load ordering without manual `_pending_loads` bookkeeping.
+pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link) !void {
+    if (self.isGoingAway()) return;
+
+    const element = link.asElement();
+    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
+    if (href.len == 0) return;
+
+    const arena = try self.getArena(.medium, "Frame.loadExternalStylesheet");
+    defer self._session.releaseArena(arena);
+
+    const resolved = URL.resolve(arena, self.base(), href, .{ .encoding = self.charset }) catch |err| {
+        log.warn(.browser, "external stylesheet resolve", .{ .err = err, .href = href });
+        try self.fireLinkEvent(link, comptime .wrap("error"));
+        return;
+    };
+
+    const session = self._session;
+    // HttpClient takes ownership of `headers` via the request struct (see
+    // HttpClient.zig:411 — must NOT pair with a local `defer deinit`).
+    var headers = try session.browser.http_client.newHeaders();
+    try headers.add("Accept: text/css,*/*;q=0.1");
+
+    var response = session.browser.http_client.syncRequest(arena, .{
+        .url = resolved,
+        .method = .GET,
+        .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
+        .headers = headers,
+        .cookie_jar = &session.cookie_jar,
+        .cookie_origin = self.url,
+        .resource_type = .stylesheet,
+        .notification = session.notification,
+    }) catch |err| {
+        log.warn(.browser, "external stylesheet fetch", .{ .err = err, .url = resolved });
+        try self.fireLinkEvent(link, comptime .wrap("error"));
+        return;
+    };
+    defer response.deinit(arena);
+
+    if (response.status < 200 or response.status >= 300) {
+        log.info(.browser, "external stylesheet status", .{ .status = response.status, .url = resolved });
+        try self.fireLinkEvent(link, comptime .wrap("error"));
+        return;
+    }
+
+    if (response.body.items.len > MAX_STYLESHEET_BYTES) {
+        log.warn(.browser, "external stylesheet too large", .{
+            .bytes = response.body.items.len,
+            .max = MAX_STYLESHEET_BYTES,
+            .url = resolved,
+        });
+        try self.fireLinkEvent(link, comptime .wrap("error"));
+        return;
+    }
+
+    const sheet = try CSSStyleSheet.initWithOwner(element, self);
+    sheet._href = try self.arena.dupe(u8, resolved);
+    sheet.replaceSync(response.body.items, self) catch |err| {
+        log.warn(.browser, "external stylesheet parse", .{ .err = err, .url = resolved });
+        try self.fireLinkEvent(link, comptime .wrap("error"));
+        return;
+    };
+
+    const sheets = try self.document.getStyleSheets(self);
+    try sheets.add(sheet, self);
+
+    try self.fireLinkEvent(link, comptime .wrap("load"));
+}
+
+fn fireLinkEvent(self: *Frame, link: *Element.Html.Link, name: String) !void {
+    const event = try Event.initTrusted(name, .{}, self._page);
+    try self._event_manager.dispatch(link._proto.asEventTarget(), event);
 }
 
 fn dispatchLoad(self: *Frame) !void {
