@@ -265,17 +265,15 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
     const session = owner.session();
     owner.makeRequest(.{
         .ctx = script,
-        .params = .{
-            .url = url,
-            .method = .GET,
-            .frame_id = owner.frameId(),
-            .loader_id = owner.loaderId(),
-            .headers = try self.getHeaders(),
-            .cookie_jar = &session.cookie_jar,
-            .cookie_origin = owner.url(),
-            .resource_type = .script,
-            .notification = session.notification,
-        },
+        .url = url,
+        .method = .GET,
+        .frame_id = owner.frameId(),
+        .loader_id = owner.loaderId(),
+        .headers = try self.getHeaders(),
+        .cookie_jar = &session.cookie_jar,
+        .cookie_origin = owner.url(),
+        .resource_type = .script,
+        .notification = session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,
@@ -372,17 +370,15 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
     self.async_scripts.append(&script.node);
     owner.makeRequest(.{
         .ctx = script,
-        .params = .{
-            .url = url,
-            .method = .GET,
-            .frame_id = owner.frameId(),
-            .loader_id = owner.loaderId(),
-            .headers = try self.getHeaders(),
-            .resource_type = .script,
-            .cookie_jar = &session.cookie_jar,
-            .cookie_origin = owner.url(),
-            .notification = session.notification,
-        },
+        .url = url,
+        .method = .GET,
+        .frame_id = owner.frameId(),
+        .loader_id = owner.loaderId(),
+        .headers = try self.getHeaders(),
+        .resource_type = .script,
+        .cookie_jar = &session.cookie_jar,
+        .cookie_origin = owner.url(),
+        .notification = session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,
@@ -581,7 +577,7 @@ pub const Script = struct {
                     .b1 = transfer.id,
                     .b2 = transfer._tries,
                     .b3 = transfer.aborted,
-                    .b4 = transfer.bytes_received,
+                    .b4 = transfer.res.bytes_received,
                     .b5 = transfer._notified_fail,
                     .b8 = transfer._auth_challenge != null,
                     .b9 = if (transfer._conn) |c| @intFromPtr(c._easy) else 0,
@@ -590,7 +586,7 @@ pub const Script = struct {
                 self.debug_transfer_id = transfer.id;
                 self.debug_transfer_tries = transfer._tries;
                 self.debug_transfer_aborted = transfer.aborted;
-                self.debug_transfer_bytes_received = transfer.bytes_received;
+                self.debug_transfer_bytes_received = transfer.res.bytes_received;
                 self.debug_transfer_notified_fail = transfer._notified_fail;
                 self.debug_transfer_auth_challenge = transfer._auth_challenge != null;
                 self.debug_transfer_easy_id = if (transfer._conn) |c| @intFromPtr(c._easy) else 0;

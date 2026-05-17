@@ -72,10 +72,10 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     req.error_callback = InterceptContext.errorCallback;
     if (ctx.forward.shutdown != null) req.shutdown_callback = InterceptContext.shutdownCallback;
 
-    req.params.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
+    req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
 
     var wait_for_interception = false;
-    req.params.notification.dispatch(.http_request_intercept, &.{
+    req.notification.dispatch(.http_request_intercept, &.{
         .transfer = transfer,
         .wait_for_interception = &wait_for_interception,
     });
@@ -83,7 +83,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
     log.debug(.http, "interception check", .{
         .wait_for_interception = wait_for_interception,
         .intercepted = self.intercepted,
-        .url = req.params.url,
+        .url = req.url,
     });
 
     if (!wait_for_interception) {
@@ -109,21 +109,21 @@ pub const InterceptContext = struct {
 
     fn startCallback(response: Response) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
-        log.debug(.http, "intercept start", .{ .url = self.transfer.url });
+        log.debug(.http, "intercept start", .{ .url = self.transfer.req.url });
         return self.forward.forwardStart(response);
     }
 
     fn headerCallback(response: Response) anyerror!bool {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
         log.debug(.http, "intercept header", .{
-            .url = self.transfer.url,
+            .url = self.transfer.req.url,
             .status = response.status(),
             .content_length = response.contentLength(),
         });
 
         self.content_length = response.contentLength() orelse 0;
 
-        self.transfer.req.params.notification.dispatch(.http_response_header_done, &.{
+        self.transfer.req.notification.dispatch(.http_response_header_done, &.{
             .transfer = self.transfer,
             .response = &response,
         });
@@ -134,11 +134,11 @@ pub const InterceptContext = struct {
     fn dataCallback(response: Response, chunk: []const u8) anyerror!void {
         const self: *InterceptContext = @ptrCast(@alignCast(response.ctx));
         log.debug(.http, "intercept data", .{
-            .url = self.transfer.url,
+            .url = self.transfer.req.url,
             .len = chunk.len,
         });
 
-        self.transfer.req.params.notification.dispatch(.http_response_data, &.{
+        self.transfer.req.notification.dispatch(.http_response_data, &.{
             .data = chunk,
             .transfer = self.transfer,
         });
@@ -150,11 +150,11 @@ pub const InterceptContext = struct {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
 
         log.debug(.http, "intercept done", .{
-            .url = self.transfer.url,
+            .url = self.transfer.req.url,
             .content_length = self.content_length,
         });
 
-        self.transfer.req.params.notification.dispatch(.http_request_done, &.{
+        self.transfer.req.notification.dispatch(.http_request_done, &.{
             .transfer = self.transfer,
             .content_length = self.content_length,
         });
@@ -165,10 +165,10 @@ pub const InterceptContext = struct {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
 
         log.debug(.http, "intercept error", .{
-            .url = self.transfer.url,
+            .url = self.transfer.req.url,
             .err = err,
         });
-        self.transfer.req.params.notification.dispatch(.http_request_fail, &.{
+        self.transfer.req.notification.dispatch(.http_request_fail, &.{
             .transfer = self.transfer,
             .err = err,
         });
@@ -178,8 +178,8 @@ pub const InterceptContext = struct {
     fn shutdownCallback(ctx: *anyopaque) void {
         const self: *InterceptContext = @ptrCast(@alignCast(ctx));
 
-        log.debug(.http, "intercept shutdown", .{ .url = self.transfer.url });
-        self.transfer.req.params.notification.dispatch(.http_request_fail, &.{
+        log.debug(.http, "intercept shutdown", .{ .url = self.transfer.req.url });
+        self.transfer.req.notification.dispatch(.http_request_fail, &.{
             .transfer = self.transfer,
             .err = error.Shutdown,
         });
@@ -257,7 +257,7 @@ fn fulfillInner(
 ) !void {
     const fulfilled = FulfilledResponse{
         .status = status,
-        .url = req.params.url,
+        .url = req.url,
         .headers = headers,
         .body = body,
     };

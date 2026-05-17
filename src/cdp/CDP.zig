@@ -829,8 +829,8 @@ pub const BrowserContext = struct {
     }
 
     fn keyFromTransfer(transfer: *const Transfer) CDP.BrowserContext.CapturedResponseKey {
-        return if (transfer.req.params.resource_type == .document)
-            .{ .kind = .loader, .id = transfer.req.params.loader_id }
+        return if (transfer.req.resource_type == .document)
+            .{ .kind = .loader, .id = transfer.req.loader_id }
         else
             .{ .kind = .request, .id = transfer.id };
     }

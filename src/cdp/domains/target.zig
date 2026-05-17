@@ -570,6 +570,47 @@ test "cdp.target: disposeBrowserContext" {
     }
 }
 
+// Issue #2472: CDP target IDs (`FID-{d:0>10}`) must stay unique for the
+// lifetime of a CDP connection. Before the fix, `Session.frame_id_gen`
+// reset to 0 on `tearDownActivePage` AND fresh sessions also started
+// from 0, so the second `Target.createTarget` after a dispose re-issued
+// the same `FID-0000000001` and Playwright clients tripped on
+// `Duplicate target FID-...`. The counter now lives on `Browser` and is
+// monotonic across BrowserContexts.
+test "cdp.target: createTarget assigns unique IDs across BrowserContexts (issue #2472)" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // Cycle 1: create context + target, capture the assigned target_id.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Target.createTarget",
+        .params = .{ .url = "about:blank" },
+    });
+    const target_id_1 = ctx.cdp().browser_context.?.target_id.?;
+    const bc_id_1 = ctx.cdp().browser_context.?.id;
+
+    // Dispose the first context.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Target.disposeBrowserContext",
+        .params = .{ .browserContextId = bc_id_1 },
+    });
+    try testing.expectEqual(null, ctx.cdp().browser_context);
+
+    // Cycle 2: create another context + target. The new target_id must
+    // differ from cycle 1's -- duplicates here are exactly what Playwright
+    // asserts on with `Duplicate target FID-...`.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Target.createTarget",
+        .params = .{ .url = "about:blank" },
+    });
+    const target_id_2 = ctx.cdp().browser_context.?.target_id.?;
+
+    try testing.expect(!std.mem.eql(u8, &target_id_1, &target_id_2));
+}
+
 test "cdp.target: createTarget" {
     {
         var ctx = try testing.context();

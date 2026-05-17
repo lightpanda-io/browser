@@ -202,9 +202,9 @@ pub fn requestIntercept(bc: *CDP.BrowserContext, intercept: *const Notification.
 
     try bc.cdp.sendEvent("Fetch.requestPaused", .{
         .requestId = &id.toInterceptId(transfer.id),
-        .frameId = &id.toFrameId(transfer.req.params.frame_id),
+        .frameId = &id.toFrameId(transfer.req.frame_id),
         .request = network.RequestWriter.init(transfer),
-        .resourceType = switch (transfer.req.params.resource_type) {
+        .resourceType = switch (transfer.req.resource_type) {
             .script => "Script",
             .xhr => "XHR",
             .document => "Document",
@@ -216,7 +216,7 @@ pub fn requestIntercept(bc: *CDP.BrowserContext, intercept: *const Notification.
     log.debug(.cdp, "request intercept", .{
         .state = "paused",
         .id = transfer.id,
-        .url = transfer.url,
+        .url = transfer.req.url,
     });
     // Await either continueRequest, failRequest or fulfillRequest
 
@@ -254,7 +254,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
     log.debug(.cdp, "request intercept", .{
         .state = "continue",
         .id = transfer.id,
-        .url = transfer.url,
+        .url = transfer.req.url,
         .new_url = params.url,
     });
 
@@ -262,14 +262,14 @@ fn continueRequest(cmd: *CDP.Command) !void {
     const request = &transfer.req;
     // Update the request with the new parameters
     if (params.url) |url| {
-        request.params.url = try arena.dupeZ(u8, url);
+        request.url = try arena.dupeZ(u8, url);
     }
     if (params.method) |method| {
-        request.params.method = std.meta.stringToEnum(http.Method, method) orelse return error.InvalidParams;
+        request.method = std.meta.stringToEnum(http.Method, method) orelse return error.InvalidParams;
     }
 
     if (params.headers) |headers| {
-        request.params.headers.deinit();
+        request.headers.deinit();
 
         var buf: std.ArrayList(u8) = .empty;
         var new_headers = try bc.cdp.browser.http_client.newHeaders();
@@ -279,14 +279,14 @@ fn continueRequest(cmd: *CDP.Command) !void {
             try buf.append(cmd.arena, 0);
             try new_headers.add(buf.items[0 .. buf.items.len - 1 :0]);
         }
-        request.params.headers = new_headers;
+        request.headers = new_headers;
     }
 
     if (params.postData) |b| {
         const decoder = std.base64.standard.Decoder;
         const body = try arena.alloc(u8, try decoder.calcSizeForSlice(b));
         try decoder.decode(body, b);
-        request.params.body = body;
+        request.body = body;
     }
 
     try client.interception_layer.continueRequest(transfer);
@@ -384,7 +384,7 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
     log.debug(.cdp, "request intercept", .{
         .state = "fulfilled",
         .id = transfer.id,
-        .url = transfer.url,
+        .url = transfer.req.url,
         .status = params.responseCode,
         .body = params.body != null,
     });
@@ -423,7 +423,7 @@ fn failRequest(cmd: *CDP.Command) !void {
     log.info(.cdp, "request intercept", .{
         .state = "fail",
         .id = transfer.id,
-        .url = transfer.url,
+        .url = transfer.req.url,
         .reason = params.errorReason,
     });
     return cmd.sendResult(null, .{});
@@ -446,9 +446,9 @@ pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notificati
 
     try bc.cdp.sendEvent("Fetch.authRequired", .{
         .requestId = &id.toInterceptId(transfer.id),
-        .frameId = &id.toFrameId(request.params.frame_id),
+        .frameId = &id.toFrameId(request.frame_id),
         .request = network.RequestWriter.init(transfer),
-        .resourceType = switch (request.params.resource_type) {
+        .resourceType = switch (request.resource_type) {
             .script => "Script",
             .xhr => "XHR",
             .document => "Document",
@@ -466,7 +466,7 @@ pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notificati
     log.debug(.cdp, "request auth required", .{
         .state = "paused",
         .id = transfer.id,
-        .url = transfer.url,
+        .url = transfer.req.url,
     });
     // Await continueWithAuth
 

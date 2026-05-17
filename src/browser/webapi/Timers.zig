@@ -32,7 +32,23 @@ const Allocator = std.mem.Allocator;
 const Timers = @This();
 
 _timer_id: u30 = 0,
-_callbacks: std.AutoHashMapUnmanaged(u32, *ScheduleCallback) = .{},
+_callbacks: CallbackHashMap = .{},
+
+const Key = u32;
+const CallbackHashMap = std.HashMapUnmanaged(
+    Key,
+    *ScheduleCallback,
+    struct {
+        pub fn hash(_: @This(), key: Key) Key {
+            return std.hash.int(key);
+        }
+
+        pub fn eql(_: @This(), a: Key, b: Key) bool {
+            return std.meta.eql(a, b);
+        }
+    },
+    std.hash_map.default_max_load_percentage,
+);
 
 pub const Mode = enum {
     idle,

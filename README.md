@@ -258,7 +258,7 @@ brew install cmake
 
 ### Build and run
 
-You an build the entire browser with `make build` or `make build-dev` for debug
+You can build the entire browser with `make build` or `make build-dev` for debug
 env.
 
 But you can directly use the zig command: `zig build run`.
@@ -363,7 +363,7 @@ Run a Lightpanda browser
 zig build run -- --insecure-disable-tls-host-verification
 ```
 
-Then you can start the wptrunner from the Demo's clone dir:
+Then you can start the wptrunner from the demo's clone dir:
 ```
 cd wptrunner && go run .
 ```

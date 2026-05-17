@@ -45,9 +45,29 @@ http_client: HttpClient,
 // used by sessions to allocate pages.
 page_pool: std.heap.MemoryPool(Page),
 
+// Monotonic frame-ID generator scoped to this Browser (one per CDP
+// connection). Lives here, not on Session, because CDP target IDs
+// (encoded as `FID-{d:0>10}`) must be unique for the lifetime of the
+// connection -- a Session-scoped counter would re-issue the same
+// `FID-0000000001` for every fresh BrowserContext on the connection,
+// which Playwright rejects with `Duplicate target FID-...` (issue
+// #2472).
+frame_id_gen: u32 = 0,
+
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
 };
+
+// Allocate the next frame ID. Wrapping `+%` keeps this safe past 2^32
+// allocations on a single connection (which would take days of
+// continuous navigation; in practice we wrap the connection long
+// before that). Callers must format with `FID-{d:0>10}` to match the
+// existing CDP target-ID encoding (`src/cdp/id.zig`).
+pub fn nextFrameId(self: *Browser) u32 {
+    const id = self.frame_id_gen +% 1;
+    self.frame_id_gen = id;
+    return id;
+}
 
 pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp_client: ?HttpClient.CDPClient) !void {
     const allocator = app.allocator;

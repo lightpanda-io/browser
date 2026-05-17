@@ -221,14 +221,20 @@ jobs:
         run: |
           export PROXY_USERNAME=username PROXY_PASSWORD=password
           ./lightpanda serve --port 9223 --http-proxy http://127.0.0.1:3000 ${{ steps.args.outputs.value }} &
+          echo $! > LPD.pid
           go run runner/main.go
           URL=https://demo-browser.lightpanda.io/campfire-commerce/ node puppeteer/proxy_auth.js
+          kill `cat LPD.pid`
+          while kill -0 `cat LPD.pid` 2>/dev/null; do sleep 1; done
 
       - name: run request interception through proxy and playwright
         run: |
           export PROXY_USERNAME=username PROXY_PASSWORD=password
           ./lightpanda serve --port 9223 ${{ steps.args.outputs.value }} &
+          echo $! > LPD.pid
           BASE_URL=https://demo-browser.lightpanda.io/ node playwright/proxy_auth.js
+          kill `cat LPD.pid`
+          while kill -0 `cat LPD.pid` 2>/dev/null; do sleep 1; done
 
       - name: upload cdp log
         uses: actions/upload-artifact@v7
@@ -450,3 +456,35 @@ jobs:
       - run: chmod a+x ./lightpanda
 
       - run: ./lightpanda fetch https://demo-browser.lightpanda.io/campfire-commerce/
+
+  mcp-smoke:
+    name: mcp smoke
+    needs: zig-build-release
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: lightpanda-build-release
+
+      - run: chmod a+x ./lightpanda
+
+      - name: jsonrpc round trip over stdio
+        run: |
+          set -euo pipefail
+
+          jq --version
+
+          timeout 30 ./lightpanda mcp > mcp.out <<'JSONRPC'
+          {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1.0.0"}}}
+          {"jsonrpc":"2.0","method":"notifications/initialized"}
+          {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+          JSONRPC
+
+          cat mcp.out
+
+          jq -ec 'select(.id == 1) | .result.protocolVersion == "2024-11-05"' mcp.out > /dev/null
+          jq -ec 'select(.id == 2) | .result.tools | type == "array" and length > 0' mcp.out > /dev/null
