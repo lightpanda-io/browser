@@ -319,7 +319,15 @@ const CLOSE_TIMEOUT = [_]u8{ 136, 2, 15, 160 }; // code: 4000
 socket: posix.socket_t,
 socket_flags: usize,
 reader: Reader(true),
+
+// Send-side state. Serialized by `send_mutex` because two threads can
+// reach the send path concurrently: the CDP reader thread (for protocol
+// close frames and ping/pong replies) and the worker thread (for CDP
+// events, command responses, etc). `send_arena` is reset at the end of
+// every send, so its lifetime cannot overlap two concurrent send paths.
+send_mutex: std.Thread.Mutex = .{},
 send_arena: ArenaAllocator,
+
 json_version_response: []const u8,
 
 pub fn init(
@@ -352,28 +360,38 @@ pub fn deinit(self: *WsConnection) void {
 }
 
 pub fn send(self: *WsConnection, data: []const u8) !void {
+    self.send_mutex.lock();
+    defer self.send_mutex.unlock();
+    return self.sendLocked(data);
+}
+
+// Caller must already hold `send_mutex`. Use this when the calling
+// function has already taken the mutex to cover allocation in
+// `send_arena` (e.g. sendJSON, sendPong).
+fn sendLocked(self: *WsConnection, data: []const u8) !void {
     var pos: usize = 0;
+    var changed_to_blocking: bool = false;
     defer _ = self.send_arena.reset(.{ .retain_with_limit = 1024 * 32 });
+
+    defer if (changed_to_blocking) {
+        // Restore non-blocking after a forced blocking write. Safe because
+        // the recv side is owned by a separate reader thread, so the peer
+        // keeps draining our writes even while we're parked here.
+        _ = posix.fcntl(self.socket, posix.F.SETFL, self.socket_flags) catch |err| {
+            log.err(.app, "ws restore nonblocking", .{ .err = err });
+        };
+    };
 
     LOOP: while (pos < data.len) {
         const written = posix.write(self.socket, data[pos..]) catch |err| switch (err) {
             error.WouldBlock => {
-                // The peer's recv buffer is full. Naively switching to a
-                // blocking write would deadlock when the peer is _also_
-                // blocked trying to send to us — a real scenario under CDP
-                // Fetch.enable + http-proxy, where lightpanda emits a flood
-                // of Fetch.requestPaused events while puppeteer is trying
-                // to send us back the matching Fetch.continueRequest
-                // messages. Each side fills the other's TCP send buffer,
-                // and a blocking write here never returns. See
-                // lightpanda-io/browser#2462.
-                //
-                // Instead, poll for POLLOUT _while also_ draining any
-                // POLLIN data into the reader buffer (without processing —
-                // that would re-enter the dispatch path and call back into
-                // send, risking unbounded recursion). The buffered bytes
-                // are picked up by the next CDP.readSocket call.
-                try self.waitWritableDrainingReads();
+                // Socket is normally non-blocking. Flip to blocking briefly
+                // so the kernel queues the rest of the write; the dedicated
+                // reader thread keeps draining recv on the side, so the
+                // peer never wedges and the blocking write completes.
+                assert(changed_to_blocking == false, "WsConnection.double block", .{});
+                changed_to_blocking = true;
+                _ = try posix.fcntl(self.socket, posix.F.SETFL, self.socket_flags & ~@as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
                 continue :LOOP;
             },
             else => return err,
@@ -386,89 +404,15 @@ pub fn send(self: *WsConnection, data: []const u8) !void {
     }
 }
 
-// Block until the socket is writable. Concurrently drains any incoming
-// bytes into the reader buffer (without processing them) so the peer
-// keeps making progress reading our writes. Used to break the two-way
-// backpressure deadlock described in `send`.
-fn waitWritableDrainingReads(self: *WsConnection) !void {
-    // Bounded so a truly dead peer eventually surfaces (TCP keepalive will
-    // close the socket; this just bounds any single send).
-    const POLL_TIMEOUT_MS: i32 = 30_000;
-
-    // We may have to stop watching POLLIN if the reader buffer is at its
-    // cap and we can't make any more space (otherwise poll would return
-    // immediately every iteration with POLLIN set, busy-spinning).
-    var watch_in = true;
-
-    while (true) {
-        const events_in: i16 = if (watch_in) @as(i16, @intCast(posix.POLL.IN)) else 0;
-        var pfds = [_]posix.pollfd{.{
-            .fd = self.socket,
-            .events = @as(i16, @intCast(posix.POLL.OUT)) | events_in,
-            .revents = 0,
-        }};
-        const n = try posix.poll(&pfds, POLL_TIMEOUT_MS);
-        if (n == 0) return error.WouldBlock;
-
-        const revents = pfds[0].revents;
-        if (revents & @as(i16, @intCast(posix.POLL.NVAL | posix.POLL.ERR | posix.POLL.HUP)) != 0) {
-            return error.Closed;
-        }
-
-        if (watch_in and revents & @as(i16, @intCast(posix.POLL.IN)) != 0) {
-            // Drain whatever's available without processing. May grow the
-            // buffer up to CDP_MAX_MESSAGE_SIZE.
-            const before = self.bufferedBytes();
-            try self.drainAvailable();
-            if (self.bufferedBytes() == before and self.reader.readBuf().len == 0) {
-                // Buffer is at cap and we couldn't read anything more.
-                // Stop watching POLLIN so we don't busy-spin while we wait
-                // for POLLOUT.
-                watch_in = false;
-            }
-        }
-
-        if (revents & @as(i16, @intCast(posix.POLL.OUT)) != 0) {
-            return;
-        }
-    }
-}
-
-// Read everything currently available on the socket into the reader
-// buffer (non-blocking). Grows the buffer if needed (capped at
-// CDP_MAX_MESSAGE_SIZE so a misbehaving peer can't OOM us). Does not
-// process messages — the caller will handle that on the next pass
-// through CDP.readSocket.
-fn drainAvailable(self: *WsConnection) !void {
-    while (true) {
-        var buf = self.reader.readBuf();
-        if (buf.len == 0) {
-            const current = self.reader.buf.len;
-            if (current >= CDP_MAX_MESSAGE_SIZE) {
-                // Already at the cap; refuse to grow further. Stop draining
-                // — the next POLLOUT-then-write attempt will block again,
-                // but at least the peer's reads will eventually free our
-                // send buffer and let us proceed.
-                return;
-            }
-            self.reader.buf = try growBuffer(self.reader.allocator, self.reader.buf, current + 1);
-            buf = self.reader.readBuf();
-        }
-        const n = posix.read(self.socket, buf) catch |err| switch (err) {
-            error.WouldBlock => return,
-            else => return err,
-        };
-        if (n == 0) return error.Closed; // peer closed
-        self.reader.len += n;
-    }
-}
-
 const EMPTY_PONG = [_]u8{ 138, 0 };
 
 fn sendPong(self: *WsConnection, data: []const u8) !void {
     if (data.len == 0) {
         return self.send(&EMPTY_PONG);
     }
+    self.send_mutex.lock();
+    defer self.send_mutex.unlock();
+
     var header_buf: [10]u8 = undefined;
     const header = websocketHeader(&header_buf, .pong, data.len);
 
@@ -476,7 +420,7 @@ fn sendPong(self: *WsConnection, data: []const u8) !void {
     const framed = try allocator.alloc(u8, header.len + data.len);
     @memcpy(framed[0..header.len], header);
     @memcpy(framed[header.len..], data);
-    return self.send(framed);
+    return self.sendLocked(framed);
 }
 
 // called by CDP
@@ -486,6 +430,9 @@ fn sendPong(self: *WsConnection, data: []const u8) !void {
 // buffer, where the first 10 bytes are reserved. We can then backfill
 // the header and send the slice.
 pub fn sendJSON(self: *WsConnection, message: anytype, opts: std.json.Stringify.Options) !void {
+    self.send_mutex.lock();
+    defer self.send_mutex.unlock();
+
     const allocator = self.send_arena.allocator();
 
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 512);
@@ -494,7 +441,7 @@ pub fn sendJSON(self: *WsConnection, message: anytype, opts: std.json.Stringify.
     try aw.writer.writeAll(&[_]u8{0} ** 10);
     try std.json.Stringify.value(message, opts, &aw.writer);
     const framed = fillWebsocketHeader(aw.toArrayList());
-    return self.send(framed);
+    return self.sendLocked(framed);
 }
 
 pub fn sendJSONRaw(
@@ -548,37 +495,6 @@ pub fn read(self: *WsConnection) !usize {
     const n = try posix.read(self.socket, self.reader.readBuf());
     self.reader.len += n;
     return n;
-}
-
-pub const ReadResult = enum { data, no_new_data, closed };
-
-// Variant of `read` that distinguishes "no new bytes on the wire" from
-// "peer closed". Used by CDP.readSocket so it can still drain buffered
-// messages (those rescued during a backpressured send) without bailing
-// when posix.read reports EWOULDBLOCK.
-pub fn tryRead(self: *WsConnection) !ReadResult {
-    const buf = self.reader.readBuf();
-    if (buf.len == 0) {
-        // Reader buffer is completely full of unprocessed messages. Don't
-        // call posix.read with a zero-length buffer (returns 0 → looks like
-        // EOF). Caller should processMessages first.
-        return if (self.bufferedBytes() > 0) .no_new_data else .closed;
-    }
-    const n = posix.read(self.socket, buf) catch |err| switch (err) {
-        error.WouldBlock => return .no_new_data,
-        else => return err,
-    };
-    if (n == 0) return .closed;
-    self.reader.len += n;
-    return .data;
-}
-
-// Number of bytes sitting in the reader buffer that haven't been parsed
-// into messages yet. Used by HttpClient.perform to detect that data was
-// rescued from the socket during a backpressured send and still needs to
-// be dispatched.
-pub fn bufferedBytes(self: *const WsConnection) usize {
-    return self.reader.len - self.reader.pos;
 }
 
 fn processHttpRequest(self: *WsConnection) !HttpResult {

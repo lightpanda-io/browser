@@ -165,17 +165,15 @@ fn layerWith(self: anytype, next: Layer) Layer {
 // specifically when we're waiting for a request interception response to
 // a blocking script.
 pub const CDPClient = struct {
+    // Fd to poll for "the CDP client has work for us". With the dedicated
+    // CDP reader thread, this is the read end of the mailbox's wake pipe;
+    // it becomes readable when a message has been enqueued.
     socket: posix.socket_t,
     ctx: *anyopaque,
-    blocking_read_start: *const fn (*anyopaque) bool,
+    // Drain any pending CDP messages. Returns false if the CDP connection
+    // has been closed. Called from sync-wait paths (HttpClient.syncRequest,
+    // ScriptManagerBase.waitForImport) and from CDP.tick.
     blocking_read: *const fn (*anyopaque) bool,
-    blocking_read_end: *const fn (*anyopaque) bool,
-    // Returns true if the CDP client has bytes already buffered (typically
-    // rescued from the socket while a synchronous send was backpressured;
-    // see WsConnection.send). When true, perform() returns .cdp_socket so
-    // the runner drains them even if the OS recv buffer is empty. See
-    // lightpanda-io/browser#2462.
-    has_buffered_input: *const fn (*anyopaque) bool,
 };
 
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: ?CDPClient) !void {
@@ -671,20 +669,11 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
 
     var status = PerformStatus.normal;
     if (self.cdp_client) |cdp_client| {
-        // Bytes may have been rescued from the CDP socket while a
-        // synchronous send was backpressured (see WsConnection.send). The
-        // OS recv buffer is empty in that case, but we still owe the
-        // dispatcher a chance to process them. See
-        // lightpanda-io/browser#2462.
-        if (cdp_client.has_buffered_input(cdp_client.ctx)) {
-            return .cdp_socket;
-        }
-
-        // Even when we processed completion messages this round, do a
-        // non-blocking poll of the CDP socket so a steady stream of HTTP
-        // completions can't starve CDP reads. Without this, a flood of
-        // intercepted/proxied transfers can leave Fetch.continueRequest
-        // messages unread for seconds at a time.
+        // Always poll the CDP wake fd, even when we just processed HTTP
+        // completions. Without this, a steady stream of completions could
+        // starve CDP reads — the runner would never observe .cdp_socket
+        // and never call into the dispatcher. With the mailbox reader
+        // thread the wake fd is just a pipe, so the poll is cheap.
         const cdp_timeout: c_int = if (processed) 0 else timeout_ms;
         var wait_fds = [_]http.WaitFd{.{
             .fd = cdp_client.socket,

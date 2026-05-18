@@ -176,6 +176,14 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
         return;
     }
 
+    // From here on the CDP reader thread owns the recv side of the socket.
+    // It must be spawned _after_ the handshake (which reads from the same
+    // socket) to avoid two threads racing on socket reads.
+    cdp.startReader() catch |err| {
+        log.err(.app, "CDP startReader", .{ .err = err });
+        return;
+    };
+
     while (true) {
         const next = cdp.tick() catch |err| {
             log.err(.app, "cdp tick", .{ .err = err });

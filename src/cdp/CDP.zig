@@ -31,6 +31,7 @@ const Label = @import("../browser/webapi/element/html/Label.zig");
 const Transfer = @import("../browser/HttpClient.zig").Transfer;
 const CDPClient = @import("../browser/HttpClient.zig").CDPClient;
 const WsConnection = @import("../network/WsConnection.zig");
+const Mailbox = @import("Mailbox.zig");
 
 const Incrementing = @import("id.zig").Incrementing;
 const InterceptState = @import("domains/fetch.zig").InterceptState;
@@ -82,6 +83,17 @@ frame_arena: std.heap.ArenaAllocator,
 // (or altogether eliminate) our use of this.
 browser_context_arena: std.heap.ArenaAllocator,
 
+// CDP incoming messages flow through a dedicated reader thread which
+// owns the WS read side and pushes complete messages onto this mailbox.
+// The worker thread (this thread) drains the mailbox at safe points
+// (Runner.tick, HttpClient.syncRequest, ScriptManagerBase.waitForImport).
+// Decoupling the read side from the runner loop prevents the two-way
+// backpressure deadlock that triggers under CDP Fetch.enable + http-proxy
+// and the related class of stalls where the runner is busy in JS while
+// CDP messages pile up unread. See lightpanda-io/browser#2462.
+mailbox: Mailbox = undefined,
+reader_thread: ?std.Thread = null,
+
 pub fn init(
     self: *CDP,
     app: *App,
@@ -105,17 +117,42 @@ pub fn init(
     try self.ws.init(socket, self.app.allocator, json_version_response);
     errdefer self.ws.deinit();
 
+    self.mailbox = try Mailbox.init(allocator);
+    errdefer self.mailbox.deinit();
+
+    // The HttpClient polls cdp_client.socket alongside the curl multi
+    // handle. With the mailbox model the worker is woken by the mailbox
+    // wake-pipe rather than by raw WS readiness.
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, .{
         .ctx = self,
-        .socket = socket,
-        .blocking_read_start = CDP.blockingReadStart,
-        .blocking_read = CDP.blockingRead,
-        .blocking_read_end = CDP.blockingReadStop,
-        .has_buffered_input = CDP.hasBufferedInput,
+        .socket = self.mailbox.wake_read,
+        .blocking_read = CDP.drainMailbox,
     });
+
+    // NOTE: the reader thread is not spawned here. The caller must run
+    // the WS handshake first (which reads from the same socket) and then
+    // call `startReader`. Spawning here would race the handshake on
+    // socket reads.
+}
+
+// Start the dedicated CDP reader thread. Must be called once, after the
+// WS handshake has completed. From this point on the reader thread owns
+// the recv side of the socket; the worker thread must only send.
+pub fn startReader(self: *CDP) !void {
+    std.debug.assert(self.reader_thread == null);
+    self.reader_thread = try std.Thread.spawn(.{}, readerLoop, .{self});
 }
 
 pub fn deinit(self: *CDP) void {
+    // Wake the reader thread's blocked poll/read by shutting down the
+    // recv side of the socket. We then join the thread before tearing
+    // down anything it touches (mailbox, ws).
+    if (self.reader_thread) |t| {
+        self.ws.shutdown();
+        t.join();
+        self.reader_thread = null;
+    }
+
     if (self.browser_context) |*bc| {
         bc.deinit();
     }
@@ -124,56 +161,112 @@ pub fn deinit(self: *CDP) void {
     self.message_arena.deinit();
     self.notification_arena.deinit();
     self.browser_context_arena.deinit();
+    self.mailbox.deinit();
     self.ws.deinit();
 }
 
-pub fn blockingReadStart(ctx: *anyopaque) bool {
-    const self: *CDP = @ptrCast(@alignCast(ctx));
-    self.ws.setBlocking(true) catch |err| {
-        log.warn(.app, "CDP blockingReadStart", .{ .err = err });
-        return false;
-    };
-    return true;
+// Reader thread entry point. Owns `self.ws` for the duration of its
+// loop and pushes parsed CDP messages onto `self.mailbox`. Exits on
+// peer close, a fatal read/parse error, or `ws.shutdown()` called from
+// the worker during CDP.deinit (surfaces as POLLHUP / read=0).
+fn readerLoop(self: *CDP) void {
+    const POLL_TIMEOUT_MS: i32 = 60_000;
+
+    var handler = MailboxHandler{ .mailbox = &self.mailbox };
+
+    while (true) {
+        var pfds = [_]posix.pollfd{.{
+            .fd = self.ws.socket,
+            .events = posix.POLL.IN,
+            .revents = 0,
+        }};
+        const n = posix.poll(&pfds, POLL_TIMEOUT_MS) catch |err| {
+            log.warn(.app, "CDP reader poll", .{ .err = err });
+            self.mailbox.close(err);
+            return;
+        };
+        if (n == 0) continue;
+
+        const revents = pfds[0].revents;
+        if (revents & @as(i16, @intCast(posix.POLL.NVAL | posix.POLL.ERR)) != 0) {
+            self.mailbox.close(error.SocketError);
+            return;
+        }
+
+        // POLLHUP can arrive together with POLLIN (peer half-closed but
+        // bytes still buffered) — drain whatever's available first.
+        const bytes = self.ws.read() catch |err| switch (err) {
+            error.WouldBlock => continue,
+            else => {
+                self.mailbox.close(err);
+                return;
+            },
+        };
+        if (bytes == 0) {
+            // Peer closed (clean EOF or our own ws.shutdown()).
+            self.mailbox.close(null);
+            return;
+        }
+
+        const ok = self.ws.processMessages(&handler) catch |err| {
+            self.mailbox.close(err);
+            return;
+        };
+        if (!ok) {
+            self.mailbox.close(null);
+            return;
+        }
+    }
 }
 
-pub fn blockingRead(ctx: *anyopaque) bool {
+const MailboxHandler = struct {
+    mailbox: *Mailbox,
+
+    pub fn handleMessage(self: *MailboxHandler, data: []const u8) bool {
+        self.mailbox.push(data) catch |err| {
+            log.err(.app, "CDP mailbox push", .{ .err = err });
+            return false;
+        };
+        return true;
+    }
+};
+
+// Called from the worker thread when the mailbox wake-pipe becomes
+// readable. Drains every pending message and dispatches it. Returns
+// false once the mailbox has been closed and emptied (peer gone).
+pub fn readSocket(self: *CDP) bool {
+    self.mailbox.drainWake();
+
+    while (true) {
+        switch (self.mailbox.pop()) {
+            .msg => |bytes| {
+                defer self.mailbox.freeMessage(bytes);
+                self.processMessage(bytes) catch |err| {
+                    log.warn(.app, "CDP processMessage", .{ .err = err });
+                    // Continue draining; a single malformed message
+                    // shouldn't poison the rest of the batch.
+                };
+            },
+            .closed => |err| {
+                if (err) |e| {
+                    log.warn(.app, "CDP disconnect", .{ .err = e });
+                } else {
+                    log.info(.app, "CDP disconnect", .{});
+                }
+                return false;
+            },
+            .empty => return true,
+        }
+    }
+}
+
+// Callback wired through HttpClient.CDPClient.blocking_read for the
+// synchronous-wait paths (syncRequest, waitForImport). Same drain
+// behaviour as readSocket; named separately to keep the call sites
+// honest about intent.
+pub fn drainMailbox(ctx: *anyopaque) bool {
     const self: *CDP = @ptrCast(@alignCast(ctx));
     return self.readSocket();
-}
-
-pub fn blockingReadStop(ctx: *anyopaque) bool {
-    const self: *CDP = @ptrCast(@alignCast(ctx));
-    self.ws.setBlocking(false) catch |err| {
-        log.warn(.app, "CDP blockingReadStop", .{ .err = err });
-        return false;
-    };
-    return true;
-}
-
-pub fn hasBufferedInput(ctx: *anyopaque) bool {
-    const self: *CDP = @ptrCast(@alignCast(ctx));
-    return self.ws.bufferedBytes() > 0;
-}
-
-pub fn readSocket(self: *CDP) bool {
-    // Use tryRead, not read, so that if the socket has no new bytes (because
-    // we already drained them while a backpressured send was waiting in
-    // WsConnection.send) we still process whatever is buffered instead of
-    // logging an error and bailing. See lightpanda-io/browser#2462.
-    const result = self.ws.tryRead() catch |err| {
-        log.warn(.app, "CDP read", .{ .err = err });
-        return false;
-    };
-
-    switch (result) {
-        .closed => {
-            log.info(.app, "CDP disconnect", .{});
-            return false;
-        },
-        .data, .no_new_data => {},
-    }
-
-    return self.ws.processMessages(self) catch false;
 }
 
 pub fn sendJSON(self: *CDP, message: anytype) !void {
