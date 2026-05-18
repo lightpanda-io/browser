@@ -74,29 +74,29 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
         );
 
         const CacheServeCtx = struct {
-            transfer: *Transfer,
+            client: *Client,
+            transfer_id: u32,
             cached: CachedResponse,
         };
 
         const ctx = try arena.create(CacheServeCtx);
-        ctx.* = .{ .transfer = transfer, .cached = cached };
-
-        const next_tick = try arena.create(NextTickNode);
-        next_tick.* = .{
-            .ctx = ctx,
-            .run = struct {
-                fn run(ctx_ptr: *anyopaque) anyerror!void {
-                    const c: *CacheServeCtx = @ptrCast(@alignCast(ctx_ptr));
-                    serveFromCache(&c.transfer.req, &c.cached) catch |err| {
-                        c.transfer.req.error_callback(c.transfer.req.ctx, err);
-                    };
-                    c.transfer.deinit();
-                }
-            }.run,
+        ctx.* = .{
+            .client = transfer.client,
+            .transfer_id = transfer.id,
+            .cached = cached,
         };
 
-        transfer.loop_owned = true;
-        transfer.client.runNextTick(next_tick);
+        try transfer.client.runNextTick(ctx, struct {
+            fn run(ctx_ptr: *anyopaque) anyerror!void {
+                const c: *CacheServeCtx = @ptrCast(@alignCast(ctx_ptr));
+                const t = c.client.findTransfer(c.transfer_id) orelse return;
+                defer t.deinit();
+
+                serveFromCache(&t.req, &c.cached) catch |err| {
+                    t.req.error_callback(t.req.ctx, err);
+                };
+            }
+        }.run);
         return;
     }
 

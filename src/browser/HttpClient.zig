@@ -97,6 +97,7 @@ queue: std.DoublyLinkedList = .{},
 
 // A queue for things that MUST happen on the next tick.
 next_tick_queue: std.DoublyLinkedList = .{},
+next_tick_count: usize = 0,
 
 // Queue is for Transfers that have no connection. ready_queue is for connections
 // that were initiated when performing == true and thus need to wait until
@@ -183,9 +184,12 @@ fn layerWith(self: anytype, next: Layer) Layer {
 }
 
 pub const NextTickNode = struct {
+    pub const Run =
+        *const fn (*anyopaque) anyerror!void;
+
     node: std.DoublyLinkedList.Node = .{},
     ctx: *anyopaque,
-    run: *const fn (*anyopaque) anyerror!void,
+    run: Run,
 };
 
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) !void {
@@ -426,14 +430,23 @@ pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
     try self.drainInbox(mode);
 }
 
-pub fn runNextTick(self: *Client, node: *NextTickNode) void {
+pub fn runNextTick(self: *Client, ctx: *anyopaque, run: NextTickNode.Run) !void {
+    const node = try self.allocator.create(NextTickNode);
+    node.* = .{ .ctx = ctx, .run = run };
+
+    self.next_tick_count += 1;
     self.next_tick_queue.append(&node.node);
 }
 
 fn drainNextTickQueue(self: *Client) !void {
-    while (self.next_tick_queue.popFirst()) |n| {
-        const next_tick: *NextTickNode = @fieldParentPtr("node", n);
-        try next_tick.run(next_tick.ctx);
+    var queue = self.next_tick_queue;
+    self.next_tick_queue = .{};
+
+    while (queue.popFirst()) |node| {
+        const n: *NextTickNode = @fieldParentPtr("node", node);
+        defer self.allocator.destroy(n);
+        self.next_tick_count -= 1;
+        try n.run(n.ctx);
     }
 }
 
