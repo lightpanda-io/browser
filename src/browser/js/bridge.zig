@@ -234,9 +234,15 @@ pub const Accessor = struct {
         };
 
         if (@typeInfo(@TypeOf(getter)) != .null) {
+            const getter_opts = if (opts.ce_reactions == false) opts else blk: {
+                var o = opts;
+                o.ce_reactions = false;
+                break :blk o;
+            };
+
             accessor.getter = struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    Caller.Function.call(T, handle.?, getter, opts);
+                    Caller.Function.call(T, handle.?, getter, getter_opts);
                 }
             }.wrap;
         }

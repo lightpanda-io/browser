@@ -84,9 +84,8 @@ pub fn popAndInvoke(self: *Self, checkpoint: usize, frame: *Frame) void {
 /// up by the same loop instead of scheduling a redundant microtask.
 pub fn drainBackup(self: *Self, frame: *Frame) void {
     var i: usize = 0;
-    const backup_queue = self.backup_queue;
-    while (i < backup_queue.items.len) : (i += 1) {
-        Custom.fireReaction(backup_queue.items[i], frame);
+    while (i < self.backup_queue.items.len) : (i += 1) {
+        Custom.fireReaction(self.backup_queue.items[i], frame);
     }
     self.backup_queue.clearRetainingCapacity();
     self.backup_scheduled = false;
