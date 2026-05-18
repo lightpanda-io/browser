@@ -27,6 +27,12 @@
 // inside a callback, a new scope captures its own checkpoint past the current
 // length, drains its own range, and the outer iteration continues from where
 // it left off.
+//
+// When a reaction is enqueued without an active scope (e.g. a Web API path
+// that wasn't tagged `.ce_reactions = true`, or a non-WebIDL entry point),
+// it goes on the backup queue instead and a microtask is scheduled to drain
+// it. This matches the spec's "backup element queue" so missing bridge tags
+// degrade to delayed reactions rather than crashes.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -38,15 +44,18 @@ const Custom = @import("webapi/element/html/Custom.zig");
 
 const String = lp.String;
 const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Self = @This();
 
 allocator: Allocator,
 queue: std.ArrayList(Reaction) = .empty,
-// Number of currently-open scopes (push() that hasn't been pop'd). Every
-// enqueue must happen inside a scope — that's the leak-detection invariant.
-// Checked in debug at enqueue time so leaks surface where the bug is, not
-// later at some unrelated boundary.
+
+backup_scheduled: bool = false,
+backup_queue: std.ArrayList(Reaction) = .empty,
+
+// Number of currently-open scopes (push() that hasn't been pop'd). When 0,
+// enqueues route to the backup queue and rely on a microtask to drain.
 active_scopes: u32 = 0,
 
 /// Open a new reactions scope. Returns a checkpoint to be passed to popAndInvoke.
@@ -70,23 +79,44 @@ pub fn popAndInvoke(self: *Self, checkpoint: usize, frame: *Frame) void {
     self.active_scopes -= 1;
 }
 
-inline fn assertScopeActive(self: *const Self) void {
-    lp.assert(self.active_scopes > 0, "ce_reactions enqueue without active scope", .{});
+/// Drain the backup queue. Called from the scheduled microtask. `backup_scheduled`
+/// stays true while draining so new enqueues append to backup_queue and get picked
+/// up by the same loop instead of scheduling a redundant microtask.
+pub fn drainBackup(self: *Self, frame: *Frame) void {
+    var i: usize = 0;
+    const backup_queue = self.backup_queue;
+    while (i < backup_queue.items.len) : (i += 1) {
+        Custom.fireReaction(backup_queue.items[i], frame);
+    }
+    self.backup_queue.clearRetainingCapacity();
+    self.backup_scheduled = false;
 }
 
-pub fn enqueueConnected(self: *Self, element: *Element) !void {
-    self.assertScopeActive();
-    try self.queue.append(self.allocator, .{ .connected = element });
+fn route(self: *Self, frame: *Frame, reaction: Reaction) !void {
+    if (self.active_scopes > 0) {
+        try self.queue.append(self.allocator, reaction);
+        return;
+    }
+    if (comptime IS_DEBUG) {
+        lp.log.err(.bug, "custom element scope", .{.note = "Missing explicit reaction scope, using fallback. This log is only generated in debug builds."});
+    }
+    try self.backup_queue.append(self.allocator, reaction);
+    if (!self.backup_scheduled) {
+        try frame.scheduleCustomElementBackupDrain();
+        self.backup_scheduled = true;
+    }
 }
 
-pub fn enqueueDisconnected(self: *Self, element: *Element) !void {
-    self.assertScopeActive();
-    try self.queue.append(self.allocator, .{ .disconnected = element });
+pub fn enqueueConnected(self: *Self, frame: *Frame, element: *Element) !void {
+    try self.route(frame, .{ .connected = element });
 }
 
-pub fn enqueueAdopted(self: *Self, element: *Element, old_document: *Document, new_document: *Document) !void {
-    self.assertScopeActive();
-    try self.queue.append(self.allocator, .{ .adopted = .{
+pub fn enqueueDisconnected(self: *Self, frame: *Frame, element: *Element) !void {
+    try self.route(frame, .{ .disconnected = element });
+}
+
+pub fn enqueueAdopted(self: *Self, frame: *Frame, element: *Element, old_document: *Document, new_document: *Document) !void {
+    try self.route(frame, .{ .adopted = .{
         .element = element,
         .old_document = old_document,
         .new_document = new_document,
@@ -95,14 +125,14 @@ pub fn enqueueAdopted(self: *Self, element: *Element, old_document: *Document, n
 
 pub fn enqueueAttributeChanged(
     self: *Self,
+    frame: *Frame,
     element: *Element,
     name: String,
     old_value: ?String,
     new_value: ?String,
     namespace: ?String,
 ) !void {
-    self.assertScopeActive();
-    try self.queue.append(self.allocator, .{ .attribute_changed = .{
+    try self.route(frame, .{ .attribute_changed = .{
         .name = name,
         .element = element,
         .old_value = old_value,

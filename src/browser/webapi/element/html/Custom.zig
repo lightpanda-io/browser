@@ -73,7 +73,7 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
         if (custom._connected_callback_invoked) return;
         custom._connected_callback_invoked = true;
         custom._disconnected_callback_invoked = false;
-        try frame._ce_reactions.enqueueConnected(element);
+        try frame._ce_reactions.enqueueConnected(frame, element);
         return;
     }
 
@@ -101,7 +101,7 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
     }
 
     _ = frame._customized_builtin_disconnected_callback_invoked.remove(element);
-    try frame._ce_reactions.enqueueConnected(element);
+    try frame._ce_reactions.enqueueConnected(frame, element);
 }
 
 pub fn enqueueDisconnectedCallbackOnElement(element: *Element, frame: *Frame) void {
@@ -110,7 +110,7 @@ pub fn enqueueDisconnectedCallbackOnElement(element: *Element, frame: *Frame) vo
         if (custom._disconnected_callback_invoked) return;
         custom._disconnected_callback_invoked = true;
         custom._connected_callback_invoked = false;
-        frame._ce_reactions.enqueueDisconnected(element) catch |err| {
+        frame._ce_reactions.enqueueDisconnected(frame, element) catch |err| {
             log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
         };
         return;
@@ -128,7 +128,7 @@ pub fn enqueueDisconnectedCallbackOnElement(element: *Element, frame: *Frame) vo
     gop.value_ptr.* = {};
     _ = frame._customized_builtin_connected_callback_invoked.remove(element);
 
-    frame._ce_reactions.enqueueDisconnected(element) catch |err| {
+    frame._ce_reactions.enqueueDisconnected(frame, element) catch |err| {
         log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
     };
 }
@@ -139,7 +139,7 @@ pub fn enqueueAdoptedCallbackOnElement(element: *Element, old_document: *Documen
     } else {
         if (frame.getCustomizedBuiltInDefinition(element) == null) return;
     }
-    frame._ce_reactions.enqueueAdopted(element, old_document, new_document) catch |err| {
+    frame._ce_reactions.enqueueAdopted(frame, element, old_document, new_document) catch |err| {
         log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
     };
 }
@@ -152,7 +152,7 @@ pub fn enqueueAttributeChangedCallbackOnElement(element: *Element, name: String,
         const definition = frame.getCustomizedBuiltInDefinition(element) orelse return;
         if (!definition.isAttributeObserved(name)) return;
     }
-    frame._ce_reactions.enqueueAttributeChanged(element, name, old_value, new_value, namespace) catch |err| {
+    frame._ce_reactions.enqueueAttributeChanged(frame, element, name, old_value, new_value, namespace) catch |err| {
         log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
     };
 }

@@ -1825,6 +1825,10 @@ pub fn scheduleSlotchangeDelivery(self: *Frame) !void {
     try self.js.queueSlotchangeDelivery();
 }
 
+pub fn scheduleCustomElementBackupDrain(self: *Frame) !void {
+    try self.js.queueCustomElementBackupDrain();
+}
+
 pub fn performScheduledIntersectionChecks(self: *Frame) void {
     if (!self._intersection_check_scheduled) {
         return;
