@@ -97,7 +97,7 @@ fn route(self: *Self, frame: *Frame, reaction: Reaction) !void {
         return;
     }
     if (comptime IS_DEBUG) {
-        lp.log.err(.bug, "custom element scope", .{.note = "Missing explicit reaction scope, using fallback. This log is only generated in debug builds."});
+        lp.log.err(.bug, "custom element scope", .{ .note = "Missing explicit reaction scope, using fallback. This log is only generated in debug builds." });
     }
     try self.backup_queue.append(self.allocator, reaction);
     if (!self.backup_scheduled) {

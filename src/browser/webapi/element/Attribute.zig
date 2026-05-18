@@ -255,7 +255,11 @@ pub const List = struct {
 
         const existing_attribute = try self.getAttribute(attribute._name, element, frame);
         if (existing_attribute) |ea| {
-            try self.delete(ea._name, element, frame);
+            // Per DOM "replace an attribute": one handle-attribute-changes call
+            // with (old, new), not a remove-then-add that would fire two
+            // attributeChanged reactions. Detach the old wrapper; put() updates
+            // the entry in place and fires the single reaction.
+            ea._element = null;
         }
 
         const entry = try self.put(attribute._name, attribute._value, element, frame);
