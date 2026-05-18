@@ -240,12 +240,10 @@ fn validateCookieString(str: []const u8) ValidateCookieError!void {
 
             // Invalid if (c < 32 AND c != 9) OR c > 126. Tab is the one
             // sub-space byte we allow through (per browser/WPT behavior).
-            const below = @intFromBool(chunk < space) & @intFromBool(chunk != tab);
-            const above = @intFromBool(chunk > tilde);
-            const reduced: std.meta.Int(.unsigned, size) = @bitCast(below | above);
+            const is_invalid = ((chunk < space) & (chunk != tab)) | (chunk > tilde);
 
             // Got match.
-            if (reduced != 0) {
+            if (@reduce(.Or, is_invalid)) {
                 return error.InvalidByteSequence;
             }
         }
