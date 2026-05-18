@@ -95,6 +95,9 @@ transfers: std.AutoHashMapUnmanaged(u32, *Transfer) = .empty,
 // When handles has no more available easys, requests get queued.
 queue: std.DoublyLinkedList = .{},
 
+// A queue for things that MUST happen on the next tick.
+next_tick_queue: std.DoublyLinkedList = .{},
+
 // Queue is for Transfers that have no connection. ready_queue is for connections
 // that were initiated when performing == true and thus need to wait until
 // performing == false before being added. I'm hoping this is temporary and that
@@ -178,6 +181,12 @@ fn layerWith(self: anytype, next: Layer) Layer {
     self.next = next;
     return self.layer();
 }
+
+pub const NextTickNode = struct {
+    node: std.DoublyLinkedList.Node = .{},
+    ctx: *anyopaque,
+    run: *const fn (*anyopaque) anyerror!void,
+};
 
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) !void {
     var handles = try http.Handles.init(network.config);
@@ -402,6 +411,7 @@ pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
         return error.ClientDisconnected;
     }
 
+    try self.drainNextTickQueue();
     try self.drainQueue();
     try self.perform(@intCast(timeout_ms));
     // perform/processMessages just released a batch of connections back to
@@ -414,6 +424,17 @@ pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
     // nested call would fire CDP handlers mid-redirect, defeating the
     // "safe points only" guarantee.
     try self.drainInbox(mode);
+}
+
+pub fn runNextTick(self: *Client, node: *NextTickNode) void {
+    self.next_tick_queue.append(&node.node);
+}
+
+fn drainNextTickQueue(self: *Client) !void {
+    while (self.next_tick_queue.popFirst()) |n| {
+        const next_tick: *NextTickNode = @fieldParentPtr("node", n);
+        try next_tick.run(next_tick.ctx);
+    }
 }
 
 fn drainQueue(self: *Client) !void {
