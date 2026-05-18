@@ -453,7 +453,9 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
             return error.TestTimedOut;
         }
         wait_ms -= @intCast(ms_elapsed);
-        std.Thread.sleep(std.time.ns_per_ms * sleep_ms);
+        if (sleep_ms > 0) {
+            std.Thread.sleep(std.time.ns_per_ms * sleep_ms);
+        }
     }
 }
 

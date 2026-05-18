@@ -68,16 +68,18 @@ ws_mutex: std.Thread.Mutex = .{},
 listener: ?Listener = null,
 accept: std.atomic.Value(bool) = .init(true),
 
-// CDP sockets the network thread polls on behalf of workers. Each
-// worker registers its accepted socket via submitCdpRegister; the
-// network thread applies the mutation in drainInbox and polls it
-// alongside the listener + curl's fds. Network-thread-private —
-// no lock needed because all mutations come through the inbox.
+// Worker-owned sockets the network thread polls on behalf of
+// workers. Used by CDP (server accepts a client socket) and WS
+// (libcurl exposes its post-handshake socket via CURLINFO_ACTIVESOCKET).
+// Each worker registers a socket via submitCdpRegister / submitWsRegister;
+// the network thread applies the mutation in drainInbox and polls it
+// alongside the listener + curl's fds. Network-thread-private — no
+// lock needed because all mutations come through the inbox.
 //
-// `extra_fds` mirrors cdp_regs (parallel arrays). extra_fds[0] is
-// the listener slot when bound; cdp_regs covers entries from
-// extra_fds[cdp_start..].
-cdp_regs: std.ArrayList(CdpReg) = .empty,
+// `extra_fds` mirrors poll_regs (parallel arrays). extra_fds[0] is
+// the listener slot when bound; poll_regs covers entries from
+// extra_fds[pollOffset()..].
+poll_regs: std.ArrayList(PollReg) = .empty,
 extra_fds: std.ArrayList(libcurl.CurlWaitFd) = .empty,
 
 shutdown: std.atomic.Value(bool) = .init(false),
@@ -129,11 +131,11 @@ pub const Message = union(enum) {
         verify: bool,
         use_proxy: bool,
     },
-    cdp_register: struct {
+    poll_register: struct {
         fd: posix.fd_t,
-        handler: CdpHandler,
+        handler: PollHandler,
     },
-    cdp_unregister: posix.fd_t,
+    poll_unregister: posix.fd_t,
 };
 
 const InboxItem = struct {
@@ -150,9 +152,32 @@ pub const CdpHandler = struct {
     on_disconnect: *const fn (ctx: *anyopaque) void,
 };
 
-const CdpReg = struct {
+// Handler for WebSocket sockets that the network thread polls on
+// behalf of the worker. The network thread does no read of its
+// own — that has to go through libcurl's WS API (TLS, framing) on
+// the worker. `on_readable` fires once per poll wakeup; the worker
+// drains via curl_ws_recv. `on_disconnect` fires after unregister
+// (or socket error) — same "no more callbacks" guarantee as CDP.
+pub const WsHandler = struct {
+    ctx: *anyopaque,
+    on_readable: *const fn (ctx: *anyopaque) void,
+    on_disconnect: *const fn (ctx: *anyopaque) void,
+};
+
+pub const PollHandler = union(enum) {
+    cdp: CdpHandler,
+    ws: WsHandler,
+
+    fn onDisconnect(self: PollHandler) void {
+        switch (self) {
+            inline else => |h| h.on_disconnect(h.ctx),
+        }
+    }
+};
+
+const PollReg = struct {
     fd: posix.fd_t,
-    handler: CdpHandler,
+    handler: PollHandler,
     // Set when we see EOF / read error / unregister request. The fd
     // is removed from extra_fds when this flips so we stop polling
     // it; the reg itself stays until on_disconnect is delivered and
@@ -345,6 +370,14 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     errdefer libcurl.curl_multi_cleanup(multi) catch {};
 
     try libcurl.curl_multi_setopt(multi, .max_host_connections, config.httpMaxHostOpen());
+    // Default `maxconnects` is 0, which makes libcurl compute a
+    // limit from the number of running transfers; for the WS use
+    // case (CONNECT_ONLY=2 handles that stay attached but idle in
+    // the cpool, waiting on curl_ws_send/recv), that math under-
+    // estimates and the cpool starts evicting our own conns —
+    // which then breaks Curl_getconnectinfo with "Failed to get
+    // recent socket". A generous explicit cap avoids that.
+    try libcurl.curl_multi_setopt(multi, .maxconnects, @as(c_long, 256));
 
     return .{
         .allocator = allocator,
@@ -373,7 +406,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 pub fn deinit(self: *Network) void {
     libcurl.curl_multi_cleanup(self.multi) catch {};
     self.inbox_pool.deinit();
-    self.cdp_regs.deinit(self.allocator);
+    self.poll_regs.deinit(self.allocator);
     self.extra_fds.deinit(self.allocator);
 
     if (self.ca_blob) |ca_blob| {
@@ -448,7 +481,7 @@ pub fn unbind(self: *Network) void {
 // applies it in drainInbox. Handler callbacks fire on the network
 // thread once polling picks up activity on the fd.
 pub fn submitCdpRegister(self: *Network, fd: posix.fd_t, handler: CdpHandler) void {
-    self.submit(.{ .cdp_register = .{ .fd = fd, .handler = handler } });
+    self.submit(.{ .poll_register = .{ .fd = fd, .handler = .{ .cdp = handler } } });
 }
 
 // Async: enqueue a CDP-socket unregistration. The network thread
@@ -456,7 +489,18 @@ pub fn submitCdpRegister(self: *Network, fd: posix.fd_t, handler: CdpHandler) vo
 // the worker uses that as the ack that no more handler calls will
 // happen for this fd (safe to free ctx after draining its inbox).
 pub fn submitCdpUnregister(self: *Network, fd: posix.fd_t) void {
-    self.submit(.{ .cdp_unregister = fd });
+    self.submit(.{ .poll_unregister = fd });
+}
+
+// WebSocket variant. Same lifecycle (handler ack, etc.) but the
+// network thread only signals readability — the worker does the
+// read via libcurl's WS API.
+pub fn submitWsRegister(self: *Network, fd: posix.fd_t, handler: WsHandler) void {
+    self.submit(.{ .poll_register = .{ .fd = fd, .handler = .{ .ws = handler } } });
+}
+
+pub fn submitWsUnregister(self: *Network, fd: posix.fd_t) void {
+    self.submit(.{ .poll_unregister = fd });
 }
 
 pub fn onTick(self: *Network, ctx: *anyopaque, callback: *const fn (*anyopaque) void) void {
@@ -491,11 +535,11 @@ pub fn run(self: *Network) void {
     var cdp_buf: [16 * 1024]u8 = undefined;
 
     // Listener (if bound) lives at extra_fds[0] for the duration.
-    // CDP entries occupy extra_fds[cdpOffset()..] in lock-step with
-    // cdp_regs: cdp_regs[i] ↔ extra_fds[i + cdpOffset()]. All
-    // mutations happen on the network thread (here or in drainInbox)
-    // so no locking is needed; the invariant holds across each
-    // iteration boundary.
+    // Worker-owned poll regs occupy extra_fds[pollOffset()..] in
+    // lock-step with poll_regs: poll_regs[i] ↔ extra_fds[i + pollOffset()].
+    // All mutations happen on the network thread (here or in
+    // drainInbox) so no locking is needed; the invariant holds
+    // across each iteration boundary.
     if (self.listener) |listener| {
         self.extra_fds.append(self.allocator, .{
             .fd = listener.socket,
@@ -512,8 +556,8 @@ pub fn run(self: *Network) void {
         if (self.listener != null and !self.accept.load(.acquire)) {
             posix.close(self.listener.?.socket);
             self.listener = null;
-            // Shift CDP entries down by 1 to keep the parallel
-            // invariant (cdp_regs[i] ↔ extra_fds[i + cdpOffset()]).
+            // Shift poll entries down by 1 to keep the parallel
+            // invariant (poll_regs[i] ↔ extra_fds[i + pollOffset()]).
             // O(N) but happens at most once per Network lifetime.
             _ = self.extra_fds.orderedRemove(0);
         }
@@ -564,17 +608,18 @@ pub fn run(self: *Network) void {
             self.acceptConnections();
         }
 
-        // CDP: parallel-array dispatch, no fd lookups. Eof entries
-        // are skipped (their extra_fds.events is zeroed so they
-        // can't have pollin set, but the explicit check documents
-        // the invariant). Iteration order is stable because eof
-        // doesn't remove from either list — only unregister does.
-        const offset = self.cdpOffset();
-        for (self.cdp_regs.items, 0..) |*reg, i| {
+        // Poll regs: parallel-array dispatch, no fd lookups. Eof
+        // entries are skipped (their extra_fds.events is zeroed so
+        // they can't have pollin set, but the explicit check
+        // documents the invariant). Iteration order is stable
+        // because eof doesn't remove from either list — only
+        // unregister does.
+        const offset = self.pollOffset();
+        for (self.poll_regs.items, 0..) |*reg, i| {
             if (reg.eof) continue;
             const fd_state = self.extra_fds.items[i + offset];
             if (!fd_state.revents.pollin) continue;
-            self.dispatchCdpRead(reg, i + offset, &cdp_buf);
+            self.dispatchPollRead(reg, i + offset, &cdp_buf);
         }
 
         libcurl.curl_multi_perform(self.multi, &running_handles) catch |err| {
@@ -707,8 +752,8 @@ fn drainInbox(self: *Network) void {
                     lp.log.warn(.app, "curl setTlsVerify", .{ .err = err });
                 };
             },
-            .cdp_register => |r| self.handleCdpRegister(r.fd, r.handler),
-            .cdp_unregister => |fd| self.handleCdpUnregister(fd),
+            .poll_register => |r| self.handlePollRegister(r.fd, r.handler),
+            .poll_unregister => |fd| self.handlePollUnregister(fd),
         }
     }
 
@@ -762,13 +807,13 @@ fn fireOnComplete(self: *Network, conn: *http.Connection, err: ?anyerror) void {
     }
 }
 
-// Append a CDP registration. Both lists grow together so
-// extra_fds[cdp_start + i] always matches cdp_regs[i] for non-eof
-// entries — see the run loop's dispatch indexing.
-fn handleCdpRegister(self: *Network, fd: posix.fd_t, handler: CdpHandler) void {
-    self.cdp_regs.append(self.allocator, .{ .fd = fd, .handler = handler }) catch |err| {
-        lp.log.err(.app, "cdp register OOM", .{ .err = err });
-        handler.on_disconnect(handler.ctx);
+// Append a poll registration. Both lists grow together so
+// extra_fds[pollOffset() + i] always matches poll_regs[i] for
+// non-eof entries — see the run loop's dispatch indexing.
+fn handlePollRegister(self: *Network, fd: posix.fd_t, handler: PollHandler) void {
+    self.poll_regs.append(self.allocator, .{ .fd = fd, .handler = handler }) catch |err| {
+        lp.log.err(.app, "poll register OOM", .{ .err = err });
+        handler.onDisconnect();
         return;
     };
     self.extra_fds.append(self.allocator, .{
@@ -776,9 +821,9 @@ fn handleCdpRegister(self: *Network, fd: posix.fd_t, handler: CdpHandler) void {
         .events = .{ .pollin = true },
         .revents = .{},
     }) catch |err| {
-        lp.log.err(.app, "cdp register OOM extra_fds", .{ .err = err });
-        _ = self.cdp_regs.pop();
-        handler.on_disconnect(handler.ctx);
+        lp.log.err(.app, "poll register OOM extra_fds", .{ .err = err });
+        _ = self.poll_regs.pop();
+        handler.onDisconnect();
         return;
     };
 }
@@ -788,49 +833,54 @@ fn handleCdpRegister(self: *Network, fd: posix.fd_t, handler: CdpHandler) void {
 // is waiting for — unless we already fired it on EOF.
 //
 // swapRemove on both lists at the same logical index preserves the
-// parallel invariant: cdp_regs[i] ↔ extra_fds[i + offset]. Both
+// parallel invariant: poll_regs[i] ↔ extra_fds[i + offset]. Both
 // lists move their last entry to position i.
-fn handleCdpUnregister(self: *Network, fd: posix.fd_t) void {
-    const offset = self.cdpOffset();
-    for (self.cdp_regs.items, 0..) |*reg, i| {
+fn handlePollUnregister(self: *Network, fd: posix.fd_t) void {
+    const offset = self.pollOffset();
+    for (self.poll_regs.items, 0..) |*reg, i| {
         if (reg.fd != fd) continue;
         const already_eof = reg.eof;
         const handler = reg.handler;
-        _ = self.cdp_regs.swapRemove(i);
+        _ = self.poll_regs.swapRemove(i);
         _ = self.extra_fds.swapRemove(i + offset);
-        if (!already_eof) handler.on_disconnect(handler.ctx);
+        if (!already_eof) handler.onDisconnect();
         return;
     }
 }
 
-fn cdpOffset(self: *Network) usize {
+fn pollOffset(self: *Network) usize {
     return if (self.listener != null) 1 else 0;
 }
 
-// Read from a readable CDP socket and dispatch to its handler.
-// On EOF / error, marks the reg eof'd and fires on_disconnect;
-// the reg+extra_fds slot stay parallel until the worker's
-// unregister fully removes them.
-fn dispatchCdpRead(self: *Network, reg: *CdpReg, fd_idx: usize, buf: []u8) void {
-    const n = posix.read(reg.fd, buf) catch |err| {
-        lp.log.warn(.app, "cdp read", .{ .err = err });
-        self.markCdpEof(reg, fd_idx);
-        return;
-    };
-    if (n == 0) {
-        self.markCdpEof(reg, fd_idx);
-        return;
+// Read from a readable poll socket and dispatch to its handler.
+// CDP regs read here in the network thread; WS regs hand the
+// readable edge to the worker (libcurl owns the read). On EOF /
+// error for CDP, marks the reg eof'd and fires on_disconnect.
+fn dispatchPollRead(self: *Network, reg: *PollReg, fd_idx: usize, buf: []u8) void {
+    switch (reg.handler) {
+        .cdp => |h| {
+            const n = posix.read(reg.fd, buf) catch |err| {
+                lp.log.warn(.app, "cdp read", .{ .err = err });
+                self.markPollEof(reg, fd_idx);
+                return;
+            };
+            if (n == 0) {
+                self.markPollEof(reg, fd_idx);
+                return;
+            }
+            h.on_data(h.ctx, buf[0..n]);
+        },
+        .ws => |h| h.on_readable(h.ctx),
     }
-    reg.handler.on_data(reg.handler.ctx, buf[0..n]);
 }
 
-// EOF / error path. Reg stays in cdp_regs (and its extra_fds slot)
+// EOF / error path. Reg stays in poll_regs (and its extra_fds slot)
 // to preserve the parallel invariant; zeroing events stops poll
 // from waking us on this fd. Worker's unregister will fully remove.
-fn markCdpEof(self: *Network, reg: *CdpReg, fd_idx: usize) void {
+fn markPollEof(self: *Network, reg: *PollReg, fd_idx: usize) void {
     reg.eof = true;
     self.extra_fds.items[fd_idx].events = .{};
-    reg.handler.on_disconnect(reg.handler.ctx);
+    reg.handler.onDisconnect();
 }
 
 pub fn stop(self: *Network) void {
@@ -890,10 +940,27 @@ fn processCompletions(self: *Network) void {
             lp.assert(false, "curl getinfo private", .{});
         const conn: *http.Connection = @ptrCast(@alignCast(ptr));
 
-        libcurl.curl_multi_remove_handle(self.multi, easy) catch |err| {
-            lp.assert(false, "curl multi remove (post-completion)", .{ .err = err });
+        // For CONNECT_ONLY=2 transports (WebSocket) we need the
+        // socket fd post-completion, but `curl_multi_remove_handle`
+        // invalidates CURLINFO_ACTIVESOCKET. Capture it here while
+        // the handle is still in the multi. Only meaningful on
+        // success; failures don't reach a usable socket.
+        // WebSocket transports stay attached to the multi after the
+        // CONNECT_ONLY=2 upgrade completes: curl_ws_send/recv look
+        // the conn up through the multi's connection pool, and
+        // detaching here would break those calls (CURLE_UNSUPPORTED_PROTOCOL
+        // from easy_connection's "Failed to get recent socket" branch).
+        // The worker removes the handle via disownConn during teardown.
+        const keep_attached = switch (conn.transport) {
+            .websocket => maybe_err == null,
+            else => false,
         };
-        conn._in_multi = false;
+        if (!keep_attached) {
+            libcurl.curl_multi_remove_handle(self.multi, easy) catch |err| {
+                lp.assert(false, "curl multi remove (post-completion)", .{ .err = err });
+            };
+            conn._in_multi = false;
+        }
         self.fireOnComplete(conn, maybe_err);
     }
 }
@@ -907,17 +974,21 @@ pub fn getConn(self: *Network) ?*http.Connection {
     return @fieldParentPtr("node", node);
 }
 
-// Called from a Worker Thread
+// Called from a Worker Thread. Routes by the conn's
+// allocation origin (`_pool`), not its current `transport` —
+// abort paths clear transport to `.none` before release, so the
+// pool tag is the only reliable signal of where the conn came
+// from.
 pub fn releaseConn(self: *Network, conn: *http.Connection) void {
-    switch (conn.transport) {
-        .websocket => {
+    switch (conn._pool) {
+        .ws => {
             conn.deinit();
             self.ws_mutex.lock();
             defer self.ws_mutex.unlock();
             self.ws_pool.destroy(conn);
             self.ws_count -= 1;
         },
-        else => {
+        .http => {
             conn.reset(self.config, self.ca_blob, self.ip_filter) catch |err| {
                 lp.assert(false, "couldn't reset curl easy", .{ .err = err });
             };
@@ -952,6 +1023,7 @@ pub fn newWSConn(self: *Network) ?*http.Connection {
 
         return null;
     };
+    conn._pool = .ws;
 
     return conn;
 }

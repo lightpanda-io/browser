@@ -43,6 +43,12 @@ pub const curl_writefunc_error: usize = c.CURL_WRITEFUNC_ERROR;
 pub const curl_readfunc_pause: usize = c.CURL_READFUNC_PAUSE;
 pub const CurlReadFunction = fn ([*]u8, usize, usize, *anyopaque) usize;
 
+// Return values for CURLOPT_SOCKOPTFUNCTION.
+pub const curl_sockopt_ok: c_int = c.CURL_SOCKOPT_OK;
+pub const curl_sockopt_error: c_int = c.CURL_SOCKOPT_ERROR;
+pub const curl_sockopt_already_connected: c_int = c.CURL_SOCKOPT_ALREADY_CONNECTED;
+pub const CurlSockoptFunction = fn (clientp: *anyopaque, fd: CurlSocket, purpose: CurlSockType) c_int;
+
 pub const CurlSockType = enum(c.curlsocktype) {
     ipcxn = c.CURLSOCKTYPE_IPCXN,
     accept = c.CURLSOCKTYPE_ACCEPT,
@@ -226,13 +232,18 @@ pub const CurlOption = enum(c.CURLoption) {
     read_data = c.CURLOPT_READDATA,
     read_function = c.CURLOPT_READFUNCTION,
     connect_only = c.CURLOPT_CONNECT_ONLY,
+    forbid_reuse = c.CURLOPT_FORBID_REUSE,
+    fresh_connect = c.CURLOPT_FRESH_CONNECT,
     upload = c.CURLOPT_UPLOAD,
     opensocket_function = c.CURLOPT_OPENSOCKETFUNCTION,
     opensocket_data = c.CURLOPT_OPENSOCKETDATA,
+    sockopt_function = c.CURLOPT_SOCKOPTFUNCTION,
+    sockopt_data = c.CURLOPT_SOCKOPTDATA,
 };
 
 pub const CurlMOption = enum(c.CURLMoption) {
     max_host_connections = c.CURLMOPT_MAX_HOST_CONNECTIONS,
+    maxconnects = c.CURLMOPT_MAXCONNECTS,
 };
 
 pub const CurlInfo = enum(c.CURLINFO) {
@@ -241,6 +252,7 @@ pub const CurlInfo = enum(c.CURLINFO) {
     redirect_count = c.CURLINFO_REDIRECT_COUNT,
     response_code = c.CURLINFO_RESPONSE_CODE,
     connect_code = c.CURLINFO_HTTP_CONNECTCODE,
+    active_socket = c.CURLINFO_ACTIVESOCKET,
 };
 
 pub const Error = error{
@@ -615,6 +627,8 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .follow_location,
         .post_field_size,
         .connect_only,
+        .forbid_reuse,
+        .fresh_connect,
         => blk: {
             const n: c_long = switch (@typeInfo(@TypeOf(value))) {
                 .comptime_int, .int => @intCast(value),
@@ -660,6 +674,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .read_data,
         .write_data,
         .opensocket_data,
+        .sockopt_data,
         => blk: {
             const ptr: ?*anyopaque = switch (@typeInfo(@TypeOf(value))) {
                 .null => null,
@@ -690,6 +705,20 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
                     fn cb(clientp: ?*anyopaque, purpose: c.curlsocktype, address: [*c]c.curl_sockaddr) callconv(.c) c.curl_socket_t {
                         const addr: *CurlSockAddr = @ptrCast(address orelse return CURL_SOCKET_BAD);
                         return value(@enumFromInt(purpose), addr, clientp);
+                    }
+                }.cb,
+                else => @compileError("expected Zig function or null for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
+            };
+            break :blk c.curl_easy_setopt(easy, opt, cb);
+        },
+
+        .sockopt_function => blk: {
+            const cb: c.curl_sockopt_callback = switch (@typeInfo(@TypeOf(value))) {
+                .null => null,
+                .@"fn" => struct {
+                    fn cb(clientp: ?*anyopaque, fd: c.curl_socket_t, purpose: c.curlsocktype) callconv(.c) c_int {
+                        const u = clientp orelse return c.CURL_SOCKOPT_ERROR;
+                        return value(u, fd, @enumFromInt(purpose));
                     }
                 }.cb,
                 else => @compileError("expected Zig function or null for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
@@ -769,6 +798,10 @@ pub fn curl_easy_getinfo(easy: *Curl, comptime info: CurlInfo, out: anytype) Err
             const p: **anyopaque = out;
             break :blk c.curl_easy_getinfo(easy, inf, p);
         },
+        .active_socket => blk: {
+            const p: *CurlSocket = out;
+            break :blk c.curl_easy_getinfo(easy, inf, p);
+        },
     };
     try errorCheck(code);
 }
@@ -829,7 +862,9 @@ pub fn curl_multi_cleanup(multi: *CurlM) ErrorMulti!void {
 pub fn curl_multi_setopt(multi: *CurlM, comptime option: CurlMOption, value: anytype) ErrorMulti!void {
     const opt: c.CURLMoption = @intFromEnum(option);
     const code = switch (option) {
-        .max_host_connections => blk: {
+        .max_host_connections,
+        .maxconnects,
+        => blk: {
             const n: c_long = switch (@typeInfo(@TypeOf(value))) {
                 .comptime_int, .int => @intCast(value),
                 else => @compileError("expected integer for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),

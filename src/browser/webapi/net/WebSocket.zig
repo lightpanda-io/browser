@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const http = @import("../../../network/http.zig");
+const libcurl = @import("../../../sys/libcurl.zig");
 
 const js = @import("../../js/js.zig");
 const Blob = @import("../Blob.zig");
@@ -35,10 +36,24 @@ const CloseEvent = @import("../event/CloseEvent.zig");
 const MessageEvent = @import("../event/MessageEvent.zig");
 
 const log = lp.log;
+const posix = std.posix;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const WebSocket = @This();
+
+// After `MAX_SEND_RETRIES` consecutive Again responses with no
+// progress, the WS is closed with an abnormal-closure status —
+// guards the worker against a stalled peer chewing CPU through
+// the inbox-resubmit retry loop. Set generously since AGAIN on
+// normal browser WS traffic is rare; only a wedged peer should
+// approach this.
+const MAX_SEND_RETRIES: u32 = 1024;
+
+// Reception scratch passed to curl_ws_recv. Sized to match the
+// historical WS recv buffer for parity. Each frame's payload is
+// reassembled into `_recv_buffer`.
+const RECV_CHUNK: usize = 16 * 1024;
 
 _rc: lp.RC(u8) = .{},
 _frame: *Frame,
@@ -50,28 +65,66 @@ _ready_state: ReadyState = .connecting,
 _url: [:0]const u8 = "",
 _binary_type: BinaryType = .blob,
 
-// Handshake tracking
-_got_101: bool = false,
-_got_upgrade: bool = false,
-
 _conn: ?*http.Connection,
 _http_client: *HttpClient,
 _req_headers: http.Headers,
 
 _owner_node: std.DoublyLinkedList.Node = .{},
 
-// buffered outgoing messages
+// libcurl-owned socket fd. Captured on the network thread inside
+// the sockopt callback (which fires once per socket, right after
+// creation and before connect()). Stays valid through the WS's
+// open/closing lifetime; the network thread polls it on our
+// behalf once handshakeComplete fires.
+_socket_fd: posix.fd_t = -1,
+
+// Network → worker dedup. Network sets to true before pushing a
+// ws_readable; worker clears it after draining curl_ws_recv to
+// Again. Without this, level-triggered POLLIN would re-push a
+// readable event every poll iteration that the worker hasn't yet
+// drained, piling duplicates in the inbox.
+_pending_readable: std.atomic.Value(bool) = .init(false),
+
+// Outgoing messages awaiting curl_ws_send. Worker-only: pushed
+// by send()/close(), drained inline (and via ws_send_retry when
+// curl_ws_send returns Again).
 _send_queue: std.ArrayList(Message) = .empty,
+
+// Bytes of `_send_queue[0]` already pushed to libcurl. Reset to
+// 0 each time the head message is fully sent and popped.
 _send_offset: usize = 0,
 
-// buffered incoming frame
-_recv_buffer: std.ArrayList(u8) = .empty,
+// Consecutive Again-without-progress count. Cleared whenever a
+// curl_ws_send call moves any bytes; bumped each time we have to
+// re-push a ws_send_retry. Hits MAX_SEND_RETRIES → transport
+// error close.
+_send_retries: u32 = 0,
 
-// close info for event dispatch
+// Set when a ws_send_retry is already in the inbox so we don't
+// pile up duplicates. Cleared inside handleSendRetry. Single-
+// thread (worker-only) so no atomic needed.
+_send_retry_queued: bool = false,
+
+// Frame reassembly. curl_ws_recv hands us chunks of one frame
+// at a time; we buffer here until `meta.bytes_left == 0`. Lives
+// on `_arena` so it shares the WS's allocation lifetime.
+_recv_buffer: std.ArrayList(u8) = .empty,
+// Type of the in-progress frame (set on the first chunk of a
+// frame, used for dispatch when the frame completes).
+_recv_frame_type: http.WsFrameType = .binary,
+
+// Close-frame state. _close_code/_close_reason hold whatever
+// the close event will surface to JS; populated by the side
+// that initiates (close() or the server-close path in
+// handleReadable). _close_dispatched guards against firing the
+// JS close event more than once across the multiple terminal
+// paths (handshake failure, clean close, abort, net disconnect).
 _close_code: u16 = 1000,
 _close_reason: []const u8 = "",
+_close_dispatched: bool = false,
 
-// negotiated protocol
+// Negotiated subprotocol from `Sec-WebSocket-Protocol` (set in
+// the header callback during the upgrade).
 _protocol: []const u8 = "",
 
 // Event handlers
@@ -125,10 +178,24 @@ pub fn init(url: []const u8, protocols: [][]const u8, frame: *Frame) !*WebSocket
     errdefer http_client.network.releaseConn(conn);
 
     try conn.setURL(resolved_url);
-    try conn.setConnectOnly(false);
-
-    try conn.setReadCallback(sendDataCallback, true);
-    try conn.setWriteCallback(receivedDataCallback);
+    try libcurl.curl_easy_setopt(conn._easy, .verbose, true);
+    // CONNECT_ONLY=2: libcurl drives the upgrade handshake, then
+    // multi delivers a CURLMSG_DONE. After that the worker owns
+    // the easy handle and does I/O via curl_ws_send / curl_ws_recv.
+    try conn.setConnectOnly(true);
+    // Force a brand-new TCP socket for the handshake — a cached
+    // WS conn left over from a prior WS in the cpool can't be
+    // reused for a new HTTP upgrade. The resulting conn still
+    // ends up in the cpool after handshake, which is what
+    // curl_ws_send/recv need to look it up later.
+    try conn.setFreshConnect(true);
+    // Capture the socket fd at creation. CURLINFO_ACTIVESOCKET
+    // can't be queried reliably after the handshake (during the
+    // upgrade it returns BAD; post-completion libcurl's internal
+    // teardown invalidates it before the worker can read it).
+    // The sockopt callback fires once with the fresh fd before
+    // connect() — most reliable place to grab it.
+    try conn.setSockoptCallback(sockoptCallback);
     try conn.setHeaderCallback(receivedHeaderCallback);
 
     var headers = try http_client.newHeaders();
@@ -166,8 +233,8 @@ pub fn init(url: []const u8, protocols: [][]const u8, frame: *Frame) !*WebSocket
 
 pub fn deinit(self: *WebSocket, page: *Page) void {
     // false: the WebSocket is being torn down without a terminal
-    // completion having arrived (GC). The conn might still be in the
-    // multi — cleanup will synchronously remove it before freeing.
+    // completion having arrived (GC). Tears down whichever phase
+    // we're in — see `cleanup` for the per-state branching.
     self.cleanup(false);
 
     if (self._on_open) |func| {
@@ -207,85 +274,170 @@ pub fn kill(self: *WebSocket) void {
     self.cleanup(false);
 }
 
-pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
-    const was_clean = self._ready_state == .closing and err_ == null;
-    self._ready_state = .closed;
+// Worker-thread handler invoked from `HttpClient.handleHttpCompletion`
+// when the CONNECT_ONLY=2 upgrade finished successfully. Transitions
+// to .open: hands the socket fd (captured in the header callback) to
+// the network thread for POLLIN watching, and dispatches the JS open
+// event. From here, all frame I/O happens directly on the worker via
+// curl_ws_send/recv.
+pub fn handshakeComplete(self: *WebSocket) !void {
+    // If the WS was already aborted (kill / close-while-connecting),
+    // the upgrade-completion edge raced us. Treat as no-op; cleanup
+    // already ran.
+    if (self._ready_state != .connecting) return;
 
+    if (self._socket_fd < 0) return error.NoActiveSocket;
+    self._ready_state = .open;
+
+    // Hand the fd to the network thread. From this point a
+    // ws_readable inbox event may arrive at any time; the handler
+    // drains via curl_ws_recv.
+    self._http_client.registerWebSocket(self, self._socket_fd);
+
+    if (comptime IS_DEBUG) {
+        log.info(.websocket, "open", .{ .url = self._url });
+    }
+    try self.dispatchOpenEvent();
+}
+
+// Failure path from handshake (libcurl returned an error before
+// the upgrade completed). Dispatches error + close events and
+// tears down. `err_` is null for the clean-close-during-handshake
+// flow (kept for API parity with the prior callback-mode model,
+// though it should rarely fire here now).
+pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
     if (err_) |err| {
         log.warn(.websocket, "disconnected", .{ .err = err, .url = self._url });
     } else {
         log.info(.websocket, "disconnected", .{ .url = self._url, .reason = "closed" });
     }
 
-    // true: we got here from handleHttpCompletion on the worker
-    // thread, which means the conn is provably out of the multi
-    // already. Skip the synchronous remove dance.
+    self._ready_state = .closed;
+
+    // Defer cleanup so the event dispatches see the final state but
+    // the conn release / ref drop runs after them.
     defer self.cleanup(true);
 
-    // Use 1006 (abnormal closure) if connection wasn't cleanly closed
-    const code = if (was_clean) self._close_code else 1006;
-    const reason = if (was_clean) self._close_reason else "";
-
-    // Spec requires error event before close on abnormal closure.
-    // Dispatch events before cleanup since cleanup releases the ref count
-    // which may free our event handler references.
-    if (!was_clean) {
-        self.dispatchErrorEvent() catch |err| {
-            log.err(.websocket, "error event dispatch failed", .{ .err = err });
+    if (err_ != null) {
+        self.dispatchErrorEvent() catch |derr| {
+            log.err(.websocket, "error event dispatch failed", .{ .err = derr });
         };
+        // Code 1006 (abnormal closure) when the connection wasn't
+        // cleanly closed.
+        self._close_code = 1006;
+        self._close_reason = "";
     }
 
-    self.dispatchCloseEvent(code, reason, was_clean) catch |err| {
-        log.err(.websocket, "close event dispatch failed", .{ .err = err });
-    };
+    self.dispatchCloseSafe(self._close_code, self._close_reason, err_ == null);
 }
 
-// `completed` distinguishes the two cleanup callers:
-//   - true: we got here from `disconnected`, which itself was driven by
-//     the terminal completion off the worker inbox. The conn is
-//     provably out of the multi already; release directly.
-//   - false: we're aborting from an external trigger (deinit / kill /
-//     close-on-connecting). The conn might still be in the multi, and
-//     libcurl callbacks reference WS state we're about to free.
-//     Synchronously remove from the multi first so libcurl is provably
-//     done; then clear transport and let the terminal completion that
-//     was fired (or had already been queued) drive the actual
-//     finishConn from handleHttpCompletion's `.none` arm. We can't
-//     finishConn here because that path destroys the conn (ws_pool)
-//     and any stale completion still sitting in our inbox would then
-//     dereference freed memory.
+// Worker-thread handler for the network-thread ws_disconnected
+// ack. With the new synchronous cleanup, this should always
+// arrive after cleanup has nulled `_conn` — so it's a no-op in
+// the common case. Kept around as a safety net for the rare
+// path where the network thread surfaces a disconnect we
+// haven't yet observed (e.g. socket-level EOF before our close
+// frame negotiation runs): in that case we trigger the same
+// teardown cleanup would have done.
+pub fn handleNetDisconnected(self: *WebSocket) void {
+    self._socket_fd = -1;
+    if (self._conn == null) return;
+    if (self._ready_state == .open or self._ready_state == .closing) {
+        self.dispatchCloseSafe(1006, "", false);
+    }
+    self.cleanup(false);
+}
+
+// Per-state teardown. Called from kill / deinit / close-on-
+// connecting / clean-close paths and from `disconnected` /
+// `handleNetDisconnected`. Idempotent: nulling `_conn` upfront
+// means a second call short-circuits on the `orelse return`
+// guard.
+//
+// In every non-terminal state we drive the conn release
+// synchronously here (no async ack hop): submit any pending
+// network-side unregister, then `disownConn` to remove from the
+// multi, then drain the inbox so the two messages we just queued
+// (`ws_disconnected` and the Canceled `http_completion`) are
+// processed before we return — `ws_disconnected` becomes a no-op
+// via the null-`_conn` guard, and `http_completion .none`
+// releases the easy handle through the WS pool. After the drain,
+// we drop the in-flight ref; if JS isn't holding the WS, deinit
+// fires immediately.
+//
+//   - .connecting: conn in multi, fd not yet registered.
+//   - .open / .closing: conn in multi, fd polled by network.
+//   - .closed (via `disconnected`): we got here from the
+//     handshake-failure path; the early-fail code in
+//     `disconnected` sets `completed = true` and we just need to
+//     finishConn + releaseRef.
 fn cleanup(self: *WebSocket, completed: bool) void {
     const conn = self._conn orelse return;
     self._conn = null;
+
     self._frame._http_owner.removeWS(self);
     self._req_headers.deinit();
+
+    // Drop any queued outbound payloads now — none of them can be
+    // sent and their arenas should be returned to the pool.
+    for (self._send_queue.items) |msg| {
+        msg.deinit(self._frame._page);
+    }
     self._send_queue.clearRetainingCapacity();
 
-    if (completed) {
-        self._http_client.finishConn(conn);
-    } else {
-        // Blocks inside disownConn until libcurl is provably done
-        // with the conn, then untracks + clears transport. The actual
-        // pool release is driven by the terminal completion through
-        // handleHttpCompletion's `.none` arm — required because any
-        // stale completion still in our inbox would UAF if we
-        // released (and destroyed, for WS conns) the conn here.
-        self._http_client.disownConn(conn);
+    switch (self._ready_state) {
+        .connecting => {
+            self._ready_state = .closed;
+            // Conn is still in the multi. Synchronously remove so
+            // libcurl callbacks (header / sockopt) stop firing;
+            // disownConn waits and clears transport. The Canceled
+            // completion that fires lands in the inbox's `.none`
+            // arm — drain it here so the conn is provably back in
+            // the pool before we return.
+            self._http_client.disownConn(conn);
+            _ = self._http_client.processInbox(0) catch {};
+            self.releaseRef(self._frame._page);
+        },
+        .open, .closing => {
+            self._ready_state = .closed;
+            // Stop fd polling first, then drop the multi
+            // attachment. Both messages are queued in order; the
+            // network thread drains them in order (unregister
+            // then remove), and `disownConn` blocks until both
+            // are done. By the time it returns, two inbox
+            // messages have been pushed back to us:
+            //   - ws_disconnected: no-op now that _conn is null
+            //   - http_completion (Canceled): `.none` arm
+            //     releases the conn via the WS pool
+            // Drain them before we drop the in-flight ref so the
+            // WS struct stays alive while they're dispatched.
+            if (self._socket_fd >= 0) {
+                self._http_client.unregisterWebSocket(self, self._socket_fd);
+            }
+            self._http_client.disownConn(conn);
+            _ = self._http_client.processInbox(0) catch {};
+            self.releaseRef(self._frame._page);
+        },
+        .closed => {
+            // Terminal path: `disconnected` set `completed=true`
+            // after a handshake-failure dispatch. Conn isn't in
+            // the multi anymore (the failing completion already
+            // pulled it) and no fd polling is active — just hand
+            // it back through the pool and drop the ref.
+            // `completed=false` against a `.closed` state is
+            // unreachable in practice: every other branch nulls
+            // `_conn` so a second cleanup call short-circuits
+            // on the `orelse return` guard up top.
+            if (completed) {
+                self._http_client.finishConn(conn);
+                self.releaseRef(self._frame._page);
+            }
+        },
     }
-
-    self.releaseRef(self._frame._page);
 }
 
 fn queueMessage(self: *WebSocket, msg: Message) !void {
-    const was_empty = self._send_queue.items.len == 0;
     try self._send_queue.append(self._arena, msg);
-
-    if (was_empty) {
-        // Unpause the send callback so libcurl will request data
-        if (self._conn) |conn| {
-            try conn.pause(.{ .cont = true });
-        }
-    }
 }
 
 fn isValidProtocol(protocol: []const u8) bool {
@@ -367,6 +519,8 @@ pub fn send(self: *WebSocket, data: SendData) !void {
             }
         },
     }
+
+    try self.drainSendQueue();
 }
 
 pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
@@ -385,12 +539,16 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
     const reason = reason_ orelse "";
 
     if (self._ready_state == .connecting) {
-        // Connection not yet established - fail it. cleanup(false)
-        // synchronously removes the in-flight handshake from the multi
-        // before we tear anything down.
-        self._ready_state = .closed;
+        // Connection not yet established — fail it. cleanup
+        // synchronously disowns the in-flight handshake.
+        self._close_code = code;
+        self._close_reason = try self._arena.dupe(u8, reason);
+        self._ready_state = .closing;
         self.cleanup(false);
-        try self.dispatchCloseEvent(code, reason, false);
+        // cleanup transitioned us to .closed; surface a clean
+        // close event since the user-initiated abort isn't a
+        // transport failure.
+        self.dispatchCloseSafe(code, reason, true);
         return;
     }
 
@@ -398,6 +556,7 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
     self._close_code = code;
     self._close_reason = try self._arena.dupe(u8, reason);
     try self.queueMessage(.close);
+    try self.drainSendQueue();
 }
 
 pub fn getUrl(self: *const WebSocket) []const u8 {
@@ -544,192 +703,241 @@ fn dispatchCloseEvent(self: *WebSocket, code: u16, reason: []const u8, was_clean
     }
 }
 
-fn sendDataCallback(buffer: [*]u8, buf_count: usize, buf_len: usize, data: *anyopaque) usize {
-    if (comptime IS_DEBUG) {
-        std.debug.assert(buf_count == 1);
-    }
-    const conn: *http.Connection = @ptrCast(@alignCast(data));
-    return _sendDataCallback(conn, buffer[0..buf_len]) catch |err| {
-        log.warn(.websocket, "send callback", .{ .err = err });
-        return http.readfunc_pause;
+// Single-shot close dispatch that swallows the error + flips
+// `_close_dispatched`. Callers that may race (handshake failure,
+// clean close, ack-driven close, abort) all funnel through here.
+fn dispatchCloseSafe(self: *WebSocket, code: u16, reason: []const u8, was_clean: bool) void {
+    if (self._close_dispatched) return;
+    self._close_dispatched = true;
+    self.dispatchCloseEvent(code, reason, was_clean) catch |err| {
+        log.err(.websocket, "close event dispatch failed", .{ .err = err });
     };
 }
 
-fn _sendDataCallback(conn: *http.Connection, buf: []u8) !usize {
-    lp.assert(buf.len >= 2, "WS short buffer", .{ .len = buf.len });
+// Inbox handler for `ws_readable`. Clears the dedup flag then
+// drains curl_ws_recv until Again (or a fatal error). Each
+// complete frame either dispatches a JS message event, handles a
+// close frame, or is silently consumed (ping/pong/cont — libcurl
+// auto-handles ping via CURLWS_AUTOPONG).
+pub fn handleReadable(self: *WebSocket) !void {
+    // Clear the flag *after* we accept the notification: any data
+    // that arrives during our drain still races a new push, which
+    // is fine — once we hit Again the socket has no more data.
+    defer self._pending_readable.store(false, .release);
 
-    const self = conn.transport.websocket;
+    if (self._ready_state == .closed) return;
 
-    if (self._send_queue.items.len == 0) {
-        // No data to send - pause until queueMessage is called
-        return http.readfunc_pause;
-    }
+    const conn = self._conn orelse return;
 
-    const msg = &self._send_queue.items[0];
+    var chunk: [RECV_CHUNK]u8 = undefined;
+    while (true) {
+        const received, const meta = conn.wsRecv(&chunk) catch |err| switch (err) {
+            error.Again => return,
+            error.GotNothing, error.RecvError, error.NoFrameMeta => {
+                // Treat as remote disconnect. We stay in this
+                // function only to drain; the actual teardown
+                // happens via the ws_disconnected ack the network
+                // thread will deliver (we still need to ask it to
+                // unregister). Fall through to the abort path.
+                self.abortFromTransportError(err);
+                return;
+            },
+            else => return err,
+        };
 
-    switch (msg.*) {
-        .close => {
-            const code = self._close_code;
-            const reason = self._close_reason;
+        if (received == 0 and meta.bytes_left == 0) {
+            // Defensive: empty frame, nothing in flight, no data.
+            // Treat the same as Again.
+            return;
+        }
 
-            // Close frame: 2 bytes for code (big-endian) + optional reason
-            // Truncate reason to fit in buf (max 123 bytes per spec)
-            const reason_len: usize = @min(reason.len, 123, buf.len -| 2);
-            const frame_len = 2 + reason_len;
-            const to_copy = @min(buf.len, frame_len);
-
-            var close_payload: [125]u8 = undefined;
-            close_payload[0] = @intCast((code >> 8) & 0xFF);
-            close_payload[1] = @intCast(code & 0xFF);
-            if (reason_len > 0) {
-                @memcpy(close_payload[2..][0..reason_len], reason[0..reason_len]);
+        if (meta.offset == 0) {
+            // Start of a new frame.
+            self._recv_frame_type = meta.frame_type;
+            self._recv_buffer.clearRetainingCapacity();
+            if (meta.len > self._http_client.max_response_size) {
+                self.abortFromTransportError(error.MessageTooLarge);
+                return;
             }
-
-            try conn.wsStartFrame(.close, to_copy);
-            @memcpy(buf[0..to_copy], close_payload[0..to_copy]);
-
-            _ = self._send_queue.orderedRemove(0);
-            return to_copy;
-        },
-        .text => |content| return self.writeContent(conn, buf, content, .text),
-        .binary => |content| return self.writeContent(conn, buf, content, .binary),
-    }
-}
-
-// Executing on the Network thread
-fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: Message.Content, frame_type: http.WsFrameType) !usize {
-    if (self._send_offset == 0) {
-        // start of the message
-        if (comptime IS_DEBUG) {
-            log.debug(.websocket, "send start", .{ .url = self._url, .len = byte_msg.data.len });
+            try self._recv_buffer.ensureTotalCapacity(self._arena, meta.len);
         }
-        try conn.wsStartFrame(frame_type, byte_msg.data.len);
-    }
 
-    const remaining = byte_msg.data[self._send_offset..];
-    const to_copy = @min(remaining.len, buf.len);
-    @memcpy(buf[0..to_copy], remaining[0..to_copy]);
+        try self._recv_buffer.appendSlice(self._arena, chunk[0..received]);
 
-    self._send_offset += to_copy;
+        if (meta.bytes_left > 0) continue;
 
-    if (self._send_offset >= byte_msg.data.len) {
-        const removed = self._send_queue.orderedRemove(0);
-        removed.deinit(self._frame._page);
-        if (comptime IS_DEBUG) {
-            log.debug(.websocket, "send complete", .{ .url = self._url, .len = byte_msg.data.len, .queue = self._send_queue.items.len });
+        // Frame complete — dispatch and reset for the next one.
+        switch (self._recv_frame_type) {
+            .text, .binary => try self.dispatchMessageEvent(self._recv_buffer.items, self._recv_frame_type),
+            .close => try self.handleServerClose(self._recv_buffer.items),
+            .ping, .pong, .cont => {},
         }
-        self._send_offset = 0;
-    }
-
-    return to_copy;
-}
-
-// Executing on the Network thread
-fn receivedDataCallback(buffer: [*]const u8, buf_count: usize, buf_len: usize, data: *anyopaque) usize {
-    if (comptime IS_DEBUG) {
-        std.debug.assert(buf_count == 1);
-    }
-    const conn: *http.Connection = @ptrCast(@alignCast(data));
-    _receivedDataCallback(conn, buffer[0..buf_len]) catch |err| {
-        log.warn(.websocket, "receive callback", .{ .err = err });
-        // TODO: are there errors, like an invalid frame, that we shouldn't treat
-        // as an error?
-        return http.writefunc_error;
-    };
-
-    return buf_len;
-}
-
-// Executing on the Network thread
-fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
-    const self = conn.transport.websocket;
-    const meta = conn.wsMeta() orelse {
-        log.err(.websocket, "missing meta", .{ .url = self._url });
-        return error.NoFrameMeta;
-    };
-
-    if (meta.offset == 0) {
-        if (comptime IS_DEBUG) {
-            log.debug(.websocket, "incoming message", .{ .url = self._url, .len = meta.len, .bytes_left = meta.bytes_left, .type = meta.frame_type });
-        }
-        // Start of new frame. Pre-allocate buffer
         self._recv_buffer.clearRetainingCapacity();
-        if (meta.len > self._http_client.max_response_size) {
-            return error.MessageTooLarge;
-        }
-        try self._recv_buffer.ensureTotalCapacity(self._arena, meta.len);
+
+        if (self._ready_state == .closed) return;
     }
+}
 
-    try self._recv_buffer.appendSlice(self._arena, data);
+// Parse a server-initiated close frame and respond per RFC 6455
+// §5.5.1. If we were already in .closing (i.e. we sent close
+// first), this is the peer's reply and we can finalize teardown.
+fn handleServerClose(self: *WebSocket, payload: []const u8) !void {
+    const received_code: u16 = if (payload.len >= 2)
+        @as(u16, payload[0]) << 8 | payload[1]
+    else
+        1005; // No status code received
 
-    if (meta.bytes_left > 0) {
-        // still more data waiting for this frame
+    if (self._ready_state == .closing) {
+        // We initiated the close; the server has acked. Dispatch
+        // and tear down. cleanup flips state from .closing → .closed
+        // through its own branch (which submits the fd unregister).
+        self.dispatchCloseSafe(self._close_code, self._close_reason, true);
+        self.cleanup(false);
         return;
     }
 
-    const message = self._recv_buffer.items;
-    switch (meta.frame_type) {
-        // V8 dispatch must happen on the worker thread. Copy the
-        // assembled frame to the inbox allocator and let the worker
-        // handle it via handleMessage. _recv_buffer is reused for
-        // the next inbound frame on this same network-thread callback.
-        .text, .binary => try self.pushMessageEvent(message, meta.frame_type),
-        .close => {
-            // Parse close frame: 2-byte code (big-endian) + optional reason
-            const received_code = if (message.len >= 2)
-                @as(u16, message[0]) << 8 | message[1]
-            else
-                1005; // No status code received
+    // Server-initiated close: queue our reciprocal close frame.
+    self._close_code = received_code;
+    if (payload.len > 2) {
+        self._close_reason = try self._arena.dupe(u8, payload[2..]);
+    }
+    self._ready_state = .closing;
+    try self.queueMessage(.close);
+    try self.drainSendQueue();
+}
 
-            if (self._ready_state == .closing) {
-                // Client-initiated close: this is the server's response.
-                // Don't fire `disconnected` here — that would dispatch
-                // V8 events from the network thread. Instead let libcurl
-                // close the conn naturally; its terminal completion
-                // routes through handleHttpCompletion -> ws.disconnected
-                // on the worker.
-            } else {
-                // Server-initiated close: send reciprocal close frame per RFC 6455 §5.5.1
-                self._close_code = received_code;
-                if (message.len > 2) {
-                    self._close_reason = try self._arena.dupe(u8, message[2..]);
+// Worker-thread handler for `ws_send_retry`. Clears the queued
+// flag and attempts another drain.
+pub fn handleSendRetry(self: *WebSocket) !void {
+    self._send_retry_queued = false;
+    if (self._ready_state == .closed) return;
+    try self.drainSendQueue();
+}
+
+// Walk the send queue, copying each message into libcurl via
+// curl_ws_send until the queue is empty or curl_ws_send returns
+// Again (partial send). On Again, push a ws_send_retry so the
+// worker tries again on its next inbox tick. Bumps
+// `_send_retries`; once that crosses MAX_SEND_RETRIES we abort
+// with a transport-error close (the peer is wedged).
+fn drainSendQueue(self: *WebSocket) !void {
+    const conn = self._conn orelse return;
+
+    while (self._send_queue.items.len > 0) {
+        const msg = &self._send_queue.items[0];
+        const result = try self.sendOne(conn, msg);
+        switch (result) {
+            .complete => {
+                const popped = self._send_queue.orderedRemove(0);
+                popped.deinit(self._frame._page);
+                self._send_offset = 0;
+                self._send_retries = 0;
+
+                if (popped == .close) {
+                    // We just put our close frame on the wire. If
+                    // we were in .closing as the initiator, leave
+                    // the WS in .closing waiting on the peer's
+                    // reply (handled in handleReadable). If we
+                    // were responding to a server close, this is
+                    // the second close frame and we're done.
+                    if (self._ready_state == .closed) return;
                 }
-                self._ready_state = .closing;
-                try self.queueMessage(.close);
-            }
-        },
-        .ping, .pong, .cont => {},
+            },
+            .partial => |sent| {
+                self._send_offset += sent;
+                if (sent == 0) {
+                    self._send_retries += 1;
+                    if (self._send_retries >= MAX_SEND_RETRIES) {
+                        self.abortFromTransportError(error.WsSendStalled);
+                        return;
+                    }
+                } else {
+                    self._send_retries = 0;
+                }
+                try self.scheduleSendRetry();
+                return;
+            },
+        }
     }
 }
 
-// Executing on the Network thread
-fn pushMessageEvent(self: *WebSocket, message: []const u8, frame_type: http.WsFrameType) !void {
-    const allocator = self._http_client.allocator;
-    const owned = try allocator.dupe(u8, message);
-    errdefer allocator.free(owned);
-    try self._http_client.inbox.push(.{ .ws_message = .{
-        .ws = self,
-        .data = owned,
-        .frame_type = frame_type,
-    } });
+const SendOneResult = union(enum) {
+    complete,
+    partial: usize,
+};
+
+fn sendOne(self: *WebSocket, conn: *http.Connection, msg: *Message) !SendOneResult {
+    switch (msg.*) {
+        .text => |c| return self.sendBytes(conn, c.data, .text),
+        .binary => |c| return self.sendBytes(conn, c.data, .binary),
+        .close => return self.sendClose(conn),
+    }
 }
 
-// Worker-thread handler for a deferred ws_open event. The network
-// thread already set `_ready_state = .open` so JS that read it
-// before this fires sees the right value; we only do the V8 dispatch
-// here.
-pub fn handleOpen(self: *WebSocket) !void {
-    log.info(.websocket, "connected", .{ .url = self._url });
-    try self.dispatchOpenEvent();
+fn sendBytes(
+    self: *WebSocket,
+    conn: *http.Connection,
+    data: []const u8,
+    frame_type: http.WsFrameType,
+) !SendOneResult {
+    const remaining = data[self._send_offset..];
+    const sent = try conn.wsSend(remaining, frame_type);
+    if (sent == remaining.len) return .complete;
+    return .{ .partial = sent };
 }
 
-// Worker-thread handler for a deferred ws_message event.
-pub fn handleMessage(self: *WebSocket, data: []const u8, frame_type: http.WsFrameType) !void {
-    try self.dispatchMessageEvent(data, frame_type);
+fn sendClose(self: *WebSocket, conn: *http.Connection) !SendOneResult {
+    // Build close payload on the stack: 2-byte code + optional
+    // reason (truncated to fit the 125-byte control-frame limit).
+    var payload: [125]u8 = undefined;
+    const reason_len = @min(self._close_reason.len, 123);
+    payload[0] = @intCast((self._close_code >> 8) & 0xFF);
+    payload[1] = @intCast(self._close_code & 0xFF);
+    if (reason_len > 0) {
+        @memcpy(payload[2..][0..reason_len], self._close_reason[0..reason_len]);
+    }
+    const frame_len = 2 + reason_len;
+
+    const remaining = payload[self._send_offset..frame_len];
+    const sent = try conn.wsSend(remaining, .close);
+    if (sent == remaining.len) return .complete;
+    return .{ .partial = sent };
 }
 
-// libcurl has no mechanism to signal that the connection is established. The
-// best option I could come up with was looking for an upgrade header response.
+fn scheduleSendRetry(self: *WebSocket) !void {
+    if (self._send_retry_queued) return;
+    self._send_retry_queued = true;
+    self._http_client.inbox.push(.{ .ws_send_retry = self }) catch |err| {
+        self._send_retry_queued = false;
+        return err;
+    };
+}
+
+// Transport-level error in the worker's read/write path (peer
+// reset, stalled send, malformed framing). Marks the WS as
+// closed and tears down — the close event surfaces as abnormal.
+fn abortFromTransportError(self: *WebSocket, err: anyerror) void {
+    log.warn(.websocket, "transport error", .{ .err = err, .url = self._url });
+    self.dispatchErrorEvent() catch |derr| {
+        log.err(.websocket, "error event dispatch failed", .{ .err = derr });
+    };
+    self.dispatchCloseSafe(1006, "", false);
+    self.cleanup(false);
+}
+
+// Sockopt callback — fires on the network thread after libcurl
+// creates the TCP socket for the upgrade and before connect().
+// We use it solely to stash the fd on the WS so the worker can
+// hand it to the network thread's poll set after handshakeComplete.
+fn sockoptCallback(clientp: *anyopaque, fd: libcurl.CurlSocket, _: libcurl.CurlSockType) c_int {
+    const conn: *http.Connection = @ptrCast(@alignCast(clientp));
+    const self = conn.transport.websocket;
+    self._socket_fd = @intCast(fd);
+    return libcurl.curl_sockopt_ok;
+}
+
+// Header callback — fires during the libcurl-driven upgrade.
+// Captures `Sec-WebSocket-Protocol` from the response.
 fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usize, data: *anyopaque) usize {
     if (comptime IS_DEBUG) {
         std.debug.assert(header_count == 1);
@@ -738,45 +946,17 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
     const self = conn.transport.websocket;
     const header = buffer[0..buf_len];
 
-    if (self._got_101 == false and std.mem.startsWith(u8, header, "HTTP/")) {
-        if (std.mem.indexOf(u8, header, " 101 ")) |_| {
-            self._got_101 = true;
-        }
+    // Skip HTTP/x.y status lines and the blank-line terminator —
+    // libcurl validates the upgrade itself.
+    if (buf_len <= 2 or std.mem.startsWith(u8, header, "HTTP/")) {
         return buf_len;
     }
 
-    // Empty line = end of headers
-    if (buf_len <= 2) {
-        if (!self._got_101 or !self._got_upgrade) {
-            return 0;
-        }
-
-        // Set ready_state here so any data the server pushes immediately
-        // after the handshake sees `.open` (`_receivedDataCallback`'s
-        // close path branches on it). The JS open event itself is
-        // deferred to the worker via the inbox to avoid touching V8
-        // from this libcurl callback.
-        self._ready_state = .open;
-
-        self._http_client.inbox.push(.{ .ws_open = self }) catch |err| {
-            log.err(.websocket, "ws_open push", .{ .err = err });
-        };
-        return buf_len;
-    }
-
-    const colon = std.mem.indexOfScalarPos(u8, header, 0, ':') orelse {
-        // weird, continue...
-        return buf_len;
-    };
-
+    const colon = std.mem.indexOfScalarPos(u8, header, 0, ':') orelse return buf_len;
     const header_name = header[0..colon];
     const value = std.mem.trim(u8, header[colon + 1 ..], " \t\r\n");
 
-    if (std.ascii.eqlIgnoreCase(header_name, "upgrade")) {
-        if (std.ascii.eqlIgnoreCase(value, "websocket")) {
-            self._got_upgrade = true;
-        }
-    } else if (std.ascii.eqlIgnoreCase(header_name, "sec-websocket-protocol")) {
+    if (std.ascii.eqlIgnoreCase(header_name, "sec-websocket-protocol")) {
         // TODO, we should validate this against our sent list.
         self._protocol = self._arena.dupe(u8, value) catch |err| {
             log.err(.websocket, "dupe protocol", .{ .err = err });

@@ -274,6 +274,13 @@ pub const Connection = struct {
     in_use: bool,
     transport: Transport,
 
+    // Which pool this conn was allocated from. Routing in
+    // `Network.releaseConn` keys off this rather than the current
+    // `transport`, because abort paths (`disownConn`) clear
+    // transport to `.none` before the conn is released. Set by
+    // the pool-specific allocator (`newWSConn` flips it to `.ws`).
+    _pool: Pool = .http,
+
     // Network-thread node. Lives in either the available pool or — once
     // the network thread has handed the conn back — `Handle._completion_queue`.
     // Mailbox messages reference the conn by pointer, so this node is *not*
@@ -308,6 +315,8 @@ pub const Connection = struct {
         http: *@import("../browser/HttpClient.zig").Transfer,
         websocket: *@import("../browser/webapi/net/WebSocket.zig"),
     };
+
+    pub const Pool = enum { http, ws };
 
     pub fn init(
         ca_blob: ?libcurl.CurlBlob,
@@ -405,6 +414,18 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(self._easy, .connect_only, value);
     }
 
+    // Force this easy handle to open a new TCP connection
+    // instead of pulling one from libcurl's multi-level cpool.
+    // Used by WebSocket: a cached WS connection (post-upgrade)
+    // can't be reused for a fresh handshake — libcurl would try
+    // to send HTTP Upgrade on a socket that's already in WS
+    // protocol mode and fail. Leaves the resulting conn eligible
+    // for cpool placement after handshake (which curl_ws_send /
+    // curl_ws_recv rely on to look up the conn post-completion).
+    pub fn setFreshConnect(self: *const Connection, fresh: bool) !void {
+        try libcurl.curl_easy_setopt(self._easy, .fresh_connect, @as(c_long, if (fresh) 1 else 0));
+    }
+
     pub fn setWriteCallback(
         self: *Connection,
         comptime data_cb: libcurl.CurlWriteFunction,
@@ -431,6 +452,18 @@ pub const Connection = struct {
     ) !void {
         try libcurl.curl_easy_setopt(self._easy, .header_data, self);
         try libcurl.curl_easy_setopt(self._easy, .header_function, data_cb);
+    }
+
+    // Register a sockopt callback. Fires once libcurl has created
+    // (or pulled from cache) the socket for the upcoming transfer,
+    // before connect(). Most reliable place to capture the fd —
+    // see WebSocket's use for the why.
+    pub fn setSockoptCallback(
+        self: *Connection,
+        comptime data_cb: libcurl.CurlSockoptFunction,
+    ) !void {
+        try libcurl.curl_easy_setopt(self._easy, .sockopt_data, self);
+        try libcurl.curl_easy_setopt(self._easy, .sockopt_function, data_cb);
     }
 
     pub fn pause(
@@ -616,6 +649,59 @@ pub const Connection = struct {
 
     pub fn wsMeta(self: *const Connection) ?libcurl.WsFrameMeta {
         return libcurl.curl_ws_meta(self._easy);
+    }
+
+    // Send a WebSocket frame using libcurl's CONNECT_ONLY=2 mode.
+    // Always issues at least one curl_ws_send so the frame header
+    // goes on the wire even for a zero-length payload (empty
+    // text/binary frame). After that, loops while libcurl wants
+    // more bytes (CURLE_OK with a partial `sent`); returns once
+    // the whole buffer is consumed or libcurl reports CURLE_AGAIN
+    // (socket would block). On Again the caller is expected to
+    // retry later from `buf[returned..]`.
+    pub fn wsSend(
+        self: *const Connection,
+        buf: []const u8,
+        frame_type: libcurl.WsFrameType,
+    ) !usize {
+        var total: usize = 0;
+        while (true) {
+            var sent: usize = 0;
+            libcurl.curl_ws_send(self._easy, buf[total..], &sent, 0, frame_type) catch |err| {
+                if (err == error.Again) {
+                    total += sent;
+                    break;
+                }
+                return err;
+            };
+            total += sent;
+            if (total >= buf.len) break;
+            // Guard against an infinite loop if libcurl ever
+            // returns OK with sent=0 on a non-empty buffer.
+            if (sent == 0) break;
+        }
+        return total;
+    }
+
+    // Receive bytes from a CONNECT_ONLY=2 WebSocket into `buf`.
+    // Returns the byte count and the frame metadata for the
+    // in-progress frame. Propagates error.Again when no bytes are
+    // currently available.
+    pub fn wsRecv(self: *const Connection, buf: []u8) !struct { usize, libcurl.WsFrameMeta } {
+        var received: usize = 0;
+        var meta: ?libcurl.WsFrameMeta = null;
+        try libcurl.curl_ws_recv(self._easy, buf, &received, &meta);
+        return .{ received, meta orelse return error.NoFrameMeta };
+    }
+
+    // Returns the underlying socket fd. Only meaningful after the
+    // CONNECT_ONLY=2 handshake has completed — libcurl reports
+    // CURL_SOCKET_BAD before that.
+    pub fn getActiveSocket(self: *const Connection) !posix.fd_t {
+        var s: libcurl.CurlSocket = libcurl.CURL_SOCKET_BAD;
+        try libcurl.curl_easy_getinfo(self._easy, .active_socket, &s);
+        if (s == libcurl.CURL_SOCKET_BAD) return error.NoActiveSocket;
+        return @intCast(s);
     }
 };
 
