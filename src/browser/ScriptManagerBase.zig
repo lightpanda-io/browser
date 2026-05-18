@@ -318,7 +318,10 @@ pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource 
                 const status = try client.tick(200);
                 if (status == .cdp_socket) {
                     if (client.cdp_client) |cdp| {
-                        _ = cdp.blocking_read(cdp.ctx);
+                        if (cdp.blocking_read(cdp.ctx) == false) {
+                            // An error happened during cdp's read.
+                            return error.Failed;
+                        }
                     }
                 }
             },
