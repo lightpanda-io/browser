@@ -530,7 +530,9 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
         switch (status) {
             .cdp_socket => {
                 const cdp = self.cdp_client.?;
-                _ = cdp.blocking_read(cdp.ctx);
+                if (cdp.blocking_read(cdp.ctx) == false) {
+                    return error.ClientDisconnected;
+                }
             },
             .normal => continue,
         }
