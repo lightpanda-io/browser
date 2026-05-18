@@ -17,15 +17,16 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+
+const CDP = @import("CDP.zig");
+
+const base = @import("../testing.zig");
+const Server = @import("../Server.zig");
+const HttpClient = @import("../browser/HttpClient.zig");
+
 const json = std.json;
 const posix = std.posix;
 
-const CDP = @import("CDP.zig");
-const Server = @import("../Server.zig");
-const Net = @import("../network/WsConnection.zig");
-const HttpClient = @import("../browser/HttpClient.zig");
-
-const base = @import("../testing.zig");
 pub const allocator = base.allocator;
 pub const expectJson = base.expectJson;
 pub const expect = std.testing.expect;

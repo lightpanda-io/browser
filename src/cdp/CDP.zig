@@ -30,8 +30,8 @@ const Element = @import("../browser/webapi/Element.zig");
 const Label = @import("../browser/webapi/element/html/Label.zig");
 const Transfer = @import("../browser/HttpClient.zig").Transfer;
 const CDPClient = @import("../browser/HttpClient.zig").CDPClient;
-const WsConnection = @import("../network/WsConnection.zig");
 
+const Connection = @import("Connection.zig");
 const Incrementing = @import("id.zig").Incrementing;
 const InterceptState = @import("domains/fetch.zig").InterceptState;
 
@@ -52,13 +52,10 @@ pub const InvocationIdGen = Incrementing(u32, "INV");
 // Generic so that we can inject mocks into it.
 const CDP = @This();
 
-allocator: Allocator,
 app: *App,
-
-ws: WsConnection,
-
-// The active browser
+conn: Connection,
 browser: Browser,
+allocator: Allocator,
 
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
@@ -97,7 +94,7 @@ pub fn init(
 
     self.* = .{
         .app = app,
-        .ws = undefined,
+        .conn = undefined,
         .browser = undefined,
         .allocator = allocator,
         .browser_context = null,
@@ -107,8 +104,8 @@ pub fn init(
         .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
     };
 
-    try self.ws.init(socket, self.app.allocator, json_version_response);
-    errdefer self.ws.deinit();
+    try self.conn.init(socket, self.app.allocator, json_version_response);
+    errdefer self.conn.deinit();
 
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, .{
         .ctx = self,
@@ -128,8 +125,8 @@ pub fn init(
 // disconnect so the next tick exits the loop.
 fn onData(ctx: *anyopaque, data: []const u8) anyerror!void {
     const self: *CDP = @ptrCast(@alignCast(ctx));
-    try self.ws.feedBytes(data);
-    const keep = try self.ws.processMessages(self);
+    try self.conn.feedBytes(data);
+    const keep = try self.conn.processMessages(self);
     if (!keep) self.disconnected = true;
 }
 
@@ -147,12 +144,12 @@ pub fn deinit(self: *CDP) void {
     self.message_arena.deinit();
     self.notification_arena.deinit();
     self.browser_context_arena.deinit();
-    self.ws.deinit();
+    self.conn.deinit();
 }
 
 pub fn blockingReadStart(ctx: *anyopaque) bool {
     const self: *CDP = @ptrCast(@alignCast(ctx));
-    self.ws.setBlocking(true) catch |err| {
+    self.conn.setBlocking(true) catch |err| {
         log.warn(.app, "CDP blockingReadStart", .{ .err = err });
         return false;
     };
@@ -166,7 +163,7 @@ pub fn blockingRead(ctx: *anyopaque) bool {
 
 pub fn blockingReadStop(ctx: *anyopaque) bool {
     const self: *CDP = @ptrCast(@alignCast(ctx));
-    self.ws.setBlocking(false) catch |err| {
+    self.conn.setBlocking(false) catch |err| {
         log.warn(.app, "CDP blockingReadStop", .{ .err = err });
         return false;
     };
@@ -174,7 +171,7 @@ pub fn blockingReadStop(ctx: *anyopaque) bool {
 }
 
 pub fn readSocket(self: *CDP) bool {
-    const n = self.ws.read() catch |err| {
+    const n = self.conn.read() catch |err| {
         log.warn(.app, "CDP read", .{ .err = err });
         return false;
     };
@@ -184,11 +181,11 @@ pub fn readSocket(self: *CDP) bool {
         return false;
     }
 
-    return self.ws.processMessages(self) catch false;
+    return self.conn.processMessages(self) catch false;
 }
 
 pub fn sendJSON(self: *CDP, message: anytype) !void {
-    try self.ws.sendJSON(message, .{ .emit_null_optional_fields = false });
+    try self.conn.sendJSON(message, .{ .emit_null_optional_fields = false });
 }
 
 pub fn handleMessage(self: *CDP, msg: []const u8) bool {
@@ -976,7 +973,7 @@ pub const BrowserContext = struct {
         };
 
         const cdp = self.cdp;
-        const allocator = cdp.ws.send_arena.allocator();
+        const allocator = cdp.conn.send_arena.allocator();
 
         const field = ",\"sessionId\":\"";
 
@@ -1002,7 +999,7 @@ pub const BrowserContext = struct {
             std.debug.assert(buf.items.len == message_len);
         }
 
-        try cdp.ws.sendJSONRaw(buf);
+        try cdp.conn.sendJSONRaw(buf);
     }
 };
 
