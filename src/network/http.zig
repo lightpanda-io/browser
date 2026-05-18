@@ -83,8 +83,17 @@ pub const Headers = struct {
         return .{ .headers = updated_headers };
     }
 
-    pub fn deinit(self: *const Headers) void {
+    pub fn deinit(self: *Headers) void {
+        // Null out after free to make deinit idempotent. Headers is value-
+        // copied across structs (Transfer holds it inside a Request, and
+        // some layers / cleanup paths produce a second deinit on the same
+        // slist). Without this, those paths double-free the curl_slist
+        // chain and the ZigToCurlAllocator hits an unaligned-block error
+        // inside curl_slist_free_all on the second pass. RobotsLayer
+        // documented the value-copy hazard for its own path; this guard
+        // is the catch-all so other code paths don't have to.
         if (self.headers) |hdr| {
+            self.headers = null;
             libcurl.curl_slist_free_all(hdr);
         }
     }
