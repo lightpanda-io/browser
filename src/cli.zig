@@ -23,7 +23,24 @@ const log = lp.log;
 
 /// Comptime CLI builder that generates a tagged union parser from a
 /// declarative command recipe. Each command becomes a union variant whose
-/// payload is a struct with one field per option.
+/// payload is a struct with one field per option. A `help` variant is added
+/// automatically; do not include it in the recipe.
+///
+/// ## Parsing behavior
+///
+/// `parse` reads `std.process.args`, picks a command by the first non-exec
+/// argument, then walks the rest as `--flag value` pairs. Quirks:
+///
+///   - When no command is given, the parser defaults to `serve`.
+///   - `help`, `help <command>`, `<command> help`, and `<command> --help` all
+///     yield the `help` union variant. When a command is named (in either
+///     position), the variant carries that command's enum tag so callers can
+///     print command-specific help; bare `help` and `help help` carry the
+///     `.help` tag. An unknown name after `help` returns
+///     `error.UnknownCommand`.
+///   - Legacy fallback: if the first argument starts with `--` and matches a
+///     known fetch/serve flag, the parser sniffs the command from it and
+///     re-parses argv. Only exists for backwards compatibility.
 ///
 /// ## Command descriptor fields
 ///
@@ -34,8 +51,9 @@ const log = lp.log;
 ///     command. Useful for common flags shared across commands.
 ///   - `positional: struct` (optional) — a single positional argument with
 ///     `.name` and `.type`. Type must be an optional pointer-to-u8 slice
-///     (e.g. `?[:0]const u8`). Positionals can appear anywhere in argv and
-///     must be provided; a missing positional returns `error.MissingArgument`.
+///     (e.g. `?[:0]const u8`); it defaults to `null` and may appear anywhere
+///     in argv. Passing it more than once returns
+///     `error.TooManyPositionalArguments`.
 ///
 /// ## Option descriptor fields
 ///
@@ -49,6 +67,8 @@ const log = lp.log;
 ///     `bool` or packed-struct options.
 ///   - `validator: fn` (optional) — custom parse function that replaces the
 ///     built-in type switch. See the validator section below.
+///   - `variants: tuple` (optional) — alternate flag names that write into
+///     the same field. See the variants section below.
 ///
 /// ## Supported types and their defaults
 ///
@@ -60,10 +80,10 @@ const log = lp.log;
 ///   - `[]const u8`, `[:0]const u8` (and mutable variants) — string slices
 ///     duped from argv. Sentinel is preserved. Requires `default` unless `?`.
 ///   - Enums — parsed via `std.meta.stringToEnum`. Returns
-///     `error.UnknownArgument` on a bad value. Requires `default` unless `?`.
+///     `error.InvalidArgument` on a bad value. Requires `default` unless `?`.
 ///   - Packed structs of `bool` fields — parsed from a comma-separated list
 ///     (e.g. `--strip-mode js,css`). The literal `"full"` sets every field.
-///     Unknown names return `error.UnknownArgument`. Requires `default`.
+///     Unknown names return `error.InvalidArgument`. Requires `default`.
 ///     `multiple` is not supported.
 ///   - Optional types default to `null` when `default` is omitted.
 ///
@@ -79,6 +99,15 @@ const log = lp.log;
 ///
 /// When a validator is present, the built-in type switch is skipped entirely.
 /// The validator owns advancing the iterator and is free to peek ahead.
+///
+/// ## Variants
+///
+/// A `variants` tuple lets multiple flag names write into the same field
+/// using different parse logic. Each variant has its own `.name` and an
+/// optional `.validator` (with the same signatures as above); the option's
+/// `type` and `multiple` are inherited. Useful for "value or file" pairs:
+/// e.g. `--wait-script "code"` vs `--wait-script-file path/to/script.js`,
+/// both populating the same `wait_script` field.
 ///
 /// ## Example
 ///
@@ -113,19 +142,25 @@ const log = lp.log;
 ///             .{ .name = "strip_mode", .type = StripMode, .default = .{} },
 ///             .{ .name = "wait_until", .type = ?WaitUntil },
 ///             .{ .name = "extra_header", .type = []const u8, .multiple = true },
+///             .{
+///                 .name = "wait_script",
+///                 .type = ?[:0]const u8,
+///                 .variants = .{
+///                     .{ .name = "wait_script_file", .validator = readScriptFile },
+///                 },
+///             },
 ///         },
 ///         .shared_options = CommonOptions,
 ///     },
 ///     .{ .name = "version", .options = .{} },
-///     .{ .name = "help", .options = .{} },
 /// });
 ///
 /// const _, const cmd = try Cli.parse(arena);
 /// switch (cmd) {
 ///     .serve => |opts| listen(opts.host, opts.port),
-///     .fetch => |opts| fetch(opts.url.?, opts.dump),
+///     .fetch => |opts| fetch(opts.url orelse return error.UrlRequired, opts.dump),
 ///     .version => printVersion(),
-///     .help => printHelp(),
+///     .help => |tag| printHelp(tag),
 /// }
 /// ```
 pub fn Builder(comptime commands: anytype) type {
@@ -134,17 +169,24 @@ pub fn Builder(comptime commands: anytype) type {
 
         /// Enum type for provided commands.
         pub const Enum = blk: {
-            var enum_fields: [commands.len]std.builtin.Type.EnumField = undefined;
-            for (commands, 0..) |command, i| {
+            const len = commands.len + 1;
+            var enum_fields: [len]std.builtin.Type.EnumField = undefined;
+
+            var i: usize = 0;
+            while (i < commands.len) : (i += 1) {
+                const command = commands[i];
                 enum_fields[i] = .{ .name = command.name, .value = i };
             }
+
+            // Entry for help.
+            enum_fields[i] = .{ .name = "help", .value = i };
 
             break :blk @Type(.{
                 .@"enum" = .{
                     .decls = &.{},
                     .fields = &enum_fields,
                     .is_exhaustive = true,
-                    .tag_type = std.math.IntFittingRange(0, commands.len),
+                    .tag_type = std.math.IntFittingRange(0, len),
                 },
             });
         };
@@ -212,8 +254,12 @@ pub fn Builder(comptime commands: anytype) type {
 
         /// Union type for provided commands.
         pub const Union = blk: {
-            var union_fields: [commands.len]std.builtin.Type.UnionField = undefined;
-            for (commands, 0..) |command, i| {
+            const len = commands.len + 1;
+            var union_fields: [len]std.builtin.Type.UnionField = undefined;
+
+            var i: usize = 0;
+            while (i < commands.len) : (i += 1) {
+                const command = commands[i];
                 const Command = @TypeOf(command);
                 const options = command.options;
 
@@ -247,6 +293,10 @@ pub fn Builder(comptime commands: anytype) type {
                 union_fields[i] = .{ .name = command.name, .type = T, .alignment = @alignOf(T) };
             }
 
+            // Entry for help; just takes `Enum` itself.
+            const Help = Enum;
+            union_fields[i] = .{ .name = "help", .type = Help, .alignment = @alignOf(Help) };
+
             break :blk @Type(.{
                 .@"union" = .{
                     .decls = &.{},
@@ -268,27 +318,43 @@ pub fn Builder(comptime commands: anytype) type {
             inline for (commands) |command| {
                 // Match a command.
                 if (std.mem.eql(u8, cmd_str, command.name)) {
-                    const cmd_parsed = parseCommand(allocator, command, &args) catch |err| {
-                        if (err == error.HelpRequested) {
-                            // <subcommand> help requested, return help <subcommand>
-                            var h = @FieldType(Union, "help"){};
-                            if (@hasField(@FieldType(Union, "help"), "subcommand")) {
-                                h.subcommand = command.name;
-                            }
-                            return .{ exec_name, @unionInit(Union, "help", h) };
-                        } else return err;
-                    };
+                    const cmd_parsed = try parseCommand(allocator, command, &args);
                     return .{ exec_name, cmd_parsed };
                 }
+            }
+
+            // Help is not in `commands`; so, we have to special case it.
+            if (std.mem.eql(u8, cmd_str, "help")) {
+                // Check if we're followed by a command name.
+                const command_name: []const u8 = args.next() orelse {
+                    // "lightpanda help"; short-circuit.
+                    return .{ exec_name, @unionInit(Union, "help", .help) };
+                };
+
+                inline for (commands) |command| {
+                    if (std.mem.eql(u8, command_name, command.name)) {
+                        return .{
+                            exec_name,
+                            @unionInit(Union, "help", std.meta.stringToEnum(Enum, command.name).?),
+                        };
+                    }
+                }
+
+                // Treat `help help` as the full help.
+                if (std.mem.eql(u8, command_name, "help")) {
+                    return .{ exec_name, @unionInit(Union, "help", .help) };
+                }
+
+                log.fatal(.app, "unknown command", .{ .arg = command_name });
+                return error.UnknownCommand;
             }
 
             // Last resort, try sniffing.
             const command_enum = try sniffCommand(cmd_str);
 
-            // `help` takes no arguments; short-circuit so the sniffed flag
-            // isn't re-parsed as an unknown option.
+            // Legacy `--help` situation.
             if (command_enum == .help) {
-                return .{ exec_name, .{ .help = .{} } };
+                return .{ exec_name, @unionInit(Union, "help", .help) };
             }
 
             // "cmd_str" wasn't a command but an option. We can't reset args, but
@@ -301,16 +367,7 @@ pub fn Builder(comptime commands: anytype) type {
 
             inline for (commands) |command| {
                 if (std.mem.eql(u8, @tagName(command_enum), command.name)) {
-                    const cmd_parsed = parseCommand(allocator, command, &args) catch |err| {
-                        if (err == error.HelpRequested) {
-                            // <subcommand> help requested, return help <subcommand>
-                            var h = @FieldType(Union, "help"){};
-                            if (@hasField(@FieldType(Union, "help"), "subcommand")) {
-                                h.subcommand = command.name;
-                            }
-                            return .{ exec_name, @unionInit(Union, "help", h) };
-                        } else return err;
-                    };
+                    const cmd_parsed = try parseCommand(allocator, command, &args);
                     return .{ exec_name, cmd_parsed };
                 }
             }
@@ -607,9 +664,9 @@ pub fn Builder(comptime commands: anytype) type {
                     }
                 }
 
-                // Subcommand help: `lightpanda fetch help` or `lightpanda fetch --help`
+                // Subcommand help: `lightpanda fetch help` or `lightpanda fetch --help`.
                 if (std.mem.eql(u8, option_name, "help") or std.mem.eql(u8, option_name, "--help")) {
-                    return error.HelpRequested;
+                    return @unionInit(Union, "help", std.meta.stringToEnum(Enum, command.name).?);
                 }
 
                 // Encountered an option we don't know of.

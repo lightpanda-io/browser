@@ -54,10 +54,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
     defer args.deinit(main_arena);
 
     switch (args.mode) {
-        .help => {
-            args.printUsageAndExit(true);
-            return std.process.cleanExit();
-        },
+        .help => |tag| return args.printUsageAndExit(tag, true),
         .version => {
             var stdout = std.fs.File.stdout().writer(&.{});
             try stdout.interface.print("{s}\n", .{lp.build_config.version});
@@ -94,7 +91,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             log.debug(.app, "startup", .{ .mode = "serve", .snapshot = app.snapshot.fromEmbedded() });
             const address = std.net.Address.parseIp(opts.host, opts.port) catch |err| {
                 log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
-                return args.printUsageAndExit(false);
+                return args.printUsageAndExit(.serve, false);
             };
 
             var server = lp.Server.init(app, address) catch |err| {
