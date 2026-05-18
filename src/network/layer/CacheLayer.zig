@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const Layer = @import("../../browser/HttpClient.zig").Layer;
 const Client = @import("../../browser/HttpClient.zig").Client;
+const NextTickNode = @import("../../browser/HttpClient.zig").NextTickNode;
 const Request = @import("../../browser/HttpClient.zig").Request;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Response = @import("../../browser/HttpClient.zig").Response;
@@ -72,11 +73,30 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
             &.{ .transfer = transfer },
         );
 
-        // Cache hit: serve synchronously from the original callbacks, then
-        // tear down. On error, the transfer is still alive and Client.request's
-        // errdefer will handle cleanup (state stays .created).
-        try serveFromCache(req, &cached);
-        transfer.deinit();
+        const CacheServeCtx = struct {
+            transfer: *Transfer,
+            cached: CachedResponse,
+        };
+
+        const ctx = try arena.create(CacheServeCtx);
+        ctx.* = .{ .transfer = transfer, .cached = cached };
+
+        const next_tick = try arena.create(NextTickNode);
+        next_tick.* = .{
+            .ctx = ctx,
+            .run = struct {
+                fn run(ctx_ptr: *anyopaque) anyerror!void {
+                    const c: *CacheServeCtx = @ptrCast(@alignCast(ctx_ptr));
+                    serveFromCache(&c.transfer.req, &c.cached) catch |err| {
+                        c.transfer.req.error_callback(c.transfer.req.ctx, err);
+                    };
+                    c.transfer.deinit();
+                }
+            }.run,
+        };
+
+        transfer.loop_owned = true;
+        transfer.client.runNextTick(next_tick);
         return;
     }
 
