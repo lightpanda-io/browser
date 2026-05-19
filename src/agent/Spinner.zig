@@ -23,8 +23,7 @@ const ansi = @import("Terminal.zig").ansi;
 
 const Spinner = @This();
 
-const dots = [_][]const u8{ "   ", ".  ", ".. ", "..." };
-const braille = [_][]const u8{ "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
+const braille = [_][]const u8{ "⡇", "⣆", "⣤", "⣰", "⢸", "⠹", "⠛", "⠏" };
 const interval_ns: u64 = 100 * std.time.ns_per_ms;
 /// Minimum dwell on a tool label so the user can read it. Slow tools exceed
 /// this naturally; fast ones (getUrl, getCookies) get padded.
@@ -44,8 +43,6 @@ const ToolState = struct {
     /// Worker should flip back to thinking once dwell elapses. Cleared by a
     /// fresh `setTool` (which overrides the dwell with a new label).
     dwell_pending: bool = false,
-    /// Render the label in red — set by `markToolFailed`, cleared by next setTool.
-    failed: bool = false,
     /// User-typed REPL commands drop the `agent:` framing since no agent
     /// is involved — it's lightpanda running the command directly.
     manual: bool = false,
@@ -168,29 +165,12 @@ pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
     @memcpy(tool.name_buf[0..tool.name_len], name[0..tool.name_len]);
     tool.args_len = @min(args.len, tool.args_buf.len);
     @memcpy(tool.args_buf[0..tool.args_len], args[0..tool.args_len]);
-    self.frame = 0;
     self.state = .{ .tool = tool };
     // Manual paths skip `start()`, so spawn the worker on demand to drive
     // the braille animation.
     if (manual) self.ensureWorkerLocked();
     self.renderLocked();
     self.cv.signal();
-}
-
-/// Repaint the active tool label in red to flag a failed tool call. Visible
-/// for the rest of the dwell window (`min_tool_display_ns`), then the
-/// indicator returns to thinking like any other call.
-pub fn markToolFailed(self: *Spinner) void {
-    if (!self.isEnabled()) return;
-    self.mu.lock();
-    defer self.mu.unlock();
-    switch (self.state) {
-        .tool => {
-            self.state.tool.failed = true;
-            self.renderLocked();
-        },
-        else => {},
-    }
 }
 
 /// Request a transition back to the cycling "thinking" state. The worker
@@ -241,7 +221,6 @@ fn workerLoop(self: *Spinner) void {
                     const delta: i128 = std.time.nanoTimestamp() - self.state.tool.set_ns;
                     if (delta >= @as(i128, min_tool_display_ns)) {
                         self.state = .thinking;
-                        self.frame = 0;
                     }
                 }
             },
@@ -250,32 +229,27 @@ fn workerLoop(self: *Spinner) void {
 
         self.renderLocked();
 
-        if (self.state == .thinking) {
-            self.frame = (self.frame + 1) % @as(u8, @intCast(dots.len));
-        } else if (std.meta.activeTag(self.state) == .tool and self.state.tool.manual) {
-            self.frame = (self.frame + 1) % @as(u8, @intCast(braille.len));
-        }
+        self.frame = (self.frame + 1) % @as(u8, @intCast(braille.len));
         self.cv.timedWait(&self.mu, interval_ns) catch {};
     }
 }
 
 fn renderLocked(self: *Spinner) void {
     var buf: [frame_buf_bytes]u8 = undefined;
+    const glyph = braille[self.frame % braille.len];
     const written = switch (self.state) {
         .idle => return,
         .thinking => std.fmt.bufPrint(
             &buf,
-            "\r" ++ ansi.yellow ++ "●" ++ ansi.reset ++ " " ++ ansi.dim ++ "[agent: thinking{s}]" ++ ansi.reset ++ clear_eol,
-            .{dots[self.frame % dots.len]},
+            "\r" ++ ansi.yellow ++ "{s}" ++ ansi.reset ++ " " ++ ansi.dim ++ "[agent: thinking]" ++ ansi.reset ++ clear_eol,
+            .{glyph},
         ) catch return,
         .tool => |tool| blk: {
-            const color: []const u8 = if (tool.failed) ansi.red else if (tool.manual) ansi.yellow else ansi.green;
-            const glyph: []const u8 = if (tool.manual) braille[self.frame % braille.len] else "●";
             const prefix: []const u8 = if (tool.manual) "" else "agent: ";
             break :blk std.fmt.bufPrint(
                 &buf,
-                "\r{s}{s}" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s}{s} {s}]" ++ ansi.reset ++ clear_eol,
-                .{ color, glyph, prefix, tool.name_buf[0..tool.name_len], tool.args_buf[0..tool.args_len] },
+                "\r" ++ ansi.yellow ++ "{s}" ++ ansi.reset ++ " " ++ ansi.dim ++ "[{s}{s} {s}]" ++ ansi.reset ++ clear_eol,
+                .{ glyph, prefix, tool.name_buf[0..tool.name_len], tool.args_buf[0..tool.args_len] },
             ) catch return;
         },
     };

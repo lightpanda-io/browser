@@ -448,7 +448,7 @@ fn runRepl(self: *Agent) void {
                 var arena: std.heap.ArenaAllocator = .init(self.allocator);
                 defer arena.deinit();
                 const result = self.cmd_runner.executeWithResult(arena.allocator(), cmd);
-                self.terminal.endTool(!result.is_error);
+                self.terminal.endTool();
                 self.cmd_runner.printResult(cmd, result);
                 if (self.recorder) |*r| r.record(cmd);
             },
@@ -495,14 +495,14 @@ fn handleSlash(self: *Agent, body: []const u8) bool {
 
     self.terminal.beginTool(schema.tool_name, rest);
     if (self.tool_executor.call(aa, schema.tool_name, args_json)) |result| {
-        self.terminal.endTool(!result.is_error);
+        self.terminal.endTool();
         if (result.is_error) {
             self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, result.text });
         } else {
             self.terminal.printToolResult(schema.tool_name, result.text);
         }
     } else |err| {
-        self.terminal.endTool(false);
+        self.terminal.endTool();
         self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, @errorName(err) });
     }
     return false;

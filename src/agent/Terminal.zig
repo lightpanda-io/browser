@@ -135,25 +135,19 @@ pub fn beginTool(self: *Terminal, name: []const u8, args: []const u8) void {
     self.spinner.setTool(name, args);
 }
 
-/// Mark the end of a manual REPL tool call. On failure, flashes the spinner
-/// label red before clearing it.
-pub fn endTool(self: *Terminal, ok: bool) void {
-    if (!ok) self.spinner.markToolFailed();
+/// Mark the end of a manual REPL tool call. Clears the running spinner; the
+/// caller's `printToolResult` / `printError` lays down the colored status dot.
+pub fn endTool(self: *Terminal) void {
     self.spinner.cancel();
 }
 
-/// Called after the tool returns.
-///
-/// - Spinner mode (TTY REPL): the running label flashes red on failure
-///   (handled by `markToolFailed`). At `medium`+, *also* commit a
-///   `● [tool: …]` line above the spinner so the run leaves a trace.
-/// - No spinner (non-TTY/non-REPL): print the same line directly,
-///   gated on `medium`+. In non-TTY contexts ANSI is still emitted —
-///   pipes that strip color see plain text via the bullet character.
+/// Called after the tool returns. At `medium`+, commits a `● [tool: …]` line
+/// above the spinner (green/red bullet for ok/fail) so the run leaves a trace.
+/// In non-TTY contexts ANSI is still emitted — pipes that strip color see
+/// plain text via the bullet character.
 pub fn agentToolDone(self: *Terminal, name: []const u8, args: []const u8, ok: bool) void {
-    const spinner_on = self.spinner.isEnabled();
-    if (spinner_on and !ok) self.spinner.markToolFailed();
     if (!atLeast(self.verbosity, .medium)) return;
+    const spinner_on = self.spinner.isEnabled();
 
     if (spinner_on) {
         const a = if (self.repl_arena) |*ra| ra else return;
