@@ -300,6 +300,116 @@
   }
 </script>
 
+<style id="style-author-beats-ua-hidden">
+  .cv-author-flex { display: flex; }
+  .cv-author-none { display: none; }
+</style>
+
+<script id="author_class_display_overrides_hidden_attr">
+  {
+    // Regression: author `.x { display: flex }` must beat UA `[hidden] {
+    // display: none }` per CSS Cascade §6.1 — any normal-origin author rule
+    // wins over UA origin regardless of specificity. Before the fix, the UA
+    // short-circuit in `isElementHidden` fired before the author rule walk,
+    // so `[hidden]` always won regardless of the class rule.
+    const el = document.createElement("div");
+    el.className = "cv-author-flex";
+    el.setAttribute("hidden", "");
+    document.body.appendChild(el);
+
+    testing.expectEqual(true, el.checkVisibility());
+    // Invariant from `StyleManager.zig:329-331`: checkVisibility() and
+    // `getComputedStyle().display === "none"` must agree.
+    testing.expectEqual(true, window.getComputedStyle(el).display !== "none");
+
+    el.remove();
+  }
+</script>
+
+<script id="author_class_display_none_alone_hides">
+  {
+    // Sanity baseline: class display:none alone still hides correctly.
+    const el = document.createElement("div");
+    el.className = "cv-author-none";
+    document.body.appendChild(el);
+
+    testing.expectEqual(false, el.checkVisibility());
+    testing.expectEqual("none", window.getComputedStyle(el).display);
+
+    el.remove();
+  }
+</script>
+
+<script id="author_class_display_none_with_hidden_attr_stays_hidden">
+  {
+    // Both author and UA say hide → still hidden (author wins, but agrees
+    // with UA).
+    const el = document.createElement("div");
+    el.className = "cv-author-none";
+    el.setAttribute("hidden", "");
+    document.body.appendChild(el);
+
+    testing.expectEqual(false, el.checkVisibility());
+    testing.expectEqual("none", window.getComputedStyle(el).display);
+
+    el.remove();
+  }
+</script>
+
+<script id="author_wildcard_overrides_hidden_attr">
+  {
+    // `*` lives in the `other_rules` bucket. Per CSS Cascade §6.1, any author
+    // rule for `display` — even a wildcard — beats UA origin regardless of
+    // specificity. The style is added dynamically and removed at teardown so
+    // the wildcard doesn't leak onto adjacent tests in the file.
+    const style = document.createElement("style");
+    style.textContent = "* { display: block; }";
+    document.head.appendChild(style);
+
+    const el = document.createElement("div");
+    el.setAttribute("hidden", "");
+    document.body.appendChild(el);
+
+    testing.expectEqual(true, el.checkVisibility());
+    testing.expectEqual(true, window.getComputedStyle(el).display !== "none");
+
+    el.remove();
+    style.remove();
+  }
+</script>
+
+<script id="no_author_rule_hidden_attr_still_hides">
+  {
+    // UA `[hidden]` fallback still applies when no author rule for `display`
+    // matched the element. After the fix the UA short-circuit runs AFTER
+    // the author rule walk, gated on `display_priority == 0`.
+    const el = document.createElement("div");
+    el.setAttribute("hidden", "");
+    document.body.appendChild(el);
+
+    testing.expectEqual(false, el.checkVisibility());
+    testing.expectEqual("none", window.getComputedStyle(el).display);
+
+    el.remove();
+  }
+</script>
+
+<script id="inline_display_with_hidden_attr_regression_guard">
+  {
+    // Inline `display` already wins via INLINE_PRIORITY and passed before
+    // the fix; regression guard so future refactors don't break the path.
+    const el = document.createElement("div");
+    el.setAttribute("hidden", "");
+    el.style.display = "flex";
+    document.body.appendChild(el);
+
+    testing.expectEqual(true, el.checkVisibility());
+    testing.expectEqual(true, window.getComputedStyle(el).display !== "none");
+
+    el.remove();
+  }
+</script>
+
 <script id="deep_nesting">
   {
     const levels = 5;
