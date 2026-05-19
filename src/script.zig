@@ -142,6 +142,9 @@ pub fn applyReplacements(
     try out.ensureTotalCapacity(allocator, total);
     var pos: usize = 0;
     for (replacements) |r| {
+        // Assert before the subtraction: a foreign-buffer span would wrap
+        // `r_start` to a huge value, silently producing UB in release.
+        std.debug.assert(@intFromPtr(r.original_span.ptr) >= content_base);
         const r_start = @intFromPtr(r.original_span.ptr) - content_base;
         const r_end = r_start + r.original_span.len;
         std.debug.assert(r_start >= pos and r_end <= content.len);
@@ -154,9 +157,10 @@ pub fn applyReplacements(
 }
 
 /// Atomically rewrite `dir`/`path` with `content` after `replacements` are
-/// applied. Writes a `.bak` of the original first, then uses Zig's
-/// `atomicFile` (write-to-temp + rename) for the live file. On failure the
-/// original is left intact.
+/// applied. Builds the new content first (so an OOM here doesn't clobber a
+/// prior `.bak`), then writes a fresh `.bak` of the original, then uses
+/// Zig's `atomicFile` (write-to-temp + rename) for the live file. On
+/// failure the original is left intact.
 pub fn writeAtomic(
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
@@ -164,12 +168,12 @@ pub fn writeAtomic(
     content: []const u8,
     replacements: []const Replacement,
 ) !void {
+    const new_content = try applyReplacements(allocator, content, replacements);
+    defer allocator.free(new_content);
+
     var bak_buf: [std.fs.max_path_bytes]u8 = undefined;
     const bak_path = try std.fmt.bufPrint(&bak_buf, "{s}.bak", .{path});
     try dir.writeFile(.{ .sub_path = bak_path, .data = content });
-
-    const new_content = try applyReplacements(allocator, content, replacements);
-    defer allocator.free(new_content);
 
     var write_buf: [4096]u8 = undefined;
     var af = try dir.atomicFile(path, .{ .write_buffer = &write_buf });

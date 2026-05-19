@@ -101,7 +101,12 @@ pub const Command = union(enum) {
             .click => |sel| try writer.print("CLICK {f}", .{quote(sel)}),
             .type_cmd => |args| try writer.print("TYPE {f} {f}", .{ quote(args.selector), quote(args.value) }),
             .wait => |sel| try writer.print("WAIT {f}", .{quote(sel)}),
-            .scroll => |args| try writer.print("SCROLL {d} {d}", .{ args.x, args.y }),
+            .scroll => |args| if (args.x == 0 and args.y == 0)
+                try writer.writeAll("SCROLL")
+            else if (args.x == 0)
+                try writer.print("SCROLL {d}", .{args.y})
+            else
+                try writer.print("SCROLL {d} {d}", .{ args.x, args.y }),
             .hover => |sel| try writer.print("HOVER {f}", .{quote(sel)}),
             .select => |args| try writer.print("SELECT {f} {f}", .{ quote(args.selector), quote(args.value) }),
             .check => |args| if (args.checked)
@@ -431,7 +436,8 @@ pub const ScriptIterator = struct {
             if (parts.items.len > 0) {
                 try parts.append(self.allocator, '\n');
             }
-            try parts.appendSlice(self.allocator, line);
+            // Strip trailing CR only — full trim would clobber EXTRACT/EVAL indentation.
+            try parts.appendSlice(self.allocator, std.mem.trimRight(u8, line, "\r"));
         }
         return null;
     }
@@ -847,6 +853,51 @@ test "parse SCROLL" {
             try std.testing.expect(cmd == .natural_language);
         }
     }
+}
+
+test "format SCROLL emits shortest round-tripping form" {
+    const cases = [_]struct { x: i32, y: i32, expected: []const u8 }{
+        .{ .x = 0, .y = 0, .expected = "SCROLL" },
+        .{ .x = 0, .y = 500, .expected = "SCROLL 500" },
+        .{ .x = 0, .y = -10, .expected = "SCROLL -10" },
+        .{ .x = 100, .y = 200, .expected = "SCROLL 100 200" },
+        // x != 0 with y == 0 still needs both axes — `SCROLL 100` would parse as y=100.
+        .{ .x = 100, .y = 0, .expected = "SCROLL 100 0" },
+    };
+    for (cases, 0..) |c, i| {
+        errdefer std.debug.print("failing case {d}: x={d} y={d}\n", .{ i, c.x, c.y });
+        const cmd: Command = .{ .scroll = .{ .x = c.x, .y = c.y } };
+
+        var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer aw.deinit();
+        try cmd.format(&aw.writer);
+        try std.testing.expectEqualStrings(c.expected, aw.written());
+
+        const round = parse(aw.written());
+        try std.testing.expectEqual(c.x, round.scroll.x);
+        try std.testing.expectEqual(c.y, round.scroll.y);
+    }
+}
+
+test "ScriptIterator strips trailing CR from CRLF-authored block bodies" {
+    const script = "GOTO https://x\r\nEXTRACT '''\r\n{\"t\":\"h1\"}\r\n'''\r\nCLICK '#x'\r\n";
+    var iter: ScriptIterator = .init(std.testing.allocator, script);
+
+    const e1 = (try iter.next()).?;
+    try std.testing.expect(e1.command == .goto);
+    try std.testing.expectEqualStrings("https://x", e1.command.goto);
+
+    const e2 = (try iter.next()).?;
+    try std.testing.expect(e2.command == .extract);
+    defer std.testing.allocator.free(e2.command.extract);
+    // No stray \r — body must parse as JSON.
+    try std.testing.expectEqualStrings("{\"t\":\"h1\"}", e2.command.extract);
+
+    const e3 = (try iter.next()).?;
+    try std.testing.expect(e3.command == .click);
+    try std.testing.expectEqualStrings("#x", e3.command.click);
+
+    try std.testing.expect((try iter.next()) == null);
 }
 
 test "parse HOVER" {

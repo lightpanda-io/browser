@@ -157,7 +157,7 @@ test "record writes state-mutating commands" {
     try std.testing.expect(std.mem.indexOf(u8, content, "GOTO https://example.com\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "CLICK 'Login'\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "WAIT '.dashboard'\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "SCROLL 0 200\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "SCROLL 200\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "HOVER '#menu'\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "SELECT '#country' 'France'\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "CHECK '#agree'\n") != null);
