@@ -19,6 +19,7 @@
 const std = @import("std");
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
+const dom = @import("dom.zig");
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
@@ -78,63 +79,38 @@ fn queryAXTree(cmd: *CDP.Command) !void {
         accessibleName: ?[]const u8 = null,
         role: ?[]const u8 = null,
     };
-    // Default-construct on missing params so we can return our specific
-    // "node identifier required" error rather than a generic InvalidParams.
-    const params = (try cmd.params(Params)) orelse Params{};
-
-    // objectId requires the JS inspector and an attached runtime — defer to a
-    // follow-up. Real clients (Capybara, Stagehand) usually have a nodeId from
-    // a prior DOM.querySelector/DOM.getDocument call.
-    if (params.objectId != null and params.nodeId == null and params.backendNodeId == null) {
-        return cmd.sendError(-32000, "Accessibility.queryAXTree by objectId is not yet supported; use nodeId or backendNodeId", .{});
-    }
-
-    const input_id = params.nodeId orelse params.backendNodeId orelse {
-        return cmd.sendError(-32000, "Either nodeId, backendNodeId or objectId must be specified", .{});
-    };
+    const params = (try cmd.params(Params)) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const node = bc.node_registry.lookup_by_id.get(input_id) orelse return error.NodeNotFound;
+    const node = try dom.getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
     const frame = bc.session.currentFrame() orelse return error.FrameNotLoaded;
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer frame.releaseArena(temp_arena);
 
-    return cmd.sendResult(.{ .nodes = try bc.axnodeQueryWriter(temp_arena, node, .{
-        .accessible_name = params.accessibleName,
-        .role = params.role,
+    return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{
+        .filter = .{
+            .accessible_name = params.accessibleName,
+            .role = params.role,
+        },
     }) }, .{});
 }
 
 const testing = @import("../testing.zig");
 
-test "cdp.accessibility: queryAXTree requires nodeId or backendNodeId" {
+test "cdp.accessibility: queryAXTree requires nodeId, backendNodeId or objectId" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_tree.html" });
 
-    // Pass filters but no node identifier — exercises the missing-id branch.
+    // Pass filters but no node identifier — dom.getNode returns MissingParams.
     try ctx.processMessage(.{
         .id = 1,
         .method = "Accessibility.queryAXTree",
         .params = .{ .role = "button" },
     });
-    try ctx.expectSentError(-32000, "Either nodeId, backendNodeId or objectId must be specified", .{ .id = 1 });
-}
-
-test "cdp.accessibility: queryAXTree with objectId only is not yet supported" {
-    var ctx = try testing.context();
-    defer ctx.deinit();
-
-    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_tree.html" });
-
-    try ctx.processMessage(.{
-        .id = 1,
-        .method = "Accessibility.queryAXTree",
-        .params = .{ .objectId = "OBJ-X" },
-    });
-    try ctx.expectSentError(-32000, "Accessibility.queryAXTree by objectId is not yet supported; use nodeId or backendNodeId", .{ .id = 1 });
+    try ctx.expectSentError(-31998, "MissingParams", .{ .id = 1 });
 }
 
 test "cdp.accessibility: queryAXTree with unknown nodeId returns error" {
