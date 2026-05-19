@@ -151,7 +151,7 @@ pub fn endTool(self: *Terminal, ok: bool) void {
 ///   gated on `medium`+. In non-TTY contexts ANSI is still emitted —
 ///   pipes that strip color see plain text via the bullet character.
 pub fn agentToolDone(self: *Terminal, name: []const u8, args: []const u8, ok: bool) void {
-    const spinner_on = self.spinner.enabled.load(.monotonic);
+    const spinner_on = self.spinner.isEnabled();
     if (spinner_on and !ok) self.spinner.markToolFailed();
     if (!atLeast(self.verbosity, .medium)) return;
 

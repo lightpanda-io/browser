@@ -22,7 +22,7 @@ const browser_tools = lp.tools;
 const Command = @import("Command.zig");
 const CDPNode = @import("../cdp/Node.zig");
 
-const Self = @This();
+const Verifier = @This();
 
 session: *lp.Session,
 node_registry: *CDPNode.Registry,
@@ -33,9 +33,8 @@ pub const VerifyResult = union(enum) {
     inconclusive,
 };
 
-/// Closed set of element properties the verifier can probe. Keeps the JS
-/// template injection-free (no caller-supplied expression text) and
-/// guarantees each variant produces a valid `el`-rooted JS expression.
+/// Closed set of element properties the verifier can probe — keeps the JS
+/// template injection-free (no caller-supplied expression text).
 const ElementProperty = enum {
     value,
     checked_string,
@@ -48,17 +47,14 @@ const ElementProperty = enum {
     }
 };
 
-/// Static fallback used when allocPrint OOMs while formatting the reason —
-/// keeps `VerifyResult.failed` non-optional so callers don't have to
-/// distinguish "no reason" from "OOM" (which they uniformly couldn't
-/// recover from anyway).
+/// Fallback when allocPrint OOMs — lets `VerifyResult.failed` stay non-optional.
 const failed_reason_oom = "verification failed (out of memory while formatting reason)";
 
 /// Verify that a command achieved its intent after execution. Only called
 /// when the command did not hard-fail (ExecResult.failed == false).
 /// Commands without a dedicated verifier return `.inconclusive` so callers
 /// can distinguish "no verification available" from "explicitly verified".
-pub fn verify(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) VerifyResult {
+pub fn verify(self: *Verifier, arena: std.mem.Allocator, cmd: Command.Command) VerifyResult {
     return switch (cmd) {
         .type_cmd => |args| self.verifyFill(arena, args.selector, args.value),
         .check => |args| self.verifyCheck(arena, args.selector, args.checked),
@@ -67,7 +63,7 @@ pub fn verify(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) Verif
     };
 }
 
-fn verifyFill(self: *Self, arena: std.mem.Allocator, selector: []const u8, expected_value: []const u8) VerifyResult {
+fn verifyFill(self: *Verifier, arena: std.mem.Allocator, selector: []const u8, expected_value: []const u8) VerifyResult {
     // Secret env-var references can't be compared literally — just
     // verify the field isn't empty after substitution.
     if (std.mem.indexOf(u8, expected_value, "$LP_") != null) {
@@ -79,12 +75,12 @@ fn verifyFill(self: *Self, arena: std.mem.Allocator, selector: []const u8, expec
     return self.verifyElementValue(arena, selector, .{ .property = .value, .expected = expected_value, .label = "value" });
 }
 
-fn verifyCheck(self: *Self, arena: std.mem.Allocator, selector: []const u8, expected: bool) VerifyResult {
+fn verifyCheck(self: *Verifier, arena: std.mem.Allocator, selector: []const u8, expected: bool) VerifyResult {
     const expected_str: []const u8 = if (expected) "true" else "false";
     return self.verifyElementValue(arena, selector, .{ .property = .checked_string, .expected = expected_str, .label = "checked state" });
 }
 
-fn verifySelect(self: *Self, arena: std.mem.Allocator, selector: []const u8, expected_value: []const u8) VerifyResult {
+fn verifySelect(self: *Verifier, arena: std.mem.Allocator, selector: []const u8, expected_value: []const u8) VerifyResult {
     return self.verifyElementValue(arena, selector, .{ .property = .value, .expected = expected_value, .label = "selected value" });
 }
 
@@ -94,7 +90,7 @@ const Check = struct {
     label: []const u8,
 };
 
-fn verifyElementValue(self: *Self, arena: std.mem.Allocator, selector: []const u8, check: Check) VerifyResult {
+fn verifyElementValue(self: *Verifier, arena: std.mem.Allocator, selector: []const u8, check: Check) VerifyResult {
     const actual = self.queryElementProperty(arena, selector, check.property) orelse return .inconclusive;
     if (!std.mem.eql(u8, actual, check.expected)) {
         const msg = std.fmt.allocPrint(arena, "element {s} is \"{s}\" (expected \"{s}\")", .{ check.label, actual, check.expected }) catch failed_reason_oom;
@@ -103,7 +99,7 @@ fn verifyElementValue(self: *Self, arena: std.mem.Allocator, selector: []const u
     return .passed;
 }
 
-fn queryElementProperty(self: *Self, arena: std.mem.Allocator, selector: []const u8, property: ElementProperty) ?[]const u8 {
+fn queryElementProperty(self: *Verifier, arena: std.mem.Allocator, selector: []const u8, property: ElementProperty) ?[]const u8 {
     const selector_json = std.json.Stringify.valueAlloc(arena, selector, .{}) catch return null;
     const script = std.fmt.allocPrint(
         arena,

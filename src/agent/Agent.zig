@@ -1194,7 +1194,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     const self: *Agent = @ptrCast(@alignCast(ctx));
     // The spinner doesn't render args, and `agentToolDone` skips the body
     // line at low verbosity — don't pay for the stringify when nobody reads it.
-    const needs_args = self.terminal.spinner.enabled.load(.monotonic) or self.terminal.verbosity != .low;
+    const needs_args = self.terminal.spinner.isEnabled() or self.terminal.verbosity != .low;
     const args_str: []const u8 = if (needs_args) (if (arguments) |v|
         std.json.Stringify.valueAlloc(allocator, v, .{}) catch ""
     else
@@ -1374,10 +1374,8 @@ fn pickModel(
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
 
-    // Known limitation: this runs before `SigBridge.attach`, so a Ctrl-C
-    // pressed during the model listing is dropped silently. The HTTP call
-    // is synchronous and uninterruptible; press Ctrl-C again at the picker
-    // prompt (which surfaces it as `error.UserCancelled` via stdin EINTR).
+    // Runs before `SigBridge.attach` — Ctrl-C during the synchronous HTTP
+    // fetch is dropped; the picker prompt catches the next press via stdin EINTR.
     std.debug.print("Fetching models for {s}…\n", .{@tagName(provider)});
     const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), provider, api_key, base_url) catch |err| {
         log.fatal(.app, "list models failed", .{ .err = @errorName(err) });

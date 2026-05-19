@@ -22,7 +22,7 @@ const log = lp.log;
 const testing = @import("../testing.zig");
 const Command = @import("Command.zig");
 
-const Self = @This();
+const Recorder = @This();
 
 allocator: std.mem.Allocator,
 /// Open append-mode handle while recording is active. Becomes null when a
@@ -38,7 +38,7 @@ lines: u32,
 buf: std.Io.Writer.Allocating,
 
 /// Append-open `path`, inserting a leading newline if the file is non-empty.
-pub fn init(allocator: std.mem.Allocator, path: []const u8) !Self {
+pub fn init(allocator: std.mem.Allocator, path: []const u8) !Recorder {
     const owned_path = try allocator.dupe(u8, path);
     errdefer allocator.free(owned_path);
     const file = try openForAppend(path);
@@ -60,23 +60,23 @@ fn openForAppend(path: []const u8) !std.fs.File {
     return f;
 }
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Recorder) void {
     self.buf.deinit();
     if (self.file) |f| f.close();
     self.allocator.free(self.path);
 }
 
-pub fn isActive(self: *const Self) bool {
+pub fn isActive(self: *const Recorder) bool {
     return self.file != null;
 }
 
-pub fn record(self: *Self, cmd: Command.Command) void {
+pub fn record(self: *Recorder, cmd: Command.Command) void {
     if (self.file == null) return;
     if (!cmd.isRecorded()) return;
     self.tryRecord(cmd) catch |err| self.disable(err);
 }
 
-fn tryRecord(self: *Self, cmd: Command.Command) !void {
+fn tryRecord(self: *Recorder, cmd: Command.Command) !void {
     self.buf.clearRetainingCapacity();
     try cmd.format(&self.buf.writer);
     try self.buf.writer.writeByte('\n');
@@ -92,12 +92,12 @@ fn tryRecord(self: *Self, cmd: Command.Command) !void {
     self.lines += 1;
 }
 
-pub fn recordComment(self: *Self, comment: []const u8) void {
+pub fn recordComment(self: *Recorder, comment: []const u8) void {
     if (self.file == null) return;
     self.tryRecordComment(comment) catch |err| self.disable(err);
 }
 
-fn tryRecordComment(self: *Self, comment: []const u8) !void {
+fn tryRecordComment(self: *Recorder, comment: []const u8) !void {
     self.buf.clearRetainingCapacity();
     // Embedded newlines would smuggle an executable line into the script on
     // replay (e.g. `# foo\nGOTO https://attacker`). Emit each line of the
@@ -115,10 +115,8 @@ fn tryRecordComment(self: *Self, comment: []const u8) !void {
 
 /// Any failure along the record path — buffer-write OOM, scrub OOM, or file
 /// write — flips the recorder to inactive so subsequent calls become silent
-/// no-ops and `isActive()` reflects the stopped state. Previously a buffer
-/// failure would `catch return` while leaving the file open and `isActive()`
-/// true, silently dropping the line.
-fn disable(self: *Self, err: anyerror) void {
+/// no-ops and `isActive()` reflects the stopped state.
+fn disable(self: *Recorder, err: anyerror) void {
     log.warn(.app, "recording disabled", .{ .err = @errorName(err) });
     if (self.file) |f| {
         f.close();
@@ -132,7 +130,7 @@ test "record writes state-mutating commands" {
 
     const file = tmp.dir.createFile("test.lp", .{ .read = true }) catch unreachable;
 
-    var recorder: Self = .{
+    var recorder: Recorder = .{
         .allocator = std.testing.allocator,
         .file = file,
         .path = try std.testing.allocator.dupe(u8, "test.lp"),
@@ -180,7 +178,7 @@ test "record skips empty and comment lines" {
 
     const file = tmp.dir.createFile("test2.lp", .{ .read = true }) catch unreachable;
 
-    var recorder: Self = .{
+    var recorder: Recorder = .{
         .allocator = std.testing.allocator,
         .file = file,
         .path = try std.testing.allocator.dupe(u8, "test.lp"),
@@ -208,7 +206,7 @@ test "lines counter tracks successful appends" {
 
     const file = tmp.dir.createFile("count.lp", .{ .read = true }) catch unreachable;
 
-    var recorder: Self = .{
+    var recorder: Recorder = .{
         .allocator = std.testing.allocator,
         .file = file,
         .path = try std.testing.allocator.dupe(u8, "test.lp"),
@@ -240,7 +238,7 @@ test "init appends to an existing file without truncating" {
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_path = tmp.dir.realpath("script.lp", &path_buf) catch unreachable;
 
-    var recorder: Self = try .init(std.testing.allocator, abs_path);
+    var recorder: Recorder = try .init(std.testing.allocator, abs_path);
     defer recorder.deinit();
     recorder.record(Command.parse("CLICK 'Login'"));
 
@@ -267,7 +265,7 @@ test "recordComment splits embedded newlines into separate comment lines" {
     defer tmp.cleanup();
 
     const file = tmp.dir.createFile("multi.lp", .{ .read = true }) catch unreachable;
-    var recorder: Self = .{
+    var recorder: Recorder = .{
         .allocator = std.testing.allocator,
         .file = file,
         .path = try std.testing.allocator.dupe(u8, "test.lp"),
@@ -302,7 +300,7 @@ test "record disables recorder on write failure" {
         break :blk tmp.dir.openFile("ro.lp", .{ .mode = .read_only }) catch unreachable;
     };
 
-    var recorder: Self = .{
+    var recorder: Recorder = .{
         .allocator = std.testing.allocator,
         .file = file,
         .path = try std.testing.allocator.dupe(u8, "test.lp"),
@@ -331,7 +329,7 @@ test "init creates the file if missing" {
     var full_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_path = std.fmt.bufPrint(&full_buf, "{s}/fresh.lp", .{dir_path}) catch unreachable;
 
-    var recorder: Self = try .init(std.testing.allocator, abs_path);
+    var recorder: Recorder = try .init(std.testing.allocator, abs_path);
     defer recorder.deinit();
     recorder.record(Command.parse("GOTO https://example.com"));
 

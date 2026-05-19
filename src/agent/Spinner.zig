@@ -57,9 +57,8 @@ const State = union(enum) {
     tool: ToolState,
 };
 
-/// Atomic so the agent-thread fast-paths (`if (!self.enabled.load(...))`) and
-/// the under-lock write in `ensureWorkerLocked` don't race if a future caller
-/// touches the spinner from a non-agent thread.
+/// Atomic so the unlocked fast-path reads (`isEnabled`) don't race the
+/// under-lock write in `ensureWorkerLocked`.
 enabled: std.atomic.Value(bool),
 
 mu: std.Thread.Mutex = .{},
@@ -80,6 +79,10 @@ pub fn init(is_repl: bool, stderr_is_tty: bool) Spinner {
     return .{ .enabled = .init(is_repl and stderr_is_tty) };
 }
 
+pub inline fn isEnabled(self: *const Spinner) bool {
+    return self.enabled.load(.monotonic);
+}
+
 pub fn deinit(self: *Spinner) void {
     if (self.thread) |t| {
         self.mu.lock();
@@ -93,7 +96,7 @@ pub fn deinit(self: *Spinner) void {
 
 /// Begin a new agent turn. Spawns the worker thread on first call.
 pub fn start(self: *Spinner) void {
-    if (!self.enabled.load(.monotonic)) return;
+    if (!self.isEnabled()) return;
     self.mu.lock();
     defer self.mu.unlock();
     self.state = .thinking;
@@ -119,7 +122,7 @@ fn ensureWorkerLocked(self: *Spinner) void {
 /// End an agent turn cleanly: clear the indicator, commit a one-line summary,
 /// reset state. Called from a `defer` in the agent code so it always runs.
 pub fn stop(self: *Spinner) void {
-    if (!self.enabled.load(.monotonic)) return;
+    if (!self.isEnabled()) return;
     self.mu.lock();
     defer self.mu.unlock();
     if (self.state == .idle) return;
@@ -141,7 +144,7 @@ pub fn stop(self: *Spinner) void {
 /// End a turn with no commit. The caller is responsible for surfacing the
 /// outcome — tool results, error messages, or summaries.
 pub fn cancel(self: *Spinner) void {
-    if (!self.enabled.load(.monotonic)) return;
+    if (!self.isEnabled()) return;
     self.mu.lock();
     defer self.mu.unlock();
     if (self.state == .idle) return;
@@ -155,7 +158,7 @@ pub fn cancel(self: *Spinner) void {
 /// without a preceding `start()` (state `.idle`) the label drops the `agent:`
 /// prefix — that path is for user-typed REPL commands, not LLM tool calls.
 pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
-    if (!self.enabled.load(.monotonic)) return;
+    if (!self.isEnabled()) return;
     self.mu.lock();
     defer self.mu.unlock();
     const manual = self.state == .idle;
@@ -178,7 +181,7 @@ pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
 /// for the rest of the dwell window (`min_tool_display_ns`), then the
 /// indicator returns to thinking like any other call.
 pub fn markToolFailed(self: *Spinner) void {
-    if (!self.enabled.load(.monotonic)) return;
+    if (!self.isEnabled()) return;
     self.mu.lock();
     defer self.mu.unlock();
     switch (self.state) {
@@ -194,7 +197,7 @@ pub fn markToolFailed(self: *Spinner) void {
 /// honors `min_tool_display_ns` — if the current tool label has not been
 /// up long enough, the flip is deferred until it has.
 pub fn setThinking(self: *Spinner) void {
-    if (!self.enabled.load(.monotonic)) return;
+    if (!self.isEnabled()) return;
     self.mu.lock();
     defer self.mu.unlock();
     switch (self.state) {
@@ -208,7 +211,7 @@ pub fn setThinking(self: *Spinner) void {
 /// Print `text` (assumed to include its own newline) above the indicator,
 /// then leave the indicator to repaint itself on the next tick.
 pub fn emitAbove(self: *Spinner, text: []const u8) bool {
-    if (!self.enabled.load(.monotonic)) return false;
+    if (!self.isEnabled()) return false;
     self.mu.lock();
     defer self.mu.unlock();
     if (self.state == .idle) return false;
