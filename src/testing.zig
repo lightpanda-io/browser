@@ -761,6 +761,13 @@ pub const LogFilter = struct {
 
     /// Restores the log filters to their previous state.
     pub fn deinit(self: LogFilter) void {
+        // Worker threads read log.opts.filter_scopes inside log.enabled,
+        // so we must wait for any in-flight workers to drain before
+        // writing it — otherwise we race the worker's load on its
+        // teardown log line.
+        if (test_cdp_server) |server| {
+            server.waitIdle();
+        }
         log.opts.filter_scopes = self.old_filter;
     }
 };

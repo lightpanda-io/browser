@@ -80,6 +80,18 @@ pub fn shutdown(self: *Server) void {
     }
 }
 
+// Wait for all in-flight workers to drain. Useful for tests that
+// mutate process-global state (e.g. log filters) and need to ensure
+// no worker thread is reading that state before mutating it.
+pub fn waitIdle(self: *Server) void {
+    if (@import("builtin").is_test == false) {
+        @compileError("waitIdle is only meant to be called in tests");
+    }
+    while (self.active_threads.load(.monotonic) > 0) {
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+}
+
 pub fn deinit(self: *Server) void {
     self.shutdown();
 
