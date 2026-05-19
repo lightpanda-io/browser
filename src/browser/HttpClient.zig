@@ -68,10 +68,14 @@ pub const Client = @This();
 // Our curl multi handle. Owns in_use/http_active/ws_active — see Network.Handle.
 handle: Network.Handle,
 
-// WebSockets with queued events to be drained from the worker thread.
-// Populated by libcurl callbacks (currently same thread, future cross-thread).
-ws_ready: std.ArrayList(*WebSocket) = .{},
-ws_ready_mutex: std.Thread.Mutex = .{},
+// WebSocket cross-thread queues. Inbound events mirror the completion queue:
+// producers append under a short lock and wake the Handle pipe; the browser
+// thread drains into a local list before dispatching JS events. Outbound
+// commands are produced by the browser thread and consumed by libcurl read
+// callbacks on the network side.
+ws_event_queue: std.DoublyLinkedList = .{},
+ws_command_queue: std.DoublyLinkedList = .{},
+ws_queue_mutex: std.Thread.Mutex = .{},
 
 // Use to generate the next request ID
 next_request_id: u32 = 0,
@@ -231,10 +235,16 @@ pub fn deinit(self: *Client) void {
         std.debug.assert(self.transfers.size == 0);
         std.debug.assert(self.queue.first == null);
     }
+    if (self.transfers.size != 0) {
+        log.err(.http, "deinit with active transfers", .{
+            .count = self.transfers.size,
+        });
+        unreachable;
+    }
 
     self.handle.deinit();
 
-    self.ws_ready.deinit(self.allocator);
+    self.clearWebSocketQueues();
     self.clearUserAgentOverride();
 
     self.robots_layer.deinit(self.allocator);
@@ -366,6 +376,12 @@ pub fn abort(self: *Client) void {
 
     for (snapshot.items) |t| {
         t.kill();
+    }
+
+    // Queued transfers deinit synchronously, and in-flight transfers
+    // complete through Handle completions after submitRemove.
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.queue.first == null);
     }
 }
 
@@ -890,24 +906,107 @@ fn processMessages(self: *Client) !bool {
     return processed;
 }
 
-// Called from WebSocket libcurl callbacks (currently same worker thread, but
-// the API is mutex-protected so it stays correct if libcurl moves off-thread).
-pub fn addReadyWs(self: *Client, ws: *WebSocket) void {
-    self.ws_ready_mutex.lock();
-    defer self.ws_ready_mutex.unlock();
-    self.ws_ready.append(self.allocator, ws) catch {};
+pub fn addWebSocketEvent(self: *Client, ws: *WebSocket, data: WebSocket.EventData) void {
+    const event = self.allocator.create(WebSocket.QueuedEvent) catch {
+        data.deinit(self.allocator);
+        return;
+    };
+    event.* = .{
+        .ws = ws,
+        .data = data,
+    };
+    ws.acquireRef();
+    {
+        self.ws_queue_mutex.lock();
+        defer self.ws_queue_mutex.unlock();
+        self.ws_event_queue.append(&event.node);
+    }
+    self.handle.wake();
+}
+
+pub fn addWebSocketCommand(self: *Client, ws: *WebSocket, data: WebSocket.CommandData) !void {
+    const command = try self.allocator.create(WebSocket.QueuedCommand);
+    command.* = .{
+        .ws = ws,
+        .data = data,
+    };
+    {
+        self.ws_queue_mutex.lock();
+        defer self.ws_queue_mutex.unlock();
+        self.ws_command_queue.append(&command.node);
+    }
+    if (ws._conn) |conn| {
+        self.handle.submitUnpause(conn);
+    }
+}
+
+pub fn drainWebSocketCommandsLocked(
+    self: *Client,
+    ws: *WebSocket,
+    send_queue: *std.ArrayList(WebSocket.CommandData),
+    arena: Allocator,
+) !void {
+    var maybe_node = self.ws_command_queue.first;
+    while (maybe_node) |node| {
+        const next = node.next;
+        const command: *WebSocket.QueuedCommand = @fieldParentPtr("node", node);
+        if (command.ws == ws) {
+            try send_queue.append(arena, command.data);
+            self.ws_command_queue.remove(node);
+            self.allocator.destroy(command);
+        }
+        maybe_node = next;
+    }
+}
+
+pub fn clearWebSocketCommandsLocked(self: *Client, ws: *WebSocket) void {
+    var maybe_node = self.ws_command_queue.first;
+    while (maybe_node) |node| {
+        const next = node.next;
+        const command: *WebSocket.QueuedCommand = @fieldParentPtr("node", node);
+        if (command.ws == ws) {
+            self.ws_command_queue.remove(node);
+            command.data.deinit(ws._arena_pool);
+            self.allocator.destroy(command);
+        }
+        maybe_node = next;
+    }
 }
 
 pub fn drainReadyWs(self: *Client) void {
-    self.ws_ready_mutex.lock();
-    const items = self.ws_ready.toOwnedSlice(self.allocator) catch {
-        self.ws_ready_mutex.unlock();
-        return;
-    };
-    self.ws_ready_mutex.unlock();
-    defer self.allocator.free(items);
-    for (items) |ws| {
-        ws.drainPending();
+    var events: std.DoublyLinkedList = .{};
+    {
+        self.ws_queue_mutex.lock();
+        defer self.ws_queue_mutex.unlock();
+        while (self.ws_event_queue.popFirst()) |node| {
+            events.append(node);
+        }
+    }
+
+    while (events.popFirst()) |node| {
+        const event: *WebSocket.QueuedEvent = @fieldParentPtr("node", node);
+        defer {
+            event.data.deinit(self.allocator);
+            event.ws.releaseRef(event.ws._frame._page);
+            self.allocator.destroy(event);
+        }
+        event.ws.drainEvent(event.data);
+    }
+}
+
+fn clearWebSocketQueues(self: *Client) void {
+    self.ws_queue_mutex.lock();
+    defer self.ws_queue_mutex.unlock();
+    while (self.ws_event_queue.popFirst()) |node| {
+        const event: *WebSocket.QueuedEvent = @fieldParentPtr("node", node);
+        event.data.deinit(self.allocator);
+        event.ws.releaseRef(event.ws._frame._page);
+        self.allocator.destroy(event);
+    }
+    while (self.ws_command_queue.popFirst()) |node| {
+        const command: *WebSocket.QueuedCommand = @fieldParentPtr("node", node);
+        command.data.deinit(command.ws._arena_pool);
+        self.allocator.destroy(command);
     }
 }
 
