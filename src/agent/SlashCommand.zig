@@ -369,11 +369,11 @@ fn lookupFieldType(schema: *const SchemaInfo, key: []const u8) FieldType {
 const testing = std.testing;
 
 const ParsedTest = struct {
-    schema: *const SchemaInfo,
+    tool_name: []const u8,
     args_json: []const u8,
 };
 
-fn parseWithCache(arena: std.mem.Allocator, input: []const u8) !ParsedTest {
+fn parse(arena: std.mem.Allocator, input: []const u8) !ParsedTest {
     const tools = try arena.alloc(zenai.provider.Tool, browser_tools.tool_defs.len);
     for (browser_tools.tool_defs, 0..) |td, i| {
         tools[i] = .{
@@ -385,21 +385,21 @@ fn parseWithCache(arena: std.mem.Allocator, input: []const u8) !ParsedTest {
     const schemas = try buildSchemas(arena, tools);
     const split = splitNameRest(input) orelse return error.MissingName;
     const schema = findSchema(schemas, split.name) orelse return error.UnknownTool;
-    return .{ .schema = schema, .args_json = try parseArgs(arena, schema, split.rest) };
+    return .{ .tool_name = schema.tool_name, .args_json = try parseArgs(arena, schema, split.rest) };
 }
 
 fn expectParse(input: []const u8, expected_tool: []const u8, expected_json: []const u8) !void {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const r = try parseWithCache(arena.allocator(), input);
-    try testing.expectEqualStrings(expected_tool, r.schema.tool_name);
+    const r = try parse(arena.allocator(), input);
+    try testing.expectEqualStrings(expected_tool, r.tool_name);
     try testing.expectEqualStrings(expected_json, r.args_json);
 }
 
 fn expectParseError(comptime expected: anyerror, input: []const u8) !void {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    try testing.expectError(expected, parseWithCache(arena.allocator(), input));
+    try testing.expectError(expected, parse(arena.allocator(), input));
 }
 
 test "parse zero-arg tool" {
