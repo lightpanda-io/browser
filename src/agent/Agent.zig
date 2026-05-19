@@ -1292,7 +1292,7 @@ fn defaultModel(p: Config.AiProvider) []const u8 {
     return switch (p) {
         .anthropic => "claude-sonnet-4-6",
         .openai => "gpt-5.5",
-        .gemini => "gemini-3-flash-preview",
+        .gemini => "gemini-3.5-flash",
         .ollama => "gemma4",
     };
 }
