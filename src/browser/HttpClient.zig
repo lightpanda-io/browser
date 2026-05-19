@@ -673,7 +673,7 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
     // and re-evaluate. Otherwise we'd sleep on cdp_link_active for up
     // to timeout_ms while pending JS work sits idle.
     if (try self.processMessages()) {
-      return;
+        return;
     }
 
     // Poll for HTTP I/O. The Network thread will call curl_multi_wakeup
