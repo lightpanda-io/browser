@@ -1580,6 +1580,12 @@ test "URL: getHost" {
     try testing.expectEqualSlices(u8, "evil.example.com", getHost("http://evil.example.com/@victim.example.com/"));
     try testing.expectEqualSlices(u8, "evil.example.com", getHost("https://evil.example.com/path/@victim.example.com"));
 
+    try testing.expectEqual("evil.example.com:8521", getHost("http://evil.example.com:8521\x00@victim.example.com:8520/"));
+    try testing.expectEqual("evil.example.com", getHost("http://evil.example.com\x00@victim.example.com/"));
+    try testing.expectEqual("evil.example.com", getHost("http://evil.example.com\r@victim.example.com/"));
+    try testing.expectEqual("evil.example.com", getHost("http://evil.example.com\n@victim.example.com/"));
+    try testing.expectEqual("evil.example.com", getHost("http://evil.example.com\t@victim.example.com/"));
+
     // IPv6 addresses
     try testing.expectEqualSlices(u8, "[::1]:8080", getHost("http://[::1]:8080/path"));
     try testing.expectEqualSlices(u8, "[::1]", getHost("http://[::1]/path"));
@@ -1669,6 +1675,17 @@ test "URL: getOrigin" {
         .{ .url = "http://evil.example.com/@victim.example.com/", .expected = "http://evil.example.com" },
         .{ .url = "https://evil.example.com/path/@victim.example.com/steal", .expected = "https://evil.example.com" },
         .{ .url = "http://evil.example.com/@victim.example.com:443/", .expected = "http://evil.example.com" },
+
+        // SECURITY: Null byte injection.
+        .{ .url = "http://attacker:8521\x00@victim:8520/", .expected = "http://attacker:8521" },
+        .{ .url = "http://attacker.com\x00@victim.com/", .expected = "http://attacker.com" },
+        .{ .url = "http://attacker.com/\x00@victim.com/", .expected = "http://attacker.com" },
+
+        // SECURITY: CR / LF / TAB are stripped by the WHATWG URL parser, so a
+        // userinfo "@" hidden behind one must not change the origin here either.
+        .{ .url = "http://attacker.com\r@victim.com/", .expected = "http://attacker.com" },
+        .{ .url = "http://attacker.com\n@victim.com/", .expected = "http://attacker.com" },
+        .{ .url = "http://attacker.com\t@victim.com/", .expected = "http://attacker.com" },
 
         // @ in query/fragment must also not affect origin
         .{ .url = "https://example.com/path?user=foo@bar.com", .expected = "https://example.com" },
