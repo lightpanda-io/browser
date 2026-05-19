@@ -257,7 +257,12 @@ _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
 _http_status: ?u16 = null,
-_http_headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
+_http_headers: std.ArrayListUnmanaged(HttpHeader) = .empty,
+
+pub const HttpHeader = struct {
+    name: []const u8,
+    value: []const u8,
+};
 
 pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
     if (comptime IS_DEBUG) {
@@ -452,14 +457,14 @@ pub fn getTitle(self: *Frame) !?[]const u8 {
 pub const HttpMetadata = struct {
     url: [:0]const u8,
     status: ?u16,
-    headers: std.StringArrayHashMapUnmanaged([]const u8),
+    headers: []const HttpHeader,
 };
 
 pub fn httpMetadata(self: *const Frame) HttpMetadata {
     return .{
         .url = self.url,
         .status = self._http_status,
-        .headers = self._http_headers,
+        .headers = self._http_headers.items,
     };
 }
 
@@ -1043,9 +1048,10 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
     self._http_status = response.status();
     var it = response.headerIterator();
     while (it.next()) |hdr| {
-        const name = try self.arena.dupe(u8, hdr.name);
-        const value = try self.arena.dupe(u8, hdr.value);
-        try self._http_headers.put(self.arena, name, value);
+        try self._http_headers.append(self.arena, .{
+            .name = try self.arena.dupe(u8, hdr.name),
+            .value = try self.arena.dupe(u8, hdr.value),
+        });
     }
 
     if (self._navigated_options) |no| {
@@ -4183,7 +4189,7 @@ test "Frame: httpMetadata after navigation" {
     const meta = frame.httpMetadata();
     try testing.expect(meta.status != null);
     try std.testing.expectEqual(@as(u16, 200), meta.status.?);
-    try testing.expect(meta.headers.count() > 0);
+    try testing.expect(meta.headers.len > 0);
     try testing.expect(meta.url.len > 0);
 }
 

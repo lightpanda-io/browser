@@ -208,49 +208,24 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
     }
 }
 
-fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, body: []const u8) !void {
+const JsonEnvelope = struct {
+    url: []const u8,
+    http_status: u16,
+    headers: []const Frame.HttpHeader,
+    dump: []const u8,
+    content: []const u8,
+};
+
+fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, content: []const u8) !void {
     const meta: ?Frame.HttpMetadata = if (frame) |f| f.httpMetadata() else null;
-
-    try writer.writeAll("{\"url\":");
-    try writeJsonString(writer, if (meta) |m| m.url else "");
-
-    try writer.writeAll(",\"http_status\":");
-    if (meta) |m| {
-        if (m.status) |status| {
-            try writer.print("{d}", .{status});
-        } else {
-            try writer.writeAll("0");
-        }
-    } else {
-        try writer.writeAll("0");
-    }
-
-    try writer.writeAll(",\"headers\":{");
-    if (meta) |m| {
-        var first = true;
-        for (m.headers.keys(), m.headers.values()) |name, value| {
-            if (!first) try writer.writeAll(",");
-            first = false;
-            try writeJsonString(writer, name);
-            try writer.writeAll(":");
-            try writeJsonString(writer, value);
-        }
-    }
-    try writer.writeAll("}");
-
-    try writer.writeAll(",\"dump\":");
-    try writeJsonString(writer, if (dump_mode) |mode| @tagName(mode) else "");
-
-    try writer.writeAll(",\"body\":");
-    try writeJsonString(writer, body);
-
-    try writer.writeAll("}\n");
-}
-
-fn writeJsonString(writer: *std.Io.Writer, s: []const u8) !void {
-    try writer.writeByte('"');
-    try std.json.Stringify.encodeJsonStringChars(s, .{}, writer);
-    try writer.writeByte('"');
+    try std.json.Stringify.value(JsonEnvelope{
+        .url = if (meta) |m| m.url else "",
+        .http_status = if (meta) |m| m.status orelse 0 else 0,
+        .headers = if (meta) |m| m.headers else &.{},
+        .dump = if (dump_mode) |mode| @tagName(mode) else "",
+        .content = content,
+    }, .{}, writer);
+    try writer.writeByte('\n');
 }
 
 fn dumpWPT(frame: *Frame, writer: *std.Io.Writer) !void {
@@ -347,51 +322,43 @@ pub fn RC(comptime T: type) type {
     };
 }
 
-test "writeJsonString: simple string" {
-    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer aw.deinit();
-    try writeJsonString(&aw.writer, "hello");
-    try std.testing.expectEqualStrings("\"hello\"", aw.written());
-}
-
-test "writeJsonString: escapes special chars" {
-    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer aw.deinit();
-    try writeJsonString(&aw.writer, "line1\nline2\ttab\"quote");
-    const result = aw.written();
-    try std.testing.expect(result[0] == '"');
-    try std.testing.expect(result[result.len - 1] == '"');
-    try std.testing.expect(std.mem.indexOf(u8, result, "\\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\\t") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\\\"") != null);
-}
-
-test "writeJsonString: empty string" {
-    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer aw.deinit();
-    try writeJsonString(&aw.writer, "");
-    try std.testing.expectEqualStrings("\"\"", aw.written());
-}
-
 test "writeJsonEnvelope: null frame" {
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
     try writeJsonEnvelope(&aw.writer, null, null, "");
     const result = aw.written();
-    try std.testing.expect(std.mem.startsWith(u8, result, "{\"url\":\"\""));
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"url\":\"\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"http_status\":0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"headers\":{}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"headers\":[]") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"dump\":\"\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"body\":\"\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"content\":\"\"") != null);
 }
 
-test "writeJsonEnvelope: null frame with dump mode and body" {
+test "writeJsonEnvelope: null frame with dump mode and content" {
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
     try writeJsonEnvelope(&aw.writer, null, .html, "<html><body>hello</body></html>");
     const result = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, result, "\"dump\":\"html\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"body\":\"<html><body>hello</body></html>\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"content\":\"<html><body>hello</body></html>\"") != null);
+}
+
+test "JsonEnvelope: repeated headers are preserved" {
+    const headers = [_]Frame.HttpHeader{
+        .{ .name = "set-cookie", .value = "a=1" },
+        .{ .name = "set-cookie", .value = "b=2" },
+    };
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try std.json.Stringify.value(JsonEnvelope{
+        .url = "https://example.com",
+        .http_status = 200,
+        .headers = &headers,
+        .dump = "",
+        .content = "",
+    }, .{}, &aw.writer);
+    const result = aw.written();
+    try std.testing.expectEqual(2, std.mem.count(u8, result, "set-cookie"));
 }
 
 test {
