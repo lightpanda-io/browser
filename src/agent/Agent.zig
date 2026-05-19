@@ -834,10 +834,11 @@ fn pruneMessages(self: *Agent) void {
 /// Self-heal must only patch the current page; navigation and arbitrary
 /// scripting are blocked even if the model emits them via `goto` / `eval`.
 /// docs/agent.md guarantees "no navigation away from the current page".
+/// Exhaustive on purpose: adding a `Command` variant must force a decision here.
 fn isHealAllowed(cmd: Command.Command) bool {
     return switch (cmd) {
-        .goto, .eval_js => false,
-        else => true,
+        .click, .hover, .wait, .type_cmd, .select, .check, .scroll, .extract => true,
+        .goto, .eval_js, .tree, .markdown, .login, .accept_cookies, .comment, .natural_language => false,
     };
 }
 
@@ -1447,10 +1448,7 @@ fn promptNumberedChoice(header: []const u8, items: []const []const u8, default: 
 
 // --- Tests ---
 
-test "isHealAllowed: blocks goto and eval_js, allows page-local commands" {
-    try std.testing.expect(!isHealAllowed(.{ .goto = "https://x" }));
-    try std.testing.expect(!isHealAllowed(.{ .eval_js = "alert(1)" }));
-
+test "isHealAllowed: only page-local DOM commands are allowed" {
     try std.testing.expect(isHealAllowed(.{ .click = ".btn" }));
     try std.testing.expect(isHealAllowed(.{ .hover = ".menu" }));
     try std.testing.expect(isHealAllowed(.{ .wait = ".loaded" }));
@@ -1458,6 +1456,16 @@ test "isHealAllowed: blocks goto and eval_js, allows page-local commands" {
     try std.testing.expect(isHealAllowed(.{ .select = .{ .selector = "#s", .value = "x" } }));
     try std.testing.expect(isHealAllowed(.{ .check = .{ .selector = "#c", .checked = true } }));
     try std.testing.expect(isHealAllowed(.{ .scroll = .{ .x = 0, .y = 100 } }));
+    try std.testing.expect(isHealAllowed(.{ .extract = "schema" }));
+
+    try std.testing.expect(!isHealAllowed(.{ .goto = "https://x" }));
+    try std.testing.expect(!isHealAllowed(.{ .eval_js = "alert(1)" }));
+    try std.testing.expect(!isHealAllowed(.{ .natural_language = "do x" }));
+    try std.testing.expect(!isHealAllowed(.login));
+    try std.testing.expect(!isHealAllowed(.accept_cookies));
+    try std.testing.expect(!isHealAllowed(.comment));
+    try std.testing.expect(!isHealAllowed(.tree));
+    try std.testing.expect(!isHealAllowed(.markdown));
 }
 
 test {
