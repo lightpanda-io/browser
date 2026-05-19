@@ -192,6 +192,7 @@ const Commands = cli.Builder(.{
                 },
             },
             .{ .name = "terminate_ms", .type = ?u32 },
+            .{ .name = "json", .type = bool },
         },
         .shared_options = CommonOptions,
     },

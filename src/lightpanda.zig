@@ -60,6 +60,7 @@ pub const FetchOpts = struct {
     dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
     writer: ?*std.Io.Writer = null,
+    json: bool = false,
 };
 pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !void {
     const notification = try Notification.init(app.allocator);
@@ -157,36 +158,99 @@ pub fn fetch(app: *App, browser: *Browser, url: [:0]const u8, opts: FetchOpts) !
     }
 
     const writer = opts.writer orelse return;
-    if (opts.dump_mode) |mode| blk: {
-        const frame = session.currentFrame() orelse {
-            try writer.writeAll("Frame closed. Please open a bug report including the URL\n");
-            break :blk;
-        };
-        switch (mode) {
-            .html => try dump.root(frame.window._document, opts.dump, writer, frame),
-            .markdown => try markdown.dump(frame.window._document.asNode(), .{}, writer, frame),
-            .semantic_tree, .semantic_tree_text => {
-                var registry = CDPNode.Registry.init(app.allocator);
-                defer registry.deinit();
 
-                const st: SemanticTree = .{
-                    .dom_node = frame.window._document.asNode(),
-                    .registry = &registry,
-                    .frame = frame,
-                    .arena = frame.call_arena,
-                    .prune = (mode == .semantic_tree_text),
-                };
+    if (opts.json) {
+        var aw: std.Io.Writer.Allocating = .init(app.allocator);
+        defer aw.deinit();
 
-                if (mode == .semantic_tree) {
-                    try std.json.Stringify.value(st, .{}, writer);
-                } else {
-                    try st.textStringify(writer);
-                }
-            },
-            .wpt => try dumpWPT(frame, writer),
+        if (opts.dump_mode) |mode| blk: {
+            const frame = session.currentFrame() orelse break :blk;
+            try dumpContent(app, mode, opts.dump, frame, &aw.writer);
+        }
+
+        const frame = session.currentFrame();
+        try writeJsonEnvelope(writer, frame, opts.dump_mode, aw.written());
+    } else {
+        if (opts.dump_mode) |mode| blk: {
+            const frame = session.currentFrame() orelse {
+                try writer.writeAll("Frame closed. Please open a bug report including the URL\n");
+                break :blk;
+            };
+            try dumpContent(app, mode, opts.dump, frame, writer);
         }
     }
     try writer.flush();
+}
+
+fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: *Frame, writer: *std.Io.Writer) !void {
+    switch (mode) {
+        .html => try dump.root(frame.window._document, dump_opts, writer, frame),
+        .markdown => try markdown.dump(frame.window._document.asNode(), .{}, writer, frame),
+        .semantic_tree, .semantic_tree_text => {
+            var registry = CDPNode.Registry.init(app.allocator);
+            defer registry.deinit();
+
+            const st: SemanticTree = .{
+                .dom_node = frame.window._document.asNode(),
+                .registry = &registry,
+                .frame = frame,
+                .arena = frame.call_arena,
+                .prune = (mode == .semantic_tree_text),
+            };
+
+            if (mode == .semantic_tree) {
+                try std.json.Stringify.value(st, .{}, writer);
+            } else {
+                try st.textStringify(writer);
+            }
+        },
+        .wpt => try dumpWPT(frame, writer),
+    }
+}
+
+fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, body: []const u8) !void {
+    const meta: ?Frame.HttpMetadata = if (frame) |f| f.httpMetadata() else null;
+
+    try writer.writeAll("{\"url\":");
+    try writeJsonString(writer, if (meta) |m| m.url else "");
+
+    try writer.writeAll(",\"http_status\":");
+    if (meta) |m| {
+        if (m.status) |status| {
+            try writer.print("{d}", .{status});
+        } else {
+            try writer.writeAll("0");
+        }
+    } else {
+        try writer.writeAll("0");
+    }
+
+    try writer.writeAll(",\"headers\":{");
+    if (meta) |m| {
+        var first = true;
+        for (m.headers.keys(), m.headers.values()) |name, value| {
+            if (!first) try writer.writeAll(",");
+            first = false;
+            try writeJsonString(writer, name);
+            try writer.writeAll(":");
+            try writeJsonString(writer, value);
+        }
+    }
+    try writer.writeAll("}");
+
+    try writer.writeAll(",\"dump\":");
+    try writeJsonString(writer, if (dump_mode) |mode| @tagName(mode) else "");
+
+    try writer.writeAll(",\"body\":");
+    try writeJsonString(writer, body);
+
+    try writer.writeAll("}\n");
+}
+
+fn writeJsonString(writer: *std.Io.Writer, s: []const u8) !void {
+    try writer.writeByte('"');
+    try std.json.Stringify.encodeJsonStringChars(s, .{}, writer);
+    try writer.writeByte('"');
 }
 
 fn dumpWPT(frame: *Frame, writer: *std.Io.Writer) !void {
@@ -281,6 +345,53 @@ pub fn RC(comptime T: type) type {
             return writer.print("{d}", .{self._refs.load(.monotonic)});
         }
     };
+}
+
+test "writeJsonString: simple string" {
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try writeJsonString(&aw.writer, "hello");
+    try std.testing.expectEqualStrings("\"hello\"", aw.written());
+}
+
+test "writeJsonString: escapes special chars" {
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try writeJsonString(&aw.writer, "line1\nline2\ttab\"quote");
+    const result = aw.written();
+    try std.testing.expect(result[0] == '"');
+    try std.testing.expect(result[result.len - 1] == '"');
+    try std.testing.expect(std.mem.indexOf(u8, result, "\\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\\t") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\\\"") != null);
+}
+
+test "writeJsonString: empty string" {
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try writeJsonString(&aw.writer, "");
+    try std.testing.expectEqualStrings("\"\"", aw.written());
+}
+
+test "writeJsonEnvelope: null frame" {
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try writeJsonEnvelope(&aw.writer, null, null, "");
+    const result = aw.written();
+    try std.testing.expect(std.mem.startsWith(u8, result, "{\"url\":\"\""));
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"http_status\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"headers\":{}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"dump\":\"\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"body\":\"\"") != null);
+}
+
+test "writeJsonEnvelope: null frame with dump mode and body" {
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try writeJsonEnvelope(&aw.writer, null, .html, "<html><body>hello</body></html>");
+    const result = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"dump\":\"html\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"body\":\"<html><body>hello</body></html>\"") != null);
 }
 
 test {
