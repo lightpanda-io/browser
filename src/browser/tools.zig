@@ -91,7 +91,7 @@ pub const tool_defs = [_]ToolDef{
     },
     .{
         .name = "search",
-        .description = "Run a web search and return results as markdown. When TAVILY_API_KEY is set, queries the Tavily Search API and returns a numbered list of {title, url, snippet}. Otherwise (or on Tavily failure) falls back to scraping the DuckDuckGo HTML endpoint — degraded results, may rate-limit on bursty traffic. Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS).",
+        .description = "Run a web search and return results as markdown. When TAVILY_API_KEY is set, queries the Tavily Search API and returns a numbered list of {title, url, snippet}. Otherwise (or on Tavily failure) falls back to scraping the DuckDuckGo HTML endpoint — degraded results, may rate-limit on bursty traffic. Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS). Browser state after this call is unspecified — to interact with a result, use `goto` with its URL; do not assume the browser DOM matches the results page.",
         .input_schema = minify(
             \\{
             \\  "type": "object",
@@ -873,7 +873,6 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
         value: []const u8 = "",
     };
     const args = try parseArgs(Params, arena, arguments);
-    if (args.value.len == 0) return ToolError.InvalidParams;
     const raw_text = args.value;
     const text = try substituteEnvVars(arena, raw_text);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
