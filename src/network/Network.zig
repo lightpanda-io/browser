@@ -588,28 +588,6 @@ fn acceptConnections(self: *Network) void {
             }
         };
 
-        // Liveness is enforced at the TCP layer via keepalive probes sent by the
-        // kernel. This is transparent to CDP clients — unlike a WebSocket ping, which
-        // go-rod panics on and chromedp logs as "malformed". Tunables in Config.zig.
-        posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.KEEPALIVE, &std.mem.toBytes(@as(c_int, 1))) catch |err| {
-            log.warn(.app, "SO_KEEPALIVE", .{ .err = err });
-            return;
-        };
-
-        const option = switch (@import("builtin").os.tag) {
-            .macos, .ios => posix.TCP.KEEPALIVE,
-            else => posix.TCP.KEEPIDLE,
-        };
-        posix.setsockopt(socket, posix.IPPROTO.TCP, option, &std.mem.toBytes(Config.CDP_KEEPALIVE_IDLE_S)) catch |err| {
-            log.warn(.app, "TCP_KEEPIDLE", .{ .err = err });
-        };
-        posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPINTVL, &std.mem.toBytes(Config.CDP_KEEPALIVE_INTVL_S)) catch |err| {
-            log.warn(.app, "TCP_KEEPINTVL", .{ .err = err });
-        };
-        posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPCNT, &std.mem.toBytes(Config.CDP_KEEPALIVE_CNT)) catch |err| {
-            log.warn(.app, "TCP_KEEPCNT", .{ .err = err });
-        };
-
         listener.onAccept(listener.ctx, socket);
     }
 }

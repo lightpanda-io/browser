@@ -31,6 +31,13 @@ const http = @import("../network/http.zig");
 const Robots = @import("../network/Robots.zig");
 const Network = @import("../network/Network.zig");
 
+const CachedResponse = @import("../network/cache/Cache.zig").CachedResponse;
+
+pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
+pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
+pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
+pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
+
 const log = lp.log;
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
@@ -41,12 +48,6 @@ pub const Method = http.Method;
 pub const Headers = http.Headers;
 pub const ResponseHead = http.ResponseHead;
 pub const HeaderIterator = http.HeaderIterator;
-const CachedResponse = @import("../network/cache/Cache.zig").CachedResponse;
-
-pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
-pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
-pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
-pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
 
 // This is loosely tied to a browser Frame. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -165,8 +166,8 @@ fn layerWith(self: anytype, next: Layer) Layer {
 // specifically when we're waiting for a request interception response to
 // a blocking script.
 pub const CDPClient = struct {
-    socket: posix.socket_t,
     ctx: *anyopaque,
+    socket: posix.socket_t,
     blocking_read_start: *const fn (*anyopaque) bool,
     blocking_read: *const fn (*anyopaque) bool,
     blocking_read_end: *const fn (*anyopaque) bool,
