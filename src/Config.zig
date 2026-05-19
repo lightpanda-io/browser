@@ -235,7 +235,6 @@ const Commands = cli.Builder(.{
         .shared_options = CommonOptions,
     },
     .{ .name = "version", .options = .{} },
-    .{ .name = "help", .positional = .{ .name = "subcommand", .type = ?[]const u8 }, .options = .{} },
 });
 
 pub const RunMode = Commands.Enum;
@@ -588,394 +587,53 @@ pub const HttpHeaders = struct {
     }
 };
 
-pub fn printUsageAndExit(self: *const Config, success: bool) void {
-    //                                                                     MAX_HELP_LEN|
-    const common_options =
-        \\
-        \\--insecure-disable-tls-host-verification
-        \\                Disables host verification on all HTTP requests. This is an
-        \\                advanced option which should only be set if you understand
-        \\                and accept the risk of disabling host verification.
-        \\
-        \\--obey-robots
-        \\                Fetches and obeys the robots.txt (if available) of the web pages
-        \\                we make requests towards.
-        \\                Defaults to false.
-        \\
-        \\--disable-subframes
-        \\                Skip loading <iframe> elements. The HTML parser registers them
-        \\                in the DOM but no child frame, document fetch, or
-        \\                Page.frameAttached / Runtime.executionContextCreated events are
-        \\                produced. Useful for pages that load many analytics / pixel
-        \\                iframes where each subframe navigation invalidates driver-side
-        \\                executionContextIds (lightpanda-io/browser#2400). On the CDP
-        \\                serve path, drivers can also toggle this per-session via the
-        \\                LP.configureLoading method.
-        \\                Defaults to false.
-        \\
-        \\--disable-workers
-        \\                Skip loading dedicated Web Workers. The Worker constructor
-        \\                still returns a Worker object so calling pages do not throw,
-        \\                but no script fetch is initiated and the worker scope's
-        \\                eval never runs (postMessage from the page to the worker is
-        \\                queued indefinitely). Sidesteps a v8 entered-context
-        \\                corruption that crashes the process when an in-page Worker
-        \\                completes its script fetch under specific HTTP-proxy timing
-        \\                conditions on Shopify storefront pages. Drivers can also
-        \\                toggle this per-session via the LP.configureLoading method.
-        \\                Defaults to false.
-        \\
-        \\--block-private-networks
-        \\                Blocks HTTP requests to private/internal IP addresses
-        \\                after DNS resolution. Useful for sandboxing, multi-tenant
-        \\                deployments, and preventing access to internal infrastructure
-        \\                regardless of what triggers the request (JavaScript, HTML
-        \\                resources, redirects, etc.).
-        \\                Defaults to false.
-        \\
-        \\--block-cidrs
-        \\                Additional CIDR ranges to block, comma-separated.
-        \\                Prefix with '-' to allow (exempt from blocking).
-        \\                e.g. --block-cidrs 169.254.169.254/32,fd00:ec2::254/128
-        \\                e.g. --block-cidrs 10.0.0.0/8,-10.0.0.42/32
-        \\                Can be used standalone or combined with --block-private-networks.
-        \\
-        \\--http-proxy    The HTTP proxy to use for all HTTP requests.
-        \\                A username:password can be included for basic authentication.
-        \\                Defaults to none.
-        \\
-        \\--proxy-bearer-token
-        \\                The <token> to send for bearer authentication with the proxy
-        \\                Proxy-Authorization: Bearer <token>
-        \\
-        \\--http-max-concurrent
-        \\                The maximum number of concurrent HTTP requests.
-        \\                Defaults to 10.
-        \\
-        \\--http-max-host-open
-        \\                The maximum number of open connection to a given host:port.
-        \\                Defaults to 4.
-        \\
-        \\--http-connect-timeout
-        \\                The time, in milliseconds, for establishing an HTTP connection
-        \\                before timing out. 0 means it never times out.
-        \\                Defaults to 0.
-        \\
-        \\--http-timeout
-        \\                The maximum time, in milliseconds, the transfer is allowed
-        \\                to complete. 0 means it never times out.
-        \\                Defaults to 10000.
-        \\
-        \\--http-max-response-size
-        \\                Limits the acceptable response size for any request
-        \\                (e.g. XHR, fetch, script loading, ...).
-        \\                Defaults to no limit.
-        \\
-        \\--ws-max-concurrent
-        \\                The maximum number of concurrent WebSocket connections.
-        \\                Defaults to 8.
-        \\
-        \\--log-level     The log level: debug, info, warn, error or fatal.
-        \\                Defaults to
-    ++ (if (builtin.mode == .Debug) " info." else "warn.") ++
-        \\
-        \\
-        \\--log-format    The log format: pretty or logfmt.
-        \\                Defaults to
-    ++ (if (builtin.mode == .Debug) " pretty." else " logfmt.") ++
-        \\
-        \\
-        \\--log-filter-scopes
-        \\                Filter out too verbose logs per scope:
-        \\                http, unknown_prop, event, ...
-        \\
-        \\--user-agent    Override the User-Agent header entirely
-        \\                User-Agent mustn't impersonate other browser.
-        \\                Any value containing "Mozilla" is forbidden.
-        \\                The browser will continue to send Sec-Ch-Ua header.
-        \\                Incompatible with --user-agent-suffix
-        \\
-        \\--user-agent-suffix
-        \\                Suffix to append to the Lightpanda/X.Y User-Agent
-        \\
-        \\--web-bot-auth-key-file
-        \\                Path to the Ed25519 private key PEM file.
-        \\
-        \\--web-bot-auth-keyid
-        \\                The JWK thumbprint of your public key.
-        \\
-        \\--web-bot-auth-domain
-        \\                Your domain e.g. yourdomain.com
-        \\
-        \\--http-cache-dir
-        \\                Path to a directory to use as a Filesystem Cache for network resources.
-        \\                Omitting this will result is no caching.
-        \\                Defaults to no caching.
-        \\
-        \\--storage-engine
-        \\                The storage engine to use. Choices are: none, sqlite.
-        \\                Default to none.
-        \\
-        \\--storage-sqlite-path
-        \\                Path to SQLite database file for persistent storage.
-        \\                Use ":memory:" for in-memory storage.
-    ;
+pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) void {
+    const exec_name = self.exec_name;
+    const Help = @import("help.zon");
+    const is_debug = builtin.mode == .Debug;
+    const info_or_warn = if (comptime is_debug) "info" else "warn";
+    const pretty_or_logfmt = if (comptime is_debug) "pretty" else "logfmt";
+    const comptimePrint = std.fmt.comptimePrint;
 
-    //                                                                     MAX_HELP_LEN|
-    const fetch_options =
-        \\fetch command
-        \\Fetches the specified URL
-        \\Example: {0s} fetch --dump html https://lightpanda.io/
-        \\
-        \\Options:
-        \\--dump          Dumps document to stdout.
-        \\                Argument must be 'html', 'markdown', 'semantic_tree', or 'semantic_tree_text'.
-        \\                Defaults to no dump.
-        \\
-        \\--strip-mode    Comma separated list of tag groups to remove from dump
-        \\                the dump. e.g. --strip-mode js,css
-        \\                  - "js" script and link[as=script, rel=preload]
-        \\                  - "ui" includes img, picture, video, css and svg
-        \\                  - "css" includes style and link[rel=stylesheet]
-        \\                  - "full" includes js, ui and css
-        \\
-        \\--with-base     Add a <base> tag in dump. Defaults to false.
-        \\
-        \\--with-frames   Includes the contents of iframes. Defaults to false.
-        \\
-        \\--wait-ms       Wait time in milliseconds. Supersedes all other --wait
-        \\                parameters.
-        \\                Defaults to 5000.
-        \\
-        \\--wait-until    Wait until the specified event. Checked before the other
-        \\                --wait- options. Supported events: load, domcontentloaded,
-        \\                networkidle, done.
-        \\                Defaults to 'done'. If --wait-selector, --wait-script or
-        \\                --wait-script-file are specified, defaults to none.
-        \\
-        \\--wait-selector Wait for an element matching the CSS selector to appear.
-        \\                Checked after --wait-until condition is met.
-        \\
-        \\--wait-script   Wait for a JavaScript expression to return truthy.
-        \\                Checked after --wait-until condition is met.
-        \\
-        \\--wait-script-file
-        \\                Like --wait-script, but reads the script from a file.
-        \\
-        \\--inject-script JavaScript to execute as the document's <head> is
-        \\                parsed, before any other scripts in the page run.
-        \\                Can be passed multiple times; scripts run in order.
-        \\
-        \\--inject-script-file
-        \\                Like --inject-script, but reads the script from a file.
-        \\                Can be passed multiple times; can be mixed with
-        \\                --inject-script and runs in CLI order.
-        \\
-        \\--terminate-ms  Hard deadline in milliseconds. After this time elapses,
-        \\                JavaScript execution is forcibly terminated (e.g. for
-        \\                pages with endless scripts). Unlike --wait-ms, which
-        \\                only stops waiting, --terminate-ms aborts the page.
-        \\                Defaults to no terminate.
-        \\
-        \\--cookie        Path to a JSON file to load cookies from (read-only).
-        \\                Defaults to no cookie loading.
-        \\
-        \\--cookie-jar    Path to a JSON file to save cookies to on exit (write-only).
-        \\                Defaults to no cookie saving.
-        \\
-    ++ common_options;
-
-    //                                                                     MAX_HELP_LEN|
-    const serve_options =
-        \\serve command
-        \\Starts a websocket CDP server
-        \\Example: {0s} serve --host 127.0.0.1 --port 9222
-        \\
-        \\Options:
-        \\--host          Host of the CDP server
-        \\                Defaults to "127.0.0.1"
-        \\
-        \\--port          Port of the CDP server
-        \\                Defaults to 9222
-        \\
-        \\--advertise-host
-        \\                The host to advertise, e.g. in the /json/version response.
-        \\                Useful, for example, when --host is 0.0.0.0.
-        \\                Defaults to --host value
-        \\
-        \\--cdp-max-connections
-        \\                Maximum number of simultaneous CDP connections.
-        \\                Defaults to 16.
-        \\
-        \\--cdp-max-pending-connections
-        \\                Maximum pending connections in the accept queue.
-        \\                Defaults to 128.
-        \\
-        \\--cookie        Path to a JSON file to load cookies from (read-only).
-        \\                Defaults to no cookie loading.
-        \\
-    ++ common_options;
-
-    //                                                                     MAX_HELP_LEN|
-    const mcp_options =
-        \\mcp command
-        \\Starts an MCP (Model Context Protocol) server over stdio
-        \\Example: {0s} mcp
-        \\
-        \\Options:
-        \\--cookie        Path to a JSON file to load cookies from (read-only).
-        \\                Defaults to no cookie loading.
-        \\
-        \\--cookie-jar    Path to a JSON file to save cookies to on exit (write-only).
-        \\                Defaults to no cookie saving.
-        \\
-    ++ common_options;
-
-    //                                                                     MAX_HELP_LEN|
-    const agent_options =
-        \\agent command
-        \\Starts an interactive AI agent that can browse the web
-        \\Example: {0s} agent                         (auto-detects API key from env)
-        \\Example: {0s} agent --provider anthropic --model claude-sonnet-4-6
-        \\Example: {0s} agent --provider ollama --model gemma4
-        \\Example: {0s} agent --no-llm                (basic PandaScript-only REPL)
-        \\Example: {0s} agent script.lp            (replay a recorded script)
-        \\Example: {0s} agent -i script.lp         (replay then drop into REPL,
-        \\                                             appending new commands to the file)
-        \\
-        \\Arguments:
-        \\[script_file]   Optional path to a .lp script.
-        \\                Without -i: replays the script (no LLM calls).
-        \\                With -i: replays if present, then enters the REPL and
-        \\                appends any new commands to the file (creating it if
-        \\                it does not yet exist).
-        \\                Caution: .lp files can contain EVAL blocks that run
-        \\                arbitrary JavaScript in the page. Only replay scripts
-        \\                you trust, the same way you would a shell script.
-        \\
-        \\Options:
-        \\--provider      The AI provider: anthropic, openai, gemini, or ollama.
-        \\                Optional. When omitted, lightpanda auto-detects an API
-        \\                key from your environment (ANTHROPIC_API_KEY,
-        \\                OPENAI_API_KEY, GOOGLE_API_KEY/GEMINI_API_KEY). With
-        \\                exactly one key set: that provider is used. With
-        \\                multiple keys on a TTY: you'll be prompted to pick;
-        \\                in non-interactive contexts, pass --provider
-        \\                explicitly. With no keys set: falls back to the basic
-        \\                REPL (PandaScript only, no natural-language input,
-        \\                no LOGIN / ACCEPT_COOKIES keywords, no --self-heal).
-        \\
-        \\--no-llm        Force the basic REPL even when an API key is present
-        \\                or --provider is set. Useful for testing PandaScript
-        \\                without burning tokens, or for disabling the LLM in
-        \\                a saved command without editing the existing flags.
-        \\                Wins over --provider.
-        \\
-        \\--model         The model name to use.
-        \\                Defaults to a sensible default per provider.
-        \\                Wins over --pick-model.
-        \\
-        \\--pick-model    Fetch the provider's model list and prompt you to
-        \\                pick one at startup, instead of using the baked-in
-        \\                default. Requires a TTY. Ignored when --model is
-        \\                also passed.
-        \\
-        \\--base-url      Override the API base URL for the provider.
-        \\                Defaults to the provider's standard endpoint.
-        \\                Ollama default: http://localhost:11434/v1
-        \\
-        \\--system-prompt Override the default system prompt.
-        \\
-        \\--self-heal     On tool errors, ask the model to recover by retrying
-        \\                with fresh page state instead of aborting.
-        \\
-        \\-i, --interactive
-        \\                After replaying the positional script (if any), drop
-        \\                into the REPL with the browser state preserved. When
-        \\                a positional script is present, any new commands
-        \\                entered in the REPL are appended to that file.
-        \\                Conflicts with --task.
-        \\
-        \\--task          One-shot mode: run a single user turn, print the
-        \\                final answer to stdout, and exit. Conflicts with the
-        \\                positional script and with --interactive.
-        \\
-        \\-a, --attach <path>
-        \\                Feed a local file to the model alongside --task.
-        \\                Repeatable, one file per flag. Text files inlined
-        \\                (max 512 KiB each); images/audio/pdf base64-encoded
-        \\                (max 20 MiB each). Requires --task.
-        \\
-        \\--list-models   Print the model IDs usable with `agent` for
-        \\                --provider, one per line, sorted, and exit.
-        \\                Auto-detects the provider from env when --provider
-        \\                is omitted.
-        \\
-        \\--verbosity     Stderr chatter level: low, medium, high.
-        \\                low: silent in --task mode (final answer to
-        \\                stdout only); spinner + summary in REPL.
-        \\                medium: + one `● [tool: ...]` line per call.
-        \\                high: + the matching `[result: ...]` body
-        \\                (required by the benchmarks harness).
-        \\                Default: high when --task captures stderr to
-        \\                a pipe or file; low otherwise. low/medium also
-        \\                raise --log-level to err (mutes page-side
-        \\                console.error spam) unless --log-level is set
-        \\                explicitly.
-        \\
-        \\API keys are read from the environment:
-        \\ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY/GEMINI_API_KEY.
-        \\Ollama does not require an API key.
-        \\
-    ++ common_options;
-
-    //                                                                     MAX_HELP_LEN|
-    const usage =
-        \\usage: {0s} command [options] [URL]
-        \\
-        \\Command can be either 'fetch', 'serve', 'mcp', 'agent' or 'help'
-        \\
-    ++ fetch_options ++
-        \\
-        \\
-    ++ serve_options ++
-        \\
-        \\
-    ++ mcp_options ++
-        \\
-        \\
-    ++ agent_options ++
-        \\
-        \\version command
-        \\Displays the version of {0s}
-        \\
-        \\help command
-        \\Displays this message
-        \\
-    ;
-
-    // When called with a subcommand argument,
-    // print only the relevant subcommand section instead of the full help.
-    switch (self.mode) {
-        .help => |h| if (h.subcommand) |sub| {
-            if (std.mem.eql(u8, sub, "fetch")) {
-                std.debug.print(fetch_options ++ "\n", .{self.exec_name});
-            } else if (std.mem.eql(u8, sub, "serve")) {
-                std.debug.print(serve_options ++ "\n", .{self.exec_name});
-            } else if (std.mem.eql(u8, sub, "mcp")) {
-                std.debug.print(mcp_options ++ "\n", .{self.exec_name});
-            } else if (std.mem.eql(u8, sub, "agent")) {
-                std.debug.print(agent_options ++ "\n", .{self.exec_name});
-            } else {
-                std.debug.print(usage, .{self.exec_name});
-            }
-            if (success) return std.process.cleanExit();
-            std.process.exit(1);
+    switch (help_for) {
+        // Requested help for everything.
+        .help => {
+            const template = comptimePrint(
+                \\
+                \\Command can be either "fetch", "serve", "mcp", "agent" or "help".
+                \\
+                \\{s}
+                \\
+                \\{s}
+                \\
+                \\{s}
+                \\
+                \\{s}
+                \\
+                \\{s}
+                \\
+                \\{s}
+                \\
+                \\{s}
+                \\
+            , .{ Help.fetch, Help.serve, Help.mcp, Help.agent, Help.common, Help.version, Help.help });
+            std.debug.print(template, .{ exec_name, info_or_warn, pretty_or_logfmt });
         },
-        else => {},
+        inline .fetch, .serve, .mcp, .agent => |tag| {
+            const template = comptimePrint(
+                \\{s}
+                \\
+                \\{s}
+                \\
+            , .{ @field(Help, @tagName(tag)), Help.common });
+            std.debug.print(template, .{ exec_name, info_or_warn, pretty_or_logfmt });
+        },
+        .version => {
+            const template = Help.version ++ "\n";
+            std.debug.print(template, .{exec_name});
+        },
     }
 
-    std.debug.print(usage, .{self.exec_name});
     if (success) {
         return std.process.cleanExit();
     }
