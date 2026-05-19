@@ -1369,6 +1369,10 @@ fn pickModel(
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
 
+    // Known limitation: this runs before `SigBridge.attach`, so a Ctrl-C
+    // pressed during the model listing is dropped silently. The HTTP call
+    // is synchronous and uninterruptible; press Ctrl-C again at the picker
+    // prompt (which surfaces it as `error.UserCancelled` via stdin EINTR).
     std.debug.print("Fetching models for {s}…\n", .{@tagName(provider)});
     const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), provider, api_key, base_url) catch |err| {
         log.fatal(.app, "list models failed", .{ .err = @errorName(err) });
