@@ -1001,7 +1001,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             .tool_choice = .auto,
             // Cap per-turn reasoning so thinking models don't burn
             // minutes per turn. Ignored by non-thinking models.
-            .thinking_budget = 2048,
+            .thinking_level = .medium,
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
         },
     ) catch |err| {
@@ -1079,7 +1079,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 // it run unbounded lets models fill the turn with thoughts
                 // and emit nothing as the final text. 512 tokens is enough
                 // for the model to pick its answer but not to freewheel.
-                .thinking_budget = 512,
+                .thinking_level = .low,
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
             },
         ) catch |err| {
