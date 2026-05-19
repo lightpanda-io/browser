@@ -855,6 +855,26 @@ test "parse SCROLL" {
     }
 }
 
+test "format CHECK round-trips both checked states" {
+    const cases = [_]struct { checked: bool, expected: []const u8 }{
+        .{ .checked = true, .expected = "CHECK '#agree'" },
+        .{ .checked = false, .expected = "CHECK '#agree' false" },
+    };
+    for (cases, 0..) |c, i| {
+        errdefer std.debug.print("failing case {d}: checked={}\n", .{ i, c.checked });
+        const cmd: Command = .{ .check = .{ .selector = "#agree", .checked = c.checked } };
+
+        var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer aw.deinit();
+        try cmd.format(&aw.writer);
+        try std.testing.expectEqualStrings(c.expected, aw.written());
+
+        const round = parse(aw.written());
+        try std.testing.expectEqualStrings("#agree", round.check.selector);
+        try std.testing.expectEqual(c.checked, round.check.checked);
+    }
+}
+
 test "format SCROLL emits shortest round-tripping form" {
     const cases = [_]struct { x: i32, y: i32, expected: []const u8 }{
         .{ .x = 0, .y = 0, .expected = "SCROLL" },

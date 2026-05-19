@@ -73,10 +73,13 @@ pub fn isActive(self: *const Self) bool {
 pub fn record(self: *Self, cmd: Command.Command) void {
     if (self.file == null) return;
     if (!cmd.isRecorded()) return;
+    self.tryRecord(cmd) catch |err| self.disable(err);
+}
 
+fn tryRecord(self: *Self, cmd: Command.Command) !void {
     self.buf.clearRetainingCapacity();
-    cmd.format(&self.buf.writer) catch return;
-    self.buf.writer.writeByte('\n') catch return;
+    try cmd.format(&self.buf.writer);
+    try self.buf.writer.writeByte('\n');
 
     // Reverse-substitute any LP_* env-var values that snuck in as literals
     // (e.g. an agent that retyped a username it saw via getUrl) so the
@@ -85,12 +88,16 @@ pub fn record(self: *Self, cmd: Command.Command) void {
     defer scrub_arena.deinit();
     const scrubbed = lp.tools.reverseSubstituteEnvVars(scrub_arena.allocator(), self.buf.written()) catch self.buf.written();
 
-    self.writeOrDisable(scrubbed) catch return;
+    try self.file.?.writeAll(scrubbed);
     self.lines += 1;
 }
 
 pub fn recordComment(self: *Self, comment: []const u8) void {
     if (self.file == null) return;
+    self.tryRecordComment(comment) catch |err| self.disable(err);
+}
+
+fn tryRecordComment(self: *Self, comment: []const u8) !void {
     self.buf.clearRetainingCapacity();
     // Embedded newlines would smuggle an executable line into the script on
     // replay (e.g. `# foo\nGOTO https://attacker`). Emit each line of the
@@ -98,26 +105,25 @@ pub fn recordComment(self: *Self, comment: []const u8) void {
     var it = std.mem.splitScalar(u8, comment, '\n');
     while (it.next()) |line| {
         const trimmed = std.mem.trimRight(u8, line, "\r");
-        self.buf.writer.writeAll("# ") catch return;
-        self.buf.writer.writeAll(trimmed) catch return;
-        self.buf.writer.writeByte('\n') catch return;
+        try self.buf.writer.writeAll("# ");
+        try self.buf.writer.writeAll(trimmed);
+        try self.buf.writer.writeByte('\n');
     }
-    self.writeOrDisable(self.buf.written()) catch return;
+    try self.file.?.writeAll(self.buf.written());
     self.lines += 1;
 }
 
-/// Write the buffered line to the recording file. On failure, close the
-/// file and null out `self.file` so `isActive()` flips to false and the
-/// caller can surface that the recording stopped — rather than silently
-/// dropping subsequent appends.
-fn writeOrDisable(self: *Self, bytes: []const u8) !void {
-    const f = self.file.?;
-    f.writeAll(bytes) catch |err| {
-        log.warn(.app, "recording disabled", .{ .err = @errorName(err) });
+/// Any failure along the record path — buffer-write OOM, scrub OOM, or file
+/// write — flips the recorder to inactive so subsequent calls become silent
+/// no-ops and `isActive()` reflects the stopped state. Previously a buffer
+/// failure would `catch return` while leaving the file open and `isActive()`
+/// true, silently dropping the line.
+fn disable(self: *Self, err: anyerror) void {
+    log.warn(.app, "recording disabled", .{ .err = @errorName(err) });
+    if (self.file) |f| {
         f.close();
         self.file = null;
-        return err;
-    };
+    }
 }
 
 test "record writes state-mutating commands" {

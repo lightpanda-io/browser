@@ -729,7 +729,7 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIter
 
         const reason: ?[]const u8 = switch (verification) {
             .failed => |r| r,
-            else => null,
+            .passed, .inconclusive => null,
         };
         if (self.attemptSelfHeal(sa, entry.raw_line, reason, last_comment)) |healed_cmds| {
             const replacement = script.formatHealReplacement(sa, entry.raw_span, entry.raw_line, healed_cmds) catch |err| {

@@ -283,8 +283,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     switch (server.verifier.verify(arena, cmd)) {
         .failed => |reason| {
             const url = browser_tools.currentUrlOrPlaceholder(server.session);
-            const why = reason orelse "verification failed";
-            const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tc.name, args.line, url, why }) catch why;
+            const msg = std.fmt.allocPrint(arena, "{s} executed at line `{s}` but verification failed (url: {s}): {s}", .{ tc.name, args.line, url, reason }) catch reason;
             return sendErrorContent(server, id, msg);
         },
         .passed, .inconclusive => {},
