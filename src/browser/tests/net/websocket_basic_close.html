@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=basic_echo type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    ws.send('msg1');
+  });
+
+  ws.addEventListener('close', (e) => {
+    received.push(['close', e.code, e.reason]);
+    state.resolve();
+  });
+
+  ws.addEventListener('message', (e) => {
+    received.push(e.data);
+    ws.close(1000, 'bye');
+  });
+
+  await state.done(() => {
+    testing.expectEqual([
+      'echo-msg1',
+      ['close', 1000, 'bye'],
+    ], received);
+  });
+}
+</script>

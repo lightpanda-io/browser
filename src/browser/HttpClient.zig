@@ -213,23 +213,18 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
 
 pub fn deinit(self: *Client) void {
     self.abort();
+    self.abortWebSockets();
 
-    // Cancellations submitted by abort flow through the network thread
-    // and come back as canceled completions. If the network thread has
-    // already stopped, drive its queues ourselves; otherwise spin until
-    // they all arrive and we drained them.
-    var spins: usize = 0;
-    while (self.handle.in_use.first != null and spins < 1000) : (spins += 1) {
-        if (self.network.shutdown.load(.acquire)) {
-            self.network.drainPendingForShutdown();
-        }
-        _ = self.processMessages() catch {};
-        self.drainReadyWs();
-        if (self.handle.in_use.first == null) break;
-        std.Thread.sleep(std.time.ns_per_ms);
+    if (self.handle.in_use.first != null) {
+        self.drainShutdownCompletions() catch |err| {
+            log.err(.http, "deinit drain", .{
+                .err = err,
+                .count = self.handle.http_active + self.handle.ws_active,
+            });
+        };
     }
     if (self.handle.in_use.first != null) {
-        log.warn(.http, "deinit with active conns", .{
+        log.err(.http, "deinit with active conns", .{
             .count = self.handle.http_active + self.handle.ws_active,
         });
     } else if (comptime IS_DEBUG) {
@@ -245,6 +240,42 @@ pub fn deinit(self: *Client) void {
     self.robots_layer.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
     self.inbox.deinit(self.arena_pool);
+}
+
+fn abortWebSockets(self: *Client) void {
+    var n = self.handle.in_use.first;
+    while (n) |node| {
+        n = node.next;
+        const conn: *http.Connection = @fieldParentPtr("_worker_node", node);
+        switch (conn.transport) {
+            .websocket => |ws| ws.kill(),
+            else => {},
+        }
+    }
+}
+
+fn drainShutdownCompletions(self: *Client) !void {
+    var timer = try std.time.Timer.start();
+    const timeout_ms: u64 = 1000;
+
+    while (self.handle.in_use.first != null) {
+        if (self.network.shutdown.load(.acquire)) {
+            self.network.drainPendingForShutdown();
+        } else {
+            try self.handle.poll(&.{}, 10);
+        }
+
+        while (try self.handle.nextCompletion()) |msg| {
+            switch (msg.conn.transport) {
+                .http => |transfer| transfer.deinit(),
+                .websocket => |ws| ws.completeShutdown(),
+                .none => self.handle.finishConn(msg.conn),
+            }
+        }
+
+        const elapsed_ms = timer.read() / std.time.ns_per_ms;
+        if (elapsed_ms >= timeout_ms) return error.Timeout;
+    }
 }
 
 // Look up a live transfer by its id. Returns null if the transfer has been
@@ -848,7 +879,7 @@ pub fn addReadyWs(self: *Client, ws: *WebSocket) void {
     self.ws_ready.append(self.allocator, ws) catch {};
 }
 
-fn drainReadyWs(self: *Client) void {
+pub fn drainReadyWs(self: *Client) void {
     self.ws_ready_mutex.lock();
     const items = self.ws_ready.toOwnedSlice(self.allocator) catch {
         self.ws_ready_mutex.unlock();

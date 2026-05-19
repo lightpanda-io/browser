@@ -70,6 +70,10 @@ pub fn nextFrameId(self: *Browser) u32 {
     return id;
 }
 
+pub fn httpClient(self: *Browser) *HttpClient {
+    return &self.http_client;
+}
+
 pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
     const allocator = app.allocator;
 
