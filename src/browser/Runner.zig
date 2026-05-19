@@ -53,19 +53,18 @@ pub const WaitOpts = struct {
     ms: u32,
     until: lp.Config.WaitUntil = .done,
 };
+
 pub fn wait(self: *Runner, opts: WaitOpts) !void {
-    _ = try self._wait(false, opts);
+    return self._wait(false, opts);
 }
 
-pub const CDPWaitResult = enum {
-    done,
-    cdp_socket,
-};
-pub fn waitCDP(self: *Runner, opts: WaitOpts) !CDPWaitResult {
+pub fn waitCDP(self: *Runner, opts: WaitOpts) !void {
     return self._wait(true, opts);
 }
 
-fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
+// Wait until either a parse-state / load goal is reached or `opts.ms`
+// elapses. Returns as soon as _tick reports .done.
+fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !void {
     const session = self.session;
     const browser = session.browser;
 
@@ -105,13 +104,26 @@ fn _wait(self: *Runner, comptime is_cdp: bool, opts: WaitOpts) !CDPWaitResult {
 
         const next_ms = switch (tick_result) {
             .ok => |next_ms| next_ms,
-            .done => return .done,
-            .cdp_socket => if (comptime is_cdp) return .cdp_socket else unreachable,
+            .done => done_blk: {
+                if (comptime is_cdp == false) {
+                    return;
+                }
+
+                // is_cdp keeps the loop alive past .done so the worker
+                // can observe CDP commands. We have nothing useful to do here
+                // but we can ask the http_client to wait for CDP messages.
+                const elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
+                if (elapsed >= opts.ms) {
+                    return;
+                }
+                try self.http_client.tick(@min(opts.ms - elapsed, 200), .all);
+                break :done_blk 0;
+            },
         };
 
         const ms_elapsed: u32 = @intCast(timer.read() / std.time.ns_per_ms);
         if (ms_elapsed >= opts.ms) {
-            return .done;
+            return;
         }
         if (next_ms > 0) {
             std.Thread.sleep(std.time.ns_per_ms * next_ms);
@@ -129,23 +141,10 @@ pub const TickResult = union(enum) {
     ok: u32,
 };
 pub fn tick(self: *Runner, opts: TickOpts) !TickResult {
-    return switch (try self._tick(false, opts)) {
-        .ok => |ms| .{ .ok = ms },
-        .done => .done,
-        .cdp_socket => unreachable,
-    };
+    return self._tick(false, opts);
 }
 
-pub const CDPTickResult = union(enum) {
-    done,
-    cdp_socket,
-    ok: u32,
-};
-pub fn tickCDP(self: *Runner, opts: TickOpts) !CDPTickResult {
-    return self._tick(true, opts);
-}
-
-fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
+fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
     // Refresh self.frame from session. In case of pending page, we want to
     // take its state while loading. If we use only the current frame, we will
     // return a .done result immediately.
@@ -156,19 +155,14 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
     switch (frame._parse_state) {
         .pre, .raw, .text, .image => {
             // The main frame hasn't started/finished navigating.
-            // There's no JS to run, and no reason to run the scheduler.
+            // There's no JS to run, and no reason to run the scheduler
+            // — unless we're the CDP worker, in which case we want
+            // http_client.tick to drain the inbox.
             if (http_client.http_active == 0 and (comptime is_cdp) == false) {
                 // haven't started navigating, I guess.
                 return .done;
             }
-
-            // Either we have active http connections, or we're in CDP
-            // mode with an extra socket. Either way, we're waiting
-            // for http traffic
-            const http_result = try http_client.tick(@intCast(opts.ms));
-            if ((comptime is_cdp) and http_result == .cdp_socket) {
-                return .cdp_socket;
-            }
+            try http_client.tick(@intCast(opts.ms), .all);
             return .{ .ok = 0 };
         },
         .html, .complete => {
@@ -212,11 +206,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
                 },
             }
 
-            if (http_active == 0 and http_client.ws_active == 0 and http_client.queue.first == null and http_client.ready_queue.first == null and (comptime is_cdp == false)) {
-                // we don't need to consider http_client.intercepted here
-                // because is_cdp is false, and that can only be
-                // the case when interception isn't possible.
-                //
+            if (http_active == 0 and http_client.ws_active == 0 and http_client.queue.first == null and http_client.ready_queue.first == null and (comptime is_cdp) == false) {
                 // ready_queue is also part of the check: makeRequest now
                 // wraps its handles.perform() in a performing=true window,
                 // and any synchronous libcurl callback that ends up
@@ -224,9 +214,10 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
                 // a WebSocket) will append to ready_queue. Without this
                 // check we could observe it non-empty after
                 // http_client.tick returns.
-                // we don't need to consider http_client.intercepted here
-                // because is_cdp is false, and that can only be
-                // the case when interception isn't possible.
+                //
+                // intercepted is only non-zero in serve mode, and
+                // serve mode implies cdp_client != null — so if we got
+                // here, intercepted == 0.
                 if (comptime IS_DEBUG) {
                     std.debug.assert(http_client.interception_layer.intercepted == 0);
                 }
@@ -246,10 +237,9 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
             }
 
             // We're here because we either have active HTTP
-            // connections, or is_cdp == false (aka, there's
-            // an cdp_socket registered with the http client).
-            // We should continue to run tasks, so we minimize how long
-            // we'll poll for network I/O.
+            // connections, or there's a CDP client whose inbox we have
+            // to drain via http_client.tick. We should continue to run
+            // tasks, so we minimize how long we'll poll for network I/O.
             var ms_to_wait = @min(opts.ms, browser.msToNextMacrotask() orelse 200);
             if (ms_to_wait > 10 and browser.hasBackgroundTasks()) {
                 // if we have background tasks, we don't want to wait too
@@ -257,10 +247,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
                 // to the top of the loop and run macrotasks.
                 ms_to_wait = 10;
             }
-            const http_result = try http_client.tick(@intCast(@min(opts.ms, ms_to_wait)));
-            if ((comptime is_cdp) and http_result == .cdp_socket) {
-                return .cdp_socket;
-            }
+            try http_client.tick(@intCast(@min(opts.ms, ms_to_wait)), .all);
             return .{ .ok = 0 };
         },
         .err => |err| {
@@ -269,10 +256,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !CDPTickResult {
         },
         .raw_done => {
             if (comptime is_cdp) {
-                const http_result = try http_client.tick(@intCast(opts.ms));
-                if (http_result == .cdp_socket) {
-                    return .cdp_socket;
-                }
+                try http_client.tick(@intCast(opts.ms), .all);
                 return .{ .ok = 0 };
             }
             return .done;

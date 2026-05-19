@@ -625,6 +625,13 @@ pub const Handles = struct {
         try libcurl.curl_multi_poll(self.multi, extra_fds, timeout_ms, null);
     }
 
+    // Thread-safe wake of a poll() in progress on this multi. Used by
+    // the Network thread to nudge the worker out of curl_multi_poll
+    // when it pushes work onto the worker's inbox.
+    pub fn wakeup(self: *Handles) !void {
+        try libcurl.curl_multi_wakeup(self.multi);
+    }
+
     pub const MultiMessage = struct {
         conn: *Connection,
         err: ?Error,
