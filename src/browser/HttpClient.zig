@@ -667,9 +667,14 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
         try self.trackConn(conn);
     }
 
-    // Process completions queued from the curl_multi_perform above before
-    // we potentially block.
-    _ = try self.processMessages();
+    // We just processed completions; their done_callbacks may have
+    // scheduled microtasks (JS continuations) or queued new transfers.
+    // Return without polling so the caller (_tick) can run macrotasks
+    // and re-evaluate. Otherwise we'd sleep on cdp_link_active for up
+    // to timeout_ms while pending JS work sits idle.
+    if (try self.processMessages()) {
+      return;
+    }
 
     // Poll for HTTP I/O. The Network thread will call curl_multi_wakeup
     // on our multi handle whenever it pushes to our inbox, so we drop

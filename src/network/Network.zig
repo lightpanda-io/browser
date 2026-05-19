@@ -657,7 +657,7 @@ fn processCdpEvents(self: *Network) void {
             // know it should exit. Drop with notify=true so
             // on_disconnect surfaces a .disconnect into the inbox.
             // dropCdp wakes the worker.
-            lp.log.warn(.cdp, "CDP onData", .{ .err = err });
+            lp.log.info(.cdp, "CDP onData", .{ .err = err });
             self.dropCdp(link, err, true);
             any_removed = true;
             continue;

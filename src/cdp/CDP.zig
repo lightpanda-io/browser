@@ -218,10 +218,8 @@ pub fn onDisconnect(self: *CDP, err: ?anyerror) void {
         if (WS.errorReply(e)) |close_frame| {
             self.conn.send(close_frame) catch {};
         }
-        log.warn(.cdp, "CDP disconnect", .{ .err = e });
-    } else {
-        log.info(.cdp, "CDP disconnect", .{});
     }
+    log.info(.cdp, "CDP disconnect", .{ .err = err });
 }
 
 pub fn sendJSON(self: *CDP, message: anytype) !void {
