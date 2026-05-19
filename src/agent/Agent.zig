@@ -30,7 +30,7 @@ const Verifier = lp.script.Verifier;
 const App = @import("../App.zig");
 const ToolExecutor = @import("ToolExecutor.zig");
 const Terminal = @import("Terminal.zig");
-const CommandExecutor = @import("CommandExecutor.zig");
+const CommandRunner = @import("CommandRunner.zig");
 const SlashCommand = @import("SlashCommand.zig");
 
 const Agent = @This();
@@ -121,7 +121,7 @@ allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
 tool_executor: *ToolExecutor,
 terminal: Terminal,
-cmd_executor: CommandExecutor,
+cmd_runner: CommandRunner,
 verifier: Verifier,
 recorder: ?Recorder,
 messages: std.ArrayList(zenai.provider.Message),
@@ -250,7 +250,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .ai_client = ai_client,
         .tool_executor = tool_executor,
         .terminal = .init(allocator, history_path, Config.agentVerbosity(opts), will_repl),
-        .cmd_executor = undefined,
+        .cmd_runner = undefined,
         .verifier = .{ .session = tool_executor.session, .node_registry = &tool_executor.node_registry },
         .recorder = null,
         .messages = .empty,
@@ -265,7 +265,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .slash_schemas = slash_schemas,
     };
 
-    self.cmd_executor = CommandExecutor.init(tool_executor, &self.terminal);
+    self.cmd_runner = .init(tool_executor, &self.terminal);
 
     if (will_repl) self.terminal.attachCompleter(slash_schemas);
 
@@ -447,9 +447,9 @@ fn runRepl(self: *Agent) void {
                 self.terminal.beginTool(split.name, split.rest);
                 var arena: std.heap.ArenaAllocator = .init(self.allocator);
                 defer arena.deinit();
-                const result = self.cmd_executor.executeWithResult(arena.allocator(), cmd);
-                self.terminal.endTool(!result.failed);
-                self.cmd_executor.printResult(cmd, result);
+                const result = self.cmd_runner.executeWithResult(arena.allocator(), cmd);
+                self.terminal.endTool(!result.is_error);
+                self.cmd_runner.printResult(cmd, result);
                 if (self.recorder) |*r| r.record(cmd);
             },
         }
@@ -493,36 +493,14 @@ fn handleSlash(self: *Agent, body: []const u8) bool {
         return false;
     };
 
-    if (std.meta.stringToEnum(lp.tools.Action, schema.tool_name)) |action| {
-        const parsed_args: ?std.json.Value = if (args_json.len == 0) null else std.json.parseFromSliceLeaky(std.json.Value, aa, args_json, .{}) catch {
-            self.terminal.printErrorFmt("{s}: invalid JSON arguments", .{schema.tool_name});
-            return false;
-        };
-        if (lp.tools.callEvalLike(aa, self.tool_executor.session, &self.tool_executor.node_registry, action, parsed_args)) |outcome| {
-            self.terminal.beginTool(schema.tool_name, rest);
-            const result = outcome catch |err| {
-                self.terminal.endTool(false);
-                self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, @errorName(err) });
-                return false;
-            };
-            switch (result) {
-                .ok => |text| {
-                    self.terminal.endTool(true);
-                    self.terminal.printToolResult(schema.tool_name, text);
-                },
-                .js_error => |text| {
-                    self.terminal.endTool(false);
-                    self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, text });
-                },
-            }
-            return false;
-        }
-    }
-
     self.terminal.beginTool(schema.tool_name, rest);
     if (self.tool_executor.call(aa, schema.tool_name, args_json)) |result| {
-        self.terminal.endTool(true);
-        self.terminal.printToolResult(schema.tool_name, result);
+        self.terminal.endTool(!result.is_error);
+        if (result.is_error) {
+            self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, result.text });
+        } else {
+            self.terminal.printToolResult(schema.tool_name, result.text);
+        }
     } else |err| {
         self.terminal.endTool(false);
         self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, @errorName(err) });
@@ -710,24 +688,24 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIter
     defer cmd_arena.deinit();
     const ca = cmd_arena.allocator();
 
-    const result = self.cmd_executor.executeWithResult(ca, entry.command);
-    self.cmd_executor.printResult(entry.command, result);
+    const result = self.cmd_runner.executeWithResult(ca, entry.command);
+    self.cmd_runner.printResult(entry.command, result);
 
-    const verification: Verifier.VerifyResult = if (!result.failed and self.self_heal)
+    const verification: Verifier.VerifyResult = if (!result.is_error and self.self_heal)
         self.verifier.verify(ca, entry.command)
     else
         .inconclusive;
 
-    if (!result.failed and verification != .failed) return .ok;
+    if (!result.is_error and verification != .failed) return .ok;
 
     if (self.self_heal and self.ai_client != null) {
         // Verification-only failures often resolve with a brief wait
         // (animations, lazy-load); skip the LLM round-trip when they do.
-        if (!result.failed and isRetryable(entry.command) and self.retryCommand(ca, entry.command)) {
+        if (!result.is_error and isRetryable(entry.command) and self.retryCommand(ca, entry.command)) {
             return .ok;
         }
 
-        const msg = if (result.failed)
+        const msg = if (result.is_error)
             "Command failed, attempting self-healing..."
         else
             "Command succeeded but verification failed, attempting self-healing...";
@@ -761,10 +739,10 @@ fn retryCommand(self: *Agent, ca: std.mem.Allocator, cmd: Command.Command) bool 
     for (0..3) |i| {
         std.Thread.sleep((500 + i * 250) * std.time.ns_per_ms);
         self.terminal.printInfo("Retrying command...");
-        const retry_result = self.cmd_executor.executeWithResult(ca, cmd);
-        if (retry_result.failed) continue;
+        const retry_result = self.cmd_runner.executeWithResult(ca, cmd);
+        if (retry_result.is_error) continue;
         if (self.verifier.verify(ca, cmd) == .failed) continue;
-        self.cmd_executor.printResult(cmd, retry_result);
+        self.cmd_runner.printResult(cmd, retry_result);
         return true;
     }
     return false;
@@ -1203,29 +1181,11 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    const action = std.meta.stringToEnum(lp.tools.Action, tool_name);
-    const eval_like = if (action) |a|
-        lp.tools.callEvalLike(allocator, self.tool_executor.session, &self.tool_executor.node_registry, a, arguments)
-    else
-        null;
-    if (eval_like) |outcome| {
-        const result = outcome catch |err| {
-            const msg = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
-            self.terminal.agentToolDone(tool_name, args_str, false);
-            if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, msg);
-            return .{ .content = msg, .is_error = true };
-        };
-        const capped = capToolOutput(allocator, result.text());
-        self.terminal.agentToolDone(tool_name, args_str, !result.isError());
+    if (self.tool_executor.callValue(allocator, tool_name, arguments)) |result| {
+        const capped = capToolOutput(allocator, result.text);
+        self.terminal.agentToolDone(tool_name, args_str, !result.is_error);
         if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, capped);
-        return .{ .content = capped, .is_error = result.isError() };
-    }
-
-    if (self.tool_executor.callValue(allocator, tool_name, arguments)) |output| {
-        const capped = capToolOutput(allocator, output);
-        self.terminal.agentToolDone(tool_name, args_str, true);
-        if (self.terminal.verbosity == .high) self.terminal.printToolResult(tool_name, capped);
-        return .{ .content = capped };
+        return .{ .content = capped, .is_error = result.is_error };
     } else |err| {
         const msg = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed";
         self.terminal.agentToolDone(tool_name, args_str, false);

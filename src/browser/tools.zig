@@ -381,23 +381,27 @@ pub const ToolError = error{
     OutOfMemory,
 };
 
-/// Outcome of running JavaScript against the page. Operational failures
-/// (OOM, missing page) come out as Zig errors on the enclosing `!EvalResult`;
-/// this union only distinguishes two normal outcomes: the script ran to a
-/// value (`ok`), or V8 caught a throw (`js_error`). The text in `js_error`
-/// is the formatted V8 error — the LLM consumes it to self-correct.
-pub const EvalResult = union(enum) {
-    ok: []const u8,
-    js_error: []const u8,
+/// Outcome of running a tool against the page. Operational failures (OOM,
+/// missing page, invalid params) come out as Zig errors on the enclosing
+/// `!ToolResult`; `is_error = true` is the in-band signal for a JS-level
+/// failure (V8 caught a throw inside `eval`/`extract`) — the LLM consumes
+/// `text` either way to self-correct. Non-eval tools always set `is_error =
+/// false` on success.
+pub const ToolResult = struct {
+    text: []const u8,
+    is_error: bool = false,
 
-    pub fn text(self: EvalResult) []const u8 {
-        return switch (self) {
-            .ok, .js_error => |t| t,
-        };
+    /// Collapse a `ToolError!ToolResult` into a single value by surfacing
+    /// the Zig error name in-band (`is_error = true`). Use when the caller
+    /// treats operational and JS-level failures the same way.
+    pub fn unwrap(result: ToolError!ToolResult) ToolResult {
+        return result catch |err| .{ .text = @errorName(err), .is_error = true };
     }
 
-    pub fn isError(self: EvalResult) bool {
-        return self == .js_error;
+    /// The text payload only when the tool succeeded; `null` on failure.
+    /// Convenient for callers (e.g. `Verifier`) that bail on any error.
+    pub fn okText(self: ToolResult) ?[]const u8 {
+        return if (self.is_error) null else self.text;
     }
 };
 
@@ -446,51 +450,34 @@ pub fn call(
     registry: *CDPNode.Registry,
     tool_name: []const u8,
     arguments: ?std.json.Value,
-) ToolError![]const u8 {
+) ToolError!ToolResult {
     const action = std.meta.stringToEnum(Action, tool_name) orelse return ToolError.InvalidParams;
 
     return switch (action) {
-        .goto => execGoto(arena, session, registry, arguments),
-        .search => execSearch(arena, session, registry, arguments),
-        .markdown => execMarkdown(arena, session, registry, arguments),
-        .links => execLinks(arena, session, registry, arguments),
-        .tree => execTree(arena, session, registry, arguments),
-        .nodeDetails => execNodeDetails(arena, session, registry, arguments),
-        .interactiveElements => execInteractiveElements(arena, session, registry, arguments),
-        .structuredData => execStructuredData(arena, session, registry, arguments),
-        .detectForms => execDetectForms(arena, session, registry, arguments),
-        .click => execClick(arena, session, registry, arguments),
-        .fill => execFill(arena, session, registry, arguments),
-        .scroll => execScroll(arena, session, registry, arguments),
-        .waitForSelector => execWaitForSelector(arena, session, registry, arguments),
-        .hover => execHover(arena, session, registry, arguments),
-        .press => execPress(arena, session, registry, arguments),
-        .selectOption => execSelectOption(arena, session, registry, arguments),
-        .setChecked => execSetChecked(arena, session, registry, arguments),
-        .findElement => execFindElement(arena, session, registry, arguments),
-        .eval => (try execEval(arena, session, registry, arguments)).text(),
-        .extract => (try execExtract(arena, session, registry, arguments)).text(),
-        .getEnv => execGetEnv(arena, arguments),
-        .consoleLogs => execConsoleLogs(arena, session),
-        .getUrl => execGetUrl(session),
-        .getCookies => execGetCookies(arena, session),
-    };
-}
-
-/// `eval` and `extract` return `EvalResult` so JS errors stay distinguishable
-/// from operational ones; non-eval-like actions return null to let callers
-/// fall through to `call()`.
-pub fn callEvalLike(
-    arena: std.mem.Allocator,
-    session: *lp.Session,
-    registry: *CDPNode.Registry,
-    action: Action,
-    arguments: ?std.json.Value,
-) ?(ToolError!EvalResult) {
-    return switch (action) {
+        .goto => .{ .text = try execGoto(arena, session, registry, arguments) },
+        .search => .{ .text = try execSearch(arena, session, registry, arguments) },
+        .markdown => .{ .text = try execMarkdown(arena, session, registry, arguments) },
+        .links => .{ .text = try execLinks(arena, session, registry, arguments) },
+        .tree => .{ .text = try execTree(arena, session, registry, arguments) },
+        .nodeDetails => .{ .text = try execNodeDetails(arena, session, registry, arguments) },
+        .interactiveElements => .{ .text = try execInteractiveElements(arena, session, registry, arguments) },
+        .structuredData => .{ .text = try execStructuredData(arena, session, registry, arguments) },
+        .detectForms => .{ .text = try execDetectForms(arena, session, registry, arguments) },
+        .click => .{ .text = try execClick(arena, session, registry, arguments) },
+        .fill => .{ .text = try execFill(arena, session, registry, arguments) },
+        .scroll => .{ .text = try execScroll(arena, session, registry, arguments) },
+        .waitForSelector => .{ .text = try execWaitForSelector(arena, session, registry, arguments) },
+        .hover => .{ .text = try execHover(arena, session, registry, arguments) },
+        .press => .{ .text = try execPress(arena, session, registry, arguments) },
+        .selectOption => .{ .text = try execSelectOption(arena, session, registry, arguments) },
+        .setChecked => .{ .text = try execSetChecked(arena, session, registry, arguments) },
+        .findElement => .{ .text = try execFindElement(arena, session, registry, arguments) },
         .eval => execEval(arena, session, registry, arguments),
         .extract => execExtract(arena, session, registry, arguments),
-        else => null,
+        .getEnv => .{ .text = try execGetEnv(arena, arguments) },
+        .consoleLogs => .{ .text = try execConsoleLogs(arena, session) },
+        .getUrl => .{ .text = try execGetUrl(session) },
+        .getCookies => .{ .text = try execGetCookies(arena, session) },
     };
 }
 
@@ -502,7 +489,7 @@ pub fn evalScript(
     session: *lp.Session,
     registry: *CDPNode.Registry,
     script: []const u8,
-) ToolError!EvalResult {
+) ToolError!ToolResult {
     const z = try arena.dupeZ(u8, script);
     const page = try ensurePage(session, registry, null, null, null);
     return runEval(arena, page, z);
@@ -516,7 +503,7 @@ pub fn extract(
     session: *lp.Session,
     registry: *CDPNode.Registry,
     schema_json: []const u8,
-) ToolError!EvalResult {
+) ToolError!ToolResult {
     const trimmed = std.mem.trim(u8, schema_json, &std.ascii.whitespace);
     if (trimmed.len == 0 or trimmed[0] != '{') return error.InvalidParams;
     const valid = try std.json.validate(arena, schema_json);
@@ -750,7 +737,7 @@ fn execDetectForms(arena: std.mem.Allocator, session: *lp.Session, registry: *CD
     return renderJson(arena, forms_data);
 }
 
-fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!EvalResult {
+fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {
     const Params = struct {
         script: [:0]const u8,
         url: ?[:0]const u8 = null,
@@ -762,13 +749,13 @@ fn execEval(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     return runEval(arena, page, args.script);
 }
 
-fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!EvalResult {
+fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {
     const Params = struct { schema: []const u8 };
     const args = try parseArgs(Params, arena, arguments);
     return extract(arena, session, registry, args.schema);
 }
 
-fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) ToolError!EvalResult {
+fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) ToolError!ToolResult {
     var ls: lp.js.Local.Scope = undefined;
     page.js.localScope(&ls);
     defer ls.deinit();
@@ -778,13 +765,13 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8) Tool
     defer try_catch.deinit();
 
     const js_result = ls.local.compileAndRun(script, null) catch |err|
-        return .{ .js_error = try formatJsError(arena, &try_catch, err) };
+        return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true };
 
     const text = js_result.toStringSliceWithAlloc(arena) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return .{ .js_error = try formatJsError(arena, &try_catch, err) },
+        else => return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true },
     };
-    return .{ .ok = text };
+    return .{ .text = text };
 }
 
 fn formatJsError(arena: std.mem.Allocator, try_catch: *lp.js.TryCatch, err: anyerror) error{OutOfMemory}![]const u8 {

@@ -23,60 +23,49 @@ const Command = lp.script.Command;
 const ToolExecutor = @import("ToolExecutor.zig");
 const Terminal = @import("Terminal.zig");
 
-const CommandExecutor = @This();
+const CommandRunner = @This();
 
 tool_executor: *ToolExecutor,
 terminal: *Terminal,
 
-pub fn init(tool_executor: *ToolExecutor, terminal: *Terminal) CommandExecutor {
+pub fn init(tool_executor: *ToolExecutor, terminal: *Terminal) CommandRunner {
     return .{
         .tool_executor = tool_executor,
         .terminal = terminal,
     };
 }
 
-pub const ExecResult = struct {
-    output: []const u8,
-    failed: bool,
-};
-
 /// Caller contract: `cmd` must not be `.natural_language`, `.comment`,
 /// `.login`, or `.accept_cookies` — those are filtered upstream (see
 /// `Agent.runRepl`) because they have no tool mapping.
-pub fn executeWithResult(self: *CommandExecutor, arena: std.mem.Allocator, cmd: Command.Command) ExecResult {
+pub fn executeWithResult(self: *CommandRunner, arena: std.mem.Allocator, cmd: Command.Command) browser_tools.ToolResult {
     switch (cmd) {
         .extract => |schema| return self.execExtract(arena, schema),
-        .eval_js => |script| return evalLikeResult(self.tool_executor.callEval(arena, script)),
+        .eval_js => |script| return browser_tools.ToolResult.unwrap(self.tool_executor.callEval(arena, script)),
         else => {},
     }
 
     const tc = (Command.toToolCall(arena, cmd, browser_tools.substituteEnvVars) catch
-        return .{ .output = "out of memory", .failed = true }) orelse
-        return .{ .output = "internal: command has no tool mapping", .failed = true };
-    if (self.tool_executor.callValue(arena, tc.name, tc.args)) |output|
-        return .{ .output = output, .failed = false }
-    else |err|
-        return .{ .output = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name, @errorName(err) }) catch "tool failed", .failed = true };
+        return .{ .text = "out of memory", .is_error = true }) orelse
+        return .{ .text = "internal: command has no tool mapping", .is_error = true };
+    return self.tool_executor.callValue(arena, tc.name, tc.args) catch |err| .{
+        .text = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name, @errorName(err) }) catch "tool failed",
+        .is_error = true,
+    };
 }
 
 /// Data output (EXTRACT/EVAL/MARKDOWN/TREE) → stdout on success; everything
 /// else, including failures from those same commands, → stderr.
-pub fn printResult(self: *CommandExecutor, cmd: Command.Command, result: ExecResult) void {
-    if (cmd.producesData() and !result.failed) {
-        self.terminal.printAssistant(result.output);
+pub fn printResult(self: *CommandRunner, cmd: Command.Command, result: browser_tools.ToolResult) void {
+    if (cmd.producesData() and !result.is_error) {
+        self.terminal.printAssistant(result.text);
     } else {
-        self.terminal.printActionResult(result.output);
+        self.terminal.printActionResult(result.text);
     }
 }
 
-fn execExtract(self: *CommandExecutor, arena: std.mem.Allocator, raw_schema: []const u8) ExecResult {
+fn execExtract(self: *CommandRunner, arena: std.mem.Allocator, raw_schema: []const u8) browser_tools.ToolResult {
     const schema = browser_tools.substituteEnvVars(arena, raw_schema) catch
-        return .{ .output = "out of memory", .failed = true };
-    return evalLikeResult(self.tool_executor.extract(arena, schema));
-}
-
-// `isError` must flow into `failed` — the generic tool path can't carry it.
-fn evalLikeResult(result: browser_tools.ToolError!browser_tools.EvalResult) ExecResult {
-    const r = result catch |err| return .{ .output = @errorName(err), .failed = true };
-    return .{ .output = r.text(), .failed = r.isError() };
+        return .{ .text = "out of memory", .is_error = true };
+    return browser_tools.ToolResult.unwrap(self.tool_executor.extract(arena, schema));
 }

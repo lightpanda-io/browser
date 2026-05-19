@@ -51,7 +51,7 @@ const ElementProperty = enum {
 const failed_reason_oom = "verification failed (out of memory while formatting reason)";
 
 /// Verify that a command achieved its intent after execution. Only called
-/// when the command did not hard-fail (ExecResult.failed == false).
+/// when the command did not hard-fail (ToolResult.is_error == false).
 /// Commands without a dedicated verifier return `.inconclusive` so callers
 /// can distinguish "no verification available" from "explicitly verified".
 pub fn verify(self: *Verifier, arena: std.mem.Allocator, cmd: Command.Command) VerifyResult {
@@ -107,8 +107,5 @@ fn queryElementProperty(self: *Verifier, arena: std.mem.Allocator, selector: []c
         .{ selector_json, property.jsExpr() },
     ) catch return null;
     const result = browser_tools.evalScript(arena, self.session, self.node_registry, script) catch return null;
-    return switch (result) {
-        .ok => |t| t,
-        .js_error => null,
-    };
+    return result.okText();
 }

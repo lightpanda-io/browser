@@ -159,15 +159,12 @@ fn dispatchBrowserTool(
         return server.sendError(id, .MethodNotFound, "Tool not found");
     };
 
-    // JS errors are returned as isError tool results, not protocol errors
-    if (browser_tools.callEvalLike(arena, server.session, &server.node_registry, action, arguments)) |outcome| {
-        if (outcome) |r| {
-            if (!r.isError()) recordIfActive(server, name, arguments);
-        } else |_| {}
-        return sendEvalOutcome(server, id, outcome);
-    }
-
     const result = browser_tools.call(arena, server.session, &server.node_registry, name, arguments) catch |err| {
+        // eval/extract surface failures in-band so the LLM can self-correct;
+        // other tools' operational failures are protocol-level.
+        if (surfacesErrorInBand(action)) {
+            return sendToolResultText(server, id, @errorName(err), true);
+        }
         const code: protocol.ErrorCode = switch (err) {
             error.FrameNotLoaded => .FrameNotLoaded,
             error.NodeNotFound, error.InvalidParams => .InvalidParams,
@@ -176,9 +173,13 @@ fn dispatchBrowserTool(
         return server.sendError(id, code, @errorName(err));
     };
 
-    recordIfActive(server, name, arguments);
+    if (!result.is_error) recordIfActive(server, name, arguments);
 
-    try sendToolResultText(server, id, result, false);
+    try sendToolResultText(server, id, result.text, result.is_error);
+}
+
+fn surfacesErrorInBand(action: browser_tools.Action) bool {
+    return action == .eval or action == .extract;
 }
 
 fn recordIfActive(server: *Server, name: []const u8, arguments: ?std.json.Value) void {
@@ -269,17 +270,18 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendErrorContent(server, id, "internal: unknown action from Command.toToolCall");
     };
 
-    if (browser_tools.callEvalLike(arena, server.session, &server.node_registry, action, tc.args)) |outcome| {
-        return sendEvalOutcome(server, id, outcome);
-    }
-
     const result = browser_tools.call(arena, server.session, &server.node_registry, tc.name, tc.args) catch |err| {
+        // eval/extract get a terse error — they're line-scoped already.
+        if (surfacesErrorInBand(action)) {
+            return sendErrorContent(server, id, @errorName(err));
+        }
         const url = browser_tools.currentUrlOrPlaceholder(server.session);
         const msg = std.fmt.allocPrint(arena, "{s} failed at line `{s}` (url: {s}): {s}", .{ tc.name, args.line, url, @errorName(err) }) catch @errorName(err);
         return sendErrorContent(server, id, msg);
     };
 
-    // Post-exec verification drives the heal roundtrip on TYPE/CHECK/SELECT.
+    // Post-exec verification drives the heal roundtrip on TYPE/CHECK/SELECT;
+    // for eval/extract `verify` is a no-op (.inconclusive).
     switch (server.verifier.verify(arena, cmd)) {
         .failed => |reason| {
             const url = browser_tools.currentUrlOrPlaceholder(server.session);
@@ -289,7 +291,7 @@ fn handleScriptStep(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         .passed, .inconclusive => {},
     }
 
-    try sendToolResultText(server, id, result, false);
+    try sendToolResultText(server, id, result.text, result.is_error);
 }
 
 fn handleScriptHeal(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -370,11 +372,6 @@ fn indexLines(arena: std.mem.Allocator, content: []const u8) !std.StringHashMapU
 fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = is_error });
-}
-
-fn sendEvalOutcome(server: *Server, id: std.json.Value, outcome: browser_tools.ToolError!browser_tools.EvalResult) !void {
-    const result = outcome catch |err| return sendToolResultText(server, id, @errorName(err), true);
-    return sendToolResultText(server, id, result.text(), result.isError());
 }
 
 fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void {
