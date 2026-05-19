@@ -713,7 +713,7 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
             .cdp => |*c| cdp.onMessage(c) catch |err| {
                 // A single malformed/failed dispatch shouldn't poison
                 // the rest of the batch — log and continue.
-                log.warn(.cdp, "CDP dispatch", .{ .err = err });
+                log.err(.cdp, "CDP dispatch", .{ .err = err });
             },
             .ping => |body| cdp.onPing(body),
             .close => {
