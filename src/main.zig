@@ -223,8 +223,8 @@ fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent, fail
         return;
     };
     sig_bridge.attach(agent_instance);
-    defer sig_bridge.detach();
     defer agent_instance.deinit();
+    defer sig_bridge.detach();
 
     if (!agent_instance.run()) {
         failed.* = true;
