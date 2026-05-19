@@ -151,10 +151,11 @@ pub fn endTool(self: *Self, ok: bool) void {
 ///   gated on `medium`+. In non-TTY contexts ANSI is still emitted —
 ///   pipes that strip color see plain text via the bullet character.
 pub fn agentToolDone(self: *Self, name: []const u8, args: []const u8, ok: bool) void {
-    if (self.spinner.enabled and !ok) self.spinner.markToolFailed();
+    const spinner_on = self.spinner.enabled.load(.monotonic);
+    if (spinner_on and !ok) self.spinner.markToolFailed();
     if (!atLeast(self.verbosity, .medium)) return;
 
-    if (self.spinner.enabled) {
+    if (spinner_on) {
         const a = if (self.repl_arena) |*ra| ra else return;
         defer _ = a.reset(.retain_capacity);
         const bytes = formatBulletLine(a.allocator(), name, args, ok) catch return;

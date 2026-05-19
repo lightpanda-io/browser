@@ -1189,7 +1189,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     const self: *Agent = @ptrCast(@alignCast(ctx));
     // The spinner doesn't render args, and `agentToolDone` skips the body
     // line at low verbosity — don't pay for the stringify when nobody reads it.
-    const needs_args = self.terminal.spinner.enabled or self.terminal.verbosity != .low;
+    const needs_args = self.terminal.spinner.enabled.load(.monotonic) or self.terminal.verbosity != .low;
     const args_str: []const u8 = if (needs_args) (if (arguments) |v|
         std.json.Stringify.valueAlloc(allocator, v, .{}) catch ""
     else

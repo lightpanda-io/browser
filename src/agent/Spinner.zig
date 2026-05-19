@@ -57,7 +57,10 @@ const State = union(enum) {
     tool: ToolState,
 };
 
-enabled: bool,
+/// Atomic so the agent-thread fast-paths (`if (!self.enabled.load(...))`) and
+/// the under-lock write in `ensureWorkerLocked` don't race if a future caller
+/// touches the spinner from a non-agent thread.
+enabled: std.atomic.Value(bool),
 
 mu: std.Thread.Mutex = .{},
 cv: std.Thread.Condition = .{},
@@ -74,7 +77,7 @@ last_render_buf: [frame_buf_bytes]u8 = undefined,
 last_render_len: usize = 0,
 
 pub fn init(is_repl: bool, stderr_is_tty: bool) Self {
-    return .{ .enabled = is_repl and stderr_is_tty };
+    return .{ .enabled = .init(is_repl and stderr_is_tty) };
 }
 
 pub fn deinit(self: *Self) void {
@@ -90,7 +93,7 @@ pub fn deinit(self: *Self) void {
 
 /// Begin a new agent turn. Spawns the worker thread on first call.
 pub fn start(self: *Self) void {
-    if (!self.enabled) return;
+    if (!self.enabled.load(.monotonic)) return;
     self.mu.lock();
     defer self.mu.unlock();
     self.state = .thinking;
@@ -105,7 +108,7 @@ fn ensureWorkerLocked(self: *Self) void {
     if (self.thread == null) {
         self.thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch |err| blk: {
             log.warn(.app, "spinner thread spawn failed", .{ .err = @errorName(err) });
-            self.enabled = false;
+            self.enabled.store(false, .monotonic);
             self.state = .idle;
             self.last_render_len = 0;
             break :blk null;
@@ -116,7 +119,7 @@ fn ensureWorkerLocked(self: *Self) void {
 /// End an agent turn cleanly: clear the indicator, commit a one-line summary,
 /// reset state. Called from a `defer` in the agent code so it always runs.
 pub fn stop(self: *Self) void {
-    if (!self.enabled) return;
+    if (!self.enabled.load(.monotonic)) return;
     self.mu.lock();
     defer self.mu.unlock();
     if (self.state == .idle) return;
@@ -138,7 +141,7 @@ pub fn stop(self: *Self) void {
 /// End a turn with no commit. The caller is responsible for surfacing the
 /// outcome — tool results, error messages, or summaries.
 pub fn cancel(self: *Self) void {
-    if (!self.enabled) return;
+    if (!self.enabled.load(.monotonic)) return;
     self.mu.lock();
     defer self.mu.unlock();
     if (self.state == .idle) return;
@@ -152,7 +155,7 @@ pub fn cancel(self: *Self) void {
 /// without a preceding `start()` (state `.idle`) the label drops the `agent:`
 /// prefix — that path is for user-typed REPL commands, not LLM tool calls.
 pub fn setTool(self: *Self, name: []const u8, args: []const u8) void {
-    if (!self.enabled) return;
+    if (!self.enabled.load(.monotonic)) return;
     self.mu.lock();
     defer self.mu.unlock();
     const manual = self.state == .idle;
@@ -175,7 +178,7 @@ pub fn setTool(self: *Self, name: []const u8, args: []const u8) void {
 /// for the rest of the dwell window (`min_tool_display_ns`), then the
 /// indicator returns to thinking like any other call.
 pub fn markToolFailed(self: *Self) void {
-    if (!self.enabled) return;
+    if (!self.enabled.load(.monotonic)) return;
     self.mu.lock();
     defer self.mu.unlock();
     switch (self.state) {
@@ -191,7 +194,7 @@ pub fn markToolFailed(self: *Self) void {
 /// honors `min_tool_display_ns` — if the current tool label has not been
 /// up long enough, the flip is deferred until it has.
 pub fn setThinking(self: *Self) void {
-    if (!self.enabled) return;
+    if (!self.enabled.load(.monotonic)) return;
     self.mu.lock();
     defer self.mu.unlock();
     switch (self.state) {
@@ -207,7 +210,7 @@ pub fn setThinking(self: *Self) void {
 /// itself on the next tick. Used by `Terminal.printToolResult` to surface
 /// verbose result bodies and tool errors without interleaving with frames.
 pub fn emitAbove(self: *Self, text: []const u8) bool {
-    if (!self.enabled) return false;
+    if (!self.enabled.load(.monotonic)) return false;
     self.mu.lock();
     defer self.mu.unlock();
     if (self.state == .idle) return false;
