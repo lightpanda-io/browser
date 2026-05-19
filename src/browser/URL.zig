@@ -883,8 +883,9 @@ fn parseAuthority(raw: []const u8) ?AuthorityInfo {
     const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return null;
     const authority_start = scheme_end + 3;
 
-    // Find end of authority FIRST (start of path/query/fragment or end of string)
-    const authority_end = if (std.mem.indexOfAny(u8, raw[authority_start..], "/?#")) |end|
+    // Find end of authority FIRST (start of path/query/fragment,
+    // a NUL/CR/LF/TAB, or end of string).
+    const authority_end = if (std.mem.indexOfAny(u8, raw[authority_start..], "/?#\x00\r\n\t")) |end|
         authority_start + end
     else
         raw.len;
