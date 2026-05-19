@@ -367,6 +367,7 @@ fn lookupFieldType(schema: *const SchemaInfo, key: []const u8) FieldType {
 // ---------- tests ----------
 
 const testing = std.testing;
+const ToolExecutor = @import("ToolExecutor.zig");
 
 const ParsedTest = struct {
     tool_name: []const u8,
@@ -374,14 +375,7 @@ const ParsedTest = struct {
 };
 
 fn parse(arena: std.mem.Allocator, input: []const u8) !ParsedTest {
-    const tools = try arena.alloc(zenai.provider.Tool, browser_tools.tool_defs.len);
-    for (browser_tools.tool_defs, 0..) |td, i| {
-        tools[i] = .{
-            .name = td.name,
-            .description = td.description,
-            .parameters = try std.json.parseFromSliceLeaky(std.json.Value, arena, td.input_schema, .{}),
-        };
-    }
+    const tools = try ToolExecutor.buildTools(arena);
     const schemas = try buildSchemas(arena, tools);
     const split = splitNameRest(input) orelse return error.MissingName;
     const schema = findSchema(schemas, split.name) orelse return error.UnknownTool;

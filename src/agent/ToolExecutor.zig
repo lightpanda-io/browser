@@ -66,7 +66,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App) !*ToolExecutor {
     return self;
 }
 
-fn buildTools(arena: std.mem.Allocator) ![]const zenai.provider.Tool {
+pub fn buildTools(arena: std.mem.Allocator) ![]const zenai.provider.Tool {
     const tools = try arena.alloc(zenai.provider.Tool, browser_tools.tool_defs.len);
     for (browser_tools.tool_defs, 0..) |t, i| {
         const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, t.input_schema, .{});
