@@ -1232,14 +1232,31 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutO
 /// chars are skipped to avoid false-positive substring matches.
 pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
     const env_names = lpEnvNames() catch return input;
-    var current: []const u8 = input;
-    var changed = false;
+
+    // Iterate by value length descending. With two LP_* values where one is a
+    // substring of the other (both ≥4 chars so neither is filtered), name-order
+    // iteration would let the shorter value clobber part of the longer one
+    // before its full match is found, leaking a suffix into the recording.
+    const Pair = struct { name: []const u8, value: []const u8 };
+    var pairs: std.ArrayList(Pair) = .empty;
+    try pairs.ensureTotalCapacity(arena, env_names.len);
     for (env_names) |name| {
         const value = lookupLpEnv(name) orelse continue;
         if (value.len < 4) continue;
-        if (std.mem.indexOf(u8, current, value) == null) continue;
-        const placeholder = try std.fmt.allocPrint(arena, "${s}", .{name});
-        current = try std.mem.replaceOwned(u8, arena, current, value, placeholder);
+        pairs.appendAssumeCapacity(.{ .name = name, .value = value });
+    }
+    std.mem.sort(Pair, pairs.items, {}, struct {
+        fn lt(_: void, a: Pair, b: Pair) bool {
+            return a.value.len > b.value.len;
+        }
+    }.lt);
+
+    var current: []const u8 = input;
+    var changed = false;
+    for (pairs.items) |p| {
+        if (std.mem.indexOf(u8, current, p.value) == null) continue;
+        const placeholder = try std.fmt.allocPrint(arena, "${s}", .{p.name});
+        current = try std.mem.replaceOwned(u8, arena, current, p.value, placeholder);
         changed = true;
     }
     return if (changed) current else input;
