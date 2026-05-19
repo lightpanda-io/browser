@@ -123,6 +123,8 @@ submission_mutex: std.Thread.Mutex = .{},
 pending_add: std.DoublyLinkedList = .{},
 pending_remove: std.DoublyLinkedList = .{},
 pending_ops: std.DoublyLinkedList = .{},
+drain_to_add: std.ArrayList(*http.Connection) = .empty,
+drain_to_remove: std.ArrayList(*http.Connection) = .empty,
 
 callbacks: [MAX_TICK_CALLBACKS]TickCallback = undefined,
 callbacks_len: usize = 0,
@@ -449,6 +451,9 @@ pub fn deinit(self: *Network) void {
         f.deinit(self.allocator);
         self.allocator.destroy(f);
     }
+
+    self.drain_to_add.deinit(self.allocator);
+    self.drain_to_remove.deinit(self.allocator);
 
     globalDeinit();
 }
@@ -904,8 +909,18 @@ fn submitRemove(self: *Network, conn: *http.Connection) void {
                 conn._submission = .pending_remove;
                 self.pending_remove.append(&conn.node);
             },
-            .idle, .pending_remove => {
+            .idle => {
+                // Cancel raced with a completion that already removed the
+                // easy from the multi. The worker still has the conn in
+                // Handle.in_use and will finish it when it drains that
+                // completion.
+                if (conn.in_use) return;
                 lp.log.warn(.app, "submitRemove bad state", .{ .state = @tagName(conn._submission) });
+                return;
+            },
+            .pending_remove => {
+                // Duplicate cancel; the queued remove will deliver the
+                // canceled completion.
                 return;
             },
         }
@@ -973,8 +988,8 @@ fn drainQueue(self: *Network) void {
     // conn.node in another DoublyLinkedList: a worker submitRequest /
     // submitRemove racing with the outside-lock loop would observe
     // unsynchronized writes to conn.node otherwise.
-    var to_remove: std.ArrayList(*http.Connection) = .empty;
-    defer to_remove.deinit(self.allocator);
+    const to_remove = &self.drain_to_remove;
+    to_remove.clearRetainingCapacity();
     {
         self.submission_mutex.lock();
         defer self.submission_mutex.unlock();
@@ -990,8 +1005,8 @@ fn drainQueue(self: *Network) void {
     }
     for (to_remove.items) |conn| self.handleRemove(conn);
 
-    var to_add: std.ArrayList(*http.Connection) = .empty;
-    defer to_add.deinit(self.allocator);
+    const to_add = &self.drain_to_add;
+    to_add.clearRetainingCapacity();
     {
         self.submission_mutex.lock();
         defer self.submission_mutex.unlock();
@@ -1120,26 +1135,6 @@ fn acceptConnections(self: *Network) void {
     }
 }
 
-fn preparePollFds(self: *Network, multi: *libcurl.CurlM) void {
-    // Only the curl slice — NOT through to the end of pollfds. The CDP
-    // socket fds live in [cdp_start..] and are owned by
-    // prepareCdpPollFds, which only rebuilds them when cdp_dirty is set
-    // (a steady-state optimization). Slicing to the end here would
-    // @memset those fds to -1 every iteration once a multi exists (which
-    // happens as soon as telemetry sends its first request), silently
-    // dropping every live CDP socket from the poll set — Network then
-    // never reads another CDP message (#2508) nor observes peer
-    // EOF/shutdown (#2507).
-    const curl_fds = self.pollfds[PSEUDO_POLLFDS..self.cdp_start];
-    @memset(curl_fds, .{ .fd = -1, .events = 0, .revents = 0 });
-
-    var fd_count: c_uint = 0;
-    const wait_fds: []libcurl.CurlWaitFd = @ptrCast(curl_fds);
-    libcurl.curl_multi_waitfds(multi, wait_fds, &fd_count) catch |err| {
-        lp.log.err(.app, "curl waitfds", .{ .err = err });
-    };
-}
-
 fn getCurlTimeout(self: *Network) i32 {
     var timeout_ms: c_long = -1;
     libcurl.curl_multi_timeout(self.multi, &timeout_ms) catch return -1;
@@ -1153,15 +1148,22 @@ fn processCompletions(self: *Network, multi: *libcurl.CurlM) void {
             .done => |e| e,
             else => continue,
         };
-        if (maybe_err) |err| {
-            lp.log.warn(.app, "curl transfer error", .{ .err = err });
-        }
-
         const easy: *libcurl.Curl = msg.easy_handle;
         var ptr: *anyopaque = undefined;
         libcurl.curl_easy_getinfo(easy, .private, &ptr) catch
             lp.assert(false, "curl getinfo private", .{});
         const conn: *http.Connection = @ptrCast(@alignCast(ptr));
+
+        if (maybe_err) |err| {
+            switch (conn.transport) {
+                .websocket => {
+                    if (err != error.GotNothing) {
+                        lp.log.warn(.app, "curl transfer error", .{ .err = err });
+                    }
+                },
+                else => lp.log.warn(.app, "curl transfer error", .{ .err = err }),
+            }
+        }
 
         libcurl.curl_multi_remove_handle(multi, easy) catch {};
 
@@ -1623,41 +1625,4 @@ fn loadCerts(allocator: Allocator) !libcurl.CurlBlob {
         .data = result.ptr,
         .flags = 0,
     };
-}
-
-const testing = @import("../testing.zig");
-
-test "Network: preparePollFds leaves the CDP fd region untouched" {
-    // Regression for #2507 / #2508. Once a multi exists (telemetry creates
-    // one in optimized builds), preparePollFds runs every loop iteration.
-    // It rebuilds only the curl slice [PSEUDO_POLLFDS..cdp_start]; the CDP
-    // region [cdp_start..] is owned by prepareCdpPollFds, which keeps its
-    // entries across iterations and only rebuilds when cdp_dirty is set.
-    // A slice that ran to the end of pollfds @memset those CDP sockets to
-    // -1, silently dropping every live CDP connection from the poll set —
-    // so Network stopped reading CDP messages (#2508) and never observed
-    // peer EOF/shutdown (#2507). curl global is initialized by the test
-    // harness (App.init -> Network.init).
-    const multi = libcurl.curl_multi_init() orelse return error.FailedToInitMulti;
-    defer libcurl.curl_multi_cleanup(multi) catch {};
-
-    const curl_slots = 4;
-    const cdp_slots = 3;
-    var pollfds: [PSEUDO_POLLFDS + curl_slots + cdp_slots]posix.pollfd = undefined;
-    @memset(&pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
-
-    // preparePollFds only reads self.pollfds and self.cdp_start.
-    var nw: Network = undefined;
-    nw.pollfds = &pollfds;
-    nw.cdp_start = PSEUDO_POLLFDS + curl_slots;
-
-    // Two live CDP sockets parked in the CDP region, mimicking the steady
-    // state between cdp_dirty rebuilds.
-    pollfds[nw.cdp_start] = .{ .fd = 4242, .events = posix.POLL.IN, .revents = 0 };
-    pollfds[nw.cdp_start + 1] = .{ .fd = 4243, .events = posix.POLL.IN, .revents = 0 };
-
-    nw.preparePollFds(multi);
-
-    try testing.expectEqual(@as(posix.fd_t, 4242), pollfds[nw.cdp_start].fd);
-    try testing.expectEqual(@as(posix.fd_t, 4243), pollfds[nw.cdp_start + 1].fd);
 }

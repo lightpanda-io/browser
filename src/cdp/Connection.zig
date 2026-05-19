@@ -35,6 +35,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 pub const Connection = @This();
 
 pub const State = enum { handshaking, live };
+const HANDSHAKE_TIMEOUT_MS: u32 = 10_000;
 
 // reference to http_client.inbox
 inbox: *Inbox,
@@ -160,13 +161,27 @@ pub fn sendJSONRaw(
 pub const HttpResult = enum { more, upgraded, close };
 
 pub fn handshake(self: *Connection) !bool {
+    return self.handshakeWithTimeout(HANDSHAKE_TIMEOUT_MS);
+}
+
+pub fn handshakeWithTimeout(self: *Connection, timeout_ms: u32) !bool {
+    var timer = try std.time.Timer.start();
     while (true) {
+        const elapsed_ms: u32 = @intCast(@min(
+            timer.read() / std.time.ns_per_ms,
+            std.math.maxInt(u32),
+        ));
+        if (elapsed_ms >= timeout_ms) {
+            log.info(.cdp, "CDP handshake timeout", .{});
+            return false;
+        }
+        const wait_ms: i32 = @intCast(@min(timeout_ms - elapsed_ms, std.math.maxInt(i32)));
         var pfds = [_]posix.pollfd{.{
             .fd = self.socket,
             .events = posix.POLL.IN,
             .revents = 0,
         }};
-        const n = try posix.poll(&pfds, 5000);
+        const n = try posix.poll(&pfds, wait_ms);
         if (n == 0) {
             log.info(.cdp, "CDP handshake timeout", .{});
             return false;
@@ -561,4 +576,27 @@ fn toLower(str: []u8) []u8 {
         str[i] = std.ascii.toLower(ch);
     }
     return str;
+}
+
+test "Connection: handshake times out silent client" {
+    var pair: [2]posix.socket_t = undefined;
+    const rc = std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair);
+    if (rc != 0) return error.SocketPairFailed;
+    defer posix.close(pair[1]);
+
+    var arena_pool = ArenaPool.init(std.testing.allocator, .{});
+    defer arena_pool.deinit();
+
+    var inbox: Inbox = .{};
+    defer inbox.deinit(&arena_pool);
+
+    var conn: Connection = undefined;
+    try conn.init(std.testing.allocator, pair[0], "", &inbox, &arena_pool);
+    defer {
+        conn.deinit();
+        posix.close(pair[0]);
+    }
+
+    const upgraded = try conn.handshakeWithTimeout(10);
+    try std.testing.expectEqual(false, upgraded);
 }

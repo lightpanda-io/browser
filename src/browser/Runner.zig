@@ -183,6 +183,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, opts: TickOpts) !TickResult {
             // store http_client.handle.http_active BEFORE this call and then use
             // it AFTER.
             try browser.runMacrotasks();
+            http_client.drainReadyWs();
 
             const http_active = http_client.handle.http_active;
             const total_network_activity = http_active + http_client.interception_layer.intercepted;

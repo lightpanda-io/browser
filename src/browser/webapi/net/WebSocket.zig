@@ -256,6 +256,17 @@ pub fn kill(self: *WebSocket) void {
     self.cleanup(false);
 }
 
+pub fn completeShutdown(self: *WebSocket) void {
+    self._mutex.lock();
+    self._ready_state = .closed;
+    self._pending_open = false;
+    self._pending_close = null;
+    self._pending_messages.clearRetainingCapacity();
+    self._recv_buffer.clearRetainingCapacity();
+    self._mutex.unlock();
+    self.cleanup(true);
+}
+
 pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
     defer self.cleanup(true);
 
@@ -608,6 +619,7 @@ pub fn drainPending(self: *WebSocket) void {
         self.dispatchCloseEvent(pc.code, pc.reason, pc.was_clean) catch |err| {
             log.err(.websocket, "close event dispatch failed", .{ .err = err });
         };
+        self.cleanup(false);
     }
 }
 
@@ -768,8 +780,14 @@ fn receivedDataCallback(buffer: [*]const u8, buf_count: usize, buf_len: usize, d
 
 fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
     const self = conn.transport.websocket;
+    var close_after_unlock = false;
     self._mutex.lock();
-    defer self._mutex.unlock();
+    defer {
+        self._mutex.unlock();
+        if (close_after_unlock) {
+            self.cleanup(false);
+        }
+    }
 
     const meta = conn.wsMeta() orelse {
         log.err(.websocket, "missing meta", .{ .url = self._url });
@@ -809,12 +827,26 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
             else
                 1005; // No status code received
 
-            if (self._ready_state == .closing) {
-                // Client-initiated close — server's response. Don't
-                // disconnect inline: we're inside a libcurl callback
-                // and tearing the conn down here would UAF the easy
-                // handle. Curl will deliver normal completion when the
-                // server closes the socket per RFC 6455 §5.5.1.
+            if (self._ready_state == .closed) {
+                // Already completed locally after sending our close frame.
+            } else if (self._ready_state == .closing) {
+                // Client-initiated close: this is the server's response.
+                // Finish the JS close flow now, then remove the easy after
+                // the callback returns. Some servers reply with a close
+                // frame but keep the TCP socket open.
+                self._close_code = received_code;
+                if (message.len > 2) {
+                    self._close_reason = try self._arena.dupe(u8, message[2..]);
+                }
+                self._ready_state = .closed;
+                self._pending_close = .{
+                    .code = self._close_code,
+                    .reason = self._close_reason,
+                    .was_clean = true,
+                    .with_error = false,
+                };
+                self.markReadyLocked();
+                close_after_unlock = true;
             } else {
                 self._close_code = received_code;
                 if (message.len > 2) {
@@ -941,4 +973,8 @@ pub const JsApi = struct {
 const testing = @import("../../../testing.zig");
 test "WebApi: WebSocket" {
     try testing.htmlRunner("net/websocket.html", .{});
+}
+
+test "WebApi: WebSocket basic close" {
+    try testing.htmlRunner("net/websocket_basic_close.html", .{});
 }
