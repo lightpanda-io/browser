@@ -1304,6 +1304,10 @@ pub const Handle = struct {
         return self._wake_pipe[0];
     }
 
+    pub fn wake(self: *Handle) void {
+        _ = posix.write(self._wake_pipe[1], &.{1}) catch {};
+    }
+
     // Producer side (network thread). Stashes the err on the conn,
     // appends to the cross-thread queue and wakes the worker.
     fn pushCompletion(self: *Handle, conn: *http.Connection, err: ?anyerror) void {
@@ -1313,7 +1317,7 @@ pub const Handle = struct {
             defer self._completion_mutex.unlock();
             self._completion_queue.append(&conn.node);
         }
-        _ = posix.write(self._wake_pipe[1], &.{1}) catch {};
+        self.wake();
     }
 
     // No-op: the network thread drives the multi. Kept for API

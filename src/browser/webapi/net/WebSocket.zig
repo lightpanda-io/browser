@@ -48,9 +48,6 @@ _arena: Allocator,
 // Cached so deinit can release the arena even after `_frame._page` has
 // been torn down.
 _arena_pool: *ArenaPool,
-// Guards mutable state shared between the network thread (libcurl
-// callbacks) and the worker thread (close, drainPending, etc.).
-_mutex: std.Thread.Mutex = .{},
 
 // Connection state
 _ready_state: ReadyState = .connecting,
@@ -68,33 +65,18 @@ _req_headers: http.Headers,
 _owner_node: std.DoublyLinkedList.Node = .{},
 _owner_linked: bool = false,
 
-// buffered outgoing messages
-_send_queue: std.ArrayList(Message) = .empty,
+// Network-side outgoing messages. Browser APIs enqueue CommandData through
+// HttpClient; libcurl read callbacks drain those commands here.
+_send_queue: std.ArrayList(CommandData) = .empty,
 _send_offset: usize = 0,
 
-// Single growing buffer for assembled ws frame bytes — both "currently
-// assembling" and "completed but not yet dispatched" messages live here.
-// Reset to zero length only by drainPending. Capacity grows to fit the
-// largest message ever received, then stays put (arena allocation, never
-// freed mid-life). Pending message data is referenced via _pending_messages
-// offset/length pairs into items — slices stay valid until drain clears.
+// Network-side frame assembly buffer. Completed frames are copied into
+// HttpClient's WebSocket event queue and dispatched by the browser thread.
 _recv_buffer: std.ArrayList(u8) = .empty,
 
 // Offset within _recv_buffer where the current in-flight frame began.
 // Used to slice out the message when bytes_left reaches 0.
 _assembling_start: usize = 0,
-
-// Events queued by libcurl callbacks; drained from the worker thread via
-// drainPending. Callbacks must NEVER enter V8 directly (they can run from
-// any thread driving curl_multi_perform), so all dispatch happens here.
-_pending_messages: std.ArrayList(QueuedMessage) = .empty,
-_pending_open: bool = false,
-_pending_close: ?PendingClose = null,
-
-// Set while we're sitting in HttpClient.ws_ready. Doubles as the dedup
-// flag and the marker that we hold one extra "pending events" ref so the
-// WebSocket stays alive between queueing and drain.
-_in_ready_list: bool = false,
 
 // Set while a cancel is in flight. We hold an extra ref so the WS
 // can't be freed before the canceled completion arrives via
@@ -121,12 +103,6 @@ pub const ReadyState = enum(u8) {
     closed = 3,
 };
 
-const QueuedMessage = struct {
-    offset: usize,
-    len: usize,
-    frame_type: http.WsFrameType,
-};
-
 const PendingClose = struct {
     code: u16,
     reason: []const u8,
@@ -137,6 +113,60 @@ const PendingClose = struct {
 pub const BinaryType = enum {
     blob,
     arraybuffer,
+};
+
+pub const QueuedEvent = struct {
+    node: std.DoublyLinkedList.Node = .{},
+    ws: *WebSocket,
+    data: EventData,
+};
+
+pub const QueuedCommand = struct {
+    node: std.DoublyLinkedList.Node = .{},
+    ws: *WebSocket,
+    data: CommandData,
+};
+
+pub const EventData = union(enum) {
+    open: ?[]const u8,
+    message: MessageData,
+    close: PendingClose,
+
+    pub const MessageData = struct {
+        data: []const u8,
+        frame_type: http.WsFrameType,
+    };
+
+    pub fn deinit(self: EventData, allocator: Allocator) void {
+        switch (self) {
+            .open => {},
+            .message => |msg| allocator.free(msg.data),
+            .close => {},
+        }
+    }
+};
+
+pub const CommandData = union(enum) {
+    close: CloseCommand,
+    text: Content,
+    binary: Content,
+
+    pub const CloseCommand = struct {
+        code: u16,
+        reason: []const u8,
+    };
+
+    pub const Content = struct {
+        arena: Allocator,
+        data: []const u8,
+    };
+
+    pub fn deinit(self: CommandData, pool: *ArenaPool) void {
+        switch (self) {
+            .text, .binary => |msg| pool.release(msg.arena),
+            .close => {},
+        }
+    }
 };
 
 pub fn init(url: []const u8, protocols: [][]const u8, frame: *Frame) !*WebSocket {
@@ -250,28 +280,18 @@ fn asEventTarget(self: *WebSocket) *EventTarget {
 
 // we're being aborted internally (e.g. frame shutting down)
 pub fn kill(self: *WebSocket) void {
-    self._mutex.lock();
     self._ready_state = .closed;
-    self._mutex.unlock();
     self.cleanup(false);
 }
 
 pub fn completeShutdown(self: *WebSocket) void {
-    self._mutex.lock();
     self._ready_state = .closed;
-    self._pending_open = false;
-    self._pending_close = null;
-    self._pending_messages.clearRetainingCapacity();
     self._recv_buffer.clearRetainingCapacity();
-    self._mutex.unlock();
     self.cleanup(true);
 }
 
 pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
     defer self.cleanup(true);
-
-    self._mutex.lock();
-    defer self._mutex.unlock();
 
     if (self._ready_state == .closed) return;
 
@@ -284,19 +304,26 @@ pub fn disconnected(self: *WebSocket, err_: ?anyerror) void {
         log.info(.websocket, "disconnected", .{ .url = self._url, .reason = "closed" });
     }
 
-    self._pending_close = .{
+    const pc = PendingClose{
         .code = if (was_clean) self._close_code else 1006,
         .reason = if (was_clean) self._close_reason else "",
         .was_clean = was_clean,
         .with_error = !was_clean,
     };
-    self.markReadyLocked();
+    if (pc.with_error) {
+        self.dispatchErrorEvent() catch |err| {
+            log.err(.websocket, "error event dispatch failed", .{ .err = err });
+        };
+    }
+    self.dispatchCloseEvent(pc.code, pc.reason, pc.was_clean) catch |err| {
+        log.err(.websocket, "close event dispatch failed", .{ .err = err });
+    };
 }
 
 fn cleanup(self: *WebSocket, completed: bool) void {
-    self._mutex.lock();
+    self._http_client.ws_queue_mutex.lock();
     const conn = self._conn orelse {
-        self._mutex.unlock();
+        self._http_client.ws_queue_mutex.unlock();
         return;
     };
     if (self._owner_linked) {
@@ -305,12 +332,12 @@ fn cleanup(self: *WebSocket, completed: bool) void {
     }
     if (!completed) {
         if (self._cancel_pending) {
-            self._mutex.unlock();
+            self._http_client.ws_queue_mutex.unlock();
             return;
         }
         self._cancel_pending = true;
         self.acquireRef();
-        self._mutex.unlock();
+        self._http_client.ws_queue_mutex.unlock();
         self._http_client.handle.submitRemove(conn);
         return;
     }
@@ -319,8 +346,9 @@ fn cleanup(self: *WebSocket, completed: bool) void {
     self._conn = null;
     const release_cancel_ref = self._cancel_pending;
     self._cancel_pending = false;
+    self._http_client.clearWebSocketCommandsLocked(self);
     self._send_queue.clearRetainingCapacity();
-    self._mutex.unlock();
+    self._http_client.ws_queue_mutex.unlock();
 
     self._http_client.handle.finishConn(conn);
     self.releaseRef(self._frame._page); // create-time
@@ -329,21 +357,8 @@ fn cleanup(self: *WebSocket, completed: bool) void {
     }
 }
 
-fn queueMessage(self: *WebSocket, msg: Message) !void {
-    self._mutex.lock();
-    defer self._mutex.unlock();
-    return self.queueMessageLocked(msg);
-}
-
-fn queueMessageLocked(self: *WebSocket, msg: Message) !void {
-    const was_empty = self._send_queue.items.len == 0;
-    try self._send_queue.append(self._arena, msg);
-
-    if (was_empty) {
-        if (self._conn) |conn| {
-            self._http_client.handle.submitUnpause(conn);
-        }
-    }
+fn queueCommand(self: *WebSocket, command: CommandData) !void {
+    try self._http_client.addWebSocketCommand(self, command);
 }
 
 fn isValidProtocol(protocol: []const u8) bool {
@@ -399,7 +414,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
         .blob => |blob| {
             const arena = try self._frame.getArena(blob._slice.len, "WebSocket.message");
             errdefer self._frame.releaseArena(arena);
-            try self.queueMessage(.{ .binary = .{
+            try self.queueCommand(.{ .binary = .{
                 .arena = arena,
                 .data = try arena.dupe(u8, blob._slice),
             } });
@@ -408,7 +423,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
             if (js_val.isString()) |str| {
                 const arena = try self._frame.getArena(str.len(), "WebSocket.message");
                 errdefer self._frame.releaseArena(arena);
-                try self.queueMessage(.{ .text = .{
+                try self.queueCommand(.{ .text = .{
                     .arena = arena,
                     .data = try str.toSliceWithAlloc(arena),
                 } });
@@ -418,7 +433,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
 
                 const arena = try self._frame.getArena(buffer.len, "WebSocket.message");
                 errdefer self._frame.releaseArena(arena);
-                try self.queueMessage(.{ .binary = .{
+                try self.queueCommand(.{ .binary = .{
                     .arena = arena,
                     .data = try arena.dupe(u8, buffer),
                 } });
@@ -438,26 +453,25 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
     const code = code_ orelse 1000;
     const reason = reason_ orelse "";
 
-    self._mutex.lock();
+    self._http_client.ws_queue_mutex.lock();
     if (self._ready_state == .closing or self._ready_state == .closed) {
-        self._mutex.unlock();
+        self._http_client.ws_queue_mutex.unlock();
         return;
     }
 
     if (self._ready_state == .connecting) {
         const reason_dup = self._arena.dupe(u8, reason) catch |err| {
-            self._mutex.unlock();
+            self._http_client.ws_queue_mutex.unlock();
             return err;
         };
         self._ready_state = .closed;
-        self._pending_close = .{
+        self._http_client.ws_queue_mutex.unlock();
+        self.queueEvent(.{ .close = .{
             .code = code,
             .reason = reason_dup,
             .was_clean = false,
             .with_error = false,
-        };
-        self.markReadyLocked();
-        self._mutex.unlock();
+        } });
         self.cleanup(false);
         return;
     }
@@ -465,11 +479,14 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
     self._ready_state = .closing;
     self._close_code = code;
     self._close_reason = self._arena.dupe(u8, reason) catch |err| {
-        self._mutex.unlock();
+        self._http_client.ws_queue_mutex.unlock();
         return err;
     };
-    const queue_err = self.queueMessageLocked(.close);
-    self._mutex.unlock();
+    self._http_client.ws_queue_mutex.unlock();
+    const queue_err = self.queueCommand(.{ .close = .{
+        .code = code,
+        .reason = self._close_reason,
+    } });
     return queue_err;
 }
 
@@ -478,23 +495,31 @@ pub fn getUrl(self: *const WebSocket) []const u8 {
 }
 
 pub fn getReadyState(self: *const WebSocket) u16 {
-    const ws: *WebSocket = @constCast(self);
-    ws._mutex.lock();
-    defer ws._mutex.unlock();
-    return @intFromEnum(ws._ready_state);
+    return @intFromEnum(self._ready_state);
 }
 
 pub fn getBufferedAmount(self: *const WebSocket) u32 {
     const ws: *WebSocket = @constCast(self);
-    ws._mutex.lock();
-    defer ws._mutex.unlock();
+    ws._http_client.ws_queue_mutex.lock();
+    defer ws._http_client.ws_queue_mutex.unlock();
 
     var buffered: u32 = 0;
     for (ws._send_queue.items) |msg| {
         switch (msg) {
             .text, .binary => |byte_msg| buffered += @intCast(byte_msg.data.len),
-            .close => buffered += @intCast(2 + ws._close_reason.len),
+            .close => |close_cmd| buffered += @intCast(2 + close_cmd.reason.len),
         }
+    }
+    var maybe_node = ws._http_client.ws_command_queue.first;
+    while (maybe_node) |node| {
+        const command: *QueuedCommand = @fieldParentPtr("node", node);
+        if (command.ws == ws) {
+            switch (command.data) {
+                .text, .binary => |byte_msg| buffered += @intCast(byte_msg.data.len),
+                .close => |close_cmd| buffered += @intCast(2 + close_cmd.reason.len),
+            }
+        }
+        maybe_node = node.next;
     }
     return buffered;
 }
@@ -565,61 +590,38 @@ pub fn setOnClose(self: *WebSocket, cb_: ?js.Function) !void {
     }
 }
 
-fn markReady(self: *WebSocket) void {
-    self._mutex.lock();
-    defer self._mutex.unlock();
-    self.markReadyLocked();
+fn queueEvent(self: *WebSocket, data: EventData) void {
+    self._http_client.addWebSocketEvent(self, data);
 }
 
-fn markReadyLocked(self: *WebSocket) void {
-    if (self._in_ready_list) return;
-    self._in_ready_list = true;
-    self.acquireRef();
-    self._http_client.addReadyWs(self);
-}
-
-// Dispatches all queued events to JS. Must be called from the worker
-// thread (the one that owns the V8 isolate). Snapshots all pending
-// state under the mutex so JS callbacks can safely re-enter while we
-// dispatch — they observe a fresh, empty queue.
-pub fn drainPending(self: *WebSocket) void {
-    self._mutex.lock();
-    self._in_ready_list = false;
-    const pending_open = self._pending_open;
-    self._pending_open = false;
-    const pending_close = self._pending_close;
-    self._pending_close = null;
-    const pending_messages = self._pending_messages;
-    self._pending_messages = .empty;
-    const recv_buffer = self._recv_buffer;
-    self._recv_buffer = .empty;
-    self._mutex.unlock();
-
-    defer self.releaseRef(self._frame._page);
-
-    if (pending_open) {
-        self.dispatchOpenEvent() catch |err| {
-            log.err(.websocket, "open event fail", .{ .err = err });
-        };
-    }
-
-    for (pending_messages.items) |msg| {
-        const data = recv_buffer.items[msg.offset..][0..msg.len];
-        self.dispatchMessageEvent(data, msg.frame_type) catch |err| {
-            log.warn(.websocket, "message dispatch", .{ .err = err });
-        };
-    }
-
-    if (pending_close) |pc| {
-        if (pc.with_error) {
-            self.dispatchErrorEvent() catch |err| {
-                log.err(.websocket, "error event dispatch failed", .{ .err = err });
+pub fn drainEvent(self: *WebSocket, data: EventData) void {
+    switch (data) {
+        .open => |protocol| {
+            if (protocol) |p| self._protocol = p;
+            self._ready_state = .open;
+            self.dispatchOpenEvent() catch |err| {
+                log.err(.websocket, "open event fail", .{ .err = err });
             };
-        }
-        self.dispatchCloseEvent(pc.code, pc.reason, pc.was_clean) catch |err| {
-            log.err(.websocket, "close event dispatch failed", .{ .err = err });
-        };
-        self.cleanup(false);
+        },
+        .message => |msg| {
+            self.dispatchMessageEvent(msg.data, msg.frame_type) catch |err| {
+                log.warn(.websocket, "message dispatch", .{ .err = err });
+            };
+        },
+        .close => |pc| {
+            self._ready_state = .closed;
+            self._close_code = pc.code;
+            self._close_reason = pc.reason;
+            if (pc.with_error) {
+                self.dispatchErrorEvent() catch |err| {
+                    log.err(.websocket, "error event dispatch failed", .{ .err = err });
+                };
+            }
+            self.dispatchCloseEvent(pc.code, pc.reason, pc.was_clean) catch |err| {
+                log.err(.websocket, "close event dispatch failed", .{ .err = err });
+            };
+            self.cleanup(false);
+        },
     }
 }
 
@@ -697,23 +699,24 @@ fn _sendDataCallback(conn: *http.Connection, buf: []u8) !usize {
     lp.assert(buf.len >= 2, "WS short buffer", .{ .len = buf.len });
 
     const self = conn.transport.websocket;
-    self._mutex.lock();
-    defer self._mutex.unlock();
+    self._http_client.ws_queue_mutex.lock();
+    defer self._http_client.ws_queue_mutex.unlock();
+
+    try self._http_client.drainWebSocketCommandsLocked(self, &self._send_queue, self._arena);
 
     if (self._send_queue.items.len == 0) {
-        // No data to send - pause until queueMessage is called
+        // No data to send - pause until a queued command unpauses the socket.
         return http.readfunc_pause;
     }
 
     const msg = &self._send_queue.items[0];
 
     switch (msg.*) {
-        .close => {
-            const code = self._close_code;
-            const reason = self._close_reason;
-
+        .close => |close_cmd| {
             // Close frame: 2 bytes for code (big-endian) + optional reason
             // Truncate reason to fit in buf (max 123 bytes per spec)
+            const code = close_cmd.code;
+            const reason = close_cmd.reason;
             const reason_len: usize = @min(reason.len, 123, buf.len -| 2);
             const frame_len = 2 + reason_len;
             const to_copy = @min(buf.len, frame_len);
@@ -728,7 +731,8 @@ fn _sendDataCallback(conn: *http.Connection, buf: []u8) !usize {
             try conn.wsStartFrame(.close, to_copy);
             @memcpy(buf[0..to_copy], close_payload[0..to_copy]);
 
-            _ = self._send_queue.orderedRemove(0);
+            const removed = self._send_queue.orderedRemove(0);
+            removed.deinit(self._arena_pool);
             return to_copy;
         },
         .text => |content| return self.writeContent(conn, buf, content, .text),
@@ -736,7 +740,7 @@ fn _sendDataCallback(conn: *http.Connection, buf: []u8) !usize {
     }
 }
 
-fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: Message.Content, frame_type: http.WsFrameType) !usize {
+fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: CommandData.Content, frame_type: http.WsFrameType) !usize {
     if (self._send_offset == 0) {
         // start of the message
         if (comptime IS_DEBUG) {
@@ -780,14 +784,6 @@ fn receivedDataCallback(buffer: [*]const u8, buf_count: usize, buf_len: usize, d
 
 fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
     const self = conn.transport.websocket;
-    var close_after_unlock = false;
-    self._mutex.lock();
-    defer {
-        self._mutex.unlock();
-        if (close_after_unlock) {
-            self.cleanup(false);
-        }
-    }
 
     const meta = conn.wsMeta() orelse {
         log.err(.websocket, "missing meta", .{ .url = self._url });
@@ -813,12 +809,12 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
     const len = self._recv_buffer.items.len - start;
     switch (meta.frame_type) {
         .text, .binary => {
-            try self._pending_messages.append(self._arena, .{
-                .offset = start,
-                .len = len,
+            const message = self._recv_buffer.items[start..][0..len];
+            self.queueEvent(.{ .message = .{
+                .data = try self._http_client.allocator.dupe(u8, message),
                 .frame_type = meta.frame_type,
-            });
-            self.markReadyLocked();
+            } });
+            self._recv_buffer.shrinkRetainingCapacity(start);
         },
         .close => {
             const message = self._recv_buffer.items[start..][0..len];
@@ -839,21 +835,22 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
                     self._close_reason = try self._arena.dupe(u8, message[2..]);
                 }
                 self._ready_state = .closed;
-                self._pending_close = .{
+                self.queueEvent(.{ .close = .{
                     .code = self._close_code,
                     .reason = self._close_reason,
                     .was_clean = true,
                     .with_error = false,
-                };
-                self.markReadyLocked();
-                close_after_unlock = true;
+                } });
             } else {
                 self._close_code = received_code;
                 if (message.len > 2) {
                     self._close_reason = try self._arena.dupe(u8, message[2..]);
                 }
                 self._ready_state = .closing;
-                try self.queueMessageLocked(.close);
+                try self.queueCommand(.{ .close = .{
+                    .code = self._close_code,
+                    .reason = self._close_reason,
+                } });
             }
             self._recv_buffer.shrinkRetainingCapacity(start);
         },
@@ -871,8 +868,6 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
     }
     const conn: *http.Connection = @ptrCast(@alignCast(data));
     const self = conn.transport.websocket;
-    self._mutex.lock();
-    defer self._mutex.unlock();
 
     const header = buffer[0..buf_len];
 
@@ -889,11 +884,8 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
             return 0;
         }
 
-        self._ready_state = .open;
         log.info(.websocket, "connected", .{ .url = self._url });
-
-        self._pending_open = true;
-        self.markReadyLocked();
+        self.queueEvent(.{ .open = if (self._protocol.len > 0) self._protocol else null });
         return buf_len;
     }
 
@@ -919,23 +911,6 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
 
     return buf_len;
 }
-
-const Message = union(enum) {
-    close,
-    text: Content,
-    binary: Content,
-
-    const Content = struct {
-        arena: Allocator,
-        data: []const u8,
-    };
-    fn deinit(self: Message, pool: *ArenaPool) void {
-        switch (self) {
-            .text, .binary => |msg| pool.release(msg.arena),
-            .close => {},
-        }
-    }
-};
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(WebSocket);
