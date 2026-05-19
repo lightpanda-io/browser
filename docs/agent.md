@@ -193,7 +193,7 @@ from selector drift, not to redesign the script.
 ```
 
 `--task` runs a single user turn, prints the final answer on stdout, and
-exits. Combine with `--task-attachment <path>` (repeatable) to feed local
+exits. Combine with `-a <path>` / `--attach <path>` (repeatable) to feed local
 files to providers that accept attachments. Text files are inlined into
 the prompt (max 512 KiB each); binary files (`image/*`, `audio/*`, `pdf`)
 are base64-encoded inline (max 20 MiB each). Unsupported MIME types

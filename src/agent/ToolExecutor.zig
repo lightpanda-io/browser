@@ -24,7 +24,7 @@ const App = @import("../App.zig");
 const CDPNode = @import("../cdp/Node.zig");
 const browser_tools = lp.tools;
 
-const Self = @This();
+const ToolExecutor = @This();
 
 allocator: std.mem.Allocator,
 app: *App,
@@ -37,11 +37,11 @@ tool_schema_arena: std.heap.ArenaAllocator,
 /// every JSON `Value` inside live in `tool_schema_arena`.
 tools: []const zenai.provider.Tool,
 
-pub fn init(allocator: std.mem.Allocator, app: *App) !*Self {
+pub fn init(allocator: std.mem.Allocator, app: *App) !*ToolExecutor {
     const notification: *lp.Notification = try .init(allocator);
     errdefer notification.deinit();
 
-    const self = try allocator.create(Self);
+    const self = try allocator.create(ToolExecutor);
     errdefer allocator.destroy(self);
 
     self.* = .{
@@ -75,7 +75,7 @@ fn buildTools(arena: std.mem.Allocator) ![]const zenai.provider.Tool {
     return tools;
 }
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *ToolExecutor) void {
     self.tool_schema_arena.deinit();
     self.node_registry.deinit();
     self.browser.deinit();
@@ -88,21 +88,21 @@ pub const CallError = browser_tools.ToolError || error{InvalidJsonArguments};
 /// Allocator backing the parsed tool schemas. Lives for the executor's
 /// lifetime, so callers can hand back slices that need the same lifetime
 /// (e.g. derived caches over `getTools` output).
-pub fn schemaAllocator(self: *Self) std.mem.Allocator {
+pub fn schemaAllocator(self: *ToolExecutor) std.mem.Allocator {
     return self.tool_schema_arena.allocator();
 }
 
-pub fn getCurrentUrl(self: *Self) []const u8 {
+pub fn getCurrentUrl(self: *ToolExecutor) []const u8 {
     return browser_tools.currentUrlOrPlaceholder(self.session);
 }
 
 /// Run a JavaScript expression. Operational failures (OOM, missing page)
 /// come back as `ToolError`; JS errors are returned as data inside `EvalResult`.
-pub fn callEval(self: *Self, arena: std.mem.Allocator, script: []const u8) browser_tools.ToolError!browser_tools.EvalResult {
+pub fn callEval(self: *ToolExecutor, arena: std.mem.Allocator, script: []const u8) browser_tools.ToolError!browser_tools.EvalResult {
     return browser_tools.evalScript(arena, self.session, &self.node_registry, script);
 }
 
-pub fn call(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments_json: []const u8) CallError![]const u8 {
+pub fn call(self: *ToolExecutor, arena: std.mem.Allocator, tool_name: []const u8, arguments_json: []const u8) CallError![]const u8 {
     const arguments: ?std.json.Value = if (arguments_json.len > 0)
         std.json.parseFromSliceLeaky(std.json.Value, arena, arguments_json, .{}) catch
             return error.InvalidJsonArguments
@@ -115,10 +115,10 @@ pub fn call(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, argume
 /// Like `call` but takes an already-parsed JSON value. Skips the
 /// stringify+reparse for callers (e.g. PandaScript replay) that already
 /// have a `std.json.Value`.
-pub fn callValue(self: *Self, arena: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) browser_tools.ToolError![]const u8 {
+pub fn callValue(self: *ToolExecutor, arena: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) browser_tools.ToolError![]const u8 {
     return browser_tools.call(arena, self.session, &self.node_registry, tool_name, arguments);
 }
 
-pub fn extract(self: *Self, arena: std.mem.Allocator, schema_json: []const u8) browser_tools.ToolError!browser_tools.EvalResult {
+pub fn extract(self: *ToolExecutor, arena: std.mem.Allocator, schema_json: []const u8) browser_tools.ToolError!browser_tools.EvalResult {
     return browser_tools.extract(arena, self.session, &self.node_registry, schema_json);
 }

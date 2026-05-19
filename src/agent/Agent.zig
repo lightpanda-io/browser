@@ -143,6 +143,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         });
         return error.ConflictingFlags;
     }
+    if (opts.task != null and opts.interactive) {
+        log.fatal(.app, "conflicting flags", .{
+            .hint = "--task is one-shot and exits; drop --interactive or drop --task",
+        });
+        return error.ConflictingFlags;
+    }
     if (opts.self_heal and opts.script_file == null) {
         log.fatal(.app, "self-heal needs a script", .{
             .hint = "--self-heal rewrites a recorded .lp on drift; pass a script path",
@@ -151,6 +157,9 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     }
     if (opts.no_llm and opts.provider != null) {
         log.warn(.app, "ignoring --provider", .{ .reason = "--no-llm takes precedence" });
+    }
+    if (opts.task == null and opts.attach.items.len > 0) {
+        log.warn(.app, "ignoring --attach", .{ .reason = "no --task; attachments are only consumed in one-shot mode" });
     }
 
     const is_one_shot = opts.task != null;
@@ -186,10 +195,10 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // Resolve model BEFORE the heavy init so --pick-model's prompt fires
     // before tool_executor / ai_client setup.
     // Precedence: --model > --pick-model > defaultModel.
-    const model: []u8 = if (opts.pick_model and effective_provider != null and api_key != null)
-        try pickModel(allocator, effective_provider.?, api_key.?, opts.base_url)
-    else if (opts.model) |m|
+    const model: []u8 = if (opts.model) |m|
         try allocator.dupe(u8, m)
+    else if (opts.pick_model and effective_provider != null and api_key != null)
+        try pickModel(allocator, effective_provider.?, api_key.?, opts.base_url)
     else if (effective_provider) |p|
         try allocator.dupe(u8, defaultModel(p))
     else
@@ -252,7 +261,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .self_heal = opts.self_heal,
         .interactive = opts.interactive,
         .one_shot_task = opts.task,
-        .one_shot_attachments = if (opts.task_attachments.items.len == 0) null else opts.task_attachments.items,
+        .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
         .slash_schemas = slash_schemas,
     };
 
@@ -290,10 +299,8 @@ pub fn deinit(self: *Agent) void {
     self.allocator.destroy(self);
 }
 
-/// Called from the sighandler thread on Ctrl-C. Just sets the flag —
-/// no terminal or V8 touches from this thread. The agent thread polls
-/// `checkCancel` inside zenai's `runTools` (between turns and after each
-/// tool call) and unwinds cleanly when it sees the flag set.
+/// Called from the sighandler thread — sets the flag only, no terminal
+/// or V8 touches from this context.
 pub fn requestCancel(self: *Agent) void {
     self.cancel_requested.store(true, .release);
 }
@@ -594,7 +601,6 @@ fn printSlashParseError(self: *Agent, err: SlashCommand.ParseError, name: []cons
 }
 
 fn firstSentence(text: []const u8) []const u8 {
-    // Sentence boundary = period followed by whitespace (or end of string).
     // Plain "." is too aggressive — descriptions reference "console.log",
     // "JSON-LD, OpenGraph, etc.", and similar abbreviations.
     var i: usize = 0;
@@ -1061,9 +1067,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         }
     };
 
-    // `result.text` and `synth.text` are owned by their RunToolsResult arenas,
-    // which are deinited at the end of this function. Dupe into the agent's
-    // `message_arena` so the returned slice outlives those arenas.
+    // RunToolsResult arenas are deinited at the end of this function —
+    // dupe into `message_arena` so the returned slice outlives them.
     const final_text: ?[]const u8 = blk: {
         if (result.text) |text| break :blk try ma.dupe(u8, text);
 
@@ -1117,7 +1122,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
     return final_text;
 }
 
-/// Build a `parts`-based user message when `--task-attachment` was given.
+/// Build a `parts`-based user message when `--attach` was given.
 /// Text-ish files are inlined into the text prefix (surrounded by clear
 /// markers); binary files (image/audio/pdf) are base64-encoded and sent as
 /// provider inline-data parts. Unknown extensions error out so the caller

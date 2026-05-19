@@ -116,7 +116,7 @@ redirecting stdout gives you a clean answer:
 ```
 
 If you need to feed the model a local file, repeat
-`--task-attachment <path>` for each one.
+`-a <path>` (or `--attach <path>`) for each one.
 
 ## 3. Driving the browser by hand
 

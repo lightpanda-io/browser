@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 const log = lp.log;
 const ansi = @import("Terminal.zig").ansi;
 
-const Self = @This();
+const Spinner = @This();
 
 const dots = [_][]const u8{ "   ", ".  ", ".. ", "..." };
 const braille = [_][]const u8{ "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
@@ -76,11 +76,11 @@ should_exit: bool = false,
 last_render_buf: [frame_buf_bytes]u8 = undefined,
 last_render_len: usize = 0,
 
-pub fn init(is_repl: bool, stderr_is_tty: bool) Self {
+pub fn init(is_repl: bool, stderr_is_tty: bool) Spinner {
     return .{ .enabled = .init(is_repl and stderr_is_tty) };
 }
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Spinner) void {
     if (self.thread) |t| {
         self.mu.lock();
         self.should_exit = true;
@@ -92,7 +92,7 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Begin a new agent turn. Spawns the worker thread on first call.
-pub fn start(self: *Self) void {
+pub fn start(self: *Spinner) void {
     if (!self.enabled.load(.monotonic)) return;
     self.mu.lock();
     defer self.mu.unlock();
@@ -104,7 +104,7 @@ pub fn start(self: *Self) void {
     self.cv.signal();
 }
 
-fn ensureWorkerLocked(self: *Self) void {
+fn ensureWorkerLocked(self: *Spinner) void {
     if (self.thread == null) {
         self.thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch |err| blk: {
             log.warn(.app, "spinner thread spawn failed", .{ .err = @errorName(err) });
@@ -118,7 +118,7 @@ fn ensureWorkerLocked(self: *Self) void {
 
 /// End an agent turn cleanly: clear the indicator, commit a one-line summary,
 /// reset state. Called from a `defer` in the agent code so it always runs.
-pub fn stop(self: *Self) void {
+pub fn stop(self: *Spinner) void {
     if (!self.enabled.load(.monotonic)) return;
     self.mu.lock();
     defer self.mu.unlock();
@@ -140,7 +140,7 @@ pub fn stop(self: *Self) void {
 
 /// End a turn with no commit. The caller is responsible for surfacing the
 /// outcome — tool results, error messages, or summaries.
-pub fn cancel(self: *Self) void {
+pub fn cancel(self: *Spinner) void {
     if (!self.enabled.load(.monotonic)) return;
     self.mu.lock();
     defer self.mu.unlock();
@@ -154,7 +154,7 @@ pub fn cancel(self: *Self) void {
 /// turn's tool-call total. Args are truncated to `max_args_bytes`. Called
 /// without a preceding `start()` (state `.idle`) the label drops the `agent:`
 /// prefix — that path is for user-typed REPL commands, not LLM tool calls.
-pub fn setTool(self: *Self, name: []const u8, args: []const u8) void {
+pub fn setTool(self: *Spinner, name: []const u8, args: []const u8) void {
     if (!self.enabled.load(.monotonic)) return;
     self.mu.lock();
     defer self.mu.unlock();
@@ -177,7 +177,7 @@ pub fn setTool(self: *Self, name: []const u8, args: []const u8) void {
 /// Repaint the active tool label in red to flag a failed tool call. Visible
 /// for the rest of the dwell window (`min_tool_display_ns`), then the
 /// indicator returns to thinking like any other call.
-pub fn markToolFailed(self: *Self) void {
+pub fn markToolFailed(self: *Spinner) void {
     if (!self.enabled.load(.monotonic)) return;
     self.mu.lock();
     defer self.mu.unlock();
@@ -193,7 +193,7 @@ pub fn markToolFailed(self: *Self) void {
 /// Request a transition back to the cycling "thinking" state. The worker
 /// honors `min_tool_display_ns` — if the current tool label has not been
 /// up long enough, the flip is deferred until it has.
-pub fn setThinking(self: *Self) void {
+pub fn setThinking(self: *Spinner) void {
     if (!self.enabled.load(.monotonic)) return;
     self.mu.lock();
     defer self.mu.unlock();
@@ -205,11 +205,9 @@ pub fn setThinking(self: *Self) void {
     self.cv.signal();
 }
 
-/// Print `text` (which should already include any newline) above the
-/// indicator: clear current line, write text, leave indicator to repaint
-/// itself on the next tick. Used by `Terminal.printToolResult` to surface
-/// verbose result bodies and tool errors without interleaving with frames.
-pub fn emitAbove(self: *Self, text: []const u8) bool {
+/// Print `text` (assumed to include its own newline) above the indicator,
+/// then leave the indicator to repaint itself on the next tick.
+pub fn emitAbove(self: *Spinner, text: []const u8) bool {
     if (!self.enabled.load(.monotonic)) return false;
     self.mu.lock();
     defer self.mu.unlock();
@@ -224,7 +222,7 @@ pub fn emitAbove(self: *Self, text: []const u8) bool {
     return true;
 }
 
-fn workerLoop(self: *Self) void {
+fn workerLoop(self: *Spinner) void {
     self.mu.lock();
     defer self.mu.unlock();
     while (!self.should_exit) {
@@ -258,7 +256,7 @@ fn workerLoop(self: *Self) void {
     }
 }
 
-fn renderLocked(self: *Self) void {
+fn renderLocked(self: *Spinner) void {
     var buf: [frame_buf_bytes]u8 = undefined;
     const written = switch (self.state) {
         .idle => return,

@@ -226,7 +226,7 @@ const Commands = cli.Builder(.{
             .{ .name = "self_heal", .type = bool },
             .{ .name = "interactive", .short = 'i', .type = bool },
             .{ .name = "task", .type = ?[]const u8 },
-            .{ .name = "task_attachments", .type = []const u8, .multiple = true },
+            .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true },
             .{ .name = "verbosity", .type = ?AgentVerbosity },
             .{ .name = "list_models", .type = bool },
             .{ .name = "no_llm", .type = bool },
@@ -894,6 +894,17 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                into the REPL with the browser state preserved. When
         \\                a positional script is present, any new commands
         \\                entered in the REPL are appended to that file.
+        \\                Conflicts with --task.
+        \\
+        \\--task          One-shot mode: run a single user turn, print the
+        \\                final answer to stdout, and exit. Conflicts with the
+        \\                positional script and with --interactive.
+        \\
+        \\-a, --attach <path>
+        \\                Feed a local file to the model alongside --task.
+        \\                Repeatable, one file per flag. Text files inlined
+        \\                (max 512 KiB each); images/audio/pdf base64-encoded
+        \\                (max 20 MiB each). Requires --task.
         \\
         \\--list-models   Print the model IDs usable with `agent` for
         \\                --provider, one per line, sorted, and exit.

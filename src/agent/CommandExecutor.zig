@@ -23,12 +23,12 @@ const Command = lp.script.Command;
 const ToolExecutor = @import("ToolExecutor.zig");
 const Terminal = @import("Terminal.zig");
 
-const Self = @This();
+const CommandExecutor = @This();
 
 tool_executor: *ToolExecutor,
 terminal: *Terminal,
 
-pub fn init(tool_executor: *ToolExecutor, terminal: *Terminal) Self {
+pub fn init(tool_executor: *ToolExecutor, terminal: *Terminal) CommandExecutor {
     return .{
         .tool_executor = tool_executor,
         .terminal = terminal,
@@ -43,7 +43,7 @@ pub const ExecResult = struct {
 /// Caller contract: `cmd` must not be `.natural_language`, `.comment`,
 /// `.login`, or `.accept_cookies` — those are filtered upstream (see
 /// `Agent.runRepl`) because they have no tool mapping.
-pub fn executeWithResult(self: *Self, arena: std.mem.Allocator, cmd: Command.Command) ExecResult {
+pub fn executeWithResult(self: *CommandExecutor, arena: std.mem.Allocator, cmd: Command.Command) ExecResult {
     switch (cmd) {
         .extract => |schema| return self.execExtract(arena, schema),
         .eval_js => |script| return evalLikeResult(self.tool_executor.callEval(arena, script)),
@@ -61,7 +61,7 @@ pub fn executeWithResult(self: *Self, arena: std.mem.Allocator, cmd: Command.Com
 
 /// Data output (EXTRACT/EVAL/MARKDOWN/TREE) → stdout on success; everything
 /// else, including failures from those same commands, → stderr.
-pub fn printResult(self: *Self, cmd: Command.Command, result: ExecResult) void {
+pub fn printResult(self: *CommandExecutor, cmd: Command.Command, result: ExecResult) void {
     if (cmd.producesData() and !result.failed) {
         self.terminal.printAssistant(result.output);
     } else {
@@ -69,7 +69,7 @@ pub fn printResult(self: *Self, cmd: Command.Command, result: ExecResult) void {
     }
 }
 
-fn execExtract(self: *Self, arena: std.mem.Allocator, raw_schema: []const u8) ExecResult {
+fn execExtract(self: *CommandExecutor, arena: std.mem.Allocator, raw_schema: []const u8) ExecResult {
     const schema = browser_tools.substituteEnvVars(arena, raw_schema) catch
         return .{ .output = "out of memory", .failed = true };
     return evalLikeResult(self.tool_executor.extract(arena, schema));

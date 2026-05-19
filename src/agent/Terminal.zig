@@ -27,7 +27,7 @@ const c = @cImport({
     @cInclude("isocline.h");
 });
 
-const Self = @This();
+const Terminal = @This();
 
 const style_cmd = "ps-cmd";
 const style_slash = "ps-slash";
@@ -77,13 +77,13 @@ const all_slash_names: [browser_tools.names.len + SlashCommand.meta_names.len][]
 /// Wires the isocline completer and hinter to `self` so the C callbacks can
 /// reach `slash_schemas`. Must run after the Terminal is in its final memory
 /// location.
-pub fn attachCompleter(self: *Self, schemas: []const SlashCommand.SchemaInfo) void {
+pub fn attachCompleter(self: *Terminal, schemas: []const SlashCommand.SchemaInfo) void {
     self.slash_schemas = schemas;
     c.ic_set_default_completer(&completionCallback, self);
     c.ic_set_default_hinter(&hintsCallback, self);
 }
 
-pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity: Verbosity, is_repl: bool) Self {
+pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity: Verbosity, is_repl: bool) Terminal {
     // Isocline probes the terminal on init (writes ESC[6n cursor-report on
     // stdout), so skip the whole setup in script-only mode — `ic_readline` is
     // never reached there anyway.
@@ -119,11 +119,11 @@ pub fn init(allocator: std.mem.Allocator, history_path: ?[:0]const u8, verbosity
     };
 }
 
-fn isRepl(self: *const Self) bool {
+fn isRepl(self: *const Terminal) bool {
     return self.repl_arena != null;
 }
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Terminal) void {
     self.spinner.deinit();
     if (self.repl_arena) |*a| a.deinit();
 }
@@ -131,13 +131,13 @@ pub fn deinit(self: *Self) void {
 const bullet_line_fmt = "{s}●{s} {s}[tool: {s}]{s} {s}\n";
 
 /// Mark the start of a manual REPL tool call. Pairs with `endTool`.
-pub fn beginTool(self: *Self, name: []const u8, args: []const u8) void {
+pub fn beginTool(self: *Terminal, name: []const u8, args: []const u8) void {
     self.spinner.setTool(name, args);
 }
 
 /// Mark the end of a manual REPL tool call. On failure, flashes the spinner
 /// label red before clearing it.
-pub fn endTool(self: *Self, ok: bool) void {
+pub fn endTool(self: *Terminal, ok: bool) void {
     if (!ok) self.spinner.markToolFailed();
     self.spinner.cancel();
 }
@@ -150,7 +150,7 @@ pub fn endTool(self: *Self, ok: bool) void {
 /// - No spinner (non-TTY/non-REPL): print the same line directly,
 ///   gated on `medium`+. In non-TTY contexts ANSI is still emitted —
 ///   pipes that strip color see plain text via the bullet character.
-pub fn agentToolDone(self: *Self, name: []const u8, args: []const u8, ok: bool) void {
+pub fn agentToolDone(self: *Terminal, name: []const u8, args: []const u8, ok: bool) void {
     const spinner_on = self.spinner.enabled.load(.monotonic);
     if (spinner_on and !ok) self.spinner.markToolFailed();
     if (!atLeast(self.verbosity, .medium)) return;
@@ -333,7 +333,7 @@ fn addEnvVarCompletions(
 fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callconv(.c) void {
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(prefix)), 0);
     const self_ptr = c.ic_completion_arg(cenv) orelse return;
-    const self: *Self = @ptrCast(@alignCast(self_ptr));
+    const self: *Terminal = @ptrCast(@alignCast(self_ptr));
 
     var buf: [completion_buf_len:0]u8 = undefined;
 
@@ -389,7 +389,7 @@ var hint_buf: [completion_buf_len:0]u8 = undefined;
 
 fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const u8 {
     const self_ptr = arg orelse return null;
-    const self: *Self = @ptrCast(@alignCast(self_ptr));
+    const self: *Terminal = @ptrCast(@alignCast(self_ptr));
     const input = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(input_c)), 0);
     if (input.len == 0) return null;
 
@@ -653,7 +653,7 @@ pub fn freeLine(line: []const u8) void {
     c.ic_free(@ptrCast(@constCast(line.ptr)));
 }
 
-pub fn printAssistant(_: *Self, text: []const u8) void {
+pub fn printAssistant(_: *Terminal, text: []const u8) void {
     const fd = std.posix.STDOUT_FILENO;
     _ = std.posix.write(fd, text) catch {};
     _ = std.posix.write(fd, "\n") catch {};
@@ -662,7 +662,7 @@ pub fn printAssistant(_: *Self, text: []const u8) void {
 /// Print the result of an action command (GOTO, CLICK, ...) to stderr so
 /// stdout stays reserved for data-producing commands. User-driven, so
 /// shown unconditionally in REPL; outside REPL gated on `medium+`.
-pub fn printActionResult(self: *Self, text: []const u8) void {
+pub fn printActionResult(self: *Terminal, text: []const u8) void {
     if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
     std.debug.print("{s}\n", .{text});
 }
@@ -673,7 +673,7 @@ pub fn printActionResult(self: *Self, text: []const u8) void {
 // REPL where the human can scroll.
 const max_result_display_len = 2000;
 
-pub fn printToolResult(self: *Self, name: []const u8, result: []const u8) void {
+pub fn printToolResult(self: *Terminal, name: []const u8, result: []const u8) void {
     if (!self.isRepl() and !atLeast(self.verbosity, .high)) return;
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
@@ -716,11 +716,11 @@ fn formatReplResult(arena: std.mem.Allocator, result: []const u8) ![]const u8 {
     return aw.written();
 }
 
-pub fn printError(self: *Self, msg: []const u8) void {
+pub fn printError(self: *Terminal, msg: []const u8) void {
     self.printErrorFmt("{s}", .{msg});
 }
 
-pub fn printErrorFmt(self: *Self, comptime fmt: []const u8, args: anytype) void {
+pub fn printErrorFmt(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
         var aw: std.Io.Writer.Allocating = .init(a.allocator());
@@ -733,11 +733,11 @@ pub fn printErrorFmt(self: *Self, comptime fmt: []const u8, args: anytype) void 
     std.debug.print("{s}{s}Error: " ++ fmt ++ "{s}\n", .{ ansi.bold, ansi.red } ++ args ++ .{ansi.reset});
 }
 
-pub fn printInfo(self: *Self, msg: []const u8) void {
+pub fn printInfo(self: *Terminal, msg: []const u8) void {
     self.printInfoFmt("{s}", .{msg});
 }
 
-pub fn printInfoFmt(self: *Self, comptime fmt: []const u8, args: anytype) void {
+pub fn printInfoFmt(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     if (!self.isRepl() and !atLeast(self.verbosity, .medium)) return;
     std.debug.print("{s}" ++ fmt ++ "{s}\n", .{ansi.dim} ++ args ++ .{ansi.reset});
 }
