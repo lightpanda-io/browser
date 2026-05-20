@@ -416,6 +416,7 @@ pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
         .mcp => 16,
+        .fetch => 0,
         else => unreachable,
     };
 }
