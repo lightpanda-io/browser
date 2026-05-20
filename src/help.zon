@@ -1,18 +1,23 @@
 .{
     //                                                                     MAX_HELP_LEN|
     .general =
-    \\Command can be either "fetch", "serve", "mcp" or "help".
-    \\Use '{0s} help <command>' for details.
+    \\usage: {0s} <command> [arguments]
+    \\
+    \\The commands are:
+    \\  serve       starts a WebSocket CDP server
+    \\  fetch       fetches the specified URL
+    \\  mcp         starts an MCP (Model Context Protocol) server over stdio
+    \\  version     displays the version of {0s}
+    \\  help        displays this message
+    \\
+    \\Use "{0s} help <command>" for more information about a command.
     ,
-    .serve_cmd =
-    \\serve command
+    .serve =
+    \\usage: {0s} serve [OPTIONS] [COMMON_OPTIONS]
+    \\
     \\Starts a WebSocket CDP server.
     \\
-    \\Usage:
-    \\  {0s} serve [OPTIONS] [COMMON_OPTIONS]
-    ,
-    .serve_options =
-    \\Options:
+    \\options:
     \\--host <HOST>              Host of the CDP server.
     \\                           Defaults to "127.0.0.1".
     \\
@@ -35,15 +40,12 @@
     \\--cookie <PATH>            Path to a JSON file to load cookies from (read-only).
     \\                           Defaults to no cookie loading.
     ,
-    .fetch_cmd =
-    \\fetch command
+    .fetch =
+    \\usage: {0s} fetch <url> [OPTIONS] [COMMON_OPTIONS]
+    \\
     \\Fetches the specified URL.
     \\
-    \\Usage:
-    \\  {0s} fetch <url> [OPTIONS] [COMMON_OPTIONS]
-    ,
-    .fetch_options =
-    \\Options:
+    \\options:
     \\--dump <DUMP>              Dumps the document to stdout.
     \\                           Defaults to no dump.
     \\
@@ -115,15 +117,12 @@
     \\                           (write-only).
     \\                           Defaults to no cookie saving.
     ,
-    .mcp_cmd =
-    \\mcp command
+    .mcp =
+    \\usage: {0s} mcp [OPTIONS] [COMMON_OPTIONS]
+    \\
     \\Starts an MCP (Model Context Protocol) server over stdio.
     \\
-    \\Usage:
-    \\  {0s} mcp [OPTIONS] [COMMON_OPTIONS]
-    ,
-    .mcp_options =
-    \\Options:
+    \\options:
     \\--cookie <PATH>            Path to a JSON file to load cookies from (read-only).
     \\                           Defaults to no cookie loading.
     \\
@@ -132,21 +131,18 @@
     \\                           Defaults to no cookie saving.
     ,
     .version =
-    \\version command
-    \\Displays the version of {0s}.
+    \\usage:  {0s} version
     \\
-    \\Usage:
-    \\  {0s} version
+    \\Displays the version of {0s}.
     ,
     .help =
-    \\help command
-    \\Displays this message.
+    \\usage: {0s} help
     \\
-    \\Usage:
-    \\  {0s} help
+    \\Displays help message for a command.
+    \\
     ,
     .common_options =
-    \\Common Options:
+    \\common options:
     \\--insecure-disable-tls-host-verification
     \\                           Disables host verification on all HTTP requests.
     \\                           Only set this if you understand and accept the risk.
