@@ -256,6 +256,13 @@ _parent_notified: bool = false,
 _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
+_http_status: ?u16 = null,
+_http_headers: std.ArrayList(HttpHeader) = .empty,
+
+pub const HttpHeader = struct {
+    name: []const u8,
+    value: []const u8,
+};
 
 pub fn init(self: *Frame, frame_id: u32, page: *Page, parent: ?*Frame) !void {
     if (comptime IS_DEBUG) {
@@ -447,6 +454,20 @@ pub fn getTitle(self: *Frame) !?[]const u8 {
     return null;
 }
 
+pub const HttpMetadata = struct {
+    url: [:0]const u8,
+    status: ?u16,
+    headers: []const HttpHeader,
+};
+
+pub fn httpMetadata(self: *const Frame) HttpMetadata {
+    return .{
+        .url = self.url,
+        .status = self._http_status,
+        .headers = self._http_headers.items,
+    };
+}
+
 // Add common headers for a request:
 // * referer
 pub fn headersForRequest(self: *Frame, headers: *HttpClient.Headers) !void {
@@ -607,6 +628,9 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     }
 
     const http_client = &session.browser.http_client;
+
+    self._http_status = null;
+    self._http_headers = .empty;
 
     self.url = try self.arena.dupeZ(u8, request_url);
     self.origin = try URL.getOrigin(self.arena, self.url);
@@ -1028,6 +1052,15 @@ fn frameHeaderDoneCallback(response: HttpClient.Response) !bool {
             .status = response.status(),
             .content_type = response.contentType(),
             .type = self._type,
+        });
+    }
+
+    self._http_status = response.status();
+    var it = response.headerIterator();
+    while (it.next()) |hdr| {
+        try self._http_headers.append(self.arena, .{
+            .name = try self.arena.dupe(u8, hdr.name),
+            .value = try self.arena.dupe(u8, hdr.value),
         });
     }
 
@@ -4166,4 +4199,22 @@ test "Page: isSameOrigin" {
     try testing.expectEqual(false, frame.isSameOrigin(""));
     try testing.expectEqual(false, frame.isSameOrigin("not-a-url"));
     try testing.expectEqual(false, frame.isSameOrigin("//origin.com/foo"));
+}
+
+test "Frame: httpMetadata after navigation" {
+    const frame = try testing.pageTest("page/meta.html", .{});
+    defer testing.test_session.removePage();
+    const meta = frame.httpMetadata();
+    try testing.expect(meta.status != null);
+    try std.testing.expectEqual(@as(u16, 200), meta.status.?);
+    try testing.expect(meta.headers.len > 0);
+    try testing.expect(meta.url.len > 0);
+}
+
+test "Frame: httpMetadata 404" {
+    const frame = try testing.pageTest("nonexistent_page_xyz.html", .{});
+    defer testing.test_session.removePage();
+    const meta = frame.httpMetadata();
+    try testing.expect(meta.status != null);
+    try std.testing.expectEqual(@as(u16, 404), meta.status.?);
 }

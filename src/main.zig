@@ -129,11 +129,12 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                     .with_base = opts.with_base,
                     .with_frames = opts.with_frames,
                 },
+                .json = opts.json,
             };
 
             var stdout = std.fs.File.stdout();
             var writer = stdout.writer(&.{});
-            if (opts.dump != null) {
+            if (opts.dump != null or opts.json) {
                 fetch_opts.writer = &writer.interface;
             }
 
