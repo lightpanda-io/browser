@@ -1,12 +1,17 @@
 .{
     //                                                                     MAX_HELP_LEN|
-    .serve =
+    .general =
+    \\Command can be either "fetch", "serve", "mcp" or "help".
+    \\Use '{0s} help <command>' for details.
+    ,
+    .serve_cmd =
     \\serve command
     \\Starts a WebSocket CDP server.
     \\
     \\Usage:
     \\  {0s} serve [OPTIONS] [COMMON_OPTIONS]
-    \\
+    ,
+    .serve_options =
     \\Options:
     \\--host <HOST>              Host of the CDP server.
     \\                           Defaults to "127.0.0.1".
@@ -30,13 +35,14 @@
     \\--cookie <PATH>            Path to a JSON file to load cookies from (read-only).
     \\                           Defaults to no cookie loading.
     ,
-    .fetch =
+    .fetch_cmd =
     \\fetch command
     \\Fetches the specified URL.
     \\
     \\Usage:
     \\  {0s} fetch <url> [OPTIONS] [COMMON_OPTIONS]
-    \\
+    ,
+    .fetch_options =
     \\Options:
     \\--dump <DUMP>              Dumps the document to stdout.
     \\                           Defaults to no dump.
@@ -109,13 +115,14 @@
     \\                           (write-only).
     \\                           Defaults to no cookie saving.
     ,
-    .mcp =
+    .mcp_cmd =
     \\mcp command
     \\Starts an MCP (Model Context Protocol) server over stdio.
     \\
     \\Usage:
     \\  {0s} mcp [OPTIONS] [COMMON_OPTIONS]
-    \\
+    ,
+    .mcp_options =
     \\Options:
     \\--cookie <PATH>            Path to a JSON file to load cookies from (read-only).
     \\                           Defaults to no cookie loading.
@@ -138,7 +145,7 @@
     \\Usage:
     \\  {0s} help
     ,
-    .common =
+    .common_options =
     \\Common Options:
     \\--insecure-disable-tls-host-verification
     \\                           Disables host verification on all HTTP requests.
