@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<head>
+  <script src="../testing.js"></script>
+  <link id="ext" rel="stylesheet" href="/styles/visibility.css">
+</head>
+<body>
+  <div id="visible">always visible</div>
+  <div id="hidden" class="ext-hide">hidden by external rule</div>
+
+  <script id="ext_stylesheet_registered">
+  {
+    // The parser-synchronous fetch in Frame.loadExternalStylesheet runs
+    // before this script executes, so document.styleSheets reflects the
+    // fetched sheet by the time we look.
+    testing.expectEqual(1, document.styleSheets.length);
+
+    const sheet = document.styleSheets[0];
+    testing.expectEqual(testing.ORIGIN + '/styles/visibility.css', sheet.href);
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual('.ext-hide', sheet.cssRules[0].selectorText);
+  }
+  </script>
+
+  <script id="ext_stylesheet_cascade">
+  {
+    // External rule must reach StyleManager: a `.ext-hide` element should
+    // report checkVisibility() === false, exactly as if the rule were
+    // declared inline in a `<style>` block.
+    testing.expectTrue(document.getElementById('visible').checkVisibility());
+    testing.expectFalse(document.getElementById('hidden').checkVisibility());
+  }
+  </script>
+
+  <script id="ext_stylesheet_dynamic_load_event">
+  {
+    // Dynamically-inserted <link> fires `load` after the fetch completes.
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/styles/visibility.css';
+    testing.async(async () => {
+      const fired = await new Promise(resolve => {
+        link.addEventListener('load', () => resolve(true));
+        link.addEventListener('error', () => resolve(false));
+        document.head.appendChild(link);
+      });
+      testing.expectEqual(true, fired);
+    });
+    testing.expectEqual(true, true);
+  }
+  </script>
+
+  <script id="ext_stylesheet_404_fires_error">
+  {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/styles/404.css';
+    testing.async(async () => {
+      const evt = await new Promise(resolve => {
+        link.addEventListener('load', () => resolve('load'));
+        link.addEventListener('error', () => resolve('error'));
+        document.head.appendChild(link);
+      });
+      testing.expectEqual('error', evt);
+    });
+    testing.expectEqual(true, true);
+  }
+  </script>
+
+  <script id="ext_stylesheet_oversize_fires_error">
+  {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/styles/oversize.css';
+    testing.async(async () => {
+      const evt = await new Promise(resolve => {
+        link.addEventListener('load', () => resolve('load'));
+        link.addEventListener('error', () => resolve('error'));
+        document.head.appendChild(link);
+      });
+      testing.expectEqual('error', evt);
+    });
+    testing.expectEqual(true, true);
+  }
+  </script>
+
+  <script id="ext_stylesheet_href_change_replaces">
+  {
+    // Mutating link.href on a connected stylesheet link must REPLACE the
+    // cached sheet's rules, not append a second entry to
+    // document.styleSheets. Regression test for the stale-sheet
+    // accumulation bug caught in code review.
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/styles/visibility.css';
+    testing.async(async () => {
+      const baseline = document.styleSheets.length;
+
+      await new Promise(resolve => {
+        link.addEventListener('load', () => resolve(), { once: true });
+        document.head.appendChild(link);
+      });
+      const afterFirst = document.styleSheets.length;
+      testing.expectEqual(baseline + 1, afterFirst);
+
+      const second = await new Promise(resolve => {
+        link.addEventListener('load', () => resolve('load'), { once: true });
+        link.addEventListener('error', () => resolve('error'), { once: true });
+        link.href = '/styles/visibility2.css';
+      });
+      testing.expectEqual('load', second);
+      testing.expectEqual(afterFirst, document.styleSheets.length);
+
+      // New rules must be in effect after the swap. The reused sheet is
+      // the last registered one (the static head link registered first).
+      const sheet = document.styleSheets[afterFirst - 1];
+      testing.expectEqual(testing.ORIGIN + '/styles/visibility2.css', sheet.href);
+      testing.expectEqual(1, sheet.cssRules.length);
+      testing.expectEqual('.ext-hide-2', sheet.cssRules[0].selectorText);
+    });
+    testing.expectEqual(true, true);
+  }
+  </script>
+
+  <script id="ext_stylesheet_fragment_parse_skipped">
+  {
+    // Stylesheet links parsed via innerHTML / outerHTML /
+    // insertAdjacentHTML / Range.createContextualFragment / <template>
+    // content / DOMParser.parseFromString must NOT trigger a network
+    // fetch or register a sheet on the live document — the owning
+    // subtree may never be attached or belongs to a different Document.
+    //
+    // Assertion is synchronous on purpose: both parse paths run inline,
+    // so any unintended sheet registration would be visible immediately.
+    // Deferring to testing.onload would race against the async tests
+    // above that legitimately add sheets.
+    const before = document.styleSheets.length;
+
+    const div = document.createElement('div');
+    div.innerHTML = '<link rel="stylesheet" href="/styles/visibility.css">';
+    testing.expectEqual(before, document.styleSheets.length);
+
+    const parsed = new DOMParser().parseFromString(
+      '<html><head><link rel="stylesheet" href="/styles/visibility2.css"></head><body></body></html>',
+      'text/html'
+    );
+    // Parsed link exists in the new document...
+    testing.expectEqual(1, parsed.querySelectorAll('link').length);
+    // ...but no sheet on the live document.
+    testing.expectEqual(before, document.styleSheets.length);
+  }
+  </script>
+
+  <script id="ext_stylesheet_disconnect_removes">
+  {
+    // Removing a connected stylesheet link must drop its sheet from
+    // document.styleSheets. Without symmetric deregistration the SPA
+    // theme-switch pattern (append new, remove old) would accumulate
+    // phantom entries and stale cascade rules.
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/styles/visibility2.css';
+    testing.async(async () => {
+      const baseline = document.styleSheets.length;
+
+      await new Promise(resolve => {
+        link.addEventListener('load', () => resolve(), { once: true });
+        document.head.appendChild(link);
+      });
+      testing.expectEqual(baseline + 1, document.styleSheets.length);
+
+      link.remove();
+      testing.expectEqual(baseline, document.styleSheets.length);
+
+      // Re-appending must register fresh — the disconnect cleanup
+      // cleared link._sheet so the cached short-circuit doesn't apply.
+      await new Promise(resolve => {
+        link.addEventListener('load', () => resolve(), { once: true });
+        document.head.appendChild(link);
+      });
+      testing.expectEqual(baseline + 1, document.styleSheets.length);
+    });
+    testing.expectEqual(true, true);
+  }
+  </script>
+</body>

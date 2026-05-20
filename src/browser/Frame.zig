@@ -52,6 +52,7 @@ const AbstractRange = @import("webapi/AbstractRange.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const Worker = @import("webapi/Worker.zig");
+const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const SubmitEvent = @import("webapi/event/SubmitEvent.zig");
@@ -1712,6 +1713,131 @@ pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
     }
 }
 
+// Hard cap on a single external stylesheet body. CSS rule storage is per-
+// arena so a hostile sheet could otherwise inflate page memory; 2 MiB is
+// well above anything seen on real sites (Tailwind's `preflight + utilities`
+// build is ~400 KiB gzipped, ~3 MiB raw — at which point a site should be
+// splitting by route anyway).
+const MAX_STYLESHEET_BYTES: usize = 2 * 1024 * 1024;
+
+// Synchronously fetch and parse an external `<link rel=stylesheet>`.
+// href is passed in as an optimization since the [currently] only callsite has
+// it, so why look it up again?
+pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []const u8) !void {
+    if (self.isGoingAway() or href.len == 0) {
+        return;
+    }
+
+    const session = self._session;
+
+    // this feature is disabled by default, and can be turned on via a command
+    // line flag or via an CDP command
+    if (session.load_external_stylesheets == false) {
+        return self.queueLoad(link._proto);
+    }
+
+    // Fragment-parsed links (innerHTML, DOMParser, ...) may not be attached.
+    // TODO: this isn't correct in all cases. If the link is added into an
+    // attached node, I think we SHOULD load it.
+    if (self._parse_mode == .fragment) {
+        return;
+    }
+    const element = link.asElement();
+
+    const arena = try session.getArena(.medium, "Frame.loadExternalStylesheet");
+    defer session.releaseArena(arena);
+
+    const resolved = URL.resolve(arena, self.base(), href, .{ .encoding = self.charset }) catch |err| {
+        log.warn(.http, "external stylesheet resolve", .{ .err = err, .href = href });
+        try self.fireElementEvent(element, comptime .wrap("error"));
+        return;
+    };
+
+    const http_client = &session.browser.http_client;
+    var headers = try http_client.newHeaders();
+    try headers.add("Accept: text/css,*/*;q=0.1");
+    try self.headersForRequest(&headers);
+
+    // Set the script-manager `is_evaluating` flag for the same reason
+    // `ScriptManager.addFromElement` does: `syncRequest` pumps the CDP
+    // socket inline, so a `Target.closeTarget` / `Page.close` arriving
+    // mid-fetch would otherwise drive `Session.removePage` while this
+    // function still holds pointers to `self`. The check in
+    // `Session.removePage` (Session.zig:253) consults
+    // `frame.anyScriptEvaluating()`, which only sees this flag.
+    const sm = &self._script_manager.base;
+    const was_evaluating = sm.is_evaluating;
+    sm.is_evaluating = true;
+    defer sm.is_evaluating = was_evaluating;
+
+    var response = http_client.syncRequest(arena, .{
+        .url = resolved,
+        .method = .GET,
+        .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
+        .headers = headers,
+        .cookie_jar = &session.cookie_jar,
+        .cookie_origin = self.url,
+        .resource_type = .stylesheet,
+        .notification = session.notification,
+    }) catch |err| {
+        log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
+        return self.fireElementEvent(element, comptime .wrap("error"));
+    };
+    defer response.deinit(arena);
+
+    if (response.status < 200 or response.status >= 300) {
+        log.info(.http, "external stylesheet status", .{ .status = response.status, .url = resolved });
+        return self.fireElementEvent(element, comptime .wrap("error"));
+    }
+
+    if (response.body.items.len > MAX_STYLESHEET_BYTES) {
+        log.warn(.http, "external stylesheet too large", .{
+            .bytes = response.body.items.len,
+            .max = MAX_STYLESHEET_BYTES,
+            .url = resolved,
+        });
+        return self.fireElementEvent(element, comptime .wrap("error"));
+    }
+
+    // Reuse the cached sheet on re-fetch (href mutation on a connected
+    // link) so `document.styleSheets` keeps a single entry per <link>
+    // instead of accumulating one per href change. On first load, create
+    // and register; on subsequent loads, replace content in place.
+    //
+    // First-load creation assigns `link._sheet` AFTER `sheets.add`
+    // succeeds so an OOM during registration doesn't cache an unregistered
+    // sheet (which would short-circuit every future re-fetch via the
+    // `orelse` branch, leaving the sheet permanently unreachable through
+    // `document.styleSheets`).
+    const sheet = link._sheet orelse blk: {
+        const new_sheet = try CSSStyleSheet.initWithOwner(element, self);
+        const sheets = try self.document.getStyleSheets(self);
+        try sheets.add(new_sheet, self);
+        link._sheet = new_sheet;
+        break :blk new_sheet;
+    };
+
+    // Parse first, only swap `_href` on success. `replaceSync` itself is
+    // not atomic (clears rules before the insert loop), so a mid-parse
+    // OOM still drops the old rules — full atomicity would require a
+    // scratch-list pattern in `CSSStyleSheet.replaceSync`. Keeping
+    // `_href` consistent with what the sheet actually contains is the
+    // minimum.
+    sheet.replaceSync(response.body.items, self) catch |err| {
+        log.warn(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
+        return self.fireElementEvent(element, comptime .wrap("error"));
+    };
+    sheet._href = try self.arena.dupe(u8, resolved);
+
+    try self.fireElementEvent(element, comptime .wrap("load"));
+}
+
+fn fireElementEvent(self: *Frame, el: *Element, name: String) !void {
+    const event = try Event.initTrusted(name, .{}, self._page);
+    try self._event_manager.dispatch(el.asEventTarget(), event);
+}
+
 fn dispatchLoad(self: *Frame) !void {
     const has_dom_load_listener = self._event_manager.has_dom_load_listener;
 
@@ -1724,8 +1850,7 @@ fn dispatchLoad(self: *Frame) !void {
 
     for (to_process.items) |html_element| {
         if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, self)) {
-            const event = try Event.initTrusted(comptime .wrap("load"), .{}, self._page);
-            try self._event_manager.dispatch(html_element.asEventTarget(), event);
+            try self.fireElementEvent(html_element.asElement(), comptime .wrap("load"));
         }
     }
 
@@ -3045,6 +3170,20 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
                 style._sheet = null;
             }
             self._style_manager.sheetModified();
+        } else if (el.is(Element.Html.Link)) |link| {
+            // External stylesheet links registered via Frame.loadExternalStylesheet
+            // must be symmetrically deregistered on disconnect, or
+            // `document.styleSheets` accumulates phantom entries and the
+            // visibility cascade keeps honoring rules from removed links —
+            // exactly the SPA theme-switch pattern (append new sheet,
+            // remove old) the feature exists to serve.
+            if (link._sheet) |sheet| {
+                if (self.document._style_sheets) |sheets| {
+                    sheets.remove(sheet);
+                }
+                link._sheet = null;
+                self._style_manager.sheetModified();
+            }
         }
     }
 }

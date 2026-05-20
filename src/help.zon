@@ -157,6 +157,13 @@
     \\                           script fetch is initiated and its scope never runs.
     \\                           Defaults to false.
     \\
+    \\--enable-external-stylesheets
+    \\                           Fetch external <link rel=stylesheet> resources so
+    \\                           their rules contribute to computed styles (and
+    \\                           therefore to visibility checks like display,
+    \\                           visibility, opacity, pointer-events).
+    \\                           Defaults to false.
+    \\
     \\--block-private-networks   Block HTTP requests to private/internal IP
     \\                           addresses after DNS resolution.
     \\                           Defaults to false.
