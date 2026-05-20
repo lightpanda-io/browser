@@ -862,6 +862,15 @@ pub fn curl_multi_poll(
     try errorMCheck(c.curl_multi_poll(multi, raw_fds, @intCast(extra_fds.len), timeout_ms, numfds));
 }
 
+// Thread-safe wakeup for a curl_multi_poll sleeping on another thread.
+// Per libcurl docs: "This function can be called from any thread, and it
+// wakes up a sleeping curl_multi_poll call that is currently (or will be)
+// waiting." Safe to call concurrently with curl_multi_perform on the same
+// handle — the wake byte is delivered via an internal self-pipe.
+pub fn curl_multi_wakeup(multi: *CurlM) ErrorMulti!void {
+    try errorMCheck(c.curl_multi_wakeup(multi));
+}
+
 pub fn curl_multi_waitfds(multi: *CurlM, ufds: []CurlWaitFd, fd_count: *c_uint) ErrorMulti!void {
     const raw_fds: [*c]c.curl_waitfd = if (ufds.len == 0) null else @ptrCast(ufds.ptr);
     try errorMCheck(c.curl_multi_waitfds(multi, raw_fds, @intCast(ufds.len), fd_count));

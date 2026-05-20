@@ -56,6 +56,11 @@
     \\                             css  Includes style and link[rel=stylesheet].
     \\                             full Strip everything.
     \\
+    \\--json                     Capture and print the status of the fetch in a
+    \\                           JSON string and output it. When used with
+    \\                           --dump <MODE> this will wrap the dumped content
+    \\                           within the JSON value.
+    \\
     \\--with-base                Add a <base> tag in dump.
     \\                           Defaults to false.
     \\
@@ -256,6 +261,13 @@
     \\--disable-workers          Skip loading dedicated Web Workers. The Worker
     \\                           constructor still returns a Worker object, but no
     \\                           script fetch is initiated and its scope never runs.
+    \\                           Defaults to false.
+    \\
+    \\--enable-external-stylesheets
+    \\                           Fetch external <link rel=stylesheet> resources so
+    \\                           their rules contribute to computed styles (and
+    \\                           therefore to visibility checks like display,
+    \\                           visibility, opacity, pointer-events).
     \\                           Defaults to false.
     \\
     \\--block-private-networks   Block HTTP requests to private/internal IP

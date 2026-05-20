@@ -428,16 +428,6 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
         opacity_priority = INLINE_PRIORITY;
     }
 
-    // UA stylesheet display:none rules (HTML Rendering §15.3.1 "Hidden elements").
-    // Skipped when an inline `display` is set so author overrides win per cascade.
-    // All UA rules are short-circuited here; the spec marks some as `!important`
-    // (`input[type=hidden]`, `noscript`) and others as normal-origin, but author
-    // CSS overriding `<script>`/`<head>`/closed-`<details>` children is rare
-    // enough that uniform treatment is acceptable.
-    if (options.check_display and display_priority != INLINE_PRIORITY) {
-        if (matchesUaDisplayNoneRule(el)) return true;
-    }
-
     if (display_priority == INLINE_PRIORITY and visibility_priority == INLINE_PRIORITY and opacity_priority == INLINE_PRIORITY) {
         return false;
     }
@@ -527,6 +517,15 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     }
 
     ctx.checkRules(&self.other_rules);
+
+    // UA stylesheet display:none fallback (HTML Rendering §15.3.1 "Hidden
+    // elements"). Applied only when no author rule for `display` matched the
+    // element — per CSS Cascade §6.1 any normal-origin author rule beats UA
+    // origin regardless of specificity, so `.x { display: flex }` on a
+    // `<div class="x" hidden>` must report visible.
+    if (options.check_display and display_priority == 0) {
+        if (matchesUaDisplayNoneRule(el)) display_none = true;
+    }
 
     return (display_none orelse false) or (visibility_hidden orelse false) or (opacity_zero orelse false);
 }

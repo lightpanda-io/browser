@@ -96,6 +96,15 @@ worker_loading_enabled: bool = true,
 // Capped at `max_console_bytes` so a runaway page can't grow it unbounded.
 _console_messages: std.Io.Writer.Allocating,
 
+// Opt-in fetch of external <link rel=stylesheet> resources. Defaults to
+// false to preserve the current rendering-free fast path: drivers that
+// don't need accurate visibility checks pay nothing. Set from the
+// `--enable-external-stylesheets` CLI flag at session init; the
+// LP.configureLoading CDP method can flip it per-session. When true,
+// `Link.linkAddedCallback` routes to `Frame.loadExternalStylesheet`
+// (synchronous fetch + parse + register on `document.styleSheets`).
+load_external_stylesheets: bool = false,
+
 const max_console_bytes = 64 * 1024;
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
@@ -120,6 +129,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .subframe_loading_enabled = !browser.app.config.disableSubframes(),
         .worker_loading_enabled = !browser.app.config.disableWorkers(),
         ._console_messages = .init(allocator),
+        .load_external_stylesheets = browser.app.config.enableExternalStylesheets(),
     };
     errdefer self._console_messages.deinit();
 

@@ -101,6 +101,7 @@ const CommonOptions = .{
     .{ .name = "storage_sqlite_path", .type = ?[:0]const u8 },
     .{ .name = "disable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
+    .{ .name = "enable_external_stylesheets", .type = bool },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -205,6 +206,7 @@ const Commands = cli.Builder(.{
                 },
             },
             .{ .name = "terminate_ms", .type = ?u32 },
+            .{ .name = "json", .type = bool },
         },
         .shared_options = CommonOptions,
     },
@@ -291,6 +293,13 @@ pub fn disableSubframes(self: *const Config) bool {
 pub fn disableWorkers(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_workers,
+        else => unreachable,
+    };
+}
+
+pub fn enableExternalStylesheets(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp => |opts| opts.enable_external_stylesheets,
         else => unreachable,
     };
 }
@@ -471,6 +480,7 @@ pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
         .mcp => 16,
+        .fetch => 0,
         else => unreachable,
     };
 }

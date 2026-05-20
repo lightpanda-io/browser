@@ -23,6 +23,7 @@ const Allocator = std.mem.Allocator;
 const js = @import("js/js.zig");
 const App = @import("../App.zig");
 const HttpClient = @import("HttpClient.zig");
+const CDP = @import("../cdp/CDP.zig");
 
 const ArenaPool = App.ArenaPool;
 
@@ -69,7 +70,7 @@ pub fn nextFrameId(self: *Browser) u32 {
     return id;
 }
 
-pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp_client: ?HttpClient.CDPClient) !void {
+pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
     const allocator = app.allocator;
 
     var env = try js.Env.init(app, opts.env);
@@ -84,7 +85,7 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp_client: ?HttpClient.C
         .http_client = undefined,
         .page_pool = std.heap.MemoryPool(Page).init(allocator),
     };
-    try self.http_client.init(allocator, &app.network, cdp_client);
+    try self.http_client.init(allocator, &app.network, cdp);
 }
 
 pub fn deinit(self: *Browser) void {
