@@ -42,6 +42,13 @@
 #   - Xcode CommandLineTools updates (the symlinked .tbd files change)
 #   - Zig version bumps (the bundled libSystem.tbd / SDKSettings move)
 #
+# Removal:
+#   Temporary workaround for Zig 0.15.x. Once the project moves to Zig 0.16+
+#   (its bundled libc ships the macOS 26 SDK and links arm64-macos natively)
+#   the shim is obsolete — delete this script, the Makefile block, and the
+#   CONTRIBUTING.md section. It won't self-disable: the Makefile keys off the
+#   system SDK, which still lacks arm64-macos on macOS 26.
+#
 # The shim is host-specific (every symlink is absolute) and is not
 # meant to be checked into the repo. The Makefile runs this script
 # automatically when the system SDK lacks arm64-macos exports.

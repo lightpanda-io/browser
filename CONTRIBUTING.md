@@ -52,6 +52,14 @@ make darwin-sdk-shim
 future SDK that puts `arm64-macos` back, the shim block is skipped entirely
 and the Makefile behaves exactly as before.
 
+This is a temporary workaround for Zig 0.15.x. Upgrading the project to
+Zig 0.16+ (its bundled libc ships the macOS 26 SDK and links `arm64-macos`
+natively) makes the shim unnecessary — at that point remove this section,
+`scripts/darwin-sdk-shim.sh`, and the Makefile block. It won't switch itself
+off when that happens: detection keys off the *system* SDK, which still lacks
+`arm64-macos` on macOS 26, so removal is a deliberate step tied to the
+toolchain bump.
+
 Bare `zig build` (without `make`) won't pick up the shim's `PATH` /
 environment automatically — use `make test` / `make build-dev` for the
 managed path. Direct `zig build` invocations need `PATH` and
