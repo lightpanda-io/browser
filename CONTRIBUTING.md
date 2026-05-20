@@ -25,6 +25,14 @@ invocation: `usr/include` is symlinked from the system SDK,
 rewritten to also export `arm64-macos`. A repo-local `xcrun` wrapper is
 prepended to `PATH` so Zig's SDK auto-detection lands on the shim.
 
+> [!NOTE]
+> The shim stays entirely inside the repo. It only **reads** the system SDK
+> (the mirrored entries are symlinks pointing back at it) and writes the
+> patched `.tbd` copies into `.lp-cache/` (gitignored). No `sudo`, no global
+> install — nothing under `/Library`, `/usr`, or your Xcode / CommandLineTools
+> install is modified. `make clean`, `make darwin-sdk-shim-clean`, or simply
+> deleting `.lp-cache/` reverts it completely.
+
 No action required from contributors — the shim builds in ~5 s the first
 time and is reused on subsequent invocations. Re-run after Xcode
 CommandLineTools updates or Zig version bumps:

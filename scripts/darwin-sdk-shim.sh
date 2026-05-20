@@ -2,6 +2,14 @@
 # Build a macOS SDK shim that lets Zig 0.15.x link arm64-macos binaries
 # on macOS 26+.
 #
+# Scope / safety:
+#   Writes only inside the output dir passed as $1 (the Makefile always
+#   points this at .lp-cache/, which is gitignored). The live system SDK is
+#   read, never modified — the mirrored entries are symlinks into it and the
+#   .tbd files are copies. No sudo, no global install; nothing under /Library,
+#   /usr, or the Xcode / CommandLineTools install is touched. Removing the
+#   output dir (`make clean` / `make darwin-sdk-shim-clean`) fully reverts it.
+#
 # Problem:
 #   macOS 26 CommandLineTools dropped arm64-macos from the system .tbd
 #   library stubs — every export now lists arm64e-macos only. Zig 0.15.x
