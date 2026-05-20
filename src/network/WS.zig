@@ -309,17 +309,26 @@ pub fn Reader(comptime EXPECT_MASK: bool, MAX_MESSAGE_SIZE: usize) type {
     };
 }
 
-pub fn errorReply(err: NextError) ?[]const u8 {
+// Map a reader error (or any error that flowed up out of one) to the
+// matching server→client close frame. Takes anyerror so callers that
+// hold the error in a wider type (e.g. ?anyerror across an inbox)
+// don't need to narrow it first; unrecognized errors return null.
+pub fn errorReply(err: anyerror) ?[]const u8 {
     return switch (err) {
         error.TooLarge => &CLOSE_TOO_BIG,
-        error.Masked => &CLOSE_PROTOCOL_ERROR,
-        error.NotMasked => &CLOSE_PROTOCOL_ERROR,
-        error.ReservedFlags => &CLOSE_PROTOCOL_ERROR,
-        error.InvalidMessageType => &CLOSE_PROTOCOL_ERROR,
-        error.ControlTooLarge => &CLOSE_PROTOCOL_ERROR,
-        error.InvalidContinuation => &CLOSE_PROTOCOL_ERROR,
-        error.NestedFragmentation => &CLOSE_PROTOCOL_ERROR,
-        error.OutOfMemory => null,
+        error.Masked,
+        error.NotMasked,
+        error.ReservedFlags,
+        error.InvalidMessageType,
+        error.ControlTooLarge,
+        error.InvalidContinuation,
+        error.NestedFragmentation,
+        // Strictly an application-level (CDP) error, but 1002
+        // "protocol error" is the closest fit and gives the peer a
+        // cleaner signal than a bare TCP FIN.
+        error.InvalidJSON,
+        => &CLOSE_PROTOCOL_ERROR,
+        else => null,
     };
 }
 

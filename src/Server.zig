@@ -72,7 +72,9 @@ pub fn shutdown(self: *Server) void {
     for (self.cdps.items) |cdp| {
         if (cdp.conn.state == .live) {
             cdp.browser.env.terminate();
-            cdp.conn.sendClose();
+            // We use to send a nice WS close frame here but (a) it isn't
+            // strictly required and (b) we'd have to protect against an interleaved
+            // write from the worker thread.
         }
         cdp.conn.shutdown();
     }
@@ -166,13 +168,16 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
     defer _ = self.active_threads.fetchSub(1, .monotonic);
     defer posix.close(socket);
 
-    // CDP is HUGE (> 512KB) because Connection has a large read buffer.
-    // V8 crashes if this is on the stack (likely related to its size).
-    const cdp = self.allocCDP() catch |err| {
-        log.err(.app, "CDP alloc", .{ .err = err });
-        return;
+    const cdp = blk: {
+        self.cdp_mutex.lock();
+        defer self.cdp_mutex.unlock();
+        break :blk self.cdp_pool.create() catch @panic("OOM");
     };
-    defer self.releaseCDP(cdp);
+    defer {
+        self.cdp_mutex.lock();
+        defer self.cdp_mutex.unlock();
+        self.cdp_pool.destroy(cdp);
+    }
 
     cdp.init(self.app, socket, self.json_version_response) catch |err| {
         log.err(.app, "CDP init", .{ .err = err });
@@ -185,18 +190,63 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
         log.info(.app, "client connected", .{ .ip = client_address });
     }
 
-    self.registerCDP(cdp);
-    defer self.unregisterCDP(cdp);
+    {
+        // track the connection
+        self.cdp_mutex.lock();
+        defer self.cdp_mutex.unlock();
+        self.cdps.append(self.app.allocator, cdp) catch {};
+    }
+
+    defer {
+        // untrack the connection
+        self.cdp_mutex.lock();
+        defer self.cdp_mutex.unlock();
+        for (self.cdps.items, 0..) |c, i| {
+            if (c == cdp) {
+                _ = self.cdps.swapRemove(i);
+                break;
+            }
+        }
+    }
 
     const upgraded = cdp.conn.handshake() catch |err| {
         log.err(.app, "CDP handshake", .{ .err = err });
         return;
     };
+
     if (!upgraded) {
         return;
     }
 
-    self.markLive(cdp);
+    {
+        // Transition from .handshake state to .live
+        // Lock needed even though the main thread hasn't seen this yet because
+        // shutdown could access this from the sighandler thread.
+        self.cdp_mutex.lock();
+        defer self.cdp_mutex.unlock();
+        cdp.conn.state = .live;
+    }
+
+    // Hand the read side of the CDP socket over to the Network thread.
+    // From here until the matching unregisterCdp, the worker must NOT
+    // read from the socket directly — bytes arrive via the inbox.
+    // unregisterCdp is synchronous, so by the time it returns Network
+    // is guaranteed to be done with this link.
+    //
+    // cdp_link_active gates HttpClient.perform's block in
+    // curl_multi_poll: with it false (tests, pre-handshake), perform
+    // skips the poll when there's no in-flight curl work — sleeping
+    // would just eat the timeout waiting for a wakeup that won't
+    // come. We set it true *after* registerCdp so Network is already
+    // accepting wakeups by the time the worker might poll, and clear
+    // it *after* unregisterCdp returns (Network is guaranteed done
+    // with us by then).
+    self.app.network.registerCdp(&cdp.link);
+    cdp.browser.http_client.cdp_link_active = true;
+    defer {
+        self.app.network.unregisterCdp(&cdp.link);
+        cdp.browser.http_client.cdp_link_active = false;
+    }
 
     // Check shutdown after markLive so that a concurrent shutdown either
     // sees us as .live and terminates us, or we observe the stop signal
@@ -213,44 +263,6 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
         if (!next) break;
     }
 }
-
-fn allocCDP(self: *Server) !*CDP {
-    self.cdp_mutex.lock();
-    defer self.cdp_mutex.unlock();
-    return self.cdp_pool.create();
-}
-
-fn releaseCDP(self: *Server, cdp: *CDP) void {
-    self.cdp_mutex.lock();
-    defer self.cdp_mutex.unlock();
-    self.cdp_pool.destroy(cdp);
-}
-
-fn registerCDP(self: *Server, cdp: *CDP) void {
-    self.cdp_mutex.lock();
-    defer self.cdp_mutex.unlock();
-    self.cdps.append(self.app.allocator, cdp) catch {};
-}
-
-fn unregisterCDP(self: *Server, cdp: *CDP) void {
-    self.cdp_mutex.lock();
-    defer self.cdp_mutex.unlock();
-    for (self.cdps.items, 0..) |c, i| {
-        if (c == cdp) {
-            _ = self.cdps.swapRemove(i);
-            break;
-        }
-    }
-}
-
-fn markLive(self: *Server, cdp: *CDP) void {
-    self.cdp_mutex.lock();
-    defer self.cdp_mutex.unlock();
-    cdp.conn.state = .live;
-}
-
-// Utils
-// --------
 
 fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
     const host = app.config.advertiseHost();
@@ -282,9 +294,6 @@ fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
         body_format;
     return try std.fmt.allocPrint(app.allocator, response_format, .{ body_len, host, port });
 }
-
-pub const timestamp = @import("datetime.zig").timestamp;
-pub const milliTimestamp = @import("datetime.zig").milliTimestamp;
 
 const testing = @import("testing.zig");
 test "server: buildJSONVersionResponse" {

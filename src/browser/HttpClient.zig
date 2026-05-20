@@ -31,6 +31,8 @@ const http = @import("../network/http.zig");
 const Robots = @import("../network/Robots.zig");
 const Network = @import("../network/Network.zig");
 
+const CDP = @import("../cdp/CDP.zig");
+const Inbox = @import("../Inbox.zig");
 const CachedResponse = @import("../network/cache/Cache.zig").CachedResponse;
 
 pub const CacheLayer = @import("../network/layer/CacheLayer.zig");
@@ -127,7 +129,29 @@ obey_robots: bool,
 user_agent_override: ?[:0]const u8 = null,
 user_agent_header_override: ?[:0]const u8 = null,
 
-cdp_client: ?CDPClient = null,
+// The CDP layer we dispatch inbox messages to. Set in CDP.init for
+// `serve` mode; null in all other modes. Since this is set early, BEFORE the
+// CDP socket is registered with the network thread, we also have the
+// `cdp_link_active` boolean.
+cdp: ?*CDP = null,
+
+// True iff a producer (Server.handleConnection, after the worker
+// handshake completes) has registered the CDP socket with the Network
+// thread and Network will fire curl_multi_wakeup on our multi handle
+// when it pushes to the inbox. perform uses this — NOT `cdp != null`
+// — to decide whether to block in poll without any in-flight curl
+// work. cdp is set in CDP.init, well before the link is wired; tests
+// and the pre-handshake window have a cdp but no producer, so polling
+// there would just eat the timeout waiting for a wakeup that's never
+// coming.
+cdp_link_active: bool = false,
+
+// CDP messages parsed off the WS socket by the Network thread land
+// here. perform drains the inbox at each safe point and dispatches
+// via cdp.onMessage / onPing / onClose / onDisconnect. Always present
+// even in non-CDP mode — the empty-queue drain is one mutex lock plus
+// a linked-list head check, cheaper than nullability everywhere.
+inbox: Inbox,
 
 max_response_size: usize,
 
@@ -155,25 +179,7 @@ fn layerWith(self: anytype, next: Layer) Layer {
     return self.layer();
 }
 
-// libcurl can monitor arbitrary sockets, this lets us use libcurl to poll
-// both HTTP data as well as messages from an CDP connection.
-// Furthermore, we have some tension between blocking scripts and request
-// interception. For non-blocking scripts, because nothing blocks, we can
-// just queue the scripts until we receive a response to the interception
-// notification. But for blocking scripts (which block the parser), it's hard
-// to return control back to the CDP loop. So the `read` function pointer is
-// used by the Client to have the CDP client read more data from the socket,
-// specifically when we're waiting for a request interception response to
-// a blocking script.
-pub const CDPClient = struct {
-    ctx: *anyopaque,
-    socket: posix.socket_t,
-    blocking_read_start: *const fn (*anyopaque) bool,
-    blocking_read: *const fn (*anyopaque) bool,
-    blocking_read_end: *const fn (*anyopaque) bool,
-};
-
-pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: ?CDPClient) !void {
+pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) !void {
     var handles = try http.Handles.init(network.config);
     errdefer handles.deinit();
 
@@ -183,7 +189,8 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp_client: 
         .handles = handles,
         .network = network,
         .allocator = allocator,
-        .cdp_client = cdp_client,
+        .cdp = cdp,
+        .inbox = .{},
 
         .use_proxy = http_proxy != null,
         .http_proxy = http_proxy,
@@ -228,6 +235,7 @@ pub fn deinit(self: *Client) void {
 
     self.robots_layer.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
+    self.inbox.deinit(self.arena_pool);
 }
 
 // Look up a live transfer by its id. Returns null if the transfer has been
@@ -379,14 +387,29 @@ pub fn abortRequests(_: *Client, owner: *Owner) void {
     // owner itself is freed, no orphan transfer points at it.
 }
 
-pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
+// What CDP messages drainInbox is allowed to dispatch this tick.
+//   .all       — outer event loop (Runner.tick). Safe to dispatch
+//                everything; the JS stack is empty.
+//   .sync_wait — reachable from inside a JS callback (syncRequest,
+//                waitForImport). The JS callstack above us holds
+//                refs to page / session / V8 state; dispatching a
+//                command that frees that state would UAF on unwind.
+//                Cherry-pick only Fetch interception responses
+const DrainMode = enum { all, sync_wait };
+
+pub fn tick(self: *Client, timeout_ms: u32, mode: DrainMode) !void {
     try self.drainQueue();
-    const status = try self.perform(@intCast(timeout_ms));
+    try self.perform(@intCast(timeout_ms));
     // perform/processMessages just released a batch of connections back to
     // the pool. Drain again so queued transfers can use them this tick
     // instead of waiting for the next runner iteration.
     try self.drainQueue();
-    return status;
+    // Dispatch CDP messages here, not inside perform: perform recurses
+    // via processOneMessage's redirect path (perform → processMessages
+    // → processOneMessage → perform), and dispatching CDP from that
+    // nested call would fire CDP handlers mid-redirect, defeating the
+    // "safe points only" guarantee.
+    try self.drainInbox(mode);
 }
 
 fn drainQueue(self: *Client) !void {
@@ -526,17 +549,7 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request) !SyncRespo
     try self.request(r, null);
 
     while (sync_ctx.completion == .in_progress) {
-        const status = try self.tick(200);
-        log.debug(.http, "sync request tick", .{ .status = status });
-        switch (status) {
-            .cdp_socket => {
-                const cdp = self.cdp_client.?;
-                if (cdp.blocking_read(cdp.ctx) == false) {
-                    return error.ClientDisconnected;
-                }
-            },
-            .normal => continue,
-        }
+        try self.tick(200, .sync_wait);
     }
 
     switch (sync_ctx.completion) {
@@ -631,12 +644,7 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
     _ = try self.handles.perform();
 }
 
-pub const PerformStatus = enum {
-    cdp_socket,
-    normal,
-};
-
-fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
+fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
     const running = blk: {
         self.performing = true;
         defer self.performing = false;
@@ -659,29 +667,87 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!PerformStatus {
         try self.trackConn(conn);
     }
 
-    // We're potentially going to block for a while until we get data. Process
-    // whatever messages we have waiting ahead of time.
+    // We just processed completions; their done_callbacks may have
+    // scheduled microtasks (JS continuations) or queued new transfers.
+    // Return without polling so the caller (_tick) can run macrotasks
+    // and re-evaluate. Otherwise we'd sleep on cdp_link_active for up
+    // to timeout_ms while pending JS work sits idle.
     if (try self.processMessages()) {
-        return .normal;
+        return;
     }
 
-    var status = PerformStatus.normal;
-    if (self.cdp_client) |cdp_client| {
-        var wait_fds = [_]http.WaitFd{.{
-            .fd = cdp_client.socket,
-            .events = .{ .pollin = true },
-            .revents = .{},
-        }};
-        try self.handles.poll(&wait_fds, timeout_ms);
-        if (wait_fds[0].revents.pollin or wait_fds[0].revents.pollpri or wait_fds[0].revents.pollout) {
-            status = .cdp_socket;
-        }
-    } else if (running > 0) {
+    // Poll for HTTP I/O. The Network thread will call curl_multi_wakeup
+    // on our multi handle whenever it pushes to our inbox, so we drop
+    // out of poll promptly even when we have no curl handles in flight
+    // — but ONLY if a producer is actually wired up. `cdp_link_active`
+    // is set by Server.handleConnection once network.registerCdp has
+    // returned; in tests (which never register) and during the
+    // pre-handshake window the flag stays false and we don't waste a
+    // poll timeout waiting for a wakeup that won't arrive.
+    if (running > 0 or self.cdp_link_active) {
+        // when cdp_link_active == true, the network thread will unblock this
+        // by calling wakup on our multi.
         try self.handles.poll(&.{}, timeout_ms);
     }
 
     _ = try self.processMessages();
-    return status;
+}
+
+// Drain any CDP messages the Network thread pushed into our inbox
+// and dispatch them via the cdp_client callbacks. Returns
+// error.ClientDisconnected if the inbox surfaced a disconnect message,
+// so the worker loop can tear down the connection. Called from tick
+// only — NOT from perform, because perform recurses through
+// processOneMessage's redirect path.
+fn drainInbox(self: *Client, mode: DrainMode) !void {
+    const cdp = self.cdp orelse return;
+    while (true) {
+        const msg = switch (mode) {
+            .all => self.inbox.pop(),
+            .sync_wait => self.inbox.popIf(allowDuringSyncWait),
+        } orelse return;
+
+        defer msg.deinit(self.arena_pool);
+
+        switch (msg.payload) {
+            .cdp => |*c| cdp.onMessage(c) catch |err| {
+                // A single malformed/failed dispatch shouldn't poison
+                // the rest of the batch — log and continue.
+                log.err(.cdp, "CDP dispatch", .{ .err = err });
+            },
+            .ping => |body| cdp.onPing(body),
+            .close => {
+                cdp.onClose();
+                cdp.onDisconnect(null);
+                return error.ClientDisconnected;
+            },
+            .disconnect => |err| {
+                cdp.onDisconnect(err);
+                return error.ClientDisconnected;
+            },
+        }
+    }
+}
+
+// Predicate for Inbox.popIf during sync_wait drains. Always allows
+// ping/close/disconnect (control frames must be observed). CDP data
+// messages are filtered: only the four Fetch interception methods
+// are safe to dispatch from inside a JS callback (they mutate
+// transfer state via InterceptionLayer; they don't touch page /
+// session / V8 state). The check is exact on the parsed `method`
+// field — no substring matching against raw JSON.
+fn allowDuringSyncWait(msg: *Inbox.Message) bool {
+    return switch (msg.payload) {
+        .ping, .close, .disconnect => true,
+        .cdp => |c| isFetchInterceptionMethod(c.input.method),
+    };
+}
+
+fn isFetchInterceptionMethod(method: []const u8) bool {
+    return std.mem.eql(u8, method, "Fetch.continueRequest") or
+        std.mem.eql(u8, method, "Fetch.failRequest") or
+        std.mem.eql(u8, method, "Fetch.fulfillRequest") or
+        std.mem.eql(u8, method, "Fetch.continueWithAuth");
 }
 
 fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) !bool {
@@ -1670,3 +1736,92 @@ pub const Owner = struct {
         self.websockets.remove(&ws._owner_node);
     }
 };
+
+const testing = @import("../testing.zig");
+
+test "HttpClient: isFetchInterceptionMethod matches the four Fetch methods" {
+    try testing.expect(isFetchInterceptionMethod("Fetch.continueRequest"));
+    try testing.expect(isFetchInterceptionMethod("Fetch.failRequest"));
+    try testing.expect(isFetchInterceptionMethod("Fetch.fulfillRequest"));
+    try testing.expect(isFetchInterceptionMethod("Fetch.continueWithAuth"));
+}
+
+test "HttpClient: isFetchInterceptionMethod rejects unrelated methods" {
+    try testing.expect(!isFetchInterceptionMethod(""));
+    try testing.expect(!isFetchInterceptionMethod("Fetch.enable"));
+    try testing.expect(!isFetchInterceptionMethod("Fetch.disable"));
+    try testing.expect(!isFetchInterceptionMethod("Page.navigate"));
+    try testing.expect(!isFetchInterceptionMethod("Runtime.evaluate"));
+    // strict-equality check: a prefix of a valid name must not match
+    try testing.expect(!isFetchInterceptionMethod("Fetch.continueReq"));
+    // trailing space, etc.
+    try testing.expect(!isFetchInterceptionMethod("Fetch.continueRequest "));
+}
+
+test "HttpClient: allowDuringSyncWait allows ping/close/disconnect" {
+    var ping_msg = Inbox.Message{
+        .arena = testing.allocator,
+        .payload = .{ .ping = "" },
+    };
+    try testing.expect(allowDuringSyncWait(&ping_msg));
+
+    var close_msg = Inbox.Message{
+        .arena = testing.allocator,
+        .payload = .close,
+    };
+    try testing.expect(allowDuringSyncWait(&close_msg));
+
+    var disconnect_msg = Inbox.Message{
+        .arena = testing.allocator,
+        .payload = .{ .disconnect = null },
+    };
+    try testing.expect(allowDuringSyncWait(&disconnect_msg));
+
+    var disconnect_err_msg = Inbox.Message{
+        .arena = testing.allocator,
+        .payload = .{ .disconnect = error.PeerClosed },
+    };
+    try testing.expect(allowDuringSyncWait(&disconnect_err_msg));
+}
+
+test "HttpClient: allowDuringSyncWait allows only Fetch interception CDP methods" {
+    var raw_buf: [16]u8 = undefined;
+
+    inline for ([_][]const u8{
+        "Fetch.continueRequest",
+        "Fetch.failRequest",
+        "Fetch.fulfillRequest",
+        "Fetch.continueWithAuth",
+    }) |method| {
+        var msg = Inbox.Message{
+            .arena = testing.allocator,
+            .payload = .{ .cdp = .{
+                .raw = &raw_buf,
+                .input = .{ .method = method },
+            } },
+        };
+        try testing.expect(allowDuringSyncWait(&msg));
+    }
+}
+
+test "HttpClient: allowDuringSyncWait denies non-Fetch CDP methods" {
+    var raw_buf: [16]u8 = undefined;
+
+    inline for ([_][]const u8{
+        "Page.navigate",
+        "Runtime.evaluate",
+        "Target.createTarget",
+        "Fetch.enable",
+        "Fetch.disable",
+        "",
+    }) |method| {
+        var msg = Inbox.Message{
+            .arena = testing.allocator,
+            .payload = .{ .cdp = .{
+                .raw = &raw_buf,
+                .input = .{ .method = method },
+            } },
+        };
+        try testing.expect(!allowDuringSyncWait(&msg));
+    }
+}

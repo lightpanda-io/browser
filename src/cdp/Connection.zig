@@ -20,8 +20,12 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
+const CDP = @import("CDP.zig");
+
+const Inbox = @import("../Inbox.zig");
 const Config = @import("../Config.zig");
 const WS = @import("../network/WS.zig");
+const ArenaPool = @import("../ArenaPool.zig");
 
 const log = lp.log;
 const posix = std.posix;
@@ -32,6 +36,9 @@ pub const Connection = @This();
 
 pub const State = enum { handshaking, live };
 
+// reference to http_client.inbox
+inbox: *Inbox,
+arena_pool: *ArenaPool,
 socket: posix.socket_t,
 socket_flags: usize,
 state: State = .handshaking,
@@ -41,9 +48,11 @@ json_version_response: []const u8,
 
 pub fn init(
     self: *Connection,
-    socket: posix.socket_t,
     allocator: Allocator,
+    socket: posix.socket_t,
     json_version_response: []const u8,
+    inbox: *Inbox,
+    arena_pool: *ArenaPool,
 ) !void {
     const socket_flags = try posix.fcntl(socket, posix.F.GETFL, 0);
     const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
@@ -52,7 +61,9 @@ pub fn init(
     }
 
     self.* = .{
+        .inbox = inbox,
         .socket = socket,
+        .arena_pool = arena_pool,
         .socket_flags = socket_flags,
         .reader = try .init(allocator),
         .send_arena = ArenaAllocator.init(allocator),
@@ -104,7 +115,7 @@ pub fn send(self: *Connection, data: []const u8) !void {
     }
 }
 
-fn sendPong(self: *Connection, data: []const u8) !void {
+pub fn sendPong(self: *Connection, data: []const u8) !void {
     if (data.len == 0) {
         return self.send(&WS.EMPTY_PONG);
     }
@@ -157,15 +168,15 @@ pub fn handshake(self: *Connection) !bool {
         }};
         const n = try posix.poll(&pfds, 5000);
         if (n == 0) {
-            log.info(.app, "CDP handshake timeout", .{});
+            log.info(.cdp, "CDP handshake timeout", .{});
             return false;
         }
         const read_bytes = self.read() catch |err| {
-            log.warn(.app, "CDP read", .{ .err = err });
+            log.warn(.cdp, "CDP read", .{ .err = err });
             return false;
         };
         if (read_bytes == 0) {
-            log.info(.app, "CDP disconnect", .{});
+            log.info(.cdp, "CDP disconnect", .{});
             return false;
         }
         const result = self.processHttpRequest() catch return false;
@@ -183,17 +194,28 @@ pub fn read(self: *Connection) !usize {
     return n;
 }
 
-// Append pre-read bytes (from the network thread) to the reader.
-// Used post-handshake when the network thread owns socket reads and
-// hands bytes back via the HttpClient inbox. Returns BufferTooSmall
-// if the reader's free space can't hold this chunk — caller is
-// expected to chunk reads to fit (Network reads in 16 KB chunks
-// which matches the reader's initial capacity).
-pub fn feedBytes(self: *Connection, data: []const u8) !void {
+// Append as many bytes as fit into the reader's free space. Returns
+// the number of bytes copied. Used post-handshake when the network
+// thread owns socket reads.
+//
+// Why partial: a single network read can carry more bytes than the
+// reader's current free space (e.g. one large pending frame plus the
+// start of another). The caller is expected to loop:
+//
+//   while (remaining.len > 0) {
+//       const n = conn.feedBytes(remaining);
+//       remaining = remaining[n..];
+//       _ = try conn.processMessages();  // extracts frames + compacts
+//       // processMessages also grows the reader buffer if it sees a
+//       // frame header bigger than the current capacity, so the next
+//       // feedBytes call has somewhere to land.
+//   }
+pub fn feedBytes(self: *Connection, data: []const u8) usize {
     const dst = self.reader.readBuf();
-    if (data.len > dst.len) return error.BufferTooSmall;
-    @memcpy(dst[0..data.len], data);
-    self.reader.len += data.len;
+    const n = @min(data.len, dst.len);
+    @memcpy(dst[0..n], data[0..n]);
+    self.reader.len += n;
+    return n;
 }
 
 fn processHttpRequest(self: *Connection) !HttpResult {
@@ -282,35 +304,87 @@ const empty_json_list_response =
     "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
     "[]";
 
-pub fn processMessages(self: *Connection, handler: anytype) !bool {
+// Framing-only iteration over received bytes. processMessages no
+// longer auto-replies pong/close or sends close-on-error — the Network
+// thread runs this loop and is read-only on the socket.
+//
+// Returns false if a close frame was seen (caller should drop the
+// link) or the handler asked to stop; true if the loop exited because
+// there were no more complete frames buffered.
+pub fn processMessages(self: *Connection) !bool {
     var reader = &self.reader;
     while (true) {
-        const msg = (reader.next() catch |err| {
-            if (WS.errorReply(err)) |error_reply| {
-                self.send(error_reply) catch {};
-            }
-            return err;
-        }) orelse break;
+        const msg = (try reader.next()) orelse break;
 
-        switch (msg.type) {
-            .pong => {},
-            .ping => try self.sendPong(msg.data),
-            .close => {
-                self.send(&WS.CLOSE_NORMAL) catch {};
-                return false;
+        const keep = switch (msg.type) {
+            .pong => true,
+            .ping, .text, .binary => try self.handleMessage(msg),
+            .close => blk: {
+                _ = try self.handleMessage(msg);
+                break :blk false;
             },
-            .text, .binary => if (handler.handleMessage(msg.data) == false) {
-                return false;
-            },
-        }
+        };
+
         if (msg.cleanup_fragment) {
             reader.cleanup();
+        }
+
+        if (!keep) {
+            return false;
         }
     }
 
     // We might have read part of the next message. Our reader potentially
     // has to move data around in its buffer to make space.
     reader.compact();
+    return true;
+}
+
+fn handleMessage(self: *Connection, msg: WS.Message) !bool {
+    switch (msg.type) {
+        .text, .binary => return self.pushCdp(msg.data),
+        .ping => {
+            const arena = try self.arena_pool.acquire(.tiny, "cdp ping");
+            errdefer self.arena_pool.release(arena);
+            self.inbox.push(arena, .{ .ping = try arena.dupe(u8, msg.data) });
+            return true;
+        },
+        .close => {
+            const arena = try self.arena_pool.acquire(.tiny, "cdp close");
+            self.inbox.push(arena, .close);
+            return true;
+        },
+        .pong => unreachable, // processMessages skips pong
+    }
+}
+
+// Parse a CDP JSON frame on the Network thread and push it onto the
+// inbox already-parsed. The consumer's allowlist check works on
+// `input.method` directly (no substring matching against raw JSON),
+// and the worker doesn't re-parse on dispatch. On parse failure we
+// push `.disconnect(error.InvalidJSON)` so the worker tears down —
+// treated the same way as a fatal WS framing error.
+fn pushCdp(self: *Connection, bytes: []const u8) !bool {
+    // TODO: is it worth trying to pad this for the cost overhead of parsing?
+    const arena = try self.arena_pool.acquire(bytes.len, "cdp data");
+    errdefer self.arena_pool.release(arena);
+
+    const raw = try arena.dupe(u8, bytes);
+
+    const input = std.json.parseFromSliceLeaky(
+        CDP.InputMessage,
+        arena,
+        raw,
+        .{ .ignore_unknown_fields = true },
+    ) catch {
+        self.inbox.push(arena, .{ .disconnect = error.InvalidJSON });
+        return false;
+    };
+
+    self.inbox.push(arena, .{ .cdp = .{
+        .raw = raw,
+        .input = input,
+    } });
     return true;
 }
 
