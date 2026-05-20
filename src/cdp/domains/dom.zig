@@ -459,7 +459,7 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn getNode(arena: Allocator, bc: *CDP.BrowserContext, node_id: ?Node.Id, backend_node_id: ?Node.Id, object_id: ?[]const u8) !*Node {
+pub fn getNode(arena: Allocator, bc: *CDP.BrowserContext, node_id: ?Node.Id, backend_node_id: ?Node.Id, object_id: ?[]const u8) !*Node {
     const input_node_id = node_id orelse backend_node_id;
     if (input_node_id) |input_node_id_| {
         return bc.node_registry.lookup_by_id.get(input_node_id_) orelse return error.NodeNotFound;

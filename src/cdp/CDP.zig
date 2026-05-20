@@ -710,8 +710,13 @@ pub const BrowserContext = struct {
     }
 
     pub fn axnodeWriter(self: *BrowserContext, temp_arena: Allocator, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
-        const frame = self.session.currentFrame() orelse return error.FrameNotLoaded;
-        _ = opts;
+        // Bind the writer to the frame that owns the root node, not whatever
+        // happens to be `currentFrame`. Name resolution (`Label.findLabelByFor`
+        // against `ownerDocument`) and visibility checks (`frame._style_manager`)
+        // are per-frame; getting this wrong on cross-frame queries produces
+        // names/visibility from the wrong document.
+        const fallback = self.session.currentFrame() orelse return error.FrameNotLoaded;
+        const frame = root.dom.ownerFrame(fallback);
         const cache = try frame.call_arena.create(Element.VisibilityCache);
         cache.* = .empty;
         const label_index = try frame.call_arena.create(Label.LabelByForIndex);
@@ -723,6 +728,7 @@ pub const BrowserContext = struct {
             .visibility_cache = cache,
             .label_index = label_index,
             .temp_arena = temp_arena,
+            .filter = opts.filter,
         };
     }
 

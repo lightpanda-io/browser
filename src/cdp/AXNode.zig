@@ -45,11 +45,31 @@ pub const Writer = struct {
     visibility_cache: *DOMNode.Element.VisibilityCache,
     label_index: *Label.LabelByForIndex,
     temp_arena: std.mem.Allocator,
+    // When null, emit the full AX tree (getFullAXTree). When set, walk the
+    // subtree visiting all nodes (including AX-ignored ones, per the
+    // queryAXTree spec) and emit only nodes whose role + accessible name
+    // match the filter, in a flat shape.
+    filter: ?Filter = null,
 
-    pub const Opts = struct {};
+    pub const Filter = struct {
+        role: ?[]const u8 = null,
+        accessible_name: ?[]const u8 = null,
+    };
+
+    pub const Opts = struct {
+        filter: ?Filter = null,
+    };
+
+    const ResolvedRole = struct {
+        role: []const u8,
+        // Non-null when the current node is a <label> whose target control is
+        // a CSS-hidden checkbox/radio. Callers use this to emit the control's
+        // checked/disabled properties on the promoted label.
+        promoted_input: ?*DOMNode.Element.Html.Input,
+    };
 
     pub fn jsonStringify(self: *const Writer, w: anytype) error{WriteFailed}!void {
-        self.toJSON(self.root, w) catch |err| {
+        self.toJSON(w) catch |err| {
             // The only error our jsonStringify method can return is
             // @TypeOf(w).Error. In other words, our code can't return its own
             // error, we can only return a writer error. Kinda sucks.
@@ -58,13 +78,34 @@ pub const Writer = struct {
         };
     }
 
-    fn toJSON(self: *const Writer, node: *const Node, w: anytype) !void {
+    fn toJSON(self: *const Writer, w: anytype) !void {
         try w.beginArray();
-        const root = AXNode.fromNode(node.dom);
-        if (try self.writeNode(node.id, root, false, w)) {
-            try self.writeNodeChildren(root, false, w);
+        if (self.filter != null) {
+            try self.walkQuery(self.root.dom, false, w);
+        } else {
+            const root = AXNode.fromNode(self.root.dom);
+            if (try self.writeNode(self.root.id, root, false, w)) {
+                try self.writeNodeChildren(root, false, w);
+            }
         }
         return w.endArray();
+    }
+
+    // Resolve the displayed role for `axn`, accounting for label-promotion
+    // when a <label> targets a CSS-hidden checkbox/radio. Shared between the
+    // tree (writeNode) and query (emitMatch) paths so the two can't drift.
+    fn resolveRole(self: *const Writer, axn: AXNode) !ResolvedRole {
+        if (labelPromotionTarget(axn, self.frame, self.visibility_cache)) |input| {
+            return .{
+                .role = switch (input._input_type) {
+                    .checkbox => "checkbox",
+                    .radio => "radio",
+                    else => unreachable,
+                },
+                .promoted_input = input,
+            };
+        }
+        return .{ .role = try axn.getRole(), .promoted_input = null };
     }
 
     // CDP spec defines AXNodeId as a string, so nodeId/parentId/childIds must
@@ -485,18 +526,11 @@ pub const Writer = struct {
         try w.objectField("backendDOMNodeId");
         try w.write(id);
 
-        const promoted_input = labelPromotionTarget(axn, self.frame, self.visibility_cache);
+        const resolved = try self.resolveRole(axn);
+        const promoted_input = resolved.promoted_input;
 
         try w.objectField("role");
-        if (promoted_input) |input| {
-            try self.writeAXValue(.{ .role = switch (input._input_type) {
-                .checkbox => "checkbox",
-                .radio => "radio",
-                else => unreachable,
-            } }, w);
-        } else {
-            try self.writeAXValue(.{ .role = try axn.getRole() }, w);
-        }
+        try self.writeAXValue(.{ .role = resolved.role }, w);
 
         const ignore = axn.isIgnore(self.frame, self.visibility_cache, in_aria_hidden);
         try w.objectField("ignored");
@@ -631,6 +665,83 @@ pub const Writer = struct {
             try w.objectField("value");
             try self.writeAXValue(.{ .string = val }, w);
         }
+    }
+
+    // Query-mode walk. Visits every node under `root` (including AX-ignored
+    // ones, per the queryAXTree spec) and defers emission to emitMatch.
+    fn walkQuery(self: *const Writer, node: *DOMNode, in_aria_hidden: bool, w: anytype) !void {
+        const axn = AXNode.fromNode(node);
+        try self.emitMatch(axn, in_aria_hidden, w);
+
+        // <head>, <script>, <style> never expose AX content — skip recursion.
+        if (axn.ignoreChildren()) return;
+
+        const child_in_aria_hidden = in_aria_hidden or blk: {
+            const parent_el = node.is(DOMNode.Element) orelse break :blk false;
+            break :blk hasAriaHiddenTrue(parent_el);
+        };
+
+        var it = node.childrenIterator();
+        while (it.next()) |child| {
+            switch (child._type) {
+                .element, .cdata => {},
+                else => continue,
+            }
+            try self.walkQuery(child, child_in_aria_hidden, w);
+        }
+    }
+
+    // Emit `axn` to `w` iff it satisfies the active filter. Output shape is
+    // the queryAXTree flat-match shape: nodeId, backendDOMNodeId, ignored,
+    // role, name, plus empty properties / childIds (clients fetch full
+    // properties via getFullAXTree on a matched nodeId).
+    fn emitMatch(self: *const Writer, axn: AXNode, in_aria_hidden: bool, w: anytype) !void {
+        const filter = self.filter.?;
+        const resolved = self.resolveRole(axn) catch return;
+
+        if (filter.role) |needle| {
+            if (!std.mem.eql(u8, needle, resolved.role)) return;
+        }
+
+        const name = (try axn.getName(self.frame, self.temp_arena)) orelse "";
+        if (filter.accessible_name) |needle| {
+            if (!std.mem.eql(u8, needle, name)) return;
+        }
+
+        const node = try self.registry.register(axn.dom);
+        const ignored = axn.isIgnore(self.frame, self.visibility_cache, in_aria_hidden);
+
+        try w.beginObject();
+
+        try w.objectField("nodeId");
+        try writeIdString(node.id, w);
+
+        try w.objectField("backendDOMNodeId");
+        try w.write(node.id);
+
+        try w.objectField("ignored");
+        try w.write(ignored);
+
+        try w.objectField("role");
+        try self.writeAXValue(.{ .role = resolved.role }, w);
+
+        try w.objectField("name");
+        try w.beginObject();
+        try w.objectField("type");
+        try w.write("computedString");
+        try w.objectField("value");
+        try w.write(name);
+        try w.endObject();
+
+        try w.objectField("properties");
+        try w.beginArray();
+        try w.endArray();
+
+        try w.objectField("childIds");
+        try w.beginArray();
+        try w.endArray();
+
+        try w.endObject();
     }
 };
 
@@ -1590,4 +1701,164 @@ test "AXNode: writer prunes hidden and resolves labels" {
         }
         try testing.expect(found);
     }
+}
+
+test "AXNode: Writer query filters by role" {
+    var registry = Node.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    var frame = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer frame._session.removePage();
+    var doc = frame.window._document;
+
+    const node = try registry.register(doc.asNode());
+    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer frame.releaseArena(temp_arena);
+
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = node,
+        .registry = &registry,
+        .frame = frame,
+        .visibility_cache = &visibility_cache,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+        .filter = .{ .role = "heading" },
+    }, .{});
+    defer testing.allocator.free(json);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const nodes = parsed.value.array.items;
+    // Fixture has one <h1>Visible</h1>.
+    try testing.expectEqual(1, nodes.len);
+
+    const role_val = nodes[0].object.get("role").?.object.get("value").?.string;
+    try testing.expectEqual("heading", role_val);
+
+    const name_val = nodes[0].object.get("name").?.object.get("value").?.string;
+    try testing.expectEqual("Visible", name_val);
+}
+
+test "AXNode: Writer query filters by accessible name" {
+    var registry = Node.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    var frame = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer frame._session.removePage();
+    var doc = frame.window._document;
+
+    const node = try registry.register(doc.asNode());
+    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer frame.releaseArena(temp_arena);
+
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = node,
+        .registry = &registry,
+        .frame = frame,
+        .visibility_cache = &visibility_cache,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+        .filter = .{ .accessible_name = "Search" },
+    }, .{});
+    defer testing.allocator.free(json);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const nodes = parsed.value.array.items;
+    // Fixture has <label for="search-input">Search</label> — its accessible
+    // name is "Search". The label itself plus the input it labels both
+    // surface as candidates; verify at least one match with the right name.
+    try testing.expect(nodes.len >= 1);
+    for (nodes) |n| {
+        const name_val = n.object.get("name").?.object.get("value").?.string;
+        try testing.expectEqual("Search", name_val);
+    }
+}
+
+test "AXNode: Writer query combined role+name filter promotes hidden-input labels" {
+    var registry = Node.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    var frame = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer frame._session.removePage();
+    var doc = frame.window._document;
+
+    const node = try registry.register(doc.asNode());
+    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer frame.releaseArena(temp_arena);
+
+    // Fixture has a CSS-hidden checkbox `<input id="toggle-switch" ...>` plus
+    // `<label for="toggle-switch">Enable feature</label>`. Walking finds both:
+    //   - the label (role promoted to "checkbox", ignored=false, clickable)
+    //   - the hidden input (intrinsic role="checkbox", ignored=true)
+    // The label is the actionable target — a real client searching by role
+    // would act on the entry with ignored=false.
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = node,
+        .registry = &registry,
+        .frame = frame,
+        .visibility_cache = &visibility_cache,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+        .filter = .{ .accessible_name = "Enable feature", .role = "checkbox" },
+    }, .{});
+    defer testing.allocator.free(json);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const nodes = parsed.value.array.items;
+    try testing.expect(nodes.len >= 1);
+
+    // Every match has the right role and name.
+    var actionable_match = false;
+    for (nodes) |n| {
+        const role_val = n.object.get("role").?.object.get("value").?.string;
+        const name_val = n.object.get("name").?.object.get("value").?.string;
+        try testing.expectEqual("checkbox", role_val);
+        try testing.expectEqual("Enable feature", name_val);
+        if (!n.object.get("ignored").?.bool) actionable_match = true;
+    }
+    // At least one match must be ignored=false. If the label wasn't promoted,
+    // only the hidden input would match (ignored=true) — a regression.
+    try testing.expect(actionable_match);
+}
+
+test "AXNode: Writer query no match returns empty array" {
+    var registry = Node.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    var frame = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer frame._session.removePage();
+    var doc = frame.window._document;
+
+    const node = try registry.register(doc.asNode());
+    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer frame.releaseArena(temp_arena);
+
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = node,
+        .registry = &registry,
+        .frame = frame,
+        .visibility_cache = &visibility_cache,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+        .filter = .{ .role = "marquee" },
+    }, .{});
+    defer testing.allocator.free(json);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    try testing.expectEqual(0, parsed.value.array.items.len);
 }
