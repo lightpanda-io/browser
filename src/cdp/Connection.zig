@@ -500,20 +500,8 @@ pub fn getAddress(self: *Connection) !std.net.Address {
     return address;
 }
 
-pub fn sendClose(self: *Connection) void {
-    self.send(&WS.CLOSE_GOING_AWAY) catch {};
-}
-
 pub fn shutdown(self: *Connection) void {
     posix.shutdown(self.socket, .recv) catch {};
-}
-
-pub fn setBlocking(self: *Connection, blocking: bool) !void {
-    if (blocking) {
-        _ = try posix.fcntl(self.socket, posix.F.SETFL, self.socket_flags & ~@as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
-    } else {
-        _ = try posix.fcntl(self.socket, posix.F.SETFL, self.socket_flags);
-    }
 }
 
 fn fillWebsocketHeader(buf: std.ArrayList(u8)) []const u8 {
