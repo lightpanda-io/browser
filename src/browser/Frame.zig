@@ -257,7 +257,7 @@ _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
 _http_status: ?u16 = null,
-_http_headers: std.ArrayListUnmanaged(HttpHeader) = .empty,
+_http_headers: std.ArrayList(HttpHeader) = .empty,
 
 pub const HttpHeader = struct {
     name: []const u8,

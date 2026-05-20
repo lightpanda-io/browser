@@ -56,6 +56,11 @@
     \\                             css  Includes style and link[rel=stylesheet].
     \\                             full Strip everything.
     \\
+    \\--json                     Capture and print the status of the fetch in a
+    \\                           JSON string and output it. When used with
+    \\                           --dump <MODE> this will wrap the dumped content
+    \\                           within the JSON value.
+    \\
     \\--with-base                Add a <base> tag in dump.
     \\                           Defaults to false.
     \\
