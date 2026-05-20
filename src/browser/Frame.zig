@@ -1687,47 +1687,41 @@ pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
 // splitting by route anyway).
 const MAX_STYLESHEET_BYTES: usize = 2 * 1024 * 1024;
 
-// Synchronously fetch and parse an external `<link rel=stylesheet>`. Opt-in
-// behind `session.load_external_stylesheets` — scrapers/crawlers that don't
-// need accurate visibility checks still get the cheap no-fetch path via
-// `Link.linkAddedCallback`. Mirrors `ScriptManager.addFromElement`'s use of
-// `syncRequest`: stylesheets are render-blocking in real browsers, so a
-// synchronous fetch from inside the parser callback matches expected
-// document-load ordering without manual `_pending_loads` bookkeeping.
-pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link) !void {
-    if (self.isGoingAway()) return;
+// Synchronously fetch and parse an external `<link rel=stylesheet>`.
+// href is passed in as an optimization since the [currently] only callsite has
+// it, so why look it up again?
+pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []const u8) !void {
+    if (self.isGoingAway() or href.len == 0) {
+        return;
+    }
 
-    // Fragment-parsed links (innerHTML / outerHTML / DOMParser /
-    // Range.createContextualFragment / <template>.content) reach
-    // `Link.Build.created` like any other parser-instantiated element, but
-    // their owner subtree may never be attached to the live document. A
-    // network fetch + sheet registration against `self.document` would be
-    // a visible side effect of merely parsing markup. Mirrors the
-    // `nodeIsReady` short-circuit at the existing parser-path guard.
-    if (self._parse_mode == .fragment) return;
+    const session = self._session;
 
+    // this feature is disabled by default, and can be turned on via a command
+    // line flag or via an CDP command
+    if (session.load_external_stylesheets == false) {
+        return self.queueLoad(link._proto);
+    }
+
+    // Fragment-parsed links (innerHTML, DOMParser, ...) may not be attached.
+    // TODO: this isn't correct in all cases. If the link is added into an
+    // attached node, I think we SHOULD load it.
+    if (self._parse_mode == .fragment) {
+        return;
+    }
     const element = link.asElement();
-    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
-    if (href.len == 0) return;
 
-    const arena = try self.getArena(.medium, "Frame.loadExternalStylesheet");
-    defer self._session.releaseArena(arena);
+    const arena = try session.getArena(.medium, "Frame.loadExternalStylesheet");
+    defer session.releaseArena(arena);
 
     const resolved = URL.resolve(arena, self.base(), href, .{ .encoding = self.charset }) catch |err| {
-        log.warn(.browser, "external stylesheet resolve", .{ .err = err, .href = href });
-        try self.fireLinkEvent(link, comptime .wrap("error"));
+        log.warn(.http, "external stylesheet resolve", .{ .err = err, .href = href });
+        try self.fireElementEvent(element, comptime .wrap("error"));
         return;
     };
 
-    const session = self._session;
-    // HttpClient takes ownership of `headers` via the request struct on
-    // successful `syncRequest` (see HttpClient.zig:411). Until ownership
-    // transfers, `errdefer` covers the OOM window in `headers.add` /
-    // `headersForRequest` so the initial `newHeaders()` slist doesn't
-    // leak. Once `syncRequest` is entered the request struct handles
-    // cleanup — do NOT add a plain `defer deinit` here.
-    var headers = try session.browser.http_client.newHeaders();
-    errdefer headers.deinit();
+    const http_client = &session.browser.http_client;
+    var headers = try http_client.newHeaders();
     try headers.add("Accept: text/css,*/*;q=0.1");
     try self.headersForRequest(&headers);
 
@@ -1743,7 +1737,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link) !void {
     sm.is_evaluating = true;
     defer sm.is_evaluating = was_evaluating;
 
-    var response = session.browser.http_client.syncRequest(arena, .{
+    var response = http_client.syncRequest(arena, .{
         .url = resolved,
         .method = .GET,
         .frame_id = self._frame_id,
@@ -1754,26 +1748,23 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link) !void {
         .resource_type = .stylesheet,
         .notification = session.notification,
     }) catch |err| {
-        log.warn(.browser, "external stylesheet fetch", .{ .err = err, .url = resolved });
-        try self.fireLinkEvent(link, comptime .wrap("error"));
-        return;
+        log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
+        return self.fireElementEvent(element, comptime .wrap("error"));
     };
     defer response.deinit(arena);
 
     if (response.status < 200 or response.status >= 300) {
-        log.info(.browser, "external stylesheet status", .{ .status = response.status, .url = resolved });
-        try self.fireLinkEvent(link, comptime .wrap("error"));
-        return;
+        log.info(.http, "external stylesheet status", .{ .status = response.status, .url = resolved });
+        return self.fireElementEvent(element, comptime .wrap("error"));
     }
 
     if (response.body.items.len > MAX_STYLESHEET_BYTES) {
-        log.warn(.browser, "external stylesheet too large", .{
+        log.warn(.http, "external stylesheet too large", .{
             .bytes = response.body.items.len,
             .max = MAX_STYLESHEET_BYTES,
             .url = resolved,
         });
-        try self.fireLinkEvent(link, comptime .wrap("error"));
-        return;
+        return self.fireElementEvent(element, comptime .wrap("error"));
     }
 
     // Reuse the cached sheet on re-fetch (href mutation on a connected
@@ -1801,18 +1792,17 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link) !void {
     // `_href` consistent with what the sheet actually contains is the
     // minimum.
     sheet.replaceSync(response.body.items, self) catch |err| {
-        log.warn(.browser, "external stylesheet parse", .{ .err = err, .url = resolved });
-        try self.fireLinkEvent(link, comptime .wrap("error"));
-        return;
+        log.warn(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
+        return self.fireElementEvent(element, comptime .wrap("error"));
     };
     sheet._href = try self.arena.dupe(u8, resolved);
 
-    try self.fireLinkEvent(link, comptime .wrap("load"));
+    try self.fireElementEvent(element, comptime .wrap("load"));
 }
 
-fn fireLinkEvent(self: *Frame, link: *Element.Html.Link, name: String) !void {
+fn fireElementEvent(self: *Frame, el: *Element, name: String) !void {
     const event = try Event.initTrusted(name, .{}, self._page);
-    try self._event_manager.dispatch(link._proto.asEventTarget(), event);
+    try self._event_manager.dispatch(el.asEventTarget(), event);
 }
 
 fn dispatchLoad(self: *Frame) !void {
@@ -1827,8 +1817,7 @@ fn dispatchLoad(self: *Frame) !void {
 
     for (to_process.items) |html_element| {
         if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, self)) {
-            const event = try Event.initTrusted(comptime .wrap("load"), .{}, self._page);
-            try self._event_manager.dispatch(html_element.asEventTarget(), event);
+            try self.fireElementEvent(html_element.asElement(), comptime .wrap("load"));
         }
     }
 

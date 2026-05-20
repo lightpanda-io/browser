@@ -124,8 +124,8 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     // which fires the load/error event itself. Other rels (preload,
     // modulepreload) and the disabled case keep the rendering-free stub that
     // fires a synthetic `load` event without touching the network.
-    if (std.mem.eql(u8, rel, "stylesheet") and frame._session.load_external_stylesheets) {
-        return frame.loadExternalStylesheet(self);
+    if (std.mem.eql(u8, rel, "stylesheet")) {
+        return frame.loadExternalStylesheet(self, href);
     }
 
     try frame.queueLoad(self._proto);
@@ -174,5 +174,7 @@ test "WebApi: HTML.Link" {
 }
 
 test "WebApi: HTML.Link external stylesheet" {
+    const filter: testing.LogFilter = .init(&.{.http});
+    defer filter.deinit();
     try testing.htmlRunner("css/external_stylesheet.html", .{ .load_external_stylesheets = true });
 }
