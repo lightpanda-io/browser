@@ -74,24 +74,15 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
         );
 
         const CacheServeCtx = struct {
-            client: *Client,
-            transfer_id: u32,
             cached: CachedResponse,
         };
 
         const ctx = try arena.create(CacheServeCtx);
-        ctx.* = .{
-            .client = transfer.client,
-            .transfer_id = transfer.id,
-            .cached = cached,
-        };
+        ctx.* = .{ .cached = cached };
 
-        try transfer.client.runNextTick(ctx, struct {
-            fn run(ctx_ptr: *anyopaque) anyerror!void {
+        try transfer.client.runNextTick(transfer.id, ctx, struct {
+            fn run(t: *Transfer, ctx_ptr: *anyopaque) anyerror!void {
                 const c: *CacheServeCtx = @ptrCast(@alignCast(ctx_ptr));
-                const t = c.client.findTransfer(c.transfer_id) orelse return;
-                defer t.deinit();
-
                 serveFromCache(&t.req, &c.cached) catch |err| {
                     t.req.error_callback(t.req.ctx, err);
                 };
