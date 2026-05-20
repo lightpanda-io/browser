@@ -553,22 +553,25 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
         .help => {
             const template = comptimePrint(
                 \\
-                \\Command can be either "fetch", "serve", "mcp" or "help".
+                \\{s}
+                \\
                 \\
                 \\{s}
                 \\
-                \\{s}
                 \\
                 \\{s}
                 \\
-                \\{s}
                 \\
                 \\{s}
                 \\
+                \\
                 \\{s}
                 \\
-            , .{ Help.fetch, Help.serve, Help.mcp, Help.common, Help.version, Help.help });
-            std.debug.print(template, .{ exec_name, info_or_warn, pretty_or_logfmt });
+                \\
+                \\{s}
+                \\
+            , .{ Help.general, Help.fetch_cmd, Help.serve_cmd, Help.mcp_cmd, Help.version, Help.help });
+            std.debug.print(template, .{exec_name});
         },
         inline .fetch, .serve, .mcp => |tag| {
             const template = comptimePrint(
@@ -576,7 +579,13 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
                 \\
                 \\{s}
                 \\
-            , .{ @field(Help, @tagName(tag)), Help.common });
+                \\{s}
+                \\
+            , .{
+                @field(Help, @tagName(tag) ++ "_cmd"),
+                @field(Help, @tagName(tag) ++ "_options"),
+                Help.common_options,
+            });
             std.debug.print(template, .{ exec_name, info_or_warn, pretty_or_logfmt });
         },
         .version => {
