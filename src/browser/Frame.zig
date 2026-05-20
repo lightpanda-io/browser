@@ -3472,10 +3472,16 @@ pub fn parseHtmlAsChildren(self: *Frame, node: *Node, html: []const u8) !void {
     var parser = Parser.init(self.call_arena, node, self);
     parser.parseFragment(html);
 
-    // https://github.com/servo/html5ever/issues/583
+    // html5ever wraps fragment output in an <html> element; unwrap so its
+    // children land directly on `node`. See https://github.com/servo/html5ever/issues/583.
+    // Because of custom element callbacks, the structure might not be what
+    // we expect, and nodes might be altogether removed. We deal with this in a
+    // few different places, but always the same way: leave it as-is.
     const children = node._children orelse return;
-    const first = children.one;
-    lp.assert(first.is(Element.Html.Html) != null, "Frame.parseHtmlAsChildren root", .{ .type = first._type });
+    const first = children.first();
+    if (first.is(Element.Html.Html) == null) {
+        return;
+    }
     node._children = first._children;
 
     if (self.hasMutationObservers()) {
