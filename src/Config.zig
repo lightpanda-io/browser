@@ -552,25 +552,9 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
         // Requested help for everything.
         .help => {
             const template = comptimePrint(
-                \\
                 \\{s}
                 \\
-                \\
-                \\{s}
-                \\
-                \\
-                \\{s}
-                \\
-                \\
-                \\{s}
-                \\
-                \\
-                \\{s}
-                \\
-                \\
-                \\{s}
-                \\
-            , .{ Help.general, Help.fetch_cmd, Help.serve_cmd, Help.mcp_cmd, Help.version, Help.help });
+            , .{Help.general});
             std.debug.print(template, .{exec_name});
         },
         inline .fetch, .serve, .mcp => |tag| {
@@ -579,13 +563,7 @@ pub fn printUsageAndExit(self: *const Config, help_for: RunMode, success: bool) 
                 \\
                 \\{s}
                 \\
-                \\{s}
-                \\
-            , .{
-                @field(Help, @tagName(tag) ++ "_cmd"),
-                @field(Help, @tagName(tag) ++ "_options"),
-                Help.common_options,
-            });
+            , .{ @field(Help, @tagName(tag)), Help.common_options });
             std.debug.print(template, .{ exec_name, info_or_warn, pretty_or_logfmt });
         },
         .version => {
