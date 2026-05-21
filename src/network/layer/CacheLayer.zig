@@ -74,7 +74,7 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
 
         // Cache hit: serve synchronously from the original callbacks, then
         // tear down. On error, the transfer is still alive and Client.request's
-        // errdefer will handle cleanup (loop_owned is still false).
+        // errdefer will handle cleanup (state stays .created).
         try serveFromCache(req, &cached);
         transfer.deinit();
         return;

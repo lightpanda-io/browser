@@ -92,10 +92,10 @@ fn request(ptr: *anyopaque, transfer: *Transfer) anyerror!void {
 
     // Paused: the CDP listener stashed `transfer` and will eventually call
     // continueRequest / abortRequest / fulfillRequest. Until then, CDP owns
-    // the transfer's lifecycle, so flag it loop_owned to keep the outer
-    // Client.request errdefer from tearing it down.
+    // the transfer's lifecycle. Park keeps the outer Client.request errdefer
+    // from tearing it down.
     self.intercepted += 1;
-    transfer.loop_owned = true;
+    transfer.park(.intercept_request);
     if (comptime IS_DEBUG) {
         log.debug(.http, "wait for interception", .{ .intercepted = self.intercepted });
     }
@@ -188,8 +188,8 @@ pub const InterceptContext = struct {
 };
 
 // CDP-driven resolution entry points. The transfer was paused inside `request`
-// (loop_owned = true). One of these three is called by CDP to resume / drop
-// the transfer.
+// (state = .parked = .intercept_request). One of these three is called by CDP
+// to resume / drop the transfer.
 
 pub fn continueRequest(self: *InterceptionLayer, transfer: *Transfer) anyerror!void {
     if (comptime IS_DEBUG) {
@@ -199,12 +199,12 @@ pub fn continueRequest(self: *InterceptionLayer, transfer: *Transfer) anyerror!v
     self.intercepted -= 1;
 
     // Resume the layer chain. Ownership is re-handed to whichever subsequent
-    // layer commits the transfer (queue, multi, or another pause). If the
-    // chain fails before any commit, we clean up here. Mirror the errdefer
+    // layer commits the transfer (queue, multi, or another park). If the
+    // chain fails before any commit, we clean up here — mirror the errdefer
     // pattern in Client.request.
-    transfer.loop_owned = false;
+    transfer.unpark();
     self.next.request(transfer) catch |err| {
-        if (!transfer.loop_owned) {
+        if (transfer.state == .created) {
             transfer.abort(err);
         }
         return err;
