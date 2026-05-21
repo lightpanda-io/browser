@@ -299,7 +299,7 @@ pub fn disableWorkers(self: *const Config) bool {
 
 pub fn enableExternalStylesheets(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| opts.enable_external_stylesheets,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.enable_external_stylesheets,
         else => unreachable,
     };
 }
@@ -480,7 +480,7 @@ pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
         .mcp => 16,
-        .fetch => 0,
+        .fetch, .agent => 0,
         else => unreachable,
     };
 }
