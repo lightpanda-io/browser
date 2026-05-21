@@ -35,6 +35,24 @@ const SlashCommand = @import("SlashCommand.zig");
 
 const Agent = @This();
 
+/// Errors raised by Agent.init / listModels where the function has already
+/// printed a human-readable message to stderr. Callers should exit non-zero
+/// without further logging.
+pub const UserError = error{
+    MissingApiKey,
+    MissingProvider,
+    ConflictingFlags,
+    AmbiguousProvider,
+    NotInteractive,
+};
+
+pub fn isUserError(err: anyerror) bool {
+    inline for (@typeInfo(UserError).error_set.?) |e| {
+        if (err == @field(anyerror, e.name)) return true;
+    }
+    return false;
+}
+
 const default_system_prompt = script.mcp_driver_guidance ++
     \\
     \\Agent-specific behavior:
@@ -164,43 +182,30 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     const is_one_shot = opts.task != null;
     const will_repl = !is_one_shot and (opts.interactive or opts.script_file == null);
-    const needs_llm = will_repl or is_one_shot;
 
-    // Precedence: --no-llm > --provider > env auto-detect.
-    const effective_provider: ?Config.AiProvider = if (opts.no_llm)
-        null
-    else if (opts.provider) |p|
-        p
-    else
-        try autoDetectProvider();
+    const llm: ?Llm = if (opts.no_llm) null else try Llm.resolve(opts);
 
     // The REPL itself can run without an LLM (basic mode), but --task,
     // --self-heal, and --pick-model genuinely need one.
     const requires_llm = is_one_shot or opts.self_heal or opts.pick_model;
-    if (effective_provider == null and requires_llm) {
-        const hint: []const u8 = if (opts.no_llm)
-            "drop --no-llm, then set an API key or pass --provider"
-        else if (opts.self_heal)
-            "--self-heal needs an LLM; set an API key or pass --provider"
-        else if (opts.pick_model)
-            "--pick-model needs an LLM; set an API key or pass --provider"
-        else
-            "set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY) or pass --provider";
-        log.fatal(.app, "no LLM available", .{ .hint = hint });
+    if (llm == null and requires_llm) {
+        if (opts.no_llm) {
+            std.debug.print("--no-llm forbids LLM use; drop it to run this mode.\n", .{});
+        } else if (opts.self_heal) {
+            std.debug.print("--self-heal needs an LLM — set an API key.\n", .{});
+        } else if (opts.pick_model) {
+            std.debug.print("--pick-model needs an LLM — set an API key.\n", .{});
+        }
         return error.MissingProvider;
     }
-
-    const api_key = try resolveApiKey(effective_provider, needs_llm);
 
     // Resolve model BEFORE the heavy init so --pick-model's prompt fires
     // before tool_executor / ai_client setup.
     // Precedence: --model > --pick-model > defaultModel.
     const model: []u8 = if (opts.model) |m|
         try allocator.dupe(u8, m)
-    else if (opts.pick_model and effective_provider != null and api_key != null)
-        try pickModel(allocator, effective_provider.?, api_key.?, opts.base_url)
-    else if (effective_provider) |p|
-        try allocator.dupe(u8, defaultModel(p))
+    else if (llm) |l|
+        if (opts.pick_model) try pickModel(allocator, l, opts.base_url) else try allocator.dupe(u8, defaultModel(l.provider))
     else
         try allocator.dupe(u8, "");
     errdefer allocator.free(model);
@@ -211,14 +216,14 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const self = try allocator.create(Agent);
     errdefer allocator.destroy(self);
 
-    const ai_client: ?zenai.provider.Client = if (api_key) |key| switch (effective_provider.?) {
+    const ai_client: ?zenai.provider.Client = if (llm) |l| switch (l.provider) {
         inline else => |tag| blk: {
             const ProviderClient = zenai.provider.Client;
             const ClientPtr = @FieldType(ProviderClient, @tagName(tag));
             const Client = @typeInfo(ClientPtr).pointer.child;
             const client = try allocator.create(Client);
             const url: ?[]const u8 = opts.base_url orelse if (tag == .ollama) "http://localhost:11434/v1" else null;
-            client.* = Client.init(allocator, key, if (url) |u| .{ .base_url = u } else .{});
+            client.* = Client.init(allocator, l.key, if (url) |u| .{ .base_url = u } else .{});
             break :blk @unionInit(ProviderClient, @tagName(tag), client);
         },
     } else null;
@@ -393,7 +398,7 @@ fn runRepl(self: *Agent) void {
     if (self.ai_client) |ai_client| {
         self.terminal.printInfoFmt("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
-        self.terminal.printInfo("Basic REPL — PandaScript only. Set an API key or pass --provider for natural-language, LOGIN, and ACCEPT_COOKIES (and drop --no-llm if you set it).");
+        self.terminal.printInfo("Basic REPL — PandaScript only. Set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) for natural-language, LOGIN, and ACCEPT_COOKIES (and drop --no-llm if you set it).");
     }
 
     repl: while (true) {
@@ -433,7 +438,7 @@ fn runRepl(self: *Agent) void {
         }
 
         if (cmd.needsLlm() and self.ai_client == null) {
-            self.terminal.printError("This command needs an LLM. Set an API key or pass --provider (and drop --no-llm if you set it). PandaScript commands (GOTO, CLICK, EXTRACT, ...) work without one.");
+            self.terminal.printError("This command needs an LLM. Set an API key (and drop --no-llm if you set it). PandaScript commands (GOTO, CLICK, EXTRACT, ...) work without one.");
             continue;
         }
 
@@ -1194,21 +1199,55 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     }
 }
 
-/// An API key is only required when an LLM turn will actually run. Without a
-/// provider, no key is needed.
-fn resolveApiKey(provider: ?Config.AiProvider, needs_llm: bool) !?[:0]const u8 {
-    const p = provider orelse return null;
-    if (zenai.provider.envApiKey(p)) |key| return key;
-    if (!needs_llm) return null;
-    log.fatal(.app, "missing API key", .{
-        .hint = "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY",
-    });
-    return error.MissingApiKey;
-}
+/// A provider + the env key that authenticates it. The two always travel
+/// together: a provider tag is only meaningful when paired with the
+/// corresponding env var, and we never carry one without the other.
+const Llm = struct {
+    provider: Config.AiProvider,
+    key: [:0]const u8,
 
-/// One-shot for `--list-models`: resolve the provider (explicit, then env
-/// auto-detect), reject `--no-llm`, fetch chat-capable model IDs from the
-/// provider, and print them to stdout (one per line).
+    /// Determine which provider to use and read its env key. Returns null
+    /// only when no `--provider` was given AND no env key exists (the caller
+    /// decides whether that's fatal — basic REPL tolerates it).
+    fn resolve(opts: Config.Agent) !?Llm {
+        if (opts.provider) |p| {
+            const key = zenai.provider.envApiKey(p) orelse {
+                std.debug.print(
+                    "Missing API key for --provider {s}: set {s} — or pass --no-llm for the basic REPL.\n",
+                    .{ @tagName(p), envVarName(p) },
+                );
+                return error.MissingApiKey;
+            };
+            return .{ .provider = p, .key = key };
+        }
+
+        const candidates = [_]Config.AiProvider{ .anthropic, .openai, .gemini };
+        var found: [candidates.len]Llm = undefined;
+        var n: usize = 0;
+        for (candidates) |p| if (zenai.provider.envApiKey(p)) |key| {
+            found[n] = .{ .provider = p, .key = key };
+            n += 1;
+        };
+
+        return switch (n) {
+            0 => blk: {
+                std.debug.print(
+                    "No API key detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY — or pass --no-llm for the basic REPL.\n",
+                    .{},
+                );
+                break :blk null;
+            },
+            1 => blk: {
+                std.debug.print("Detected {s} — using --provider {s}.\n", .{ envVarName(found[0].provider), @tagName(found[0].provider) });
+                break :blk found[0];
+            },
+            else => try pickProvider(found[0..n]),
+        };
+    }
+};
+
+/// One-shot for `--list-models`: resolve provider+key, fetch chat-capable
+/// model IDs, print to stdout (one per line).
 pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     if (opts.no_llm) {
         log.fatal(.app, "list-models needs LLM", .{
@@ -1224,59 +1263,16 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
         });
         return error.ConflictingFlags;
     }
-    const provider = opts.provider orelse (try autoDetectProvider()) orelse {
-        log.fatal(.app, "list-models needs LLM", .{
-            .hint = "set ANTHROPIC_API_KEY (or OPENAI_API_KEY / GOOGLE_API_KEY) or pass --provider",
-        });
-        return error.MissingProvider;
-    };
-    const api_key = zenai.provider.envApiKey(provider) orelse {
-        log.fatal(.app, "missing API key", .{
-            .provider = @tagName(provider),
-            .env = envVarName(provider),
-        });
-        return error.MissingApiKey;
-    };
+    const llm = (try Llm.resolve(opts)) orelse return error.MissingProvider;
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids = try zenai.provider.listChatModelIds(allocator, arena.allocator(), provider, api_key, opts.base_url);
+    const ids = try zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, opts.base_url);
 
     var stdout_file = std.fs.File.stdout().writer(&.{});
     const w = &stdout_file.interface;
     for (ids) |id| try w.print("{s}\n", .{id});
     try w.flush();
-}
-
-/// Pick a provider from env keys when `--provider` was not given.
-/// Notices go to stderr unconditionally so users always know which mode they're in.
-pub fn autoDetectProvider() !?Config.AiProvider {
-    const candidates = [_]Config.AiProvider{ .anthropic, .openai, .gemini };
-    var found_buf: [candidates.len]Config.AiProvider = undefined;
-    var found_len: usize = 0;
-    for (candidates) |p| {
-        if (zenai.provider.envApiKey(p) != null) {
-            found_buf[found_len] = p;
-            found_len += 1;
-        }
-    }
-    const found = found_buf[0..found_len];
-
-    return switch (found.len) {
-        0 => blk: {
-            std.debug.print(
-                "No API key detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY, or pass --provider — or pass --no-llm for the basic REPL.\n",
-                .{},
-            );
-            break :blk null;
-        },
-        1 => blk: {
-            const p = found[0];
-            std.debug.print("Detected {s} — using --provider {s}.\n", .{ envVarName(p), @tagName(p) });
-            break :blk p;
-        },
-        else => try promptForProvider(found),
-    };
 }
 
 fn envVarName(p: Config.AiProvider) []const u8 {
@@ -1297,7 +1293,7 @@ fn defaultModel(p: Config.AiProvider) []const u8 {
     };
 }
 
-fn promptForProvider(found: []const Config.AiProvider) !Config.AiProvider {
+fn pickProvider(found: []const Llm) !Llm {
     if (!interactiveTty()) {
         log.fatal(.app, "multiple API keys detected", .{
             .hint = "Pass --provider explicitly when running non-interactively",
@@ -1305,10 +1301,10 @@ fn promptForProvider(found: []const Config.AiProvider) !Config.AiProvider {
         return error.AmbiguousProvider;
     }
 
-    var labels_buf: [@typeInfo(Config.AiProvider).@"enum".fields.len][]const u8 = undefined;
-    for (found, 0..) |p, i| labels_buf[i] = @tagName(p);
+    var labels: [@typeInfo(Config.AiProvider).@"enum".fields.len][]const u8 = undefined;
+    for (found, 0..) |f, i| labels[i] = @tagName(f.provider);
 
-    const idx = promptNumberedChoice("Multiple API keys detected. Pick provider:", labels_buf[0..found.len], null) catch {
+    const idx = promptNumberedChoice("Multiple API keys detected. Pick provider:", labels[0..found.len], null) catch {
         std.debug.print("Cancelled — pass --provider to skip the picker.\n", .{});
         return error.UserCancelled;
     };
@@ -1319,12 +1315,7 @@ fn promptForProvider(found: []const Config.AiProvider) !Config.AiProvider {
 /// one. Empty input picks the baked-in default. Always returns an owned
 /// heap buffer (including for the default case) so the caller has one
 /// uniform free path.
-fn pickModel(
-    allocator: std.mem.Allocator,
-    provider: Config.AiProvider,
-    api_key: [:0]const u8,
-    base_url: ?[:0]const u8,
-) ![]u8 {
+fn pickModel(allocator: std.mem.Allocator, llm: Llm, base_url: ?[:0]const u8) ![]u8 {
     if (!interactiveTty()) {
         log.fatal(.app, "pick-model needs a TTY", .{
             .hint = "rerun in a terminal or pass --model explicitly",
@@ -1337,17 +1328,17 @@ fn pickModel(
 
     // Runs before `SigBridge.attach` — Ctrl-C during the synchronous HTTP
     // fetch is dropped; the picker prompt catches the next press via stdin EINTR.
-    std.debug.print("Fetching models for {s}…\n", .{@tagName(provider)});
-    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), provider, api_key, base_url) catch |err| {
+    std.debug.print("Fetching models for {s}…\n", .{@tagName(llm.provider)});
+    const ids = zenai.provider.listChatModelIds(allocator, arena.allocator(), llm.provider, llm.key, base_url) catch |err| {
         log.fatal(.app, "list models failed", .{ .err = @errorName(err) });
         return err;
     };
     if (ids.len == 0) {
-        log.fatal(.app, "no models returned", .{ .provider = @tagName(provider) });
+        log.fatal(.app, "no models returned", .{ .provider = @tagName(llm.provider) });
         return error.NoModels;
     }
 
-    const default_model = defaultModel(provider);
+    const default_model = defaultModel(llm.provider);
     var default_idx: ?usize = null;
     for (ids, 0..) |id, i| if (std.mem.eql(u8, id, default_model)) {
         default_idx = i;
@@ -1356,7 +1347,7 @@ fn pickModel(
 
     var header_buf: [128]u8 = undefined;
     const enter_hint: []const u8 = if (default_idx == null) "" else " (Enter for default)";
-    const header = std.fmt.bufPrint(&header_buf, "Pick model for {s}{s}:", .{ @tagName(provider), enter_hint }) catch
+    const header = std.fmt.bufPrint(&header_buf, "Pick model for {s}{s}:", .{ @tagName(llm.provider), enter_hint }) catch
         "Pick model:";
 
     const idx = promptNumberedChoice(header, ids, default_idx) catch {

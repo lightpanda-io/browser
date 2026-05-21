@@ -43,12 +43,13 @@ pub fn main() !void {
     const main_arena = main_arena_instance.allocator();
     defer main_arena_instance.deinit();
 
-    run(gpa, main_arena) catch |err| switch (err) {
-        error.UserCancelled => std.posix.exit(130),
-        else => {
-            log.fatal(.app, "exit", .{ .err = err });
-            std.posix.exit(1);
-        },
+    run(gpa, main_arena) catch |err| {
+        if (err == error.UserCancelled) std.posix.exit(130);
+        // error.AgentFailed: the agent thread reported the failure in-context.
+        // lp.Agent.UserError: a user-facing message was already printed.
+        if (err == error.AgentFailed or lp.Agent.isUserError(err)) std.posix.exit(1);
+        log.fatal(.app, "exit", .{ .err = err });
+        std.posix.exit(1);
     };
 }
 
@@ -215,7 +216,8 @@ fn agentThread(allocator: std.mem.Allocator, app: *App, opts: Config.Agent, fail
         if (err == error.UserCancelled) {
             cancelled.* = true;
         } else {
-            log.fatal(.app, "agent init error", .{ .err = err });
+            // UserError: message already printed inside Agent.init.
+            if (!lp.Agent.isUserError(err)) log.fatal(.app, "agent init error", .{ .err = err });
             failed.* = true;
         }
         return;
