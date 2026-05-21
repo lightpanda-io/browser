@@ -736,6 +736,11 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
 // transfer state via InterceptionLayer; they don't touch page /
 // session / V8 state). The check is exact on the parsed `method`
 // field — no substring matching against raw JSON.
+//
+// Every method listed here must be safe to dispatch with
+// JS on the stack — meaning it must NO reach any other code
+// path that frees Page/Session/Frame/Worker state the unwinding
+// eval frame above us will dereference.
 fn allowDuringSyncWait(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
         .ping, .close, .disconnect => true,
