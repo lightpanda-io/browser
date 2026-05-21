@@ -1379,6 +1379,11 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         );
     };
 
+    // Append the new frame before navigate() so synchronous navigation paths
+    // (about:blank, blob:) and the notifications they dispatch can see this
+    // frame in self.child_frames.
+    try self.child_frames.append(self.arena, new_frame);
+
     // Iframe's initial src request carries the parent's URL as Referer and
     // as the SameSite initiator. Parent frame outlives this navigate()
     // call, so the slice is safe.
@@ -1388,20 +1393,22 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         .referer = parent_url,
         .initiator_url = parent_url,
     }) catch |err| {
+        // extra defensive..maybe navigate added a new fame, and the index it
+        // was added at was removed. Or maybe this frame was removed somehow
+        // (which I don't think is possible)
+        if (std.mem.indexOfScalar(*Frame, self.child_frames.items, new_frame)) |idx| {
+            _ = self.child_frames.swapRemove(idx);
+        }
         log.warn(.frame, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
         iframe._window = null;
         return error.IFrameLoadError;
     };
 
-    // window[N] is based on document order. For now we'll just append the frame
-    // at the end of our list and set child_frames_sorted == false. window.getFrame
-    // will check this flag to decide if it needs to sort the frames or not.
-    // But, we can optimize this a bit. Since we expect frames to often be
-    // added in document order, we can do a quick check to see whether the list
-    // is sorted or not.
-    try self.child_frames.append(self.arena, new_frame);
-
+    // window[N] is based on document order. We appended above and rely on
+    // child_frames_sorted to tell window.getFrame whether it has to sort.
+    // Since we expect frames to often be added in document order, do a quick
+    // check to keep the list flagged as sorted when possible.
     const frames_len = self.child_frames.items.len;
     if (frames_len == 1) {
         // this is the only frame, it must be sorted.
