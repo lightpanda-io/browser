@@ -984,7 +984,9 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
     @import("../webapi/FileReader.zig"),
     @import("../webapi/ImageData.zig"),
-    // @import("../webapi/Performance.zig"),
+    @import("../webapi/Performance.zig"),
+    @import("../webapi/PerformanceObserver.zig"),
+    @import("../webapi/EventCounts.zig"),
 });
 
 // Master list of ALL JS APIs across all contexts.

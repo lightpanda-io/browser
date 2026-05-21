@@ -531,3 +531,79 @@
     testing.expectEqual(36, count);
   }
 </script>
+
+<script id=worker_basic type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./performance-worker.js');
+    worker.onmessage = (e) => state.resolve(e.data);
+    setTimeout(() => worker.postMessage({ kind: 'basic' }), 100);
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker error: ' + data.err);
+      testing.expectEqual(true, data.has_performance);
+      testing.expectEqual(true, data.is_self_performance);
+      testing.expectEqual(true, data.now_is_number);
+      testing.expectEqual(true, data.now_non_negative);
+      testing.expectEqual(true, data.origin_is_number);
+      testing.expectEqual(true, data.origin_positive);
+    });
+  }
+</script>
+
+<script id=worker_marks_and_measures type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./performance-worker.js');
+    worker.onmessage = (e) => state.resolve(e.data);
+    setTimeout(() => worker.postMessage({ kind: 'marks_and_measures' }), 100);
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker error: ' + data.err);
+      testing.expectEqual(true, data.mark_is_mark);
+      testing.expectEqual(1.5, data.mark_start_time);
+      testing.expectEqual(true, data.measure_is_measure);
+      testing.expectEqual(8.5, data.measure_duration);
+      testing.expectEqual(2, data.mark_count);
+      testing.expectEqual(1, data.measure_count);
+      testing.expectEqual(1, data.by_name_count);
+    });
+  }
+</script>
+
+<script id=worker_event_counts type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./performance-worker.js');
+    worker.onmessage = (e) => state.resolve(e.data);
+    setTimeout(() => worker.postMessage({ kind: 'event_counts' }), 100);
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker error: ' + data.err);
+      testing.expectEqual(36, data.size);
+      testing.expectEqual(true, data.has_click);
+      testing.expectEqual(false, data.has_scroll);
+      testing.expectEqual(true, data.get_click_is_number);
+      testing.expectEqual(36, data.keys_length);
+      testing.expectEqual(36, data.iter_count);
+    });
+  }
+</script>
+
+<script id=worker_observer type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./performance-worker.js');
+    worker.onmessage = (e) => state.resolve(e.data);
+    setTimeout(() => worker.postMessage({ kind: 'observer' }), 100);
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker error: ' + data.err);
+      testing.expectEqual(true, data.observer_is_observer);
+      testing.expectEqual(2, data.entry_count);
+      testing.expectEqual('observed-1', data.first_name);
+      testing.expectEqual('mark', data.first_type);
+      testing.expectEqual(true, data.same_observer);
+    });
+  }
+</script>

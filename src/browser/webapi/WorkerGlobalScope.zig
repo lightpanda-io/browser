@@ -39,6 +39,7 @@ const Crypto = @import("Crypto.zig");
 const Console = @import("Console.zig");
 const Timers = @import("Timers.zig");
 const EventTarget = @import("EventTarget.zig");
+const Performance = @import("Performance.zig");
 const WorkerLocation = @import("WorkerLocation.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
@@ -95,6 +96,7 @@ _closed: bool = false,
 _proto: *EventTarget,
 _console: Console = .init,
 _crypto: Crypto = .init,
+_performance: Performance,
 _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
@@ -138,6 +140,7 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*WorkerGlobalScope {
         ._event_manager = .init(arena),
         ._script_manager = undefined,
         ._location = .{ ._url = url },
+        ._performance = .init(),
     });
     errdefer factory.destroy(self);
 
@@ -246,6 +249,10 @@ pub fn getConsole(self: *WorkerGlobalScope) *Console {
 
 pub fn getCrypto(self: *WorkerGlobalScope) *Crypto {
     return &self._crypto;
+}
+
+pub fn performance(self: *WorkerGlobalScope) *Performance {
+    return &self._performance;
 }
 
 pub fn getLocation(self: *WorkerGlobalScope) *WorkerLocation {
@@ -628,6 +635,15 @@ pub const JsApi = struct {
     pub const self = bridge.accessor(WorkerGlobalScope.getSelf, null, .{});
     pub const console = bridge.accessor(WorkerGlobalScope.getConsole, null, .{});
     pub const crypto = bridge.accessor(WorkerGlobalScope.getCrypto, null, .{});
+    pub const performance = bridge.accessor(struct {
+        // Unnecessary, But, our WebAPI getters are ALWAYS `fn getPerformance()...`.
+        // But for performance, we _need_ to have fn performance() *Performance to
+        // have parity with frame. So rather than having method called `performance`
+        // and one called `getPerformance`, we create this wrapper here.
+        pub fn wrap(wgs: *WorkerGlobalScope) *Performance {
+            return wgs.performance();
+        }
+    }.wrap, null, .{});
     pub const location = bridge.accessor(WorkerGlobalScope.getLocation, null, .{});
 
     pub const onerror = bridge.accessor(WorkerGlobalScope.getOnError, WorkerGlobalScope.setOnError, .{});

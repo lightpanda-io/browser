@@ -1,10 +1,31 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
 const datetime = @import("../../datetime.zig");
 
 const EventCounts = @import("EventCounts.zig");
+const PerformanceObserver = @import("PerformanceObserver.zig");
 
+const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
 pub fn registerTypes() []const type {
@@ -19,6 +40,11 @@ _timing: PerformanceTiming = .{},
 _navigation: PerformanceNavigation = .{},
 _event_counts: EventCounts = .{},
 
+// PerformanceObserver infrastructure. Lives here (rather than on the owning
+// Frame/WorkerGlobalScope) so that both contexts get observers for free.
+_observers: std.ArrayList(*PerformanceObserver) = .{},
+_delivery_scheduled: bool = false,
+
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
 fn highResTimestamp() u64 {
@@ -32,9 +58,6 @@ fn highResTimestamp() u64 {
 pub fn init() Performance {
     return .{
         ._time_origin = highResTimestamp(),
-        ._entries = .{},
-        ._timing = .{},
-        ._navigation = .{},
     };
 }
 
@@ -66,12 +89,13 @@ pub fn mark(
     self: *Performance,
     name: []const u8,
     _options: ?Mark.Options,
-    frame: *Frame,
+    exec: *const Execution,
 ) !*Mark {
-    const m = try Mark.init(name, _options, frame);
-    try self._entries.append(frame.arena, m._proto);
-    // Notify about the change.
-    try frame.notifyPerformanceObservers(m._proto);
+    const opts = _options orelse Mark.Options{};
+    const start_time = opts.startTime orelse self.now();
+    const m = try Mark.init(name, opts.detail, start_time, exec);
+    try self._entries.append(exec.arena, m._proto);
+    try self.notifyObservers(m._proto, exec);
     return m;
 }
 
@@ -85,7 +109,7 @@ pub fn measure(
     name: []const u8,
     maybe_options_or_start: ?MeasureOptionsOrStartMark,
     maybe_end_mark: ?[]const u8,
-    frame: *Frame,
+    exec: *const Execution,
 ) !*Measure {
     if (maybe_options_or_start) |options_or_start| switch (options_or_start) {
         .measure_options => |options| {
@@ -119,11 +143,10 @@ pub fn measure(
                 start_timestamp,
                 end_timestamp,
                 options.duration,
-                frame,
+                exec,
             );
-            try self._entries.append(frame.arena, m._proto);
-            // Notify about the change.
-            try frame.notifyPerformanceObservers(m._proto);
+            try self._entries.append(exec.arena, m._proto);
+            try self.notifyObservers(m._proto, exec);
             return m;
         },
         .start_mark => |start_mark| {
@@ -144,19 +167,17 @@ pub fn measure(
                 start_timestamp,
                 end_timestamp,
                 null,
-                frame,
+                exec,
             );
-            try self._entries.append(frame.arena, m._proto);
-            // Notify about the change.
-            try frame.notifyPerformanceObservers(m._proto);
+            try self._entries.append(exec.arena, m._proto);
+            try self.notifyObservers(m._proto, exec);
             return m;
         },
     };
 
-    const m = try Measure.init(name, null, 0.0, self.now(), null, frame);
-    try self._entries.append(frame.arena, m._proto);
-    // Notify about the change.
-    try frame.notifyPerformanceObservers(m._proto);
+    const m = try Measure.init(name, null, 0.0, self.now(), null, exec);
+    try self._entries.append(exec.arena, m._proto);
+    try self.notifyObservers(m._proto, exec);
     return m;
 }
 
@@ -193,12 +214,12 @@ pub fn getEntries(self: *const Performance) []*Entry {
     return self._entries.items;
 }
 
-pub fn getEntriesByType(self: *const Performance, entry_type: []const u8, frame: *Frame) ![]const *Entry {
-    return filterEntriesByType(frame.call_arena, self._entries.items, entry_type);
+pub fn getEntriesByType(self: *const Performance, entry_type: []const u8, exec: *const Execution) ![]const *Entry {
+    return filterEntriesByType(exec.call_arena, self._entries.items, entry_type);
 }
 
-pub fn getEntriesByName(self: *const Performance, name: []const u8, entry_type: ?[]const u8, frame: *Frame) ![]const *Entry {
-    return filterEntriesByName(frame.call_arena, self._entries.items, name, entry_type);
+pub fn getEntriesByName(self: *const Performance, name: []const u8, entry_type: ?[]const u8, exec: *const Execution) ![]const *Entry {
+    return filterEntriesByName(exec.call_arena, self._entries.items, name, entry_type);
 }
 
 // Also used by PerformanceObserver
@@ -270,6 +291,59 @@ fn getMarkTime(self: *const Performance, mark_name: []const u8) !f64 {
     }
 
     return error.SyntaxError; // Mark not found
+}
+
+pub fn registerObserver(self: *Performance, observer: *PerformanceObserver, exec: *const Execution) !void {
+    return self._observers.append(exec.arena, observer);
+}
+
+pub fn unregisterObserver(self: *Performance, observer: *PerformanceObserver) void {
+    for (self._observers.items, 0..) |o, i| {
+        if (o == observer) {
+            _ = self._observers.swapRemove(i);
+            return;
+        }
+    }
+}
+
+/// Append the entry to every interested observer's queue and schedule async
+/// delivery. Does NOT fire the callbacks synchronously — that happens later
+/// via the scheduled task.
+pub fn notifyObservers(self: *Performance, entry: *Entry, exec: *const Execution) !void {
+    for (self._observers.items) |observer| {
+        if (observer.interested(entry)) {
+            observer._entries.append(exec.arena, entry) catch |err| {
+                lp.log.err(.frame, "Performance.notifyObservers", .{ .err = err });
+            };
+        }
+    }
+
+    try self.scheduleDelivery(exec);
+}
+
+pub fn scheduleDelivery(self: *Performance, exec: *const Execution) !void {
+    if (self._delivery_scheduled) {
+        return;
+    }
+    self._delivery_scheduled = true;
+
+    return exec._scheduler.add(
+        self,
+        struct {
+            fn run(_self: *anyopaque) anyerror!?u32 {
+                const perf: *Performance = @ptrCast(@alignCast(_self));
+                perf._delivery_scheduled = false;
+                for (perf._observers.items) |observer| {
+                    if (observer.hasRecords()) {
+                        try observer.dispatch();
+                    }
+                }
+                return null;
+            }
+        }.run,
+        0,
+        .{ .name = "Performance.deliverObservers" },
+    );
 }
 
 pub const JsApi = struct {
@@ -380,23 +454,20 @@ pub const Mark = struct {
         startTime: ?f64 = null,
     };
 
-    pub fn init(name: []const u8, _opts: ?Options, frame: *Frame) !*Mark {
-        const opts = _opts orelse Options{};
-        const start_time = opts.startTime orelse frame.window._performance.now();
-
+    pub fn init(name: []const u8, maybe_detail: ?js.Value, start_time: f64, exec: *const Execution) !*Mark {
         if (start_time < 0.0) {
             return error.TypeError;
         }
 
-        const detail = if (opts.detail) |d| try d.persist() else null;
-        const m = try frame._factory.create(Mark{
+        const detail = if (maybe_detail) |d| try d.persist() else null;
+        const m = try exec._factory.create(Mark{
             ._proto = undefined,
             ._detail = detail,
         });
 
-        const entry = try frame._factory.create(Entry{
+        const entry = try exec._factory.create(Entry{
             ._start_time = start_time,
-            ._name = try frame.dupeString(name),
+            ._name = try exec.dupeString(name),
             ._type = .{ .mark = m },
         });
         m._proto = entry;
@@ -441,7 +512,7 @@ pub const Measure = struct {
         start_timestamp: f64,
         end_timestamp: f64,
         maybe_duration: ?f64,
-        frame: *Frame,
+        exec: *const Execution,
     ) !*Measure {
         const duration = maybe_duration orelse (end_timestamp - start_timestamp);
         if (duration < 0.0) {
@@ -449,15 +520,15 @@ pub const Measure = struct {
         }
 
         const detail = if (maybe_detail) |d| try d.persist() else null;
-        const m = try frame._factory.create(Measure{
+        const m = try exec._factory.create(Measure{
             ._proto = undefined,
             ._detail = detail,
         });
 
-        const entry = try frame._factory.create(Entry{
+        const entry = try exec._factory.create(Entry{
             ._start_time = start_timestamp,
             ._duration = duration,
-            ._name = try frame.dupeString(name),
+            ._name = try exec.dupeString(name),
             ._type = .{ .measure = m },
         });
         m._proto = entry;
