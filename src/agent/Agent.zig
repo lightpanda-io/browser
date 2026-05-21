@@ -149,7 +149,6 @@ model: []u8,
 system_prompt: []const u8,
 script_file: ?[]const u8,
 self_heal: bool,
-no_llm: bool,
 interactive: bool,
 one_shot_task: ?[]const u8,
 one_shot_attachments: ?[]const []const u8,
@@ -272,7 +271,6 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .system_prompt = opts.system_prompt orelse default_system_prompt,
         .script_file = opts.script_file,
         .self_heal = opts.self_heal,
-        .no_llm = opts.no_llm,
         .interactive = opts.interactive,
         .one_shot_task = opts.task,
         .one_shot_attachments = if (opts.attach.items.len == 0) null else opts.attach.items,
@@ -447,11 +445,7 @@ fn runRepl(self: *Agent) void {
         }
 
         if (cmd.needsLlm() and self.ai_client == null) {
-            if (self.no_llm) {
-                self.terminal.printError("To use Lightpanda agent in natural language mode, you need to connect an LLM. Set an API key with export or type /help for available commands in no-llm mode.");
-            } else {
-                self.terminal.printError("This command needs an LLM. Set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY). PandaScript commands (GOTO, CLICK, EXTRACT, ...) work without one.");
-            }
+            self.terminal.printError("To use Lightpanda agent in natural language mode, you need to connect an LLM. Set an API key with export or type /help for available commands in no-llm mode.");
             continue;
         }
 
