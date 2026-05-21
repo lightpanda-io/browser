@@ -82,6 +82,13 @@ pub const SchemaInfo = struct {
         }
         return .other;
     }
+
+    pub fn isFieldDefaultTrue(self: *const SchemaInfo, key: []const u8) bool {
+        for (self.fields) |f| {
+            if (std.mem.eql(u8, f.name, key)) return f.default_true;
+        }
+        return false;
+    }
 };
 
 pub const ParseError = error{
@@ -206,6 +213,12 @@ pub fn findSchema(schemas: []const SchemaInfo, name: []const u8) ?*const SchemaI
     return null;
 }
 
+pub fn findSchemaCanonical(schemas: []const SchemaInfo, name: []const u8) ?*const SchemaInfo {
+    std.debug.assert(schemas.len == browser_tools.tool_defs.len);
+    const action = std.meta.stringToEnum(browser_tools.Action, name) orelse return null;
+    return &schemas[@intFromEnum(action)];
+}
+
 pub const Split = struct {
     name: []const u8,
     rest: []const u8,
@@ -252,12 +265,12 @@ pub fn parseValue(arena: std.mem.Allocator, schema: *const SchemaInfo, rest: []c
     var pairs = try arena.alloc(KvPair, tokens.len);
     const kv_start: usize = if (leading_positional) 1 else 0;
     if (leading_positional) {
-        pairs[0] = .{ .key = schema.required[0], .value = try stripQuotes(arena, tokens[0]) };
+        pairs[0] = .{ .key = schema.required[0], .value = stripQuotes(tokens[0]) };
     }
     for (tokens[kv_start..], kv_start..) |tok, i| {
         const eq = std.mem.indexOfScalar(u8, tok, '=') orelse return error.MalformedKv;
         if (eq == 0 or eq == tok.len - 1) return error.MalformedKv;
-        pairs[i] = .{ .key = tok[0..eq], .value = try stripQuotes(arena, tok[eq + 1 ..]) };
+        pairs[i] = .{ .key = tok[0..eq], .value = stripQuotes(tok[eq + 1 ..]) };
     }
 
     // Default-true required booleans (e.g. setChecked.checked) are filled in
@@ -306,8 +319,15 @@ fn tokenize(arena: std.mem.Allocator, input: []const u8) ParseError![][]const u8
         while (i < input.len and !std.ascii.isWhitespace(input[i])) : (i += 1) {
             const ch = input[i];
             if (ch == '"' or ch == '\'') {
-                const close = std.mem.indexOfScalarPos(u8, input, i + 1, ch) orelse return error.UnterminatedQuote;
-                i = close;
+                const is_triple = i + 2 < input.len and input[i + 1] == ch and input[i + 2] == ch;
+                if (is_triple) {
+                    const triple_delim = input[i .. i + 3];
+                    const close = std.mem.indexOfPos(u8, input, i + 3, triple_delim) orelse return error.UnterminatedQuote;
+                    i = close + 2;
+                } else {
+                    const close = std.mem.indexOfScalarPos(u8, input, i + 1, ch) orelse return error.UnterminatedQuote;
+                    i = close;
+                }
             }
         }
         try out.append(arena, input[tok_start..i]);
@@ -316,27 +336,23 @@ fn tokenize(arena: std.mem.Allocator, input: []const u8) ParseError![][]const u8
     return try out.toOwnedSlice(arena);
 }
 
-fn stripQuotes(arena: std.mem.Allocator, raw: []const u8) ParseError![]const u8 {
-    const has_quote = std.mem.indexOfAny(u8, raw, "\"'") != null;
-    if (!has_quote) return raw;
-
-    var buf: std.ArrayList(u8) = .empty;
-    try buf.ensureTotalCapacity(arena, raw.len);
-    var i: usize = 0;
-    while (i < raw.len) {
-        const ch = raw[i];
-        if (ch == '"' or ch == '\'') {
-            i += 1;
-            const start = i;
-            while (i < raw.len and raw[i] != ch) i += 1;
-            try buf.appendSlice(arena, raw[start..i]);
-            i += 1;
-            continue;
+fn stripQuotes(raw: []const u8) []const u8 {
+    if (raw.len >= 6) {
+        if (std.mem.startsWith(u8, raw, "'''") and std.mem.endsWith(u8, raw, "'''")) {
+            return raw[3 .. raw.len - 3];
         }
-        try buf.append(arena, ch);
-        i += 1;
+        if (std.mem.startsWith(u8, raw, "\"\"\"") and std.mem.endsWith(u8, raw, "\"\"\"")) {
+            return raw[3 .. raw.len - 3];
+        }
     }
-    return try buf.toOwnedSlice(arena);
+    if (raw.len >= 2) {
+        const first = raw[0];
+        const last = raw[raw.len - 1];
+        if ((first == '\'' and last == '\'') or (first == '"' and last == '"')) {
+            return raw[1 .. raw.len - 1];
+        }
+    }
+    return raw;
 }
 
 fn buildValue(arena: std.mem.Allocator, schema: *const SchemaInfo, pairs: []const KvPair) error{OutOfMemory}!std.json.Value {
@@ -429,6 +445,10 @@ test "globalSchemas: comptime tool defs reduce cleanly" {
         if (std.mem.eql(u8, f.name, "checked")) checked_default_true = f.default_true;
     }
     try testing.expect(checked_default_true);
+
+    // canonical lookup matches search lookup
+    try testing.expect(findSchemaCanonical(schemas, "goto") == goto);
+    try testing.expect(findSchemaCanonical(schemas, "unknown_tool") == null);
 }
 
 test "parseValue: single-required positional binds" {
@@ -518,4 +538,13 @@ test "splitNameRest: trims and handles empty" {
     const r = splitNameRest("  goto  https://x ").?;
     try testing.expectEqualStrings("goto", r.name);
     try testing.expectEqualStrings("https://x", r.rest);
+}
+
+test "tokenize: inline triple quotes with spaces" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const tokens = try tokenize(arena.allocator(), "selector='''hello world''' value=\"\"\"foo bar\"\"\"");
+    try testing.expectEqual(@as(usize, 2), tokens.len);
+    try testing.expectEqualStrings("selector='''hello world'''", tokens[0]);
+    try testing.expectEqualStrings("value=\"\"\"foo bar\"\"\"", tokens[1]);
 }

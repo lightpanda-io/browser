@@ -337,3 +337,35 @@ test "init creates the file if missing" {
     const n = file.readAll(&buf) catch unreachable;
     try std.testing.expectEqualStrings("/goto 'https://example.com'\n", buf[0..n]);
 }
+
+test "record and parse: triple-quote round-trip" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var recorder = try Recorder.init(std.testing.allocator, tmp.dir, "triple.lp");
+    defer recorder.deinit();
+
+    const cmd_str = "/extract '{\n  \"title\": \"span.title\",\n  \"desc\": \"p.description\"\n}'";
+    const original_cmd = parseLine(aa, cmd_str);
+    recorder.record(original_cmd);
+
+    const file = tmp.dir.openFile("triple.lp", .{}) catch unreachable;
+    defer file.close();
+    var buf: [512]u8 = undefined;
+    const n = file.readAll(&buf) catch unreachable;
+    const content = buf[0..n];
+
+    var iter: Command.ScriptIterator = .init(aa, content);
+    const entry = (try iter.next()).?;
+    const parsed_cmd = entry.command;
+
+    try std.testing.expectEqualStrings("extract", parsed_cmd.tool_call.name);
+
+    const original_val = original_cmd.tool_call.args.?.object.get("schema").?.string;
+    const parsed_val = parsed_cmd.tool_call.args.?.object.get("schema").?.string;
+    try std.testing.expectEqualStrings(original_val, parsed_val);
+}

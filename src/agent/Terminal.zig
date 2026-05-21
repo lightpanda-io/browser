@@ -519,7 +519,7 @@ fn slashHasPrefix(name: []const u8) bool {
 }
 
 fn slashHasParams(name: []const u8) bool {
-    if (SlashCommand.findSchema(SlashCommand.globalSchemas(), name)) |s| return s.hints.len > 0;
+    if (SlashCommand.findSchemaCanonical(SlashCommand.globalSchemas(), name)) |s| return s.hints.len > 0;
     if (SlashCommand.findMeta(name)) |m| return m.hint.len > 0;
     return false;
 }

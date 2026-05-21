@@ -671,8 +671,6 @@ fn runActionEntry(self: *Agent, sa: std.mem.Allocator, entry: Command.ScriptIter
     if (!result.is_error and verification != .failed) return .ok;
 
     if (self.self_heal and self.ai_client != null) {
-        // Verification-only failures often resolve with a brief wait
-        // (animations, lazy-load); skip the LLM round-trip when they do.
         if (!result.is_error and isRetryable(entry.command) and self.retryCommand(ca, entry.command)) {
             return .ok;
         }
@@ -720,6 +718,18 @@ fn retryCommand(self: *Agent, ca: std.mem.Allocator, cmd: Command) bool {
     return false;
 }
 
+fn isRetryable(cmd: Command) bool {
+    const tc = switch (cmd) {
+        .tool_call => |t| t,
+        else => return false,
+    };
+    const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse return false;
+    return switch (action) {
+        .fill, .setChecked, .selectOption => true,
+        else => false,
+    };
+}
+
 fn flushReplacements(self: *Agent, path: []const u8, content: []const u8, replacements: []const Replacement) void {
     if (replacements.len == 0) return;
     script.writeAtomic(self.allocator, std.fs.cwd(), path, content, replacements) catch |err| {
@@ -733,18 +743,6 @@ fn flushReplacements(self: *Agent, path: []const u8, content: []const u8, replac
         "Script updated with {d} healed command(s); backup at {s}.bak",
         .{ replacements.len, path },
     );
-}
-
-fn isRetryable(cmd: Command) bool {
-    const tc = switch (cmd) {
-        .tool_call => |t| t,
-        else => return false,
-    };
-    const action = std.meta.stringToEnum(browser_tools.Action, tc.name) orelse return false;
-    return switch (action) {
-        .fill, .setChecked, .selectOption => true,
-        else => false,
-    };
 }
 
 const self_heal_max_attempts = 3;

@@ -51,8 +51,8 @@ pub const Command = union(enum) {
             .comment => false,
             .login, .accept_cookies => true,
             .tool_call => |tc| blk: {
-                const td = toolDef(tc.name) orelse break :blk false;
-                if (!td.recorded) break :blk false;
+                const s = schema.findSchemaCanonical(schema.globalSchemas(), tc.name) orelse break :blk false;
+                if (!s.recorded) break :blk false;
                 // backendNodeId-based calls aren't replayable (the id is
                 // invalidated by any DOM mutation), so keep them out of the
                 // recording even when the tool itself is recordable.
@@ -65,7 +65,7 @@ pub const Command = union(enum) {
 
     pub fn producesData(self: Command) bool {
         return switch (self) {
-            .tool_call => |tc| if (toolDef(tc.name)) |td| td.produces_data else false,
+            .tool_call => |tc| if (schema.findSchemaCanonical(schema.globalSchemas(), tc.name)) |s| s.produces_data else false,
             else => false,
         };
     }
@@ -82,7 +82,7 @@ pub const Command = union(enum) {
     /// `can_heal` flag in `tool_defs`; here it's just a lookup.
     pub fn canHeal(self: Command) bool {
         return switch (self) {
-            .tool_call => |tc| if (toolDef(tc.name)) |td| td.can_heal else false,
+            .tool_call => |tc| if (schema.findSchemaCanonical(schema.globalSchemas(), tc.name)) |s| s.can_heal else false,
             else => false,
         };
     }
@@ -149,7 +149,7 @@ pub const Command = union(enum) {
     /// Use when the Command must outlive the original args buffer (e.g. the
     /// self-heal path returns Commands across an arena deinit).
     pub fn fromToolCallOwned(arena: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) std.mem.Allocator.Error!Command {
-        const owned_name = if (toolDef(tool_name)) |td| td.name else try arena.dupe(u8, tool_name);
+        const owned_name = if (schema.findSchemaCanonical(schema.globalSchemas(), tool_name)) |s| s.tool_name else try arena.dupe(u8, tool_name);
         const owned_args = if (arguments) |v| try dupeJsonValue(arena, v) else null;
         return .{ .tool_call = .{ .name = owned_name, .args = owned_args } };
     }
@@ -264,13 +264,6 @@ pub const Command = union(enum) {
     };
 };
 
-fn toolDef(name: []const u8) ?*const lp.tools.ToolDef {
-    for (&lp.tools.tool_defs) |*td| {
-        if (std.mem.eql(u8, td.name, name)) return td;
-    }
-    return null;
-}
-
 /// Deep-copy a `std.json.Value`, duplicating all owned strings and containers
 /// into `a`. Used by `fromToolCallOwned` for the heal path.
 fn dupeJsonValue(a: std.mem.Allocator, value: std.json.Value) std.mem.Allocator.Error!std.json.Value {
@@ -326,15 +319,13 @@ fn formatToolCall(tc: Command.ToolCall, writer: *std.Io.Writer) std.Io.Writer.Er
             if (isDefaultTrueBool(s, entry.key_ptr.*, entry.value_ptr.*)) continue;
             visible += 1;
         }
-        if (has_one_required and visible == 1) {
+        if (has_one_required and visible == 1) blk: {
             const req_name = s.required[0];
-            if (args.get(req_name)) |v| {
-                if (v == .string) {
-                    try writer.writeByte(' ');
-                    try formatString(writer, v.string);
-                    positional_emitted = req_name;
-                }
-            }
+            const v = args.get(req_name) orelse break :blk;
+            if (v != .string) break :blk;
+            try writer.writeByte(' ');
+            try formatString(writer, v.string);
+            positional_emitted = req_name;
         }
     }
 
@@ -353,11 +344,7 @@ fn formatToolCall(tc: Command.ToolCall, writer: *std.Io.Writer) std.Io.Writer.Er
 }
 
 fn isDefaultTrueBool(s: *const schema.SchemaInfo, key: []const u8, v: std.json.Value) bool {
-    if (v != .bool or !v.bool) return false;
-    for (s.fields) |f| {
-        if (std.mem.eql(u8, f.name, key)) return f.default_true;
-    }
-    return false;
+    return v == .bool and v.bool and s.isFieldDefaultTrue(key);
 }
 
 /// Strings are always quoted (or triple-quoted when they contain newlines)

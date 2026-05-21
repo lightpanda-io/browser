@@ -17,9 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! REPL-only meta slash commands and re-exports of the PandaScript schema
-//! primitives. The actual slash-command grammar (which now IS PandaScript)
-//! lives in `script/schema.zig`; this module keeps the agent-only meta
-//! commands (`/help`, `/quit`, `/verbosity`) that aren't part of the script.
+//! primitives. The actual slash-command grammar lives in `script/schema.zig`;
+//! this module keeps the agent-only meta commands (`/help`, `/quit`,
+//! `/verbosity`) that aren't part of the script.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -39,6 +39,7 @@ pub const max_hint_slots = schema.max_hint_slots;
 pub const buildSchemas = schema.buildSchemas;
 pub const globalSchemas = schema.globalSchemas;
 pub const findSchema = schema.findSchema;
+pub const findSchemaCanonical = schema.findSchemaCanonical;
 pub const splitNameRest = schema.splitNameRest;
 
 /// Meta slash commands handled directly by the agent (not by ToolExecutor).

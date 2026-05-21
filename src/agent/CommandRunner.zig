@@ -58,12 +58,14 @@ fn substituteStringArgs(arena: std.mem.Allocator, tool_name: []const u8, args: ?
     const v = args orelse return null;
     if (v != .object) return v;
 
+    const is_fill = if (std.meta.stringToEnum(browser_tools.Action, tool_name)) |a| a == .fill else false;
+
     var needs_sub = false;
     var it = v.object.iterator();
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
         const val = entry.value_ptr.*;
-        const exclude = std.mem.eql(u8, tool_name, "fill") and std.mem.eql(u8, key, "value");
+        const exclude = is_fill and std.mem.eql(u8, key, "value");
         if (!exclude and val == .string and std.mem.indexOf(u8, val.string, "$LP_") != null) {
             needs_sub = true;
             break;
@@ -77,8 +79,8 @@ fn substituteStringArgs(arena: std.mem.Allocator, tool_name: []const u8, args: ?
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
         const val = entry.value_ptr.*;
-        const exclude = std.mem.eql(u8, tool_name, "fill") and std.mem.eql(u8, key, "value");
-        if (!exclude and val == .string) {
+        const exclude = is_fill and std.mem.eql(u8, key, "value");
+        if (!exclude and val == .string and std.mem.indexOf(u8, val.string, "$LP_") != null) {
             const resolved = try browser_tools.substituteEnvVars(arena, val.string);
             try new_obj.put(key, .{ .string = resolved });
             continue;
