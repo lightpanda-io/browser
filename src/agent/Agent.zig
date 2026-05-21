@@ -26,6 +26,7 @@ const script = lp.script;
 const Command = lp.script.Command;
 const Recorder = lp.script.Recorder;
 const Verifier = lp.script.Verifier;
+const Credentials = zenai.provider.Credentials;
 
 const App = @import("../App.zig");
 const ToolExecutor = @import("ToolExecutor.zig");
@@ -193,7 +194,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     // Skip resolve when --no-llm forces no client, or no mode could use one
     // (pure replay) — otherwise resolve prints "No API key detected" for a
     // run that does not need one.
-    const llm: ?Llm = if (opts.no_llm or !requires_llm) null else try Llm.resolve(opts);
+    const llm: ?Credentials = if (opts.no_llm or !requires_llm) null else try resolveCredentials(opts);
 
     if (llm == null and requires_llm) {
         if (opts.no_llm) {
@@ -1200,53 +1201,40 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     }
 }
 
-/// A provider + the env key that authenticates it. The two always travel
-/// together: a provider tag is only meaningful when paired with the
-/// corresponding env var, and we never carry one without the other.
-const Llm = struct {
-    provider: Config.AiProvider,
-    key: [:0]const u8,
-
-    /// Determine which provider to use and read its env key. Returns null
-    /// only when no `--provider` was given AND no env key exists (the caller
-    /// decides whether that's fatal — basic REPL tolerates it).
-    fn resolve(opts: Config.Agent) !?Llm {
-        if (opts.provider) |p| {
-            const key = zenai.provider.envApiKey(p) orelse {
-                std.debug.print(
-                    "Missing API key for --provider {s}: set {s} — or pass --no-llm for the basic REPL.\n",
-                    .{ @tagName(p), zenai.provider.envVarName(p) },
-                );
-                return error.MissingApiKey;
-            };
-            return .{ .provider = p, .key = key };
-        }
-
-        const candidates = [_]Config.AiProvider{ .anthropic, .openai, .gemini };
-        var found: [candidates.len]Llm = undefined;
-        var n: usize = 0;
-        for (candidates) |p| if (zenai.provider.envApiKey(p)) |key| {
-            found[n] = .{ .provider = p, .key = key };
-            n += 1;
+/// Determine which provider to use and read its env key. Returns null
+/// only when no `--provider` was given AND no env key exists (the caller
+/// decides whether that's fatal — basic REPL tolerates it).
+fn resolveCredentials(opts: Config.Agent) !?Credentials {
+    if (opts.provider) |p| {
+        const key = zenai.provider.envApiKey(p) orelse {
+            std.debug.print(
+                "Missing API key for --provider {s}: set {s} — or pass --no-llm for the basic REPL.\n",
+                .{ @tagName(p), zenai.provider.envVarName(p) },
+            );
+            return error.MissingApiKey;
         };
-
-        return switch (n) {
-            0 => blk: {
-                std.debug.print(
-                    \\No API key detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
-                    \\If you want to use the REPL in basic mode (without LLM integration) you can pass the --no-llm option.
-                    \\
-                , .{});
-                break :blk null;
-            },
-            1 => blk: {
-                std.debug.print("Detected {s} — using --provider {s}.\n", .{ zenai.provider.envVarName(found[0].provider), @tagName(found[0].provider) });
-                break :blk found[0];
-            },
-            else => try pickProvider(found[0..n]),
-        };
+        return .{ .provider = p, .key = key };
     }
-};
+
+    var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
+    const found = zenai.provider.detectKeys(&buf, zenai.provider.default_candidates);
+
+    return switch (found.len) {
+        0 => blk: {
+            std.debug.print(
+                \\No API key detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.
+                \\If you want to use the REPL in basic mode (without LLM integration) you can pass the --no-llm option.
+                \\
+            , .{});
+            break :blk null;
+        },
+        1 => blk: {
+            std.debug.print("Detected {s} — using --provider {s}.\n", .{ zenai.provider.envVarName(found[0].provider), @tagName(found[0].provider) });
+            break :blk found[0];
+        },
+        else => try pickProvider(found),
+    };
+}
 
 /// One-shot for `--list-models`: resolve provider+key, fetch chat-capable
 /// model IDs, print to stdout (one per line).
@@ -1265,7 +1253,7 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
         });
         return error.ConflictingFlags;
     }
-    const llm = (try Llm.resolve(opts)) orelse return error.MissingProvider;
+    const llm = (try resolveCredentials(opts)) orelse return error.MissingProvider;
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
@@ -1286,7 +1274,7 @@ fn defaultModel(p: Config.AiProvider) []const u8 {
     };
 }
 
-fn pickProvider(found: []const Llm) !Llm {
+fn pickProvider(found: []const Credentials) !Credentials {
     if (!interactiveTty()) {
         log.fatal(.app, "multiple API keys detected", .{
             .hint = "Pass --provider explicitly when running non-interactively",
@@ -1308,7 +1296,7 @@ fn pickProvider(found: []const Llm) !Llm {
 /// one. Empty input picks the baked-in default. Always returns an owned
 /// heap buffer (including for the default case) so the caller has one
 /// uniform free path.
-fn pickModel(allocator: std.mem.Allocator, llm: Llm, base_url: ?[:0]const u8) ![]u8 {
+fn pickModel(allocator: std.mem.Allocator, llm: Credentials, base_url: ?[:0]const u8) ![]u8 {
     if (!interactiveTty()) {
         log.fatal(.app, "pick-model needs a TTY", .{
             .hint = "rerun in a terminal or pass --model explicitly",
