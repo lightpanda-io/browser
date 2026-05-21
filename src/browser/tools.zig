@@ -31,6 +31,16 @@ pub const ToolDef = struct {
     name: []const u8,
     description: []const u8,
     input_schema: []const u8,
+    /// State-mutating: surfaces in `.lp` recordings. Read-only tools (queries,
+    /// env probes) stay out so a replay doesn't bloat the script with noise.
+    recorded: bool = false,
+    /// Safe target for the self-heal LLM to emit when a recorded step fails.
+    /// Only deterministic per-element actions; anything that depends on prior
+    /// page state or LLM judgment is excluded.
+    can_heal: bool = false,
+    /// Result is data the caller probably wants on stdout (extracted JSON,
+    /// markdown, eval return value) rather than a status line on stderr.
+    produces_data: bool = false,
 };
 
 pub fn minify(comptime json: []const u8) []const u8 {
@@ -88,6 +98,7 @@ pub const tool_defs = [_]ToolDef{
             \\  "required": ["url"]
             \\}
         ),
+        .recorded = true,
     },
     .{
         .name = "search",
@@ -103,16 +114,19 @@ pub const tool_defs = [_]ToolDef{
             \\  "required": ["query"]
             \\}
         ),
+        .produces_data = true,
     },
     .{
         .name = "markdown",
         .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
         .input_schema = url_params_schema,
+        .produces_data = true,
     },
     .{
         .name = "links",
         .description = "Extract all links in the opened page. If a url is provided, it navigates to that url first.",
         .input_schema = url_params_schema,
+        .produces_data = true,
     },
     .{
         .name = "eval",
@@ -129,6 +143,8 @@ pub const tool_defs = [_]ToolDef{
             \\  "required": ["script"]
             \\}
         ),
+        .recorded = true,
+        .produces_data = true,
     },
     .{
         .name = "extract",
@@ -158,6 +174,9 @@ pub const tool_defs = [_]ToolDef{
             \\  "required": ["schema"]
             \\}
         ),
+        .recorded = true,
+        .can_heal = true,
+        .produces_data = true,
     },
     .{
         .name = "tree",
@@ -174,6 +193,7 @@ pub const tool_defs = [_]ToolDef{
             \\  }
             \\}
         ),
+        .produces_data = true,
     },
     .{
         .name = "nodeDetails",
@@ -187,21 +207,25 @@ pub const tool_defs = [_]ToolDef{
             \\  "required": ["backendNodeId"]
             \\}
         ),
+        .produces_data = true,
     },
     .{
         .name = "interactiveElements",
         .description = "Extract interactive elements from the opened page. If a url is provided, it navigates to that url first.",
         .input_schema = url_params_schema,
+        .produces_data = true,
     },
     .{
         .name = "structuredData",
         .description = "Extract structured data (like JSON-LD, OpenGraph, etc) from the opened page. If a url is provided, it navigates to that url first.",
         .input_schema = url_params_schema,
+        .produces_data = true,
     },
     .{
         .name = "detectForms",
         .description = "Detect all forms on the page and return their structure including fields, types, and required status. If a url is provided, it navigates to that url first.",
         .input_schema = url_params_schema,
+        .produces_data = true,
     },
     .{
         .name = "click",
@@ -215,6 +239,8 @@ pub const tool_defs = [_]ToolDef{
             \\  }
             \\}
         ),
+        .recorded = true,
+        .can_heal = true,
     },
     .{
         .name = "fill",
@@ -230,6 +256,8 @@ pub const tool_defs = [_]ToolDef{
             \\  "required": ["value"]
             \\}
         ),
+        .recorded = true,
+        .can_heal = true,
     },
     .{
         .name = "scroll",
@@ -244,6 +272,8 @@ pub const tool_defs = [_]ToolDef{
             \\  }
             \\}
         ),
+        .recorded = true,
+        .can_heal = true,
     },
     .{
         .name = "waitForSelector",
@@ -258,6 +288,8 @@ pub const tool_defs = [_]ToolDef{
             \\  "required": ["selector"]
             \\}
         ),
+        .recorded = true,
+        .can_heal = true,
     },
     .{
         .name = "hover",
@@ -271,6 +303,8 @@ pub const tool_defs = [_]ToolDef{
             \\  }
             \\}
         ),
+        .recorded = true,
+        .can_heal = true,
     },
     .{
         .name = "press",
@@ -285,6 +319,8 @@ pub const tool_defs = [_]ToolDef{
             \\  "required": ["key"]
             \\}
         ),
+        .recorded = true,
+        .can_heal = true,
     },
     .{
         .name = "selectOption",
@@ -300,6 +336,8 @@ pub const tool_defs = [_]ToolDef{
             \\  "required": ["value"]
             \\}
         ),
+        .recorded = true,
+        .can_heal = true,
     },
     .{
         .name = "setChecked",
@@ -310,11 +348,13 @@ pub const tool_defs = [_]ToolDef{
             \\  "properties": {
             \\    "selector": { "type": "string", "description": "CSS selector of the checkbox or radio input element. Preferred over backendNodeId." },
             \\    "backendNodeId": { "type": "integer", "description": "The backend node ID of the checkbox or radio input element." },
-            \\    "checked": { "type": "boolean", "description": "Whether to check (true) or uncheck (false) the element." }
+            \\    "checked": { "type": "boolean", "description": "Whether to check (true) or uncheck (false) the element.", "default": true }
             \\  },
             \\  "required": ["checked"]
             \\}
         ),
+        .recorded = true,
+        .can_heal = true,
     },
     .{
         .name = "findElement",
@@ -328,6 +368,7 @@ pub const tool_defs = [_]ToolDef{
             \\  }
             \\}
         ),
+        .produces_data = true,
     },
     .{
         .name = "consoleLogs",
@@ -335,6 +376,7 @@ pub const tool_defs = [_]ToolDef{
         .input_schema = minify(
             \\{ "type": "object", "properties": {} }
         ),
+        .produces_data = true,
     },
     .{
         .name = "getUrl",
@@ -342,6 +384,7 @@ pub const tool_defs = [_]ToolDef{
         .input_schema = minify(
             \\{ "type": "object", "properties": {} }
         ),
+        .produces_data = true,
     },
     .{
         .name = "getCookies",
@@ -349,6 +392,7 @@ pub const tool_defs = [_]ToolDef{
         .input_schema = minify(
             \\{ "type": "object", "properties": {} }
         ),
+        .produces_data = true,
     },
     .{
         .name = "getEnv",
@@ -361,6 +405,7 @@ pub const tool_defs = [_]ToolDef{
             \\  }
             \\}
         ),
+        .produces_data = true,
     },
 };
 

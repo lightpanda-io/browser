@@ -361,15 +361,6 @@ fn completionCallback(cenv: ?*c.ic_completion_env_t, prefix: [*c]const u8) callc
             }
             return;
         }
-    } else if (!has_space) {
-        // Trailing space on argful keywords hands off to the hinter, which
-        // renders ` '<selector>'` etc. uniformly whether typed or Tab-completed.
-        // Case-insensitive Tab so `goto<TAB>` rewrites to `GOTO `; the
-        // highlighter stays case-sensitive.
-        for (Command.keywords) |kw| {
-            const suffix: []const u8 = if (kw.params.len > 0) " " else "";
-            addPrefixedCompletion(cenv, &buf, input, "", kw.name, suffix, input);
-        }
     }
 
     addEnvVarCompletions(cenv, &buf, input);
@@ -401,19 +392,9 @@ fn hintsCallback(input_c: [*c]const u8, arg: ?*anyopaque) callconv(.c) [*c]const
         return null;
     }
 
-    if (input[0] == '/') return null;
-
-    const space = std.mem.indexOfScalar(u8, input, ' ');
-    const kw_end = space orelse input.len;
-    const kw = exactKeywordMatch(input[0..kw_end]) orelse return null;
-    if (kw.params.len == 0) return null;
-
-    if (space == null) return writeHints(" ", kw.params);
-    const body = input[kw_end + 1 ..];
-    const cur = Command.analyzePandaBody(body);
-    if (!cur.at_boundary or cur.complete_args >= kw.params.len) return null;
-    const lead: []const u8 = if (input[input.len - 1] == ' ') "" else " ";
-    return writeHints(lead, kw.params[cur.complete_args..]);
+    // Non-slash lines are natural-language prompts to the LLM (REPL only).
+    // No syntactic hint to render — the LLM sees the line verbatim.
+    return null;
 }
 
 /// Join `fragments` into `hint_buf` with single-space separators, prefixed by
@@ -517,37 +498,15 @@ fn highlighterCallback(henv: ?*c.ic_highlight_env_t, input: [*c]const u8, _: ?*a
         }
         highlightSlashArgs(henv, text, i);
     } else {
-        const style: ?[*:0]const u8 = blk: {
-            if (isKnownCommand(cmd)) break :blk style_cmd;
-            if (!looksLikeKeyword(cmd)) break :blk null;
-            if (closed or !keywordHasPrefix(cmd)) break :blk style_err;
-            break :blk null;
-        };
-        if (style) |s| c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), s);
-        highlightPandaArgs(henv, text, i);
+        // A bare token whose first word matches a tool name suggests the user
+        // forgot the leading `/`. Flag it in error red.
+        if (closed and isKnownSlashName(cmd)) {
+            c.ic_highlight(henv, @intCast(cmd_start), @intCast(cmd.len), style_err.ptr);
+        }
+        // Natural-language prompts still benefit from `$LP_*` highlighting on
+        // any embedded env-var references.
+        highlightDollarVars(henv, text, i);
     }
-}
-
-fn looksLikeKeyword(s: []const u8) bool {
-    if (s.len == 0) return false;
-    for (s) |ch| {
-        if (!std.ascii.isUpper(ch) and !std.ascii.isDigit(ch) and ch != '_') return false;
-    }
-    return true;
-}
-
-fn isKnownCommand(name: []const u8) bool {
-    for (Command.keywords) |kw| {
-        if (std.mem.eql(u8, kw.name, name)) return true;
-    }
-    return false;
-}
-
-fn exactKeywordMatch(input: []const u8) ?Command.KeywordSyntax {
-    for (Command.keywords) |kw| {
-        if (std.ascii.eqlIgnoreCase(kw.name, input)) return kw;
-    }
-    return null;
 }
 
 fn isKnownSlashName(name: []const u8) bool {
@@ -560,13 +519,6 @@ fn isKnownSlashName(name: []const u8) bool {
 fn slashHasPrefix(name: []const u8) bool {
     for (all_slash_names) |n| {
         if (std.ascii.startsWithIgnoreCase(n, name)) return true;
-    }
-    return false;
-}
-
-fn keywordHasPrefix(name: []const u8) bool {
-    for (Command.keywords) |kw| {
-        if (std.mem.startsWith(u8, kw.name, name)) return true;
     }
     return false;
 }
@@ -601,18 +553,19 @@ fn scanQuoted(text: []const u8, start: usize) usize {
     return close + 1;
 }
 
-fn highlightPandaArgs(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
+/// Highlight `$LP_*` tokens embedded in natural-language input. Used for the
+/// non-slash REPL line path where the rest is freeform prose to the LLM.
+fn highlightDollarVars(henv: ?*c.ic_highlight_env_t, text: []const u8, start: usize) void {
     var i = start;
-    while (skipWs(text, &i)) {
-        if (text[i] == '\'' or text[i] == '"') {
-            const tok_start = i;
-            i = scanQuoted(text, i);
-            c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_string.ptr);
-            continue;
-        }
+    while (i < text.len) : (i += 1) {
+        if (text[i] != '$') continue;
         const tok_start = i;
-        while (i < text.len and !std.ascii.isWhitespace(text[i])) i += 1;
-        highlightBareToken(henv, text, tok_start, i);
+        i += 1;
+        while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
+        if (i > tok_start + 1) {
+            c.ic_highlight(henv, @intCast(tok_start), @intCast(i - tok_start), style_var.ptr);
+        }
+        if (i >= text.len) break;
     }
 }
 

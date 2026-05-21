@@ -35,26 +35,50 @@ pub fn init(tool_executor: *ToolExecutor, terminal: *Terminal) CommandRunner {
     };
 }
 
-/// Caller contract: `cmd` must not be `.natural_language`, `.comment`,
-/// `.login`, or `.accept_cookies` — those are filtered upstream (see
-/// `Agent.runRepl`) because they have no tool mapping.
+/// Caller contract: `cmd` must be `.tool_call` — `.comment`, `.login`, and
+/// `.accept_cookies` are filtered upstream (see `Agent.runRepl`) because they
+/// have no tool mapping.
 pub fn executeWithResult(self: *CommandRunner, arena: std.mem.Allocator, cmd: Command) browser_tools.ToolResult {
-    switch (cmd) {
-        .extract => |schema| return self.execExtract(arena, schema),
-        .eval_js => |script| return browser_tools.ToolResult.unwrap(self.tool_executor.callEval(arena, script)),
-        else => {},
-    }
-
-    const tc = (cmd.toToolCall(arena, browser_tools.substituteEnvVars) catch
-        return .{ .text = "out of memory", .is_error = true }) orelse
-        return .{ .text = "internal: command has no tool mapping", .is_error = true };
-    return self.tool_executor.callValue(arena, tc.name, tc.args) catch |err| .{
+    const tc = switch (cmd) {
+        .tool_call => |t| t,
+        else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
+    };
+    const substituted = substituteStringArgs(arena, tc.name, tc.args) catch
+        return .{ .text = "out of memory", .is_error = true };
+    return self.tool_executor.callValue(arena, tc.name, substituted) catch |err| .{
         .text = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name, @errorName(err) }) catch "tool failed",
         .is_error = true,
     };
 }
 
-/// Data output (EXTRACT/EVAL/MARKDOWN/TREE) → stdout on success; everything
+/// Resolve `$LP_*` placeholders in string args before the tool runs. `fill`'s
+/// `value` is excluded — the tool resolves it internally and rewrites the
+/// result text so the credential never appears in the echoed confirmation.
+fn substituteStringArgs(arena: std.mem.Allocator, tool_name: []const u8, args: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
+    const v = args orelse return null;
+    if (v != .object) return v;
+    var changed = false;
+    var new_obj: std.json.ObjectMap = .init(arena);
+    try new_obj.ensureTotalCapacity(v.object.count());
+    var it = v.object.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const val = entry.value_ptr.*;
+        const exclude = std.mem.eql(u8, tool_name, "fill") and std.mem.eql(u8, key, "value");
+        if (!exclude and val == .string) {
+            const resolved = try browser_tools.substituteEnvVars(arena, val.string);
+            if (resolved.ptr != val.string.ptr) changed = true;
+            try new_obj.put(key, .{ .string = resolved });
+            continue;
+        }
+        try new_obj.put(key, val);
+    }
+    // Only allocate a new value if substitution actually changed something —
+    // the original args object can stay aliased into the caller's arena.
+    return if (changed) .{ .object = new_obj } else v;
+}
+
+/// Data output (extract/eval/markdown/tree/…) → stdout on success; everything
 /// else, including failures from those same commands, → stderr.
 pub fn printResult(self: *CommandRunner, cmd: Command, result: browser_tools.ToolResult) void {
     if (cmd.producesData() and !result.is_error) {
@@ -62,10 +86,4 @@ pub fn printResult(self: *CommandRunner, cmd: Command, result: browser_tools.Too
     } else {
         self.terminal.printActionResult(result.text);
     }
-}
-
-fn execExtract(self: *CommandRunner, arena: std.mem.Allocator, raw_schema: []const u8) browser_tools.ToolResult {
-    const schema = browser_tools.substituteEnvVars(arena, raw_schema) catch
-        return .{ .text = "out of memory", .is_error = true };
-    return browser_tools.ToolResult.unwrap(self.tool_executor.extract(arena, schema));
 }

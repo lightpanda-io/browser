@@ -405,7 +405,7 @@ fn runRepl(self: *Agent) void {
     if (self.ai_client) |ai_client| {
         self.terminal.printInfoFmt("Provider: {s}, Model: {s}", .{ @tagName(std.meta.activeTag(ai_client)), self.model });
     } else {
-        self.terminal.printInfo("Basic REPL (--no-llm) — PandaScript only. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language, LOGIN, and ACCEPT_COOKIES.");
+        self.terminal.printInfo("Basic REPL (--no-llm) — PandaScript only. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language, /login, and /acceptCookies.");
     }
 
     repl: while (true) {
@@ -422,44 +422,54 @@ fn runRepl(self: *Agent) void {
 
         if (line.len == 0) continue;
 
-        if (line[0] == '/') {
-            if (self.handleSlash(line[1..])) break :repl;
-            continue :repl;
-        }
-
-        const cmd = Command.parse(line);
-
-        // Distinguish "you mistyped a PandaScript command" from "this is
-        // natural language for the LLM". Both fall through to
-        // `.natural_language` in Command.parse, but the first should never
-        // hit the LLM-needed error path.
-        if (std.meta.activeTag(cmd) == .natural_language) {
-            if (Command.keywordSyntax(line)) |kc| {
-                if (kc.args) |args| {
-                    self.terminal.printErrorFmt("Usage: {s} {s}", .{ kc.name, args });
-                } else {
-                    self.terminal.printErrorFmt("{s} takes no arguments", .{kc.name});
+        // Meta slash commands (/help, /quit, /verbosity) aren't part of
+        // PandaScript — they're REPL-only and never recorded. Intercept
+        // before Command.parse so they don't surface as UnknownTool.
+        if (line.len > 0 and line[0] == '/') {
+            if (SlashCommand.splitNameRest(line[1..])) |split| {
+                if (SlashCommand.findMeta(split.name)) |_| {
+                    if (self.handleMeta(split.name, split.rest)) break :repl;
+                    continue :repl;
                 }
-                continue;
             }
         }
 
-        if (cmd.needsLlm() and self.ai_client == null) {
-            self.terminal.printError("To use Lightpanda agent in natural language mode, you need to connect an LLM. Set an API key with export or type /help for available commands in no-llm mode.");
-            continue;
-        }
+        var arena: std.heap.ArenaAllocator = .init(self.allocator);
+        defer arena.deinit();
+        const aa = arena.allocator();
+
+        const cmd = Command.parseWithSchemas(aa, line, self.slash_schemas) catch |err| switch (err) {
+            error.NotASlashCommand => {
+                if (self.ai_client == null) {
+                    self.terminal.printError("Basic REPL (--no-llm) accepts only slash commands. Try /help, or drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY) to enable natural-language prompts.");
+                    continue :repl;
+                }
+                _ = self.runTurn(.{ .prompt = line, .record_comment = line });
+                continue :repl;
+            },
+            else => |e| {
+                self.printSlashParseError(e, line);
+                continue :repl;
+            },
+        };
 
         switch (cmd) {
             .comment => continue :repl,
-            .login => _ = self.runTurn(.{ .prompt = login_prompt, .record_comment = line, .label = "LOGIN" }),
-            .accept_cookies => _ = self.runTurn(.{ .prompt = accept_cookies_prompt, .record_comment = line, .label = "ACCEPT_COOKIES" }),
-            .natural_language => _ = self.runTurn(.{ .prompt = line, .record_comment = line }),
-            else => {
-                const split = SlashCommand.splitNameRest(line) orelse continue :repl;
-                self.terminal.beginTool(split.name, split.rest);
-                var arena: std.heap.ArenaAllocator = .init(self.allocator);
-                defer arena.deinit();
-                const result = self.cmd_runner.executeWithResult(arena.allocator(), cmd);
+            .login, .accept_cookies => {
+                if (self.ai_client == null) {
+                    self.terminal.printError("/login and /acceptCookies require an LLM. Drop --no-llm and set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY).");
+                    continue :repl;
+                }
+                const prompt = if (cmd == .login) login_prompt else accept_cookies_prompt;
+                const label: []const u8 = if (cmd == .login) "LOGIN" else "ACCEPT_COOKIES";
+                _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .label = label });
+            },
+            .tool_call => |tc| {
+                // We just parsed `line` as `.tool_call` — it started with `/`,
+                // so the name+rest split is guaranteed to succeed.
+                const split = SlashCommand.splitNameRest(line[1..]) orelse unreachable;
+                self.terminal.beginTool(tc.name, split.rest);
+                const result = self.cmd_runner.executeWithResult(aa, cmd);
                 self.terminal.endTool();
                 self.cmd_runner.printResult(cmd, result);
                 if (self.recorder) |*r| r.record(cmd);
@@ -470,17 +480,11 @@ fn runRepl(self: *Agent) void {
     self.terminal.printInfo("Goodbye!");
 }
 
-/// Handle a REPL line that started with `/`. Returns `true` if the user asked
-/// to quit (`/quit`), `false` otherwise. All errors are printed and
-/// swallowed — the REPL must not die from a malformed slash command.
-fn handleSlash(self: *Agent, body: []const u8) bool {
-    const split = SlashCommand.splitNameRest(body) orelse {
-        self.terminal.printError("Empty slash command. Try /help.");
-        return false;
-    };
-    const name = split.name;
-    const rest = split.rest;
-
+/// Handle a meta slash command (/quit, /help, /verbosity). These aren't part
+/// of PandaScript — they're REPL-only and never recorded. Returns `true` if
+/// the user asked to quit. Caller has already verified `name` is in
+/// `SlashCommand.meta_commands`.
+fn handleMeta(self: *Agent, name: []const u8, rest: []const u8) bool {
     if (std.mem.eql(u8, name, "quit")) return true;
     if (std.mem.eql(u8, name, "help")) {
         self.printSlashHelp(rest);
@@ -489,33 +493,6 @@ fn handleSlash(self: *Agent, body: []const u8) bool {
     if (std.mem.eql(u8, name, "verbosity")) {
         self.handleVerbosity(rest);
         return false;
-    }
-
-    const schema = SlashCommand.findSchema(self.slash_schemas, name) orelse {
-        self.printSlashParseError(error.UnknownTool, name);
-        return false;
-    };
-
-    var arena: std.heap.ArenaAllocator = .init(self.allocator);
-    defer arena.deinit();
-    const aa = arena.allocator();
-
-    const args_json = SlashCommand.parseArgs(aa, schema, rest) catch |err| {
-        self.printSlashParseError(err, name);
-        return false;
-    };
-
-    self.terminal.beginTool(schema.tool_name, rest);
-    if (self.tool_executor.call(aa, schema.tool_name, args_json)) |result| {
-        self.terminal.endTool();
-        if (result.is_error) {
-            self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, result.text });
-        } else {
-            self.terminal.printToolResult(schema.tool_name, result.text);
-        }
-    } else |err| {
-        self.terminal.endTool();
-        self.terminal.printErrorFmt("{s}: {s}", .{ schema.tool_name, @errorName(err) });
     }
     return false;
 }
@@ -634,11 +611,6 @@ fn runScript(self: *Agent, path: []const u8) bool {
                 }
                 continue;
             },
-            .natural_language => {
-                self.terminal.printErrorFmt("line {d}: unrecognized command: {s}", .{ entry.line_num, entry.opener_line });
-                self.flushReplacements(path, content, replacements.items);
-                return false;
-            },
             .login, .accept_cookies => {
                 if (self.ai_client == null) {
                     self.terminal.printErrorFmt("line {d}: {s} requires --provider", .{
@@ -661,7 +633,7 @@ fn runScript(self: *Agent, path: []const u8) bool {
                 if (text) |t| self.terminal.printAssistant(t);
                 self.pruneMessages();
             },
-            else => {
+            .tool_call => {
                 self.terminal.printInfoFmt("[{d}] {s}", .{ entry.line_num, entry.opener_line });
                 switch (self.runActionEntry(sa, entry, last_comment)) {
                     .ok => {},
@@ -776,10 +748,16 @@ fn flushReplacements(self: *Agent, path: []const u8, content: []const u8, replac
 }
 
 fn isRetryable(cmd: Command) bool {
-    return switch (cmd) {
-        .type_cmd, .check, .select => true,
-        else => false,
+    const tc = switch (cmd) {
+        .tool_call => |t| t,
+        else => return false,
     };
+    // Same set as today: tools whose post-action state can lag (form updates,
+    // controlled inputs, select dropdowns) and benefit from a brief retry
+    // before going to the LLM for heal.
+    return std.mem.eql(u8, tc.name, "fill") or
+        std.mem.eql(u8, tc.name, "setChecked") or
+        std.mem.eql(u8, tc.name, "selectOption");
 }
 
 const self_heal_max_attempts = 3;
@@ -858,8 +836,7 @@ fn runHealTurn(self: *Agent, arena: std.mem.Allocator, prompt: []const u8) ![]Co
     var cmds: std.ArrayList(Command) = .empty;
     for (result.tool_calls_made) |tc| {
         if (tc.is_error) continue;
-        const args = tc.arguments orelse continue;
-        const cmd = Command.fromToolCall(tc.name, args) orelse continue;
+        const cmd = Command.fromToolCall(tc.name, tc.arguments);
         if (!cmd.canHeal()) {
             self.terminal.printInfoFmt(
                 "self-heal: ignoring {s} (navigation and eval are not allowed during heal)",
@@ -1032,8 +1009,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         for (result.tool_calls_made, 0..) |tc, i| {
             if (tc.is_error) continue;
             if (last_extract_idx) |idx| if (std.mem.eql(u8, tc.name, "extract") and idx != i) continue;
-            const args = tc.arguments orelse continue;
-            const cmd = Command.fromToolCall(tc.name, args) orelse continue;
+            const cmd = Command.fromToolCall(tc.name, tc.arguments);
+            if (!cmd.isRecorded()) continue;
             if (!recorded_any) {
                 if (input.record_comment) |c| r.recordComment(c);
                 recorded_any = true;
@@ -1375,24 +1352,24 @@ fn promptNumberedChoice(header: []const u8, items: []const []const u8, default: 
 // --- Tests ---
 
 test "canHeal: only page-local DOM commands are allowed" {
-    const C = Command;
-    try std.testing.expect((C{ .click = ".btn" }).canHeal());
-    try std.testing.expect((C{ .hover = ".menu" }).canHeal());
-    try std.testing.expect((C{ .wait = ".loaded" }).canHeal());
-    try std.testing.expect((C{ .type_cmd = .{ .selector = "#u", .value = "x" } }).canHeal());
-    try std.testing.expect((C{ .select = .{ .selector = "#s", .value = "x" } }).canHeal());
-    try std.testing.expect((C{ .check = .{ .selector = "#c", .checked = true } }).canHeal());
-    try std.testing.expect((C{ .scroll = .{ .x = 0, .y = 100 } }).canHeal());
-    try std.testing.expect((C{ .extract = "schema" }).canHeal());
+    // Table driven over the actual tool flags so adding a new tool can't
+    // silently drift from the heal allow-list. The heal LLM is restricted to
+    // these tools by Command.canHeal(); navigation and eval are excluded.
+    const tc_allow = [_][]const u8{ "click", "hover", "waitForSelector", "fill", "selectOption", "setChecked", "scroll", "extract", "press" };
+    const tc_deny = [_][]const u8{ "goto", "eval", "tree", "markdown", "search", "links" };
 
-    try std.testing.expect(!(C{ .goto = "https://x" }).canHeal());
-    try std.testing.expect(!(C{ .eval_js = "alert(1)" }).canHeal());
-    try std.testing.expect(!(C{ .natural_language = "do x" }).canHeal());
-    try std.testing.expect(!(C{ .login = {} }).canHeal());
-    try std.testing.expect(!(C{ .accept_cookies = {} }).canHeal());
-    try std.testing.expect(!(C{ .comment = {} }).canHeal());
-    try std.testing.expect(!(C{ .tree = {} }).canHeal());
-    try std.testing.expect(!(C{ .markdown = {} }).canHeal());
+    for (tc_allow) |name| {
+        const cmd = Command.fromToolCall(name, null);
+        try std.testing.expect(cmd.canHeal());
+    }
+    for (tc_deny) |name| {
+        const cmd = Command.fromToolCall(name, null);
+        try std.testing.expect(!cmd.canHeal());
+    }
+
+    try std.testing.expect(!(Command{ .login = {} }).canHeal());
+    try std.testing.expect(!(Command{ .accept_cookies = {} }).canHeal());
+    try std.testing.expect(!(Command{ .comment = {} }).canHeal());
 }
 
 test {

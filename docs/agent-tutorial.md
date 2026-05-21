@@ -60,7 +60,7 @@ vars.
 
 Verify they're set before continuing — substitution fails silently if
 a variable is missing (the literal `$LP_HN_USERNAME` ends up typed
-into the form), and the `TYPE` confirmation message intentionally
+into the form), and the `/fill` confirmation message intentionally
 echoes the placeholder name rather than the resolved value, so the
 response text won't tell you. Confirm directly:
 
@@ -125,23 +125,24 @@ time so you can see how each step depends on what the previous one
 showed.
 
 ```
-> GOTO https://news.ycombinator.com/login
+> /goto https://news.ycombinator.com/login
 ```
 
-`GOTO` takes an unquoted URL. The page is now loaded.
+`/goto` takes a single URL argument (positional, optionally quoted). The page
+is now loaded.
 
-> Commands must be uppercase. `click '#foo'` is forwarded to the LLM as
-> natural language; only `CLICK '#foo'` runs as a command. TAB
-> completion in the REPL fills in the caps for you — typing `cli<TAB>`
-> rewrites the line to `CLICK`.
+> PandaScript is just slash commands. `click '#foo'` (no leading slash) is
+> forwarded to the LLM as a natural-language prompt; only `/click '#foo'`
+> runs as a command. TAB completion in the REPL helps you find the right
+> tool name.
 
 Inspect it before clicking anything:
 
 ```
-> TREE
+> /tree
 ```
 
-`TREE` prints the semantic tree to stdout. Two forms are visible —
+`/tree` prints the semantic tree to stdout. Two forms are visible —
 the login form and the create-account form below it — and each one
 contains two unlabeled textboxes:
 
@@ -185,9 +186,9 @@ named `acct` and `pw`. That's enough to synthesize the CSS selector
 yourself: scope by form action to avoid colliding with the
 create-account form, then key on the input's `name` attribute.
 
-**Selector rule, load-bearing:** the click-family tools (`CLICK`,
-`TYPE`, `HOVER`, `SELECT`, `CHECK`) accept CSS selectors only. The
-backend node IDs `findElement` and `detectForms` return are
+**Selector rule, load-bearing:** the click-family tools (`/click`,
+`/fill`, `/hover`, `/selectOption`, `/setChecked`) accept CSS selectors
+only. The backend node IDs `findElement` and `detectForms` return are
 invalidated by any DOM mutation, and they cannot be serialized into
 PandaScript — a session that uses them is not replayable. Always
 synthesize a CSS selector from the attributes (`id`, `class`,
@@ -196,45 +197,46 @@ synthesize a CSS selector from the attributes (`id`, `class`,
 Now fill the form:
 
 ```
-> TYPE 'form[action="login"] input[name="acct"]' '$LP_HN_USERNAME'
-> TYPE 'form[action="login"] input[name="pw"]' '$LP_HN_PASSWORD'
-> CLICK 'form[action="login"] input[type="submit"][value="login"]'
-> WAIT '#logout'
+> /fill selector='form[action="login"] input[name="acct"]' value='$LP_HN_USERNAME'
+> /fill selector='form[action="login"] input[name="pw"]' value='$LP_HN_PASSWORD'
+> /click selector='form[action="login"] input[type="submit"][value="login"]'
+> /waitForSelector '#logout'
 ```
 
-`$LP_*` references in `TYPE` values are resolved at execution time
+`$LP_*` references in `/fill` values are resolved at execution time
 inside the subprocess. The LLM never sees the literal credential.
 
-The `WAIT '#logout'` line is doing two jobs at once, and it's worth
-unpacking because the pattern recurs in every recorded script:
+The `/waitForSelector '#logout'` line is doing two jobs at once, and it's
+worth unpacking because the pattern recurs in every recorded script:
 
-- **It's a synchronization point.** `CLICK` on the submit button
+- **It's a synchronization point.** `/click` on the submit button
   returns as soon as the click dispatches, not after the server
   responds. Without a wait, the next command races the login redirect
-  and may run against the *pre-login* DOM. `WAIT '<selector>'` blocks
-  until that selector appears, so the script resumes only after HN's
-  logged-in page has rendered.
+  and may run against the *pre-login* DOM. `/waitForSelector '<sel>'`
+  blocks until that selector appears, so the script resumes only after
+  HN's logged-in page has rendered.
 - **It's an implicit assertion.** HN renders the `#logout` link only
   when the session is authenticated. If the credentials are wrong (or
   HN throws up a captcha, or rate-limits, or the form layout
-  changed), `#logout` never appears and `WAIT` times out — the script
-  fails loudly at the line where the failure actually happened,
-  instead of silently succeeding and producing garbage downstream.
+  changed), `#logout` never appears and `/waitForSelector` times out —
+  the script fails loudly at the line where the failure actually
+  happened, instead of silently succeeding and producing garbage
+  downstream.
 
-You generally want a `WAIT` like this after every state-changing
+You generally want a `/waitForSelector` like this after every state-changing
 action that triggers async work: pick a selector that *only* exists
 in the post-action state, and you get free regression protection.
 Waiting on the URL (`location.pathname === "/news"`) or a generic
 element that exists on both pages is weaker — both can be true before
 the navigation finishes.
 
-Confirm by pulling structured data off the page. `EXTRACT` takes a
+Confirm by pulling structured data off the page. `/extract` takes a
 JSON schema object — each value describes what to lift out, and the
 whole result is printed to stdout as one JSON object. The simplest
 form is a flat selector lookup:
 
 ```
-> EXTRACT '{"karma": "#karma"}'
+> /extract '{"karma": "#karma"}'
 {"karma":"42"}
 ```
 
@@ -251,13 +253,13 @@ The schema grammar is small but covers the cases you'd reach for:
   each `fields` entry is resolved relative to the matched element.
 
 After a page-changing action (click, navigation, form submit) the
-previous `TREE` snapshot is stale; re-inspect before the next
+previous `/tree` snapshot is stale; re-inspect before the next
 interaction. Hop back to the front page and pull the story list to
 exercise the structured form:
 
 ```
-> GOTO https://news.ycombinator.com
-> EXTRACT '''
+> /goto https://news.ycombinator.com
+> /extract '''
 {
   "topStories": [{
     "selector": ".athing",
@@ -277,7 +279,7 @@ The result is a single JSON object printed to stdout:
 `{"topStories":[{"rank":"1","title":"…","url":"…"}, …]}`.
 
 The schema is parsed in Zig before the page-side walker runs, so a
-typo like a stray comma surfaces here as `Error: invalid EXTRACT
+typo like a stray comma surfaces here as `Error: invalid /extract
 schema JSON` instead of a confusing V8 stack trace.
 
 ## 4. Recording the session
@@ -289,9 +291,9 @@ The same flow, but recorded to a file. Quit the REPL, then:
 ```
 
 `-i <path>` opens an interactive REPL that appends state-mutating
-commands to `<path>`. Retype the same sequence — login (`GOTO`, two
-`TYPE`s, `CLICK`, `WAIT`), then the front-page hop and structured
-pull (`GOTO`, multi-line `EXTRACT`) — then `/quit`.
+commands to `<path>`. Retype the same sequence — login (`/goto`, two
+`/fill`s, `/click`, `/waitForSelector`), then the front-page hop and
+structured pull (`/goto`, multi-line `/extract`) — then `/quit`.
 
 Inspect the result:
 
@@ -300,11 +302,10 @@ cat hn.lp
 ```
 
 You should see the seven mutating commands and nothing else — no
-`TREE`, no `MARKDOWN`, no slash-command lookups. The recorder filters
-on a per-command flag (`Command.isRecorded()`) so read-only inspection
-never pollutes the script; `EXTRACT` *is* recorded (it changes what
-the script will output on replay even though it doesn't mutate the
-page).
+`/tree`, no `/markdown`, no read-only lookups. The recorder filters on a
+per-tool flag (`ToolDef.recorded`) so read-only inspection never
+pollutes the script; `/extract` *is* recorded (it changes what the
+script will output on replay even though it doesn't mutate the page).
 
 Diff it against the checked-in fixture:
 
@@ -325,9 +326,11 @@ No `--provider`, no LLM, no token spend. The recorded script runs
 top to bottom against a fresh browser. This is the form you want for
 regression tests and CI: it's pure replay.
 
-`LOGIN`, `ACCEPT_COOKIES`, and natural-language lines are the only
-script entries that require an LLM. A pure recording from `-i` never
-contains them, so it always replays without `--provider`.
+`/login` and `/acceptCookies` are the only script entries that require
+an LLM. A pure recording from `-i` never contains them (the recorder
+captures the LLM's resulting tool calls, not the trigger), so it always
+replays without `--provider`. Natural-language lines aren't valid
+PandaScript syntax in the first place — they're a REPL-only convenience.
 
 ## 6. Selector drift and `--self-heal`
 
@@ -345,8 +348,8 @@ replay fails:
 ./lightpanda agent hn_broken.lp
 ```
 
-`TYPE`, `CHECK`, and `SELECT` go a step further than just "did the
-selector resolve" — a post-exec verifier checks that the DOM
+`/fill`, `/setChecked`, and `/selectOption` go a step further than just
+"did the selector resolve" — a post-exec verifier checks that the DOM
 actually reflects the intent (the input ended up with the value you
 typed, the checkbox flipped, the option got selected). That's what
 catches silent drift before it propagates.
@@ -364,8 +367,8 @@ in place. A `hn_broken.lp.bak` is written before any mutation, and
 the rewritten line is prefixed with a header:
 
 ```pandascript
-# [Auto-healed] Original: TYPE 'form[action="login"] input[name="user"]' '$LP_USERNAME'
-TYPE 'form[action="login"] input[name="acct"]' '$LP_USERNAME'
+# [Auto-healed] Original: /fill selector='form[action="login"] input[name="user"]' value='$LP_USERNAME'
+/fill selector='form[action="login"] input[name="acct"]' value='$LP_USERNAME'
 ```
 
 Self-heal is intentionally narrow: one replacement per failure, no
@@ -444,9 +447,9 @@ roundtrip the calling agent orchestrates:
 
 `script_step` deliberately does *not* auto-record: the script is
 already the source of truth during replay, so double-recording would
-diverge the file from itself. `LOGIN`, `ACCEPT_COOKIES`, and
-natural-language lines are rejected — those need an LLM, which is the
-caller's responsibility.
+diverge the file from itself. `/login`, `/acceptCookies`, and any line
+that isn't a slash command are rejected — those need an LLM, which is
+the caller's responsibility.
 
 ## Where to go next
 

@@ -58,7 +58,7 @@ overrides the API endpoint (Ollama defaults to `http://localhost:11434/v1`).
 When `--provider` is omitted, lightpanda inspects the environment and picks one:
 
 - **No keys set** → falls back to the basic REPL (PandaScript only). Natural
-  language, `LOGIN`, `ACCEPT_COOKIES`, and `--self-heal` will reject. A
+  language, `/login`, `/acceptCookies`, and `--self-heal` will reject. A
   one-line notice is printed so you know which mode you landed in.
 - **Exactly one key set** → that provider is used. A one-line notice
   identifies the env var that won.
@@ -74,35 +74,38 @@ editing the existing flags. `--no-llm` wins over `--provider`.
 
 ## PandaScript
 
-PandaScript is a tiny, line-oriented DSL for browser actions. Each line is one
-command. Comments start with `#`. Strings are quoted with `'`, `"`, or `'''…'''`
-for values that mix both quote styles. Quoting rules are content-aware so that
-recorded scripts round-trip through the parser.
+PandaScript is a tiny, line-oriented DSL for browser actions. Each line is a
+slash command (`/<tool> [args]`), a `#` comment, or blank. There is no other
+syntax: anything that doesn't match those three forms is a parse error.
 
-Commands are matched **ALL CAPS only** (`CLICK`, `GOTO`, `TYPE`, …). Lowercase
-or mixed-case input is forwarded to the LLM as natural language, so prompts
-like `click the login button` flow through without being misread as a `CLICK`
-command. In the REPL, TAB completion fills in the canonical caps form for you.
+Slash commands accept any of:
 
-| Command          | Form                                     | Notes                                                |
-|------------------|------------------------------------------|------------------------------------------------------|
-| `GOTO`           | `GOTO <url>`                             | Navigate. URL is unquoted.                           |
-| `CLICK`          | `CLICK '<selector>'`                     | CSS selector.                                        |
-| `TYPE`           | `TYPE '<selector>' '<value>'`            | Fills an input. `$LP_*` env refs auto-resolve.       |
-| `WAIT`           | `WAIT '<selector>'`                      | Wait for selector to be present in the DOM.          |
-| `SCROLL`         | `SCROLL [x] [y]`                         | Default `(0, 0)`.                                    |
-| `HOVER`          | `HOVER '<selector>'`                     |                                                      |
-| `SELECT`         | `SELECT '<selector>' '<value>'`          | `<select>` option by value.                          |
-| `CHECK`          | `CHECK '<selector>' [true\|false]`       | Check / uncheck. Default `true`.                     |
-| `EXTRACT`        | `EXTRACT '<schema>'` or `'''<schema>'''` | JSON schema in, single JSON object on stdout.        |
-| `EVAL`           | `EVAL '<js>'` or `'''<js>'''`            | Triple-quote for multi-line JS.                      |
-| `TREE`           | `TREE`                                   | Print the semantic tree (not recorded).              |
-| `MARKDOWN`       | `MARKDOWN`                               | Print page as markdown (not recorded).               |
-| `LOGIN`          | `LOGIN`                                  | LLM-driven: fills credentials from `$LP_*` env vars. |
-| `ACCEPT_COOKIES` | `ACCEPT_COOKIES`                         | LLM-driven: dismiss the consent banner.              |
+- a single positional value, when the tool has exactly one required field —
+  `/goto 'https://example.com'`, `/click selector='Login'`,
+  `/extract '{"karma":"#karma"}'`;
+- `key=value` pairs — values may be bare or quoted; strings with whitespace
+  must be quoted (`/fill selector='#email' value='user@x.com'`);
+- a raw `{json}` blob — handed straight to the tool (`/findElement
+  {"role":"button"}`).
 
-In the REPL, anything that does not parse as a PandaScript command is sent to
-the LLM as natural language. To leave the REPL, use the `/quit` slash command.
+Quoting is content-aware: `'…'`, `"…"`, and triple-quoted `'''…'''` /
+`"""…"""` for values that mix both quote styles or span multiple lines.
+Recorded scripts round-trip through the parser without escapes.
+
+Two slash commands have no underlying tool — they trigger an LLM turn that
+the agent translates into actual tool calls:
+
+| Command          | Notes                                                |
+|------------------|------------------------------------------------------|
+| `/login`         | LLM-driven: fills credentials from `$LP_*` env vars. |
+| `/acceptCookies` | LLM-driven: dismiss the consent banner.              |
+
+Both require an LLM. `--no-llm` rejects them.
+
+In the REPL (and only the REPL), a line that isn't a slash command and
+doesn't start with `#` is sent to the LLM as a natural-language prompt. In
+`.lp` scripts and through MCP `script_step`, the same input is a parse
+error. To leave the REPL, use the `/quit` meta command.
 
 ### Example script
 
@@ -110,16 +113,16 @@ the LLM as natural language. To leave the REPL, use the `/quit` slash command.
 # Log into the demo and grab the dashboard title and visible cards.
 # Site-scoped vars (LP_<SITE>_<FIELD>) avoid collisions when you have
 # credentials for several sites; the unprefixed form is the fallback.
-GOTO https://demo-browser.lightpanda.io/
-ACCEPT_COOKIES
-TYPE '#email' '$LP_DEMO_USERNAME'
-TYPE '#password' '$LP_DEMO_PASSWORD'
-CLICK 'button[type="submit"]'
-WAIT '.dashboard'
-EXTRACT '{"title": ".dashboard h1", "cards": [".dashboard .card .name"]}'
+/goto 'https://demo-browser.lightpanda.io/'
+/acceptCookies
+/fill selector='#email' value='$LP_DEMO_USERNAME'
+/fill selector='#password' value='$LP_DEMO_PASSWORD'
+/click selector='button[type="submit"]'
+/waitForSelector '.dashboard'
+/extract '{"title": ".dashboard h1", "cards": [".dashboard .card .name"]}'
 ```
 
-`EXTRACT` takes a JSON schema object — each value tells the extractor
+`/extract` takes a JSON schema object — each value tells the extractor
 what to lift off the page, and the whole result is printed to stdout
 as a single JSON object. Supported value forms:
 
@@ -130,9 +133,9 @@ as a single JSON object. Supported value forms:
 - `[{"selector": "<sel>", "fields": {…}}]` — array of records, each
   `fields` value resolved relative to the matched element.
 
-Use `EXTRACT '''…'''` (or `"""…"""`) to spread a schema across multiple
+Use `/extract '''…'''` (or `"""…"""`) to spread a schema across multiple
 lines. The schema is parsed in Zig before the page-side walker runs,
-so a malformed schema fails with `Error: invalid EXTRACT schema JSON`
+so a malformed schema fails with `Error: invalid /extract schema JSON`
 rather than a V8 stack trace. See [agent-tutorial.md](agent-tutorial.md)
 section 3 for a worked example against Hacker News.
 
@@ -144,10 +147,12 @@ Interactive sessions can write back to a `.lp` file:
 ./lightpanda agent -i session.lp
 ```
 
-State-mutating commands (`GOTO`, `CLICK`, `TYPE`, ...) are appended; read-only
-commands (`TREE`, `MARKDOWN`) and the natural-language turns that produced
+State-mutating commands (`/goto`, `/click`, `/fill`, `/scroll`, `/hover`,
+`/selectOption`, `/setChecked`, `/waitForSelector`, `/press`, `/eval`,
+`/extract`) are appended; read-only commands (`/tree`, `/markdown`,
+`/links`, `/findElement`, …) and the natural-language turns that produced
 them are not. Natural-language turns are recorded as `# <prompt>` comments
-above the resulting tool calls so the script stays readable.
+above the resulting slash commands so the script stays readable.
 
 ### Replay and self-healing
 
@@ -165,25 +170,23 @@ from selector drift, not to redesign the script.
 
 ## REPL features
 
-- **Tab completion** (case-insensitive): cycles through PandaScript keywords
-  and `/<tool>` slash commands. The dim grey suffix shown after the cursor is
-  the first match.
+- **Tab completion** (case-insensitive): cycles through `/<tool>` and meta
+  slash commands. The dim grey suffix shown after the cursor is the first
+  match.
 - **Persistent history**: stored in `.lp-history` in the working directory.
-- **Slash commands**: `/<tool> [args]` calls a browser tool directly without
-  going through the LLM. Args accept either a single positional value (for
-  tools with one required field), `key=value` pairs, or a raw `{json}` blob.
-  Two meta commands round out the set: `/help` lists tools (`/help <tool>`
-  prints the JSON schema), and `/quit` exits the REPL.
+- **Meta slash commands**: `/help` lists tools (`/help <tool>` prints the
+  JSON schema), `/quit` exits the REPL, `/verbosity <low|medium|high>` tunes
+  the log level. These are REPL-only and never recorded.
   ```
   > /goto https://example.com
   > /findElement role=button name=Submit
   > /eval {"script": "document.title"}
   > /quit
   ```
-- **Stdout vs stderr**: the final assistant answer and data-producing commands
-  (`EXTRACT`, `EVAL`, `MARKDOWN`, `TREE`) write to stdout. Tool calls,
-  progress, and errors go to stderr, so `lightpanda agent --task ... > out.txt`
-  captures a clean answer.
+- **Stdout vs stderr**: the final assistant answer and data-producing slash
+  commands (`/extract`, `/eval`, `/markdown`, `/tree`, …) write to stdout.
+  Tool calls, progress, and errors go to stderr, so `lightpanda agent --task
+  ... > out.txt` captures a clean answer.
 
 ## One-shot mode (`--task`)
 
@@ -257,8 +260,9 @@ replacement, call `script_heal` with the patch, then continue. Lines
 executed via `script_step` are intentionally NOT auto-recorded — replay
 shouldn't double-record.
 
-`LOGIN`, `ACCEPT_COOKIES`, and natural-language steps are rejected by
-`script_step`: those require an LLM and belong to the calling agent.
+`/login`, `/acceptCookies`, and anything that isn't a slash command are
+rejected by `script_step`: those require an LLM and belong to the calling
+agent.
 
 ## Browser tools
 
@@ -280,9 +284,9 @@ for the LLM.
 
 - The agent treats page content as untrusted data, not instructions. URLs
   surfaced by a page are not followed unless they match the user's task.
-- `$LP_*` environment variable references in `TYPE` / `fill` values are
-  resolved at execution time inside the subprocess, so credentials never
-  enter the LLM context. Conventional naming for site-scoped values is
+- `$LP_*` environment variable references in `/fill` values are resolved
+  at execution time inside the subprocess, so credentials never enter the
+  LLM context. Conventional naming for site-scoped values is
   `LP_<SITE>_<FIELD>` (e.g. `LP_HN_USERNAME`, `LP_GH_TOKEN`); the
   unprefixed `LP_USERNAME` / `LP_PASSWORD` form is the generic fallback.
 - The `getEnv` tool only reads variables whose name starts with `LP_`.
@@ -296,7 +300,7 @@ for the LLM.
   `serve`, `fetch`, and `mcp`.
 - REPL prompts are persisted to `.lp-history` in the current working
   directory in plaintext (no encryption). Anything you type at the prompt
-  — including natural-language context that accompanies a `LOGIN` —
+  — including natural-language context that accompanies a `/login` —
   lands in that file. Delete it or move out of sensitive directories if
   you don't want it retained.
 - `record_start` and `script_heal` reject empty, absolute, and `..`

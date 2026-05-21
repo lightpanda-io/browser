@@ -55,12 +55,28 @@ const failed_reason_oom = "verification failed (out of memory while formatting r
 /// Commands without a dedicated verifier return `.inconclusive` so callers
 /// can distinguish "no verification available" from "explicitly verified".
 pub fn verify(self: *Verifier, arena: std.mem.Allocator, cmd: Command) VerifyResult {
-    return switch (cmd) {
-        .type_cmd => |args| self.verifyFill(arena, args.selector, args.value),
-        .check => |args| self.verifyCheck(arena, args.selector, args.checked),
-        .select => |args| self.verifySelect(arena, args.selector, args.value),
-        else => .inconclusive,
+    const tc = switch (cmd) {
+        .tool_call => |t| t,
+        else => return .inconclusive,
     };
+    const args = (tc.args orelse return .inconclusive).object;
+
+    if (std.mem.eql(u8, tc.name, "fill")) {
+        const selector = (args.get("selector") orelse return .inconclusive).string;
+        const value = (args.get("value") orelse return .inconclusive).string;
+        return self.verifyFill(arena, selector, value);
+    }
+    if (std.mem.eql(u8, tc.name, "setChecked")) {
+        const selector = (args.get("selector") orelse return .inconclusive).string;
+        const checked = (args.get("checked") orelse return .inconclusive).bool;
+        return self.verifyCheck(arena, selector, checked);
+    }
+    if (std.mem.eql(u8, tc.name, "selectOption")) {
+        const selector = (args.get("selector") orelse return .inconclusive).string;
+        const value = (args.get("value") orelse return .inconclusive).string;
+        return self.verifySelect(arena, selector, value);
+    }
+    return .inconclusive;
 }
 
 fn verifyFill(self: *Verifier, arena: std.mem.Allocator, selector: []const u8, expected_value: []const u8) VerifyResult {
