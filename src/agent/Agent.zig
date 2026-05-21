@@ -1215,7 +1215,7 @@ const Llm = struct {
             const key = zenai.provider.envApiKey(p) orelse {
                 std.debug.print(
                     "Missing API key for --provider {s}: set {s} — or pass --no-llm for the basic REPL.\n",
-                    .{ @tagName(p), envVarName(p) },
+                    .{ @tagName(p), zenai.provider.envVarName(p) },
                 );
                 return error.MissingApiKey;
             };
@@ -1240,7 +1240,7 @@ const Llm = struct {
                 break :blk null;
             },
             1 => blk: {
-                std.debug.print("Detected {s} — using --provider {s}.\n", .{ envVarName(found[0].provider), @tagName(found[0].provider) });
+                std.debug.print("Detected {s} — using --provider {s}.\n", .{ zenai.provider.envVarName(found[0].provider), @tagName(found[0].provider) });
                 break :blk found[0];
             },
             else => try pickProvider(found[0..n]),
@@ -1275,15 +1275,6 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     const w = &stdout_file.interface;
     for (ids) |id| try w.print("{s}\n", .{id});
     try w.flush();
-}
-
-fn envVarName(p: Config.AiProvider) []const u8 {
-    return switch (p) {
-        .anthropic => "ANTHROPIC_API_KEY",
-        .openai => "OPENAI_API_KEY",
-        .gemini => "GOOGLE_API_KEY/GEMINI_API_KEY",
-        .ollama => "<ollama>",
-    };
 }
 
 fn defaultModel(p: Config.AiProvider) []const u8 {
