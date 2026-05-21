@@ -697,12 +697,11 @@ fn shutdownCdpLinks(self: *Network) void {
 
     var it = self.cdp_links.first;
     while (it) |node| {
-        const next = node.next;
+        it = node.next;
         const link: *CdpLink = @fieldParentPtr("node", node);
         if (link.state == .live) {
             self.dropCdp(link, null, true);
         }
-        it = next;
     }
 
     self.cdp_unregister.broadcast();
